@@ -1,0 +1,10 @@
+[package]
+name = "reimagine-runtime"
+version.workspace = true
+description.workspace = true
+authors.workspace = true
+edition.workspace = true
+
+[dependencies]
+reimagine-core = { path = "../core" }
+serde = { workspace = true }
