@@ -1,7 +1,8 @@
 use reimagine_core::model::{
-    ArtifactId, ArtifactRef, CommandBatchId, DiagnosticId, EdgeId, HistoryEntryId, ModelFamily,
-    ModelId, ModelRef, ModelRole, NodeDef, NodeId, NodeValue, ParamDef, ParamKind, ParamValue,
-    ProposalId, RunId, SocketDef, SocketKind, TensorDType, TensorData, TensorShape, WorkflowId,
+    ArtifactId, ArtifactRef, CommandBatchId, DiagnosticId, EdgeId, HistoryEntryId, ModelId,
+    ModelRef, ModelRole, ModelSeries, ModelVariant, NodeDef, NodeId, NodeValue, ParamDef,
+    ParamKind, ParamValue, ProposalId, RunId, SocketDef, SocketKind, TensorDType, TensorData,
+    TensorShape, WorkflowId,
 };
 
 #[test]
@@ -69,13 +70,19 @@ fn inference_contracts_use_tensor_data_from_the_shared_model_layer() {
 #[test]
 fn runtime_facing_model_values_are_available_from_the_model_facade() {
     let model_id = ModelId::new("sdxl-base");
-    let model_ref = ModelRef::new(model_id.clone(), ModelFamily::Sdxl, ModelRole::Denoiser);
+    let model_ref = ModelRef::new(
+        model_id.clone(),
+        ModelSeries::new("stable_diffusion"),
+        ModelVariant::new("sdxl"),
+        ModelRole::DiffusionModel,
+    );
     let shape = TensorShape::new(vec![1, 4, 128, 128]);
     let prompt = ParamValue::String("cinematic lake".to_owned());
 
     assert_eq!(model_ref.id(), &model_id);
-    assert_eq!(model_ref.family(), ModelFamily::Sdxl);
-    assert_eq!(model_ref.role(), ModelRole::Denoiser);
+    assert_eq!(model_ref.model_series().as_str(), "stable_diffusion");
+    assert_eq!(model_ref.variant().as_str(), "sdxl");
+    assert_eq!(model_ref.role(), ModelRole::DiffusionModel);
     assert_eq!(shape.dims(), &[1, 4, 128, 128]);
     assert_eq!(shape.rank(), 4);
     assert_eq!(shape.numel(), 65_536);

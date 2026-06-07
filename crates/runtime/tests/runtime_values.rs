@@ -15,7 +15,7 @@ fn runtime_values_can_express_the_minimal_sdxl_base_intermediates() {
 
     let model = RuntimeModelHandle::new(
         checkpoint.clone(),
-        ModelRole::Denoiser,
+        ModelRole::DiffusionModel,
         backend.clone(),
         "sdxl-base/denoiser",
     )
@@ -27,7 +27,7 @@ fn runtime_values_can_express_the_minimal_sdxl_base_intermediates() {
 
     assert!(matches!(RuntimeValue::Model(model.clone()), RuntimeValue::Model(_)));
     assert_eq!(model.model_id(), &checkpoint);
-    assert_eq!(model.role(), ModelRole::Denoiser);
+    assert_eq!(model.role(), ModelRole::DiffusionModel);
     assert_eq!(clip.backend().as_str(), "candle");
     assert_eq!(vae.device_label(), Some(device));
 
