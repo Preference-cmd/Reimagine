@@ -20,7 +20,7 @@ pub use ids::{
     ArtifactId, CommandBatchId, DiagnosticId, EdgeId, HistoryEntryId, ModelId, NodeId,
     ProposalId, RunId, WorkflowId,
 };
-pub use models::{ModelFamily, ModelRef, ModelRole};
+pub use models::{ModelRef, ModelRole, ModelSeries, ModelVariant};
 pub use nodes::NodeDef;
 pub use params::{ParamDef, ParamKind};
 pub use sockets::{SocketDef, SocketKind};
