@@ -4,5 +4,4 @@
 //! or struct constructor is the way core obtains a `Model` impl for that
 //! family; `loader::load` is the dispatcher.
 
-#[path = "models/clip.rs"]
 pub mod clip;
