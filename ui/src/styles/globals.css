@@ -1,0 +1,156 @@
+@import "tailwindcss";
+@import "./theme.css";
+
+/* UI 整体缩放：layout 撑到 1/0.7，再用 transform: scale(0.7) 缩回 painted 100%。
+   - layout box  = 100% 视口（topLeft 锚定，painted 不溢出）
+   - painted     = 100% 视口（铺满）
+   - children    = 70% 设计尺寸
+   修正：原来是 width/height: 200%（200% × 0.7 = 140%，会溢出），正确值是 142.857%。 */
+#root {
+  --ui-scale: 0.7;
+  width: calc(100% / var(--ui-scale));
+  height: calc(100% / var(--ui-scale));
+  transform: scale(var(--ui-scale));
+  transform-origin: top left;
+}
+
+@layer base {
+  html {
+    background-color: var(--color-background);
+  }
+  html,
+  body,
+  #root {
+    height: 100%;
+    width: 100%;
+  }
+
+  body {
+    margin: 0;
+    background-color: var(--color-background);
+    color: var(--color-on-background);
+    font-family: var(--font-sans);
+    font-size: var(--text-body-md);
+    line-height: var(--text-body-md--line-height);
+    -webkit-font-smoothing: antialiased;
+    text-rendering: optimizeLegibility;
+    overflow: hidden;
+  }
+
+  code,
+  kbd,
+  pre,
+  samp {
+    font-family: var(--font-mono);
+  }
+}
+
+@layer utilities {
+  /* Hide scrollbar for dense panels (explorer, properties, inspector). */
+  .scrollbar-hide {
+    scrollbar-width: none;
+    -ms-overflow-style: none;
+  }
+  .scrollbar-hide::-webkit-scrollbar {
+    display: none;
+  }
+
+  /* Infinite canvas dot grid — 20px spacing per design system. */
+  .canvas-grid {
+    background-color: #000;
+    background-image: radial-gradient(
+      circle,
+      #2a2a2a 1.5px,
+      transparent 1.5px
+    );
+    background-size: 20px 20px;
+  }
+
+  /* Glass panels: floating side panels (explorer, properties, dialogs).
+     Luminance-stacked dark surface with 20px blur. */
+  .panel-glass {
+    background: linear-gradient(
+      145deg,
+      rgba(24, 24, 24, 0.8),
+      rgba(12, 12, 12, 0.8)
+    );
+    border: 1px solid rgba(255, 255, 255, 0.05);
+    backdrop-filter: blur(20px);
+    -webkit-backdrop-filter: blur(20px);
+  }
+}
+
+@layer components {
+  /* Node base surface — pure transparent frosted glass: no background
+     tint of its own, just the 20px backdrop blur. The canvas dot grid
+     shows through clearly (blurred), and the node reads as a glass
+     frame. `--node-tone` is set per-instance from React and drives
+     the header dot, the selected ring, and the outer glow. */
+  .node-base {
+    position: relative;
+    width: 280px;
+    border-radius: 16px;
+    background: transparent;
+    backdrop-filter: blur(20px);
+    -webkit-backdrop-filter: blur(20px);
+    border: 1px solid rgba(255, 255, 255, 0.06);
+    box-shadow:
+      inset 0 1px 0 rgba(255, 255, 255, 0.04),
+      0 8px 24px rgba(0, 0, 0, 0.4);
+    color: var(--color-on-surface);
+    font-family: var(--font-sans);
+    transition:
+      border-color 180ms ease,
+      box-shadow 180ms ease;
+  }
+  .node-base:hover {
+    border-color: rgba(255, 255, 255, 0.1);
+  }
+  .node-base--selected {
+    border-color: var(--node-tone);
+    box-shadow:
+      inset 0 1px 0 rgba(255, 255, 255, 0.06),
+      0 0 0 1px var(--node-tone),
+      0 0 18px color-mix(in srgb, var(--node-tone) 35%, transparent),
+      0 8px 24px rgba(0, 0, 0, 0.4);
+  }
+
+  /* Header — bare title row, no background, no bottom divider. The
+     tone dot + title sit directly on the node-base glass; the body's
+     own rounded surface (which sits below with margin and a light-gray
+     fill) is what visually separates the body from the header.
+     Vertical padding is 40% larger than before (10px → 14px) so the
+     title row reads as more prominent. */
+  .node-base__header {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    padding: 14px 12px;
+  }
+
+  /* Body — a rounded light-gray card inside node-base. Visually distinct
+     from the darker glass of node-base: same hue family but lighter,
+     so the body reads as "the content area" and the surrounding
+     node-base reads as the frame. The 8px inset (down from 10px) keeps
+     the card close to the frame without touching it. Horizontal padding
+     is 14px so the React Flow `Handle` (positioned at the node's edge)
+     has room without overlapping the inner content. */
+  .node-base__body {
+    margin: 0 8px 8px;
+    border-radius: 10px;
+    background: rgba(255, 255, 255, 0.06);
+    padding: 8px 14px 10px;
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+  }
+
+  /* Inner card — transparent container inside the body. No background,
+     no border; only a rounded shape and a hair of padding so the
+     parameters / children read as a grouped unit. The body's own
+     light-gray surface provides the visual container. */
+  .node-base__inner {
+    border-radius: 8px;
+    padding: 4px 2px;
+  }
+}
