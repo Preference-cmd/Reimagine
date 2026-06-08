@@ -9,6 +9,8 @@ A Tauri + Candle + React desktop app for node-based image generation workflows �
 - `ui/` — React 19 + Vite 7 frontend (bun-managed).
 - `assets/` — static resources (models, sample images).
 - `docs/agents/` — per-repo agent config (tracked).
+- `docs/architecture/` — architecture source of truth (tracked).
+- `docs/design/` — design source material (tracked).
 
 ## Commands
 
@@ -37,4 +39,4 @@ Default five-role vocabulary: `needs-triage`, `needs-info`, `ready-for-agent`, `
 
 ### Domain docs
 
-Single-context — one `CONTEXT.md` and `docs/adr/` at the repo root. See `docs/agents/domain.md`.
+Single-context — one local `CONTEXT.md` plus tracked `docs/architecture/`. See `docs/agents/domain.md`.
