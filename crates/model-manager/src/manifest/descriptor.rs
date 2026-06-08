@@ -105,6 +105,18 @@ impl ModelDescriptor {
         self
     }
 
+    pub(crate) fn set_source_status(&mut self, source_status: ModelSourceStatus) {
+        self.source_status = source_status;
+    }
+
+    pub(crate) fn set_observed_size_bytes(&mut self, observed_size_bytes: Option<u64>) {
+        self.observed_size_bytes = observed_size_bytes;
+    }
+
+    pub(crate) fn set_observed_modified_at(&mut self, observed_modified_at: Option<String>) {
+        self.observed_modified_at = observed_modified_at;
+    }
+
     pub fn id(&self) -> &ModelId {
         &self.id
     }
@@ -139,6 +151,10 @@ impl ModelDescriptor {
 
     pub fn observed_size_bytes(&self) -> Option<u64> {
         self.observed_size_bytes
+    }
+
+    pub fn observed_modified_at(&self) -> Option<&str> {
+        self.observed_modified_at.as_deref()
     }
 
     pub fn fingerprint(&self) -> Option<&Fingerprint> {

@@ -22,5 +22,5 @@ pub use manifest::{
     ModelRootId, ModelRootKind, ModelSource, ModelSourceStatus, validate_manifest,
     validate_manifest_with_series_config,
 };
-pub use scan::ScanConfig;
+pub use scan::{ManifestUpdate, ManifestUpdatePolicy, ModelScanner, ScanConfig, ScanObservation};
 pub use store::{ModelManifestStore, load_model_manifest};

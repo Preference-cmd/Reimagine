@@ -65,6 +65,10 @@ impl ModelManifest {
         &self.models
     }
 
+    pub(crate) fn models_mut(&mut self) -> &mut Vec<ModelDescriptor> {
+        &mut self.models
+    }
+
     pub fn remove_model(&mut self, model_id: &reimagine_core::model::ModelId) {
         self.models.retain(|model| model.id() != model_id);
     }

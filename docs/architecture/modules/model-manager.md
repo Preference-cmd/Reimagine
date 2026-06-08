@@ -427,17 +427,18 @@ Users may edit and save the inferred model series and variant. Saving user edits
 
 ## Scanner
 
-`ModelScanner` walks configured roots and returns scan candidates:
+`ModelScanner` walks configured roots and returns scan observations:
 
 ```text
-ScanCandidate
+ScanObservation
+  root_id
   source
   format
   size_bytes
-  fingerprint optional
-  inferred_model_series
-  inferred_variant
-  inferred_roles
+  modified_at optional
+  relative_path
+  filename
+  extension
 ```
 
 Scan behavior is configurable per root:
@@ -460,7 +461,17 @@ supported_extensions = [".safetensors"]
 exclude_patterns include .git, target, node_modules, and common cache/build dirs
 ```
 
-The scanner should support checkpoint-like files under configured roots and ignore hidden files/directories by default.
+The scanner should support checkpoint-like files under configured roots and ignore hidden files/directories by default. It does not write the manifest and does not compute fingerprints during normal scans.
+
+Manifest update logic consumes observations plus `ModelSeriesConfig` classification and id policy results:
+
+```text
+ManifestUpdatePolicy
+  apply_observations(manifest, observations)
+  apply_root_observations(manifest, root_id, observations)
+```
+
+`apply_observations` is for a full scan snapshot. `apply_root_observations` is for a single-root scan and must only mark entries from that root as missing. This prevents scanning one available root from marking unrelated roots as missing.
 
 V1 does not need remote download, Hugging Face snapshots, or automatic metadata extraction beyond simple format/model_series/variant/role inference.
 
