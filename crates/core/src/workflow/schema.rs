@@ -38,6 +38,44 @@ pub struct Workflow {
 }
 
 impl Workflow {
+    pub fn new(id: impl Into<WorkflowId>, version: WorkflowVersion) -> Self {
+        Self {
+            schema_version: WorkflowSchemaVersion::default(),
+            id: id.into(),
+            version,
+            metadata: WorkflowMetadata::new(),
+            interface: WorkflowInterface::new(),
+            nodes: Vec::new(),
+            edges: Vec::new(),
+            layout: WorkflowLayout::new(),
+        }
+    }
+
+    pub fn with_metadata(mut self, metadata: WorkflowMetadata) -> Self {
+        self.metadata = metadata;
+        self
+    }
+
+    pub fn with_interface(mut self, interface: WorkflowInterface) -> Self {
+        self.interface = interface;
+        self
+    }
+
+    pub fn with_node(mut self, node: WorkflowNode) -> Self {
+        self.nodes.push(node);
+        self
+    }
+
+    pub fn with_edge(mut self, edge: WorkflowEdge) -> Self {
+        self.edges.push(edge);
+        self
+    }
+
+    pub fn with_layout(mut self, layout: WorkflowLayout) -> Self {
+        self.layout = layout;
+        self
+    }
+
     pub fn schema_version(&self) -> &WorkflowSchemaVersion {
         &self.schema_version
     }
@@ -69,6 +107,30 @@ impl Workflow {
     pub fn layout(&self) -> &WorkflowLayout {
         &self.layout
     }
+
+    pub(crate) fn set_version(&mut self, version: WorkflowVersion) {
+        self.version = version;
+    }
+
+    pub(crate) fn set_metadata(&mut self, metadata: WorkflowMetadata) {
+        self.metadata = metadata;
+    }
+
+    pub(crate) fn set_layout(&mut self, layout: WorkflowLayout) {
+        self.layout = layout;
+    }
+
+    pub(crate) fn nodes_mut(&mut self) -> &mut Vec<WorkflowNode> {
+        &mut self.nodes
+    }
+
+    pub(crate) fn edges_mut(&mut self) -> &mut Vec<WorkflowEdge> {
+        &mut self.edges
+    }
+
+    pub(crate) fn layout_mut(&mut self) -> &mut WorkflowLayout {
+        &mut self.layout
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize)]
@@ -82,6 +144,25 @@ pub struct WorkflowNode {
 }
 
 impl WorkflowNode {
+    pub fn new(id: impl Into<NodeId>, type_id: impl Into<NodeTypeId>) -> Self {
+        Self {
+            id: id.into(),
+            type_id: type_id.into(),
+            label: None,
+            params: BTreeMap::new(),
+        }
+    }
+
+    pub fn with_label(mut self, label: impl Into<String>) -> Self {
+        self.label = Some(label.into());
+        self
+    }
+
+    pub fn with_param(mut self, slot_id: impl Into<SlotId>, value: ParamValue) -> Self {
+        self.params.insert(slot_id.into(), value);
+        self
+    }
+
     pub fn id(&self) -> &NodeId {
         &self.id
     }
@@ -97,6 +178,14 @@ impl WorkflowNode {
     pub fn params(&self) -> &BTreeMap<SlotId, ParamValue> {
         &self.params
     }
+
+    pub(crate) fn set_label(&mut self, label: Option<String>) {
+        self.label = label;
+    }
+
+    pub(crate) fn params_mut(&mut self) -> &mut BTreeMap<SlotId, ParamValue> {
+        &mut self.params
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
@@ -107,6 +196,14 @@ pub struct WorkflowEdge {
 }
 
 impl WorkflowEdge {
+    pub fn new(id: impl Into<EdgeId>, from: Endpoint, to: Endpoint) -> Self {
+        Self {
+            id: id.into(),
+            from,
+            to,
+        }
+    }
+
     pub fn id(&self) -> &EdgeId {
         &self.id
     }

@@ -155,6 +155,21 @@ WorkflowInterface
   outputs: Vec<WorkflowOutputDef>
 ```
 
+Each workflow interface definition names the external endpoint, the workflow-facing
+slot label, and the value kind used for structural edge compatibility:
+
+```text
+WorkflowInputDef
+  id: WorkflowInputId
+  slot: SlotId
+  kind: SlotKind
+
+WorkflowOutputDef
+  id: WorkflowOutputId
+  slot: SlotId
+  kind: SlotKind
+```
+
 Workflow interface endpoints are distinct from node slots:
 
 ```json

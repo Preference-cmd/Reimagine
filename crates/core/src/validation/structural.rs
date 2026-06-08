@@ -181,7 +181,19 @@ impl<'a, C: NodeCatalog> StructuralValidator<'a, C> {
                 };
                 Some(output_slot.kind())
             }
-            Endpoint::WorkflowInput { .. } => None,
+            Endpoint::WorkflowInput { workflow_input } => {
+                let Some(input_def) = self.workflow.interface().input(workflow_input) else {
+                    self.push_edge_diagnostic(
+                        "interface_input_missing",
+                        edge_id,
+                        "CORE/WORKFLOW_INTERFACE_INPUT_MISSING",
+                        "edge source workflow input does not exist in the workflow interface",
+                        Some("from.workflow_input"),
+                    );
+                    return None;
+                };
+                Some(input_def.kind())
+            }
             Endpoint::WorkflowOutput { .. } => {
                 self.push_edge_diagnostic(
                     "endpoint_direction_invalid",
@@ -211,7 +223,19 @@ impl<'a, C: NodeCatalog> StructuralValidator<'a, C> {
                 };
                 Some(input_slot.kind())
             }
-            Endpoint::WorkflowOutput { .. } => None,
+            Endpoint::WorkflowOutput { workflow_output } => {
+                let Some(output_def) = self.workflow.interface().output(workflow_output) else {
+                    self.push_edge_diagnostic(
+                        "interface_output_missing",
+                        edge_id,
+                        "CORE/WORKFLOW_INTERFACE_OUTPUT_MISSING",
+                        "edge target workflow output does not exist in the workflow interface",
+                        Some("to.workflow_output"),
+                    );
+                    return None;
+                };
+                Some(output_def.kind())
+            }
             Endpoint::WorkflowInput { .. } => {
                 self.push_edge_diagnostic(
                     "endpoint_direction_invalid",

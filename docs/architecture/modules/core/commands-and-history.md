@@ -120,11 +120,8 @@ Both paths use the same clone, command application, structural validation, and c
 7. commit clone
 8. advance version
 9. append history entry
-10. run executable readiness
-11. return CommandResult
+10. return CommandResult
 ```
-
-Readiness diagnostics do not roll back a structurally valid command batch.
 
 ## Command Result
 
@@ -144,7 +141,7 @@ CommandStatus
   NoOp
 ```
 
-Rejected results have no changes and contain structural diagnostics. Applied results may still contain readiness diagnostics.
+Rejected results have no changes and contain structural diagnostics. V1 of this slice does not run executable-readiness checks yet, so applied results here contain change data plus any command-path diagnostics only.
 
 ## Workflow Changes
 
@@ -158,7 +155,7 @@ WorkflowChange
   EdgeRemoved { edge }
   ParamSet { node_id, slot_id, before, after }
   ParamRemoved { node_id, slot_id, before }
-  NodeMoved { node_id, before, after }
+  NodeMoved { node_id, before optional, after optional }
   LayoutApplied { before, after }
   NodeLabelSet { node_id, before, after }
   WorkflowMetadataSet { before, after }

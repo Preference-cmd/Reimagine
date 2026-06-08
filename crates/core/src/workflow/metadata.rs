@@ -1,4 +1,4 @@
-use crate::model::{SlotId, WorkflowInputId, WorkflowOutputId};
+use crate::model::{SlotId, SlotKind, WorkflowInputId, WorkflowOutputId};
 
 #[derive(Debug, Clone, PartialEq, Default, serde::Serialize, serde::Deserialize)]
 pub struct WorkflowMetadata {
@@ -13,6 +13,21 @@ pub struct WorkflowMetadata {
 impl WorkflowMetadata {
     pub fn new() -> Self {
         Self::default()
+    }
+
+    pub fn with_name(mut self, name: impl Into<String>) -> Self {
+        self.name = Some(name.into());
+        self
+    }
+
+    pub fn with_description(mut self, description: impl Into<String>) -> Self {
+        self.description = Some(description.into());
+        self
+    }
+
+    pub fn with_created_by(mut self, created_by: impl Into<String>) -> Self {
+        self.created_by = Some(created_by.into());
+        self
     }
 
     pub fn name(&self) -> Option<&str> {
@@ -32,11 +47,13 @@ impl WorkflowMetadata {
 pub struct WorkflowInputDef {
     id: WorkflowInputId,
     slot: SlotId,
+    #[serde(default = "default_interface_slot_kind")]
+    kind: SlotKind,
 }
 
 impl WorkflowInputDef {
-    pub fn new(id: WorkflowInputId, slot: SlotId) -> Self {
-        Self { id, slot }
+    pub fn new(id: WorkflowInputId, slot: SlotId, kind: SlotKind) -> Self {
+        Self { id, slot, kind }
     }
 
     pub fn id(&self) -> &WorkflowInputId {
@@ -46,17 +63,23 @@ impl WorkflowInputDef {
     pub fn slot(&self) -> &SlotId {
         &self.slot
     }
+
+    pub fn kind(&self) -> SlotKind {
+        self.kind
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub struct WorkflowOutputDef {
     id: WorkflowOutputId,
     slot: SlotId,
+    #[serde(default = "default_interface_slot_kind")]
+    kind: SlotKind,
 }
 
 impl WorkflowOutputDef {
-    pub fn new(id: WorkflowOutputId, slot: SlotId) -> Self {
-        Self { id, slot }
+    pub fn new(id: WorkflowOutputId, slot: SlotId, kind: SlotKind) -> Self {
+        Self { id, slot, kind }
     }
 
     pub fn id(&self) -> &WorkflowOutputId {
@@ -65,6 +88,10 @@ impl WorkflowOutputDef {
 
     pub fn slot(&self) -> &SlotId {
         &self.slot
+    }
+
+    pub fn kind(&self) -> SlotKind {
+        self.kind
     }
 }
 
@@ -79,6 +106,16 @@ impl WorkflowInterface {
         Self::default()
     }
 
+    pub fn with_input(mut self, input: WorkflowInputDef) -> Self {
+        self.inputs.push(input);
+        self
+    }
+
+    pub fn with_output(mut self, output: WorkflowOutputDef) -> Self {
+        self.outputs.push(output);
+        self
+    }
+
     pub fn inputs(&self) -> &[WorkflowInputDef] {
         &self.inputs
     }
@@ -86,4 +123,16 @@ impl WorkflowInterface {
     pub fn outputs(&self) -> &[WorkflowOutputDef] {
         &self.outputs
     }
+
+    pub fn input(&self, id: &WorkflowInputId) -> Option<&WorkflowInputDef> {
+        self.inputs.iter().find(|input| input.id() == id)
+    }
+
+    pub fn output(&self, id: &WorkflowOutputId) -> Option<&WorkflowOutputDef> {
+        self.outputs.iter().find(|output| output.id() == id)
+    }
+}
+
+fn default_interface_slot_kind() -> SlotKind {
+    SlotKind::Null
 }
