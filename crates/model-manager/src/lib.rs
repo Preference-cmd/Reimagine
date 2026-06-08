@@ -22,5 +22,10 @@ pub use manifest::{
     ModelRootId, ModelRootKind, ModelSource, ModelSourceStatus, validate_manifest,
     validate_manifest_with_series_config,
 };
+pub use resolve::{
+    ManifestModelResolver, ModelDescriptorResolver, ModelReadinessResolver, ModelResolution,
+    ResolvedModelInfo,
+};
 pub use scan::{ManifestUpdate, ManifestUpdatePolicy, ModelScanner, ScanConfig, ScanObservation};
 pub use store::{ModelManifestStore, load_model_manifest};
+pub use verify::{FingerprintRefresh, ModelFingerprintVerifier};

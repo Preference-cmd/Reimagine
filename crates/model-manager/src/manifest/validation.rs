@@ -12,7 +12,8 @@ use crate::classify::ModelSeriesConfig;
 
 use super::{
     Fingerprint, MODEL_MANIFEST_SCHEMA_VERSION, ModelDescriptor, ModelManifest, ModelRoot,
-    ModelRootId, ModelRootKind, ModelSource, ModelSourceStatus,
+    ModelRootId, ModelRootKind, ModelSource, ModelSourceStatus, resolve_root_path,
+    resolve_source_path,
 };
 
 pub type ManifestValidationReport = OperationReport;
@@ -294,24 +295,6 @@ async fn relative_root_missing(
     !tokio::fs::try_exists(root_path).await.unwrap_or(false)
 }
 
-fn resolve_source_path(
-    manifest: &ModelManifest,
-    source: &ModelSource,
-    models_dir: &Path,
-) -> Option<PathBuf> {
-    match source {
-        ModelSource::LocalFileRelative { root_id, path } => {
-            if root_id.as_str() == "base" {
-                Some(models_dir.join(path))
-            } else {
-                let root = find_root(manifest, root_id)?;
-                Some(resolve_root_path(root, models_dir).join(path))
-            }
-        }
-        ModelSource::LocalFileAbsolute { path } => Some(PathBuf::from(path)),
-    }
-}
-
 fn resolve_relative_root_path(
     manifest: &ModelManifest,
     root_id: &ModelRootId,
@@ -322,15 +305,6 @@ fn resolve_relative_root_path(
     } else {
         let root = find_root(manifest, root_id)?;
         Some(resolve_root_path(root, models_dir))
-    }
-}
-
-fn resolve_root_path(root: &ModelRoot, models_dir: &Path) -> PathBuf {
-    let root_path = Path::new(root.path());
-    if root_path.is_absolute() {
-        root_path.to_path_buf()
-    } else {
-        models_dir.join(root_path)
     }
 }
 

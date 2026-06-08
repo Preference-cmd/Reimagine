@@ -1,4 +1,9 @@
 //! Model descriptor and readiness resolution facade.
-//!
-//! Resolution behavior is implemented after manifest persistence, scanning,
-//! and fingerprint refresh are stable.
+
+mod descriptor;
+mod readiness;
+
+pub use descriptor::{
+    ManifestModelResolver, ModelDescriptorResolver, ModelResolution, ResolvedModelInfo,
+};
+pub use readiness::ModelReadinessResolver;
