@@ -133,6 +133,18 @@ impl ModelDescriptor {
         self.format
     }
 
+    pub fn size_bytes(&self) -> Option<u64> {
+        self.size_bytes
+    }
+
+    pub fn observed_size_bytes(&self) -> Option<u64> {
+        self.observed_size_bytes
+    }
+
+    pub fn fingerprint(&self) -> Option<&Fingerprint> {
+        self.fingerprint.as_ref()
+    }
+
     pub fn is_runnable_candidate(&self) -> bool {
         self.model_series.as_str() != "unknown"
             && self.variant.as_str() != "unknown"

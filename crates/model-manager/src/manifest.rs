@@ -6,6 +6,7 @@ mod format;
 mod root;
 mod source;
 mod status;
+mod validation;
 
 use serde::{Deserialize, Serialize};
 
@@ -15,6 +16,7 @@ pub use format::ModelFormat;
 pub use root::{ModelRoot, ModelRootId, ModelRootKind};
 pub use source::ModelSource;
 pub use status::ModelSourceStatus;
+pub use validation::{validate_manifest, ManifestValidationReport};
 
 pub const MODEL_MANIFEST_SCHEMA_VERSION: &str = "reimagine.model_manifest.v1";
 
@@ -39,6 +41,11 @@ impl ModelManifest {
         self
     }
 
+    pub fn with_schema_version(mut self, schema_version: impl Into<String>) -> Self {
+        self.schema_version = schema_version.into();
+        self
+    }
+
     pub fn with_model(mut self, model: ModelDescriptor) -> Self {
         self.models.push(model);
         self
@@ -54,6 +61,10 @@ impl ModelManifest {
 
     pub fn models(&self) -> &[ModelDescriptor] {
         &self.models
+    }
+
+    pub fn remove_model(&mut self, model_id: &reimagine_core::model::ModelId) {
+        self.models.retain(|model| model.id() != model_id);
     }
 }
 
