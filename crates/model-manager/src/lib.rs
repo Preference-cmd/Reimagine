@@ -14,8 +14,8 @@ mod verify;
 pub use classify::{ModelSeriesConfig, ModelSeriesRule};
 pub use error::{ModelManagerError, ModelManagerResult};
 pub use manifest::{
-    validate_manifest, Fingerprint, ManifestValidationReport, ModelDescriptor, ModelFormat,
-    ModelManifest, ModelRoot, ModelRootId, ModelRootKind, ModelSource, ModelSourceStatus,
+    Fingerprint, ManifestValidationReport, ModelDescriptor, ModelFormat, ModelManifest, ModelRoot,
+    ModelRootId, ModelRootKind, ModelSource, ModelSourceStatus, validate_manifest,
 };
 pub use scan::ScanConfig;
-pub use store::{load_model_manifest, ModelManifestStore};
+pub use store::{ModelManifestStore, load_model_manifest};

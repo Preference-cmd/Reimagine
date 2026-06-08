@@ -3,15 +3,17 @@ use std::path::PathBuf;
 use reimagine_config::AppPaths;
 use reimagine_core::model::{ModelId, ModelRole, ModelSeries, ModelVariant};
 use reimagine_model_manager::{
-    validate_manifest, Fingerprint, ManifestValidationReport, ModelDescriptor, ModelFormat,
-    ModelManifest, ModelRoot, ModelRootId, ModelRootKind, ModelSource, ModelSourceStatus,
+    Fingerprint, ManifestValidationReport, ModelDescriptor, ModelFormat, ModelManifest, ModelRoot,
+    ModelRootId, ModelRootKind, ModelSource, ModelSourceStatus, validate_manifest,
 };
 
 #[tokio::test]
 async fn unsupported_schema_version_produces_diagnostic() {
     let base = test_base("unsupported-schema");
     let path = base.join("models/manifest.json");
-    tokio::fs::create_dir_all(path.parent().unwrap()).await.unwrap();
+    tokio::fs::create_dir_all(path.parent().unwrap())
+        .await
+        .unwrap();
     tokio::fs::write(
         &path,
         serde_json::json!({
@@ -87,18 +89,22 @@ async fn duplicate_ids_and_invalid_unknown_descriptor_are_reported() {
 #[tokio::test]
 async fn fully_unknown_descriptor_is_allowed_without_diagnostic() {
     let base = test_base("unknown-allowed");
-    tokio::fs::create_dir_all(base.join("models")).await.unwrap();
-    let manifest = ModelManifest::new().with_root(ModelRoot::base_models()).with_model(
-        ModelDescriptor::new(
-            ModelId::new("unknown-local-file"),
-            ModelSeries::new("unknown"),
-            ModelVariant::new("unknown"),
-            Vec::new(),
-            ModelSource::absolute(base.join("mystery.bin").display().to_string()),
-            ModelFormat::Unknown,
-        )
-        .with_source_status(ModelSourceStatus::Unverified),
-    );
+    tokio::fs::create_dir_all(base.join("models"))
+        .await
+        .unwrap();
+    let manifest = ModelManifest::new()
+        .with_root(ModelRoot::base_models())
+        .with_model(
+            ModelDescriptor::new(
+                ModelId::new("unknown-local-file"),
+                ModelSeries::new("unknown"),
+                ModelVariant::new("unknown"),
+                Vec::new(),
+                ModelSource::absolute(base.join("mystery.bin").display().to_string()),
+                ModelFormat::Unknown,
+            )
+            .with_source_status(ModelSourceStatus::Unverified),
+        );
 
     tokio::fs::write(base.join("mystery.bin"), b"weights")
         .await
@@ -158,7 +164,9 @@ async fn source_status_consistency_and_root_existence_are_reported() {
             .with_fingerprint(Fingerprint::sha256("abc123")),
         );
 
-    tokio::fs::create_dir_all(base.join("models")).await.unwrap();
+    tokio::fs::create_dir_all(base.join("models"))
+        .await
+        .unwrap();
     tokio::fs::write(base.join("size-mismatch.safetensors"), b"weights")
         .await
         .unwrap();
@@ -174,6 +182,41 @@ async fn source_status_consistency_and_root_existence_are_reported() {
             "MODEL_MANAGER/SIZE_MISMATCH",
         ],
     );
+
+    cleanup(base).await;
+}
+
+#[tokio::test]
+async fn declared_relative_root_missing_on_disk_is_reported() {
+    let base = test_base("declared-root-missing");
+    tokio::fs::create_dir_all(base.join("models"))
+        .await
+        .unwrap();
+
+    let manifest = ModelManifest::new()
+        .with_root(ModelRoot::base_models())
+        .with_root(ModelRoot::new(
+            ModelRootId::new("external"),
+            "missing-root",
+            ModelRootKind::UserSelected,
+        ))
+        .with_model(
+            ModelDescriptor::new(
+                ModelId::new("declared-root-missing"),
+                ModelSeries::new("stable_diffusion"),
+                ModelVariant::new("sdxl"),
+                vec![ModelRole::DiffusionModel],
+                ModelSource::relative(ModelRootId::new("external"), "file.safetensors"),
+                ModelFormat::Safetensors,
+            )
+            .with_source_status(ModelSourceStatus::Missing),
+        );
+
+    let report = validate_manifest(&manifest, base.join("models")).await;
+
+    assert_codes(&report, &["MODEL_MANAGER/MODEL_ROOT_MISSING"]);
+    assert_lacks_code(&report, "MODEL_MANAGER/SOURCE_ROOT_MISSING");
+    assert_lacks_code(&report, "MODEL_MANAGER/SOURCE_FILE_MISSING");
 
     cleanup(base).await;
 }
@@ -203,6 +246,20 @@ fn assert_codes(report: &ManifestValidationReport, expected: &[&str]) {
             codes
         );
     }
+}
+
+fn assert_lacks_code(report: &ManifestValidationReport, unexpected: &str) {
+    let codes: Vec<_> = report
+        .diagnostics()
+        .iter()
+        .map(|diagnostic| diagnostic.code().as_str().to_owned())
+        .collect();
+
+    assert!(
+        !codes.iter().any(|actual| actual == unexpected),
+        "did not expect diagnostic code {unexpected} in {:?}",
+        codes
+    );
 }
 
 fn test_base(name: &str) -> PathBuf {

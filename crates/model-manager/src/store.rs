@@ -1,10 +1,10 @@
 use std::path::{Path, PathBuf};
 
-use reimagine_config::{atomic_write, AppPaths};
+use reimagine_config::{AppPaths, atomic_write};
 
 use crate::{
-    validate_manifest, ManifestValidationReport, ModelManagerError, ModelManagerResult,
-    ModelManifest, ModelRoot,
+    ManifestValidationReport, ModelManagerError, ModelManagerResult, ModelManifest, ModelRoot,
+    validate_manifest,
 };
 
 const MANIFEST_RELATIVE_PATH: &str = "models/manifest.json";
@@ -54,7 +54,10 @@ impl ModelManifestStore {
         Ok((manifest, report))
     }
 
-    pub async fn save(&self, manifest: &ModelManifest) -> ModelManagerResult<ManifestValidationReport> {
+    pub async fn save(
+        &self,
+        manifest: &ModelManifest,
+    ) -> ModelManagerResult<ManifestValidationReport> {
         let bytes = serde_json::to_vec_pretty(manifest).map_err(|error| {
             ModelManagerError::ManifestInvalid {
                 path: MANIFEST_RELATIVE_PATH.to_owned(),
@@ -71,7 +74,10 @@ impl ModelManifestStore {
         Ok(validate_manifest(manifest, self.app_paths.models_dir()).await)
     }
 
-    pub async fn update<F>(&self, mutator: F) -> ModelManagerResult<(ModelManifest, ManifestValidationReport)>
+    pub async fn update<F>(
+        &self,
+        mutator: F,
+    ) -> ModelManagerResult<(ModelManifest, ManifestValidationReport)>
     where
         F: FnOnce(&mut ModelManifest),
     {
@@ -85,7 +91,8 @@ impl ModelManifestStore {
         &self,
         model_id: &reimagine_core::model::ModelId,
     ) -> ModelManagerResult<(ModelManifest, ManifestValidationReport)> {
-        self.update(|manifest| manifest.remove_model(model_id)).await
+        self.update(|manifest| manifest.remove_model(model_id))
+            .await
     }
 }
 

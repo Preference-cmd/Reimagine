@@ -9,8 +9,8 @@ use reimagine_core::event::OperationReport;
 use reimagine_core::model::DiagnosticId;
 
 use super::{
-    Fingerprint, ModelDescriptor, ModelManifest, ModelRoot, ModelRootId, ModelRootKind,
-    ModelSource, ModelSourceStatus, MODEL_MANIFEST_SCHEMA_VERSION,
+    Fingerprint, MODEL_MANIFEST_SCHEMA_VERSION, ModelDescriptor, ModelManifest, ModelRoot,
+    ModelRootId, ModelRootKind, ModelSource, ModelSourceStatus,
 };
 
 pub type ManifestValidationReport = OperationReport;
@@ -76,9 +76,7 @@ pub async fn validate_manifest(
             && descriptor.roles().is_empty()
             && matches!(descriptor.format(), super::ModelFormat::Unknown);
 
-        if !fully_unknown
-            && (series_unknown || variant_unknown)
-        {
+        if !fully_unknown && (series_unknown || variant_unknown) {
             report.push_diagnostic(model_diagnostic(
                 "descriptor_unknown",
                 Some(model_id.clone()),
@@ -108,26 +106,15 @@ pub async fn validate_manifest(
             ));
         }
 
-        validate_source_shape(
-            &mut report,
-            descriptor,
-            manifest,
-            &models_dir,
-        );
-        validate_source_status(
-            &mut report,
-            descriptor,
-            manifest,
-            &models_dir,
-        )
-        .await;
+        validate_source_shape(&mut report, descriptor, manifest, &models_dir).await;
+        validate_source_status(&mut report, descriptor, manifest, &models_dir).await;
         validate_size_and_fingerprint(&mut report, descriptor);
     }
 
     report
 }
 
-fn validate_source_shape(
+async fn validate_source_shape(
     report: &mut ManifestValidationReport,
     descriptor: &ModelDescriptor,
     manifest: &ModelManifest,
@@ -153,8 +140,17 @@ fn validate_source_shape(
                     "MODEL_MANAGER/SOURCE_ROOT_MISSING",
                     "referenced model root does not exist",
                 ));
-            } else {
-                let _ = resolve_source_path(manifest, descriptor.source(), models_dir);
+            } else if let Some(root_path) =
+                resolve_relative_root_path(manifest, root_id, models_dir)
+                && !tokio::fs::try_exists(&root_path).await.unwrap_or(false)
+            {
+                report.push_diagnostic(model_diagnostic(
+                    "model_root_missing",
+                    Some(descriptor.id().as_str().to_owned()),
+                    Some(root_path.display().to_string()),
+                    "MODEL_MANAGER/MODEL_ROOT_MISSING",
+                    "declared model root directory does not exist",
+                ));
             }
         }
         ModelSource::LocalFileAbsolute { path } => {
@@ -177,6 +173,12 @@ async fn validate_source_status(
     manifest: &ModelManifest,
     models_dir: &Path,
 ) {
+    if let ModelSource::LocalFileRelative { root_id, .. } = descriptor.source()
+        && relative_root_missing(manifest, root_id, models_dir).await
+    {
+        return;
+    }
+
     let Some(source_path) = resolve_source_path(manifest, descriptor.source(), models_dir) else {
         return;
     };
@@ -243,11 +245,26 @@ fn validate_size_and_fingerprint(
 }
 
 fn find_root<'a>(manifest: &'a ModelManifest, root_id: &ModelRootId) -> Option<&'a ModelRoot> {
-    manifest.model_roots().iter().find(|root| root.id() == root_id)
+    manifest
+        .model_roots()
+        .iter()
+        .find(|root| root.id() == root_id)
 }
 
 fn root_exists(manifest: &ModelManifest, root_id: &ModelRootId) -> bool {
     root_id.as_str() == "base" || find_root(manifest, root_id).is_some()
+}
+
+async fn relative_root_missing(
+    manifest: &ModelManifest,
+    root_id: &ModelRootId,
+    models_dir: &Path,
+) -> bool {
+    let Some(root_path) = resolve_relative_root_path(manifest, root_id, models_dir) else {
+        return false;
+    };
+
+    !tokio::fs::try_exists(root_path).await.unwrap_or(false)
 }
 
 fn resolve_source_path(
@@ -265,6 +282,19 @@ fn resolve_source_path(
             }
         }
         ModelSource::LocalFileAbsolute { path } => Some(PathBuf::from(path)),
+    }
+}
+
+fn resolve_relative_root_path(
+    manifest: &ModelManifest,
+    root_id: &ModelRootId,
+    models_dir: &Path,
+) -> Option<PathBuf> {
+    if root_id.as_str() == "base" {
+        Some(models_dir.to_path_buf())
+    } else {
+        let root = find_root(manifest, root_id)?;
+        Some(resolve_root_path(root, models_dir))
     }
 }
 
