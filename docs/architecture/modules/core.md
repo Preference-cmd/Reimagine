@@ -39,6 +39,7 @@ Detailed core design is split by domain:
 - [Node Definitions and Slots](core/node-defs-and-slots.md)
 - [Validation and Diagnostics](core/validation-and-diagnostics.md)
 - [Commands and History](core/commands-and-history.md)
+- [Execution Plan and Run Event](core/execution-plan-and-run-event.md)
 
 The SDXL base workflow example is kept separately:
 
@@ -57,7 +58,7 @@ src/
     artifacts.rs
     nodes.rs
     slots.rs
-    time.rs
+    workflow.rs
   workflow.rs
   workflow/
     node.rs
@@ -112,6 +113,11 @@ IDs:
   CommandBatchId
   ProposalId
   ModelId
+  NodeTypeId
+  SlotId
+  WorkflowInputId
+  WorkflowOutputId
+  WorkflowVersion
 
 Values:
   ParamValue

@@ -22,6 +22,8 @@ Node inputs are modeled as input slots. Params are not a separate connectability
 ```text
 NodeDef
   type_id
+  display_name
+  category
   effect: NodeEffect
   input_slots: Vec<InputSlotDef>
   output_slots: Vec<OutputSlotDef>
@@ -44,6 +46,62 @@ OutputSlotDef
   kind: SlotKind
   required: bool
 ```
+
+## Rust Data Boundary
+
+`NodeDef`, `InputSlotDef`, `OutputSlotDef`, `SlotKind`, and `NodeEffect` belong to `crates/core`.
+
+The `nodes` crate owns concrete built-in registrations, but it must consume this schema rather than defining another node-definition model.
+
+The old split between node `inputs`, `outputs`, and `parameters` should be removed as implementation reaches this slice. Static params are represented as `dynamic=false` input slots with optional defaults and UI metadata.
+
+Minimum public types:
+
+```text
+NodeDef
+NodeEffect
+InputSlotDef
+OutputSlotDef
+SlotKind
+SlotConstraint
+SlotUi
+NodeCatalog
+```
+
+`NodeCatalog` is a read-only lookup interface used by validation and command application:
+
+```text
+NodeCatalog
+  get(type_id: &NodeTypeId) -> Option<&NodeDef>
+```
+
+The first implementation may use a simple in-memory catalog in tests. Built-in node registration belongs to `crates/nodes`.
+
+## Slot Kinds
+
+V1 slot kinds must cover the SDXL base workflow and saved params:
+
+```text
+String
+Text
+Integer
+Float
+Bool
+Seed
+Select
+Path
+ModelRef
+Model
+Clip
+Vae
+Latent
+Conditioning
+Image
+Artifact
+Null
+```
+
+`SlotKind` is the compatibility language for both params and edges. `ParamValue` values must map to compatible saved-value slot kinds. Runtime-handle slot kinds such as `Model`, `Clip`, `Vae`, `Latent`, `Conditioning`, and `Image` can be produced or consumed through edges but must not be stored directly in `WorkflowNode.params`.
 
 ## Dynamic Inputs
 

@@ -81,6 +81,47 @@ Readiness checks:
 
 Cycle detection is executable readiness, not structural validity. Cyclic graphs may be saved and edited, but cannot run.
 
+## Validation API Boundary
+
+`core-workflow/01` should introduce the structural validation entry point without implementing the full command/session system.
+
+Minimum API shape:
+
+```text
+StructuralValidator
+  validate(workflow, node_catalog) -> OperationReport
+
+ValidationReport = OperationReport
+```
+
+The validator should produce diagnostics using the existing core diagnostic model. A structurally valid workflow returns an empty or non-error report. A structurally invalid workflow can still be represented as parsed data, but `WorkflowSession` must later reject command batches that would commit structural errors.
+
+`core-workflow/01` should cover structural checks that require only `Workflow`, `NodeDef`, and `NodeCatalog`. It should not call model-manager or runtime.
+
+`core-workflow/03` should introduce executable readiness and execution-plan construction after command/session semantics are stable.
+
+## Diagnostic Codes
+
+Use stable, namespaced diagnostic codes. Initial workflow structural codes:
+
+```text
+CORE/WORKFLOW_SCHEMA_UNSUPPORTED
+CORE/WORKFLOW_NODE_ID_DUPLICATE
+CORE/WORKFLOW_EDGE_ID_DUPLICATE
+CORE/WORKFLOW_NODE_TYPE_UNKNOWN
+CORE/WORKFLOW_ENDPOINT_NODE_MISSING
+CORE/WORKFLOW_ENDPOINT_SLOT_MISSING
+CORE/WORKFLOW_ENDPOINT_DIRECTION_INVALID
+CORE/WORKFLOW_SLOT_KIND_MISMATCH
+CORE/WORKFLOW_PARAM_SLOT_MISSING
+CORE/WORKFLOW_PARAM_ON_DYNAMIC_SLOT
+CORE/WORKFLOW_PARAM_KIND_MISMATCH
+CORE/WORKFLOW_INPUT_EDGE_DUPLICATE
+CORE/WORKFLOW_LAYOUT_NODE_MISSING
+```
+
+Readiness codes should be added in the readiness slice, not mixed into the first schema implementation unless a test needs them.
+
 ## Effective Input Resolution
 
 ```text
