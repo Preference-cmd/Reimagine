@@ -87,6 +87,33 @@ async fn duplicate_ids_and_invalid_unknown_descriptor_are_reported() {
 }
 
 #[tokio::test]
+async fn unsupported_series_and_variant_are_reported() {
+    let base = test_base("unsupported-series-variant");
+    tokio::fs::create_dir_all(&base).await.unwrap();
+    let source_path = base.join("unsupported.safetensors");
+    tokio::fs::write(&source_path, b"weights").await.unwrap();
+    let manifest = ModelManifest::new()
+        .with_root(ModelRoot::base_models())
+        .with_model(
+            ModelDescriptor::new(
+                ModelId::new("unsupported-series"),
+                ModelSeries::new("totally_not_a_series"),
+                ModelVariant::new("totally_not_a_variant"),
+                vec![ModelRole::DiffusionModel],
+                ModelSource::absolute(source_path.display().to_string()),
+                ModelFormat::Safetensors,
+            )
+            .with_source_status(ModelSourceStatus::Available),
+        );
+
+    let report = validate_manifest(&manifest, base.join("models")).await;
+
+    assert_codes(&report, &["MODEL_MANAGER/MODEL_DESCRIPTOR_UNKNOWN"]);
+
+    cleanup(base).await;
+}
+
+#[tokio::test]
 async fn fully_unknown_descriptor_is_allowed_without_diagnostic() {
     let base = test_base("unknown-allowed");
     tokio::fs::create_dir_all(base.join("models"))
