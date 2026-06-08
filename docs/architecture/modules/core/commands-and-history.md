@@ -41,12 +41,43 @@ WorkflowCommand
 ```text
 CommandBatch
   id: CommandBatchId
-  actor
+  actor: CommandActor
   base_version
-  provenance
-  correlation_id
+  provenance: CommandProvenance
+  created_at: Timestamp
+  correlation_id: Option<CorrelationId>
   commands: Vec<WorkflowCommand>
 ```
+
+`CommandActor` is defined by core but remains host-neutral:
+
+```text
+CommandActor
+  kind: Human | Agent | Importer | System
+  id: Option<String>
+  label: Option<String>
+```
+
+`actor` records the original author of the workflow mutation. Agent and human edits are first-class peers. If an Agent build-mode proposal is approved by a human, the committed batch may still use `actor.kind = Agent`; the human approval is represented by provenance.
+
+`CommandProvenance` records how the batch entered the workflow session:
+
+```text
+CommandProvenance
+  Direct
+  AgentProposal
+    proposal_id: ProposalId
+    approved_by: Option<CommandActor>
+  Import
+    format: String
+    source: Option<String>
+  Migration
+    from_schema_version: String
+```
+
+Run, save, open, list/rescan models, and agent-message actions are not provenance values by themselves. They may cause workflow commands to be produced, but only the command-producing source is recorded here.
+
+Core does not read the system clock while applying a batch. `created_at` is supplied by the caller so tests, imports, agent proposals, and future replay flows stay deterministic. `HistoryEntry.created_at` uses the committed batch's `created_at`.
 
 V1 command batches are atomic:
 
@@ -56,6 +87,26 @@ or no commands apply
 ```
 
 If `base_version` does not match the session version, the batch is rejected with a version conflict diagnostic.
+
+## Preview and Apply
+
+`WorkflowSession` exposes two command paths:
+
+```text
+preview_batch(batch) -> CommandResult
+apply_batch(batch) -> CommandResult
+```
+
+Both paths use the same clone, command application, structural validation, and change computation logic.
+
+`preview_batch`:
+
+- does not commit the cloned workflow;
+- does not advance the session version;
+- does not append history;
+- returns the same change and diagnostic shape that an apply would return.
+
+`apply_batch` commits only after the batch structurally validates. Agent build mode can wrap `preview_batch` into a proposal without core knowing about provider calls, chat sessions, or UI review state.
 
 ## Apply Flow
 
@@ -101,17 +152,17 @@ Rejected results have no changes and contain structural diagnostics. Applied res
 
 ```text
 WorkflowChange
-  NodeAdded
-  NodeRemoved
-  EdgeAdded
-  EdgeRemoved
-  ParamSet
-  ParamRemoved
-  NodeMoved
-  LayoutApplied
-  NodeLabelSet
-  WorkflowMetadataSet
-  VersionAdvanced
+  NodeAdded { node }
+  NodeRemoved { node, removed_edges, removed_layout }
+  EdgeAdded { edge }
+  EdgeRemoved { edge }
+  ParamSet { node_id, slot_id, before, after }
+  ParamRemoved { node_id, slot_id, before }
+  NodeMoved { node_id, before, after }
+  LayoutApplied { before, after }
+  NodeLabelSet { node_id, before, after }
+  WorkflowMetadataSet { before, after }
+  VersionAdvanced { before, after }
 ```
 
 Uses:
@@ -123,6 +174,8 @@ Uses:
 - history details.
 
 Setting a field to its current value should produce no change. A batch with no changes returns `NoOp`.
+
+`WorkflowChange` carries data rather than display text. UI patch projection, agent proposal diffs, and history details should not have to re-read the workflow to infer what changed.
 
 ## Command Semantics
 
@@ -211,13 +264,17 @@ HistoryEntry
   id: HistoryEntryId
   actor
   provenance
-  command_batch
+  command_batch: CommandBatch
   before: Workflow
   after: Workflow
   forward_changes: Vec<WorkflowChange>
   inverse_changes: Vec<WorkflowChange>
   created_at
 ```
+
+V1 stores the full `CommandBatch` in each `HistoryEntry`. This is intentionally not compacted in V1: batches are expected to be small, and preserving the exact batch gives history, audit, agent proposal review, and UI details one shared source of truth.
+
+`HistoryEntry.id` can be derived deterministically from the committed batch id by `WorkflowSession`. V1 does not need a separate history id generator unless implementation discovers a collision or replay problem.
 
 `WorkflowHistory` uses a cursor:
 
@@ -227,7 +284,9 @@ WorkflowHistory
   cursor: usize
 ```
 
-Undo/redo move the cursor, restore a snapshot, increment version, and emit changes. They do not append ordinary history entries.
+Undo/redo are `WorkflowSession` methods, not `WorkflowCommand` variants.
+
+Undo/redo move the cursor, restore a snapshot, increment version, and emit changes. They do not append ordinary history entries and do not create a new `CommandBatch`.
 
 ## Agent Proposals
 
