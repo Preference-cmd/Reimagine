@@ -1,6 +1,9 @@
 use std::sync::Arc;
 
+use super::models::ModelRef;
+
 #[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize)]
+#[serde(tag = "type", content = "value", rename_all = "snake_case")]
 pub enum ParamValue {
     String(String),
     Text(String),
@@ -10,6 +13,7 @@ pub enum ParamValue {
     Seed(u64),
     Select(String),
     Path(String),
+    ModelRef(ModelRef),
     Null,
 }
 

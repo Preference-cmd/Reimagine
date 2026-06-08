@@ -6,3 +6,5 @@ pub mod diagnostic;
 pub mod event;
 pub mod inference;
 pub mod model;
+pub mod validation;
+pub mod workflow;
