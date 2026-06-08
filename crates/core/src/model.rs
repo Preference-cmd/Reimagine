@@ -4,17 +4,15 @@ mod artifacts;
 mod ids;
 mod models;
 mod nodes;
-mod params;
-mod sockets;
+mod slots;
 mod values;
 
 pub use artifacts::ArtifactRef;
 pub use ids::{
-    ArtifactId, CommandBatchId, DiagnosticId, EdgeId, HistoryEntryId, ModelId, NodeId, ProposalId,
-    RunId, WorkflowId,
+    ArtifactId, CommandBatchId, DiagnosticId, EdgeId, HistoryEntryId, ModelId, NodeId, NodeTypeId,
+    ProposalId, RunId, SlotId, WorkflowId, WorkflowInputId, WorkflowOutputId, WorkflowVersion,
 };
 pub use models::{ModelRef, ModelRole, ModelSeries, ModelVariant};
-pub use nodes::NodeDef;
-pub use params::{ParamDef, ParamKind};
-pub use sockets::{SocketDef, SocketKind};
+pub use nodes::{NodeCatalog, NodeDef, NodeEffect};
+pub use slots::{InputSlotDef, OutputSlotDef, SlotConstraint, SlotKind, SlotUi};
 pub use values::{NodeValue, ParamValue, TensorDType, TensorData, TensorShape};

@@ -1,7 +1,7 @@
 use reimagine_core::model::{
-    ArtifactId, ArtifactRef, CommandBatchId, DiagnosticId, EdgeId, HistoryEntryId, ModelId,
-    ModelRef, ModelRole, ModelSeries, ModelVariant, NodeDef, NodeId, NodeValue, ParamDef,
-    ParamKind, ParamValue, ProposalId, RunId, SocketDef, SocketKind, TensorDType, TensorData,
+    ArtifactId, ArtifactRef, CommandBatchId, DiagnosticId, EdgeId, HistoryEntryId, InputSlotDef,
+    ModelId, ModelRef, ModelRole, ModelSeries, ModelVariant, NodeDef, NodeEffect, NodeId,
+    NodeValue, OutputSlotDef, ParamValue, ProposalId, RunId, SlotKind, TensorDType, TensorData,
     TensorShape, WorkflowId,
 };
 
@@ -19,16 +19,19 @@ fn shared_domain_types_are_available_from_the_model_facade() {
     let model_id = ModelId::new("sdxl_base_demo");
     let artifact = ArtifactRef::new("artifact_preview");
 
-    let input = SocketDef::new("prompt", SocketKind::Conditioning, "Prompt");
-    let output = SocketDef::new("image", SocketKind::Image, "Image");
-    let parameter = ParamDef::new("steps", "Steps", ParamKind::Int)
-        .with_default(NodeValue::Int(30))
-        .with_range(1.0, 150.0);
+    let model_input = InputSlotDef::new("model", SlotKind::Model)
+        .dynamic(true)
+        .required(true);
+    let steps_input = InputSlotDef::new("steps", SlotKind::Integer)
+        .required(true)
+        .with_default_value(ParamValue::Integer(30));
+    let output = OutputSlotDef::new("latent", SlotKind::Latent).required(true);
 
     let node = NodeDef::new("ksampler", "KSampler", "sampling")
-        .with_input(input.clone())
-        .with_output(output.clone())
-        .with_parameter(parameter.clone());
+        .with_effect(NodeEffect::Pure)
+        .with_input_slot(model_input.clone())
+        .with_input_slot(steps_input.clone())
+        .with_output_slot(output.clone());
 
     assert_eq!(workflow_id.as_str(), "workflow_demo");
     assert_eq!(node_id.as_str(), "node_clip_encode");
@@ -41,10 +44,9 @@ fn shared_domain_types_are_available_from_the_model_facade() {
     assert_eq!(proposal_id.as_str(), "proposal_demo");
     assert_eq!(model_id.as_str(), "sdxl_base_demo");
     assert_eq!(artifact.as_str(), "artifact_preview");
-    assert_eq!(node.type_id, "ksampler");
-    assert_eq!(node.inputs, vec![input]);
-    assert_eq!(node.outputs, vec![output]);
-    assert_eq!(node.parameters, vec![parameter]);
+    assert_eq!(node.type_id().as_str(), "ksampler");
+    assert_eq!(node.input_slots(), &[model_input, steps_input]);
+    assert_eq!(node.output_slots(), &[output]);
 }
 
 #[test]
