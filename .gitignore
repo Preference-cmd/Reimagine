@@ -42,6 +42,10 @@ src-tauri/WixTools/
 .env.local
 .env.*.local
 
+# ----- Local planning / agent scratch -----
+.scratch/
+.sc/
+
 # Project docs: keep shared architecture/agent docs, ignore local/generated docs.
 docs/*
 !docs/agents/
