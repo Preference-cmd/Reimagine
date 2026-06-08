@@ -76,4 +76,12 @@ impl WorkflowLayout {
     pub fn viewport(&self) -> Option<&Viewport> {
         self.viewport.as_ref()
     }
+
+    pub(crate) fn set_node_position(&mut self, node_id: NodeId, position: Position) {
+        self.nodes.insert(node_id, position);
+    }
+
+    pub(crate) fn remove_node(&mut self, node_id: &NodeId) -> Option<Position> {
+        self.nodes.remove(node_id)
+    }
 }

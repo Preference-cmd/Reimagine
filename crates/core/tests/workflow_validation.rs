@@ -2,9 +2,13 @@ use std::collections::HashMap;
 
 use reimagine_core::model::{
     InputSlotDef, NodeCatalog, NodeDef, NodeEffect, NodeTypeId, OutputSlotDef, SlotKind,
+    WorkflowInputId, WorkflowOutputId,
 };
 use reimagine_core::validation::validate_structure;
-use reimagine_core::workflow::Workflow;
+use reimagine_core::workflow::{
+    Endpoint, Workflow, WorkflowEdge, WorkflowInputDef, WorkflowInterface, WorkflowNode,
+    WorkflowOutputDef,
+};
 
 #[test]
 fn structural_validation_accepts_sdxl_example_with_matching_catalog() {
@@ -164,6 +168,98 @@ fn structural_validation_reports_remaining_v1_structural_errors() {
     assert!(codes.contains(&"CORE/WORKFLOW_SLOT_KIND_MISMATCH"));
     assert!(codes.contains(&"CORE/WORKFLOW_ENDPOINT_NODE_MISSING"));
     assert!(codes.contains(&"CORE/WORKFLOW_ENDPOINT_DIRECTION_INVALID"));
+}
+
+#[test]
+fn structural_validation_rejects_missing_workflow_interface_endpoints() {
+    let workflow = Workflow::new("workflow_missing_interface", 1.into())
+        .with_node(WorkflowNode::new("node_source", "builtin.source"))
+        .with_node(
+            WorkflowNode::new("node_consumer", "builtin.consumer")
+                .with_param("count", reimagine_core::model::ParamValue::Integer(1)),
+        )
+        .with_edge(WorkflowEdge::new(
+            "edge_prompt",
+            Endpoint::workflow_input(WorkflowInputId::new("prompt")),
+            Endpoint::node_slot("node_consumer".into(), "dynamic_value".into()),
+        ))
+        .with_edge(WorkflowEdge::new(
+            "edge_output",
+            Endpoint::node_slot("node_source".into(), "value".into()),
+            Endpoint::workflow_output(WorkflowOutputId::new("image")),
+        ));
+    let catalog = representative_catalog();
+
+    let report = validate_structure(&workflow, &catalog);
+    let codes: Vec<&str> = report
+        .diagnostics()
+        .iter()
+        .map(|diagnostic| diagnostic.code().as_str())
+        .collect();
+
+    assert!(codes.contains(&"CORE/WORKFLOW_INTERFACE_INPUT_MISSING"));
+    assert!(codes.contains(&"CORE/WORKFLOW_INTERFACE_OUTPUT_MISSING"));
+}
+
+#[test]
+fn structural_validation_uses_workflow_interface_slot_kinds_for_endpoint_compatibility() {
+    let valid_workflow = Workflow::new("workflow_interface_valid", 1.into())
+        .with_interface(
+            WorkflowInterface::new()
+                .with_input(WorkflowInputDef::new(
+                    WorkflowInputId::new("prompt"),
+                    "value".into(),
+                    SlotKind::String,
+                ))
+                .with_output(WorkflowOutputDef::new(
+                    WorkflowOutputId::new("image"),
+                    "image".into(),
+                    SlotKind::String,
+                )),
+        )
+        .with_node(WorkflowNode::new("node_source", "builtin.source"))
+        .with_node(
+            WorkflowNode::new("node_consumer", "builtin.consumer")
+                .with_param("count", reimagine_core::model::ParamValue::Integer(1)),
+        )
+        .with_edge(WorkflowEdge::new(
+            "edge_prompt",
+            Endpoint::workflow_input(WorkflowInputId::new("prompt")),
+            Endpoint::node_slot("node_consumer".into(), "dynamic_value".into()),
+        ))
+        .with_edge(WorkflowEdge::new(
+            "edge_output",
+            Endpoint::node_slot("node_source".into(), "value".into()),
+            Endpoint::workflow_output(WorkflowOutputId::new("image")),
+        ));
+
+    let mismatch_workflow = Workflow::new("workflow_interface_mismatch", 1.into())
+        .with_interface(WorkflowInterface::new().with_input(WorkflowInputDef::new(
+            WorkflowInputId::new("steps"),
+            "steps".into(),
+            SlotKind::Integer,
+        )))
+        .with_node(
+            WorkflowNode::new("node_consumer", "builtin.consumer")
+                .with_param("count", reimagine_core::model::ParamValue::Integer(1)),
+        )
+        .with_edge(WorkflowEdge::new(
+            "edge_steps",
+            Endpoint::workflow_input(WorkflowInputId::new("steps")),
+            Endpoint::node_slot("node_consumer".into(), "dynamic_value".into()),
+        ));
+    let catalog = representative_catalog();
+
+    let valid_report = validate_structure(&valid_workflow, &catalog);
+    assert!(valid_report.diagnostics().is_empty());
+
+    let mismatch_report = validate_structure(&mismatch_workflow, &catalog);
+    let mismatch_codes: Vec<&str> = mismatch_report
+        .diagnostics()
+        .iter()
+        .map(|diagnostic| diagnostic.code().as_str())
+        .collect();
+    assert!(mismatch_codes.contains(&"CORE/WORKFLOW_SLOT_KIND_MISMATCH"));
 }
 
 struct TestCatalog {
