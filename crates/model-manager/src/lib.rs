@@ -2,19 +2,12 @@
 
 #![deny(unsafe_code)]
 
-#[path = "classify.rs"]
 mod classify;
-#[path = "error.rs"]
 mod error;
-#[path = "identity.rs"]
 mod identity;
-#[path = "manifest.rs"]
 mod manifest;
-#[path = "resolve.rs"]
 mod resolve;
-#[path = "scan.rs"]
 mod scan;
-#[path = "verify.rs"]
 mod verify;
 
 pub use classify::{ModelSeriesConfig, ModelSeriesRule};

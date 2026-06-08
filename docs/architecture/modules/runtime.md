@@ -54,7 +54,7 @@ src/
   node_context.rs
 ```
 
-Use modern Rust module layout. Do not introduce `mod.rs`.
+Use modern Rust module layout. Do not introduce `mod.rs`, and prefer ordinary `mod foo;` declarations over `#[path = "..."]` attributes.
 
 ## RunEventSink
 

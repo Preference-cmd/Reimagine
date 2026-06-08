@@ -84,7 +84,7 @@ src/
   inference.rs
 ```
 
-Use modern Rust module layout. Do not introduce `mod.rs` files.
+Use modern Rust module layout. Do not introduce `mod.rs` files, and prefer ordinary `mod foo;` declarations over `#[path = "..."]` attributes.
 
 ## Shared Model Facade
 

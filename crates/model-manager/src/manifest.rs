@@ -1,16 +1,10 @@
 //! Serializable model manifest schema.
 
-#[path = "manifest/descriptor.rs"]
 mod descriptor;
-#[path = "manifest/fingerprint.rs"]
 mod fingerprint;
-#[path = "manifest/format.rs"]
 mod format;
-#[path = "manifest/root.rs"]
 mod root;
-#[path = "manifest/source.rs"]
 mod source;
-#[path = "manifest/status.rs"]
 mod status;
 
 use serde::{Deserialize, Serialize};

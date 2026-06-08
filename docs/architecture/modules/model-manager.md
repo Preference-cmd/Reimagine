@@ -268,7 +268,7 @@ src/
   event.rs
 ```
 
-Use modern Rust module layout. Do not introduce `mod.rs`.
+Use modern Rust module layout. Do not introduce `mod.rs`, and prefer ordinary `mod foo;` declarations over `#[path = "..."]` attributes.
 
 `lib.rs` is the public facade. It should re-export stable API types such as `ModelManager`, `ModelManifest`, `ModelDescriptor`, `ModelManifestStore`, `ScanConfig`, `ModelSeriesConfig`, resolver traits, and result/report types. It should not expose every internal helper module.
 

@@ -75,7 +75,7 @@ Diagnostics are user/Agent-facing and structured. Logs/traces are developer/runt
 
 ### Modern Rust module layout
 
-New Rust modules use the modern file layout and avoid the old `mod.rs` directory pattern. Large files should be split by domain concept before they become review-hostile.
+New Rust modules use the standard modern file layout and avoid the old `mod.rs` directory pattern. Prefer ordinary `mod foo;` declarations that resolve to `foo.rs` or `foo/bar.rs`; do not use `#[path = "..."]` unless there is a concrete interop reason. Large files should be split by domain concept before they become review-hostile.
 
 ## Crate and Host Map
 

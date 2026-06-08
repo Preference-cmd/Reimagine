@@ -2,15 +2,10 @@
 
 use crate::model::DiagnosticId;
 
-#[path = "diagnostic/code.rs"]
 mod code;
-#[path = "diagnostic/fix.rs"]
 mod fix;
-#[path = "diagnostic/related.rs"]
 mod related;
-#[path = "diagnostic/severity.rs"]
 mod severity;
-#[path = "diagnostic/target.rs"]
 mod target;
 
 pub use code::DiagnosticCode;
@@ -270,10 +265,7 @@ mod tests {
         assert_eq!(diag.severity(), DiagnosticSeverity::Warning);
         assert_eq!(diag.source().as_str(), "config");
         assert_eq!(diag.message(), "config file not found");
-        assert_eq!(
-            diag.primary().path(),
-            Some("~/.reimagine/config.toml")
-        );
+        assert_eq!(diag.primary().path(), Some("~/.reimagine/config.toml"));
         assert_eq!(diag.correlation_id().unwrap().as_str(), "corr-1");
         assert_eq!(diag.trace_span_id(), Some("span-42"));
         assert_eq!(diag.related().len(), 1);
@@ -336,10 +328,7 @@ mod tests {
         assert_eq!(diag.severity(), DiagnosticSeverity::Error);
         assert_eq!(diag.source().as_str(), "config");
         assert!(diag.message().contains("not found"));
-        assert_eq!(
-            diag.correlation_id().unwrap().as_str(),
-            "corr-config"
-        );
+        assert_eq!(diag.correlation_id().unwrap().as_str(), "corr-config");
     }
 
     // Simulated model-manager-style error.
