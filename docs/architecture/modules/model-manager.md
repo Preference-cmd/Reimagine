@@ -370,23 +370,56 @@ V1 stores this under:
 <base_path>/config/model_series.json
 ```
 
-Suggested shape:
+V1 shape:
 
 ```text
 ModelSeriesConfig
+  schema_version
   rules: Vec<ModelSeriesRule>
 ```
 
 ```text
 ModelSeriesRule
-  match
+  root_id optional
+  path_pattern optional
+  filename_pattern optional
+  extension optional
   model_series
   variant
   roles
   format optional
 ```
 
-Rules may match by path pattern, filename pattern, extension, or manifest root. The scanner uses these rules to propose or assign `model_series`, `variant`, and roles.
+Rules may match by path pattern, filename pattern, extension, or manifest root. A rule matches only when every field present on the rule matches the candidate. Rules are evaluated in order; the first matching rule wins.
+
+V1 matching semantics:
+
+```text
+extension
+  exact match after trimming leading "." and ASCII-lowercasing both sides
+
+path_pattern
+  glob match against the candidate path
+
+filename_pattern
+  glob match against the candidate filename
+
+root_id
+  exact match against the candidate manifest root id
+```
+
+The classifier does not walk directories or stat files. It classifies a `ClassificationCandidate` supplied by the scanner:
+
+```text
+ClassificationCandidate
+  root_id optional
+  path
+  filename
+  extension
+  observed_format optional
+```
+
+If no rule matches, the classifier returns `model_series = "unknown"`, `variant = "unknown"`, no roles, and either the observed format or `Unknown`.
 
 `ModelSeriesConfig` is defined by model-manager and implements `config::ConfigDocument`. `ModelManager` owns a `ConfigHandle<ModelSeriesConfig>` created from `AppConfig::config::<ModelSeriesConfig>()`.
 
@@ -433,7 +466,7 @@ V1 does not need remote download, Hugging Face snapshots, or automatic metadata 
 
 ## Fingerprint Strategy
 
-Fingerprints support stale-file diagnostics and stable auto-generated ids.
+Fingerprints support stale-file diagnostics and model identity conflict resolution.
 
 V1 can use:
 
@@ -492,7 +525,7 @@ fingerprint missing but source exists
   warn and allow run
 ```
 
-The purpose of the fingerprint is to detect silent model replacement without hashing large checkpoint files on every startup or run.
+The purpose of the fingerprint is to detect silent model replacement without hashing large checkpoint files on every startup or run. Fingerprints also participate in auto-id collision handling: when an auto-generated id collides, matching fingerprint plus matching full `ModelSource` means the candidate is treated as the same model.
 
 ## ID Policy
 
@@ -509,14 +542,15 @@ Collision handling:
 ```text
 if id is unused
   use it
-else if same fingerprint/source
+else if same fingerprint and same full ModelSource
   treat as same model
 else
-  append a longer hash suffix
+  append a longer deterministic hash suffix
+  if the suffixed id is also taken, append a deterministic counter
   emit notification/diagnostic describing the conflict resolution
 ```
 
-Manual id conflicts are rejected and reported to the user. Auto-generated id conflicts are resolved by suffixing, but still produce a notification so the user can see what happened.
+Manual id conflicts are rejected and reported to the user. Auto-generated id conflicts are resolved by suffixing, but still produce a notification/diagnostic so the user can see what happened. The id policy is pure model-manager logic over candidate descriptor data and existing manifest descriptors; it does not save manifests.
 
 Model IDs are user-visible. Avoid opaque UUID-only IDs for V1.
 
