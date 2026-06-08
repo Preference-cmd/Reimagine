@@ -8,12 +8,14 @@ mod identity;
 mod manifest;
 mod resolve;
 mod scan;
+mod store;
 mod verify;
 
 pub use classify::{ModelSeriesConfig, ModelSeriesRule};
 pub use error::{ModelManagerError, ModelManagerResult};
 pub use manifest::{
-    Fingerprint, ModelDescriptor, ModelFormat, ModelManifest, ModelRoot, ModelRootId,
-    ModelRootKind, ModelSource, ModelSourceStatus,
+    validate_manifest, Fingerprint, ManifestValidationReport, ModelDescriptor, ModelFormat,
+    ModelManifest, ModelRoot, ModelRootId, ModelRootKind, ModelSource, ModelSourceStatus,
 };
 pub use scan::ScanConfig;
+pub use store::{load_model_manifest, ModelManifestStore};

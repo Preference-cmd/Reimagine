@@ -2757,9 +2757,11 @@ dependencies = [
 name = "reimagine-model-manager"
 version = "0.1.0"
 dependencies = [
+ "reimagine-config",
  "reimagine-core",
  "serde",
  "serde_json",
+ "tokio",
 ]
 
 [[package]]

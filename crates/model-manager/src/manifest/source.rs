@@ -20,4 +20,17 @@ impl ModelSource {
     pub fn absolute(path: impl Into<String>) -> Self {
         Self::LocalFileAbsolute { path: path.into() }
     }
+
+    pub fn path(&self) -> &str {
+        match self {
+            Self::LocalFileRelative { path, .. } | Self::LocalFileAbsolute { path } => path,
+        }
+    }
+
+    pub fn root_id(&self) -> Option<&ModelRootId> {
+        match self {
+            Self::LocalFileRelative { root_id, .. } => Some(root_id),
+            Self::LocalFileAbsolute { .. } => None,
+        }
+    }
 }

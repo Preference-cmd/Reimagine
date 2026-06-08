@@ -11,3 +11,9 @@ pub enum ModelFormat {
     #[serde(rename = "unknown")]
     Unknown,
 }
+
+impl ModelFormat {
+    pub fn is_supported(self) -> bool {
+        !matches!(self, Self::Unknown)
+    }
+}
