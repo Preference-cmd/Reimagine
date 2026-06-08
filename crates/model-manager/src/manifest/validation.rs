@@ -86,6 +86,23 @@ pub async fn validate_manifest(
             ));
         }
 
+        if !fully_unknown
+            && !series_unknown
+            && !variant_unknown
+            && !is_supported_series_variant(
+                descriptor.model_series().as_str(),
+                descriptor.variant().as_str(),
+            )
+        {
+            report.push_diagnostic(model_diagnostic(
+                "descriptor_unknown",
+                Some(model_id.clone()),
+                Some(descriptor.source().path().to_owned()),
+                "MODEL_MANAGER/MODEL_DESCRIPTOR_UNKNOWN",
+                "model descriptor has unsupported series or variant",
+            ));
+        }
+
         if descriptor.roles().is_empty() && !series_unknown && !variant_unknown {
             report.push_diagnostic(model_diagnostic(
                 "roles_missing",
@@ -346,6 +363,10 @@ fn is_valid_fingerprint(fingerprint: &Fingerprint) -> bool {
     !fingerprint.kind().trim().is_empty()
         && !fingerprint.value().trim().is_empty()
         && matches!(fingerprint.kind(), "sha256")
+}
+
+fn is_supported_series_variant(series: &str, variant: &str) -> bool {
+    matches!((series, variant), ("stable_diffusion", "sdxl" | "sd15"))
 }
 
 fn model_diagnostic(
