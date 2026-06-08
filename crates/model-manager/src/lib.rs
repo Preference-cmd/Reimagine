@@ -11,8 +11,12 @@ mod scan;
 mod store;
 mod verify;
 
-pub use classify::{ModelSeriesConfig, ModelSeriesRule};
+pub use classify::{
+    ClassificationCandidate, ClassificationResult, Classifier, MODEL_SERIES_SCHEMA_VERSION,
+    ModelSeriesConfig, ModelSeriesRule,
+};
 pub use error::{ModelManagerError, ModelManagerResult};
+pub use identity::{AutoIdResult, IdPolicy, IdResolution};
 pub use manifest::{
     Fingerprint, ManifestValidationReport, ModelDescriptor, ModelFormat, ModelManifest, ModelRoot,
     ModelRootId, ModelRootKind, ModelSource, ModelSourceStatus, validate_manifest,
