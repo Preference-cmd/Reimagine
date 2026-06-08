@@ -8,6 +8,8 @@ use reimagine_core::diagnostic::{
 use reimagine_core::event::OperationReport;
 use reimagine_core::model::DiagnosticId;
 
+use crate::classify::ModelSeriesConfig;
+
 use super::{
     Fingerprint, MODEL_MANIFEST_SCHEMA_VERSION, ModelDescriptor, ModelManifest, ModelRoot,
     ModelRootId, ModelRootKind, ModelSource, ModelSourceStatus,
@@ -18,6 +20,14 @@ pub type ManifestValidationReport = OperationReport;
 pub async fn validate_manifest(
     manifest: &ModelManifest,
     models_dir: impl Into<PathBuf>,
+) -> ManifestValidationReport {
+    validate_manifest_with_series_config(manifest, models_dir, &ModelSeriesConfig::default()).await
+}
+
+pub async fn validate_manifest_with_series_config(
+    manifest: &ModelManifest,
+    models_dir: impl Into<PathBuf>,
+    series_config: &ModelSeriesConfig,
 ) -> ManifestValidationReport {
     let models_dir = models_dir.into();
     let mut report = ManifestValidationReport::new();
@@ -57,9 +67,9 @@ pub async fn validate_manifest(
             ));
         }
 
-        if descriptor.model_series().as_str().trim().is_empty()
-            || descriptor.variant().as_str().trim().is_empty()
-        {
+        let series_empty = descriptor.model_series().as_str().trim().is_empty();
+        let variant_empty = descriptor.variant().as_str().trim().is_empty();
+        if series_empty || variant_empty {
             report.push_diagnostic(model_diagnostic(
                 "descriptor_unknown",
                 Some(model_id.clone()),
@@ -87,12 +97,12 @@ pub async fn validate_manifest(
         }
 
         if !fully_unknown
+            && !series_empty
+            && !variant_empty
             && !series_unknown
             && !variant_unknown
-            && !is_supported_series_variant(
-                descriptor.model_series().as_str(),
-                descriptor.variant().as_str(),
-            )
+            && !series_config
+                .supports_series_variant(descriptor.model_series(), descriptor.variant())
         {
             report.push_diagnostic(model_diagnostic(
                 "descriptor_unknown",
@@ -363,10 +373,6 @@ fn is_valid_fingerprint(fingerprint: &Fingerprint) -> bool {
     !fingerprint.kind().trim().is_empty()
         && !fingerprint.value().trim().is_empty()
         && matches!(fingerprint.kind(), "sha256")
-}
-
-fn is_supported_series_variant(series: &str, variant: &str) -> bool {
-    matches!((series, variant), ("stable_diffusion", "sdxl" | "sd15"))
 }
 
 fn model_diagnostic(

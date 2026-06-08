@@ -16,6 +16,7 @@ pub use error::{ModelManagerError, ModelManagerResult};
 pub use manifest::{
     Fingerprint, ManifestValidationReport, ModelDescriptor, ModelFormat, ModelManifest, ModelRoot,
     ModelRootId, ModelRootKind, ModelSource, ModelSourceStatus, validate_manifest,
+    validate_manifest_with_series_config,
 };
 pub use scan::ScanConfig;
 pub use store::{ModelManifestStore, load_model_manifest};
