@@ -3,8 +3,8 @@ use std::path::PathBuf;
 use reimagine_config::AppPaths;
 use reimagine_core::model::{ModelId, ModelRole, ModelSeries, ModelVariant};
 use reimagine_model_manager::{
-    load_model_manifest, Fingerprint, ModelDescriptor, ModelFormat, ModelManifest,
-    ModelManifestStore, ModelRoot, ModelRootId, ModelSource, ModelSourceStatus,
+    Fingerprint, ModelDescriptor, ModelFormat, ModelManifest, ModelManifestStore, ModelRoot,
+    ModelRootId, ModelSource, ModelSourceStatus, load_model_manifest,
 };
 
 #[tokio::test]
@@ -52,7 +52,9 @@ async fn save_and_reload_roundtrip_preserves_manifest() {
 async fn invalid_json_returns_error_with_diagnostic() {
     let base = test_base("invalid-json");
     let store = ModelManifestStore::new(AppPaths::new(base.clone()));
-    tokio::fs::create_dir_all(base.join("models")).await.unwrap();
+    tokio::fs::create_dir_all(base.join("models"))
+        .await
+        .unwrap();
     tokio::fs::write(store.path(), b"{bad-json").await.unwrap();
 
     let error = store.load().await.unwrap_err();
