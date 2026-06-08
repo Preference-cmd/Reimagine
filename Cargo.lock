@@ -2754,6 +2754,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "reimagine-model-manager"
+version = "0.1.0"
+dependencies = [
+ "reimagine-core",
+ "serde",
+ "serde_json",
+]
+
+[[package]]
 name = "reimagine-runtime"
 version = "0.1.0"
 dependencies = [
