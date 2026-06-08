@@ -16,7 +16,9 @@ pub use format::ModelFormat;
 pub use root::{ModelRoot, ModelRootId, ModelRootKind};
 pub use source::ModelSource;
 pub use status::ModelSourceStatus;
-pub use validation::{ManifestValidationReport, validate_manifest};
+pub use validation::{
+    ManifestValidationReport, validate_manifest, validate_manifest_with_series_config,
+};
 
 pub const MODEL_MANIFEST_SCHEMA_VERSION: &str = "reimagine.model_manifest.v1";
 

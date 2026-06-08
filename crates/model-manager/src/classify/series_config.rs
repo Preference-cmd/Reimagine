@@ -20,6 +20,18 @@ impl ModelSeriesConfig {
         }
     }
 
+    pub fn v1_builtin() -> Self {
+        Self::new()
+            .with_rule(ModelSeriesRule::new(
+                ModelSeries::new("stable_diffusion"),
+                ModelVariant::new("sdxl"),
+            ))
+            .with_rule(ModelSeriesRule::new(
+                ModelSeries::new("stable_diffusion"),
+                ModelVariant::new("sd15"),
+            ))
+    }
+
     pub fn with_rule(mut self, rule: ModelSeriesRule) -> Self {
         self.rules.push(rule);
         self
@@ -32,11 +44,17 @@ impl ModelSeriesConfig {
     pub fn rules(&self) -> &[ModelSeriesRule] {
         &self.rules
     }
+
+    pub fn supports_series_variant(&self, series: &ModelSeries, variant: &ModelVariant) -> bool {
+        self.rules
+            .iter()
+            .any(|rule| rule.model_series() == series && rule.variant() == variant)
+    }
 }
 
 impl Default for ModelSeriesConfig {
     fn default() -> Self {
-        Self::new()
+        Self::v1_builtin()
     }
 }
 

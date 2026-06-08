@@ -4,7 +4,8 @@ use reimagine_config::AppPaths;
 use reimagine_core::model::{ModelId, ModelRole, ModelSeries, ModelVariant};
 use reimagine_model_manager::{
     Fingerprint, ManifestValidationReport, ModelDescriptor, ModelFormat, ModelManifest, ModelRoot,
-    ModelRootId, ModelRootKind, ModelSource, ModelSourceStatus, validate_manifest,
+    ModelRootId, ModelRootKind, ModelSeriesConfig, ModelSeriesRule, ModelSource, ModelSourceStatus,
+    validate_manifest, validate_manifest_with_series_config,
 };
 
 #[tokio::test]
@@ -109,6 +110,65 @@ async fn unsupported_series_and_variant_are_reported() {
     let report = validate_manifest(&manifest, base.join("models")).await;
 
     assert_codes(&report, &["MODEL_MANAGER/MODEL_DESCRIPTOR_UNKNOWN"]);
+
+    cleanup(base).await;
+}
+
+#[tokio::test]
+async fn series_config_is_the_supported_series_variant_source() {
+    let base = test_base("series-config-source");
+    tokio::fs::create_dir_all(&base).await.unwrap();
+    let source_path = base.join("custom.safetensors");
+    tokio::fs::write(&source_path, b"weights").await.unwrap();
+    let manifest = ModelManifest::new()
+        .with_root(ModelRoot::base_models())
+        .with_model(
+            ModelDescriptor::new(
+                ModelId::new("custom-variant"),
+                ModelSeries::new("stable_diffusion"),
+                ModelVariant::new("sd3"),
+                vec![ModelRole::DiffusionModel],
+                ModelSource::absolute(source_path.display().to_string()),
+                ModelFormat::Safetensors,
+            )
+            .with_source_status(ModelSourceStatus::Available),
+        );
+    let series_config = ModelSeriesConfig::default().with_rule(ModelSeriesRule::new(
+        ModelSeries::new("stable_diffusion"),
+        ModelVariant::new("sd3"),
+    ));
+
+    let report =
+        validate_manifest_with_series_config(&manifest, base.join("models"), &series_config).await;
+
+    assert_lacks_code(&report, "MODEL_MANAGER/MODEL_DESCRIPTOR_UNKNOWN");
+
+    cleanup(base).await;
+}
+
+#[tokio::test]
+async fn empty_series_and_variant_emit_one_descriptor_diagnostic() {
+    let base = test_base("empty-series-variant");
+    tokio::fs::create_dir_all(&base).await.unwrap();
+    let source_path = base.join("empty.safetensors");
+    tokio::fs::write(&source_path, b"weights").await.unwrap();
+    let manifest = ModelManifest::new()
+        .with_root(ModelRoot::base_models())
+        .with_model(
+            ModelDescriptor::new(
+                ModelId::new("empty-series"),
+                ModelSeries::new(""),
+                ModelVariant::new(""),
+                vec![ModelRole::DiffusionModel],
+                ModelSource::absolute(source_path.display().to_string()),
+                ModelFormat::Safetensors,
+            )
+            .with_source_status(ModelSourceStatus::Available),
+        );
+
+    let report = validate_manifest(&manifest, base.join("models")).await;
+
+    assert_code_count(&report, "MODEL_MANAGER/MODEL_DESCRIPTOR_UNKNOWN", 1);
 
     cleanup(base).await;
 }
@@ -286,6 +346,19 @@ fn assert_lacks_code(report: &ManifestValidationReport, unexpected: &str) {
         !codes.iter().any(|actual| actual == unexpected),
         "did not expect diagnostic code {unexpected} in {:?}",
         codes
+    );
+}
+
+fn assert_code_count(report: &ManifestValidationReport, expected: &str, count: usize) {
+    let actual_count = report
+        .diagnostics()
+        .iter()
+        .filter(|diagnostic| diagnostic.code().as_str() == expected)
+        .count();
+
+    assert_eq!(
+        actual_count, count,
+        "expected diagnostic code {expected} to appear {count} time(s)"
     );
 }
 
