@@ -1,4 +1,9 @@
-use reimagine_core::model::{ModelRole, ModelSeries, ModelVariant};
+use reimagine_config::{ConfigDocument, ConfigValidationContext};
+use reimagine_core::diagnostic::{
+    Diagnostic, DiagnosticCode, DiagnosticSeverity, DiagnosticSourceName, DiagnosticTarget,
+    DiagnosticTargetDomain,
+};
+use reimagine_core::model::{DiagnosticId, ModelRole, ModelSeries, ModelVariant};
 use serde::{Deserialize, Serialize};
 
 use crate::manifest::{ModelFormat, ModelRootId};
@@ -37,6 +42,11 @@ impl ModelSeriesConfig {
         self
     }
 
+    pub fn with_schema_version(mut self, version: impl Into<String>) -> Self {
+        self.schema_version = version.into();
+        self
+    }
+
     pub fn schema_version(&self) -> &str {
         &self.schema_version
     }
@@ -55,6 +65,36 @@ impl ModelSeriesConfig {
 impl Default for ModelSeriesConfig {
     fn default() -> Self {
         Self::v1_builtin()
+    }
+}
+
+impl ConfigDocument for ModelSeriesConfig {
+    const KEY: &'static str = "model_series.json";
+    const SCHEMA_VERSION: &'static str = MODEL_SERIES_SCHEMA_VERSION;
+
+    fn validate(&self, context: &ConfigValidationContext) -> Vec<Diagnostic> {
+        let mut diagnostics = Vec::new();
+
+        if self.schema_version != MODEL_SERIES_SCHEMA_VERSION {
+            diagnostics.push(Diagnostic::new(
+                DiagnosticId::new(format!(
+                    "config:{}:schema_version_unsupported",
+                    context.key()
+                )),
+                DiagnosticCode::new("CONFIG/MODEL_SERIES_SCHEMA_VERSION_UNSUPPORTED"),
+                DiagnosticSeverity::Error,
+                DiagnosticSourceName::new("model-manager"),
+                format!(
+                    "model series config schema version `{}` is not supported; expected `{}`",
+                    self.schema_version, MODEL_SERIES_SCHEMA_VERSION,
+                ),
+                DiagnosticTarget::new(DiagnosticTargetDomain::new("config"))
+                    .with_id(context.key().to_string())
+                    .with_path(context.path().display().to_string()),
+            ));
+        }
+
+        diagnostics
     }
 }
 
