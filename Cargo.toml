@@ -4,6 +4,7 @@ members = [
     "src-tauri",
     "crates/core",
     "crates/config",
+    "crates/model-manager",
     "crates/runtime",
     "crates/candle-integration"
 ]

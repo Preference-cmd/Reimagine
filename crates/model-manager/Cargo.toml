@@ -1,0 +1,15 @@
+[package]
+name = "reimagine-model-manager"
+version.workspace = true
+description.workspace = true
+authors.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+
+[dependencies]
+reimagine-core = { path = "../core" }
+serde = { workspace = true }
+serde_json = { workspace = true }
+
+[dev-dependencies]
+serde_json = { workspace = true }
