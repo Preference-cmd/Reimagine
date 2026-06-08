@@ -45,11 +45,18 @@ src-tauri/WixTools/
 # ----- Local planning / agent scratch -----
 .scratch/
 .sc/
+CONTEXT.md
 
-# Project docs: keep shared architecture/agent docs, ignore local/generated docs.
+# Project docs: keep shared architecture/design/agent docs, ignore local ADR/dev drafts.
 docs/*
 !docs/agents/
 !docs/agents/**
+!docs/architecture/
+!docs/architecture/**
+!docs/design/
+!docs/design/**
+docs/adr/
+docs/dev/
 
 # ----- Editor / OS -----
 .vscode/*
