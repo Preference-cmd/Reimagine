@@ -1,3 +1,6 @@
 //! Fingerprint verification facade.
-//!
-//! Explicit fingerprint refresh belongs to a later model-manager slice.
+
+mod refresh;
+mod sha256;
+
+pub use refresh::{FingerprintRefresh, ModelFingerprintVerifier};

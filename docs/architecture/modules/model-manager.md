@@ -657,7 +657,9 @@ Resolution checks:
 - manifest model_series and variant match `ModelRef.model_series` and `ModelRef.variant`;
 - requested role is provided by the descriptor;
 - source file exists;
-- fingerprint matches when available.
+- stale status blocks until explicit verify refresh updates fingerprint and observed metadata;
+- missing fingerprint with an existing source emits a warning but still allows readiness;
+- fingerprint-backed descriptors block when observed file metadata no longer matches the verified snapshot.
 
 The resolver returns descriptors only. Loaded backend handles belong to runtime/backend stores.
 
@@ -686,6 +688,8 @@ ResolvedModelInfo
 The full descriptor remains owned by model-manager and includes source paths, size, fingerprint, and metadata.
 
 Resolution should not load model weights. It only proves that a manifest entry exists and points to an available source that can later be loaded by a backend.
+
+Explicit verify/refresh remains the only path that computes SHA-256, updates `fingerprint`, `verified_at`, `observed_size_bytes`, `observed_modified_at`, `source_status`, and `updated_at`, and clears stale state for an existing descriptor or a first-add descriptor.
 
 ## Runtime Handoff
 

@@ -117,6 +117,22 @@ impl ModelDescriptor {
         self.observed_modified_at = observed_modified_at;
     }
 
+    pub(crate) fn set_size_bytes(&mut self, size_bytes: Option<u64>) {
+        self.size_bytes = size_bytes;
+    }
+
+    pub(crate) fn set_fingerprint(&mut self, fingerprint: Option<Fingerprint>) {
+        self.fingerprint = fingerprint;
+    }
+
+    pub(crate) fn set_verified_at(&mut self, verified_at: Option<String>) {
+        self.verified_at = verified_at;
+    }
+
+    pub(crate) fn set_updated_at(&mut self, updated_at: Option<String>) {
+        self.updated_at = updated_at;
+    }
+
     pub fn id(&self) -> &ModelId {
         &self.id
     }
@@ -159,6 +175,14 @@ impl ModelDescriptor {
 
     pub fn fingerprint(&self) -> Option<&Fingerprint> {
         self.fingerprint.as_ref()
+    }
+
+    pub fn verified_at(&self) -> Option<&str> {
+        self.verified_at.as_deref()
+    }
+
+    pub fn updated_at(&self) -> Option<&str> {
+        self.updated_at.as_deref()
     }
 
     pub fn is_runnable_candidate(&self) -> bool {
