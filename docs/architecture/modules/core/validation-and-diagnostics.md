@@ -60,18 +60,24 @@ Readiness decides whether core can produce an execution plan. It does not block 
 
 Readiness is evaluated over the execution subgraph, not necessarily the whole graph.
 
-Run targets in V1:
+Run target selection in V1:
 
 ```text
-SideEffect nodes
-workflow outputs
+RunTargetSelection
+  AllDefaultTargets
+  ExplicitTargets(Vec<RunTarget>)
 ```
 
-The execution subgraph is found by tracing upstream dependencies from run targets.
+Default run targets are target-capable nodes: nodes whose `NodeDef` has no `required=true` output slots. This allows terminal nodes such as preview and save nodes to be run without requiring an output socket.
+
+Explicit targets may select a target-capable node, a specific node output, or a workflow output. This supports partial execution of one selected target as well as full default-target execution.
+
+The execution subgraph is found by tracing upstream dependencies from the selected run targets. Multiple selected targets produce one merged execution subgraph, so shared upstream nodes execute once.
 
 Readiness checks:
 
 - at least one run target exists;
+- explicit targets exist and are valid;
 - required input slots in the execution subgraph resolve to effective values;
 - required outputs on pure nodes are consumed or exposed;
 - pure nodes contribute to a run target;
@@ -136,9 +142,76 @@ If a slot is `dynamic=true`, `WorkflowNode.params[slot]` is structurally invalid
 
 ## External Readiness Capabilities
 
-Core owns `ModelRef` and diagnostic target shapes, but does not own model manifests, model scanning, or model descriptor resolution.
+Core owns readiness traversal, workflow input context, `ModelRef`, and diagnostic target shapes. It does not own model manifests, model scanning, model descriptor resolution, file-system preflight, backend capability checks, or async I/O.
 
-Readiness may call host-provided capabilities for domains outside core, such as model availability. Those capabilities return diagnostics using core diagnostic types. The concrete resolver APIs live in the owning module, such as `model-manager`.
+Readiness consumes host-provided external readiness providers. V1 keeps this provider synchronous from core's point of view. Hosts may call async services such as model-manager before invoking core readiness, then pass a snapshot-backed provider into core.
+
+```text
+ExternalReadinessProvider
+  diagnostics_for(context, subject) -> Vec<Diagnostic>
+
+ExternalReadinessContext
+  workflow_id
+  workflow_version
+  node_id optional
+  slot_id optional
+  workflow_input_id optional
+  path
+
+ExternalReadinessSubject
+  ModelRef
+```
+
+V1 uses `ExternalReadinessSubject::ModelRef` for `ParamValue::ModelRef`. The subject enum may grow later for path, image, workflow input, artifact destination, or backend capability checks.
+
+Provider implementations do not live in core when they depend on concrete upstream crates. For example, a runtime or app-services adapter can depend on both core and model-manager, build a `ModelReadinessSnapshot`, and implement core's provider trait by looking up prepared results. Core must not depend on model-manager.
+
+If core readiness encounters a subject that requires external readiness and the provider has no entry for it, readiness reports an error such as:
+
+```text
+CORE/WORKFLOW_EXTERNAL_READINESS_MISSING
+```
+
+This represents orchestration failure, not "model not found". A missing model should be represented by a normal model-manager diagnostic entry, such as `MODEL_MANAGER/MODEL_REF_NOT_FOUND`.
+
+## Diagnostic Projection
+
+Concrete external modules emit diagnostics about their own domains. Core readiness needs diagnostics attached to workflow inputs, nodes, or params. Projection turns an external diagnostic into a workflow-targeted diagnostic while preserving the original cause.
+
+Generic projection can live in core because it depends only on core diagnostic types:
+
+```text
+project_external_diagnostic(original, new_primary)
+  primary = new_primary
+  related += original.primary
+  keep id or derive a stable projected id
+  keep correlation_id
+  keep trace_span_id
+  keep code
+  keep severity
+  keep source
+  keep message
+  keep fixes
+```
+
+For a model-manager diagnostic on a checkpoint param, the projected diagnostic should look like:
+
+```text
+primary:
+  domain = workflow
+  id = workflow_id
+  path = nodes.node_checkpoint.params.checkpoint
+
+related:
+  target = original model-manager target
+  message = external readiness source
+
+code = MODEL_MANAGER/MODEL_SOURCE_STALE
+source = model-manager
+severity = Error
+```
+
+Warnings from external providers do not block plan construction. Error diagnostics block plan construction.
 
 ## Diagnostics
 
