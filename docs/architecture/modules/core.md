@@ -78,7 +78,16 @@ src/
   history.rs
   actor.rs
   validation.rs
+  readiness.rs
+  readiness/
+    planner.rs
+    targets.rs
+    inputs.rs
+    external.rs
+    diagnostics.rs
   diagnostic.rs
+  diagnostic/
+    projection.rs
   proposal.rs
   execution_plan.rs
   run_event.rs
