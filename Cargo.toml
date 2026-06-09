@@ -5,6 +5,7 @@ members = [
     "crates/core",
     "crates/config",
     "crates/model-manager",
+    "crates/nodes",
     "crates/runtime",
     "crates/candle-integration"
 ]

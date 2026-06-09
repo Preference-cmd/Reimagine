@@ -1,0 +1,13 @@
+[package]
+name = "reimagine-nodes"
+version.workspace = true
+description.workspace = true
+authors.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+
+[dependencies]
+reimagine-core = { path = "../core" }
+
+[dev-dependencies]
+serde_json = { workspace = true }
