@@ -4,7 +4,7 @@
 
 ## Role
 
-An Axum server host is a future peer host adapter for remote/headless operation. It should reuse the same crates as Tauri.
+An Axum server host is a future peer host adapter for remote/headless operation. It should reuse the same `app-host` facade as Tauri.
 
 ## Potential Surface
 
@@ -20,6 +20,10 @@ POST /agent/sessions/:id/messages
 ## Non-Responsibilities
 
 - Workflow mutation logic.
+- Workflow session registry.
+- Workflow readiness orchestration.
 - Agent policy logic.
 - Runtime scheduling logic.
 - Backend inference logic.
+
+Axum routes should call `app-host` facade methods rather than reimplementing workflow/model/runtime orchestration.

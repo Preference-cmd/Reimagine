@@ -72,7 +72,7 @@ builtin.checkpoint_loader
     vae: Vae, required=true
 ```
 
-The node receives a `ModelRef` saved in workflow params. Runtime uses model-manager resolution and backend loading to produce runtime handles.
+The node receives a `ModelRef` saved in workflow params. Its runtime executor uses app-host-injected model resolution and backend loading capabilities to produce runtime handles.
 
 ### Conditioning
 
@@ -86,7 +86,7 @@ builtin.clip_text_encode
     conditioning: Conditioning, required=true
 ```
 
-There is no separate SDXL-specific prompt encode node in V1. Encoding behavior is selected by the runtime/backend based on the loaded `Clip` handle and model metadata.
+There is no separate SDXL-specific prompt encode node in V1. Encoding behavior is selected by the node executor/backend based on the loaded `Clip` handle and model metadata.
 
 ### Latent
 

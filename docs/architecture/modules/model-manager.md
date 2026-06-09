@@ -661,7 +661,7 @@ Resolution checks:
 - missing fingerprint with an existing source emits a warning but still allows readiness;
 - fingerprint-backed descriptors block when observed file metadata no longer matches the verified snapshot.
 
-The resolver returns descriptors only. Loaded backend handles belong to runtime/backend stores.
+The resolver returns descriptors only. Loaded backend handles belong to backend stores assembled outside model-manager.
 
 There are two resolver surfaces:
 
@@ -670,7 +670,7 @@ ModelReadinessResolver
   lightweight view passed to core readiness
 
 ModelDescriptorResolver
-  full descriptor lookup used by runtime/backend loading
+  full descriptor lookup used by app-host/backend loading capabilities
 ```
 
 The readiness resolver can project a descriptor into:
@@ -691,9 +691,9 @@ Resolution should not load model weights. It only proves that a manifest entry e
 
 Explicit verify/refresh remains the only path that computes SHA-256, updates `fingerprint`, `verified_at`, `observed_size_bytes`, `observed_modified_at`, `source_status`, and `updated_at`, and clears stale state for an existing descriptor or a first-add descriptor.
 
-## Runtime Handoff
+## Backend Handoff
 
-Runtime receives a full `ModelDescriptor` and requested role:
+`app-host` assembles backend loading capabilities that receive a full `ModelDescriptor` and requested role:
 
 ```text
 BackendModelStore
@@ -744,10 +744,10 @@ V1 can keep concurrency simple:
 - one in-memory manifest per app state;
 - async scans run one at a time;
 - manifest updates are serialized by the model manager;
-- runtime loading can read descriptors while scans are not mutating them;
+- backend loading can read descriptors while scans are not mutating them;
 - long hash computations should not block UI.
 
-If a workflow run starts while a scan is in progress, runtime uses the last committed manifest snapshot.
+If a workflow run starts while a scan is in progress, `app-host` builds readiness and backend loading capabilities from the last committed manifest snapshot.
 
 ## V1 Limits
 
@@ -771,11 +771,11 @@ model-manager must not -> runtime
 model-manager must not -> tauri
 ```
 
-Runtime and Candle integration consume resolved descriptors:
+`app-host` and Candle integration consume resolved descriptors:
 
 ```text
 Workflow ModelRef
-  -> model-manager resolves ModelDescriptor
-  -> candle-integration loads backend model payload
-  -> runtime passes Model / Clip / Vae handles between nodes
+  -> app-host/model service resolves ModelDescriptor
+  -> candle-integration-backed capability loads backend model payload
+  -> runtime receives Model / Clip / Vae handles from node executors
 ```
