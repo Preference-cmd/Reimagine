@@ -4,12 +4,14 @@ use crate::model::DiagnosticId;
 
 mod code;
 mod fix;
+mod projection;
 mod related;
 mod severity;
 mod target;
 
 pub use code::DiagnosticCode;
 pub use fix::DiagnosticFixHint;
+pub use projection::project_diagnostic;
 pub use related::DiagnosticRelated;
 pub use severity::DiagnosticSeverity;
 pub use target::{DiagnosticTarget, DiagnosticTargetDomain};
