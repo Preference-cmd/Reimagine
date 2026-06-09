@@ -3,9 +3,11 @@
 mod domain_event;
 mod kind;
 mod report;
+mod run_event;
 mod source;
 
 pub use domain_event::{DomainEvent, DomainEventId, Timestamp};
 pub use kind::DomainEventKind;
 pub use report::OperationReport;
+pub use run_event::{RunEvent, RunEventId, RunEventKind};
 pub use source::DomainEventSource;
