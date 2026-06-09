@@ -2773,6 +2773,14 @@ dependencies = [
 ]
 
 [[package]]
+name = "reimagine-nodes"
+version = "0.1.0"
+dependencies = [
+ "reimagine-core",
+ "serde_json",
+]
+
+[[package]]
 name = "reimagine-runtime"
 version = "0.1.0"
 dependencies = [
