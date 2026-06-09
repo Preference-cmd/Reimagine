@@ -15,7 +15,7 @@ This document is the architecture entry point. Module-level details live under `
 
 `src-tauri` is the V1 desktop host adapter. It owns Tauri IPC, desktop settings, window integration, and event bridging. It does not own workflow mutation, validation, Agent policy, execution scheduling, model inference, or ComfyUI mapping logic.
 
-A future Axum server is a peer host adapter. It should reuse the same crates as Tauri instead of copying desktop logic into server routes.
+A future Axum server is a peer host adapter. It should reuse the same `app-host` facade as Tauri instead of copying desktop logic into server routes.
 
 ### UI draft, Rust canonical truth
 
@@ -110,6 +110,20 @@ crates/agent
   - Reimagine-owned AgentProvider trait
   - Rig-backed V1 provider adapter
 
+crates/agent-macros
+  Agent tool macro:
+  - #[agent_tool] wrapper generation
+  - schema metadata derivation
+  - no policy bypass
+
+crates/app-host
+  Application service layer:
+  - WorkspaceHost / AppHost facade
+  - workflow session registry
+  - model/runtime/config/agent composition
+  - core readiness orchestration
+  - concrete Agent tools
+
 crates/config
   Workspace-scoped configuration infrastructure:
   - AppPaths and base_path layout
@@ -146,11 +160,12 @@ src-tauri
   - IPC
   - settings/window integration
   - Tauri event bridge
+  - app-host state injection
 
 future Axum host
   HTTP/WebSocket host adapter:
   - REST/WebSocket API
-  - server-side session stores
+  - app-host state injection
   - remote/headless run control
 
 ui
@@ -243,6 +258,7 @@ VAE and image:
 ## Module Docs
 
 - [Core](./modules/core.md)
+- [App host](./modules/app-host.md)
 - [Config](./modules/config.md)
 - [Model manager](./modules/model-manager.md)
 - [Runtime](./modules/runtime.md)

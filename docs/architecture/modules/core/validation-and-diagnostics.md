@@ -164,7 +164,7 @@ ExternalReadinessSubject
 
 V1 uses `ExternalReadinessSubject::ModelRef` for `ParamValue::ModelRef`. The subject enum may grow later for path, image, workflow input, artifact destination, or backend capability checks.
 
-Provider implementations do not live in core when they depend on concrete upstream crates. For example, a runtime or app-services adapter can depend on both core and model-manager, build a `ModelReadinessSnapshot`, and implement core's provider trait by looking up prepared results. Core must not depend on model-manager.
+Provider implementations do not live in core when they depend on concrete upstream crates. For example, an app-host adapter can depend on both core and model-manager, build a `ModelReadinessSnapshot`, and implement core's provider trait by looking up prepared results. Core must not depend on model-manager.
 
 If core readiness encounters a subject that requires external readiness and the provider has no entry for it, readiness reports an error such as:
 

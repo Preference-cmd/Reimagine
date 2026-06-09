@@ -5,24 +5,27 @@
 
 ## Role
 
-`runtime` is the host-independent workflow execution layer. It executes `core::ExecutionPlan` values using node capabilities and Candle-backed inference, manages run sessions, schedules stages, handles cancellation, routes artifacts, and emits `core::RunEvent` values through a host-provided sink.
+`runtime` is the host-independent workflow execution layer. It executes `core::ExecutionPlan` values using injected node capabilities, manages run sessions, schedules stages, handles cancellation, routes artifacts through injected artifact capabilities, and emits `core::RunEvent` values through a host-provided sink.
 
 It must not depend on Tauri or Axum.
 
 ## Responsibilities
 
-- Execute workflows through `ExecutionRunner`.
+- Execute prepared `core::ExecutionPlan` values through `RuntimeService` / `ExecutionRunner`.
 - Own `RunSession` and run state.
 - Schedule DAG stages and parallel nodes.
 - Handle cancellation.
-- Coordinate node execution and backend calls.
-- Route preview and saved artifacts under `base_path`.
+- Coordinate node execution through a `NodeExecutorRegistry`.
+- Route preview and saved artifacts through injected artifact capabilities.
 - Emit run events through `RunEventSink`.
 
 ## Non-Responsibilities
 
 - Workflow command application.
 - Workflow history.
+- Workflow readiness planning.
+- Workspace config loading.
+- Model manifest scanning or model reference policy.
 - Tauri IPC.
 - HTTP/WebSocket routing.
 - Agent reasoning.
@@ -33,11 +36,13 @@ It must not depend on Tauri or Axum.
 
 ```text
 runtime -> core
-runtime -> nodes
-runtime -> candle-integration
 runtime must not -> tauri
 runtime must not -> axum
+runtime must not -> model-manager
+runtime must not -> candle-integration
 ```
+
+Concrete node executors and backend capabilities are assembled by `app-host`. Runtime defines the execution traits and consumes trait objects/registries.
 
 ## Suggested Module Layout
 
@@ -52,6 +57,8 @@ src/
   artifacts.rs
   events.rs
   node_context.rs
+  executor.rs
+  store.rs
 ```
 
 Use modern Rust module layout. Do not introduce `mod.rs`, and prefer ordinary `mod foo;` declarations over `#[path = "..."]` attributes.
@@ -154,22 +161,22 @@ Runtime
       RunValueStore
 ```
 
-`Runtime` is long-lived and held by the host as a handle:
+`RuntimeService` is long-lived and held by `app-host` as a handle:
 
 ```text
-Runtime
-  config
+RuntimeService
   run_store
-  node_catalog
-  model_descriptor_resolver
-  backend_model_store
+  node_executor_registry
 ```
+
+Workspace config, model manager, backend model stores, and concrete node executor construction belong to `app-host`.
 
 `RunStore` tracks active runs and summaries:
 
 ```text
 RunStore
   active: RunId -> RunHandle
+  snapshots: RunId -> RunSnapshot
   summaries: RunId -> RunSummary
 ```
 
@@ -180,9 +187,10 @@ V1 can use `RwLock<HashMap<...>>`; it does not need a concurrent map unless prof
 ```text
 RunHandle
   run_id
-  state
   cancellation
 ```
+
+`RunHandle` is a control handle, not the canonical state source. Hosts query `RunStore` for `RunSnapshot` and `RunSummary`.
 
 `RunSession` is internal to the runner task:
 
@@ -244,16 +252,16 @@ V1 does not persist run event logs or intermediate values. UI can recover with `
 
 ## Model Resolution and Loading
 
-Runtime does not scan model directories and does not own the manifest. It receives a model descriptor resolver from `model-manager`.
+Runtime does not scan model directories, own the manifest, or depend on `model-manager`. Model resolution and backend loading are provided through node executors or runtime capabilities assembled by `app-host`.
 
 Execution flow:
 
 ```text
 Workflow ModelRef
   -> model-manager readiness resolver reports availability diagnostics
-  -> runtime resolves full ModelDescriptor through model-manager
-  -> backend model store get_or_load(descriptor, role, device)
+  -> app-host builds execution plan and node executor capabilities
+  -> checkpoint/model-loading node executor resolves/loads through injected capability
   -> RuntimeValue::Model / Clip / Vae
 ```
 
-The loaded backend payload stays in the backend model store. Runtime passes typed handles between nodes.
+The loaded backend payload stays in the backend model store owned by the injected backend capability. Runtime passes typed handles between nodes.
