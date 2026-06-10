@@ -58,6 +58,7 @@ src/
   events.rs
   node_context.rs
   executor.rs
+  resources.rs
   store.rs
 ```
 
@@ -265,6 +266,8 @@ Artifact
 Null
 ```
 
+`RunValueStore` should store `Arc<RuntimeValue>` handles. Large tensor buffers and loaded model payloads must not be copied into `RunValueStore`; they remain in backend-owned stores and are referenced by lightweight handles such as `BackendTensorHandle` or `RuntimeModelHandle`.
+
 These values are not owned by app state and are not exposed to UI. Host state keeps run handles, summaries, diagnostics, and artifact references only.
 
 `core::model::NodeValue` remains the public semantic value model. It is not the runtime store's primary representation.
@@ -277,11 +280,65 @@ V1 `NodeExecutor` may use `async-trait` for a readable async trait-object bounda
 
 V1 scheduling executes stages in order and may run nodes within a stage concurrently. Deterministic stage order and deterministic event/snapshot semantics are still required even when same-stage work is concurrent.
 
+## Backend Resource Lifecycle
+
+Runtime owns run dependency lifetime. Backend capabilities own real model/tensor/device memory lifetime.
+
+```text
+Runtime owns:
+  RunValueStore
+  OutputKey -> Arc<RuntimeValue>
+  dependency order
+  stage/last-use knowledge
+  run cancellation and cleanup timing
+
+Backend owns:
+  loaded model payloads
+  tensor payloads
+  device allocations
+  model cache policy
+  tensor cache policy
+  device transfer/offload policy
+  memory budget and eviction
+```
+
+Runtime should not directly unload a specific model, move a tensor to a device, compact a memory pool, or decide GPU/CPU placement. It should call a thin resource capability that communicates lifecycle intent:
+
+```text
+RunResourceBackend
+  begin_run(run_id)
+  release_runtime_value(run_id, value)
+  cleanup_run(run_id)
+  memory_snapshot()
+```
+
+The backend decides the mechanism:
+
+- `begin_run` may create run-scoped allocation state or pin already loaded models.
+- `release_runtime_value` may release a tensor immediately, decrement a backend refcount, or keep it in a pool.
+- `cleanup_run` releases run-scoped tensor payloads and run pins. Cached models may remain loaded according to backend policy.
+- `memory_snapshot` returns backend-specific memory/cache observations for diagnostics and UI, without giving runtime ownership of backend internals.
+
+V1 may keep all intermediate tensor handles until run cleanup. The runtime type shape should still allow future last-use analysis to call `release_runtime_value` earlier after the last downstream consumer completes.
+
+Model loading remains executor/backend capability work:
+
+```text
+checkpoint_loader executor
+  -> backend model capability get_or_load(...)
+  -> RuntimeValue::Model(handle)
+```
+
+Runtime stores and routes the returned handle, but it does not resolve manifests or own the loaded payload.
+
+Device placement and transfer are backend policy decisions surfaced through handles, run events, diagnostics, or memory snapshots. Runtime may pass cancellation and context to executors, but backend capabilities decide whether CPU/GPU transfer, offload, or eviction is allowed.
+
 Run cleanup:
 
 ```text
 completed/failed/cancelled
   -> persist artifacts as needed
+  -> cleanup backend run resources
   -> store RunSummary
   -> drop RunSession
   -> drop RunValueStore and intermediate tensors
