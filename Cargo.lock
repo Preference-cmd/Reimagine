@@ -2784,8 +2784,11 @@ dependencies = [
 name = "reimagine-runtime"
 version = "0.1.0"
 dependencies = [
+ "async-trait",
  "reimagine-core",
  "serde",
+ "tokio",
+ "tracing",
 ]
 
 [[package]]
