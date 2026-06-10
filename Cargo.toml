@@ -9,6 +9,7 @@ members = [
     "crates/runtime",
     "crates/candle-integration",
     "crates/agent",
+    "crates/agent-macros",
 ]
 
 [workspace.package]
@@ -29,3 +30,8 @@ tokio = "1"
 glob-match = "0.2"
 sha2 = "0.10"
 async-trait = "0.1"
+proc-macro2 = "1"
+quote = "1"
+syn = "2"
+schemars = "0.8"
+trybuild = "1"
