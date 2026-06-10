@@ -7,6 +7,20 @@
 
 `agent` is the Rust-side Agent runtime domain. It manages Agent sessions, mode policy, tool calls, workflow proposals, and provider access through a Reimagine-owned provider abstraction.
 
+Agent sessions are workspace-scoped. An Agent session belongs to one workspace and can only use the tools, workflow sessions, model manifest, config, diagnostics, and policy exposed for that workspace.
+
+```text
+WorkspaceHost
+  agent_service
+    AgentSession
+      workspace_scope
+      mode
+      provider_session
+      tool_policy
+```
+
+There is no app-global Agent session in V1. `AppHost` may route to a workspace, but the Agent runtime and tool context operate inside the selected workspace boundary.
+
 ## V1 Provider Boundary
 
 Reimagine owns:
@@ -75,12 +89,15 @@ Concrete tools live in `app-host` because they need access to workflow, model, r
 
 ```text
 ToolContext
+  workspace_scope
   agent_session_id
   mode
   correlation_id
   actor
   permissions
 ```
+
+`workspace_scope` is an opaque workspace identity/scope value defined by `agent` or shared app domain types, not an `app-host` handle. It is used for policy, audit, and correlation. It does not let the `agent` crate access workspace services directly.
 
 `ToolContext` should not carry an erased app-host capability bag in V1. Concrete app-host tool closures/functions can capture `Arc<WorkspaceHost>` directly because they live in `app-host`. This keeps `agent` independent from app-specific state and avoids turning context into an untyped service locator.
 
