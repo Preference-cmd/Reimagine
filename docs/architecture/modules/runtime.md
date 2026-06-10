@@ -63,6 +63,39 @@ src/
 
 Use modern Rust module layout. Do not introduce `mod.rs`, and prefer ordinary `mod foo;` declarations over `#[path = "..."]` attributes.
 
+## Public Run Boundary
+
+`RuntimeService::run` starts a complete workflow run for one prepared `core::ExecutionPlan`.
+
+```text
+RuntimeService::run(plan, run_inputs, options, sink) -> RunHandle
+```
+
+It does not mean "execute one internal execution unit". The public runtime boundary remains plan-based because callers such as `app-host`, Tauri, Axum, and Agent tools reason about workflow runs, targets, diagnostics, and run state. They should not need to know how the runtime scheduler subdivides the plan.
+
+Runtime may compile an `ExecutionPlan` into internal scheduling structures:
+
+```text
+ExecutionPlan
+  -> PreparedRun
+    -> ScheduledGraph
+      -> ExecutionUnit
+```
+
+`PreparedRun`, `ScheduledGraph`, and `ExecutionUnit` are runtime-internal concepts. They may model stage nodes, executor calls, artifact writes, or future fused operations, but they are not the API consumed by hosts.
+
+V1 `run` should spawn a background runner task and return a `RunHandle` immediately. Hosts observe progress through `RunStore` snapshots/summaries and `RunEventSink`, rather than blocking on the whole run.
+
+```text
+RuntimeService::run(...)
+  -> create run_id and cancellation token
+  -> insert active RunHandle and initial RunSnapshot
+  -> spawn runner task with RunSession
+  -> return RunHandle
+```
+
+The future may add lower-level APIs for testing or scheduler introspection, but host-facing execution stays run/plan-oriented.
+
 ## RunEventSink
 
 `core` owns `RunEvent`. `runtime` owns `RunEventSink`.
@@ -180,7 +213,7 @@ RunStore
   summaries: RunId -> RunSummary
 ```
 
-V1 can use `RwLock<HashMap<...>>`; it does not need a concurrent map unless profiling shows contention.
+V1 should use `Arc<RwLock<RunStoreInner>>`; it does not need a concurrent map unless profiling shows contention. The runner task owns the mutable `RunSession` and publishes snapshots/summaries back into the store. Hosts never get direct mutable access to a session.
 
 `RunHandle` is host-visible metadata/control, not a value-store handle:
 
@@ -237,6 +270,12 @@ These values are not owned by app state and are not exposed to UI. Host state ke
 `core::model::NodeValue` remains the public semantic value model. It is not the runtime store's primary representation.
 
 Node executors should not receive the whole `RunValueStore`. Runtime resolves graph dependencies and passes only the node's inputs through `NodeExecutionContext`.
+
+`NodeExecutorRegistry` is keyed by `core::model::NodeTypeId`. The node catalog defines node metadata; the executor registry defines how a node type runs. Do not merge those responsibilities.
+
+V1 `NodeExecutor` may use `async-trait` for a readable async trait-object boundary. If profiling later shows this boundary matters, it can be replaced with boxed futures without changing the runtime's public run/plan API.
+
+V1 scheduling executes stages in order and may run nodes within a stage concurrently. Deterministic stage order and deterministic event/snapshot semantics are still required even when same-stage work is concurrent.
 
 Run cleanup:
 
