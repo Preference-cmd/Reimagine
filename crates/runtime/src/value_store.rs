@@ -1,0 +1,86 @@
+//! Internal store of intermediate node outputs for a single run.
+
+use std::collections::HashMap;
+use std::sync::Arc;
+
+use reimagine_core::model::{NodeId, SlotId};
+
+use crate::value::RuntimeValue;
+
+/// Key for a value produced by a node and stored in the run value store.
+///
+/// Combines the producing node and the output slot id so the same node can
+/// publish multiple typed outputs (e.g. positive/negative conditioning).
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub struct OutputKey {
+    node_id: NodeId,
+    slot_id: SlotId,
+}
+
+impl OutputKey {
+    pub fn new(node_id: impl Into<NodeId>, slot_id: impl Into<SlotId>) -> Self {
+        Self {
+            node_id: node_id.into(),
+            slot_id: slot_id.into(),
+        }
+    }
+
+    pub fn node_id(&self) -> &NodeId {
+        &self.node_id
+    }
+
+    pub fn slot_id(&self) -> &SlotId {
+        &self.slot_id
+    }
+}
+
+/// Per-run value store keyed by [`OutputKey`].
+///
+/// Stores lightweight `Arc<RuntimeValue>` handles, not large tensor or model
+/// payloads — those remain in backend-owned stores and are referenced by
+/// handles carried inside [`RuntimeValue`].
+#[derive(Debug, Default)]
+pub struct RunValueStore {
+    values: HashMap<OutputKey, Arc<RuntimeValue>>,
+}
+
+impl RunValueStore {
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    /// Insert a value for the given output key.
+    pub fn insert(&mut self, key: OutputKey, value: Arc<RuntimeValue>) {
+        self.values.insert(key, value);
+    }
+
+    /// Get a value for the given key.
+    pub fn get(&self, key: &OutputKey) -> Option<Arc<RuntimeValue>> {
+        self.values.get(key).cloned()
+    }
+
+    /// Returns `true` if the store contains a value for the given key.
+    pub fn contains(&self, key: &OutputKey) -> bool {
+        self.values.contains_key(key)
+    }
+
+    /// Number of stored values.
+    pub fn len(&self) -> usize {
+        self.values.len()
+    }
+
+    /// Returns `true` if the store is empty.
+    pub fn is_empty(&self) -> bool {
+        self.values.is_empty()
+    }
+
+    /// Iterate all stored `(key, value)` pairs.
+    pub fn iter(&self) -> impl Iterator<Item = (&OutputKey, &Arc<RuntimeValue>)> {
+        self.values.iter()
+    }
+
+    /// Remove and return the value for the given key.
+    pub fn remove(&mut self, key: &OutputKey) -> Option<Arc<RuntimeValue>> {
+        self.values.remove(key)
+    }
+}
