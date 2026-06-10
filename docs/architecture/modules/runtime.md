@@ -97,6 +97,31 @@ RuntimeService::run(...)
 
 The future may add lower-level APIs for testing or scheduler introspection, but host-facing execution stays run/plan-oriented.
 
+## Host and Agent Boundary
+
+`runtime` exposes a host-neutral service contract for `app-host`. It must not know about Tauri, Axum, or Agent tools.
+
+```text
+RuntimeService
+  run(plan, run_inputs, options, sink) -> RunHandle
+  cancel(run_id) -> OperationReport
+  snapshot(run_id) -> Option<RunSnapshot>
+  summary(run_id) -> Option<RunSummary>
+```
+
+`app-host` decides which runtime operations are reachable from UI, future Axum routes, or Agent tools.
+
+```text
+UI/Tauri -> app-host -> runtime
+Future Axum -> app-host -> runtime
+Agent -> app-host -> runtime only when policy explicitly allows
+
+Agent must not -> runtime
+runtime must not -> agent
+```
+
+V1 Agent policy does not expose runtime run/cancel tools. Agent may inspect workflow/model/diagnostic facades through `app-host`, and runtime status may be projected into diagnostics or summaries by `app-host`, but Agent does not receive direct `RuntimeService` access.
+
 ## RunEventSink
 
 `core` owns `RunEvent`. `runtime` owns `RunEventSink`.
@@ -225,6 +250,37 @@ RunHandle
 ```
 
 `RunHandle` is a control handle, not the canonical state source. Hosts query `RunStore` for `RunSnapshot` and `RunSummary`.
+
+`RunSnapshot` is the live host-neutral observation shape:
+
+```text
+RunSnapshot
+  run_id
+  workflow_id
+  workflow_version
+  state
+  node_states
+  diagnostics
+  artifacts
+  started_at
+  updated_at
+```
+
+`RunSummary` is the completed/terminal observation shape:
+
+```text
+RunSummary
+  run_id
+  workflow_id
+  workflow_version
+  state
+  diagnostics
+  artifacts
+  started_at
+  finished_at
+```
+
+Snapshots and summaries must not expose `RunValueStore`, backend tensor payloads, loaded model payloads, or mutable session handles.
 
 `RunSession` is internal to the runner task:
 
