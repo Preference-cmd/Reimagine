@@ -7,7 +7,8 @@ members = [
     "crates/model-manager",
     "crates/nodes",
     "crates/runtime",
-    "crates/candle-integration"
+    "crates/candle-integration",
+    "crates/agent",
 ]
 
 [workspace.package]
@@ -27,3 +28,4 @@ serde_json = "1"
 tokio = "1"
 glob-match = "0.2"
 sha2 = "0.10"
+async-trait = "0.1"
