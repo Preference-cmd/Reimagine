@@ -152,6 +152,10 @@ async fn preview_commands(
 
 Input and output types should derive Serde and JSON Schema traits so provider adapters can expose schemas to OpenAI-compatible, Anthropic, or Rig-backed providers.
 
+V1 macro expansion preserves explicit registration. For a function named `preview_commands`, the macro generates a small `AgentTool` wrapper and a constructor such as `preview_commands_agent_tool()`. App-host registers that wrapper with `AgentToolRegistry`; execution still happens through `AgentToolRegistry::invoke`, so `ToolPolicy` remains the only public execution gate.
+
+The generated wrapper deserializes registry-boundary `ToolInput` (`serde_json::Value`) into the function's typed input, calls the async function, and serializes the typed output back into `ToolOutput`. Schema metadata is derived from `schemars::JsonSchema`-compatible input/output types and attached to `ToolSpec`.
+
 ## Code Organization
 
 `crates/agent` should use the same modern Rust module style as the rest of the workspace: no `mod.rs`, no `#[path]`, and no large catch-all file.

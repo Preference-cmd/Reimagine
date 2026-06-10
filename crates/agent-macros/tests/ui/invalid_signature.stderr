@@ -1,0 +1,5 @@
+error: `#[agent_tool]` functions must accept `(ToolContext, Input)`
+  --> tests/ui/invalid_signature.rs:22:28
+   |
+22 | async fn invalid_signature(_ctx: ToolContext) -> ToolResult<Output> {
+   |                            ^^^^^^^^^^^^^^^^^

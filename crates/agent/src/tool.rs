@@ -21,9 +21,13 @@ pub type ToolInput = Value;
 /// JSON-typed tool output carried across the registry boundary.
 pub type ToolOutput = Value;
 
-/// Result alias for tool invocations. A `ToolResult` is the successful
-/// output of a tool; failures are returned as `ToolError`.
-pub type ToolResult = Result<ToolOutput, ToolError>;
+/// Result alias for tool invocations.
+///
+/// At the registry boundary, `ToolResult` defaults to JSON `ToolOutput`.
+/// Macro-generated typed wrappers can use `ToolResult<MyOutput>` and
+/// serialize the successful value back to `ToolOutput` before returning it
+/// to the registry.
+pub type ToolResult<T = ToolOutput> = Result<T, ToolError>;
 
 /// Static description of a tool, returned by `AgentTool::spec`.
 ///
