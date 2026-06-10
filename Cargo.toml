@@ -10,6 +10,7 @@ members = [
     "crates/candle-integration",
     "crates/agent",
     "crates/agent-macros",
+    "crates/app-host",
 ]
 
 [workspace.package]

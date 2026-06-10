@@ -2762,6 +2762,20 @@ dependencies = [
 ]
 
 [[package]]
+name = "reimagine-app-host"
+version = "0.1.0"
+dependencies = [
+ "reimagine-agent",
+ "reimagine-config",
+ "reimagine-core",
+ "reimagine-model-manager",
+ "reimagine-nodes",
+ "reimagine-runtime",
+ "serde_json",
+ "tokio",
+]
+
+[[package]]
 name = "reimagine-candle-integration"
 version = "0.1.0"
 dependencies = [
