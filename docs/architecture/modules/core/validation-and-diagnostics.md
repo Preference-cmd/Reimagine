@@ -213,6 +213,57 @@ severity = Error
 
 Warnings from external providers do not block plan construction. Error diagnostics block plan construction.
 
+## Domain Event Adaptation
+
+Core owns the common host-facing event payload language, but it does not own a global event bus or service-specific event enums.
+
+Multiple services need to expose their local events as `DomainEvent` values:
+
+- config load/save reports;
+- model-manager scan, verify, and resolve events;
+- runtime run events;
+- agent session, tool, provider, and proposal events.
+
+Each service should keep its own internal event enum and implement a core-defined adapter trait when it needs to project those local events into the common host-facing event stream.
+
+Minimum trait shape:
+
+```text
+DomainEventAdapter<S>
+  adapt(source: S, context: EventAdapterContext) -> EventReport
+
+EventAdapterContext
+  source
+  correlation_id optional
+  subject optional
+
+EventReport
+  events: Vec<DomainEvent>
+  diagnostics: Vec<Diagnostic>
+```
+
+The concrete naming can evolve during implementation, but the ownership boundary is fixed:
+
+```text
+core
+  DomainEvent
+  Diagnostic
+  EventReport
+  DomainEventAdapter trait
+  no event bus
+
+service crates
+  own local event enums
+  implement adapter from local event to DomainEvent
+
+app-host
+  wires service event streams
+  invokes adapters
+  bridges DomainEvent to Tauri/Axum/UI
+```
+
+This keeps `DomainEvent` as the shared language without forcing services such as `agent` or `runtime` to use it as their only internal event model.
+
 ## Diagnostics
 
 Diagnostics use an abstract target model.

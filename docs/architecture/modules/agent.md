@@ -32,9 +32,27 @@ AgentProvider
   list_models()
 ```
 
-V1 should prefer Rig behind this trait. V1 provider support covers OpenAI-compatible endpoints and Anthropic.
+V1 provider support targets OpenAI-compatible endpoints and Anthropic, but `agent/01` only defines the Reimagine-owned provider boundary. It must not bind the runtime crate to a concrete provider framework or SDK.
 
-The Agent runtime remains owned by Reimagine because workflow command policy, proposal diffs, and safety rules are app-specific.
+Provider implementations can be added behind this trait later. Rig is the preferred V1 candidate for that implementation layer because it provides provider/model/streaming abstractions without needing to own Reimagine's workspace, workflow command, or tool policy semantics.
+
+Cersei is a useful reference for complete coding-agent runtime design, especially event streaming, tool execution lifecycle, MCP integration, memory, skills, and sub-agent orchestration. It should not be a V1 runtime dependency for `agent`, because those responsibilities overlap with Reimagine-owned workspace scope, app-host concrete tools, `ToolContext`, workflow proposal policy, and `WorkflowCommand` editing semantics.
+
+```text
+crates/agent
+  Reimagine-owned AgentProvider trait
+  Reimagine-owned tool registry and policy
+  no Rig or Cersei dependency in agent/01
+
+future provider adapter
+  Rig-backed OpenAI-compatible provider
+  Rig-backed Anthropic provider
+
+architecture reference only
+  Cersei-style event stream and tool lifecycle patterns
+```
+
+The Agent runtime remains owned by Reimagine because workflow command policy, proposal diffs, workspace scoping, and safety rules are app-specific.
 
 ## Modes
 
@@ -133,3 +151,85 @@ async fn preview_commands(
 ```
 
 Input and output types should derive Serde and JSON Schema traits so provider adapters can expose schemas to OpenAI-compatible, Anthropic, or Rig-backed providers.
+
+## Code Organization
+
+`crates/agent` should use the same modern Rust module style as the rest of the workspace: no `mod.rs`, no `#[path]`, and no large catch-all file.
+
+Suggested V1 structure:
+
+```text
+crates/agent/src/lib.rs
+crates/agent/src/error.rs
+crates/agent/src/ids.rs
+crates/agent/src/mode.rs
+crates/agent/src/session.rs
+crates/agent/src/context.rs
+crates/agent/src/permissions.rs
+crates/agent/src/tool.rs
+crates/agent/src/registry.rs
+crates/agent/src/policy.rs
+crates/agent/src/provider.rs
+crates/agent/src/event.rs
+crates/agent/src/event_adapter.rs
+crates/agent/src/report.rs
+```
+
+Module responsibilities:
+
+```text
+ids.rs
+  AgentSessionId, WorkspaceScope, ToolName, ProviderName, ModelName
+
+mode.rs
+  AgentMode::Agent, AgentMode::Build
+
+session.rs
+  workspace-scoped AgentSession and in-memory V1 session state
+
+context.rs
+  ToolContext metadata only; no app-host handles
+
+permissions.rs
+  ToolPermission, ToolRiskLevel, PermissionSet
+
+tool.rs
+  AgentTool trait, ToolSpec, ToolInput, ToolOutput, ToolResult
+
+registry.rs
+  explicit registration, duplicate rejection, deterministic listing, policy-mediated invocation
+
+policy.rs
+  mode, permission, and risk checks; no workflow command semantics
+
+provider.rs
+  AgentProvider trait, AgentRequest, AgentResponse, AgentStreamEvent, ModelInfo
+
+event.rs
+  AgentEvent and agent-local event payloads
+
+event_adapter.rs
+  AgentDomainEventAdapter implementing the core event adapter trait when available
+
+report.rs
+  AgentReport or ToolInvocationReport for policy/tool/provider outcomes
+
+error.rs
+  AgentError, ToolError, ProviderError
+```
+
+`lib.rs` should declare private modules and re-export the public surface. Prefer:
+
+```rust
+mod context;
+mod error;
+mod event;
+
+pub use context::ToolContext;
+pub use error::{AgentError, ProviderError, ToolError};
+pub use event::AgentEvent;
+```
+
+Use `serde_json::Value` at the registry boundary for `ToolInput` and `ToolOutput`. Concrete app-host tools and future `#[agent_tool]` wrappers can deserialize into strongly typed input/output structs. This keeps the registry compatible with OpenAI-compatible, Anthropic, and future Rig-backed tool schemas without binding `agent/01` to a schema-generation crate.
+
+`AgentEvent` is the agent-local event model. It should not be replaced by core `DomainEvent`. Instead, `event_adapter.rs` projects `AgentEvent` into core's common event language once the core adapter trait exists.
