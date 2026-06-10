@@ -69,7 +69,16 @@ WorkspaceHost
   node_executor_registry
 ```
 
-`WorkspaceHost` is the shared application state center. Tauri and future Axum hold it through their own host state mechanisms. Agent tools receive a controlled context that can call its facade methods.
+`WorkspaceHost` is the shared application state center. Tauri and future Axum hold it through their own host state mechanisms. Agent sessions are bound to a `WorkspaceHost`, not to global `AppHost` state. Agent tools receive a controlled context for the current workspace and concrete app-host tool functions capture the matching `Arc<WorkspaceHost>`.
+
+V1 can keep `AppHost` single-workspace:
+
+```text
+AppHost
+  workspace: Arc<WorkspaceHost>
+```
+
+The type shape should still make the workspace boundary explicit so future multi-workspace support can route Agent sessions and host requests to the correct `WorkspaceHost`.
 
 ## Service Facades
 
@@ -154,6 +163,7 @@ ToolSpec
 
 ```text
 ToolContext
+  workspace_scope
   agent_session_id
   mode
   correlation_id
@@ -163,8 +173,11 @@ ToolContext
 app-host concrete tool
   captures Arc<WorkspaceHost>
   receives ToolContext and typed input
+  verifies context workspace_scope matches captured workspace
   calls app-host workflow/model/diagnostic facade
 ```
+
+The workspace match check is part of app-host's tool boundary. A tool call with a mismatched workspace scope is an authorization/orchestration error, not a workflow command validation error.
 
 The `#[agent_tool]` macro lives in `crates/agent-macros`. The macro generates schema and wrapper code only. It must not bypass policy.
 
