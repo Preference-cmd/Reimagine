@@ -150,7 +150,21 @@ ToolPolicy
 ToolSpec
 ```
 
-`ToolContext` is an execution context supplied by `app-host` at call time. The type lives in `agent`, but app-specific access is injected through controlled handles/capabilities so `agent` never depends on `app-host`.
+`ToolContext` is an execution context supplied by `app-host` at call time. The type lives in `agent`, but it remains generic and host-neutral. App-specific access should be captured by concrete app-host tool functions/closures instead of being stored inside `ToolContext`.
+
+```text
+ToolContext
+  agent_session_id
+  mode
+  correlation_id
+  actor
+  permissions
+
+app-host concrete tool
+  captures Arc<WorkspaceHost>
+  receives ToolContext and typed input
+  calls app-host workflow/model/diagnostic facade
+```
 
 The `#[agent_tool]` macro lives in `crates/agent-macros`. The macro generates schema and wrapper code only. It must not bypass policy.
 
@@ -175,6 +189,27 @@ model.list
 model.resolve_ref
 diagnostics.for_workflow
 ```
+
+Workflow command tools use app-host workflow sessions:
+
+```text
+workflow.preview_commands
+  -> WorkflowService.preview_batch(...)
+  -> returns CommandResult / diff / diagnostics
+
+workflow.propose_commands
+  -> WorkflowService.preview_batch(...)
+  -> stores or returns a proposal envelope
+  -> does not mutate workflow
+
+workflow.apply_commands
+  -> checks Agent mode and ToolPolicy
+  -> requires preview success
+  -> agent mode may auto-apply only low-risk editor-only command batches
+  -> build mode applies only after human/host approval
+```
+
+`app-host` is responsible for converting Agent tool input into `core::CommandBatch` values with `CommandActorKind::Agent` and the correct provenance. Core remains responsible for command validation, preview, apply, history, undo/redo, and diagnostics.
 
 V1 Agent tools must not expose:
 

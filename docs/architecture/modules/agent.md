@@ -29,6 +29,22 @@ The Agent runtime remains owned by Reimagine because workflow command policy, pr
 
 V1 accepts or rejects proposals as a whole.
 
+V1 keeps auto-apply conservative:
+
+```text
+agent mode
+  may auto-apply low-risk, reversible, editor-only WorkflowCommand batches
+  must not run workflows, cancel runs, scan models, overwrite files, or perform arbitrary filesystem writes
+
+build mode
+  proposes a complete command batch and returns preview/diff/report
+  human approval applies the proposal
+```
+
+Low-risk editor-only commands are commands that mutate workflow edit state through core command/session semantics and remain undoable through workflow history. V1 policy should treat graph/data edits as candidates for auto-apply only after preview succeeds and policy allows the command kinds. Destructive or external-effect operations require human/host approval.
+
+The Agent runtime does not decide workflow command semantics. It enforces tool/mode/permission policy and delegates command preview/apply behavior to app-host tools.
+
 ## Tool Boundary
 
 Agent tools are declared with an attribute macro and executed through a registry/policy layer.
@@ -55,7 +71,18 @@ V1 uses explicit tool registration rather than distributed auto-registration.
 
 Concrete tools live in `app-host` because they need access to workflow, model, runtime, and diagnostic facades. The `agent` crate itself should not depend on `app-host`.
 
-`ToolContext` is defined by `agent` and supplied by `app-host` when a concrete tool is invoked. It may carry controlled handles/capabilities, but it must not require `agent` to import `app-host` types.
+`ToolContext` is defined by `agent` and supplied by `app-host` when a concrete tool is invoked. V1 keeps it generic:
+
+```text
+ToolContext
+  agent_session_id
+  mode
+  correlation_id
+  actor
+  permissions
+```
+
+`ToolContext` should not carry an erased app-host capability bag in V1. Concrete app-host tool closures/functions can capture `Arc<WorkspaceHost>` directly because they live in `app-host`. This keeps `agent` independent from app-specific state and avoids turning context into an untyped service locator.
 
 V1 tools:
 
