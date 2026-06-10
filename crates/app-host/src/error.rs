@@ -1,4 +1,5 @@
-use reimagine_core::model::{WorkflowId, WorkflowVersion};
+use reimagine_core::model::{RunId, WorkflowId, WorkflowVersion};
+use reimagine_runtime::RuntimeServiceError;
 
 pub type AppHostResult<T> = Result<T, AppHostError>;
 
@@ -9,6 +10,9 @@ pub enum AppHostError {
     },
     UnknownAgentSession {
         session_id: reimagine_agent::AgentSessionId,
+    },
+    UnknownRun {
+        run_id: RunId,
     },
     WorkflowIdPathUnsafe {
         workflow_id: WorkflowId,
@@ -26,6 +30,7 @@ pub enum AppHostError {
         path: std::path::PathBuf,
         message: String,
     },
+    Runtime(RuntimeServiceError),
     ModelManager(reimagine_model_manager::ModelManagerError),
 }
 
@@ -37,6 +42,9 @@ impl std::fmt::Display for AppHostError {
             }
             Self::UnknownAgentSession { session_id } => {
                 write!(f, "unknown agent session `{session_id}`")
+            }
+            Self::UnknownRun { run_id } => {
+                write!(f, "unknown run `{run_id}`")
             }
             Self::WorkflowIdPathUnsafe { workflow_id } => {
                 write!(f, "workflow id `{workflow_id}` is not safe as a file name")
@@ -55,6 +63,7 @@ impl std::fmt::Display for AppHostError {
             Self::WorkflowJson { path, message } => {
                 write!(f, "workflow json error at `{}`: {message}", path.display())
             }
+            Self::Runtime(error) => write!(f, "{error}"),
             Self::ModelManager(error) => write!(f, "{error}"),
         }
     }
@@ -65,5 +74,11 @@ impl std::error::Error for AppHostError {}
 impl From<reimagine_model_manager::ModelManagerError> for AppHostError {
     fn from(value: reimagine_model_manager::ModelManagerError) -> Self {
         Self::ModelManager(value)
+    }
+}
+
+impl From<RuntimeServiceError> for AppHostError {
+    fn from(value: RuntimeServiceError) -> Self {
+        Self::Runtime(value)
     }
 }

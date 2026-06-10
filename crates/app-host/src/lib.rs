@@ -10,6 +10,8 @@ mod agent_service;
 mod app_host;
 mod error;
 mod model_service;
+mod readiness;
+mod run_workflow;
 mod workflow_service;
 mod workspace;
 
@@ -17,5 +19,7 @@ pub use agent_service::AgentService;
 pub use app_host::AppHost;
 pub use error::{AppHostError, AppHostResult};
 pub use model_service::ModelService;
+pub use readiness::SnapshotExternalReadinessProvider;
+pub use run_workflow::{RunWorkflowRequest, RunWorkflowResult, run_id_of};
 pub use workflow_service::WorkflowService;
 pub use workspace::WorkspaceHost;
