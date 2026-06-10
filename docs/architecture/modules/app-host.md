@@ -99,6 +99,8 @@ It coordinates:
 
 `core` still owns the rules for a single workflow/session. `WorkflowService` owns the app-level registry.
 
+`WorkflowService` is also the persistence boundary for workflow JSON in V1. It may expose save/open helpers for host adapters, but graph mutation still goes through `WorkflowSession` command preview/apply APIs from `core`.
+
 `ModelService` wraps `model-manager` operations:
 
 - load/save manifest;
@@ -106,6 +108,23 @@ It coordinates:
 - list models;
 - resolve `ModelRef`;
 - produce readiness diagnostics/snapshots for core readiness.
+
+`ModelService` must not change model-manager validation, scan, identity, or resolver rules. It owns the host-facing cache/snapshot of the latest manifest and delegates domain decisions to `model-manager`.
+
+Core readiness expects a synchronous `ExternalReadinessProvider`, while model-manager resolution is async because it can touch the filesystem. `app-host` bridges this by building a snapshot before calling core:
+
+```text
+ModelService::build_readiness_snapshot(workflow)
+  -> collect ModelRef subjects from the workflow/session snapshot
+  -> asynchronously resolve each ModelRef through model-manager
+  -> store diagnostics keyed by ExternalReadinessSubject
+  -> return SnapshotExternalReadinessProvider
+
+core::readiness::build_execution_plan(..., Some(&snapshot_provider))
+  -> synchronously reads diagnostics from the snapshot
+```
+
+No async work should happen inside the core readiness callback.
 
 `RuntimeService` is provided by `crates/runtime` and is used through a host-neutral API:
 
@@ -129,6 +148,8 @@ AppHost::run_workflow(workflow_id, target_selection, run_inputs)
 ```
 
 This flow belongs in `app-host`, not in `runtime` and not in `src-tauri`.
+
+`run_workflow` is a host action in V1. Agent tools do not expose runtime run/cancel, so Agent-created workflow edits must be accepted/applied first and then a human/host action may call `run_workflow`.
 
 ## Agent Tool Boundary
 
@@ -224,6 +245,22 @@ workflow.apply_commands
 
 `app-host` is responsible for converting Agent tool input into `core::CommandBatch` values with `CommandActorKind::Agent` and the correct provenance. Core remains responsible for command validation, preview, apply, history, undo/redo, and diagnostics.
 
+Workflow proposal state belongs to `app-host`, not `agent` and not `core`. A proposal stores:
+
+```text
+WorkflowProposal
+  proposal_id
+  workflow_id
+  base_version
+  agent_session_id
+  command_batch
+  preview_result
+  created_at
+  status: pending | accepted | rejected | superseded
+```
+
+`workflow.propose_commands` previews the batch and stores or returns this proposal without mutating the workflow. `workflow.apply_commands` may apply a direct policy-approved agent-mode batch, or apply an accepted proposal in build mode after host/human approval. V1 accepts or rejects proposals as a whole.
+
 V1 Agent tools must not expose:
 
 ```text
@@ -262,3 +299,28 @@ src/
 ```
 
 Use modern Rust module layout. Do not introduce `mod.rs` files or `#[path = "..."]` attributes.
+
+## Implementation Slices
+
+`app-host` should be implemented in small slices:
+
+```text
+app-host/01a
+  crate scaffold
+  AppHost / WorkspaceHost
+  WorkflowService session registry and JSON persistence
+  ModelService manifest facade
+  AgentService session registry shell
+
+app-host/01b
+  readiness snapshot bridge
+  run_workflow orchestration
+  mock node executor coverage
+
+app-host/01c
+  concrete V1 Agent tools
+  proposal store
+  workflow command policy integration
+```
+
+This split keeps service ownership, run orchestration, and Agent editing policy independently reviewable.
