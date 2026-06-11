@@ -234,6 +234,38 @@ V1 does not use distributed auto-registration such as `inventory`.
 
 `AgentService` receives the frozen registry from `WorkspaceHost` construction. It owns Agent sessions and registry access, but it does not discover concrete app tools itself.
 
+## Agent Turn Orchestration
+
+`AgentService` is the app-host boundary that turns the crate-local Agent loop into a workspace feature. It owns workspace-scoped session lookup, provider lookup, and event sink wiring, then delegates the actual turn lifecycle to `crates/agent::AgentLoop`.
+
+```text
+AgentService::run_turn(request)
+  -> load AgentSession from workspace-scoped session store
+  -> resolve session.provider through AgentProviderCatalog
+  -> build AgentLoop(provider, event_sink)
+  -> call AgentLoop::run_turn(AgentTurnRequest)
+  -> return AgentTurnResult plus any app-host projection needed by host adapters
+```
+
+Provider selection is app-host/provider-adapter state, not an `agent` crate concern. V1 may use a deterministic test/mock provider catalog to prove the orchestration path. Real OpenAI-compatible, Anthropic, or Rig-backed provider adapters are separate slices that register `Arc<dyn AgentProvider>` values behind the same catalog boundary.
+
+The V1 provider catalog should stay minimal:
+
+```text
+AgentProviderCatalog
+  providers: ProviderName -> Arc<dyn AgentProvider>
+```
+
+Unknown provider names are host orchestration errors. They should not panic and should not cause app-host to fabricate a tool observation, because provider lookup happens before the Agent loop starts.
+
+`AgentService` should not call concrete tools directly. Tool execution still goes through the session's frozen `AgentToolRegistry` and the policy gate inside `AgentLoop`. This keeps the provider loop, app-host concrete tools, and workflow command policy in one deterministic path.
+
+`AgentService::run_turn` may return `reimagine_agent::AgentTurnResult` directly in V1. Add an app-host wrapper only if the host must return extra app-host data such as collected events. Do not create a parallel app-host turn lifecycle vocabulary.
+
+Agent session permissions are explicit. `AgentService` should expose a session creation path that accepts `PermissionSet` rather than silently granting broad write access. Host adapters decide which permissions a user/session receives.
+
+Agent-local events are emitted through an injected `AgentEventSink`. App-host may initially use `VecAgentEventSink` in tests and later bridge the same stream through `AgentDomainEventAdapter` into the common host event/report pipeline for Tauri or future Axum. Tool observations remain provider-visible messages; host events and diagnostics remain separate projections.
+
 V1 Agent tools include:
 
 ```text
@@ -370,6 +402,12 @@ app-host/01c
   concrete V1 Agent tools
   proposal store
   workflow command policy integration
+
+app-host/02
+  AgentService turn orchestration
+  workspace-scoped session lookup
+  provider catalog / resolver seam
+  AgentLoop invocation and event sink wiring
 ```
 
 This split keeps service ownership, run orchestration, and Agent editing policy independently reviewable.

@@ -6,6 +6,7 @@
 
 #![deny(unsafe_code)]
 
+mod agent_provider;
 mod agent_service;
 mod app_host;
 mod error;
@@ -19,7 +20,8 @@ mod tools;
 mod workflow_service;
 mod workspace;
 
-pub use agent_service::AgentService;
+pub use agent_provider::AgentProviderCatalog;
+pub use agent_service::{AgentService, AgentServiceTurnRequest};
 pub use app_host::AppHost;
 pub use error::{AppHostError, AppHostResult};
 pub use model_service::ModelService;
