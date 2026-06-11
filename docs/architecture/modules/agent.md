@@ -34,6 +34,48 @@ ToolPolicy
 
 V1 does not dynamically add or remove built-in app tools while a session is running. This mirrors the Codex-style capability-surface model: the Agent loop receives a stable set of tools and policies from the host, then invokes those tools only through the registry.
 
+## Terminology
+
+Reimagine uses Codex-style Agent loop terminology, adapted to workflow editing rather than coding-agent shell/file execution:
+
+```text
+AgentSession
+  Long-lived workspace-scoped Agent state. Owns workspace_scope, mode,
+  provider identity/config, frozen tool registry, policy, and conversation
+  continuity.
+
+AgentTurn
+  One user/agent request lifecycle inside a session. A turn may call the
+  provider multiple times if the model asks to invoke tools.
+
+AgentLoop
+  The harness that runs an AgentTurn. It builds provider requests,
+  advertises tool specs, executes requested tools through the registry,
+  feeds tool observations back to the provider, emits events, and stops
+  when a final assistant response or stop condition is reached.
+
+ToolCall
+  Provider-requested tool invocation. V1 already represents this through
+  provider::ToolCall and provider::ToolCallId.
+
+ToolObservation
+  The model-visible result of a tool call. It is serialized into a
+  provider::Message::tool_result(...) and fed back into the next provider
+  request.
+
+ToolCallResult
+  Agent-loop record of a tool call outcome. It carries tool_call_id,
+  tool name, status, output or diagnostics, whether the call was
+  effective, and correlation data. The provider receives the observation;
+  hosts may also receive events/diagnostics.
+
+AgentEvent / DomainEvent / Diagnostic
+  Host-facing observation streams for UI, audit, and adapters. They are
+  not the provider's conversation state.
+```
+
+`AgentSession` is the closest Reimagine concept to Codex's thread continuity. `AgentTurn` is the closest Reimagine concept to a Codex turn. Reimagine does not copy Codex's coding-specific shell, patch, or filesystem tools into V1.
+
 ## Agent Loop
 
 The Agent loop is owned by Reimagine, not by a provider SDK. Providers answer model requests; the Agent loop coordinates provider calls, tool calls, tool observations, events, and stop conditions.
@@ -68,6 +110,53 @@ AgentEvent / DomainEvent / Diagnostic
 ```
 
 This separation prevents the model from inferring workflow state from host-only events. If a tool creates a proposal, the tool output must explicitly report that the proposal is pending and that the workflow was not mutated.
+
+## Agent Turn Lifecycle
+
+V1 Agent loop execution should be deterministic and testable with a mock provider:
+
+```text
+run_turn(session, input)
+  -> create AgentTurn
+  -> build initial messages from session history + turn input
+  -> build AgentToolDefinition list from registry ToolSpec values
+  -> call AgentProvider::complete(...)
+  -> append assistant message
+  -> if assistant message has no tool calls:
+       finish turn with final assistant response
+  -> if assistant message has tool calls:
+       for each tool call:
+         invoke AgentToolRegistry with ToolContext
+         convert success/failure into ToolCallResult
+         append Message::tool_result(...)
+         emit AgentEvent::ToolInvoked/ToolCompleted/ToolFailed
+       call provider again with appended tool observations
+  -> repeat until final response, max tool steps, cancellation, or provider error
+```
+
+V1 may execute tool calls sequentially. Parallel tool execution can be considered later, after event ordering, proposal ordering, and UI projection semantics are stable.
+
+Stop conditions:
+
+```text
+final_response
+  provider returns assistant content with no tool calls
+
+max_tool_steps
+  loop reaches the configured V1 guard before final response
+
+provider_error
+  AgentProvider returns ProviderError
+
+tool_error
+  tool cannot be invoked or returns ToolError; V1 feeds the error
+  observation to the provider unless policy marks it terminal
+
+cancelled
+  future turn control; agent/02 may leave this as a placeholder
+```
+
+V1 should define turn status and result shapes even if streaming, steering, interruption, and real provider adapters are deferred.
 
 ## V1 Provider Boundary
 
@@ -292,6 +381,14 @@ event_adapter.rs
 
 report.rs
   AgentReport or ToolInvocationReport for policy/tool/provider outcomes
+
+turn.rs
+  AgentTurnId, AgentTurnStatus, AgentTurnRequest, AgentTurnResult,
+  ToolCallResult, stop condition shapes
+
+loop.rs
+  minimal AgentLoop / AgentTurnRunner over AgentProvider and
+  AgentToolRegistry
 
 error.rs
   AgentError, ToolError, ProviderError
