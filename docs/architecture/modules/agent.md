@@ -16,10 +16,58 @@ WorkspaceHost
       workspace_scope
       mode
       provider_session
+      tool_registry
       tool_policy
 ```
 
 There is no app-global Agent session in V1. `AppHost` may route to a workspace, but the Agent runtime and tool context operate inside the selected workspace boundary.
+
+At session creation time, the session is bound to:
+
+```text
+workspace_scope
+mode
+provider session/config
+frozen AgentToolRegistry
+ToolPolicy
+```
+
+V1 does not dynamically add or remove built-in app tools while a session is running. This mirrors the Codex-style capability-surface model: the Agent loop receives a stable set of tools and policies from the host, then invokes those tools only through the registry.
+
+## Agent Loop
+
+The Agent loop is owned by Reimagine, not by a provider SDK. Providers answer model requests; the Agent loop coordinates provider calls, tool calls, tool observations, events, and stop conditions.
+
+```text
+Agent loop
+  -> collect session context
+     - workspace_scope
+     - mode
+     - tool specs
+     - relevant workflow/model/diagnostic context
+  -> call AgentProvider
+  -> receive assistant text and/or tool call requests
+  -> invoke AgentToolRegistry
+     - ToolPolicy check
+     - concrete app-host tool execution
+  -> feed ToolCallResult back to the provider as observation
+  -> emit AgentEvent / DomainEvent / diagnostics for host observers
+  -> continue until final assistant response or stop condition
+```
+
+The provider sees tool schemas and tool observations. It does not receive app-host service handles, event bus handles, workflow sessions, or proposal stores.
+
+Tool observations and domain events are separate channels:
+
+```text
+ToolCallResult / ToolOutput
+  consumed by the Agent loop and sent back to the provider
+
+AgentEvent / DomainEvent / Diagnostic
+  consumed by UI, host adapters, audit, and future Axum/Tauri streams
+```
+
+This separation prevents the model from inferring workflow state from host-only events. If a tool creates a proposal, the tool output must explicitly report that the proposal is pending and that the workflow was not mutated.
 
 ## V1 Provider Boundary
 
@@ -77,6 +125,8 @@ Low-risk editor-only commands are commands that mutate workflow edit state throu
 
 The Agent runtime does not decide workflow command semantics. It enforces tool/mode/permission policy and delegates command preview/apply behavior to app-host tools.
 
+Approval is a host/app-host concern, not a tool-internal side effect. In build mode, Agent tools create proposals and return proposal receipts. A human or host action later accepts or rejects the proposal as a whole. The approved apply path is represented in workflow provenance, but the approval action itself is not a provider tool call.
+
 ## Tool Boundary
 
 Agent tools are declared with an attribute macro and executed through a registry/policy layer.
@@ -117,7 +167,7 @@ ToolContext
 
 `workspace_scope` is an opaque workspace identity/scope value defined by `agent` or shared app domain types, not an `app-host` handle. It is used for policy, audit, and correlation. It does not let the `agent` crate access workspace services directly.
 
-`ToolContext` should not carry an erased app-host capability bag in V1. Concrete app-host tool closures/functions can capture `Arc<WorkspaceHost>` directly because they live in `app-host`. This keeps `agent` independent from app-specific state and avoids turning context into an untyped service locator.
+`ToolContext` should not carry an erased app-host capability bag in V1. Concrete app-host tool wrappers capture app-host service state outside the context, typically through an `Arc<WorkspaceServices>`-style value owned by `app-host`. This keeps `agent` independent from app-specific state and avoids turning context into an untyped service locator.
 
 V1 tools:
 
@@ -132,6 +182,29 @@ diagnostics.for_workflow
 ```
 
 V1 does not expose runtime run/cancel tools to Agent.
+
+## Tool Results and Effects
+
+Every tool invocation returns an observation that can be fed back into the Agent loop. For mutation-capable tools, the output must distinguish preview/proposal from committed state:
+
+```text
+workflow.preview_commands
+  returns CommandResult-style preview
+  effective = false
+
+workflow.propose_commands
+  returns ProposalReceipt with proposal_id, base_version, preview_result
+  effective = false
+  workflow is not mutated
+
+workflow.apply_commands
+  returns apply result
+  effective = true only when core apply succeeds
+```
+
+`effective` is a tool-output property for the Agent loop. It is not a replacement for core history or workflow versioning. It exists so the model, UI, and tests can tell whether a tool invocation actually changed workflow state.
+
+Rejected tool calls, policy denials, and failed service calls should return structured diagnostics where possible. The Agent loop may feed those diagnostics back to the provider as part of the tool observation, while app-host/event adapters can also project them to the host-facing event stream.
 
 ## Tool Macro Shape
 
@@ -155,6 +228,8 @@ Input and output types should derive Serde and JSON Schema traits so provider ad
 V1 macro expansion preserves explicit registration. For a function named `preview_commands`, the macro generates a small `AgentTool` wrapper and a constructor such as `preview_commands_agent_tool()`. App-host registers that wrapper with `AgentToolRegistry`; execution still happens through `AgentToolRegistry::invoke`, so `ToolPolicy` remains the only public execution gate.
 
 The generated wrapper deserializes registry-boundary `ToolInput` (`serde_json::Value`) into the function's typed input, calls the async function, and serializes the typed output back into `ToolOutput`. Schema metadata is derived from `schemars::JsonSchema`-compatible input/output types and attached to `ToolSpec`.
+
+`#[agent_tool]` is optional for app-host concrete tools in V1. It is practical for stateless tools, but workspace-bound app-host tools may hand-write `AgentTool` wrappers when they need to capture `Arc<WorkspaceServices>`. The macro must not force app-host state into `ToolContext`.
 
 ## Code Organization
 

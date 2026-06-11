@@ -59,17 +59,21 @@ AppHost
 
 ```text
 WorkspaceHost
-  base_path
-  config_service
+  services: Arc<WorkspaceServices>
+  agent_service
+
+WorkspaceServices
+  workspace_scope
+  config
   workflow_service
   model_service
   runtime_service
-  agent_service
   node_catalog
-  node_executor_registry
 ```
 
-`WorkspaceHost` is the shared application state center. Tauri and future Axum hold it through their own host state mechanisms. Agent sessions are bound to a `WorkspaceHost`, not to global `AppHost` state. Agent tools receive a controlled context for the current workspace and concrete app-host tool functions capture the matching `Arc<WorkspaceHost>`.
+`WorkspaceHost` is the shared application state center. Tauri and future Axum hold it through their own host state mechanisms. Agent sessions are bound to one workspace, not to global `AppHost` state.
+
+`WorkspaceServices` is the app-host service container captured by concrete Agent tools. Tools capture `Arc<WorkspaceServices>`, not `Arc<WorkspaceHost>`, so they cannot recurse back through `AgentService` or mutate the registry while handling a tool call.
 
 V1 can keep `AppHost` single-workspace:
 
@@ -80,6 +84,20 @@ AppHost
 
 The type shape should still make the workspace boundary explicit so future multi-workspace support can route Agent sessions and host requests to the correct `WorkspaceHost`.
 
+Workspace construction follows a fixed capability-surface flow:
+
+```text
+WorkspaceHost::new
+  -> build Arc<WorkspaceServices>
+  -> build AgentToolRegistry
+  -> register_app_tools(&mut registry, Arc<WorkspaceServices>)
+  -> freeze registry as Arc<AgentToolRegistry>
+  -> create AgentService with workspace_scope and registry
+  -> return WorkspaceHost
+```
+
+The V1 registry is frozen after workspace construction. Built-in tools are not dynamically added or removed while Agent sessions are running.
+
 ## Service Facades
 
 `WorkflowService` owns app-level workflow session management:
@@ -87,6 +105,7 @@ The type shape should still make the workspace boundary explicit so future multi
 ```text
 WorkflowService
   sessions: WorkflowId -> WorkflowSession
+  proposals: WorkflowProposalStore
 ```
 
 It coordinates:
@@ -95,6 +114,7 @@ It coordinates:
 - saving workflow JSON;
 - applying `WorkflowCommand` batches;
 - previewing command batches;
+- creating and approving workflow proposals;
 - building readiness plans for a selected target.
 
 `core` still owns the rules for a single workflow/session. `WorkflowService` owns the app-level registry.
@@ -153,7 +173,7 @@ This flow belongs in `app-host`, not in `runtime` and not in `src-tauri`.
 
 ## Agent Tool Boundary
 
-Agent tools use an attribute macro to keep tool metadata close to implementation:
+Agent tools may use an attribute macro to keep tool metadata close to implementation:
 
 ```rust
 #[agent_tool(
@@ -192,7 +212,7 @@ ToolContext
   permissions
 
 app-host concrete tool
-  captures Arc<WorkspaceHost>
+  captures Arc<WorkspaceServices>
   receives ToolContext and typed input
   verifies context workspace_scope matches captured workspace
   calls app-host workflow/model/diagnostic facade
@@ -207,10 +227,12 @@ Concrete tool functions live in `app-host` because they need access to workflow,
 V1 uses explicit registration:
 
 ```text
-register_app_tools(registry)
+register_app_tools(registry, Arc<WorkspaceServices>)
 ```
 
 V1 does not use distributed auto-registration such as `inventory`.
+
+`AgentService` receives the frozen registry from `WorkspaceHost` construction. It owns Agent sessions and registry access, but it does not discover concrete app tools itself.
 
 V1 Agent tools include:
 
@@ -233,14 +255,15 @@ workflow.preview_commands
 
 workflow.propose_commands
   -> WorkflowService.preview_batch(...)
-  -> stores or returns a proposal envelope
+  -> stores a pending proposal and returns ProposalReceipt
   -> does not mutate workflow
 
 workflow.apply_commands
   -> checks Agent mode and ToolPolicy
   -> requires preview success
+  -> checks WorkflowCommandPolicy for auto-apply eligibility
   -> agent mode may auto-apply only low-risk editor-only command batches
-  -> build mode applies only after human/host approval
+  -> build mode does not directly mutate workflow through Agent tools
 ```
 
 `app-host` is responsible for converting Agent tool input into `core::CommandBatch` values with `CommandActorKind::Agent` and the correct provenance. Core remains responsible for command validation, preview, apply, history, undo/redo, and diagnostics.
@@ -259,7 +282,33 @@ WorkflowProposal
   status: pending | accepted | rejected | superseded
 ```
 
-`workflow.propose_commands` previews the batch and stores or returns this proposal without mutating the workflow. `workflow.apply_commands` may apply a direct policy-approved agent-mode batch, or apply an accepted proposal in build mode after host/human approval. V1 accepts or rejects proposals as a whole.
+`workflow.propose_commands` previews the batch and returns a `ProposalReceipt` without mutating the workflow:
+
+```text
+ProposalReceipt
+  proposal_id
+  workflow_id
+  base_version
+  preview_result
+  status: pending
+  effective: false
+```
+
+V1 stores only pending proposals in the proposal store. One pending proposal per workflow is allowed; a new proposal supersedes the older pending proposal for that workflow.
+
+`workflow.apply_commands` may apply a direct policy-approved agent-mode batch. Build-mode proposal approval is a host/app-host API, not an Agent tool call. When a host/human approves a pending proposal, app-host applies the stored command batch with `CommandProvenance::AgentProposal` and records the approver. V1 accepts or rejects proposals as a whole.
+
+Tool results and host events are distinct:
+
+```text
+Tool output
+  returned to the Agent loop as model-observable result
+
+DomainEvent / Diagnostic
+  emitted for UI, audit, host streams, and future Axum/Tauri adapters
+```
+
+Mutation-capable tool outputs include `effective`. `effective = false` means the model received a valid observation, but workflow state did not change.
 
 V1 Agent tools must not expose:
 
