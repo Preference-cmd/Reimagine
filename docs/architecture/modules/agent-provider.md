@@ -97,9 +97,11 @@ ProviderConfig
   enabled
 ```
 
-The exact secret-storage strategy can evolve. V1 may use local config values or
-environment variables, but the provider adapter should not read app config
-globally. Constructors receive resolved config.
+V1 provider config and provider secrets are read from and written to the
+workspace/app configuration files. Environment variables are not part of the V1
+provider configuration path. The provider adapter should not read app config
+globally; app-host/config loads the file-backed config and passes resolved
+values into constructors.
 
 ## App-Host Registration
 
