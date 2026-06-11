@@ -8,6 +8,9 @@ pub enum AppHostError {
     UnknownWorkflow {
         workflow_id: WorkflowId,
     },
+    NoPendingProposal {
+        workflow_id: WorkflowId,
+    },
     UnknownAgentSession {
         session_id: reimagine_agent::AgentSessionId,
     },
@@ -39,6 +42,9 @@ impl std::fmt::Display for AppHostError {
         match self {
             Self::UnknownWorkflow { workflow_id } => {
                 write!(f, "unknown workflow `{workflow_id}`")
+            }
+            Self::NoPendingProposal { workflow_id } => {
+                write!(f, "no pending proposal for workflow `{workflow_id}`")
             }
             Self::UnknownAgentSession { session_id } => {
                 write!(f, "unknown agent session `{session_id}`")
