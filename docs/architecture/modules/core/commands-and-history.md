@@ -108,6 +108,26 @@ Both paths use the same clone, command application, structural validation, and c
 
 `apply_batch` commits only after the batch structurally validates. Agent build mode can wrap `preview_batch` into a proposal without core knowing about provider calls, chat sessions, or UI review state.
 
+Core does not own the Agent loop, tool registry, proposal store, or human approval state. Those belong to `agent` and `app-host`. Core only reports whether a command batch would apply, did apply, was rejected, or was a no-op.
+
+This distinction matters for Agent tools:
+
+```text
+preview_batch
+  may become a model-visible tool observation
+  does not mutate workflow
+
+proposal
+  app-host state built from preview_batch
+  not a core workflow state transition
+
+apply_batch
+  the only path that mutates the workflow session
+  advances version and writes history only on success
+```
+
+If a build-mode proposal is approved by a human, app-host submits the stored batch to core with `CommandProvenance::AgentProposal`. Core records the provenance and committed actor data, but it does not decide approval policy.
+
 ## Apply Flow
 
 ```text
