@@ -23,14 +23,17 @@ mod registry;
 mod report;
 mod session;
 mod tool;
+mod turn;
 
 mod event_adapter;
+mod r#loop;
 
 pub use context::{Actor, ToolContext};
 pub use error::{AgentError, ProviderError, ToolError, ToolErrorCode};
 pub use event::AgentEvent;
 pub use event_adapter::AgentDomainEventAdapter;
 pub use ids::{AgentSessionId, ModelName, ProviderName, ToolName, WorkspaceScope};
+pub use r#loop::{AgentEventSink, AgentLoop, VecAgentEventSink};
 pub use mode::AgentMode;
 pub use permissions::{PermissionSet, ToolPermission, ToolRiskLevel};
 pub use policy::{PolicyDecision, PolicyDenialReason, ToolPolicy};
@@ -42,3 +45,7 @@ pub use registry::{AgentToolRegistry, ToolRegistryError};
 pub use report::{AgentReport, ToolInvocationReport};
 pub use session::AgentSession;
 pub use tool::{AgentTool, ToolInput, ToolOutput, ToolResult, ToolSpec};
+pub use turn::{
+    AgentTurnId, AgentTurnRequest, AgentTurnResult, AgentTurnStatus, AgentTurnStopReason,
+    DEFAULT_MAX_TOOL_STEPS, ToolCallResult, ToolCallStatus,
+};

@@ -56,7 +56,7 @@ impl std::fmt::Display for ToolErrorCode {
 /// Tool-level error returned by the registry when policy or execution
 /// fails. The error keeps the tool name and the stable code so hosts can
 /// project the failure into a `Diagnostic`.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub struct ToolError {
     code: ToolErrorCode,
     tool: Option<ToolName>,
