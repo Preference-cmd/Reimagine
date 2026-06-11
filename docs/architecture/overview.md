@@ -108,7 +108,13 @@ crates/agent
   - tool registry
   - WorkflowProposal and diff generation
   - Reimagine-owned AgentProvider trait
+
+crates/agent-provider
+  Agent provider adapters:
   - Rig-backed V1 provider adapter
+  - OpenAI-compatible provider implementation
+  - Anthropic provider implementation
+  - provider config mapping to AgentProvider instances
 
 crates/agent-macros
   Agent tool macro:
@@ -264,6 +270,7 @@ VAE and image:
 - [Runtime](./modules/runtime.md)
 - [Nodes](./modules/nodes.md)
 - [Agent](./modules/agent.md)
+- [Agent provider](./modules/agent-provider.md)
 - [Adapters](./modules/adapters.md)
 - [Candle integration](./modules/candle-integration.md)
 - [Tauri host](./modules/tauri-host.md)
