@@ -171,7 +171,7 @@ AgentProvider
 
 V1 provider support targets OpenAI-compatible endpoints and Anthropic, but `agent/01` only defines the Reimagine-owned provider boundary. It must not bind the runtime crate to a concrete provider framework or SDK.
 
-Provider implementations can be added behind this trait later. Rig is the preferred V1 candidate for that implementation layer because it provides provider/model/streaming abstractions without needing to own Reimagine's workspace, workflow command, or tool policy semantics.
+Provider implementations live outside `crates/agent`, in `crates/agent-provider`. Rig is the preferred V1 candidate for that implementation layer because it provides provider/model/streaming abstractions without needing to own Reimagine's workspace, workflow command, or tool policy semantics.
 
 Cersei is a useful reference for complete coding-agent runtime design, especially event streaming, tool execution lifecycle, MCP integration, memory, skills, and sub-agent orchestration. It should not be a V1 runtime dependency for `agent`, because those responsibilities overlap with Reimagine-owned workspace scope, app-host concrete tools, `ToolContext`, workflow proposal policy, and `WorkflowCommand` editing semantics.
 
@@ -181,9 +181,10 @@ crates/agent
   Reimagine-owned tool registry and policy
   no Rig or Cersei dependency in agent/01
 
-future provider adapter
+crates/agent-provider
   Rig-backed OpenAI-compatible provider
   Rig-backed Anthropic provider
+  provider config mapping to AgentProvider instances
 
 architecture reference only
   Cersei-style event stream and tool lifecycle patterns

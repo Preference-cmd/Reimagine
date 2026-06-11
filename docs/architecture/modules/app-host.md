@@ -40,6 +40,7 @@ app-host -> model-manager
 app-host -> runtime
 app-host -> candle-integration
 app-host -> agent
+app-host -> agent-provider
 app-host -> agent-macros
 
 src-tauri -> app-host
@@ -247,7 +248,7 @@ AgentService::run_turn(request)
   -> return AgentTurnResult plus any app-host projection needed by host adapters
 ```
 
-Provider selection is app-host/provider-adapter state, not an `agent` crate concern. V1 may use a deterministic test/mock provider catalog to prove the orchestration path. Real OpenAI-compatible, Anthropic, or Rig-backed provider adapters are separate slices that register `Arc<dyn AgentProvider>` values behind the same catalog boundary.
+Provider selection is app-host/provider-adapter state, not an `agent` crate concern. V1 may use a deterministic test/mock provider catalog to prove the orchestration path. Real OpenAI-compatible, Anthropic, or Rig-backed provider adapters live in `crates/agent-provider` and register `Arc<dyn AgentProvider>` values behind the same catalog boundary.
 
 The V1 provider catalog should stay minimal:
 
