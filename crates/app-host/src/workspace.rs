@@ -1,11 +1,13 @@
 use std::path::Path;
 use std::sync::Arc;
 
-use reimagine_agent::WorkspaceScope;
+use reimagine_agent::{AgentToolRegistry, WorkspaceScope};
 use reimagine_config::{AppConfig, AppPaths};
 use reimagine_nodes::BuiltinNodeCatalog;
 use reimagine_runtime::{NodeExecutorRegistry, RuntimeService, VecRunEventSink};
 
+use crate::services::WorkspaceServices;
+use crate::tools::register_app_tools;
 use crate::{AgentService, ModelService, WorkflowService};
 
 #[derive(Debug)]
@@ -17,6 +19,7 @@ pub struct WorkspaceHost {
     runtime_service: Arc<RuntimeService>,
     agent_service: Arc<AgentService>,
     node_catalog: Arc<BuiltinNodeCatalog>,
+    services: Arc<WorkspaceServices>,
 }
 
 impl WorkspaceHost {
@@ -29,7 +32,23 @@ impl WorkspaceHost {
         let config = Arc::new(config);
         let workflow_service = Arc::new(WorkflowService::new(config.paths().clone()));
         let model_service = Arc::new(ModelService::new(config.paths().clone()));
-        let agent_service = Arc::new(AgentService::new(workspace_scope.clone()));
+
+        let services = Arc::new(WorkspaceServices::new(
+            workspace_scope.clone(),
+            Arc::clone(&config),
+            Arc::clone(&workflow_service),
+            Arc::clone(&model_service),
+            Arc::clone(&runtime_service),
+            Arc::clone(&node_catalog),
+        ));
+
+        let mut registry = AgentToolRegistry::new();
+        register_app_tools(&mut registry, Arc::clone(&services));
+        let registry = Arc::new(registry);
+        let agent_service = Arc::new(AgentService::with_registry(
+            workspace_scope.clone(),
+            Arc::clone(&registry),
+        ));
 
         Self {
             workspace_scope,
@@ -39,6 +58,7 @@ impl WorkspaceHost {
             runtime_service,
             agent_service,
             node_catalog,
+            services,
         }
     }
 
@@ -86,6 +106,10 @@ impl WorkspaceHost {
     pub fn node_catalog(&self) -> &Arc<BuiltinNodeCatalog> {
         &self.node_catalog
     }
+
+    pub fn services(&self) -> &Arc<WorkspaceServices> {
+        &self.services
+    }
 }
 
 #[cfg(test)]
@@ -104,6 +128,7 @@ mod tests {
             reimagine_nodes::all_builtin_defs().len()
         );
         assert_eq!(host.runtime_service().store().active_count(), 0);
+        assert!(!host.agent_service().registry().is_empty());
     }
 
     fn unique_temp_dir(prefix: &str) -> std::path::PathBuf {

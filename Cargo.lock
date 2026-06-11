@@ -2772,6 +2772,7 @@ dependencies = [
  "reimagine-model-manager",
  "reimagine-nodes",
  "reimagine-runtime",
+ "serde",
  "serde_json",
  "tokio",
 ]

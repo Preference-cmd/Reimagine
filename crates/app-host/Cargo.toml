@@ -7,15 +7,16 @@ edition.workspace = true
 rust-version.workspace = true
 
 [dependencies]
+async-trait = { workspace = true }
 reimagine-agent = { path = "../agent" }
 reimagine-config = { path = "../config" }
 reimagine-core = { path = "../core" }
 reimagine-model-manager = { path = "../model-manager" }
 reimagine-nodes = { path = "../nodes" }
 reimagine-runtime = { path = "../runtime" }
+serde = { workspace = true }
 serde_json = { workspace = true }
 tokio = { workspace = true, features = ["fs", "io-util"] }
 
 [dev-dependencies]
-async-trait = { workspace = true }
 tokio = { workspace = true, features = ["macros", "rt", "rt-multi-thread"] }

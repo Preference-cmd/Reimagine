@@ -3,16 +3,21 @@ use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex, RwLock};
 
 use reimagine_config::{AppPaths, atomic_write};
-use reimagine_core::command::{CommandBatch, CommandResult};
+use reimagine_core::command::{
+    CommandActor, CommandActorKind, CommandBatch, CommandProvenance, CommandResult,
+    CommandResultStatus,
+};
 use reimagine_core::model::{NodeCatalog, WorkflowId};
 use reimagine_core::session::WorkflowSession;
 use reimagine_core::workflow::Workflow;
 
+use crate::proposal::WorkflowProposal;
 use crate::{AppHostError, AppHostResult};
 
 pub struct WorkflowService {
     app_paths: AppPaths,
     sessions: RwLock<BTreeMap<WorkflowId, Arc<Mutex<WorkflowSession>>>>,
+    proposals: RwLock<BTreeMap<WorkflowId, WorkflowProposal>>,
 }
 
 impl std::fmt::Debug for WorkflowService {
@@ -22,9 +27,15 @@ impl std::fmt::Debug for WorkflowService {
             .read()
             .map(|sessions| sessions.len())
             .unwrap_or_default();
+        let proposal_count = self
+            .proposals
+            .read()
+            .map(|proposals| proposals.len())
+            .unwrap_or_default();
         f.debug_struct("WorkflowService")
             .field("workflows_dir", &self.app_paths.workflows_dir())
             .field("workflow_count", &workflow_count)
+            .field("proposal_count", &proposal_count)
             .finish()
     }
 }
@@ -34,6 +45,7 @@ impl WorkflowService {
         Self {
             app_paths,
             sessions: RwLock::new(BTreeMap::new()),
+            proposals: RwLock::new(BTreeMap::new()),
         }
     }
 
@@ -156,6 +168,73 @@ impl WorkflowService {
             .app_paths
             .workflows_dir()
             .join(format!("{workflow_id}.json")))
+    }
+
+    pub fn store_proposal(&self, proposal: WorkflowProposal) -> AppHostResult<()> {
+        let workflow_id = proposal.workflow_id().clone();
+        let mut proposals = self.proposals.write().expect("proposal registry poisoned");
+        proposals.insert(workflow_id, proposal);
+        Ok(())
+    }
+
+    pub fn apply_pending_proposal(
+        &self,
+        workflow_id: &WorkflowId,
+        node_catalog: &impl NodeCatalog,
+        approved_by: Option<reimagine_core::command::CommandActor>,
+    ) -> AppHostResult<CommandResult> {
+        let proposal = self.get_pending_proposal(workflow_id).ok_or_else(|| {
+            AppHostError::NoPendingProposal {
+                workflow_id: workflow_id.clone(),
+            }
+        })?;
+
+        let mut batch = CommandBatch::new(
+            proposal.command_batch().id().clone(),
+            CommandActor::new(CommandActorKind::Agent)
+                .with_id(proposal.agent_session_id().as_str()),
+            proposal.base_version(),
+            CommandProvenance::AgentProposal {
+                proposal_id: proposal.proposal_id().clone(),
+                approved_by,
+            },
+            proposal.command_batch().created_at().clone(),
+            proposal.command_batch().commands().to_vec(),
+        );
+        if let Some(cid) = proposal.command_batch().correlation_id() {
+            batch = batch.with_correlation_id(cid.clone());
+        }
+
+        let result = self.apply_batch(workflow_id, node_catalog, batch)?;
+        if result.status() != CommandResultStatus::Rejected {
+            self.remove_proposal(workflow_id);
+        }
+        Ok(result)
+    }
+
+    pub fn get_pending_proposal(&self, workflow_id: &WorkflowId) -> Option<WorkflowProposal> {
+        self.proposals
+            .read()
+            .expect("proposal registry poisoned")
+            .get(workflow_id)
+            .cloned()
+            .filter(|p| p.status() == crate::proposal::ProposalStatus::Pending)
+    }
+
+    pub fn list_proposals(&self) -> Vec<WorkflowProposal> {
+        self.proposals
+            .read()
+            .expect("proposal registry poisoned")
+            .values()
+            .cloned()
+            .collect()
+    }
+
+    pub fn remove_proposal(&self, workflow_id: &WorkflowId) -> Option<WorkflowProposal> {
+        self.proposals
+            .write()
+            .expect("proposal registry poisoned")
+            .remove(workflow_id)
     }
 
     fn session(&self, workflow_id: &WorkflowId) -> AppHostResult<Arc<Mutex<WorkflowSession>>> {
