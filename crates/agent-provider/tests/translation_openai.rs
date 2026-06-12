@@ -1,18 +1,19 @@
-use reimagine_agent::{AgentRequest, AgentToolDefinition, Message, ModelName, ToolCall, ToolCallId};
+use reimagine_agent::{
+    AgentRequest, AgentToolDefinition, Message, ModelName, ToolCall, ToolCallId,
+};
 use reimagine_agent_provider::translation;
 use serde_json::json;
 
 #[test]
 fn openai_request_translation_user_message_and_tool_definition() {
-    let req = AgentRequest::new(
-        ModelName::new("gpt-test"),
-        vec![Message::user("hi")],
-    )
-    .with_tools(vec![AgentToolDefinition::new(
-        "echo",
-        "echo something",
-        json!({"type": "object", "properties": {"x": {"type": "number"}}}),
-    )]);
+    let req =
+        AgentRequest::new(ModelName::new("gpt-test"), vec![Message::user("hi")]).with_tools(vec![
+            AgentToolDefinition::new(
+                "echo",
+                "echo something",
+                json!({"type": "object", "properties": {"x": {"type": "number"}}}),
+            ),
+        ]);
     let messages = translation::request::to_openai_messages(req.messages());
     let tools = translation::tools::to_openai_tools(req.tools());
     assert_eq!(messages.len(), 1);
@@ -70,7 +71,10 @@ fn openai_response_translation_tool_call_with_stringified_arguments() {
 fn openai_response_translation_missing_choices_is_serialization_error() {
     let payload = json!({});
     let err = translation::response::from_openai_response(&payload).unwrap_err();
-    assert!(matches!(err, reimagine_agent_provider::ProviderAdapterError::Serialization(_)));
+    assert!(matches!(
+        err,
+        reimagine_agent_provider::ProviderAdapterError::Serialization(_)
+    ));
 }
 
 #[test]
@@ -89,5 +93,8 @@ fn openai_response_translation_malformed_tool_call_arguments_is_serialization_er
         ]
     });
     let err = translation::response::from_openai_response(&payload).unwrap_err();
-    assert!(matches!(err, reimagine_agent_provider::ProviderAdapterError::Serialization(_)));
+    assert!(matches!(
+        err,
+        reimagine_agent_provider::ProviderAdapterError::Serialization(_)
+    ));
 }

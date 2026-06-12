@@ -123,10 +123,7 @@ fn default_enabled() -> bool {
 }
 
 impl ProviderConfig {
-    pub fn with_openai_compatible(
-        name: impl Into<String>,
-        inner: OpenAiCompatibleConfig,
-    ) -> Self {
+    pub fn with_openai_compatible(name: impl Into<String>, inner: OpenAiCompatibleConfig) -> Self {
         Self {
             name: name.into(),
             enabled: true,

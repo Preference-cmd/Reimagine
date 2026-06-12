@@ -1,6 +1,4 @@
-use reimagine_agent::{
-    AgentRequest, AgentResponse, AgentStreamEvent, Message, ModelInfo,
-};
+use reimagine_agent::{AgentRequest, AgentResponse, AgentStreamEvent, Message, ModelInfo};
 use reimagine_agent_provider::{CompletionBackend, FakeCompletionBackend, ScriptedBackendStep};
 
 // The plan's test file had a bare `impl CompletionBackend for FakeCompletionBackend {}`
@@ -14,13 +12,14 @@ use reimagine_agent_provider::{CompletionBackend, FakeCompletionBackend, Scripte
 
 #[tokio::test]
 async fn fake_backend_replays_scripted_complete_steps() {
-    let backend = FakeCompletionBackend::new(vec![
-        ScriptedBackendStep::Complete(Ok(
-            reimagine_agent::AgentResponse::new(Message::assistant("hello"))
-                .with_stop_reason("end_turn"),
-        )),
-    ]);
-    let req = AgentRequest::new(reimagine_agent::ModelName::new("gpt-test"), vec![Message::user("hi")]);
+    let backend = FakeCompletionBackend::new(vec![ScriptedBackendStep::Complete(Ok(
+        reimagine_agent::AgentResponse::new(Message::assistant("hello"))
+            .with_stop_reason("end_turn"),
+    ))]);
+    let req = AgentRequest::new(
+        reimagine_agent::ModelName::new("gpt-test"),
+        vec![Message::user("hi")],
+    );
     let resp = backend.complete(req).await.expect("complete ok");
     let resp = resp.expect("scripted step returned response");
     assert_eq!(resp.message().content(), "hello");
@@ -31,21 +30,34 @@ async fn fake_backend_replays_scripted_complete_error() {
     let backend = FakeCompletionBackend::new(vec![ScriptedBackendStep::Complete(Err(
         reimagine_agent_provider::ProviderAdapterError::transport("connection refused"),
     ))]);
-    let req = AgentRequest::new(reimagine_agent::ModelName::new("gpt-test"), vec![Message::user("hi")]);
-    let resp = backend.complete(req).await.expect("complete ok").expect_err("err");
-    assert_eq!(resp, reimagine_agent_provider::ProviderAdapterError::transport("connection refused"));
+    let req = AgentRequest::new(
+        reimagine_agent::ModelName::new("gpt-test"),
+        vec![Message::user("hi")],
+    );
+    let resp = backend
+        .complete(req)
+        .await
+        .expect("complete ok")
+        .expect_err("err");
+    assert_eq!(
+        resp,
+        reimagine_agent_provider::ProviderAdapterError::transport("connection refused")
+    );
 }
 
 #[tokio::test]
 async fn fake_backend_replays_scripted_stream_steps() {
-    let backend = FakeCompletionBackend::new(vec![
-        ScriptedBackendStep::Stream(vec![
-            Ok(AgentStreamEvent::ContentDelta("hel".into())),
-            Ok(AgentStreamEvent::ContentDelta("lo".into())),
-            Ok(AgentStreamEvent::Done { stop_reason: Some("end_turn".into()) }),
-        ]),
-    ]);
-    let req = AgentRequest::new(reimagine_agent::ModelName::new("gpt-test"), vec![Message::user("hi")]);
+    let backend = FakeCompletionBackend::new(vec![ScriptedBackendStep::Stream(vec![
+        Ok(AgentStreamEvent::ContentDelta("hel".into())),
+        Ok(AgentStreamEvent::ContentDelta("lo".into())),
+        Ok(AgentStreamEvent::Done {
+            stop_reason: Some("end_turn".into()),
+        }),
+    ])]);
+    let req = AgentRequest::new(
+        reimagine_agent::ModelName::new("gpt-test"),
+        vec![Message::user("hi")],
+    );
     let mut stream = backend.stream(req).await.expect("stream ok");
     let mut collected = Vec::new();
     while let Some(ev) = stream.next_event().await {
