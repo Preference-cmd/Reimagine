@@ -14,3 +14,8 @@ mod openai_compatible;
 mod anthropic;
 mod rig;
 mod translation;
+
+pub use config::{
+    AgentProviderConfigDocument, AnthropicConfig, OpenAiCompatibleConfig, ProviderConfig,
+    ProviderKind,
+};
