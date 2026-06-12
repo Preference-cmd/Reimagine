@@ -19,3 +19,4 @@ pub use config::{
     AgentProviderConfigDocument, AnthropicConfig, OpenAiCompatibleConfig, ProviderConfig,
     ProviderKind,
 };
+pub use error::ProviderAdapterError;
