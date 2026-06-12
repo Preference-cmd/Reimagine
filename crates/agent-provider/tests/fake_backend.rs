@@ -1,4 +1,4 @@
-use reimagine_agent::{AgentRequest, AgentResponse, AgentStreamEvent, Message, ModelInfo};
+use reimagine_agent::{AgentRequest, AgentStreamEvent, Message, ModelInfo};
 use reimagine_agent_provider::{CompletionBackend, FakeCompletionBackend, ScriptedBackendStep};
 
 // The plan's test file had a bare `impl CompletionBackend for FakeCompletionBackend {}`

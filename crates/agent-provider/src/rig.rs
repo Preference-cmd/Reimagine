@@ -228,7 +228,8 @@ impl RealRigBackend {
         Ok(translation::response::from_anthropic_response(&value))
     }
 
-    /// OpenAI-compatible model listing. Hits `/v1/models` and
+    /// OpenAI-compatible model listing. Hits `/models` relative to the
+    /// configured OpenAI-compatible base URL and
     /// stamps the configured provider name on every entry.
     async fn run_openai_list_models(&self) -> Result<Vec<ModelInfo>, ProviderAdapterError> {
         let cfg = self.openai_config();
@@ -241,7 +242,7 @@ impl RealRigBackend {
                 .map_err(|e| ProviderAdapterError::configuration(format!("openai client: {e}")))?;
 
         let req = rig_client
-            .get("/v1/models")
+            .get("/models")
             .map_err(|e| ProviderAdapterError::configuration(format!("openai get: {e}")))?
             .body(rig::http_client::NoBody)
             .map_err(|e| ProviderAdapterError::configuration(format!("openai body: {e}")))?;

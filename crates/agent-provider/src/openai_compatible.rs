@@ -52,9 +52,9 @@ impl OpenAiCompatibleProvider {
         }
     }
 
-    /// Construct with the production `RealRigBackend` (no network in
-    /// unit tests; the real backend returns a configuration error
-    /// unless wired up at app-host level).
+    /// Construct with the production `RealRigBackend`. Unit tests
+    /// inject a fake backend or a local wiremock-backed HTTP client so
+    /// the default suite does not require live provider credentials.
     pub fn new(name: ProviderName, config: OpenAiCompatibleConfig) -> Self {
         Self {
             name: name.clone(),
