@@ -13,9 +13,7 @@
 use std::sync::Arc;
 
 use async_trait::async_trait;
-use reimagine_agent::{
-    AgentRequest, AgentResponse, AgentStream, ModelInfo, ProviderName,
-};
+use reimagine_agent::{AgentRequest, AgentResponse, AgentStream, ModelInfo, ProviderName};
 // `HttpClientExt` is the extension trait that provides `Client::send()`.
 use rig::http_client::HttpClientExt;
 
@@ -121,12 +119,13 @@ impl RealRigBackend {
         request: &AgentRequest,
     ) -> Result<Result<AgentResponse, ProviderAdapterError>, ProviderAdapterError> {
         let cfg = self.openai_config();
-        let rig_client = rig::providers::openai::Client::<rig::http_client::ReqwestClient>::builder()
-            .api_key(cfg.api_key())
-            .base_url(cfg.base_url())
-            .http_client(self.http.clone())
-            .build()
-            .map_err(|e| ProviderAdapterError::configuration(format!("openai client: {e}")))?;
+        let rig_client =
+            rig::providers::openai::Client::<rig::http_client::ReqwestClient>::builder()
+                .api_key(cfg.api_key())
+                .base_url(cfg.base_url())
+                .http_client(self.http.clone())
+                .build()
+                .map_err(|e| ProviderAdapterError::configuration(format!("openai client: {e}")))?;
 
         let messages = translation::request::to_openai_messages(request.messages());
         let tools = translation::tools::to_openai_tools(request.tools());
@@ -173,14 +172,16 @@ impl RealRigBackend {
         request: &AgentRequest,
     ) -> Result<Result<AgentResponse, ProviderAdapterError>, ProviderAdapterError> {
         let cfg = self.anthropic_config();
-        let rig_client = rig::providers::anthropic::Client::<rig::http_client::ReqwestClient>::builder()
-            .api_key(cfg.api_key())
-            .http_client(self.http.clone())
-            .build()
-            .map_err(|e| ProviderAdapterError::configuration(format!("anthropic client: {e}")))?;
+        let rig_client =
+            rig::providers::anthropic::Client::<rig::http_client::ReqwestClient>::builder()
+                .api_key(cfg.api_key())
+                .http_client(self.http.clone())
+                .build()
+                .map_err(|e| {
+                    ProviderAdapterError::configuration(format!("anthropic client: {e}"))
+                })?;
 
-        let (system, messages) =
-            translation::request::to_anthropic_messages(request.messages());
+        let (system, messages) = translation::request::to_anthropic_messages(request.messages());
         let tools = translation::tools::to_anthropic_tools(request.tools());
         let max_tokens = request
             .options()
@@ -229,16 +230,15 @@ impl RealRigBackend {
 
     /// OpenAI-compatible model listing. Hits `/v1/models` and
     /// stamps the configured provider name on every entry.
-    async fn run_openai_list_models(
-        &self,
-    ) -> Result<Vec<ModelInfo>, ProviderAdapterError> {
+    async fn run_openai_list_models(&self) -> Result<Vec<ModelInfo>, ProviderAdapterError> {
         let cfg = self.openai_config();
-        let rig_client = rig::providers::openai::Client::<rig::http_client::ReqwestClient>::builder()
-            .api_key(cfg.api_key())
-            .base_url(cfg.base_url())
-            .http_client(self.http.clone())
-            .build()
-            .map_err(|e| ProviderAdapterError::configuration(format!("openai client: {e}")))?;
+        let rig_client =
+            rig::providers::openai::Client::<rig::http_client::ReqwestClient>::builder()
+                .api_key(cfg.api_key())
+                .base_url(cfg.base_url())
+                .http_client(self.http.clone())
+                .build()
+                .map_err(|e| ProviderAdapterError::configuration(format!("openai client: {e}")))?;
 
         let req = rig_client
             .get("/v1/models")
@@ -272,15 +272,16 @@ impl RealRigBackend {
 
     /// Anthropic model listing. Hits `/v1/models` and stamps the
     /// configured provider name on every entry.
-    async fn run_anthropic_list_models(
-        &self,
-    ) -> Result<Vec<ModelInfo>, ProviderAdapterError> {
+    async fn run_anthropic_list_models(&self) -> Result<Vec<ModelInfo>, ProviderAdapterError> {
         let cfg = self.anthropic_config();
-        let rig_client = rig::providers::anthropic::Client::<rig::http_client::ReqwestClient>::builder()
-            .api_key(cfg.api_key())
-            .http_client(self.http.clone())
-            .build()
-            .map_err(|e| ProviderAdapterError::configuration(format!("anthropic client: {e}")))?;
+        let rig_client =
+            rig::providers::anthropic::Client::<rig::http_client::ReqwestClient>::builder()
+                .api_key(cfg.api_key())
+                .http_client(self.http.clone())
+                .build()
+                .map_err(|e| {
+                    ProviderAdapterError::configuration(format!("anthropic client: {e}"))
+                })?;
 
         let req = rig_client
             .get("/v1/models")
@@ -325,7 +326,9 @@ pub fn arc_real_backend_with_http_client(
     cfg: OpenAiCompatibleConfig,
     http: rig::http_client::ReqwestClient,
 ) -> Arc<dyn CompletionBackend> {
-    Arc::new(RealRigBackend::openai_compatible_with_http_client(name, cfg, http))
+    Arc::new(RealRigBackend::openai_compatible_with_http_client(
+        name, cfg, http,
+    ))
 }
 
 pub fn arc_real_anthropic_backend(
