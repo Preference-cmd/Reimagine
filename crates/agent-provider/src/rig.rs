@@ -16,11 +16,39 @@ use async_trait::async_trait;
 use reimagine_agent::{AgentRequest, AgentResponse, AgentStream, ModelInfo, ProviderName};
 // `HttpClientExt` is the extension trait that provides `Client::send()`.
 use rig::http_client::HttpClientExt;
+use serde_json::Value;
 
 use crate::backend::CompletionBackend;
 use crate::config::{AnthropicConfig, OpenAiCompatibleConfig};
 use crate::error::ProviderAdapterError;
 use crate::translation;
+
+type RigResponse = rig::http_client::Response<rig::http_client::LazyBody<Vec<u8>>>;
+
+fn encode_json_body(value: &Value) -> Result<Vec<u8>, ProviderAdapterError> {
+    serde_json::to_vec(value)
+        .map_err(|e| ProviderAdapterError::serialization(format!("body encode: {e}")))
+}
+
+async fn response_text_or_api_error(resp: RigResponse) -> Result<String, ProviderAdapterError> {
+    let status = resp.status();
+    let status_code = status.as_u16().to_string();
+    let text = rig::http_client::text(resp)
+        .await
+        .map_err(|e| ProviderAdapterError::transport(e.to_string()))?;
+
+    if status.is_success() {
+        Ok(text)
+    } else {
+        Err(ProviderAdapterError::api(status_code, text))
+    }
+}
+
+async fn response_json_or_api_error(resp: RigResponse) -> Result<Value, ProviderAdapterError> {
+    let text = response_text_or_api_error(resp).await?;
+    serde_json::from_str(&text)
+        .map_err(|e| ProviderAdapterError::serialization(format!("response json: {e}")))
+}
 
 /// Production backend. `complete` and `list_models` route through
 /// the lower-level `rig::Client` HTTP seam (not the
@@ -117,7 +145,7 @@ impl RealRigBackend {
     async fn run_openai_complete(
         &self,
         request: &AgentRequest,
-    ) -> Result<Result<AgentResponse, ProviderAdapterError>, ProviderAdapterError> {
+    ) -> Result<AgentResponse, ProviderAdapterError> {
         let cfg = self.openai_config();
         let rig_client =
             rig::providers::openai::Client::<rig::http_client::ReqwestClient>::builder()
@@ -134,8 +162,7 @@ impl RealRigBackend {
             "messages": messages,
             "tools": tools,
         });
-        let bytes = serde_json::to_vec(&body)
-            .map_err(|e| ProviderAdapterError::serialization(format!("body encode: {e}")))?;
+        let bytes = encode_json_body(&body)?;
 
         let req = rig_client
             .post("/chat/completions")
@@ -147,20 +174,8 @@ impl RealRigBackend {
             .await
             .map_err(|e| ProviderAdapterError::transport(e.to_string()))?;
 
-        if !resp.status().is_success() {
-            let status = resp.status().as_u16().to_string();
-            let text = rig::http_client::text(resp)
-                .await
-                .map_err(|e| ProviderAdapterError::transport(e.to_string()))?;
-            return Ok(Err(ProviderAdapterError::api(status, text)));
-        }
-
-        let text = rig::http_client::text(resp)
-            .await
-            .map_err(|e| ProviderAdapterError::transport(e.to_string()))?;
-        let value: serde_json::Value = serde_json::from_str(&text)
-            .map_err(|e| ProviderAdapterError::serialization(format!("response json: {e}")))?;
-        Ok(translation::response::from_openai_response(&value))
+        let value = response_json_or_api_error(resp).await?;
+        translation::response::from_openai_response(&value)
     }
 
     /// Anthropic completion. Mirrors `run_openai_complete` but
@@ -170,7 +185,7 @@ impl RealRigBackend {
     async fn run_anthropic_complete(
         &self,
         request: &AgentRequest,
-    ) -> Result<Result<AgentResponse, ProviderAdapterError>, ProviderAdapterError> {
+    ) -> Result<AgentResponse, ProviderAdapterError> {
         let cfg = self.anthropic_config();
         let rig_client =
             rig::providers::anthropic::Client::<rig::http_client::ReqwestClient>::builder()
@@ -199,8 +214,7 @@ impl RealRigBackend {
         if let Some(sys) = system {
             body["system"] = serde_json::json!(sys);
         }
-        let bytes = serde_json::to_vec(&body)
-            .map_err(|e| ProviderAdapterError::serialization(format!("body encode: {e}")))?;
+        let bytes = encode_json_body(&body)?;
 
         let req = rig_client
             .post("/v1/messages")
@@ -212,20 +226,8 @@ impl RealRigBackend {
             .await
             .map_err(|e| ProviderAdapterError::transport(e.to_string()))?;
 
-        if !resp.status().is_success() {
-            let status = resp.status().as_u16().to_string();
-            let text = rig::http_client::text(resp)
-                .await
-                .map_err(|e| ProviderAdapterError::transport(e.to_string()))?;
-            return Ok(Err(ProviderAdapterError::api(status, text)));
-        }
-
-        let text = rig::http_client::text(resp)
-            .await
-            .map_err(|e| ProviderAdapterError::transport(e.to_string()))?;
-        let value: serde_json::Value = serde_json::from_str(&text)
-            .map_err(|e| ProviderAdapterError::serialization(format!("response json: {e}")))?;
-        Ok(translation::response::from_anthropic_response(&value))
+        let value = response_json_or_api_error(resp).await?;
+        translation::response::from_anthropic_response(&value)
     }
 
     /// OpenAI-compatible model listing. Hits `/models` relative to the
@@ -251,19 +253,7 @@ impl RealRigBackend {
             .await
             .map_err(|e| ProviderAdapterError::transport(e.to_string()))?;
 
-        if !resp.status().is_success() {
-            let status = resp.status().as_u16().to_string();
-            let text = rig::http_client::text(resp)
-                .await
-                .map_err(|e| ProviderAdapterError::transport(e.to_string()))?;
-            return Err(ProviderAdapterError::api(status, text));
-        }
-
-        let text = rig::http_client::text(resp)
-            .await
-            .map_err(|e| ProviderAdapterError::transport(e.to_string()))?;
-        let value: serde_json::Value = serde_json::from_str(&text)
-            .map_err(|e| ProviderAdapterError::serialization(format!("response json: {e}")))?;
+        let value = response_json_or_api_error(resp).await?;
         let models = translation::listing::from_openai_models(&value)?;
         Ok(models
             .into_iter()
@@ -294,19 +284,7 @@ impl RealRigBackend {
             .await
             .map_err(|e| ProviderAdapterError::transport(e.to_string()))?;
 
-        if !resp.status().is_success() {
-            let status = resp.status().as_u16().to_string();
-            let text = rig::http_client::text(resp)
-                .await
-                .map_err(|e| ProviderAdapterError::transport(e.to_string()))?;
-            return Err(ProviderAdapterError::api(status, text));
-        }
-
-        let text = rig::http_client::text(resp)
-            .await
-            .map_err(|e| ProviderAdapterError::transport(e.to_string()))?;
-        let value: serde_json::Value = serde_json::from_str(&text)
-            .map_err(|e| ProviderAdapterError::serialization(format!("response json: {e}")))?;
+        let value = response_json_or_api_error(resp).await?;
         let models = translation::listing::from_anthropic_models(&value)?;
         Ok(models
             .into_iter()
@@ -349,10 +327,7 @@ pub fn arc_real_anthropic_backend_with_http_client(
 
 #[async_trait]
 impl CompletionBackend for RealRigBackend {
-    async fn complete(
-        &self,
-        request: AgentRequest,
-    ) -> Result<Result<AgentResponse, ProviderAdapterError>, ProviderAdapterError> {
+    async fn complete(&self, request: AgentRequest) -> Result<AgentResponse, ProviderAdapterError> {
         match &self.kind {
             RealBackendKind::OpenAiCompatible(_) => self.run_openai_complete(&request).await,
             RealBackendKind::Anthropic(_) => self.run_anthropic_complete(&request).await,

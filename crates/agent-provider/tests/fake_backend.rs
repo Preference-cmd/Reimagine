@@ -21,7 +21,6 @@ async fn fake_backend_replays_scripted_complete_steps() {
         vec![Message::user("hi")],
     );
     let resp = backend.complete(req).await.expect("complete ok");
-    let resp = resp.expect("scripted step returned response");
     assert_eq!(resp.message().content(), "hello");
 }
 
@@ -34,11 +33,7 @@ async fn fake_backend_replays_scripted_complete_error() {
         reimagine_agent::ModelName::new("gpt-test"),
         vec![Message::user("hi")],
     );
-    let resp = backend
-        .complete(req)
-        .await
-        .expect("complete ok")
-        .expect_err("err");
+    let resp = backend.complete(req).await.expect_err("err");
     assert_eq!(
         resp,
         reimagine_agent_provider::ProviderAdapterError::transport("connection refused")
