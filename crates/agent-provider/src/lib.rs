@@ -13,7 +13,7 @@ mod error;
 mod openai_compatible;
 mod anthropic;
 mod rig;
-mod translation;
+pub mod translation;
 
 pub use backend::{CompletionBackend, FakeCompletionBackend, ScriptedBackendStep};
 pub use config::{
