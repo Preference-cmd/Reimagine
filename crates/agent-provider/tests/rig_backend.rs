@@ -32,7 +32,7 @@ const OPENAI_KEY: &str = "sk-test-openai";
 const ANTHROPIC_KEY: &str = "sk-test-anthropic";
 
 fn openai_cfg_for(server: &MockServer) -> OpenAiCompatibleConfig {
-    OpenAiCompatibleConfig::new(server.uri(), OPENAI_KEY, "gpt-4o-mini")
+    OpenAiCompatibleConfig::new(format!("{}/v1", server.uri()), OPENAI_KEY, "gpt-4o-mini")
 }
 
 #[allow(dead_code)]
@@ -61,7 +61,7 @@ async fn openai_complete_returns_translated_response() {
     let server = MockServer::start().await;
 
     Mock::given(method("POST"))
-        .and(path("/chat/completions"))
+        .and(path("/v1/chat/completions"))
         .and(header("authorization", format!("Bearer {OPENAI_KEY}")))
         .and(body_partial_json(json!({
             "model": "gpt-4o-mini",
@@ -150,7 +150,7 @@ async fn openai_complete_maps_non_2xx_to_api_error() {
     let server = MockServer::start().await;
 
     Mock::given(method("POST"))
-        .and(path("/chat/completions"))
+        .and(path("/v1/chat/completions"))
         .respond_with(ResponseTemplate::new(401).set_body_string("invalid api key"))
         .mount(&server)
         .await;
