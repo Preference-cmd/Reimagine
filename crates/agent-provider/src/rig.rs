@@ -13,40 +13,119 @@
 use std::sync::Arc;
 
 use async_trait::async_trait;
-use reimagine_agent::{AgentRequest, AgentResponse, AgentStream, ModelInfo};
+use reimagine_agent::{
+    AgentRequest, AgentResponse, AgentStream, Message, ModelInfo, ModelName, ProviderName,
+};
 
 use crate::backend::CompletionBackend;
 use crate::config::{AnthropicConfig, OpenAiCompatibleConfig};
 use crate::error::ProviderAdapterError;
 
-/// Production backend. V1 does not exercise this in unit tests; the
-/// methods return an `STREAMING_UNSUPPORTED`-style error for `stream`
-/// and forward `complete` through the Rig client when wired up.
+/// Production backend. `complete` and `list_models` route through
+/// the lower-level `rig::Client` HTTP seam (not the
+/// `CoreCompletionModel` agent-loop layer). `stream` remains
+/// `streaming_unsupported` — V2 work.
 #[derive(Debug, Clone)]
-#[allow(dead_code)]
 pub struct RealRigBackend {
+    name: ProviderName,
     kind: RealBackendKind,
+    http: reqwest::Client,
 }
 
 #[derive(Debug, Clone)]
-#[allow(dead_code)]
 pub enum RealBackendKind {
     OpenAiCompatible(OpenAiCompatibleConfig),
     Anthropic(AnthropicConfig),
 }
 
 impl RealRigBackend {
-    pub fn openai_compatible(cfg: OpenAiCompatibleConfig) -> Self {
+    /// Construct an OpenAI-compatible backend with a default
+    /// `reqwest::Client`.
+    pub fn openai_compatible(name: ProviderName, cfg: OpenAiCompatibleConfig) -> Self {
+        Self::openai_compatible_with_http_client(name, cfg, reqwest::Client::new())
+    }
+
+    /// Construct an OpenAI-compatible backend with an explicit
+    /// `reqwest::Client` (used by tests).
+    pub fn openai_compatible_with_http_client(
+        name: ProviderName,
+        cfg: OpenAiCompatibleConfig,
+        http: reqwest::Client,
+    ) -> Self {
         Self {
+            name,
             kind: RealBackendKind::OpenAiCompatible(cfg),
+            http,
         }
     }
 
-    pub fn anthropic(cfg: AnthropicConfig) -> Self {
+    /// Construct an Anthropic backend with a default
+    /// `reqwest::Client`.
+    pub fn anthropic(name: ProviderName, cfg: AnthropicConfig) -> Self {
+        Self::anthropic_with_http_client(name, cfg, reqwest::Client::new())
+    }
+
+    /// Construct an Anthropic backend with an explicit
+    /// `reqwest::Client` (used by tests).
+    pub fn anthropic_with_http_client(
+        name: ProviderName,
+        cfg: AnthropicConfig,
+        http: reqwest::Client,
+    ) -> Self {
         Self {
+            name,
             kind: RealBackendKind::Anthropic(cfg),
+            http,
         }
     }
+
+    fn openai_config(&self) -> &OpenAiCompatibleConfig {
+        match &self.kind {
+            RealBackendKind::OpenAiCompatible(cfg) => cfg,
+            RealBackendKind::Anthropic(_) => {
+                panic!("RealRigBackend::openai_config called on Anthropic backend")
+            }
+        }
+    }
+
+    fn anthropic_config(&self) -> &AnthropicConfig {
+        match &self.kind {
+            RealBackendKind::Anthropic(cfg) => cfg,
+            RealBackendKind::OpenAiCompatible(_) => {
+                panic!("RealRigBackend::anthropic_config called on OpenAI backend")
+            }
+        }
+    }
+}
+
+pub fn arc_real_backend(
+    name: ProviderName,
+    cfg: OpenAiCompatibleConfig,
+) -> Arc<dyn CompletionBackend> {
+    Arc::new(RealRigBackend::openai_compatible(name, cfg))
+}
+
+pub fn arc_real_backend_with_http_client(
+    name: ProviderName,
+    cfg: OpenAiCompatibleConfig,
+    http: reqwest::Client,
+) -> Arc<dyn CompletionBackend> {
+    Arc::new(RealRigBackend::openai_compatible_with_http_client(name, cfg, http))
+}
+
+pub fn arc_real_anthropic_backend(
+    name: ProviderName,
+    cfg: AnthropicConfig,
+) -> Arc<dyn CompletionBackend> {
+    Arc::new(RealRigBackend::anthropic(name, cfg))
+}
+
+pub fn arc_real_anthropic_backend_with_http_client(
+    name: ProviderName,
+    cfg: AnthropicConfig,
+    http: reqwest::Client,
+) -> Arc<dyn CompletionBackend> {
+    Arc::new(RealRigBackend::anthropic_with_http_client(name, cfg, http))
 }
 
 #[async_trait]
@@ -56,7 +135,7 @@ impl CompletionBackend for RealRigBackend {
         _request: AgentRequest,
     ) -> Result<Result<AgentResponse, ProviderAdapterError>, ProviderAdapterError> {
         Err(ProviderAdapterError::configuration(
-            "real Rig backend is not wired in V1 unit tests; use a FakeCompletionBackend",
+            "RealRigBackend::complete is wired in Task 4; use FakeCompletionBackend in tests",
         ))
     }
 
@@ -69,15 +148,7 @@ impl CompletionBackend for RealRigBackend {
 
     async fn list_models(&self) -> Result<Vec<ModelInfo>, ProviderAdapterError> {
         Err(ProviderAdapterError::configuration(
-            "real Rig backend is not wired in V1 unit tests; use a FakeCompletionBackend",
+            "RealRigBackend::list_models is wired in Task 4; use FakeCompletionBackend in tests",
         ))
     }
-}
-
-pub fn arc_real_backend(cfg: OpenAiCompatibleConfig) -> Arc<dyn CompletionBackend> {
-    Arc::new(RealRigBackend::openai_compatible(cfg))
-}
-
-pub fn arc_real_anthropic_backend(cfg: AnthropicConfig) -> Arc<dyn CompletionBackend> {
-    Arc::new(RealRigBackend::anthropic(cfg))
 }
