@@ -11,6 +11,7 @@ members = [
     "crates/agent",
     "crates/agent-macros",
     "crates/app-host",
+    "crates/agent-provider",
 ]
 
 [workspace.package]
@@ -36,3 +37,4 @@ quote = "1"
 syn = "2"
 schemars = "0.8"
 trybuild = "1"
+rig-core = { version = "0.31", default-features = false, features = ["reqwest-middleware-rustls"] }
