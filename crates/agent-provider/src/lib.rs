@@ -21,3 +21,51 @@ pub use config::{
     ProviderKind,
 };
 pub use error::ProviderAdapterError;
+pub use openai_compatible::OpenAiCompatibleProvider;
+pub use anthropic::AnthropicProvider;
+
+use std::sync::Arc;
+
+use reimagine_agent::{AgentProvider, ProviderName};
+
+/// Build an `Arc<dyn AgentProvider>` from a `ProviderConfig`. The kind
+/// determines which concrete adapter is constructed. Missing inner
+/// config is rejected with `ProviderAdapterError::MissingConfig`.
+pub fn build_provider(
+    config: ProviderConfig,
+) -> Result<Arc<dyn AgentProvider>, ProviderAdapterError> {
+    match config.kind() {
+        ProviderKind::OpenAiCompatible => {
+            let cfg = config
+                .openai_compatible()
+                .ok_or_else(|| ProviderAdapterError::MissingConfig {
+                    provider: config.name().to_string(),
+                    kind: ProviderKind::OpenAiCompatible,
+                })?;
+            let provider = OpenAiCompatibleProvider::new(
+                ProviderName::new(config.name().to_string()),
+                cfg.clone(),
+            );
+            Ok(Arc::new(provider))
+        }
+        ProviderKind::Anthropic => {
+            let cfg = config
+                .anthropic()
+                .ok_or_else(|| ProviderAdapterError::MissingConfig {
+                    provider: config.name().to_string(),
+                    kind: ProviderKind::Anthropic,
+                })?;
+            let provider = AnthropicProvider::new(
+                ProviderName::new(config.name().to_string()),
+                cfg.clone(),
+            );
+            Ok(Arc::new(provider))
+        }
+    }
+}
+
+/// Helper to extract a `ProviderName` from a config so the caller can
+/// register it under its identity in `AgentProviderCatalog`.
+pub fn provider_name(config: &ProviderConfig) -> ProviderName {
+    ProviderName::new(config.name().to_string())
+}
