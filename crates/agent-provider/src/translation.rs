@@ -682,10 +682,93 @@ pub mod streaming {
     }
 }
 
+// ---------------------------------------------------------------------------
+// Section 5: model listing translation
+// ---------------------------------------------------------------------------
+pub mod listing {
+    //! Translate `/v1/models` listing responses into
+    //! `Vec<ModelInfo>`. Both OpenAI-compatible and Anthropic
+    //! providers expose a JSON listing; the wire shape differs
+    //! slightly, so we have two small translators. The provider
+    //! name on each `ModelInfo` is set by the caller (the listing
+    //! JSON does not carry it).
+    //!
+    //! V1 advertises `ModelCapability::Chat` and
+    //! `ModelCapability::ToolUse` for every model the upstream
+    //! returns. The upstream `/v1/models` endpoints do not expose a
+    //! capability vocabulary, so this is a deliberate V1 contract,
+    //! not a heuristic.
+
+    use serde_json::Value;
+
+    use reimagine_agent::{ModelCapability, ModelInfo};
+
+    use crate::error::ProviderAdapterError;
+
+    /// Translate an OpenAI-compatible `/v1/models` response JSON
+    /// into `Vec<ModelInfo>`. Expects:
+    ///
+    /// ```text
+    /// { "data": [ { "id": "gpt-4o-mini", ... }, ... ] }
+    /// ```
+    pub fn from_openai_models(value: &Value) -> Result<Vec<ModelInfo>, ProviderAdapterError> {
+        let data = value.get("data").and_then(|v| v.as_array()).ok_or_else(|| {
+            ProviderAdapterError::serialization("openai listing missing `data` array")
+        })?;
+        let mut out = Vec::with_capacity(data.len());
+        for (i, entry) in data.iter().enumerate() {
+            let id = entry
+                .get("id")
+                .and_then(|v| v.as_str())
+                .ok_or_else(|| {
+                    ProviderAdapterError::serialization(format!(
+                        "openai listing data[{i}].id missing or not a string"
+                    ))
+                })?
+                .to_string();
+            out.push(
+                ModelInfo::new(reimagine_agent::ModelName::new(id))
+                    .with_capabilities([ModelCapability::Chat, ModelCapability::ToolUse]),
+            );
+        }
+        Ok(out)
+    }
+
+    /// Translate an Anthropic `/v1/models` response JSON into
+    /// `Vec<ModelInfo>`. Expects:
+    ///
+    /// ```text
+    /// { "data": [ { "id": "claude-3-5-sonnet-20241022", ... }, ... ] }
+    /// ```
+    pub fn from_anthropic_models(value: &Value) -> Result<Vec<ModelInfo>, ProviderAdapterError> {
+        let data = value.get("data").and_then(|v| v.as_array()).ok_or_else(|| {
+            ProviderAdapterError::serialization("anthropic listing missing `data` array")
+        })?;
+        let mut out = Vec::with_capacity(data.len());
+        for (i, entry) in data.iter().enumerate() {
+            let id = entry
+                .get("id")
+                .and_then(|v| v.as_str())
+                .ok_or_else(|| {
+                    ProviderAdapterError::serialization(format!(
+                        "anthropic listing data[{i}].id missing or not a string"
+                    ))
+                })?
+                .to_string();
+            out.push(
+                ModelInfo::new(reimagine_agent::ModelName::new(id))
+                    .with_capabilities([ModelCapability::Chat, ModelCapability::ToolUse]),
+            );
+        }
+        Ok(out)
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
     use serde_json::json;
+    use reimagine_agent::ModelCapability;
 
     #[test]
     fn openai_messages_user_and_system() {
@@ -744,5 +827,58 @@ mod tests {
         assert_eq!(v[0]["content"][0]["type"], "tool_result");
         assert_eq!(v[0]["content"][0]["tool_use_id"], "c1");
         assert_eq!(v[0]["content"][0]["content"], "ok");
+    }
+
+    #[test]
+    fn listing_from_openai_models_extracts_ids_with_capabilities() {
+        let value = json!({
+            "object": "list",
+            "data": [
+                { "id": "gpt-4o-mini", "object": "model" },
+                { "id": "gpt-4o", "object": "model" }
+            ]
+        });
+        let models = listing::from_openai_models(&value).expect("ok");
+        assert_eq!(models.len(), 2);
+        assert_eq!(models[0].name().as_str(), "gpt-4o-mini");
+        assert_eq!(models[1].name().as_str(), "gpt-4o");
+        // Every entry advertises Chat + ToolUse.
+        for m in &models {
+            assert!(m.capabilities().contains(&ModelCapability::Chat));
+            assert!(m.capabilities().contains(&ModelCapability::ToolUse));
+            // Provider name is set by the caller, not the translator.
+            assert!(m.provider().is_none());
+        }
+    }
+
+    #[test]
+    fn listing_from_openai_models_rejects_missing_data() {
+        let value = json!({ "object": "list" });
+        let err = listing::from_openai_models(&value).expect_err("must reject");
+        assert_eq!(
+            err,
+            ProviderAdapterError::serialization("openai listing missing `data` array")
+        );
+    }
+
+    #[test]
+    fn listing_from_anthropic_models_extracts_id_with_capabilities() {
+        let value = json!({
+            "data": [
+                { "id": "claude-3-5-sonnet-20241022", "display_name": "Claude 3.5 Sonnet" }
+            ]
+        });
+        let models = listing::from_anthropic_models(&value).expect("ok");
+        assert_eq!(models.len(), 1);
+        assert_eq!(models[0].name().as_str(), "claude-3-5-sonnet-20241022");
+        assert!(models[0].capabilities().contains(&ModelCapability::Chat));
+        assert!(models[0].capabilities().contains(&ModelCapability::ToolUse));
+    }
+
+    #[test]
+    fn listing_from_anthropic_models_empty_data_yields_empty_vec() {
+        let value = json!({ "data": [] });
+        let models = listing::from_anthropic_models(&value).expect("ok");
+        assert!(models.is_empty());
     }
 }
