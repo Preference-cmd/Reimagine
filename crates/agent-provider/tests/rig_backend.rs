@@ -22,7 +22,8 @@ use reimagine_agent::{
     AgentRequest, AgentToolDefinition, Message, ModelCapability, ModelName, ProviderName,
 };
 use reimagine_agent_provider::{
-    AnthropicConfig, CompletionBackend, OpenAiCompatibleConfig, ProviderAdapterError, RealRigBackend,
+    AnthropicConfig, CompletionBackend, OpenAiCompatibleConfig, ProviderAdapterError,
+    RealRigBackend,
 };
 
 const OPENAI_KEY: &str = "sk-test-openai";
@@ -229,6 +230,7 @@ async fn openai_list_models_returns_translated_listing() {
 }
 
 #[tokio::test]
+#[ignore = "hits real https://api.anthropic.com; run on demand with: cargo test -p reimagine-agent-provider --test rig_backend -- --ignored anthropic_complete_carries_required_fields"]
 async fn anthropic_complete_carries_required_fields() {
     // This test is a request-shape test, not a full round-trip: we
     // exercise the anthropic dispatcher and assert that the request
@@ -239,14 +241,19 @@ async fn anthropic_complete_carries_required_fields() {
     // outbound HTTPS is blocked, this surfaces as a Transport error.
     // If the upstream is reachable, we get an Api 401 instead; the
     // test asserts on the error variant present in this environment.
+    //
+    // This test is marked `#[ignore]`d unconditionally — it makes a
+    // real outbound HTTPS call, which is both a hidden flake risk
+    // and a sandbox-fragility issue. Run it on demand with:
+    //
+    //   cargo test -p reimagine-agent-provider --test rig_backend -- --ignored anthropic_complete_carries_required_fields
     let cfg = anthropic_cfg();
     let http = rig::http_client::ReqwestClient::new();
-    let backend = RealRigBackend::anthropic_with_http_client(
-        ProviderName::new("anthropic-test"),
-        cfg,
-        http,
-    );
-    let result = backend.complete(build_request("claude-3-5-sonnet-latest")).await;
+    let backend =
+        RealRigBackend::anthropic_with_http_client(ProviderName::new("anthropic-test"), cfg, http);
+    let result = backend
+        .complete(build_request("claude-3-5-sonnet-latest"))
+        .await;
     // The body must serialize successfully and we must reach the
     // network layer. Either Transport (DNS / TLS / connect failure)
     // or Api (upstream 401 because the test key is bogus) is
