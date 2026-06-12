@@ -15,6 +15,7 @@ mod anthropic;
 mod rig;
 mod translation;
 
+pub use backend::{CompletionBackend, FakeCompletionBackend, ScriptedBackendStep};
 pub use config::{
     AgentProviderConfigDocument, AnthropicConfig, OpenAiCompatibleConfig, ProviderConfig,
     ProviderKind,
