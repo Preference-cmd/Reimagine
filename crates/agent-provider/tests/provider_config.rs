@@ -12,7 +12,10 @@ fn openai_compat(name: &str) -> ProviderConfig {
 }
 
 fn anthropic(name: &str) -> ProviderConfig {
-    ProviderConfig::with_anthropic(name, AnthropicConfig::new("sk-ant-test", "claude-3-5-sonnet"))
+    ProviderConfig::with_anthropic(
+        name,
+        AnthropicConfig::new("sk-ant-test", "claude-3-5-sonnet"),
+    )
 }
 
 #[test]

@@ -66,7 +66,10 @@ pub mod request {
                     }
                 }
                 "tool" => {
-                    let id = m.tool_call_id().map(|i| i.as_str().to_string()).unwrap_or_default();
+                    let id = m
+                        .tool_call_id()
+                        .map(|i| i.as_str().to_string())
+                        .unwrap_or_default();
                     out.push(json!({
                         "role": "tool",
                         "tool_call_id": id,
@@ -76,7 +79,9 @@ pub mod request {
                 other => {
                     // Unknown role: fall back to user content so the
                     // provider still sees a coherent transcript.
-                    out.push(json!({ "role": "user", "content": format!("[{other}] {}", m.content()) }));
+                    out.push(
+                        json!({ "role": "user", "content": format!("[{other}] {}", m.content()) }),
+                    );
                 }
             }
         }
@@ -141,7 +146,9 @@ pub mod request {
                     }));
                 }
                 other => {
-                    out.push(json!({ "role": "user", "content": format!("[{other}] {}", m.content()) }));
+                    out.push(
+                        json!({ "role": "user", "content": format!("[{other}] {}", m.content()) }),
+                    );
                 }
             }
         }
@@ -200,7 +207,9 @@ pub mod response {
         Ok(resp)
     }
 
-    fn parse_openai_tool_calls(value: Option<&Value>) -> Result<Vec<ToolCall>, ProviderAdapterError> {
+    fn parse_openai_tool_calls(
+        value: Option<&Value>,
+    ) -> Result<Vec<ToolCall>, ProviderAdapterError> {
         let mut out = Vec::new();
         let Some(arr) = value.and_then(|v| v.as_array()) else {
             return Ok(out);
@@ -209,14 +218,18 @@ pub mod response {
             let id = call
                 .get("id")
                 .and_then(|v| v.as_str())
-                .ok_or_else(|| ProviderAdapterError::serialization(format!("tool_calls[{i}].id missing")))?
+                .ok_or_else(|| {
+                    ProviderAdapterError::serialization(format!("tool_calls[{i}].id missing"))
+                })?
                 .to_string();
             let name = call
                 .get("function")
                 .and_then(|f| f.get("name"))
                 .and_then(|v| v.as_str())
                 .ok_or_else(|| {
-                    ProviderAdapterError::serialization(format!("tool_calls[{i}].function.name missing"))
+                    ProviderAdapterError::serialization(format!(
+                        "tool_calls[{i}].function.name missing"
+                    ))
                 })?
                 .to_string();
             let args_str = call
@@ -224,8 +237,11 @@ pub mod response {
                 .and_then(|f| f.get("arguments"))
                 .and_then(|v| v.as_str())
                 .unwrap_or("{}");
-            let arguments = serde_json::from_str(args_str)
-                .map_err(|e| ProviderAdapterError::serialization(format!("tool_calls[{i}].function.arguments: {e}")))?;
+            let arguments = serde_json::from_str(args_str).map_err(|e| {
+                ProviderAdapterError::serialization(format!(
+                    "tool_calls[{i}].function.arguments: {e}"
+                ))
+            })?;
             out.push(ToolCall::new(ToolCallId::new(id), name, arguments));
         }
         Ok(out)
@@ -275,13 +291,12 @@ pub mod response {
                         .get("name")
                         .and_then(|v| v.as_str())
                         .ok_or_else(|| {
-                            ProviderAdapterError::serialization(format!("content[{i}].name missing"))
+                            ProviderAdapterError::serialization(format!(
+                                "content[{i}].name missing"
+                            ))
                         })?
                         .to_string();
-                    let arguments = block
-                        .get("input")
-                        .cloned()
-                        .unwrap_or(Value::Null);
+                    let arguments = block.get("input").cloned().unwrap_or(Value::Null);
                     tool_calls.push(ToolCall::new(ToolCallId::new(id), name, arguments));
                 }
                 _ => {
@@ -396,7 +411,10 @@ pub mod streaming {
         /// `AgentStreamEvent` values to emit for this chunk (excluding
         /// any `ToolCall` flushes, which the caller triggers via
         /// [`flush_complete_tool_calls`]).
-        pub fn ingest_chunk(&mut self, chunk: &Value) -> Result<Vec<AgentStreamEvent>, ProviderAdapterError> {
+        pub fn ingest_chunk(
+            &mut self,
+            chunk: &Value,
+        ) -> Result<Vec<AgentStreamEvent>, ProviderAdapterError> {
             let mut out = Vec::new();
             // Content delta: `choices[0].delta.content`.
             if let Some(delta_content) = chunk
@@ -541,20 +559,19 @@ pub mod streaming {
         /// emit. Text deltas produce `ContentDelta`; tool-use deltas
         /// produce `ToolCallDelta`; complete tool blocks produce
         /// `ToolCall`. `message_stop` produces the final `Done`.
-        pub fn ingest_event(&mut self, event: &Value) -> Result<Vec<AgentStreamEvent>, ProviderAdapterError> {
+        pub fn ingest_event(
+            &mut self,
+            event: &Value,
+        ) -> Result<Vec<AgentStreamEvent>, ProviderAdapterError> {
             let mut out = Vec::new();
-            let event_type = event
-                .get("type")
-                .and_then(|v| v.as_str())
-                .ok_or_else(|| ProviderAdapterError::serialization("anthropic stream event missing type"))?;
+            let event_type = event.get("type").and_then(|v| v.as_str()).ok_or_else(|| {
+                ProviderAdapterError::serialization("anthropic stream event missing type")
+            })?;
             match event_type {
                 "content_block_start" => {
-                    let index = event
-                        .get("index")
-                        .and_then(|v| v.as_u64())
-                        .ok_or_else(|| {
-                            ProviderAdapterError::serialization("content_block_start missing index")
-                        })? as usize;
+                    let index = event.get("index").and_then(|v| v.as_u64()).ok_or_else(|| {
+                        ProviderAdapterError::serialization("content_block_start missing index")
+                    })? as usize;
                     let block = event.get("content_block");
                     while self.tool_calls.len() <= index {
                         self.tool_calls.push(PartialToolCall::default());
@@ -583,12 +600,9 @@ pub mod streaming {
                     }
                 }
                 "content_block_delta" => {
-                    let index = event
-                        .get("index")
-                        .and_then(|v| v.as_u64())
-                        .ok_or_else(|| {
-                            ProviderAdapterError::serialization("content_block_delta missing index")
-                        })? as usize;
+                    let index = event.get("index").and_then(|v| v.as_u64()).ok_or_else(|| {
+                        ProviderAdapterError::serialization("content_block_delta missing index")
+                    })? as usize;
                     let delta = event.get("delta");
                     if let Some(d) = delta {
                         match d.get("type").and_then(|v| v.as_str()) {
@@ -599,7 +613,9 @@ pub mod streaming {
                                 }
                             }
                             Some("input_json_delta") => {
-                                if let Some(partial) = d.get("partial_json").and_then(|v| v.as_str()) {
+                                if let Some(partial) =
+                                    d.get("partial_json").and_then(|v| v.as_str())
+                                {
                                     while self.tool_calls.len() <= index {
                                         self.tool_calls.push(PartialToolCall::default());
                                     }
@@ -617,12 +633,9 @@ pub mod streaming {
                     }
                 }
                 "content_block_stop" => {
-                    let index = event
-                        .get("index")
-                        .and_then(|v| v.as_u64())
-                        .ok_or_else(|| {
-                            ProviderAdapterError::serialization("content_block_stop missing index")
-                        })? as usize;
+                    let index = event.get("index").and_then(|v| v.as_u64()).ok_or_else(|| {
+                        ProviderAdapterError::serialization("content_block_stop missing index")
+                    })? as usize;
                     if let Some(partial) = self.tool_calls.get_mut(index) {
                         if let (Some(id), Some(name)) = (partial.id.clone(), partial.name.clone()) {
                             let arguments = if partial.arguments.is_empty() {
@@ -685,11 +698,7 @@ mod tests {
 
     #[test]
     fn openai_messages_assistant_with_tool_calls_uses_function_shape() {
-        let call = ToolCall::new(
-            ToolCallId::new("c1"),
-            "echo",
-            json!({"x": 1}),
-        );
+        let call = ToolCall::new(ToolCallId::new("c1"), "echo", json!({"x": 1}));
         let msgs = vec![Message::assistant_with_tool_calls("", vec![call])];
         let v = request::to_openai_messages(&msgs);
         assert_eq!(v[0]["role"], "assistant");
@@ -717,11 +726,7 @@ mod tests {
 
     #[test]
     fn anthropic_messages_assistant_tool_call_uses_tool_use_block() {
-        let call = ToolCall::new(
-            ToolCallId::new("c1"),
-            "echo",
-            json!({"x": 1}),
-        );
+        let call = ToolCall::new(ToolCallId::new("c1"), "echo", json!({"x": 1}));
         let msgs = vec![Message::assistant_with_tool_calls("", vec![call])];
         let (_, v) = request::to_anthropic_messages(&msgs);
         assert_eq!(v[0]["role"], "assistant");

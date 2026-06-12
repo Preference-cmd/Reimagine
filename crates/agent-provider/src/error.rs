@@ -28,7 +28,10 @@ pub enum ProviderAdapterError {
     StreamingUnsupported,
     /// A provider config was missing the inner typed config matching
     /// the discriminator.
-    MissingConfig { provider: String, kind: ProviderKind },
+    MissingConfig {
+        provider: String,
+        kind: ProviderKind,
+    },
 }
 
 impl ProviderAdapterError {
@@ -89,7 +92,10 @@ impl std::fmt::Display for ProviderAdapterError {
             Self::Configuration(m) => write!(f, "[CONFIGURATION] {m}"),
             Self::StreamingUnsupported => write!(f, "[STREAMING_UNSUPPORTED]"),
             Self::MissingConfig { provider, kind } => {
-                write!(f, "[CONFIGURATION] provider `{provider}` missing config for `{kind}`")
+                write!(
+                    f,
+                    "[CONFIGURATION] provider `{provider}` missing config for `{kind}`"
+                )
             }
         }
     }

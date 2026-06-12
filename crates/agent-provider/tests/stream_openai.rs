@@ -1,11 +1,11 @@
 use reimagine_agent::{
     AgentProvider, AgentRequest, AgentResponse, AgentStreamEvent, Message, ModelName, ProviderName,
 };
+use reimagine_agent_provider::translation::streaming::OpenAiStreamAccumulator;
 use reimagine_agent_provider::{
     CompletionBackend, FakeCompletionBackend, OpenAiCompatibleConfig, OpenAiCompatibleProvider,
     ScriptedBackendStep,
 };
-use reimagine_agent_provider::translation::streaming::OpenAiStreamAccumulator;
 use serde_json::json;
 use std::sync::Arc;
 
@@ -13,7 +13,7 @@ use std::sync::Arc;
 async fn openai_adapter_complete_returns_response_and_maps_error() {
     let backend: Arc<dyn CompletionBackend> = Arc::new(FakeCompletionBackend::new(vec![
         ScriptedBackendStep::Complete(Ok(
-            AgentResponse::new(Message::assistant("hi back")).with_stop_reason("stop"),
+            AgentResponse::new(Message::assistant("hi back")).with_stop_reason("stop")
         )),
     ]));
     let provider = OpenAiCompatibleProvider::with_backend(

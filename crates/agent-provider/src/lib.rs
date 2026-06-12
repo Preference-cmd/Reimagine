@@ -7,14 +7,15 @@
 
 #![deny(unsafe_code)]
 
+mod anthropic;
 mod backend;
 mod config;
 mod error;
 mod openai_compatible;
-mod anthropic;
 mod rig;
 pub mod translation;
 
+pub use anthropic::AnthropicProvider;
 pub use backend::{CompletionBackend, FakeCompletionBackend, ScriptedBackendStep};
 pub use config::{
     AgentProviderConfigDocument, AnthropicConfig, OpenAiCompatibleConfig, ProviderConfig,
@@ -22,7 +23,6 @@ pub use config::{
 };
 pub use error::ProviderAdapterError;
 pub use openai_compatible::OpenAiCompatibleProvider;
-pub use anthropic::AnthropicProvider;
 
 use std::sync::Arc;
 
@@ -36,12 +36,13 @@ pub fn build_provider(
 ) -> Result<Arc<dyn AgentProvider>, ProviderAdapterError> {
     match config.kind() {
         ProviderKind::OpenAiCompatible => {
-            let cfg = config
-                .openai_compatible()
-                .ok_or_else(|| ProviderAdapterError::MissingConfig {
-                    provider: config.name().to_string(),
-                    kind: ProviderKind::OpenAiCompatible,
-                })?;
+            let cfg =
+                config
+                    .openai_compatible()
+                    .ok_or_else(|| ProviderAdapterError::MissingConfig {
+                        provider: config.name().to_string(),
+                        kind: ProviderKind::OpenAiCompatible,
+                    })?;
             let provider = OpenAiCompatibleProvider::new(
                 ProviderName::new(config.name().to_string()),
                 cfg.clone(),
@@ -55,10 +56,8 @@ pub fn build_provider(
                     provider: config.name().to_string(),
                     kind: ProviderKind::Anthropic,
                 })?;
-            let provider = AnthropicProvider::new(
-                ProviderName::new(config.name().to_string()),
-                cfg.clone(),
-            );
+            let provider =
+                AnthropicProvider::new(ProviderName::new(config.name().to_string()), cfg.clone());
             Ok(Arc::new(provider))
         }
     }

@@ -104,9 +104,7 @@ impl AgentProvider for OpenAiCompatibleProvider {
         }
     }
 
-    async fn list_models(
-        &self,
-    ) -> Result<Vec<ModelInfo>, reimagine_agent::ProviderError> {
+    async fn list_models(&self) -> Result<Vec<ModelInfo>, reimagine_agent::ProviderError> {
         match self.backend.list_models().await {
             Ok(models) => Ok(models),
             Err(err) => Err(err.to_provider_error(Some(self.name.clone()))),

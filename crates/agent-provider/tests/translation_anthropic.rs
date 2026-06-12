@@ -38,7 +38,10 @@ fn anthropic_response_translation_text_plus_tool_use() {
 fn anthropic_response_translation_missing_content_array_is_serialization_error() {
     let payload = json!({});
     let err = translation::response::from_anthropic_response(&payload).unwrap_err();
-    assert!(matches!(err, reimagine_agent_provider::ProviderAdapterError::Serialization(_)));
+    assert!(matches!(
+        err,
+        reimagine_agent_provider::ProviderAdapterError::Serialization(_)
+    ));
 }
 
 #[test]
