@@ -712,9 +712,12 @@ pub mod listing {
     /// { "data": [ { "id": "gpt-4o-mini", ... }, ... ] }
     /// ```
     pub fn from_openai_models(value: &Value) -> Result<Vec<ModelInfo>, ProviderAdapterError> {
-        let data = value.get("data").and_then(|v| v.as_array()).ok_or_else(|| {
-            ProviderAdapterError::serialization("openai listing missing `data` array")
-        })?;
+        let data = value
+            .get("data")
+            .and_then(|v| v.as_array())
+            .ok_or_else(|| {
+                ProviderAdapterError::serialization("openai listing missing `data` array")
+            })?;
         let mut out = Vec::with_capacity(data.len());
         for (i, entry) in data.iter().enumerate() {
             let id = entry
@@ -741,9 +744,12 @@ pub mod listing {
     /// { "data": [ { "id": "claude-3-5-sonnet-20241022", ... }, ... ] }
     /// ```
     pub fn from_anthropic_models(value: &Value) -> Result<Vec<ModelInfo>, ProviderAdapterError> {
-        let data = value.get("data").and_then(|v| v.as_array()).ok_or_else(|| {
-            ProviderAdapterError::serialization("anthropic listing missing `data` array")
-        })?;
+        let data = value
+            .get("data")
+            .and_then(|v| v.as_array())
+            .ok_or_else(|| {
+                ProviderAdapterError::serialization("anthropic listing missing `data` array")
+            })?;
         let mut out = Vec::with_capacity(data.len());
         for (i, entry) in data.iter().enumerate() {
             let id = entry
@@ -767,8 +773,8 @@ pub mod listing {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use serde_json::json;
     use reimagine_agent::ModelCapability;
+    use serde_json::json;
 
     #[test]
     fn openai_messages_user_and_system() {
