@@ -23,7 +23,10 @@ pub use config::{
 };
 pub use error::ProviderAdapterError;
 pub use openai_compatible::OpenAiCompatibleProvider;
-pub use rig::RealRigBackend;
+pub use rig::{
+    RealRigBackend, arc_real_anthropic_backend, arc_real_anthropic_backend_with_http_client,
+    arc_real_backend, arc_real_backend_with_http_client,
+};
 
 use std::sync::Arc;
 

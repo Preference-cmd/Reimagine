@@ -14,6 +14,8 @@
 //! round-trip is covered by manual smoke docs in a follow-up V1.5
 //! issue that will add `base_url` to `AnthropicConfig`.
 
+use std::sync::Arc;
+
 use serde_json::json;
 use wiremock::matchers::{body_partial_json, header, method, path};
 use wiremock::{Mock, MockServer, ResponseTemplate};
@@ -23,7 +25,7 @@ use reimagine_agent::{
 };
 use reimagine_agent_provider::{
     AnthropicConfig, CompletionBackend, OpenAiCompatibleConfig, ProviderAdapterError,
-    RealRigBackend,
+    RealRigBackend, arc_real_backend_with_http_client,
 };
 
 const OPENAI_KEY: &str = "sk-test-openai";
@@ -107,7 +109,7 @@ async fn openai_complete_returns_translated_response() {
     // the rig re-export to avoid adding a new dev-dep.
     let http = rig::http_client::ReqwestClient::new();
 
-    let backend = RealRigBackend::openai_compatible_with_http_client(
+    let backend: Arc<dyn CompletionBackend> = arc_real_backend_with_http_client(
         ProviderName::new("openai-test"),
         openai_cfg_for(&server),
         http,
@@ -154,7 +156,7 @@ async fn openai_complete_maps_non_2xx_to_api_error() {
         .await;
 
     let http = rig::http_client::ReqwestClient::new();
-    let backend = RealRigBackend::openai_compatible_with_http_client(
+    let backend: Arc<dyn CompletionBackend> = arc_real_backend_with_http_client(
         ProviderName::new("openai-test"),
         openai_cfg_for(&server),
         http,
@@ -213,7 +215,7 @@ async fn openai_list_models_returns_translated_listing() {
         .await;
 
     let http = rig::http_client::ReqwestClient::new();
-    let backend = RealRigBackend::openai_compatible_with_http_client(
+    let backend: Arc<dyn CompletionBackend> = arc_real_backend_with_http_client(
         ProviderName::new("openai-test"),
         openai_cfg_for(&server),
         http,
