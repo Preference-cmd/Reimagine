@@ -56,9 +56,9 @@ impl AnthropicProvider {
     /// unless wired up at app-host level).
     pub fn new(name: ProviderName, config: AnthropicConfig) -> Self {
         Self {
-            name,
+            name: name.clone(),
             config: config.clone(),
-            backend: crate::rig::arc_real_anthropic_backend(config),
+            backend: crate::rig::arc_real_anthropic_backend(name, config),
         }
     }
 
