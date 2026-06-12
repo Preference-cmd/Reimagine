@@ -57,9 +57,9 @@ impl OpenAiCompatibleProvider {
     /// unless wired up at app-host level).
     pub fn new(name: ProviderName, config: OpenAiCompatibleConfig) -> Self {
         Self {
-            name,
+            name: name.clone(),
             config: config.clone(),
-            backend: crate::rig::arc_real_backend(config),
+            backend: crate::rig::arc_real_backend(name, config),
         }
     }
 
