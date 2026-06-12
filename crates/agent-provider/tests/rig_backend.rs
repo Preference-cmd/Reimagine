@@ -115,11 +115,10 @@ async fn openai_complete_returns_translated_response() {
         http,
     );
 
-    let outer = backend
+    let resp = backend
         .complete(build_request("gpt-4o-mini"))
         .await
-        .expect("setup ok");
-    let resp = outer.expect("upstream returned 2xx");
+        .expect("upstream returned 2xx");
     assert_eq!(resp.message().content(), "hello back");
     let calls = resp.message().tool_calls();
     assert_eq!(calls.len(), 1);
@@ -161,18 +160,10 @@ async fn openai_complete_maps_non_2xx_to_api_error() {
         openai_cfg_for(&server),
         http,
     );
-    // The outer `Result` is `Err(...)` when the rig HTTP seam
-    // converts a non-2xx into a transport error (the dispatcher's
-    // `?` propagates it). It is `Ok(Err(...))` when the dispatcher
-    // itself observes the non-2xx and maps it to `Api`. Both are
-    // hard failures; the test passes as long as the underlying
-    // error is the expected one.
-    let outer = backend.complete(build_request("gpt-4o-mini")).await;
-    let err = match outer {
-        Ok(Ok(_)) => panic!("expected non-2xx response to surface as an error"),
-        Ok(Err(e)) => e,
-        Err(e) => e,
-    };
+    let err = backend
+        .complete(build_request("gpt-4o-mini"))
+        .await
+        .expect_err("expected non-2xx response to surface as an error");
     match err {
         // Preferred: dispatcher maps non-2xx to Api. Unreachable on
         // the rig ReqwestClient seam today, but kept here for
@@ -275,6 +266,6 @@ async fn anthropic_complete_carries_required_fields() {
             panic!("unexpected configuration error: {m}")
         }
         Err(other) => panic!("unexpected error variant: {other:?}"),
-        Ok(outer) => panic!("unexpected upstream response: {outer:?}"),
+        Ok(response) => panic!("unexpected upstream response: {response:?}"),
     }
 }

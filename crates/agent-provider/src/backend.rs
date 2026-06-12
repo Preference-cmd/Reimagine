@@ -38,10 +38,7 @@ pub enum ScriptedBackendStep {
 /// provider-agnostic shapes to whatever transport the upstream uses.
 #[async_trait]
 pub trait CompletionBackend: Send + Sync {
-    async fn complete(
-        &self,
-        request: AgentRequest,
-    ) -> Result<Result<AgentResponse, ProviderAdapterError>, ProviderAdapterError>;
+    async fn complete(&self, request: AgentRequest) -> Result<AgentResponse, ProviderAdapterError>;
 
     /// Return a boxed stream of events. The `Result` outer layer is
     /// for setup-time errors (e.g. transport); inner items are
@@ -84,10 +81,10 @@ impl CompletionBackend for FakeCompletionBackend {
     async fn complete(
         &self,
         _request: AgentRequest,
-    ) -> Result<Result<AgentResponse, ProviderAdapterError>, ProviderAdapterError> {
+    ) -> Result<AgentResponse, ProviderAdapterError> {
         let mut steps = self.steps.lock().unwrap();
         match steps.pop_front() {
-            Some(ScriptedBackendStep::Complete(r)) => Ok(r),
+            Some(ScriptedBackendStep::Complete(r)) => r,
             Some(other) => {
                 // Put it back so a later `stream` call can consume it.
                 steps.push_front(other);

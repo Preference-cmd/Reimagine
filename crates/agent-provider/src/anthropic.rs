@@ -18,7 +18,6 @@ use reimagine_agent::{
 
 use crate::backend::CompletionBackend;
 use crate::config::AnthropicConfig;
-use crate::translation;
 
 /// V1 adapter for Anthropic messages API.
 pub struct AnthropicProvider {
@@ -77,12 +76,8 @@ impl AgentProvider for AnthropicProvider {
         &self,
         request: AgentRequest,
     ) -> Result<AgentResponse, reimagine_agent::ProviderError> {
-        // Build translated payloads for documentation / future real backend.
-        let _ = translation::request::to_anthropic_messages(request.messages());
-        let _ = translation::tools::to_anthropic_tools(request.tools());
         match self.backend.complete(request).await {
-            Ok(Ok(resp)) => Ok(resp),
-            Ok(Err(err)) => Err(err.to_provider_error(Some(self.name.clone()))),
+            Ok(resp) => Ok(resp),
             Err(err) => Err(err.to_provider_error(Some(self.name.clone()))),
         }
     }
@@ -91,9 +86,6 @@ impl AgentProvider for AnthropicProvider {
         &self,
         request: AgentRequest,
     ) -> Result<Box<dyn AgentStream>, reimagine_agent::ProviderError> {
-        // Build the body for documentation / future real backend.
-        let _ = translation::request::to_anthropic_messages(request.messages());
-        let _ = translation::tools::to_anthropic_tools(request.tools());
         match self.backend.stream(request).await {
             Ok(stream) => Ok(stream),
             Err(err) => Err(err.to_provider_error(Some(self.name.clone()))),
