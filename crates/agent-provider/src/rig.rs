@@ -16,6 +16,7 @@ use async_trait::async_trait;
 use reimagine_agent::{
     AgentRequest, AgentResponse, AgentStream, ModelInfo, ProviderName,
 };
+// `HttpClientExt` is the extension trait that provides `Client::send()`.
 use rig::http_client::HttpClientExt;
 
 use crate::backend::CompletionBackend;
@@ -27,11 +28,24 @@ use crate::translation;
 /// the lower-level `rig::Client` HTTP seam (not the
 /// `CoreCompletionModel` agent-loop layer). `stream` remains
 /// `streaming_unsupported` — V2 work.
-#[derive(Debug, Clone)]
+#[derive(Clone)]
 pub struct RealRigBackend {
     name: ProviderName,
     kind: RealBackendKind,
     http: rig::http_client::ReqwestClient,
+}
+
+impl std::fmt::Debug for RealRigBackend {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        let kind_repr = match &self.kind {
+            RealBackendKind::OpenAiCompatible(_) => "OpenAiCompatible(<redacted>)",
+            RealBackendKind::Anthropic(_) => "Anthropic(<redacted>)",
+        };
+        f.debug_struct("RealRigBackend")
+            .field("name", &self.name)
+            .field("kind", &kind_repr)
+            .finish_non_exhaustive()
+    }
 }
 
 #[derive(Debug, Clone)]
