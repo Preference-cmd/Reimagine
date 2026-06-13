@@ -7,6 +7,7 @@
 
 use std::sync::Arc;
 
+use reimagine_core::model::NodeTypeId;
 use reimagine_runtime::NodeExecutorRegistry;
 
 use crate::backend::InferenceBackend;
@@ -31,14 +32,12 @@ pub fn register_builtin_inference_executors(
     backend: Arc<dyn InferenceBackend>,
     resolver: Arc<dyn ModelResolver>,
 ) -> Result<(), reimagine_runtime::NodeExecutorRegistryError> {
-    use reimagine_nodes::*;
-
     // builtin.string — pure passthrough, no backend call
-    registry.register(BUILTIN_STRING, Arc::new(StringExecutor))?;
+    registry.register(NodeTypeId::new("builtin.string"), Arc::new(StringExecutor))?;
 
     // builtin.checkpoint_loader — model.load_bundle
     registry.register(
-        BUILTIN_CHECKPOINT_LOADER,
+        NodeTypeId::new("builtin.checkpoint_loader"),
         Arc::new(CheckpointLoaderExecutor::new(
             Arc::clone(&backend),
             Arc::clone(&resolver),
@@ -47,37 +46,37 @@ pub fn register_builtin_inference_executors(
 
     // builtin.clip_text_encode — text.encode
     registry.register(
-        BUILTIN_CLIP_TEXT_ENCODE,
+        NodeTypeId::new("builtin.clip_text_encode"),
         Arc::new(ClipTextEncodeExecutor::new(Arc::clone(&backend))),
     )?;
 
     // builtin.empty_latent_image — latent.create_empty
     registry.register(
-        BUILTIN_EMPTY_LATENT_IMAGE,
+        NodeTypeId::new("builtin.empty_latent_image"),
         Arc::new(EmptyLatentImageExecutor::new(Arc::clone(&backend))),
     )?;
 
     // builtin.ksampler — diffusion.sample
     registry.register(
-        BUILTIN_KSAMPLER,
+        NodeTypeId::new("builtin.ksampler"),
         Arc::new(KSamplerExecutor::new(Arc::clone(&backend))),
     )?;
 
     // builtin.vae_decode — latent.decode
     registry.register(
-        BUILTIN_VAE_DECODE,
+        NodeTypeId::new("builtin.vae_decode"),
         Arc::new(VaeDecodeExecutor::new(Arc::clone(&backend))),
     )?;
 
     // builtin.save_image — image.save
     registry.register(
-        BUILTIN_SAVE_IMAGE,
+        NodeTypeId::new("builtin.save_image"),
         Arc::new(SaveImageExecutor::new(Arc::clone(&backend))),
     )?;
 
     // builtin.preview_image — image.preview
     registry.register(
-        BUILTIN_PREVIEW_IMAGE,
+        NodeTypeId::new("builtin.preview_image"),
         Arc::new(PreviewImageExecutor::new(Arc::clone(&backend))),
     )?;
 

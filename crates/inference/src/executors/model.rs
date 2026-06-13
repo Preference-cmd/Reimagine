@@ -8,7 +8,7 @@
 
 use std::sync::Arc;
 
-use reimagine_core::model::{ModelRef, ParamValue, SlotId};
+use reimagine_core::model::{ModelRef, ParamValue, SlotId, SlotKind};
 use reimagine_runtime::{NodeExecutionContext, NodeExecutor, NodeExecutorError, RuntimeValue};
 
 use crate::backend::InferenceBackend;
@@ -76,9 +76,9 @@ impl NodeExecutor for CheckpointLoaderExecutor {
 
         // Validate.
         let expected = vec![
-            ExpectedOutputSlot::required("model"),
-            ExpectedOutputSlot::required("clip"),
-            ExpectedOutputSlot::required("vae"),
+            ExpectedOutputSlot::required("model", SlotKind::Model),
+            ExpectedOutputSlot::required("clip", SlotKind::Clip),
+            ExpectedOutputSlot::required("vae", SlotKind::Vae),
         ];
         validate_response(&response, &expected, false)
     }

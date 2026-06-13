@@ -9,10 +9,13 @@ rust-version.workspace = true
 [dependencies]
 async-trait = { workspace = true }
 reimagine-core = { path = "../core" }
-reimagine-nodes = { path = "../nodes" }
 reimagine-runtime = { path = "../runtime" }
 serde = { workspace = true }
 tracing = "0.1"
+
+[features]
+default = []
+testing = []
 
 [dev-dependencies]
 tokio = { workspace = true, features = ["macros", "rt", "rt-multi-thread", "sync"] }

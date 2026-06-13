@@ -2,12 +2,12 @@
 //!
 //! [`FakeBackend`] is a minimal [`InferenceBackend`] implementation
 //! that returns either a canned response or a deterministic
-//! `BackendNotImplemented` error. The module is unconditionally
-//! public so that downstream crate integration tests (which cannot
-//! access `#[cfg(test)]` items from a dependency) can use it.
+//! `BackendNotImplemented` error. The module is only compiled for
+//! crate unit tests or when the explicit `testing` feature is enabled.
 //!
-//! Production code must not depend on `FakeBackend`. A future
-//! refinement may gate the module behind a `testing` Cargo feature.
+//! Downstream crates that need `FakeBackend` in integration tests
+//! should enable the `testing` feature. Production code must not
+//! depend on `FakeBackend`.
 
 use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
