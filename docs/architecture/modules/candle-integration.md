@@ -7,7 +7,7 @@
 ## Role
 
 The Candle backend adapter is the local Candle implementation of the
-backend-neutral inference layer. It implements the SDXL capability traits from
+backend-neutral inference layer. It implements the operation protocol from
 `crates/inference` and owns Candle-specific model loading, tensor storage,
 device policy, and image encoding.
 
@@ -22,7 +22,7 @@ V1 must support SDXL base-only text-to-image inference. SDXL refiner support is 
 - Model loading and cache.
 - CLIP, UNet, VAE implementations.
 - Tensor conversion between `core` data and Candle tensors.
-- SDXL capability implementations consumed by inference-layer executors.
+- Operation implementations consumed by inference-layer executors.
 - Artifact encoding for image outputs produced by `builtin.save_image`.
 
 ## Non-Responsibilities
@@ -64,8 +64,8 @@ RuntimeService
 ```
 
 `inference` provides backend-neutral `NodeExecutor` implementations or
-factories for the V1 built-ins. The Candle adapter implements the SDXL backend
-capabilities consumed by those executors. Runtime remains backend-agnostic.
+factories for the V1 built-ins. The Candle adapter implements the operations
+consumed by those executors. Runtime remains backend-agnostic.
 
 Initial executor set:
 
@@ -101,6 +101,18 @@ The backend owns:
 - conversion between backend tensors and `RuntimeValue` handles;
 - image encoding/write helpers used by `save_image`.
 
+It may implement both:
+
+```text
+InferenceBackend
+  execute(operation_request)
+
+RunResourceBackend
+  begin_run / release_runtime_value / cleanup_run / memory_snapshot
+```
+
+These roles stay separate even when implemented by the same concrete object.
+
 The runtime only sees lightweight `RuntimeValue` handles:
 
 ```text
@@ -128,7 +140,8 @@ The dependency direction is:
 workflow ModelRef
   -> app-host ModelService::resolve_descriptor
   -> inference model resolver capability
-  -> CandleBackend model loader
+  -> InferenceRequest(model.load_bundle)
+  -> CandleBackend
   -> RuntimeValue::Model / Clip / Vae handles
 ```
 
