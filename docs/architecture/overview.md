@@ -155,11 +155,19 @@ crates/runtime
   - artifact routing
   - RunEventSink boundary
 
-crates/candle-integration
-  Candle backend:
-  - Session
+crates/inference
+  Backend-neutral inference layer:
+  - inference backend traits
+  - SDXL capability traits
+  - backend-neutral executor factories
+  - inference diagnostics/errors
+
+crates/inference-backends/candle
+  V1 default local inference backend:
+  - CandleBackend
   - model loader/cache
-  - SDXL base-only inference implementation
+  - tensor payload store
+  - SDXL base-only capability implementation
 
 crates/axum-host
   HTTP host adapter:
@@ -268,11 +276,12 @@ VAE and image:
 - [Config](./modules/config.md)
 - [Model manager](./modules/model-manager.md)
 - [Runtime](./modules/runtime.md)
+- [Inference](./modules/inference.md)
 - [Nodes](./modules/nodes.md)
 - [Agent](./modules/agent.md)
 - [Agent provider](./modules/agent-provider.md)
 - [Adapters](./modules/adapters.md)
-- [Candle integration](./modules/candle-integration.md)
+- [Candle backend adapter](./modules/candle-integration.md)
 - [Tauri host](./modules/tauri-host.md)
 - [UI](./modules/ui.md)
 - [Axum host](./modules/axum-host.md)

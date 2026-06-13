@@ -6,7 +6,7 @@
 
 The Axum host is a peer host adapter for remote / headless operation and
 end-to-end workflow testing. It reuses the same `app-host` facade as Tauri
-and never reaches into `runtime` or `candle-integration` directly.
+and never reaches into `runtime` or concrete inference backends directly.
 
 ## Responsibilities
 
@@ -107,7 +107,7 @@ shared app-host facade.
 - It does not duplicate app-host orchestration logic.
 - It reads run snapshots and summaries through `WorkspaceHost` facade
   methods rather than through `RuntimeService`.
-- It does not depend on `candle-integration` directly. It may depend on
+- It does not depend on concrete inference backends directly. It may depend on
   `reimagine-runtime` for host-neutral DTO projections and for the
   `RunEventSink` adapter boundary.
 - The V1 event surface is JSON polling. SSE / WebSocket can be a
