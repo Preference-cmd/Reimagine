@@ -3340,6 +3340,18 @@ dependencies = [
 ]
 
 [[package]]
+name = "reimagine-inference"
+version = "0.1.0"
+dependencies = [
+ "async-trait",
+ "reimagine-core",
+ "reimagine-runtime",
+ "serde",
+ "tokio",
+ "tracing",
+]
+
+[[package]]
 name = "reimagine-model-manager"
 version = "0.1.0"
 dependencies = [
