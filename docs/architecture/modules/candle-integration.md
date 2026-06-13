@@ -1,11 +1,15 @@
-# Candle Integration Module Architecture
+# Candle Backend Adapter Architecture
 
 > Status: working draft
-> Crate: `crates/candle-integration`
+> Target crate: `crates/inference-backends/candle` (`reimagine-inference-candle`)
+> Current crate: `crates/candle-integration` until migration
 
 ## Role
 
-`candle-integration` is the Candle-specific inference backend. It implements backend behavior behind the `core` inference contracts.
+The Candle backend adapter is the local Candle implementation of the
+backend-neutral inference layer. It implements the SDXL capability traits from
+`crates/inference` and owns Candle-specific model loading, tensor storage,
+device policy, and image encoding.
 
 ## V1 Target
 
@@ -18,7 +22,7 @@ V1 must support SDXL base-only text-to-image inference. SDXL refiner support is 
 - Model loading and cache.
 - CLIP, UNet, VAE implementations.
 - Tensor conversion between `core` data and Candle tensors.
-- Built-in SDXL node executor implementations for the runtime executor registry.
+- SDXL capability implementations consumed by inference-layer executors.
 - Artifact encoding for image outputs produced by `builtin.save_image`.
 
 ## Non-Responsibilities
@@ -32,19 +36,21 @@ V1 must support SDXL base-only text-to-image inference. SDXL refiner support is 
 ## Dependency Direction
 
 ```text
-app-host -> candle-integration
-candle-integration -> runtime
-candle-integration -> core
-candle-integration must not -> app-host
-candle-integration must not -> tauri
-candle-integration must not -> axum
-candle-integration must not -> model-manager
+app-host -> inference
+app-host -> inference-backends/candle
+inference-backends/candle -> inference
+inference-backends/candle -> runtime
+inference-backends/candle -> core
+inference-backends/candle must not -> app-host
+inference-backends/candle must not -> tauri
+inference-backends/candle must not -> axum
+inference-backends/candle must not -> model-manager
 ```
 
-`app-host` resolves model descriptors through `model-manager`, then injects
-the resolved backend capability and node executor registry into runtime.
-`candle-integration` consumes resolved paths/metadata; it does not scan
-directories or read manifests.
+`app-host` resolves model descriptors through `model-manager`, then injects the
+chosen inference backend and node executor registry into runtime. The Candle
+adapter consumes resolved paths/metadata; it does not scan directories or read
+manifests.
 
 ## Runtime Integration
 
@@ -57,9 +63,9 @@ RuntimeService
   -> Vec<(SlotId, Arc<RuntimeValue>)>
 ```
 
-`candle-integration` provides concrete `NodeExecutor` implementations for the
-V1 built-ins. It must register them into a `NodeExecutorRegistry` assembled by
-`app-host`; runtime remains backend-agnostic.
+`inference` provides backend-neutral `NodeExecutor` implementations or
+factories for the V1 built-ins. The Candle adapter implements the SDXL backend
+capabilities consumed by those executors. Runtime remains backend-agnostic.
 
 Initial executor set:
 
@@ -76,7 +82,7 @@ builtin.save_image
 `builtin.preview_image` may be added later, but it is not required to prove the
 base text-to-image save path.
 
-## Backend Session Shape
+## Candle Backend Shape
 
 V1 should introduce a Candle backend service with explicit configuration and
 interior synchronization so executors can share it safely:
@@ -121,27 +127,32 @@ The dependency direction is:
 ```text
 workflow ModelRef
   -> app-host ModelService::resolve_descriptor
-  -> resolved descriptor/path
-  -> candle-integration checkpoint loader executor
+  -> inference model resolver capability
+  -> CandleBackend model loader
   -> RuntimeValue::Model / Clip / Vae handles
 ```
 
-The resolver capability should be defined at the app-host/candle boundary, not
-inside runtime. Runtime passes params to the executor but does not resolve
+The resolver capability should be defined at the app-host/inference boundary,
+not inside runtime. Runtime passes params to the executor but does not resolve
 models itself.
 
 ## M1 Strategy
 
 M1 should prioritize an executable vertical slice over complete SDXL quality:
 
-1. Register concrete executors through app-host into runtime.
-2. Prove the existing SDXL workflow executes through Axum HTTP using the real
+1. Introduce the `inference` crate boundary and backend-neutral executor
+   registration shape.
+2. Migrate the current `candle-integration` crate into
+   `crates/inference-backends/candle` or replace it with a new
+   `reimagine-inference-candle` crate.
+3. Register concrete executors through app-host into runtime.
+4. Prove the existing SDXL workflow executes through Axum HTTP using the real
    registry path.
-3. Initially allow backend stubs for heavy kernels where needed, but keep the
+5. Initially allow backend stubs for heavy kernels where needed, but keep the
    runtime value shapes and artifact path identical to the eventual real SDXL
    path.
-4. Replace stubs with real Candle CLIP/UNet/VAE implementation behind the same
-   executor/backend API.
+6. Replace stubs with real Candle CLIP/UNet/VAE implementation behind the same
+   inference/backend API.
 
 The first M1 issue should not try to perfect sampling quality, device offload,
 or streaming progress. It should make the SDXL example produce a deterministic
