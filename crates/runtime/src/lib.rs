@@ -24,7 +24,7 @@ mod snapshot;
 mod store;
 mod value_store;
 
-pub use artifacts::{ArtifactRecord, ArtifactStore, NodeArtifactCapability};
+pub use artifacts::{ArtifactEventKind, ArtifactRecord, ArtifactStore, NodeArtifactCapability};
 pub use cancellation::CancellationToken;
 pub use clock::{Clock, SystemClock};
 pub use error::RuntimeError;
@@ -34,7 +34,7 @@ pub use executor::{
     NodeExecutorRegistryError,
 };
 pub use handle::{RunHandle, RunState};
-pub use node_context::NodeExecutionContext;
+pub use node_context::{NodeExecutionContext, NodeInputs, NodeParams};
 pub use resources::{MemorySnapshot, NoopRunResourceBackend, RunResourceBackend};
 pub use run_inputs::RunInputs;
 pub use run_session::RunSession;
