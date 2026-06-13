@@ -1,7 +1,7 @@
 # Reimagine Architecture Overview
 
 > Status: working draft
-> Last updated: 2026-06-08
+> Last updated: 2026-06-13
 
 ## Purpose
 
@@ -15,7 +15,7 @@ This document is the architecture entry point. Module-level details live under `
 
 `src-tauri` is the V1 desktop host adapter. It owns Tauri IPC, desktop settings, window integration, and event bridging. It does not own workflow mutation, validation, Agent policy, execution scheduling, model inference, or ComfyUI mapping logic.
 
-A future Axum server is a peer host adapter. It should reuse the same `app-host` facade as Tauri instead of copying desktop logic into server routes.
+`axum-host` is a peer host adapter for remote/headless operation and backend E2E testing. It reuses the same `app-host` facade as Tauri instead of copying desktop logic into server routes.
 
 ### UI draft, Rust canonical truth
 
@@ -161,18 +161,18 @@ crates/candle-integration
   - model loader/cache
   - SDXL base-only inference implementation
 
+crates/axum-host
+  HTTP host adapter:
+  - V1 REST API for health, workflow open/run, run snapshot, and run events
+  - app-host state injection
+  - backend E2E workflow test harness
+
 src-tauri
   V1 desktop host adapter:
   - IPC
   - settings/window integration
   - Tauri event bridge
   - app-host state injection
-
-future Axum host
-  HTTP/WebSocket host adapter:
-  - REST/WebSocket API
-  - app-host state injection
-  - remote/headless run control
 
 ui
   Editing experience:
@@ -275,4 +275,4 @@ VAE and image:
 - [Candle integration](./modules/candle-integration.md)
 - [Tauri host](./modules/tauri-host.md)
 - [UI](./modules/ui.md)
-- [Future Axum host](./modules/axum-host.md)
+- [Axum host](./modules/axum-host.md)

@@ -1,6 +1,6 @@
 # Axum Host Architecture
 
-> Status: working draft (V1 implementation in flight)
+> Status: implemented V1 HTTP harness; still working draft for future streaming and remote/headless features
 
 ## Role
 
