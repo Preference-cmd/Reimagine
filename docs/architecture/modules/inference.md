@@ -117,6 +117,39 @@ NodeExecutionContext
   -> Vec<(SlotId, Arc<RuntimeValue>)>
 ```
 
+## Suggested Module Layout
+
+```text
+src/
+  lib.rs
+  error.rs
+  operation.rs
+  request.rs
+  response.rs
+  capability.rs
+  backend.rs
+  resolver.rs
+  registry.rs
+  executors.rs
+  executors/
+    string.rs
+    model.rs
+    text.rs
+    latent.rs
+    diffusion.rs
+    image.rs
+  testing.rs
+```
+
+`lib.rs` should stay as a facade of private modules plus explicit public
+re-exports. Keep the operation protocol, backend trait, resolver trait, and
+executor adapters in separate files; do not collect the crate's core model into
+one large `lib.rs` or `backend.rs`.
+
+`testing.rs` may expose fake/stub helpers behind `#[cfg(any(test, feature =
+"testing"))]` if downstream tests need them. The default public API should not
+require test-only fake types.
+
 ## Operation Protocol
 
 The central abstraction is an operation-based backend adapter:
@@ -198,6 +231,31 @@ builtin.vae_decode
 builtin.save_image
 ```
 
+### Executor Adapter Organization
+
+Inference-backed executors are node adapters, not backend implementations.
+Each executor should be small and focused:
+
+- read required inputs/params from `NodeExecutionContext`;
+- produce one `InferenceRequest` with a stable `InferenceOperationId`;
+- call `InferenceBackend::execute`;
+- validate response slot names and value kinds;
+- return `NodeExecutionOutputs`.
+
+Keep backend-specific behavior out of these executor files. For example,
+`executors/diffusion.rs` may map `builtin.ksampler` to
+`diffusion.sample`, but it must not branch on Candle model internals.
+
+Executor registration belongs in a narrow API such as:
+
+```text
+register_builtin_inference_executors(registry, backend, resolver)
+```
+
+The exact function name can vary, but the registration entrypoint should live
+in `registry.rs` or a similarly focused module. It should not require
+`app-host`, `model-manager`, or a concrete backend crate.
+
 ## RunResourceBackend Relationship
 
 `RunResourceBackend` and `InferenceBackend` are separate roles.
@@ -233,6 +291,12 @@ workflow ModelRef
 
 This keeps `model-manager` independent from backend crates and keeps runtime
 free of model manifest knowledge.
+
+The model resolver trait should return inference-layer resolved model metadata,
+not `model-manager::ModelDescriptor` directly. `app-host` can adapt
+`ModelDescriptor` into that shape. This prevents `inference` from depending on
+`model-manager` while still preserving the path and identity needed by
+`model.load_bundle`.
 
 ## Backend Crate Placement
 
