@@ -12,6 +12,7 @@ members = [
     "crates/agent-macros",
     "crates/app-host",
     "crates/agent-provider",
+    "crates/axum-host",
 ]
 
 [workspace.package]
@@ -32,9 +33,11 @@ tokio = "1"
 glob-match = "0.2"
 sha2 = "0.10"
 async-trait = "0.1"
+axum = "0.8"
 proc-macro2 = "1"
 quote = "1"
 syn = "2"
 schemars = "0.8"
 trybuild = "1"
+tower = "0.5"
 rig-core = { version = "0.31", default-features = false, features = ["reqwest-middleware-rustls"] }

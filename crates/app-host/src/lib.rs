@@ -14,6 +14,7 @@ mod model_service;
 mod policy;
 mod proposal;
 mod readiness;
+mod run_observation;
 mod run_workflow;
 mod services;
 mod tools;
