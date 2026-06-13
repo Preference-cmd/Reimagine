@@ -5,7 +5,7 @@
 
 use std::sync::Arc;
 
-use reimagine_core::model::{ParamValue, SlotId};
+use reimagine_core::model::{ParamValue, SlotId, SlotKind};
 use reimagine_runtime::{NodeExecutionContext, NodeExecutor, NodeExecutorError, RuntimeValue};
 
 use crate::backend::InferenceBackend;
@@ -66,7 +66,7 @@ impl NodeExecutor for EmptyLatentImageExecutor {
             .await
             .map_err(|e| e.into_executor_error())?;
 
-        let expected = vec![ExpectedOutputSlot::required("latent")];
+        let expected = vec![ExpectedOutputSlot::required("latent", SlotKind::Latent)];
         validate_response(&response, &expected, false)
     }
 }

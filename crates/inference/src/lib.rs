@@ -19,6 +19,7 @@ pub mod registry;
 pub mod request;
 pub mod resolver;
 pub mod response;
+#[cfg(any(test, feature = "testing"))]
 pub mod testing;
 
 pub use backend::InferenceBackend;
@@ -29,4 +30,5 @@ pub use registry::register_builtin_inference_executors;
 pub use request::InferenceRequest;
 pub use resolver::{ModelFormat, ModelResolver, ResolvedInferenceModel};
 pub use response::{InferenceOutput, InferenceResponse};
+#[cfg(any(test, feature = "testing"))]
 pub use testing::FakeBackend;

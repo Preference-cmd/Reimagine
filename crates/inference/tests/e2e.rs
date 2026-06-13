@@ -5,22 +5,24 @@
 //! [`NodeExecutionContext`], and assert the output slot names, order
 //! independence, error propagation, and validation invariants.
 
-use std::sync::Arc;
+use std::collections::HashMap;
+use std::sync::{Arc, Mutex};
 
 use reimagine_core::diagnostic::CorrelationId;
 use reimagine_core::model::{
     ModelId, ModelRef, ModelRole, ModelSeries, ModelVariant, ParamValue, SlotId,
 };
+use reimagine_runtime::{BackendKind, RuntimeClipHandle, RuntimeModelHandle, RuntimeVaeHandle};
 use reimagine_runtime::{
     CancellationToken, NodeExecutionContext, NodeExecutorError, NodeExecutorRegistry, NodeInputs,
-    NodeParams, RuntimeValue, VecRunEventSink,
+    RuntimeValue, VecRunEventSink,
 };
 
 use reimagine_inference::operation::*;
-use reimagine_inference::testing::fake_output;
 use reimagine_inference::{
-    FakeBackend, InferenceError, ModelFormat, ModelResolver, ResolvedInferenceModel,
-    register_builtin_inference_executors,
+    InferenceBackend, InferenceBackendCapabilities, InferenceError, InferenceOperationId,
+    InferenceOperationSupport, InferenceRequest, InferenceResponse, ModelFormat, ModelResolver,
+    ResolvedInferenceModel, register_builtin_inference_executors,
 };
 
 // ── Fake model resolver ────────────────────────────────────────────
@@ -52,6 +54,75 @@ impl ModelResolver for FakeResolver {
     }
 }
 
+// ── Fake backend ───────────────────────────────────────────────────
+
+struct FakeBackend {
+    kind: String,
+    operations: Mutex<HashMap<InferenceOperationId, Vec<(SlotId, Arc<RuntimeValue>)>>>,
+}
+
+impl FakeBackend {
+    fn new(kind: impl Into<String>) -> Self {
+        Self {
+            kind: kind.into(),
+            operations: Mutex::new(HashMap::new()),
+        }
+    }
+
+    fn with_operation(
+        self,
+        operation_id: impl Into<InferenceOperationId>,
+        outputs: Vec<(SlotId, Arc<RuntimeValue>)>,
+    ) -> Self {
+        self.operations
+            .lock()
+            .expect("fake backend poisoned")
+            .insert(operation_id.into(), outputs);
+        self
+    }
+}
+
+#[async_trait::async_trait]
+impl InferenceBackend for FakeBackend {
+    fn backend_kind(&self) -> &str {
+        &self.kind
+    }
+
+    fn capabilities(&self) -> InferenceBackendCapabilities {
+        let operations = self.operations.lock().expect("fake backend poisoned");
+        let mut capabilities = InferenceBackendCapabilities::new(&self.kind);
+        for operation_id in operations.keys() {
+            capabilities =
+                capabilities.with_support(InferenceOperationSupport::new(operation_id.clone()));
+        }
+        capabilities
+    }
+
+    async fn execute(
+        &self,
+        request: InferenceRequest,
+    ) -> Result<InferenceResponse, InferenceError> {
+        let operations = self.operations.lock().expect("fake backend poisoned");
+        match operations.get(request.operation_id()) {
+            Some(outputs) => Ok(InferenceResponse::new(
+                outputs
+                    .iter()
+                    .map(|(slot_id, value)| {
+                        reimagine_inference::InferenceOutput::new(
+                            slot_id.clone(),
+                            Arc::clone(value),
+                        )
+                    })
+                    .collect(),
+            )),
+            None => Err(InferenceError::BackendNotImplemented {
+                operation_id: request.operation_id().to_string(),
+                backend_kind: self.kind.clone(),
+            }),
+        }
+    }
+}
+
 // ── Test helpers ───────────────────────────────────────────────────
 
 fn model_ref() -> ModelRef {
@@ -63,11 +134,42 @@ fn model_ref() -> ModelRef {
     )
 }
 
+fn fake_output(slot: &str, value: impl Into<ParamValue>) -> (SlotId, Arc<RuntimeValue>) {
+    (
+        SlotId::new(slot),
+        Arc::new(RuntimeValue::Param(value.into())),
+    )
+}
+
 fn fake_checkpoint_outputs() -> Vec<(SlotId, Arc<RuntimeValue>)> {
+    let backend = BackendKind::new("fake");
+    let model_id = ModelId::new("sdxl-base-1.0");
     vec![
-        fake_output("model", ParamValue::String("model-handle".to_string())),
-        fake_output("clip", ParamValue::String("clip-handle".to_string())),
-        fake_output("vae", ParamValue::String("vae-handle".to_string())),
+        (
+            SlotId::new("model"),
+            Arc::new(RuntimeValue::Model(RuntimeModelHandle::new(
+                model_id.clone(),
+                ModelRole::DiffusionModel,
+                backend.clone(),
+                "model-handle",
+            ))),
+        ),
+        (
+            SlotId::new("clip"),
+            Arc::new(RuntimeValue::Clip(RuntimeClipHandle::new(
+                model_id.clone(),
+                backend.clone(),
+                "clip-handle",
+            ))),
+        ),
+        (
+            SlotId::new("vae"),
+            Arc::new(RuntimeValue::Vae(RuntimeVaeHandle::new(
+                model_id,
+                backend,
+                "vae-handle",
+            ))),
+        ),
     ]
 }
 
@@ -156,11 +258,8 @@ async fn checkpoint_loader_multi_output_by_slot_id() {
 async fn checkpoint_loader_slot_order_is_irrelevant() {
     // Return outputs in reversed order (vae, clip, model) — should
     // still pass validation because slot order must not matter.
-    let reversed_outputs = vec![
-        fake_output("vae", ParamValue::String("vae-handle".to_string())),
-        fake_output("clip", ParamValue::String("clip-handle".to_string())),
-        fake_output("model", ParamValue::String("model-handle".to_string())),
-    ];
+    let mut reversed_outputs = fake_checkpoint_outputs();
+    reversed_outputs.reverse();
     let backend =
         Arc::new(FakeBackend::new("fake").with_operation(OP_MODEL_LOAD_BUNDLE, reversed_outputs));
     let resolver = Arc::new(FakeResolver::new("/models/sdxl-base.safetensors"));

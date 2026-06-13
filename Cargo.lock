@@ -3345,7 +3345,6 @@ version = "0.1.0"
 dependencies = [
  "async-trait",
  "reimagine-core",
- "reimagine-nodes",
  "reimagine-runtime",
  "serde",
  "tokio",
