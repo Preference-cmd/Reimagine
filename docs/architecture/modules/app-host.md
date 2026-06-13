@@ -85,6 +85,8 @@ AppHost
 
 The type shape should still make the workspace boundary explicit so future multi-workspace support can route Agent sessions and host requests to the correct `WorkspaceHost`.
 
+`app-host` owns the unified bootstrap entry that assembles `WorkspaceHost`. Tauri and Axum adapters should receive an already-built workspace handle rather than duplicating service composition.
+
 Workspace construction follows a fixed capability-surface flow:
 
 ```text
@@ -98,6 +100,16 @@ WorkspaceHost::new
 ```
 
 The V1 registry is frozen after workspace construction. Built-in tools are not dynamically added or removed while Agent sessions are running.
+
+Typical bootstrap flow:
+
+```text
+app-host bootstrap
+  -> resolve AppConfig / AppPaths
+  -> build WorkflowService / ModelService / RuntimeService / NodeRegistry
+  -> construct WorkspaceHost
+  -> hand Arc<WorkspaceHost> to src-tauri or axum-host
+```
 
 ## Service Facades
 

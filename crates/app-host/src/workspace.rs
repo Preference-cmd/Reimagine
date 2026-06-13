@@ -4,7 +4,7 @@ use std::sync::Arc;
 use reimagine_agent::{AgentToolRegistry, WorkspaceScope};
 use reimagine_config::{AppConfig, AppPaths};
 use reimagine_nodes::BuiltinNodeCatalog;
-use reimagine_runtime::{NodeExecutorRegistry, RuntimeService, VecRunEventSink};
+use reimagine_runtime::{BoxedRunEventSink, NodeExecutorRegistry, RuntimeService, VecRunEventSink};
 
 use crate::services::WorkspaceServices;
 use crate::tools::register_app_tools;
@@ -66,10 +66,22 @@ impl WorkspaceHost {
         workspace_scope: WorkspaceScope,
         base_path: impl Into<std::path::PathBuf>,
     ) -> Self {
+        Self::with_defaults_and_event_sink(
+            workspace_scope,
+            base_path,
+            Arc::new(VecRunEventSink::new()),
+        )
+    }
+
+    pub fn with_defaults_and_event_sink(
+        workspace_scope: WorkspaceScope,
+        base_path: impl Into<std::path::PathBuf>,
+        event_sink: BoxedRunEventSink,
+    ) -> Self {
         let config = AppConfig::new(AppPaths::new(base_path));
         let runtime_service = Arc::new(RuntimeService::with_defaults(
             NodeExecutorRegistry::default(),
-            Arc::new(VecRunEventSink::new()),
+            event_sink,
         ));
         let node_catalog = Arc::new(BuiltinNodeCatalog::v1());
         Self::new(workspace_scope, config, runtime_service, node_catalog)
