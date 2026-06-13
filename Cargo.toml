@@ -13,6 +13,7 @@ members = [
     "crates/app-host",
     "crates/agent-provider",
     "crates/axum-host",
+    "crates/inference",
 ]
 
 [workspace.package]
