@@ -132,6 +132,7 @@ src/
   registry.rs
   executors.rs
   executors/
+    validation.rs
     string.rs
     model.rs
     text.rs
@@ -162,18 +163,88 @@ InferenceBackend
   memory_snapshot()
 ```
 
+V1 should use the same `async_trait` style already used by `runtime` and
+`agent` for async trait objects:
+
+```text
+#[async_trait]
+trait InferenceBackend: Send + Sync + 'static {
+  async fn execute(&self, request: InferenceRequest)
+    -> Result<InferenceResponse, InferenceError>;
+}
+```
+
+The request owns cheap, shareable handles rather than borrowing from
+`NodeExecutionContext`. In practice that means `SlotId -> Arc<RuntimeValue>`
+maps, typed params, and resolved model DTOs are cloned into the request. This
+keeps the backend call lifetime simple across `.await` while preserving
+zero-copy behavior for tensors and loaded models, because large data remains
+inside backend-owned stores referenced by runtime handles.
+
 `InferenceRequest` carries:
 
 - `operation_id`;
-- model context or resolved model input when required;
-- input `RuntimeValue` values;
+- `models: Vec<ResolvedInferenceModel>` when the operation needs model
+  context;
+- input `RuntimeValue` values keyed by `SlotId`;
 - typed node params;
-- run/correlation context;
-- artifact capability when the operation can publish files.
+- run/correlation context.
 
-`InferenceResponse` carries named `RuntimeValue` outputs or an
-`InferenceError`. The operation protocol is model-family-neutral. SDXL is a V1
-consumer of the protocol, not the shape of the protocol.
+Use a vector even for single-model operations. A request with one checkpoint
+bundle simply carries one resolved model, while future operations can carry a
+base model plus LoRA, ControlNet, refiner, or multiple text encoders without
+changing the protocol.
+
+`InferenceRequest` must not carry `NodeArtifactCapability`. Artifact recording
+belongs to the inference-backed executor adapter because runtime owns the
+artifact store. A backend may return an image value, an artifact intent, or a
+backend payload handle, but the executor records the artifact through
+`NodeArtifactCapability::record`.
+
+`InferenceResponse` carries slot-aware named `RuntimeValue` outputs or an
+`InferenceError`:
+
+```text
+InferenceResponse
+  outputs: Vec<InferenceOutput>
+
+InferenceOutput
+  slot_id: SlotId
+  value: Arc<RuntimeValue>
+```
+
+`SlotId` is the core model identifier for a node input or output slot. It is
+not a backend field name and it is not an array index. Inference executors use
+the workflow/node declaration to translate operation inputs and outputs into
+these slot ids. This mirrors runtime's `NodeExecutionOutputs` shape and avoids
+relying on array order for multi-output nodes such as
+`builtin.checkpoint_loader`.
+
+Response validation belongs to the inference-backed executor adapter:
+
+- every returned `slot_id` must be declared by the node's `output_slots`;
+- required output slots must be present before the executor returns;
+- returned values must match the expected runtime value kind for the slot;
+- duplicate output slot ids are errors;
+- extra backend outputs are errors unless the node type explicitly declares an
+  extension/dynamic output policy.
+
+This keeps runtime generic. Runtime stores whatever
+`Vec<(SlotId, Arc<RuntimeValue>)>` the executor returns; it does not understand
+inference operation ids or backend-native output names.
+
+Put shared validation code in `executors/validation.rs` rather than duplicating
+it across node executors. Individual executor modules should declare their
+expected output slots and value kinds, call the shared validator, and then
+return `NodeExecutionOutputs`.
+
+`InferenceError` should convert into runtime's `NodeExecutorError` through an
+explicit method such as `InferenceError::into_executor_error()`. Avoid a broad
+`From<InferenceError> for NodeExecutorError` implementation in V1 so call sites
+make the inference-to-runtime boundary visible.
+
+The operation protocol is model-family-neutral. SDXL is a V1 consumer of the
+protocol, not the shape of the protocol.
 
 Initial operation ids:
 
@@ -191,13 +262,15 @@ Backends publish a capability report that says which operations they support
 for which model families/variants:
 
 ```text
-CandleBackend supports:
-  model.load_bundle    stable_diffusion/sdxl
-  text.encode          stable_diffusion/sdxl
-  latent.create_empty  *
-  diffusion.sample     stable_diffusion/sdxl
-  latent.decode        stable_diffusion/sdxl
-  image.save           *
+InferenceBackendCapabilities
+  backend_kind
+  operations: Vec<InferenceOperationSupport>
+
+InferenceOperationSupport
+  operation_id
+  model_series: Option<ModelSeries>
+  variant: Option<ModelVariant>
+  roles: Vec<ModelRole>
 ```
 
 Future Flux, video, ONNX, or remote backends extend the support matrix. They do
@@ -240,6 +313,8 @@ Each executor should be small and focused:
 - produce one `InferenceRequest` with a stable `InferenceOperationId`;
 - call `InferenceBackend::execute`;
 - validate response slot names and value kinds;
+- record artifacts through `NodeArtifactCapability` for save/preview
+  operations;
 - return `NodeExecutionOutputs`.
 
 Keep backend-specific behavior out of these executor files. For example,
@@ -255,6 +330,20 @@ register_builtin_inference_executors(registry, backend, resolver)
 The exact function name can vary, but the registration entrypoint should live
 in `registry.rs` or a similarly focused module. It should not require
 `app-host`, `model-manager`, or a concrete backend crate.
+
+Save/preview executors should treat artifact recording as a runtime-facing
+adapter concern:
+
+```text
+image.save executor
+  -> InferenceBackend::execute(image.save)
+  -> validate image/artifact response
+  -> NodeArtifactCapability::record(slot_id, ArtifactRef, ArtifactEventKind)
+  -> RuntimeValue::Artifact(...)
+```
+
+This keeps concrete backends independent from runtime's artifact store while
+still letting remote or local backends produce saveable image data.
 
 ## RunResourceBackend Relationship
 
@@ -294,9 +383,30 @@ free of model manifest knowledge.
 
 The model resolver trait should return inference-layer resolved model metadata,
 not `model-manager::ModelDescriptor` directly. `app-host` can adapt
-`ModelDescriptor` into that shape. This prevents `inference` from depending on
-`model-manager` while still preserving the path and identity needed by
-`model.load_bundle`.
+`ModelDescriptor` into that shape.
+
+`ResolvedInferenceModel` is type-independent from `model-manager`, but it
+should reuse stable cross-module semantics from `core::model`. In practice,
+that means fields such as `ModelId`, `ModelSeries`, `ModelVariant`, and
+`ModelRole` come from `core`, while manifest-only details such as scan source,
+root declarations, user classification rules, fingerprint status, or
+model-manager diagnostics stay outside inference.
+
+Suggested shape:
+
+```text
+ResolvedInferenceModel
+  model_id
+  model_series
+  variant
+  role
+  source_path
+  format
+  metadata
+```
+
+This prevents `inference` from depending on `model-manager` while still
+preserving the path and identity needed by `model.load_bundle`.
 
 ## Backend Crate Placement
 
