@@ -39,7 +39,8 @@ runtime -> core
 runtime must not -> tauri
 runtime must not -> axum
 runtime must not -> model-manager
-runtime must not -> candle-integration
+runtime must not -> inference
+runtime must not -> inference-backends/*
 ```
 
 Concrete node executors and backend capabilities are assembled by `app-host`. Runtime defines the execution traits and consumes trait objects/registries.
@@ -229,6 +230,28 @@ RuntimeService
 ```
 
 Workspace config, model manager, backend model stores, and concrete node executor construction belong to `app-host`.
+
+`runtime` does not know whether a `NodeExecutor` is hand-written, inference
+backed, Candle backed, or remote. It schedules nodes and calls the
+`NodeExecutor` trait object. Inference-backed executors are adapters outside
+runtime:
+
+```text
+runtime scheduler
+  -> NodeExecutor::execute(NodeExecutionContext)
+  -> inference-backed executor
+  -> InferenceBackend::execute(operation_request)
+  -> RuntimeValue outputs
+```
+
+This prevents `inference` from becoming a second runtime. `runtime` owns run
+state, scheduling, cancellation, value storage, snapshots, summaries, and run
+events. `inference` owns only the node-to-operation protocol and backend
+adapter boundary.
+
+`RunResourceBackend` remains a runtime lifecycle hook, not the inference
+execution API. A concrete backend may implement both `RunResourceBackend` and
+the inference backend trait, but runtime only sees `RunResourceBackend`.
 
 `RunStore` tracks active runs and summaries:
 
