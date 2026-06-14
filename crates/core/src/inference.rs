@@ -1,7 +1,7 @@
 //! Backend-agnostic inference types and trait.
 //!
 //! These types form the public boundary between `reimagine-core` and any
-//! inference backend (e.g. `reimagine-candle-integration`). A backend
+//! inference backend (e.g. `reimagine-inference-candle`). A backend
 //! implements the [`Model`] trait; core talks to it only through these types.
 
 use std::path::PathBuf;

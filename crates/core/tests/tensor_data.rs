@@ -31,7 +31,10 @@ fn cheap_clone_semantics() {
     let td = TensorData::from_vec(big, vec![100_000]);
     let cloned = td.clone();
 
-    assert!(std::ptr::eq(td.as_slice().as_ptr(), cloned.as_slice().as_ptr()));
+    assert!(std::ptr::eq(
+        td.as_slice().as_ptr(),
+        cloned.as_slice().as_ptr()
+    ));
     assert_eq!(td, cloned);
     assert_eq!(cloned.as_slice().len(), 100_000);
 }

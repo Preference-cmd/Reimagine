@@ -3,7 +3,7 @@
 //! This crate defines the workspace-scoped Agent session, the host-neutral
 //! tool abstraction, the tool policy and registry, the Reimagine-owned
 //! provider boundary, and the agent event model. It must not depend on
-//! Tauri, Axum, app-host, runtime, model-manager, candle-integration, Rig,
+//! Tauri, Axum, app-host, runtime, model-manager, inference-backends, Rig,
 //! or Cersei.
 //!
 //! See `docs/architecture/modules/agent.md` for the architecture source of
@@ -38,8 +38,8 @@ pub use mode::AgentMode;
 pub use permissions::{PermissionSet, ToolPermission, ToolRiskLevel};
 pub use policy::{PolicyDecision, PolicyDenialReason, ToolPolicy};
 pub use provider::{
-    AgentProvider, AgentRequest, AgentResponse, AgentStream, AgentStreamEvent,
-    AgentToolDefinition, Message, ModelCapability, ModelInfo, ToolCall, ToolCallId, Usage,
+    AgentProvider, AgentRequest, AgentResponse, AgentStream, AgentStreamEvent, AgentToolDefinition,
+    Message, ModelCapability, ModelInfo, ToolCall, ToolCallId, Usage,
 };
 pub use registry::{AgentToolRegistry, ToolRegistryError};
 pub use report::{AgentReport, ToolInvocationReport};

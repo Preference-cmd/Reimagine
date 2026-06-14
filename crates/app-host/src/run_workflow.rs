@@ -97,13 +97,24 @@ impl WorkspaceHost {
         let RunWorkflowRequest {
             workflow_id: _,
             target_selection,
-            run_inputs,
+            mut run_inputs,
             mut options,
             correlation_id,
         } = request;
 
         if let Some(correlation_id) = correlation_id {
             options.correlation_id = Some(correlation_id);
+        }
+
+        // Seed run inputs from the workflow's own node params so that
+        // HTTP/Tauri callers do not have to resend values already
+        // declared in the workflow JSON. Explicit run inputs still win.
+        for node in workflow.nodes() {
+            for (slot_id, value) in node.params() {
+                if run_inputs.node_param(node.id(), slot_id).is_none() {
+                    run_inputs.insert_node_param(node.id().clone(), slot_id.clone(), value.clone());
+                }
+            }
         }
 
         let plan_result = self.build_plan(&workflow, target_selection).await?;

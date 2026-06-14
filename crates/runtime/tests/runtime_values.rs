@@ -3,8 +3,8 @@ use reimagine_core::model::{
 };
 use reimagine_runtime::{
     BackendKind, BackendPayloadKey, BackendTensorHandle, ConditioningMetadata, RuntimeClipHandle,
-    RuntimeConditioning, RuntimeImage, RuntimeLatent, RuntimeModelHandle, RuntimeValue,
-    RuntimeVaeHandle,
+    RuntimeConditioning, RuntimeImage, RuntimeLatent, RuntimeModelHandle, RuntimeVaeHandle,
+    RuntimeValue,
 };
 
 #[test]
@@ -22,10 +22,13 @@ fn runtime_values_can_express_the_minimal_sdxl_base_intermediates() {
     .with_device(device);
     let clip = RuntimeClipHandle::new(checkpoint.clone(), backend.clone(), "sdxl-base/clip")
         .with_device(device);
-    let vae =
-        RuntimeVaeHandle::new(checkpoint.clone(), backend.clone(), "sdxl-base/vae").with_device(device);
+    let vae = RuntimeVaeHandle::new(checkpoint.clone(), backend.clone(), "sdxl-base/vae")
+        .with_device(device);
 
-    assert!(matches!(RuntimeValue::Model(model.clone()), RuntimeValue::Model(_)));
+    assert!(matches!(
+        RuntimeValue::Model(model.clone()),
+        RuntimeValue::Model(_)
+    ));
     assert_eq!(model.model_id(), &checkpoint);
     assert_eq!(model.role(), ModelRole::DiffusionModel);
     assert_eq!(clip.backend().as_str(), "candle");
@@ -79,7 +82,10 @@ fn runtime_values_can_express_the_minimal_sdxl_base_intermediates() {
     let latent = RuntimeLatent::new(latent_tensor.clone(), 1024, 1024, 1, 4);
     assert_eq!(latent.payload(), &latent_tensor);
     assert_eq!(latent.width(), 1024);
-    assert!(matches!(RuntimeValue::Latent(latent), RuntimeValue::Latent(_)));
+    assert!(matches!(
+        RuntimeValue::Latent(latent),
+        RuntimeValue::Latent(_)
+    ));
 
     let image_tensor = BackendTensorHandle::new(
         backend,
@@ -100,7 +106,10 @@ fn runtime_values_can_express_the_minimal_sdxl_base_intermediates() {
 #[test]
 fn runtime_values_do_not_require_candle_types() {
     let value = RuntimeValue::Param(ParamValue::String("a cinematic lake".to_owned()));
-    assert_eq!(value.as_param(), Some(&ParamValue::String("a cinematic lake".to_owned())));
+    assert_eq!(
+        value.as_param(),
+        Some(&ParamValue::String("a cinematic lake".to_owned()))
+    );
 
     let tensor = BackendTensorHandle::new(
         BackendKind::new("mock-backend"),

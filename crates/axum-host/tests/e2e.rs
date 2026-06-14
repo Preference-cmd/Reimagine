@@ -14,7 +14,7 @@ use axum::body::Body;
 use axum::http::header;
 use axum::http::{Request, StatusCode};
 use reimagine_agent::WorkspaceScope;
-use reimagine_app_host::{ModelService, WorkspaceHost};
+use reimagine_app_host::{BackendSelection, ModelService, WorkspaceHost};
 use reimagine_config::{AppConfig, AppPaths};
 use reimagine_core::model::{
     ModelId, ModelRef, ModelRole, ModelSeries, ModelVariant, ParamValue, SlotId, WorkflowId,
@@ -146,6 +146,43 @@ async fn build_ready_host(
         builtin_catalog(),
     ));
     (host, runtime, recorder)
+}
+
+/// Build a host that uses the real Candle inference backend and the
+/// built-in executor registry, with a populated model manifest.
+async fn build_candle_ready_host(
+    manifest: ModelManifest,
+    base: &str,
+) -> (Arc<WorkspaceHost>, Arc<RunEventRecorder>) {
+    let base_path = unique_temp_dir(base);
+    let paths = AppPaths::new(&base_path);
+    tokio::fs::create_dir_all(paths.models_dir()).await.unwrap();
+    tokio::fs::write(paths.models_dir().join(CHECKPOINT_FILENAME), b"placeholder")
+        .await
+        .unwrap();
+    let model_service = ModelService::new(paths.clone());
+    model_service
+        .save_manifest(&manifest)
+        .await
+        .expect("save manifest");
+
+    let recorder = Arc::new(RunEventRecorder::new());
+    let host = WorkspaceHost::with_defaults_and_backend(
+        WorkspaceScope::new(format!("ws-{base}")),
+        &base_path,
+        BackendSelection::Candle,
+        recorder.clone() as Arc<dyn RunEventSink>,
+    );
+    (Arc::new(host), recorder)
+}
+
+fn load_sdxl_workflow_json() -> serde_json::Value {
+    let path = std::path::PathBuf::from(concat!(
+        env!("CARGO_MANIFEST_DIR"),
+        "/../../docs/architecture/examples/sdxl-base-workflow.json"
+    ));
+    let bytes = std::fs::read(&path).unwrap_or_else(|e| panic!("failed to read {path:?}: {e}"));
+    serde_json::from_slice(&bytes).unwrap_or_else(|e| panic!("failed to parse SDXL workflow: {e}"))
 }
 
 fn build_state(host: Arc<WorkspaceHost>, recorder: Arc<RunEventRecorder>) -> AxumHostState {
@@ -531,4 +568,129 @@ async fn run_handoff_uses_explicit_target_selection() {
     assert_eq!(json["outcome"], "started");
     let run_id = reimagine_core::model::RunId::new(json["run_id"].as_str().unwrap().to_string());
     run_to_completion(&runtime, &run_id).await;
+}
+
+#[tokio::test]
+async fn candle_sdxl_workflow_run_returns_precise_backend_failure() {
+    let model_id = ModelId::new(MODEL_ID);
+    let (host, recorder) = build_candle_ready_host(
+        manifest_with_model(&model_id, CHECKPOINT_FILENAME),
+        "candle-sdxl",
+    )
+    .await;
+    let app = build_router().with_state(build_state(host.clone(), recorder.clone()));
+
+    // Open the canonical SDXL workflow inline.
+    let workflow_json = load_sdxl_workflow_json();
+    let workflow_id = workflow_json["id"].as_str().expect("workflow id");
+    let open_body = serde_json::json!({ "workflow": workflow_json }).to_string();
+    let response = app
+        .clone()
+        .oneshot(json_request("POST", "/workflows/open", Some(&open_body)))
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+
+    // Run with an explicit target that forces the full pipeline up to
+    // save_image. The first heavy unimplemented kernel is text.encode.
+    let run_body = serde_json::json!({
+        "target_selection": {
+            "kind": "explicit",
+            "targets": [
+                { "kind": "node", "node_id": "node_save_image" }
+            ]
+        },
+        "correlation_id": "corr-candle-sdxl"
+    })
+    .to_string();
+    let response = app
+        .clone()
+        .oneshot(json_request(
+            "POST",
+            &format!("/workflows/{workflow_id}/run"),
+            Some(&run_body),
+        ))
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+    let bytes = body_bytes(response.into_body()).await;
+    let json: Value = serde_json::from_slice(&bytes).unwrap();
+    assert_eq!(json["outcome"], "started");
+    let run_id_str = json["run_id"].as_str().expect("run_id");
+    let run_id = reimagine_core::model::RunId::new(run_id_str.to_string());
+
+    let deadline = std::time::Instant::now() + Duration::from_secs(3);
+    loop {
+        if let Some(summary) = host.runtime_service().summary(&run_id) {
+            assert!(
+                summary.state.is_terminal(),
+                "run {run_id} should be terminal"
+            );
+            assert_eq!(
+                summary.state,
+                reimagine_runtime::RunState::Failed,
+                "expected run to fail at an unimplemented kernel"
+            );
+            let messages: Vec<String> = summary
+                .diagnostics
+                .iter()
+                .map(|d| d.message().to_string())
+                .collect();
+            assert!(
+                messages
+                    .iter()
+                    .any(|m| { m.contains("text.encode") || m.contains("does not implement") }),
+                "expected text.encode / backend-not-implemented diagnostic, got {messages:?}"
+            );
+            break;
+        }
+        if std::time::Instant::now() > deadline {
+            panic!("run {run_id} did not finish in time");
+        }
+        tokio::time::sleep(Duration::from_millis(5)).await;
+    }
+
+    // GET /runs/:id should return a summary with the same failure.
+    let response = app
+        .clone()
+        .oneshot(json_request("GET", &format!("/runs/{run_id_str}"), None))
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+    let bytes = body_bytes(response.into_body()).await;
+    let json: Value = serde_json::from_slice(&bytes).unwrap();
+    assert_eq!(json["kind"], "summary");
+    assert_eq!(json["state"], "Failed");
+
+    // GET /runs/:id/events should include lifecycle events emitted via
+    // the same recorder used by the Axum host.
+    let response = app
+        .oneshot(json_request(
+            "GET",
+            &format!("/runs/{run_id_str}/events"),
+            None,
+        ))
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+    let bytes = body_bytes(response.into_body()).await;
+    let json: Value = serde_json::from_slice(&bytes).unwrap();
+    let events = json["events"].as_array().expect("events array");
+    let kinds: Vec<&str> = events
+        .iter()
+        .map(|e| e["kind"].as_str().unwrap_or(""))
+        .collect();
+    assert!(kinds.iter().any(|k| *k == "RunQueued"), "kinds = {kinds:?}");
+    assert!(
+        kinds.iter().any(|k| *k == "RunStarted"),
+        "kinds = {kinds:?}"
+    );
+    assert!(kinds.iter().any(|k| *k == "RunFailed"), "kinds = {kinds:?}");
+    assert!(
+        events.iter().any(|e| e["correlation_id"]
+            .as_str()
+            .unwrap_or("")
+            .contains("corr-candle-sdxl")),
+        "expected an event to carry the correlation id, got {events:?}"
+    );
 }

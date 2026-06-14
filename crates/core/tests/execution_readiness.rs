@@ -145,7 +145,10 @@ fn edged_model_ref_param_does_not_trigger_external_check_for_overridden_param() 
             WorkflowNode::new("node_loader", "builtin.model_ref_passthrough")
                 .with_param("value", ParamValue::ModelRef(stale_ref)),
         )
-        .with_node(WorkflowNode::new("node_model_target", "builtin.model_target"))
+        .with_node(WorkflowNode::new(
+            "node_model_target",
+            "builtin.model_target",
+        ))
         .with_edge(WorkflowEdge::new(
             "edge_ref_loader",
             Endpoint::node_slot("node_model_ref".into(), "value".into()),
@@ -455,7 +458,10 @@ fn workflow_input_edge_satisfies_required_dynamic_input() {
 #[test]
 fn pure_required_output_must_be_consumed_or_exposed() {
     let workflow = Workflow::new("workflow_unconsumed_pure_output", 1.into())
-        .with_node(WorkflowNode::new("node_dual_image_source", "builtin.dual_image_source"))
+        .with_node(WorkflowNode::new(
+            "node_dual_image_source",
+            "builtin.dual_image_source",
+        ))
         .with_node(
             WorkflowNode::new("node_preview", "builtin.preview_image")
                 .with_param("label", ParamValue::String("preview".to_owned())),
@@ -482,8 +488,9 @@ fn pure_required_output_must_be_consumed_or_exposed() {
 
 #[test]
 fn pure_required_output_is_valid_when_explicitly_targeted() {
-    let workflow = Workflow::new("workflow_exposed_pure_output", 1.into())
-        .with_node(WorkflowNode::new("node_image_source", "builtin.image_source"));
+    let workflow = Workflow::new("workflow_exposed_pure_output", 1.into()).with_node(
+        WorkflowNode::new("node_image_source", "builtin.image_source"),
+    );
     let catalog = preview_catalog();
 
     let result = build_execution_plan(
@@ -788,13 +795,17 @@ fn model_ref_catalog() -> TestCatalog {
                     .with_default_value(ParamValue::ModelRef(model_ref("active"))),
             )
             .with_output_slot(OutputSlotDef::new("value", SlotKind::ModelRef).required(true)),
-        NodeDef::new("builtin.model_ref_passthrough", "Model Ref Passthrough", "test")
-            .with_input_slot(
-                InputSlotDef::new("value", SlotKind::ModelRef)
-                    .dynamic(true)
-                    .required(true),
-            )
-            .with_output_slot(OutputSlotDef::new("value", SlotKind::ModelRef).required(true)),
+        NodeDef::new(
+            "builtin.model_ref_passthrough",
+            "Model Ref Passthrough",
+            "test",
+        )
+        .with_input_slot(
+            InputSlotDef::new("value", SlotKind::ModelRef)
+                .dynamic(true)
+                .required(true),
+        )
+        .with_output_slot(OutputSlotDef::new("value", SlotKind::ModelRef).required(true)),
         NodeDef::new("builtin.model_target", "Model Target", "test")
             .with_effect(NodeEffect::SideEffect)
             .with_input_slot(

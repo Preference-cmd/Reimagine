@@ -116,6 +116,7 @@ impl InferenceBackend for FakeBackend {
             None => Err(InferenceError::BackendNotImplemented {
                 operation_id: request.operation_id().to_string(),
                 backend_kind: self.kind.clone(),
+                message: None,
             }),
         }
     }
