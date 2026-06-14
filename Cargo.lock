@@ -3286,6 +3286,8 @@ dependencies = [
  "reimagine-agent",
  "reimagine-config",
  "reimagine-core",
+ "reimagine-inference",
+ "reimagine-inference-candle",
  "reimagine-model-manager",
  "reimagine-nodes",
  "reimagine-runtime",
@@ -3312,13 +3314,6 @@ dependencies = [
  "serde_json",
  "tokio",
  "tower",
-]
-
-[[package]]
-name = "reimagine-candle-integration"
-version = "0.1.0"
-dependencies = [
- "reimagine-core",
 ]
 
 [[package]]
@@ -3349,6 +3344,18 @@ dependencies = [
  "serde",
  "tokio",
  "tracing",
+]
+
+[[package]]
+name = "reimagine-inference-candle"
+version = "0.1.0"
+dependencies = [
+ "async-trait",
+ "reimagine-core",
+ "reimagine-inference",
+ "reimagine-runtime",
+ "serde",
+ "tokio",
 ]
 
 [[package]]

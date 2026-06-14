@@ -18,6 +18,7 @@ pub enum InferenceError {
     BackendNotImplemented {
         operation_id: String,
         backend_kind: String,
+        message: Option<String>,
     },
     /// The backend returned a response that fails the executor's
     /// output validation. The executor should surface this as a
@@ -43,11 +44,18 @@ impl InferenceError {
             Self::BackendNotImplemented {
                 operation_id,
                 backend_kind,
-            } => reimagine_runtime::NodeExecutorError::Failed {
-                message: format!(
+                message,
+            } => {
+                let base = format!(
                     "backend `{backend_kind}` does not implement operation `{operation_id}`"
-                ),
-            },
+                );
+                reimagine_runtime::NodeExecutorError::Failed {
+                    message: match message {
+                        Some(m) => format!("{base}: {m}"),
+                        None => base,
+                    },
+                }
+            }
             Self::InvalidResponse { reason } => reimagine_runtime::NodeExecutorError::Failed {
                 message: format!("invalid backend response: {reason}"),
             },
@@ -72,11 +80,16 @@ impl std::fmt::Display for InferenceError {
             Self::BackendNotImplemented {
                 operation_id,
                 backend_kind,
+                message,
             } => {
                 write!(
                     f,
                     "backend `{backend_kind}` does not implement `{operation_id}`"
-                )
+                )?;
+                if let Some(m) = message {
+                    write!(f, ": {m}")?;
+                }
+                Ok(())
             }
             Self::InvalidResponse { reason } => write!(f, "invalid response: {reason}"),
             Self::MissingInput { slot_id } => write!(f, "missing input slot `{slot_id}`"),
@@ -97,6 +110,7 @@ mod tests {
         let err = InferenceError::BackendNotImplemented {
             operation_id: "diffusion.sample".to_string(),
             backend_kind: "fake".to_string(),
+            message: None,
         };
         let exec_err = err.into_executor_error();
         assert!(matches!(

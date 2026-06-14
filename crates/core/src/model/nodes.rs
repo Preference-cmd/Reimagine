@@ -1,6 +1,6 @@
+use super::SlotId;
 use super::ids::NodeTypeId;
 use super::slots::{InputSlotDef, OutputSlotDef};
-use super::SlotId;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, serde::Serialize, serde::Deserialize)]
 #[serde(rename_all = "PascalCase")]

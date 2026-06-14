@@ -1,7 +1,7 @@
 //! Scheduler-aware cancellation token used by the runtime.
 
-use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, Ordering};
 
 use tokio::sync::Notify;
 

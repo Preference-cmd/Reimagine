@@ -65,7 +65,13 @@ pub fn trace_execution_subgraph(
     }
 
     let planning_graph = PlanningGraph { node_ids, edge_ids };
-    validate_required_outputs(workflow, node_catalog, resolved_targets, &planning_graph, report);
+    validate_required_outputs(
+        workflow,
+        node_catalog,
+        resolved_targets,
+        &planning_graph,
+        report,
+    );
 
     Some(planning_graph)
 }
@@ -86,17 +92,14 @@ fn validate_required_outputs(
             }
             super::RunTarget::Node { .. } | super::RunTarget::WorkflowOutput { .. } => None,
         })
-        .chain(
-            resolved_targets
-                .workflow_outputs
-                .iter()
-                .filter_map(|output| match output.source() {
-                    ExecutionWorkflowOutputSource::NodeOutput { node_id, slot_id } => {
-                        Some((node_id.clone(), slot_id.clone()))
-                    }
-                    ExecutionWorkflowOutputSource::WorkflowInput { .. } => None,
-                }),
-        )
+        .chain(resolved_targets.workflow_outputs.iter().filter_map(
+            |output| match output.source() {
+                ExecutionWorkflowOutputSource::NodeOutput { node_id, slot_id } => {
+                    Some((node_id.clone(), slot_id.clone()))
+                }
+                ExecutionWorkflowOutputSource::WorkflowInput { .. } => None,
+            },
+        ))
         .collect();
 
     for node in workflow

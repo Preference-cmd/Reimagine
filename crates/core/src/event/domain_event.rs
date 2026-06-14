@@ -174,9 +174,7 @@ mod tests {
             Timestamp::new("2026-06-08T12:00:00Z"),
         )
         .with_correlation_id(CorrelationId::new("corr-42"))
-        .with_subject(
-            DiagnosticTarget::new(DiagnosticTargetDomain::new("model")).with_id("sd-1.5"),
-        )
+        .with_subject(DiagnosticTarget::new(DiagnosticTargetDomain::new("model")).with_id("sd-1.5"))
         .with_diagnostic(diag);
 
         assert_eq!(ev.id().as_str(), "ev-001");

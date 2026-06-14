@@ -168,9 +168,19 @@ mod tests {
 
     #[derive(Debug, Clone, PartialEq, Eq)]
     enum ConfigLocalEvent {
-        Loaded { key: String, path: String },
-        Saved { key: String, bytes: usize },
-        ParseFailed { key: String, path: String, message: String },
+        Loaded {
+            key: String,
+            path: String,
+        },
+        Saved {
+            key: String,
+            bytes: usize,
+        },
+        ParseFailed {
+            key: String,
+            path: String,
+            message: String,
+        },
     }
 
     struct ConfigEventAdapter;
@@ -301,10 +311,22 @@ mod tests {
 
     #[derive(Debug, Clone, PartialEq, Eq)]
     enum AgentLocalEvent {
-        SessionStarted { session_id: String, provider: String },
-        ToolInvoked { session_id: String, tool: String },
-        ProviderError { session_id: String, message: String },
-        ProposalReady { session_id: String, proposal_id: String },
+        SessionStarted {
+            session_id: String,
+            provider: String,
+        },
+        ToolInvoked {
+            session_id: String,
+            tool: String,
+        },
+        ProviderError {
+            session_id: String,
+            message: String,
+        },
+        ProposalReady {
+            session_id: String,
+            proposal_id: String,
+        },
     }
 
     struct AgentEventAdapter;
@@ -317,7 +339,10 @@ mod tests {
                     .with_id(sid.to_owned())
             };
             match source {
-                AgentLocalEvent::SessionStarted { session_id, provider: _ } => {
+                AgentLocalEvent::SessionStarted {
+                    session_id,
+                    provider: _,
+                } => {
                     let mut event = DomainEvent::new(
                         DomainEventId::new(format!("agent:{session_id}:started")),
                         context.source().clone(),
@@ -346,7 +371,10 @@ mod tests {
                     }
                     EventReport::with_event(event)
                 }
-                AgentLocalEvent::ProviderError { session_id, message } => {
+                AgentLocalEvent::ProviderError {
+                    session_id,
+                    message,
+                } => {
                     let diagnostic = Diagnostic::new(
                         DiagnosticId::new(format!("agent:{session_id}:provider_error")),
                         DiagnosticCode::new("AGENT/PROVIDER_ERROR"),
@@ -357,7 +385,10 @@ mod tests {
                     );
                     EventReport::with_diagnostic(diagnostic)
                 }
-                AgentLocalEvent::ProposalReady { session_id, proposal_id } => {
+                AgentLocalEvent::ProposalReady {
+                    session_id,
+                    proposal_id,
+                } => {
                     let mut event = DomainEvent::new(
                         DomainEventId::new(format!("agent:{session_id}:proposal:{proposal_id}")),
                         context.source().clone(),
@@ -476,7 +507,10 @@ mod tests {
             ctx,
         );
 
-        assert_eq!(report.events()[0].correlation_id().unwrap().as_str(), "corr-agent-tool");
+        assert_eq!(
+            report.events()[0].correlation_id().unwrap().as_str(),
+            "corr-agent-tool"
+        );
     }
 
     #[test]
@@ -492,7 +526,10 @@ mod tests {
             ctx,
         );
 
-        assert_eq!(report.events()[0].correlation_id().unwrap().as_str(), "corr-agent-proposal");
+        assert_eq!(
+            report.events()[0].correlation_id().unwrap().as_str(),
+            "corr-agent-proposal"
+        );
     }
 
     // --- EventReport behavior -------------------------------------------

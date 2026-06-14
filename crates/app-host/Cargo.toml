@@ -11,6 +11,8 @@ async-trait = { workspace = true }
 reimagine-agent = { path = "../agent" }
 reimagine-config = { path = "../config" }
 reimagine-core = { path = "../core" }
+reimagine-inference = { path = "../inference" }
+reimagine-inference-candle = { path = "../inference-backends/candle" }
 reimagine-model-manager = { path = "../model-manager" }
 reimagine-nodes = { path = "../nodes" }
 reimagine-runtime = { path = "../runtime" }

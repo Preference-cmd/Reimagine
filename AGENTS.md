@@ -25,7 +25,7 @@ A Tauri + Candle + React desktop app for node-based image generation workflows â
 - Tauri commands in `src-tauri/src/lib.rs` are thin wrappers; domain logic lives in `crates/*`.
 - Domain crates must not depend on `tauri` â€” keep them unit-testable without a Tauri runtime.
 - Dependency versions are centralized in root `Cargo.toml` under `[workspace.dependencies]`.
-- AI/ML inference code belongs in `crates/candle-integration/`, never in `src-tauri/`.
+- AI/ML inference code belongs in `crates/inference-backends/candle/`, never in `src-tauri/`.
 
 ## Agent skills
 

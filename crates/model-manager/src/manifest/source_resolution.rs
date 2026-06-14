@@ -2,7 +2,7 @@ use std::path::{Path, PathBuf};
 
 use super::{ModelManifest, ModelRoot, ModelSource};
 
-pub(crate) fn resolve_source_path(
+pub fn resolve_source_path(
     manifest: &ModelManifest,
     source: &ModelSource,
     models_dir: &Path,

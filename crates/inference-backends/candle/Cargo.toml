@@ -1,0 +1,17 @@
+[package]
+name = "reimagine-inference-candle"
+version.workspace = true
+description.workspace = true
+authors.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+
+[dependencies]
+async-trait = { workspace = true }
+serde = { workspace = true }
+reimagine-core = { path = "../../core" }
+reimagine-runtime = { path = "../../runtime" }
+reimagine-inference = { path = "../../inference" }
+
+[dev-dependencies]
+tokio = { workspace = true, features = ["rt-multi-thread", "macros"] }

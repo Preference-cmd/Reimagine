@@ -16,7 +16,8 @@ pub use fingerprint::Fingerprint;
 pub use format::ModelFormat;
 pub use root::{ModelRoot, ModelRootId, ModelRootKind};
 pub use source::ModelSource;
-pub(crate) use source_resolution::{resolve_root_path, resolve_source_path};
+pub(crate) use source_resolution::resolve_root_path;
+pub use source_resolution::resolve_source_path;
 pub use status::ModelSourceStatus;
 pub use validation::{
     ManifestValidationReport, validate_manifest, validate_manifest_with_series_config,

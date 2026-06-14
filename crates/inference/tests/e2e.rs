@@ -118,6 +118,7 @@ impl InferenceBackend for FakeBackend {
             None => Err(InferenceError::BackendNotImplemented {
                 operation_id: request.operation_id().to_string(),
                 backend_kind: self.kind.clone(),
+                message: None,
             }),
         }
     }
@@ -503,6 +504,7 @@ fn inference_error_boundary_is_explicit() {
     let err = InferenceError::BackendNotImplemented {
         operation_id: "test".to_string(),
         backend_kind: "fake".to_string(),
+        message: None,
     };
     let exec_err = err.into_executor_error();
     assert!(exec_err.to_string().contains("does not implement"));

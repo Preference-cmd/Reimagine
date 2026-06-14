@@ -58,7 +58,10 @@ mod tests {
         let h = DiagnosticFixHint::new("remove stale cache")
             .with_description("Deletes cached weights for this model")
             .with_requires_confirmation(true);
-        assert_eq!(h.description(), Some("Deletes cached weights for this model"));
+        assert_eq!(
+            h.description(),
+            Some("Deletes cached weights for this model")
+        );
         assert!(h.requires_confirmation());
     }
 }

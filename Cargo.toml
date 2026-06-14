@@ -7,13 +7,13 @@ members = [
     "crates/model-manager",
     "crates/nodes",
     "crates/runtime",
-    "crates/candle-integration",
     "crates/agent",
     "crates/agent-macros",
     "crates/app-host",
     "crates/agent-provider",
     "crates/axum-host",
     "crates/inference",
+    "crates/inference-backends/candle",
 ]
 
 [workspace.package]
