@@ -70,6 +70,11 @@ src-tauri should not directly -> inference-backends/*
 the backend adapter object, registers inference-backed executors into
 `RuntimeService`, and hands host adapters an `Arc<WorkspaceHost>`.
 
+The configured backend applies at workspace/run/execution-unit granularity in
+V1. `inference` does not define node-level backend overrides, implicit
+cross-backend transfer, or backend-specific scheduler decisions. Those require
+an explicit future bridge/conversion design.
+
 ## Runtime And Inference Boundary
 
 `runtime` owns the execution loop. `inference` must not become a second
