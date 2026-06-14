@@ -51,7 +51,7 @@ Cargo crates and clean optional dependencies for each backend.
 
 ```text
 app-host -> inference
-app-host -> inference-backends/candle     # V1 default backend assembly
+app-host -> inference-backends/candle     # V1 configured default backend assembly
 
 inference -> runtime
 inference -> core
@@ -424,9 +424,10 @@ Reasons:
 
 1. Introduce `crates/inference` with the operation-based backend protocol and
    generic executor registration shape.
-2. Migrate the legacy `crates/candle-integration` placeholder into
+2. Directly migrate the legacy `crates/candle-integration` placeholder into
    `crates/inference-backends/candle` as `reimagine-inference-candle`.
-3. Wire app-host to use the Candle backend as the V1 default backend.
+3. Wire app-host to select the configured backend enum value, with Candle as
+   the V1 default backend.
 4. Prove the SDXL example workflow runs through Axum using the same app-host
    and runtime path.
 5. Replace stubbed backend kernels with real Candle CLIP/UNet/VAE behavior

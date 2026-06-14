@@ -163,7 +163,7 @@ crates/inference
   - inference diagnostics/errors
 
 crates/inference-backends/candle
-  V1 default local inference backend:
+  V1 configured default local inference backend:
   - CandleBackend
   - model loader/cache
   - tensor payload store
