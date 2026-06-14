@@ -8,6 +8,7 @@ use reimagine_runtime::{BackendKind, BackendPayloadKey, RuntimeLatent, RuntimeVa
 
 use crate::backend::CandleBackend;
 use crate::error::{BackendNotImplementedError, CandleBackendError};
+use crate::store::CandlePayload;
 
 fn extract_i64(
     params: &std::collections::HashMap<reimagine_core::model::SlotId, ParamValue>,
@@ -32,19 +33,34 @@ pub fn execute_latent_create_empty(
     let height = extract_i64(request.params(), "height")?;
     let batch_size = extract_i64(request.params(), "batch_size")?;
 
-    // SDXL VAE latent channels; V1 placeholder.
     let channels: u32 = 4;
     let latent_width = (width as u32) / 8;
     let latent_height = (height as u32) / 8;
 
+    let payload_key = BackendPayloadKey::new(format!(
+        "latent:{}:{}",
+        request.run_id().as_str(),
+        request.node_id().as_str()
+    ));
+
+    backend.store().register_run_payload(
+        request.run_id().clone(),
+        payload_key.clone(),
+        CandlePayload::LatentPlaceholder {
+            dims: vec![
+                batch_size as usize,
+                channels as usize,
+                latent_height as usize,
+                latent_width as usize,
+            ],
+            dtype: "f32".to_string(),
+        },
+    );
+
     let latent = RuntimeValue::Latent(RuntimeLatent::new(
         reimagine_runtime::BackendTensorHandle::new(
             BackendKind::from(backend.backend_kind()),
-            BackendPayloadKey::new(format!(
-                "latent:{}:{}",
-                request.run_id().as_str(),
-                request.node_id().as_str()
-            )),
+            payload_key,
             TensorDType::F32,
             TensorShape::new(vec![
                 batch_size as usize,

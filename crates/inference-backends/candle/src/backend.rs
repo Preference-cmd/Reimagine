@@ -10,6 +10,7 @@ use crate::config::CandleBackendConfig;
 use crate::device::CandleDevice;
 use crate::error::{BackendNotImplementedError, CandleBackendError};
 use crate::operation::*;
+use crate::resource::CandleRunResourceBackend;
 use crate::store::{CandleModelCache, CandleStore};
 
 #[derive(Debug, Clone)]
@@ -42,6 +43,10 @@ impl CandleBackend {
 
     pub fn model_cache(&self) -> &Arc<CandleModelCache> {
         &self.model_cache
+    }
+
+    pub fn resource_backend(&self) -> CandleRunResourceBackend {
+        CandleRunResourceBackend::new(self.store.clone(), self.model_cache.clone())
     }
 }
 

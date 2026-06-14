@@ -6,9 +6,7 @@ use reimagine_config::{AppConfig, AppPaths};
 use reimagine_core::model::ModelRef;
 use reimagine_inference::registry::register_builtin_inference_executors;
 use reimagine_inference::{InferenceError, ModelResolver, ResolvedInferenceModel};
-use reimagine_inference_candle::{
-    CandleBackend, CandleBackendConfig, CandleBackendError, CandleRunResourceBackend,
-};
+use reimagine_inference_candle::{CandleBackend, CandleBackendConfig, CandleBackendError};
 use reimagine_nodes::BuiltinNodeCatalog;
 use reimagine_runtime::{BoxedRunEventSink, NodeExecutorRegistry, RuntimeService, VecRunEventSink};
 
@@ -93,17 +91,18 @@ impl WorkspaceHost {
     pub fn with_defaults_and_backend(
         workspace_scope: WorkspaceScope,
         base_path: impl Into<std::path::PathBuf>,
-        backend_selection: BackendSelection,
+        _backend_selection: BackendSelection,
         event_sink: BoxedRunEventSink,
     ) -> Self {
         let config = AppConfig::new(AppPaths::new(base_path));
         let model_service = Arc::new(ModelService::new(config.paths().clone()));
-        let backend = build_backend(backend_selection, config.paths()).expect("backend");
-        let resource_backend = Arc::new(CandleRunResourceBackend);
+        let candle_backend = build_candle_backend(config.paths()).expect("backend");
+        let backend: Arc<dyn reimagine_inference::InferenceBackend> = candle_backend.clone();
+        let resource_backend = candle_backend.resource_backend();
         let mut registry = NodeExecutorRegistry::default();
         register_builtin_inference_executors(
             &mut registry,
-            backend.clone(),
+            backend,
             Arc::new(ModelResolverAdapter::new(
                 model_service.clone(),
                 config.paths().clone(),
@@ -112,7 +111,7 @@ impl WorkspaceHost {
         .expect("register executors");
         let runtime_service = Arc::new(RuntimeService::new(
             registry,
-            resource_backend,
+            Arc::new(resource_backend),
             event_sink,
             Arc::new(reimagine_runtime::SystemClock),
         ));
@@ -149,16 +148,9 @@ impl WorkspaceHost {
     }
 }
 
-fn build_backend(
-    selection: BackendSelection,
-    app_paths: &AppPaths,
-) -> Result<Arc<dyn reimagine_inference::InferenceBackend>, CandleBackendError> {
-    match selection {
-        BackendSelection::Candle => {
-            let config = CandleBackendConfig::new(app_paths.models_dir().to_path_buf());
-            Ok(Arc::new(CandleBackend::new(config)?))
-        }
-    }
+fn build_candle_backend(app_paths: &AppPaths) -> Result<Arc<CandleBackend>, CandleBackendError> {
+    let config = CandleBackendConfig::new(app_paths.models_dir().to_path_buf());
+    Ok(Arc::new(CandleBackend::new(config)?))
 }
 
 struct ModelResolverAdapter {

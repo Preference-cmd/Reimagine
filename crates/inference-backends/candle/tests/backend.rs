@@ -18,7 +18,7 @@ use reimagine_inference::{
     ResolvedInferenceModel, operation::*,
 };
 use reimagine_inference_candle::{CandleBackend, CandleBackendConfig};
-use reimagine_runtime::RuntimeValue;
+use reimagine_runtime::{RunResourceBackend, RuntimeValue};
 
 fn backend() -> CandleBackend {
     CandleBackend::new(CandleBackendConfig::new("/tmp/reimagine-candle-tests")).unwrap()
@@ -231,4 +231,164 @@ async fn unknown_operation_returns_not_implemented() {
     let request = base_request("custom.unknown_op");
     let err = backend.execute(request).await.unwrap_err();
     assert_backend_not_implemented(err, "custom.unknown_op");
+}
+
+// --- Resource lifecycle tests ---
+
+#[tokio::test]
+async fn cleanup_run_removes_latent_payloads() {
+    let backend = backend();
+    let run_id = RunId::new("run-cleanup");
+    let request = InferenceRequest::new(
+        OP_LATENT_CREATE_EMPTY.into(),
+        run_id.clone(),
+        WorkflowId::new("wf-test"),
+        WorkflowVersion::new(1),
+        NodeId::new("node-cleanup"),
+    )
+    .with_param("width", ParamValue::Integer(512))
+    .with_param("height", ParamValue::Integer(512))
+    .with_param("batch_size", ParamValue::Integer(1));
+
+    let response = backend.execute(request).await.unwrap();
+    let outputs = outputs_by_slot(&response);
+    let latent = outputs["latent"];
+    let payload_key = match latent.as_ref() {
+        RuntimeValue::Latent(handle) => handle.payload().payload_key().clone(),
+        other => panic!("expected latent, got {other:?}"),
+    };
+
+    assert!(backend.store().contains_payload(&payload_key));
+    assert_eq!(backend.store().payload_count(), 1);
+
+    let resource = backend.resource_backend();
+    resource.cleanup_run(&run_id).await;
+
+    assert!(!backend.store().contains_payload(&payload_key));
+    assert_eq!(backend.store().payload_count(), 0);
+}
+
+#[tokio::test]
+async fn cleanup_run_does_not_affect_other_runs() {
+    let backend = backend();
+    let run_a = RunId::new("run-a");
+    let run_b = RunId::new("run-b");
+
+    let request_a = InferenceRequest::new(
+        OP_LATENT_CREATE_EMPTY.into(),
+        run_a.clone(),
+        WorkflowId::new("wf-test"),
+        WorkflowVersion::new(1),
+        NodeId::new("node-a"),
+    )
+    .with_param("width", ParamValue::Integer(512))
+    .with_param("height", ParamValue::Integer(512))
+    .with_param("batch_size", ParamValue::Integer(1));
+
+    let request_b = InferenceRequest::new(
+        OP_LATENT_CREATE_EMPTY.into(),
+        run_b.clone(),
+        WorkflowId::new("wf-test"),
+        WorkflowVersion::new(1),
+        NodeId::new("node-b"),
+    )
+    .with_param("width", ParamValue::Integer(512))
+    .with_param("height", ParamValue::Integer(512))
+    .with_param("batch_size", ParamValue::Integer(1));
+
+    let response_a = backend.execute(request_a).await.unwrap();
+    let response_b = backend.execute(request_b).await.unwrap();
+
+    let key_a = match outputs_by_slot(&response_a)["latent"].as_ref() {
+        RuntimeValue::Latent(handle) => handle.payload().payload_key().clone(),
+        other => panic!("expected latent, got {other:?}"),
+    };
+    let key_b = match outputs_by_slot(&response_b)["latent"].as_ref() {
+        RuntimeValue::Latent(handle) => handle.payload().payload_key().clone(),
+        other => panic!("expected latent, got {other:?}"),
+    };
+
+    assert!(backend.store().contains_payload(&key_a));
+    assert!(backend.store().contains_payload(&key_b));
+    assert_eq!(backend.store().payload_count(), 2);
+
+    let resource = backend.resource_backend();
+    resource.cleanup_run(&run_a).await;
+
+    assert!(!backend.store().contains_payload(&key_a));
+    assert!(backend.store().contains_payload(&key_b));
+    assert_eq!(backend.store().payload_count(), 1);
+}
+
+#[tokio::test]
+async fn cleanup_run_does_not_remove_cached_model() {
+    let backend = backend();
+    let run_id = RunId::new("run-model");
+    let request = InferenceRequest::new(
+        OP_MODEL_LOAD_BUNDLE.into(),
+        run_id.clone(),
+        WorkflowId::new("wf-test"),
+        WorkflowVersion::new(1),
+        NodeId::new("node-model"),
+    )
+    .with_model(sdxl_model());
+
+    backend.execute(request).await.unwrap();
+    assert_eq!(backend.model_cache().bundle_count(), 1);
+
+    let resource = backend.resource_backend();
+    resource.cleanup_run(&run_id).await;
+
+    assert_eq!(backend.model_cache().bundle_count(), 1);
+}
+
+#[tokio::test]
+async fn memory_snapshot_reports_counts() {
+    let backend = backend();
+    let run_id = RunId::new("run-snapshot");
+    let request = InferenceRequest::new(
+        OP_LATENT_CREATE_EMPTY.into(),
+        run_id.clone(),
+        WorkflowId::new("wf-test"),
+        WorkflowVersion::new(1),
+        NodeId::new("node-snap"),
+    )
+    .with_param("width", ParamValue::Integer(512))
+    .with_param("height", ParamValue::Integer(512))
+    .with_param("batch_size", ParamValue::Integer(1));
+
+    backend.execute(request).await.unwrap();
+    backend
+        .execute(
+            InferenceRequest::new(
+                OP_MODEL_LOAD_BUNDLE.into(),
+                run_id.clone(),
+                WorkflowId::new("wf-test"),
+                WorkflowVersion::new(1),
+                NodeId::new("node-model"),
+            )
+            .with_model(sdxl_model()),
+        )
+        .await
+        .unwrap();
+
+    let resource = backend.resource_backend();
+    let snapshot = resource.memory_snapshot().await;
+
+    let run_payloads = snapshot
+        .observations
+        .get("run_payloads")
+        .expect("missing run_payloads observation");
+    assert_eq!(run_payloads, "1", "should report 1 run payload (latent)");
+
+    let cached_models = snapshot
+        .observations
+        .get("cached_models")
+        .expect("missing cached_models observation");
+    assert_eq!(cached_models, "1", "should report 1 cached model bundle");
+
+    assert!(
+        snapshot.observations.contains_key("bytes_approximate"),
+        "should include bytes_approximate observation"
+    );
 }
