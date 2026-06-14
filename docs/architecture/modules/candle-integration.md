@@ -1,8 +1,8 @@
 # Candle Backend Adapter Architecture
 
 > Status: working draft
-> Target crate: `crates/inference-backends/candle` (`reimagine-inference-candle`)
-> Current crate: `crates/candle-integration` until migration
+> Crate: `crates/inference-backends/candle` (`reimagine-inference-candle`)
+> Legacy placeholder: `crates/candle-integration`
 
 ## Role
 
@@ -10,6 +10,11 @@ The Candle backend adapter is the local Candle implementation of the
 backend-neutral inference layer. It implements the operation protocol from
 `crates/inference` and owns Candle-specific model loading, tensor storage,
 device policy, and image encoding.
+
+Concrete inference backend crates are grouped under
+`crates/inference-backends/*`. `crates/candle-integration` is a legacy
+placeholder from the pre-`inference` architecture and should be migrated,
+renamed, or removed as the Candle adapter becomes `reimagine-inference-candle`.
 
 ## V1 Target
 
@@ -79,8 +84,9 @@ builtin.vae_decode
 builtin.save_image
 ```
 
-`builtin.preview_image` may be added later, but it is not required to prove the
-base text-to-image save path.
+`builtin.preview_image` follows the same backend boundary as `save_image`; it
+is useful for UI/runtime parity but is not required to prove the base
+text-to-image save path.
 
 ## Candle Backend Shape
 
@@ -155,9 +161,9 @@ M1 should prioritize an executable vertical slice over complete SDXL quality:
 
 1. Introduce the `inference` crate boundary and backend-neutral executor
    registration shape.
-2. Migrate the current `candle-integration` crate into
-   `crates/inference-backends/candle` or replace it with a new
-   `reimagine-inference-candle` crate.
+2. Migrate the current `candle-integration` placeholder into
+   `crates/inference-backends/candle` as `reimagine-inference-candle`, or
+   replace it outright with the new grouped backend crate.
 3. Register concrete executors through app-host into runtime.
 4. Prove the existing SDXL workflow executes through Axum HTTP using the real
    registry path.

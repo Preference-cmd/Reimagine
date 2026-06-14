@@ -157,8 +157,8 @@ crates/runtime
 
 crates/inference
   Backend-neutral inference layer:
-  - inference backend traits
-  - SDXL capability traits
+  - operation-based inference backend protocol
+  - model resolver capability shape
   - backend-neutral executor factories
   - inference diagnostics/errors
 
@@ -167,7 +167,7 @@ crates/inference-backends/candle
   - CandleBackend
   - model loader/cache
   - tensor payload store
-  - SDXL base-only capability implementation
+  - SDXL base-only operation implementation
 
 crates/axum-host
   HTTP host adapter:
