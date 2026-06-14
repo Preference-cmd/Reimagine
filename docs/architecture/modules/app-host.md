@@ -120,6 +120,27 @@ runtime or executor constant. Runtime receives only the populated executor
 registry and optional resource backend; it does not know which concrete backend
 was selected.
 
+Backend selection is not per-node in V1. It is a workspace/run/execution-unit
+profile selected before runtime execution begins:
+
+```text
+workspace/run inference backend profile
+  -> app-host constructs selected backend
+  -> app-host registers executor set for that backend
+  -> runtime executes the prepared plan with that registry/resource backend
+```
+
+V1 does not support node-level backend overrides or implicit cross-backend
+tensor transfer. A workflow run should not execute one inference node with
+Candle and another inference node with a different backend. Non-inference nodes,
+such as string input or artifact saving, may still use ordinary runtime
+executors; that is not considered backend switching.
+
+Future node-level or stage-level backend selection would require explicit value
+conversion/bridge design, compatibility diagnostics, and scheduler cost/lifetime
+awareness. It should be treated as a later architecture decision, not an
+implicit extension of the V1 config enum.
+
 Workspace construction follows a fixed capability-surface flow:
 
 ```text

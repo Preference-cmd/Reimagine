@@ -249,6 +249,12 @@ state, scheduling, cancellation, value storage, snapshots, summaries, and run
 events. `inference` owns only the node-to-operation protocol and backend
 adapter boundary.
 
+V1 runtime does not select inference backends per node. Backend selection is
+resolved by app-host before a run/execution unit starts, by constructing the
+executor registry and resource backend for the selected backend profile.
+Runtime executes the registry it was given and does not perform implicit
+cross-backend tensor conversion.
+
 `RunResourceBackend` remains a runtime lifecycle hook, not the inference
 execution API. A concrete backend may implement both `RunResourceBackend` and
 the inference backend trait, but runtime only sees `RunResourceBackend`.

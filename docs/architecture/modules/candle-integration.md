@@ -102,7 +102,8 @@ interior synchronization so executors can share it safely:
 ```text
 CandleBackend
   config: CandleBackendConfig
-  session/cache: Arc<...>
+  store: Arc<CandleStore>
+  model_cache: Arc<CandleModelCache>
 ```
 
 The backend owns:
@@ -112,6 +113,35 @@ The backend owns:
 - backend tensor payload store keyed by `BackendPayloadKey`;
 - conversion between backend tensors and `RuntimeValue` handles;
 - image encoding/write helpers used by `save_image`.
+
+`CandleBackend` owns both the backend payload store and the model cache. Runtime
+and app-host must not hold Candle tensors or loaded Candle model objects
+directly.
+
+Payload lifetimes are split by intent:
+
+```text
+CandleModelCache
+  cross-run model payloads
+  loaded checkpoint / UNet / CLIP / VAE objects
+  backend cache policy controls eviction
+
+CandleStore
+  run-scoped payloads
+  latent / conditioning / decoded image tensors
+  indexed by RunId and BackendPayloadKey
+```
+
+`RunResourceBackend` communicates lifecycle intent to the backend. It does not
+force a release strategy:
+
+- `begin_run` can create run-local indexes or pins;
+- `release_runtime_value` can release immediately, decrement backend refs, or
+  keep a payload in a pool;
+- `cleanup_run` releases run-scoped payloads and run pins;
+- cached model payloads may remain loaded according to backend policy;
+- `memory_snapshot` reports backend cache/device observations without exposing
+  backend internals.
 
 It may implement both:
 
@@ -139,6 +169,27 @@ RuntimeValue::Artifact(ArtifactRef)
 
 No `candle_core::Tensor` should appear in `runtime`, `app-host`, `axum-host`,
 or workflow JSON.
+
+`model.load_bundle` should avoid duplicating loaded SDXL components. Internally,
+the backend may store one loaded bundle and expose separate typed handles for
+the workflow outputs:
+
+```text
+LoadedSdxlBundle
+  diffusion model / UNet
+  CLIP
+  VAE
+  metadata
+
+model.load_bundle outputs
+  RuntimeValue::Model(handle to bundle model role)
+  RuntimeValue::Clip(handle to bundle clip role)
+  RuntimeValue::Vae(handle to bundle vae role)
+```
+
+The workflow/runtime surface still sees three typed values. Only the Candle
+backend knows whether those handles point into one shared bundle or separate
+backend payloads.
 
 ## Model Resolution Handoff
 
