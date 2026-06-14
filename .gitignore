@@ -45,6 +45,8 @@ src-tauri/WixTools/
 # ----- Local planning / agent scratch -----
 .scratch/
 .sc/
+.claude/
+.worktrees/
 CONTEXT.md
 
 # Project docs: keep shared architecture/design/agent docs, ignore local ADR/dev drafts.
