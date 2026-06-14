@@ -6,7 +6,9 @@ use reimagine_config::{AppConfig, AppPaths, ConfigDocument, InferenceBackendConf
 use reimagine_core::model::ModelRef;
 use reimagine_inference::registry::register_builtin_inference_executors;
 use reimagine_inference::{InferenceError, ModelResolver, ResolvedInferenceModel};
-use reimagine_inference_candle::{CandleBackend, CandleBackendConfig, CandleBackendError, CandleDevice};
+use reimagine_inference_candle::{
+    CandleBackend, CandleBackendConfig, CandleBackendError, CandleDevice,
+};
 use reimagine_nodes::BuiltinNodeCatalog;
 use reimagine_runtime::{BoxedRunEventSink, NodeExecutorRegistry, RuntimeService, VecRunEventSink};
 
@@ -18,6 +20,7 @@ use crate::{AgentService, BackendSelection, ModelService, WorkflowService};
 pub struct WorkspaceHost {
     workspace_scope: WorkspaceScope,
     config: Arc<AppConfig>,
+    backend_config: InferenceBackendConfig,
     workflow_service: Arc<WorkflowService>,
     model_service: Arc<ModelService>,
     runtime_service: Arc<RuntimeService>,
@@ -30,6 +33,7 @@ impl WorkspaceHost {
     pub fn new(
         workspace_scope: WorkspaceScope,
         config: AppConfig,
+        backend_config: InferenceBackendConfig,
         runtime_service: Arc<RuntimeService>,
         node_catalog: Arc<BuiltinNodeCatalog>,
     ) -> Self {
@@ -54,6 +58,7 @@ impl WorkspaceHost {
         Self {
             workspace_scope,
             config,
+            backend_config,
             workflow_service,
             model_service,
             runtime_service,
@@ -116,7 +121,8 @@ impl WorkspaceHost {
         event_sink: BoxedRunEventSink,
     ) -> Self {
         let model_service = Arc::new(ModelService::new(config.paths().clone()));
-        let candle_backend = build_candle_backend(config.paths(), &backend_config).expect("backend");
+        let candle_backend =
+            build_candle_backend(config.paths(), &backend_config).expect("backend");
         let backend: Arc<dyn reimagine_inference::InferenceBackend> = candle_backend.clone();
         let resource_backend = candle_backend.resource_backend();
         let mut registry = NodeExecutorRegistry::default();
@@ -136,7 +142,13 @@ impl WorkspaceHost {
             Arc::new(reimagine_runtime::SystemClock),
         ));
         let node_catalog = Arc::new(BuiltinNodeCatalog::v1());
-        Self::new(workspace_scope, config, runtime_service, node_catalog)
+        Self::new(
+            workspace_scope,
+            config,
+            backend_config,
+            runtime_service,
+            node_catalog,
+        )
     }
 
     pub fn workspace_scope(&self) -> &WorkspaceScope {
@@ -166,10 +178,16 @@ impl WorkspaceHost {
     pub fn services(&self) -> &Arc<WorkspaceServices> {
         &self.services
     }
+    pub fn backend_config(&self) -> &InferenceBackendConfig {
+        &self.backend_config
+    }
 }
 
 fn load_backend_config(config: &AppConfig) -> InferenceBackendConfig {
-    let path = config.paths().config_dir().join(InferenceBackendConfig::KEY);
+    let path = config
+        .paths()
+        .config_dir()
+        .join(InferenceBackendConfig::KEY);
     match std::fs::read_to_string(&path) {
         Ok(json) => serde_json::from_str(&json).unwrap_or_default(),
         Err(_) => InferenceBackendConfig::default(),
@@ -181,8 +199,8 @@ fn build_candle_backend(
     backend_config: &InferenceBackendConfig,
 ) -> Result<Arc<CandleBackend>, CandleBackendError> {
     let device = CandleDevice::new(&backend_config.candle_device);
-    let candle_config = CandleBackendConfig::new(app_paths.models_dir().to_path_buf())
-        .with_device(device);
+    let candle_config =
+        CandleBackendConfig::new(app_paths.models_dir().to_path_buf()).with_device(device);
     Ok(Arc::new(CandleBackend::new(candle_config)?))
 }
 
@@ -273,24 +291,20 @@ mod tests {
             .duration_since(std::time::UNIX_EPOCH)
             .unwrap()
             .as_nanos();
-        std::env::temp_dir().join(format!("reimagine-app-host-ws-{prefix}-{nonce}"))
-    }
-
-    #[test]
-    fn default_config_selects_candle() {
-        let cfg = InferenceBackendConfig::default();
-        assert_eq!(cfg.backend, InferenceBackendKind::Candle);
-        assert_eq!(cfg.candle_device, "cpu");
+        let tid = std::thread::current().id();
+        std::env::temp_dir().join(format!("reimagine-app-host-ws-{prefix}-{nonce:?}-{tid:?}"))
     }
 
     #[test]
     fn workspace_with_defaults_uses_candle() {
         let base = temp_dir("defaults");
-        let workspace = WorkspaceHost::with_defaults(
-            WorkspaceScope::new("test-defaults"),
-            &base,
-        );
+        let workspace = WorkspaceHost::with_defaults(WorkspaceScope::new("test-defaults"), &base);
         assert_eq!(workspace.base_path(), base);
+        assert_eq!(
+            workspace.backend_config().backend,
+            InferenceBackendKind::Candle
+        );
+        assert_eq!(workspace.backend_config().candle_device, "cpu");
         let _ = fs::remove_dir_all(&base);
     }
 
@@ -305,22 +319,27 @@ mod tests {
         )
         .unwrap();
 
-        let workspace = WorkspaceHost::with_defaults(
-            WorkspaceScope::new("test-config-file"),
-            &base,
-        );
+        let workspace =
+            WorkspaceHost::with_defaults(WorkspaceScope::new("test-config-file"), &base);
         assert_eq!(workspace.base_path(), base);
+        assert_eq!(
+            workspace.backend_config().backend,
+            InferenceBackendKind::Candle
+        );
+        assert_eq!(workspace.backend_config().candle_device, "cpu");
         let _ = fs::remove_dir_all(&base);
     }
 
     #[test]
     fn missing_config_file_defaults_to_candle() {
         let base = temp_dir("no-config");
-        let workspace = WorkspaceHost::with_defaults(
-            WorkspaceScope::new("test-no-config"),
-            &base,
-        );
+        let workspace = WorkspaceHost::with_defaults(WorkspaceScope::new("test-no-config"), &base);
         assert_eq!(workspace.base_path(), base);
+        assert_eq!(
+            workspace.backend_config().backend,
+            InferenceBackendKind::Candle
+        );
+        assert_eq!(workspace.backend_config().candle_device, "cpu");
         let _ = fs::remove_dir_all(&base);
     }
 }

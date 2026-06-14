@@ -166,6 +166,7 @@ async fn build_host(manifest: ModelManifest, base: &str) -> WorkspaceHost {
     WorkspaceHost::new(
         WorkspaceScope::new(format!("ws-{base}")),
         AppConfig::new(paths),
+        reimagine_config::InferenceBackendConfig::default(),
         build_runtime(),
         builtin_catalog(),
     )
@@ -296,6 +297,7 @@ async fn run_workflow_handoff_completes_when_readiness_passes() {
     let host = WorkspaceHost::new(
         WorkspaceScope::new("ws-run-start"),
         AppConfig::new(paths),
+        reimagine_config::InferenceBackendConfig::default(),
         runtime.clone(),
         builtin_catalog(),
     );
@@ -373,6 +375,7 @@ async fn run_workflow_propagates_correlation_id_to_runtime_options() {
     let host = WorkspaceHost::new(
         WorkspaceScope::new("ws-run-corr"),
         AppConfig::new(paths),
+        reimagine_config::InferenceBackendConfig::default(),
         runtime.clone(),
         builtin_catalog(),
     );

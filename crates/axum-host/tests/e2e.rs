@@ -142,6 +142,7 @@ async fn build_ready_host(
     let host = Arc::new(WorkspaceHost::new(
         WorkspaceScope::new(format!("ws-{base}")),
         AppConfig::new(paths),
+        reimagine_config::InferenceBackendConfig::default(),
         runtime.clone(),
         builtin_catalog(),
     ));

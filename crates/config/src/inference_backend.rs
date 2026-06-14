@@ -17,7 +17,7 @@ impl Default for InferenceBackendKind {
 }
 
 /// Persisted inference backend configuration.
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct InferenceBackendConfig {
     #[serde(default = "default_schema_version")]
     pub schema_version: String,
