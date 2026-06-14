@@ -766,16 +766,18 @@ V1 intentionally excludes:
 ```text
 model-manager -> core
 model-manager -> config
-model-manager must not -> candle-integration
+model-manager must not -> inference-backends/candle
 model-manager must not -> runtime
 model-manager must not -> tauri
 ```
 
-`app-host` and Candle integration consume resolved descriptors:
+`app-host` consumes resolved descriptors and adapts them into inference-layer
+model resolution:
 
 ```text
 Workflow ModelRef
   -> app-host/model service resolves ModelDescriptor
-  -> candle-integration-backed capability loads backend model payload
-  -> runtime receives Model / Clip / Vae handles from node executors
+  -> app-host maps ModelDescriptor to inference::ResolvedInferenceModel
+  -> inference-backends/candle loads backend model payload
+  -> runtime receives Model / Clip / Vae handles from inference executors
 ```

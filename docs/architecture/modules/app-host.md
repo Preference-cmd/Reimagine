@@ -38,7 +38,8 @@ app-host -> core
 app-host -> config
 app-host -> model-manager
 app-host -> runtime
-app-host -> candle-integration
+app-host -> inference
+app-host -> inference-backends/candle
 app-host -> agent
 app-host -> agent-provider
 app-host -> agent-macros

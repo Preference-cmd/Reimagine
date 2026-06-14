@@ -424,7 +424,7 @@ Reasons:
 
 1. Introduce `crates/inference` with the operation-based backend protocol and
    generic executor registration shape.
-2. Move or replace `crates/candle-integration` with
+2. Migrate the legacy `crates/candle-integration` placeholder into
    `crates/inference-backends/candle` as `reimagine-inference-candle`.
 3. Wire app-host to use the Candle backend as the V1 default backend.
 4. Prove the SDXL example workflow runs through Axum using the same app-host
