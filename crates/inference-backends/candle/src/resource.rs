@@ -3,15 +3,54 @@ use std::sync::Arc;
 use reimagine_core::model::RunId;
 use reimagine_runtime::{MemorySnapshot, RunResourceBackend, RuntimeValue};
 
-#[derive(Debug, Default, Clone)]
-pub struct CandleRunResourceBackend;
+use crate::store::{CandleModelCache, CandleStore};
+
+#[derive(Debug, Clone)]
+pub struct CandleRunResourceBackend {
+    store: Arc<CandleStore>,
+    model_cache: Arc<CandleModelCache>,
+}
+
+impl CandleRunResourceBackend {
+    pub fn new(store: Arc<CandleStore>, model_cache: Arc<CandleModelCache>) -> Self {
+        Self { store, model_cache }
+    }
+}
 
 #[async_trait::async_trait]
 impl RunResourceBackend for CandleRunResourceBackend {
     async fn begin_run(&self, _run_id: &RunId) {}
-    async fn release_runtime_value(&self, _run_id: &RunId, _value: Arc<RuntimeValue>) {}
-    async fn cleanup_run(&self, _run_id: &RunId) {}
+
+    async fn release_runtime_value(&self, _run_id: &RunId, value: Arc<RuntimeValue>) {
+        let key = match value.as_ref() {
+            RuntimeValue::Latent(l) => Some(l.payload().payload_key()),
+            RuntimeValue::Model(m) => Some(m.payload_key()),
+            RuntimeValue::Clip(c) => Some(c.payload_key()),
+            RuntimeValue::Vae(v) => Some(v.payload_key()),
+            RuntimeValue::Image(i) => Some(i.payload().payload_key()),
+            RuntimeValue::Conditioning(c) => Some(c.text_embedding().payload_key()),
+            _ => None,
+        };
+        if let Some(key) = key {
+            self.store.release_payload(key);
+        }
+    }
+
+    async fn cleanup_run(&self, run_id: &RunId) {
+        self.store.cleanup_run(run_id);
+    }
+
     async fn memory_snapshot(&self) -> MemorySnapshot {
-        MemorySnapshot::default()
+        let mut observations = std::collections::HashMap::new();
+        observations.insert(
+            "run_payloads".to_string(),
+            self.store.payload_count().to_string(),
+        );
+        observations.insert(
+            "cached_models".to_string(),
+            self.model_cache.bundle_count().to_string(),
+        );
+        observations.insert("bytes_approximate".to_string(), "0".to_string());
+        MemorySnapshot { observations }
     }
 }
