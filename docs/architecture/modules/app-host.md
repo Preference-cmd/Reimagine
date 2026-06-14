@@ -39,7 +39,7 @@ app-host -> config
 app-host -> model-manager
 app-host -> runtime
 app-host -> inference
-app-host -> inference-backends/candle
+app-host -> inference-backends/candle   # concrete backend crate selected by config in V1
 app-host -> agent
 app-host -> agent-provider
 app-host -> agent-macros
@@ -87,6 +87,38 @@ AppHost
 The type shape should still make the workspace boundary explicit so future multi-workspace support can route Agent sessions and host requests to the correct `WorkspaceHost`.
 
 `app-host` owns the unified bootstrap entry that assembles `WorkspaceHost`. Tauri and Axum adapters should receive an already-built workspace handle rather than duplicating service composition.
+
+## Backend Selection
+
+`app-host` is the composition root for inference backends, but it should not
+hard-code Candle inside the runtime path. V1 should model backend selection as
+configuration:
+
+```text
+InferenceBackendKind
+  Candle
+```
+
+The enum belongs at the app-host/config boundary, where user settings can select
+the desired backend and workspace bootstrap can instantiate the matching
+concrete backend crate.
+
+```text
+AppConfig
+  inference.backend: InferenceBackendKind
+
+WorkspaceHost::new(config)
+  -> match config.inference.backend
+  -> construct selected backend
+  -> construct ModelResolver adapter
+  -> register_builtin_inference_executors(...)
+  -> construct RuntimeService
+```
+
+Candle may be the V1 default, but the default is still a config value, not a
+runtime or executor constant. Runtime receives only the populated executor
+registry and optional resource backend; it does not know which concrete backend
+was selected.
 
 Workspace construction follows a fixed capability-surface flow:
 

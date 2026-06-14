@@ -15,6 +15,8 @@ Concrete inference backend crates are grouped under
 `crates/inference-backends/*`. `crates/candle-integration` is a legacy
 placeholder from the pre-`inference` architecture and should be migrated,
 renamed, or removed as the Candle adapter becomes `reimagine-inference-candle`.
+The preferred V1 path is direct migration into the grouped backend crate, not a
+long-lived compatibility layer.
 
 ## V1 Target
 
@@ -56,6 +58,10 @@ inference-backends/candle must not -> model-manager
 chosen inference backend and node executor registry into runtime. The Candle
 adapter consumes resolved paths/metadata; it does not scan directories or read
 manifests.
+
+Backend selection is owned by app-host/config. Candle can be the default V1
+backend, but it should be selected through an enum/config value rather than
+being hard-coded into runtime, inference executors, Axum, or Tauri.
 
 ## Runtime Integration
 
@@ -161,9 +167,9 @@ M1 should prioritize an executable vertical slice over complete SDXL quality:
 
 1. Introduce the `inference` crate boundary and backend-neutral executor
    registration shape.
-2. Migrate the current `candle-integration` placeholder into
-   `crates/inference-backends/candle` as `reimagine-inference-candle`, or
-   replace it outright with the new grouped backend crate.
+2. Directly migrate the current `candle-integration` placeholder into
+   `crates/inference-backends/candle` as `reimagine-inference-candle`, replacing
+   the legacy crate unless a very small temporary shim is required.
 3. Register concrete executors through app-host into runtime.
 4. Prove the existing SDXL workflow executes through Axum HTTP using the real
    registry path.
@@ -176,4 +182,7 @@ M1 should prioritize an executable vertical slice over complete SDXL quality:
 The first M1 issue should not try to perfect sampling quality, device offload,
 or streaming progress. It should make the SDXL example produce a deterministic
 artifact or a precise backend-not-implemented diagnostic through the real
-executor registration path.
+executor registration path. It is acceptable for `model.load_bundle` and
+`latent.create_empty` to succeed and for the run to fail at the first heavy
+unimplemented operation, such as `text.encode`, as long as the diagnostic names
+the unsupported backend operation precisely.
