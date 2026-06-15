@@ -8,6 +8,18 @@ use reimagine_runtime::BackendPayloadKey;
 use crate::error::CandleBackendError;
 use crate::models::LoadedModelBundle;
 
+fn dtype_byte_size(dtype: DType) -> usize {
+    match dtype {
+        DType::F64 | DType::I64 => 8,
+        DType::F32 | DType::I32 | DType::U32 => 4,
+        DType::F16 | DType::BF16 | DType::I16 | DType::F8E8M0 => 2,
+        DType::F8E4M3 | DType::F6E2M3 | DType::F6E3M2 | DType::F4 | DType::U8 => 1,
+        // Future DType variants default to 1 byte; byte_size is
+        // approximate and only feeds the memory snapshot.
+        _ => 1,
+    }
+}
+
 /// Backend-owned latent tensor wrapper.
 ///
 /// `candle_core::Tensor` is reference-counted internally, so cloning
@@ -42,32 +54,65 @@ impl CandleLatent {
 
     /// Approximate byte size of the latent payload.
     pub fn byte_size(&self) -> usize {
-        let dtype_size = match self.tensor.dtype() {
-            DType::F64 | DType::I64 => 8,
-            DType::F32 | DType::I32 | DType::U32 => 4,
-            DType::F16 | DType::BF16 | DType::I16 | DType::F8E8M0 => 2,
-            DType::F8E4M3 | DType::F6E2M3 | DType::F6E3M2 | DType::F4 | DType::U8 => 1,
-            // Future DType variants default to 1 byte; byte_size is
-            // approximate and only feeds the memory snapshot.
-            _ => 1,
-        };
-        self.tensor.elem_count() * dtype_size
+        self.tensor.elem_count() * dtype_byte_size(self.tensor.dtype())
+    }
+}
+
+/// Backend-owned conditioning payload.
+///
+/// SDXL uses dual CLIP encoders: CLIP-L (768-dim) and CLIP-G (1280-dim).
+/// The text embedding is the concatenated output (2048-dim). The pooled
+/// embedding (1280-dim) comes from CLIP-G and is used by the UNet for
+/// SDXL-specific conditioning.
+#[derive(Debug, Clone)]
+pub struct CandleConditioning {
+    text_embedding: Tensor,
+    pooled_embedding: Option<Tensor>,
+}
+
+impl CandleConditioning {
+    pub fn new(text_embedding: Tensor, pooled_embedding: Option<Tensor>) -> Self {
+        Self {
+            text_embedding,
+            pooled_embedding,
+        }
+    }
+
+    pub fn text_embedding(&self) -> &Tensor {
+        &self.text_embedding
+    }
+
+    pub fn pooled_embedding(&self) -> Option<&Tensor> {
+        self.pooled_embedding.as_ref()
+    }
+
+    pub fn byte_size(&self) -> usize {
+        let dtype_size = dtype_byte_size(self.text_embedding.dtype());
+        let text_bytes = self.text_embedding.elem_count() * dtype_size;
+        let pooled_bytes = self
+            .pooled_embedding
+            .as_ref()
+            .map(|t| t.elem_count() * dtype_byte_size(t.dtype()))
+            .unwrap_or(0);
+        text_bytes + pooled_bytes
     }
 }
 
 /// Backend-owned payload enum.
 ///
-/// V1 carries a single real latent variant; later milestones add image
-/// and conditioning payloads behind the same typed-accessor boundary.
+/// V1 carries latent and conditioning variants; later milestones add
+/// image payloads behind the same typed-accessor boundary.
 #[derive(Debug, Clone)]
 pub enum CandlePayload {
     Latent(CandleLatent),
+    Conditioning(CandleConditioning),
 }
 
 impl CandlePayload {
     pub fn kind(&self) -> &'static str {
         match self {
             Self::Latent(_) => "latent",
+            Self::Conditioning(_) => "conditioning",
         }
     }
 }
@@ -214,6 +259,71 @@ impl CandleStore {
         removed
     }
 
+    /// Insert a conditioning payload and pin it to the run.
+    pub fn insert_conditioning(
+        &self,
+        run_id: RunId,
+        key: BackendPayloadKey,
+        conditioning: CandleConditioning,
+    ) {
+        let mut inner = self.inner.lock().expect("store poisoned");
+        inner
+            .payloads
+            .insert(key.clone(), CandlePayload::Conditioning(conditioning));
+        inner.run_index.entry(run_id).or_default().push(key);
+    }
+
+    /// Clone a conditioning payload handle. The lock is released as
+    /// soon as the cheap Arc-internal clone completes.
+    #[allow(unreachable_patterns)]
+    pub fn get_conditioning(
+        &self,
+        key: &BackendPayloadKey,
+    ) -> Result<CandleConditioning, StoreError> {
+        let inner = self.inner.lock().expect("store poisoned");
+        let cloned = inner.payloads.get(key).cloned();
+        drop(inner);
+        match cloned {
+            Some(CandlePayload::Conditioning(cond)) => Ok(cond),
+            Some(other) => Err(StoreError::WrongPayloadKind {
+                key: key.clone(),
+                expected: "conditioning",
+                actual: other.kind(),
+            }),
+            None => Err(StoreError::PayloadNotFound {
+                key: key.clone(),
+                expected: "conditioning",
+            }),
+        }
+    }
+
+    /// Take ownership of a conditioning payload, removing it from the
+    /// store and unpinning it from any run index.
+    #[allow(unreachable_patterns)]
+    pub fn take_conditioning(
+        &self,
+        key: &BackendPayloadKey,
+    ) -> Result<CandleConditioning, StoreError> {
+        let mut inner = self.inner.lock().expect("store poisoned");
+        match inner.payloads.remove(key) {
+            Some(CandlePayload::Conditioning(cond)) => {
+                for keys in inner.run_index.values_mut() {
+                    keys.retain(|k| k != key);
+                }
+                Ok(cond)
+            }
+            Some(other) => Err(StoreError::WrongPayloadKind {
+                key: key.clone(),
+                expected: "conditioning",
+                actual: other.kind(),
+            }),
+            None => Err(StoreError::PayloadNotFound {
+                key: key.clone(),
+                expected: "conditioning",
+            }),
+        }
+    }
+
     /// Total number of payloads currently stored.
     pub fn payload_count(&self) -> usize {
         self.inner.lock().expect("store poisoned").payloads.len()
@@ -239,14 +349,15 @@ impl CandleStore {
             .contains_key(key)
     }
 
-    /// Approximate total byte size of all stored latent payloads.
-    pub fn latent_byte_size(&self) -> usize {
+    /// Approximate total byte size of all stored payloads.
+    pub fn payload_byte_size(&self) -> usize {
         let inner = self.inner.lock().expect("store poisoned");
         inner
             .payloads
             .values()
             .map(|payload| match payload {
                 CandlePayload::Latent(latent) => latent.byte_size(),
+                CandlePayload::Conditioning(cond) => cond.byte_size(),
             })
             .sum()
     }
@@ -512,7 +623,7 @@ mod tests {
         // 1 * 4 * 8 * 8 = 256 f32 elements = 1024 bytes per payload
         store.insert_latent(run_id.clone(), first, build_latent_tensor(&[1, 4, 8, 8]));
         store.insert_latent(run_id, second, build_latent_tensor(&[1, 4, 8, 8]));
-        assert_eq!(store.latent_byte_size(), 2048);
+        assert_eq!(store.payload_byte_size(), 2048);
     }
 
     #[test]

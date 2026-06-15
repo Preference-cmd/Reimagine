@@ -46,6 +46,7 @@ src-tauri/WixTools/
 .scratch/
 .sc/
 .claude/
+.mimocode/
 .worktrees/
 CONTEXT.md
 

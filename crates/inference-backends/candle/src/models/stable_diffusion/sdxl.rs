@@ -7,5 +7,7 @@
 //! real CLIP / UNet / VAE kernels.
 
 mod bundle;
+pub mod text;
+pub mod tokenizer;
 
 pub use bundle::LoadedSdxlBundle;

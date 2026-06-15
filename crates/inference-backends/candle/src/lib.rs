@@ -14,7 +14,9 @@ pub use config::CandleBackendConfig;
 pub use device::CandleDevice;
 pub use error::{BackendNotImplementedError, CandleBackendError};
 pub use resource::CandleRunResourceBackend;
-pub use store::{CandleLatent, CandleModelCache, CandlePayload, CandleStore, StoreError};
+pub use store::{
+    CandleConditioning, CandleLatent, CandleModelCache, CandlePayload, CandleStore, StoreError,
+};
 
 pub use candle_core::{DType, Tensor};
 pub use models::{LoadedModelBundle, LoadedSdxlBundle};
