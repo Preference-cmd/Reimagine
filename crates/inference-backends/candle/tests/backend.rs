@@ -789,15 +789,797 @@ async fn text_encode_rejects_wrong_clip_payload_key() {
 }
 
 #[tokio::test]
-async fn diffusion_sample_returns_not_implemented() {
+async fn diffusion_sample_succeeds_after_text_encode_and_latent_create_empty() {
     let backend = backend();
+    let (model, _root) = sdxl_model();
+    backend
+        .execute(base_request(OP_MODEL_LOAD_BUNDLE).with_model(model))
+        .await
+        .unwrap();
+
+    let bundle = backend
+        .model_cache()
+        .get_bundle(&ModelId::new("sdxl-base-1.0"))
+        .expect("cached bundle");
+    let (model_payload_key, clip_payload_key) = match bundle.as_ref() {
+        LoadedModelBundle::StableDiffusionSdxl(sdxl) => (
+            sdxl.model_payload_key.clone(),
+            sdxl.clip_payload_key.clone(),
+        ),
+    };
+
+    let make_model = || {
+        RuntimeValue::Model(reimagine_runtime::RuntimeModelHandle::new(
+            ModelId::new("sdxl-base-1.0"),
+            ModelRole::CheckpointBundle,
+            reimagine_runtime::BackendKind::from("candle"),
+            model_payload_key.clone(),
+        ))
+    };
+    let make_clip = || {
+        RuntimeValue::Clip(reimagine_runtime::RuntimeClipHandle::new(
+            ModelId::new("sdxl-base-1.0"),
+            reimagine_runtime::BackendKind::from("candle"),
+            clip_payload_key.clone(),
+        ))
+    };
+
+    // Encode the positive and negative conditioning so the sampler can
+    // resolve them through the typed store accessor.
+    let positive_encode = backend
+        .execute(
+            base_request(OP_TEXT_ENCODE)
+                .with_input("clip", Arc::new(make_clip()))
+                .with_input(
+                    "text",
+                    Arc::new(RuntimeValue::Param(
+                        reimagine_core::model::ParamValue::String(
+                            "cinematic lake at sunrise".to_string(),
+                        ),
+                    )),
+                ),
+        )
+        .await
+        .unwrap();
+    let positive = match &positive_encode.outputs()[0].value().as_ref() {
+        RuntimeValue::Conditioning(c) => c.clone(),
+        other => panic!("expected conditioning, got {other:?}"),
+    };
+
+    let negative_encode = backend
+        .execute(
+            InferenceRequest::new(
+                OP_TEXT_ENCODE.into(),
+                RunId::new("run-test"),
+                WorkflowId::new("wf-test"),
+                WorkflowVersion::new(1),
+                NodeId::new("node-negative-encode"),
+            )
+            .with_input("clip", Arc::new(make_clip()))
+            .with_input(
+                "text",
+                Arc::new(RuntimeValue::Param(
+                    reimagine_core::model::ParamValue::String("low quality, blurry".to_string()),
+                )),
+            ),
+        )
+        .await
+        .unwrap();
+    let negative = match &negative_encode.outputs()[0].value().as_ref() {
+        RuntimeValue::Conditioning(c) => c.clone(),
+        other => panic!("expected conditioning, got {other:?}"),
+    };
+
+    // Allocate the empty latent.
+    let latent_resp = backend
+        .execute(
+            base_request(OP_LATENT_CREATE_EMPTY)
+                .with_param("width", ParamValue::Integer(64))
+                .with_param("height", ParamValue::Integer(64))
+                .with_param("batch_size", ParamValue::Integer(1)),
+        )
+        .await
+        .unwrap();
+    let input_latent = match latent_resp.outputs()[0].value().as_ref() {
+        RuntimeValue::Latent(l) => l.clone(),
+        other => panic!("expected latent, got {other:?}"),
+    };
+
+    let sampler_resp = backend
+        .execute(
+            base_request(OP_DIFFUSION_SAMPLE)
+                .with_input("model", Arc::new(make_model()))
+                .with_input("positive", Arc::new(RuntimeValue::Conditioning(positive)))
+                .with_input("negative", Arc::new(RuntimeValue::Conditioning(negative)))
+                .with_input("latent", Arc::new(RuntimeValue::Latent(input_latent)))
+                .with_param("seed", ParamValue::Seed(123456789))
+                .with_param("steps", ParamValue::Integer(20))
+                .with_param("cfg", ParamValue::Float(7.0))
+                .with_param("sampler", ParamValue::Select("euler".to_string()))
+                .with_param("scheduler", ParamValue::Select("normal".to_string()))
+                .with_param("denoise", ParamValue::Float(1.0)),
+        )
+        .await
+        .unwrap();
+    let sampled = match sampler_resp.outputs()[0].value().as_ref() {
+        RuntimeValue::Latent(l) => l.clone(),
+        other => panic!("expected latent, got {other:?}"),
+    };
+    assert_eq!(sampled.width(), 64);
+    assert_eq!(sampled.height(), 64);
+    assert_eq!(sampled.batch(), 1);
+    assert_eq!(sampled.channels(), 4);
+    assert_eq!(
+        sampled.payload().dtype(),
+        reimagine_core::model::TensorDType::F32
+    );
+    assert_eq!(sampled.payload().backend().as_str(), "candle");
+    assert_eq!(sampled.payload().device_label(), "cpu");
+    // SDXL latent shape: [batch, 4, height/8, width/8].
+    assert_eq!(sampled.payload().shape().dims(), &[1, 4, 8, 8]);
+
+    // The sampled latent must be present in the store under the new
+    // payload key, and the store must keep the run-scoped cleanup
+    // invariant.
+    let sampled_payload = backend
+        .store()
+        .get_latent(sampled.payload().payload_key())
+        .expect("sampled latent present");
+    assert_eq!(sampled_payload.dims(), vec![1, 4, 8, 8]);
+    assert_eq!(sampled_payload.dtype(), candle_core::DType::F32);
+    assert_eq!(
+        backend.store().run_payload_count(&RunId::new("run-test")),
+        4,
+        "two conditioning payloads + input latent + sampled latent"
+    );
+}
+
+#[tokio::test]
+async fn diffusion_sample_is_deterministic_for_same_seed_and_inputs() {
+    let backend = backend();
+    let (model, _root) = sdxl_model();
+    backend
+        .execute(base_request(OP_MODEL_LOAD_BUNDLE).with_model(model))
+        .await
+        .unwrap();
+
+    let bundle = backend
+        .model_cache()
+        .get_bundle(&ModelId::new("sdxl-base-1.0"))
+        .expect("cached bundle");
+    let (model_payload_key, clip_payload_key) = match bundle.as_ref() {
+        LoadedModelBundle::StableDiffusionSdxl(sdxl) => (
+            sdxl.model_payload_key.clone(),
+            sdxl.clip_payload_key.clone(),
+        ),
+    };
+    let make_model = || {
+        RuntimeValue::Model(reimagine_runtime::RuntimeModelHandle::new(
+            ModelId::new("sdxl-base-1.0"),
+            ModelRole::CheckpointBundle,
+            reimagine_runtime::BackendKind::from("candle"),
+            model_payload_key.clone(),
+        ))
+    };
+    let make_clip = || {
+        RuntimeValue::Clip(reimagine_runtime::RuntimeClipHandle::new(
+            ModelId::new("sdxl-base-1.0"),
+            reimagine_runtime::BackendKind::from("candle"),
+            clip_payload_key.clone(),
+        ))
+    };
+    let make_conditioning = || async {
+        let response = backend
+            .execute(
+                base_request(OP_TEXT_ENCODE)
+                    .with_input("clip", Arc::new(make_clip()))
+                    .with_input(
+                        "text",
+                        Arc::new(RuntimeValue::Param(
+                            reimagine_core::model::ParamValue::String(
+                                "deterministic test prompt".to_string(),
+                            ),
+                        )),
+                    ),
+            )
+            .await
+            .unwrap();
+        match response.outputs()[0].value().as_ref() {
+            RuntimeValue::Conditioning(c) => c.clone(),
+            other => panic!("expected conditioning, got {other:?}"),
+        }
+    };
+    let positive = make_conditioning().await;
+    let negative = make_conditioning().await;
+
+    let make_latent = || async {
+        let response = backend
+            .execute(
+                base_request(OP_LATENT_CREATE_EMPTY)
+                    .with_param("width", ParamValue::Integer(32))
+                    .with_param("height", ParamValue::Integer(32))
+                    .with_param("batch_size", ParamValue::Integer(1)),
+            )
+            .await
+            .unwrap();
+        match response.outputs()[0].value().as_ref() {
+            RuntimeValue::Latent(l) => l.clone(),
+            other => panic!("expected latent, got {other:?}"),
+        }
+    };
+    let latent_a = make_latent().await;
+    let latent_b = make_latent().await;
+
+    let sample_request = |latent: reimagine_runtime::RuntimeLatent, node: &str| {
+        InferenceRequest::new(
+            OP_DIFFUSION_SAMPLE.into(),
+            RunId::new("run-test"),
+            WorkflowId::new("wf-test"),
+            WorkflowVersion::new(1),
+            NodeId::new(node),
+        )
+        .with_input("model", Arc::new(make_model()))
+        .with_input(
+            "positive",
+            Arc::new(RuntimeValue::Conditioning(positive.clone())),
+        )
+        .with_input(
+            "negative",
+            Arc::new(RuntimeValue::Conditioning(negative.clone())),
+        )
+        .with_input("latent", Arc::new(RuntimeValue::Latent(latent)))
+        .with_param("seed", ParamValue::Seed(42))
+        .with_param("steps", ParamValue::Integer(15))
+        .with_param("cfg", ParamValue::Float(6.5))
+        .with_param("sampler", ParamValue::Select("euler".to_string()))
+        .with_param("scheduler", ParamValue::Select("normal".to_string()))
+        .with_param("denoise", ParamValue::Float(0.8))
+    };
+
+    let resp_a = backend
+        .execute(sample_request(latent_a, "node-sample-a"))
+        .await
+        .unwrap();
+    let resp_b = backend
+        .execute(sample_request(latent_b, "node-sample-b"))
+        .await
+        .unwrap();
+
+    let key_a = match resp_a.outputs()[0].value().as_ref() {
+        RuntimeValue::Latent(l) => l.payload().payload_key().clone(),
+        other => panic!("expected latent, got {other:?}"),
+    };
+    let key_b = match resp_b.outputs()[0].value().as_ref() {
+        RuntimeValue::Latent(l) => l.payload().payload_key().clone(),
+        other => panic!("expected latent, got {other:?}"),
+    };
+    let tensor_a = backend.store().get_latent(&key_a).unwrap().into_tensor();
+    let tensor_b = backend.store().get_latent(&key_b).unwrap().into_tensor();
+    let data_a = tensor_a.flatten_all().unwrap().to_vec1::<f32>().unwrap();
+    let data_b = tensor_b.flatten_all().unwrap().to_vec1::<f32>().unwrap();
+    assert_eq!(
+        data_a, data_b,
+        "sampling must be deterministic for the same seed"
+    );
+}
+
+#[tokio::test]
+async fn diffusion_sample_rejects_missing_inputs() {
+    let backend = backend();
+    let request = base_request(OP_DIFFUSION_SAMPLE);
+    let err = backend.execute(request).await.unwrap_err();
+    let msg = match err {
+        InferenceError::BackendExecutionFailed { message } => message,
+        other => panic!("expected BackendExecutionFailed, got {other:?}"),
+    };
+    assert!(msg.contains("model"), "msg: {msg}");
+}
+
+#[tokio::test]
+async fn diffusion_sample_rejects_wrong_backend_latent() {
+    let backend = backend();
+    let (model, _root) = sdxl_model();
+    backend
+        .execute(base_request(OP_MODEL_LOAD_BUNDLE).with_model(model.clone()))
+        .await
+        .unwrap();
+    let bundle = backend
+        .model_cache()
+        .get_bundle(&ModelId::new("sdxl-base-1.0"))
+        .expect("cached bundle");
+    let (model_payload_key, clip_payload_key) = match bundle.as_ref() {
+        LoadedModelBundle::StableDiffusionSdxl(sdxl) => (
+            sdxl.model_payload_key.clone(),
+            sdxl.clip_payload_key.clone(),
+        ),
+    };
+    let model_value = RuntimeValue::Model(reimagine_runtime::RuntimeModelHandle::new(
+        ModelId::new("sdxl-base-1.0"),
+        ModelRole::CheckpointBundle,
+        reimagine_runtime::BackendKind::from("candle"),
+        model_payload_key,
+    ));
+    let conditioning_value =
+        RuntimeValue::Conditioning(reimagine_runtime::RuntimeConditioning::new(
+            reimagine_runtime::BackendTensorHandle::new(
+                reimagine_runtime::BackendKind::from("candle"),
+                clip_payload_key,
+                reimagine_core::model::TensorDType::F32,
+                reimagine_core::model::TensorShape::new(vec![1, 77, 2048]),
+                "cpu",
+            ),
+            reimagine_runtime::ConditioningMetadata::new(64, 64),
+        ));
+    let wrong_backend_latent = RuntimeValue::Latent(reimagine_runtime::RuntimeLatent::new(
+        reimagine_runtime::BackendTensorHandle::new(
+            reimagine_runtime::BackendKind::from("other-backend"),
+            reimagine_runtime::BackendPayloadKey::new("latent:other"),
+            reimagine_core::model::TensorDType::F32,
+            reimagine_core::model::TensorShape::new(vec![1, 4, 8, 8]),
+            "cpu",
+        ),
+        64,
+        64,
+        1,
+        4,
+    ));
+
     let request = base_request(OP_DIFFUSION_SAMPLE)
-        .with_input("model", Arc::new(RuntimeValue::Null))
-        .with_input("positive", Arc::new(RuntimeValue::Null))
+        .with_input("model", Arc::new(model_value))
+        .with_input("positive", Arc::new(conditioning_value.clone()))
+        .with_input("negative", Arc::new(conditioning_value))
+        .with_input("latent", Arc::new(wrong_backend_latent))
+        .with_param("seed", ParamValue::Seed(1))
+        .with_param("steps", ParamValue::Integer(10))
+        .with_param("cfg", ParamValue::Float(7.0))
+        .with_param("sampler", ParamValue::Select("euler".to_string()))
+        .with_param("scheduler", ParamValue::Select("normal".to_string()))
+        .with_param("denoise", ParamValue::Float(1.0));
+    let err = backend.execute(request).await.unwrap_err();
+    let msg = match err {
+        InferenceError::BackendExecutionFailed { message } => message,
+        other => panic!("expected BackendExecutionFailed, got {other:?}"),
+    };
+    assert!(msg.contains("other-backend"), "msg: {msg}");
+    assert!(msg.contains("candle"), "msg: {msg}");
+}
+
+#[tokio::test]
+async fn diffusion_sample_rejects_wrong_backend_pooled_conditioning() {
+    let backend = backend();
+    let (model, _root) = sdxl_model();
+    backend
+        .execute(base_request(OP_MODEL_LOAD_BUNDLE).with_model(model))
+        .await
+        .unwrap();
+    let bundle = backend
+        .model_cache()
+        .get_bundle(&ModelId::new("sdxl-base-1.0"))
+        .expect("cached bundle");
+    let model_payload_key = match bundle.as_ref() {
+        LoadedModelBundle::StableDiffusionSdxl(sdxl) => sdxl.model_payload_key.clone(),
+    };
+    let model_value = RuntimeValue::Model(reimagine_runtime::RuntimeModelHandle::new(
+        ModelId::new("sdxl-base-1.0"),
+        ModelRole::CheckpointBundle,
+        reimagine_runtime::BackendKind::from("candle"),
+        model_payload_key,
+    ));
+    let text_handle = reimagine_runtime::BackendTensorHandle::new(
+        reimagine_runtime::BackendKind::from("candle"),
+        reimagine_runtime::BackendPayloadKey::new("conditioning:test"),
+        reimagine_core::model::TensorDType::F32,
+        reimagine_core::model::TensorShape::new(vec![1, 77, 2048]),
+        "cpu",
+    );
+    let pooled_handle = reimagine_runtime::BackendTensorHandle::new(
+        reimagine_runtime::BackendKind::from("other-backend"),
+        reimagine_runtime::BackendPayloadKey::new("conditioning:test"),
+        reimagine_core::model::TensorDType::F32,
+        reimagine_core::model::TensorShape::new(vec![1, 1280]),
+        "cpu",
+    );
+    let conditioning = RuntimeValue::Conditioning(
+        reimagine_runtime::RuntimeConditioning::new(
+            text_handle,
+            reimagine_runtime::ConditioningMetadata::new(64, 64),
+        )
+        .with_pooled_embedding(pooled_handle),
+    );
+
+    let request = base_request(OP_DIFFUSION_SAMPLE)
+        .with_input("model", Arc::new(model_value))
+        .with_input("positive", Arc::new(conditioning))
         .with_input("negative", Arc::new(RuntimeValue::Null))
         .with_input("latent", Arc::new(RuntimeValue::Null));
     let err = backend.execute(request).await.unwrap_err();
-    assert_backend_not_implemented(err, OP_DIFFUSION_SAMPLE);
+    let msg = match err {
+        InferenceError::BackendExecutionFailed { message } => message,
+        other => panic!("expected BackendExecutionFailed, got {other:?}"),
+    };
+    assert!(msg.contains("pooled conditioning"), "msg: {msg}");
+    assert!(msg.contains("other-backend"), "msg: {msg}");
+}
+
+#[tokio::test]
+async fn diffusion_sample_rejects_mismatched_pooled_conditioning_payload() {
+    let backend = backend();
+    let (model, _root) = sdxl_model();
+    backend
+        .execute(base_request(OP_MODEL_LOAD_BUNDLE).with_model(model))
+        .await
+        .unwrap();
+    let bundle = backend
+        .model_cache()
+        .get_bundle(&ModelId::new("sdxl-base-1.0"))
+        .expect("cached bundle");
+    let model_payload_key = match bundle.as_ref() {
+        LoadedModelBundle::StableDiffusionSdxl(sdxl) => sdxl.model_payload_key.clone(),
+    };
+    let model_value = RuntimeValue::Model(reimagine_runtime::RuntimeModelHandle::new(
+        ModelId::new("sdxl-base-1.0"),
+        ModelRole::CheckpointBundle,
+        reimagine_runtime::BackendKind::from("candle"),
+        model_payload_key,
+    ));
+    let text_handle = reimagine_runtime::BackendTensorHandle::new(
+        reimagine_runtime::BackendKind::from("candle"),
+        reimagine_runtime::BackendPayloadKey::new("conditioning:text"),
+        reimagine_core::model::TensorDType::F32,
+        reimagine_core::model::TensorShape::new(vec![1, 77, 2048]),
+        "cpu",
+    );
+    let pooled_handle = reimagine_runtime::BackendTensorHandle::new(
+        reimagine_runtime::BackendKind::from("candle"),
+        reimagine_runtime::BackendPayloadKey::new("conditioning:pooled"),
+        reimagine_core::model::TensorDType::F32,
+        reimagine_core::model::TensorShape::new(vec![1, 1280]),
+        "cpu",
+    );
+    let conditioning = RuntimeValue::Conditioning(
+        reimagine_runtime::RuntimeConditioning::new(
+            text_handle,
+            reimagine_runtime::ConditioningMetadata::new(64, 64),
+        )
+        .with_pooled_embedding(pooled_handle),
+    );
+
+    let request = base_request(OP_DIFFUSION_SAMPLE)
+        .with_input("model", Arc::new(model_value))
+        .with_input("positive", Arc::new(conditioning))
+        .with_input("negative", Arc::new(RuntimeValue::Null))
+        .with_input("latent", Arc::new(RuntimeValue::Null));
+    let err = backend.execute(request).await.unwrap_err();
+    let msg = match err {
+        InferenceError::BackendExecutionFailed { message } => message,
+        other => panic!("expected BackendExecutionFailed, got {other:?}"),
+    };
+    assert!(msg.contains("conditioning:pooled"), "msg: {msg}");
+    assert!(msg.contains("conditioning:text"), "msg: {msg}");
+}
+
+#[tokio::test]
+async fn diffusion_sample_rejects_unsupported_sampler() {
+    let backend = backend();
+    let (model, _root) = sdxl_model();
+    backend
+        .execute(base_request(OP_MODEL_LOAD_BUNDLE).with_model(model))
+        .await
+        .unwrap();
+
+    let bundle = backend
+        .model_cache()
+        .get_bundle(&ModelId::new("sdxl-base-1.0"))
+        .expect("cached bundle");
+    let (model_payload_key, clip_payload_key) = match bundle.as_ref() {
+        LoadedModelBundle::StableDiffusionSdxl(sdxl) => (
+            sdxl.model_payload_key.clone(),
+            sdxl.clip_payload_key.clone(),
+        ),
+    };
+    let model_value = RuntimeValue::Model(reimagine_runtime::RuntimeModelHandle::new(
+        ModelId::new("sdxl-base-1.0"),
+        ModelRole::CheckpointBundle,
+        reimagine_runtime::BackendKind::from("candle"),
+        model_payload_key,
+    ));
+    let cond_value = RuntimeValue::Conditioning(reimagine_runtime::RuntimeConditioning::new(
+        reimagine_runtime::BackendTensorHandle::new(
+            reimagine_runtime::BackendKind::from("candle"),
+            clip_payload_key,
+            reimagine_core::model::TensorDType::F32,
+            reimagine_core::model::TensorShape::new(vec![1, 77, 2048]),
+            "cpu",
+        ),
+        reimagine_runtime::ConditioningMetadata::new(64, 64),
+    ));
+    let latent_value = RuntimeValue::Latent(reimagine_runtime::RuntimeLatent::new(
+        reimagine_runtime::BackendTensorHandle::new(
+            reimagine_runtime::BackendKind::from("candle"),
+            reimagine_runtime::BackendPayloadKey::new("latent:missing"),
+            reimagine_core::model::TensorDType::F32,
+            reimagine_core::model::TensorShape::new(vec![1, 4, 8, 8]),
+            "cpu",
+        ),
+        64,
+        64,
+        1,
+        4,
+    ));
+
+    let request = base_request(OP_DIFFUSION_SAMPLE)
+        .with_input("model", Arc::new(model_value))
+        .with_input("positive", Arc::new(cond_value.clone()))
+        .with_input("negative", Arc::new(cond_value))
+        .with_input("latent", Arc::new(latent_value))
+        .with_param("seed", ParamValue::Seed(1))
+        .with_param("steps", ParamValue::Integer(10))
+        .with_param("cfg", ParamValue::Float(7.0))
+        .with_param("sampler", ParamValue::Select("dpmpp_2m".to_string()))
+        .with_param("scheduler", ParamValue::Select("normal".to_string()))
+        .with_param("denoise", ParamValue::Float(1.0));
+    let err = backend.execute(request).await.unwrap_err();
+    let msg = match err {
+        InferenceError::BackendExecutionFailed { message } => message,
+        other => panic!("expected BackendExecutionFailed, got {other:?}"),
+    };
+    assert!(msg.contains("dpmpp_2m"), "msg: {msg}");
+    assert!(msg.contains("V1"), "msg: {msg}");
+}
+
+#[tokio::test]
+async fn diffusion_sample_rejects_missing_latent_payload() {
+    let backend = backend();
+    let (model, _root) = sdxl_model();
+    backend
+        .execute(base_request(OP_MODEL_LOAD_BUNDLE).with_model(model))
+        .await
+        .unwrap();
+
+    let bundle = backend
+        .model_cache()
+        .get_bundle(&ModelId::new("sdxl-base-1.0"))
+        .expect("cached bundle");
+    let (model_payload_key, clip_payload_key) = match bundle.as_ref() {
+        LoadedModelBundle::StableDiffusionSdxl(sdxl) => (
+            sdxl.model_payload_key.clone(),
+            sdxl.clip_payload_key.clone(),
+        ),
+    };
+    let model_value = RuntimeValue::Model(reimagine_runtime::RuntimeModelHandle::new(
+        ModelId::new("sdxl-base-1.0"),
+        ModelRole::CheckpointBundle,
+        reimagine_runtime::BackendKind::from("candle"),
+        model_payload_key,
+    ));
+    let clip_handle = RuntimeValue::Clip(reimagine_runtime::RuntimeClipHandle::new(
+        ModelId::new("sdxl-base-1.0"),
+        reimagine_runtime::BackendKind::from("candle"),
+        clip_payload_key,
+    ));
+
+    let positive = encode_conditioning(&backend, &clip_handle, "node-positive-cond", "test").await;
+    let negative = encode_conditioning(&backend, &clip_handle, "node-negative-cond", "test").await;
+
+    // Latent handle points to a key that was never registered.
+    let latent_value = RuntimeValue::Latent(reimagine_runtime::RuntimeLatent::new(
+        reimagine_runtime::BackendTensorHandle::new(
+            reimagine_runtime::BackendKind::from("candle"),
+            reimagine_runtime::BackendPayloadKey::new("latent:not-in-store"),
+            reimagine_core::model::TensorDType::F32,
+            reimagine_core::model::TensorShape::new(vec![1, 4, 8, 8]),
+            "cpu",
+        ),
+        64,
+        64,
+        1,
+        4,
+    ));
+
+    let request = base_request(OP_DIFFUSION_SAMPLE)
+        .with_input("model", Arc::new(model_value))
+        .with_input("positive", Arc::new(RuntimeValue::Conditioning(positive)))
+        .with_input("negative", Arc::new(RuntimeValue::Conditioning(negative)))
+        .with_input("latent", Arc::new(latent_value))
+        .with_param("seed", ParamValue::Seed(1))
+        .with_param("steps", ParamValue::Integer(10))
+        .with_param("cfg", ParamValue::Float(7.0))
+        .with_param("sampler", ParamValue::Select("euler".to_string()))
+        .with_param("scheduler", ParamValue::Select("normal".to_string()))
+        .with_param("denoise", ParamValue::Float(1.0));
+    let err = backend.execute(request).await.unwrap_err();
+    let msg = match err {
+        InferenceError::BackendExecutionFailed { message } => message,
+        other => panic!("expected BackendExecutionFailed, got {other:?}"),
+    };
+    assert!(msg.contains("latent:not-in-store"), "msg: {msg}");
+}
+
+async fn encode_conditioning(
+    backend: &CandleBackend,
+    clip: &RuntimeValue,
+    node: &str,
+    text: &str,
+) -> reimagine_runtime::RuntimeConditioning {
+    let resp = backend
+        .execute(
+            InferenceRequest::new(
+                OP_TEXT_ENCODE.into(),
+                RunId::new("run-test"),
+                WorkflowId::new("wf-test"),
+                WorkflowVersion::new(1),
+                NodeId::new(node),
+            )
+            .with_input("clip", Arc::new(clone_runtime_value(clip)))
+            .with_input(
+                "text",
+                Arc::new(RuntimeValue::Param(
+                    reimagine_core::model::ParamValue::String(text.to_string()),
+                )),
+            ),
+        )
+        .await
+        .unwrap();
+    match resp.outputs()[0].value().as_ref() {
+        RuntimeValue::Conditioning(c) => c.clone(),
+        other => panic!("expected conditioning, got {other:?}"),
+    }
+}
+
+fn clone_runtime_value(value: &RuntimeValue) -> RuntimeValue {
+    match value {
+        RuntimeValue::Clip(handle) => {
+            RuntimeValue::Clip(reimagine_runtime::RuntimeClipHandle::new(
+                handle.model_id().clone(),
+                handle.backend().clone(),
+                handle.payload_key().clone(),
+            ))
+        }
+        other => other.clone(),
+    }
+}
+
+#[tokio::test]
+async fn diffusion_sample_cleans_up_run_scoped_payload() {
+    let backend = backend();
+    let (model, _root) = sdxl_model();
+    backend
+        .execute(base_request(OP_MODEL_LOAD_BUNDLE).with_model(model))
+        .await
+        .unwrap();
+
+    let bundle = backend
+        .model_cache()
+        .get_bundle(&ModelId::new("sdxl-base-1.0"))
+        .expect("cached bundle");
+    let (model_payload_key, clip_payload_key) = match bundle.as_ref() {
+        LoadedModelBundle::StableDiffusionSdxl(sdxl) => (
+            sdxl.model_payload_key.clone(),
+            sdxl.clip_payload_key.clone(),
+        ),
+    };
+    let make_model = || {
+        RuntimeValue::Model(reimagine_runtime::RuntimeModelHandle::new(
+            ModelId::new("sdxl-base-1.0"),
+            ModelRole::CheckpointBundle,
+            reimagine_runtime::BackendKind::from("candle"),
+            model_payload_key.clone(),
+        ))
+    };
+    let make_clip = || {
+        RuntimeValue::Clip(reimagine_runtime::RuntimeClipHandle::new(
+            ModelId::new("sdxl-base-1.0"),
+            reimagine_runtime::BackendKind::from("candle"),
+            clip_payload_key.clone(),
+        ))
+    };
+
+    let run_id = RunId::new("run-diffusion-cleanup");
+
+    let positive = {
+        let resp = backend
+            .execute(
+                InferenceRequest::new(
+                    OP_TEXT_ENCODE.into(),
+                    run_id.clone(),
+                    WorkflowId::new("wf-test"),
+                    WorkflowVersion::new(1),
+                    NodeId::new("node-positive-encode"),
+                )
+                .with_input("clip", Arc::new(make_clip()))
+                .with_input(
+                    "text",
+                    Arc::new(RuntimeValue::Param(
+                        reimagine_core::model::ParamValue::String("a cat".to_string()),
+                    )),
+                ),
+            )
+            .await
+            .unwrap();
+        match resp.outputs()[0].value().as_ref() {
+            RuntimeValue::Conditioning(c) => c.clone(),
+            other => panic!("expected conditioning, got {other:?}"),
+        }
+    };
+    let negative = {
+        let resp = backend
+            .execute(
+                InferenceRequest::new(
+                    OP_TEXT_ENCODE.into(),
+                    run_id.clone(),
+                    WorkflowId::new("wf-test"),
+                    WorkflowVersion::new(1),
+                    NodeId::new("node-negative-encode"),
+                )
+                .with_input("clip", Arc::new(make_clip()))
+                .with_input(
+                    "text",
+                    Arc::new(RuntimeValue::Param(
+                        reimagine_core::model::ParamValue::String("blurry".to_string()),
+                    )),
+                ),
+            )
+            .await
+            .unwrap();
+        match resp.outputs()[0].value().as_ref() {
+            RuntimeValue::Conditioning(c) => c.clone(),
+            other => panic!("expected conditioning, got {other:?}"),
+        }
+    };
+    let latent = {
+        let resp = backend
+            .execute(
+                InferenceRequest::new(
+                    OP_LATENT_CREATE_EMPTY.into(),
+                    run_id.clone(),
+                    WorkflowId::new("wf-test"),
+                    WorkflowVersion::new(1),
+                    NodeId::new("node-latent"),
+                )
+                .with_param("width", ParamValue::Integer(32))
+                .with_param("height", ParamValue::Integer(32))
+                .with_param("batch_size", ParamValue::Integer(1)),
+            )
+            .await
+            .unwrap();
+        match resp.outputs()[0].value().as_ref() {
+            RuntimeValue::Latent(l) => l.clone(),
+            other => panic!("expected latent, got {other:?}"),
+        }
+    };
+
+    backend
+        .execute(
+            InferenceRequest::new(
+                OP_DIFFUSION_SAMPLE.into(),
+                run_id.clone(),
+                WorkflowId::new("wf-test"),
+                WorkflowVersion::new(1),
+                NodeId::new("node-sampler"),
+            )
+            .with_input("model", Arc::new(make_model()))
+            .with_input("positive", Arc::new(RuntimeValue::Conditioning(positive)))
+            .with_input("negative", Arc::new(RuntimeValue::Conditioning(negative)))
+            .with_input("latent", Arc::new(RuntimeValue::Latent(latent)))
+            .with_param("seed", ParamValue::Seed(1))
+            .with_param("steps", ParamValue::Integer(10))
+            .with_param("cfg", ParamValue::Float(7.0))
+            .with_param("sampler", ParamValue::Select("euler".to_string()))
+            .with_param("scheduler", ParamValue::Select("normal".to_string()))
+            .with_param("denoise", ParamValue::Float(1.0)),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(
+        backend.store().run_payload_count(&run_id),
+        4,
+        "two conditionings + input latent + sampled latent"
+    );
+
+    let resource = backend.resource_backend();
+    resource.cleanup_run(&run_id).await;
+    assert_eq!(backend.store().run_payload_count(&run_id), 0);
 }
 
 #[tokio::test]

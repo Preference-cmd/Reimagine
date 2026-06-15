@@ -593,7 +593,8 @@ async fn candle_sdxl_workflow_run_returns_precise_backend_failure() {
     assert_eq!(response.status(), StatusCode::OK);
 
     // Run with an explicit target that forces the full pipeline up to
-    // save_image. The first heavy unimplemented kernel is diffusion.sample.
+    // save_image. After diffusion.sample lands, the next heavy
+    // unimplemented kernel is latent.decode.
     let run_body = serde_json::json!({
         "target_selection": {
             "kind": "explicit",
@@ -638,10 +639,10 @@ async fn candle_sdxl_workflow_run_returns_precise_backend_failure() {
                 .map(|d| d.message().to_string())
                 .collect();
             assert!(
-                messages.iter().any(|m| {
-                    m.contains("diffusion.sample") || m.contains("does not implement")
-                }),
-                "expected diffusion.sample / backend-not-implemented diagnostic, got {messages:?}"
+                messages
+                    .iter()
+                    .any(|m| { m.contains("latent.decode") || m.contains("does not implement") }),
+                "expected latent.decode / backend-not-implemented diagnostic, got {messages:?}"
             );
             break;
         }

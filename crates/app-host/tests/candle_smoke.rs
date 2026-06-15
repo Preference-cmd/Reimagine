@@ -5,12 +5,13 @@
 //! matching `sdxl-base-1.0` manifest entry, and runs the workflow
 //! through a real `WorkspaceHost` constructed with the Candle backend.
 //!
-//! The heavy Candle kernels are not fully implemented yet, so the run is
-//! expected to fail at `builtin.ksampler` (`diffusion.sample`) with
+//! The heavy Candle kernels are not fully implemented yet, so the run
+//! is expected to fail at `builtin.vae_decode` (`latent.decode`) with
 //! a precise backend-not-implemented diagnostic. The test proves that
-//! `model.load_bundle`, `latent.create_empty`, and `text.encode` succeed
-//! all the way through the runtime executor registry and that the failure
-//! is surfaced cleanly.
+//! `model.load_bundle`, `latent.create_empty`, `text.encode`, and
+//! `diffusion.sample` all succeed through the runtime executor
+//! registry and that the failure is surfaced cleanly at the next
+//! unimplemented heavy operation.
 
 use std::path::PathBuf;
 use std::sync::Arc;
@@ -82,7 +83,7 @@ async fn run_to_completion(host: &WorkspaceHost, run_id: &reimagine_core::model:
 }
 
 #[tokio::test]
-async fn candle_backend_sdxl_workflow_fails_at_diffusion_sample() {
+async fn candle_backend_sdxl_workflow_fails_at_latent_decode() {
     let base = unique_temp_dir("app-host");
     let paths = AppPaths::new(&base);
     tokio::fs::create_dir_all(paths.models_dir()).await.unwrap();
@@ -139,7 +140,7 @@ async fn candle_backend_sdxl_workflow_fails_at_diffusion_sample() {
     assert!(
         messages
             .iter()
-            .any(|m| m.contains("diffusion.sample") || m.contains("does not implement")),
-        "expected failure to name diffusion.sample or backend-not-implemented, got {messages:?}"
+            .any(|m| m.contains("latent.decode") || m.contains("does not implement")),
+        "expected failure to name latent.decode or backend-not-implemented, got {messages:?}"
     );
 }
