@@ -165,6 +165,25 @@ app-host bootstrap
   -> hand Arc<WorkspaceHost> to src-tauri or axum-host
 ```
 
+Workspace bootstrap has two construction paths:
+
+```text
+WorkspaceHost::with_defaults(...)
+  test/backward-compatible helper
+  may panic only for programmer errors
+
+WorkspaceHost::try_with_defaults(...).await
+  production bootstrap path
+  loads config through ConfigHandle<T>
+  returns app-host bootstrap error/report on invalid config
+```
+
+Missing optional config documents may still load module defaults through
+`ConfigHandle<T>`. Invalid JSON, unsupported config schema, or invalid enum
+values must not be silently replaced by defaults. App-host should preserve the
+config key/path and diagnostic information so Tauri, Axum, and future UI shells
+can surface the bootstrap problem. Runtime must not read config directly.
+
 ## Service Facades
 
 `WorkflowService` owns app-level workflow session management:

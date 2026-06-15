@@ -14,7 +14,7 @@ use reimagine_runtime::{BoxedRunEventSink, NodeExecutorRegistry, RuntimeService,
 
 use crate::services::WorkspaceServices;
 use crate::tools::register_app_tools;
-use crate::{AgentService, BackendSelection, ModelService, WorkflowService};
+use crate::{AgentService, AppHostError, BackendSelection, ModelService, WorkflowService};
 
 #[derive(Debug)]
 pub struct WorkspaceHost {
@@ -78,6 +78,21 @@ impl WorkspaceHost {
             BackendSelection::Candle,
             Arc::new(VecRunEventSink::new()),
         )
+    }
+
+    pub async fn try_with_defaults(
+        workspace_scope: WorkspaceScope,
+        base_path: impl Into<std::path::PathBuf>,
+    ) -> Result<Self, AppHostError> {
+        let base_path = base_path.into();
+        let config = AppConfig::new(AppPaths::new(&base_path));
+        let backend_config = load_backend_config_result(&config).await?;
+        Ok(Self::with_backend_config_inner(
+            workspace_scope,
+            config,
+            backend_config,
+            Arc::new(VecRunEventSink::new()),
+        ))
     }
 
     pub fn with_defaults_and_event_sink(
@@ -192,6 +207,14 @@ fn load_backend_config(config: &AppConfig) -> InferenceBackendConfig {
         Ok(json) => serde_json::from_str(&json).unwrap_or_default(),
         Err(_) => InferenceBackendConfig::default(),
     }
+}
+
+async fn load_backend_config_result(
+    config: &AppConfig,
+) -> reimagine_config::ConfigResult<InferenceBackendConfig> {
+    let handle = config.config::<InferenceBackendConfig>()?;
+    let (backend_config, _) = handle.load().await?;
+    Ok(backend_config)
 }
 
 fn build_candle_backend(
@@ -340,6 +363,103 @@ mod tests {
             InferenceBackendKind::Candle
         );
         assert_eq!(workspace.backend_config().candle_device, "cpu");
+        let _ = fs::remove_dir_all(&base);
+    }
+
+    #[tokio::test]
+    async fn invalid_config_json_returns_error() {
+        let base = temp_dir("invalid-json");
+        let config_dir = base.join("config");
+        fs::create_dir_all(&config_dir).unwrap();
+        fs::write(
+            config_dir.join("inference_backend.json"),
+            r#"{"backend": "nope"}"#,
+        )
+        .unwrap();
+
+        let config = AppConfig::new(reimagine_config::AppPaths::new(&base));
+        let result = load_backend_config_result(&config).await;
+        assert!(result.is_err(), "invalid backend should return error");
+        let err = result.unwrap_err();
+        let msg = err.to_string();
+        assert!(
+            msg.contains("inference_backend.json") || msg.contains("not valid JSON"),
+            "error should include config path, got: {msg}"
+        );
+        let _ = fs::remove_dir_all(&base);
+    }
+
+    #[tokio::test]
+    async fn malformed_json_returns_error() {
+        let base = temp_dir("malformed-json");
+        let config_dir = base.join("config");
+        fs::create_dir_all(&config_dir).unwrap();
+        fs::write(config_dir.join("inference_backend.json"), "not json at all").unwrap();
+
+        let result =
+            load_backend_config_result(&AppConfig::new(reimagine_config::AppPaths::new(&base)))
+                .await;
+        assert!(result.is_err(), "malformed json should return error");
+        let _ = fs::remove_dir_all(&base);
+    }
+
+    #[tokio::test]
+    async fn try_with_defaults_missing_config_returns_ok_default() {
+        let base = temp_dir("try-missing");
+        let workspace =
+            WorkspaceHost::try_with_defaults(WorkspaceScope::new("test-try-missing"), &base)
+                .await
+                .expect("missing config should succeed with defaults");
+        assert_eq!(
+            workspace.backend_config().backend,
+            InferenceBackendKind::Candle
+        );
+        assert_eq!(workspace.backend_config().candle_device, "cpu");
+        let _ = fs::remove_dir_all(&base);
+    }
+
+    #[tokio::test]
+    async fn try_with_defaults_valid_config_returns_ok() {
+        let base = temp_dir("try-valid");
+        let config_dir = base.join("config");
+        fs::create_dir_all(&config_dir).unwrap();
+        fs::write(
+            config_dir.join("inference_backend.json"),
+            r#"{"backend": "candle", "candle_device": "cpu"}"#,
+        )
+        .unwrap();
+
+        let workspace =
+            WorkspaceHost::try_with_defaults(WorkspaceScope::new("test-try-valid"), &base)
+                .await
+                .expect("valid config should succeed");
+        assert_eq!(
+            workspace.backend_config().backend,
+            InferenceBackendKind::Candle
+        );
+        let _ = fs::remove_dir_all(&base);
+    }
+
+    #[tokio::test]
+    async fn try_with_defaults_invalid_json_returns_error() {
+        let base = temp_dir("try-invalid");
+        let config_dir = base.join("config");
+        fs::create_dir_all(&config_dir).unwrap();
+        fs::write(
+            config_dir.join("inference_backend.json"),
+            r#"{"backend": "unsupported_backend"}"#,
+        )
+        .unwrap();
+
+        let err = WorkspaceHost::try_with_defaults(WorkspaceScope::new("test-try-invalid"), &base)
+            .await
+            .expect_err("invalid config should fail");
+
+        let msg = err.to_string();
+        assert!(
+            msg.contains("inference_backend.json") || msg.contains("bootstrap"),
+            "error should mention config file or bootstrap, got: {msg}"
+        );
         let _ = fs::remove_dir_all(&base);
     }
 }
