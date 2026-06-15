@@ -1,3 +1,4 @@
+use reimagine_config::ConfigError;
 use reimagine_core::model::{RunId, WorkflowId, WorkflowVersion};
 use reimagine_runtime::RuntimeServiceError;
 
@@ -36,6 +37,7 @@ pub enum AppHostError {
         path: std::path::PathBuf,
         message: String,
     },
+    BootstrapConfig(ConfigError),
     Runtime(RuntimeServiceError),
     ModelManager(reimagine_model_manager::ModelManagerError),
 }
@@ -75,6 +77,7 @@ impl std::fmt::Display for AppHostError {
             Self::WorkflowJson { path, message } => {
                 write!(f, "workflow json error at `{}`: {message}", path.display())
             }
+            Self::BootstrapConfig(error) => write!(f, "config bootstrap failed: {error}"),
             Self::Runtime(error) => write!(f, "{error}"),
             Self::ModelManager(error) => write!(f, "{error}"),
         }
@@ -86,6 +89,12 @@ impl std::error::Error for AppHostError {}
 impl From<reimagine_model_manager::ModelManagerError> for AppHostError {
     fn from(value: reimagine_model_manager::ModelManagerError) -> Self {
         Self::ModelManager(value)
+    }
+}
+
+impl From<ConfigError> for AppHostError {
+    fn from(error: ConfigError) -> Self {
+        Self::BootstrapConfig(error)
     }
 }
 
