@@ -84,7 +84,7 @@ impl InferenceBackend for CandleBackend {
             OP_MODEL_LOAD_BUNDLE => execute_model_load_bundle(&request, self),
             OP_LATENT_CREATE_EMPTY => execute_latent_create_empty(self, &request),
             OP_TEXT_ENCODE => execute_text_encode(&request, self),
-            OP_DIFFUSION_SAMPLE => execute_diffusion_sample(&request, self.backend_kind()),
+            OP_DIFFUSION_SAMPLE => execute_diffusion_sample(&request, self),
             OP_LATENT_DECODE => execute_latent_decode(&request, self.backend_kind()),
             OP_IMAGE_SAVE => execute_image_save(&request, self.backend_kind()),
             OP_IMAGE_PREVIEW => execute_image_preview(&request, self.backend_kind()),

@@ -7,6 +7,7 @@
 //! real CLIP / UNet / VAE kernels.
 
 mod bundle;
+pub mod diffusion;
 pub mod text;
 pub mod tokenizer;
 
