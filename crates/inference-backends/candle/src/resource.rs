@@ -50,7 +50,10 @@ impl RunResourceBackend for CandleRunResourceBackend {
             "cached_models".to_string(),
             self.model_cache.bundle_count().to_string(),
         );
-        observations.insert("bytes_approximate".to_string(), "0".to_string());
+        observations.insert(
+            "bytes_approximate".to_string(),
+            self.store.latent_byte_size().to_string(),
+        );
         MemorySnapshot { observations }
     }
 }

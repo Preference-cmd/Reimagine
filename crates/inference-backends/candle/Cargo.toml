@@ -12,6 +12,7 @@ serde = { workspace = true }
 reimagine-core = { path = "../../core" }
 reimagine-runtime = { path = "../../runtime" }
 reimagine-inference = { path = "../../inference" }
+candle-core = { workspace = true }
 
 [dev-dependencies]
 tokio = { workspace = true, features = ["rt-multi-thread", "macros"] }
