@@ -10,5 +10,6 @@ mod bundle;
 pub mod diffusion;
 pub mod text;
 pub mod tokenizer;
+pub mod vae;
 
 pub use bundle::LoadedSdxlBundle;

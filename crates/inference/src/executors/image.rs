@@ -129,10 +129,12 @@ impl NodeExecutor for SaveImageExecutor {
                 message: "image.save backend returned no outputs".to_string(),
             })?;
 
-        let reference = reimagine_core::model::ArtifactRef::new(format!(
-            "save-image-{}",
-            context.node_id().as_str()
-        ));
+        let reference = artifact_reference_from_output(first.value()).unwrap_or_else(|| {
+            reimagine_core::model::ArtifactRef::new(format!(
+                "save-image-{}",
+                context.node_id().as_str()
+            ))
+        });
         let _ = context
             .artifacts()
             .record(first.slot_id().clone(), reference, ArtifactEventKind::Saved)
@@ -190,10 +192,12 @@ impl NodeExecutor for PreviewImageExecutor {
                 message: "image.preview backend returned no outputs".to_string(),
             })?;
 
-        let reference = reimagine_core::model::ArtifactRef::new(format!(
-            "preview-image-{}",
-            context.node_id().as_str()
-        ));
+        let reference = artifact_reference_from_output(first.value()).unwrap_or_else(|| {
+            reimagine_core::model::ArtifactRef::new(format!(
+                "preview-image-{}",
+                context.node_id().as_str()
+            ))
+        });
         let _ = context
             .artifacts()
             .record(
@@ -204,5 +208,14 @@ impl NodeExecutor for PreviewImageExecutor {
             .await;
 
         Ok(Vec::new())
+    }
+}
+
+fn artifact_reference_from_output(
+    value: &RuntimeValue,
+) -> Option<reimagine_core::model::ArtifactRef> {
+    match value {
+        RuntimeValue::Artifact(reference) => Some(reference.clone()),
+        _ => None,
     }
 }

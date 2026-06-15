@@ -1,30 +1,546 @@
-use reimagine_inference::request::InferenceRequest;
-use reimagine_inference::response::InferenceResponse;
+//! `image.save` and `image.preview` operations.
+//!
+//! Both operations consume a `RuntimeValue::Image`, encode the image tensor
+//! to PNG format, write it to the workspace output directory, and return
+//! a single `InferenceOutput` so the inference executor can record the
+//! artifact via `NodeArtifactCapability`.
+//!
+//! ## Sanitization policy
+//!
+//! Filename components (`prefix`, `run_id`, `node_id`) are sanitized:
+//! - Allowed: ASCII alphanumeric (`a-zA-Z0-9`), `-`, `_`
+//! - Everything else: replaced with `_`
+//! - Empty after sanitization: replaced with `_unnamed`
+//! - Result is bounded to avoid OS path limits (prefix: 64 chars,
+//!   run_id/node_id: 128 chars)
 
-use crate::error::{BackendNotImplementedError, CandleBackendError};
+use std::sync::Arc;
+
+use candle_core::Device;
+use reimagine_core::model::{ArtifactRef, SlotId};
+use reimagine_inference::InferenceBackend;
+use reimagine_inference::request::InferenceRequest;
+use reimagine_inference::response::{InferenceOutput, InferenceResponse};
+use reimagine_runtime::RuntimeValue;
+
+use crate::backend::CandleBackend;
+use crate::error::CandleBackendError;
+
+fn is_cpu_device(device: &Device) -> bool {
+    matches!(device, Device::Cpu)
+}
+
+fn extract_optional_string_param(
+    params: &std::collections::HashMap<
+        reimagine_core::model::SlotId,
+        reimagine_core::model::ParamValue,
+    >,
+    slot: &str,
+) -> Option<String> {
+    params
+        .get(&reimagine_core::model::SlotId::new(slot))
+        .and_then(|v| match v {
+            reimagine_core::model::ParamValue::String(s) => Some(s.clone()),
+            _ => None,
+        })
+}
 
 pub fn execute_image_save(
     request: &InferenceRequest,
-    backend_kind: &str,
+    backend: &CandleBackend,
 ) -> Result<InferenceResponse, CandleBackendError> {
-    Err(CandleBackendError::BackendNotImplemented(
-        BackendNotImplementedError::new(
-            backend_kind,
-            request.operation_id().clone(),
-            "image save not implemented",
-        ),
-    ))
+    let prefix = extract_optional_string_param(request.params(), "filename_prefix")
+        .unwrap_or_else(|| "reimagine".to_string());
+    execute_image_persist(request, backend, &prefix)
 }
 
 pub fn execute_image_preview(
     request: &InferenceRequest,
-    backend_kind: &str,
+    backend: &CandleBackend,
 ) -> Result<InferenceResponse, CandleBackendError> {
-    Err(CandleBackendError::BackendNotImplemented(
-        BackendNotImplementedError::new(
-            backend_kind,
-            request.operation_id().clone(),
-            "image preview not implemented",
-        ),
-    ))
+    execute_image_persist(request, backend, "preview")
+}
+
+fn execute_image_persist(
+    request: &InferenceRequest,
+    backend: &CandleBackend,
+    prefix: &str,
+) -> Result<InferenceResponse, CandleBackendError> {
+    let image_value = request.inputs().get(&SlotId::new("image")).ok_or_else(|| {
+        CandleBackendError::InvalidRequest("image.save requires an `image` input".to_string())
+    })?;
+
+    let image_value = match image_value.as_ref() {
+        RuntimeValue::Image(img) => img,
+        _ => {
+            return Err(CandleBackendError::InvalidRequest(
+                "image.save requires an `image` input".to_string(),
+            ));
+        }
+    };
+
+    if image_value.payload().backend().as_str() != backend.backend_kind() {
+        return Err(CandleBackendError::InvalidRequest(format!(
+            "image.save `image` handle belongs to backend `{}`, expected `{}`",
+            image_value.payload().backend().as_str(),
+            backend.backend_kind()
+        )));
+    }
+
+    let payload_key = image_value.payload().payload_key();
+    if !backend.store().contains_payload(payload_key) {
+        return Err(CandleBackendError::InvalidRequest(format!(
+            "image.save image payload `{}` not found in store",
+            payload_key.as_str()
+        )));
+    }
+
+    let candle_image = backend.store().take_image(payload_key)?;
+
+    let filename = build_safe_filename(
+        prefix,
+        request.run_id().as_str(),
+        request.node_id().as_str(),
+        backend.next_image_seq(),
+    );
+
+    let output_path = backend.output_dir().join(&filename);
+
+    std::fs::create_dir_all(backend.output_dir()).map_err(|e| {
+        CandleBackendError::InvalidRequest(format!(
+            "image.save failed to create output directory: {e}"
+        ))
+    })?;
+
+    validate_path_inside_output_dir(&output_path, backend.output_dir())?;
+
+    let png_bytes = encode_tensor_to_png(&candle_image, backend.device().as_ref())?;
+
+    std::fs::write(&output_path, &png_bytes).map_err(|e| {
+        CandleBackendError::InvalidRequest(format!("image.save failed to write PNG file: {e}"))
+    })?;
+
+    let reference = output_path
+        .strip_prefix(backend.output_dir())
+        .ok()
+        .map(|relative| format!("output/{}", relative.to_string_lossy()))
+        .unwrap_or_else(|| output_path.to_string_lossy().to_string());
+    let output = InferenceOutput::new(
+        "artifact",
+        Arc::new(RuntimeValue::Artifact(ArtifactRef::new(reference))),
+    );
+    Ok(InferenceResponse::new(vec![output]))
+}
+
+fn build_safe_filename(prefix: &str, run_id: &str, node_id: &str, seq: u64) -> String {
+    let safe_prefix = sanitize_component(prefix, 64);
+    let safe_run_id = sanitize_component(run_id, 128);
+    let safe_node_id = sanitize_component(node_id, 128);
+    format!(
+        "{}_{}_{}_{}.png",
+        safe_prefix, safe_run_id, safe_node_id, seq
+    )
+}
+
+fn sanitize_component(input: &str, max_len: usize) -> String {
+    let result: String = input
+        .chars()
+        .map(|c| {
+            if c.is_ascii_alphanumeric() || c == '-' || c == '_' {
+                c
+            } else {
+                '_'
+            }
+        })
+        .collect();
+
+    if result.is_empty() {
+        return "_unnamed".to_string();
+    }
+
+    if result.chars().count() > max_len {
+        result.chars().take(max_len).collect()
+    } else {
+        result
+    }
+}
+
+fn validate_path_inside_output_dir(
+    path: &std::path::Path,
+    output_dir: &std::path::Path,
+) -> Result<(), CandleBackendError> {
+    let output_dir_canon = std::fs::canonicalize(output_dir).map_err(|_| {
+        CandleBackendError::InvalidRequest(format!(
+            "image.save output directory path does not exist or is inaccessible: {}",
+            output_dir.display()
+        ))
+    })?;
+
+    let parent = path.parent().unwrap_or(path);
+
+    let parent_canon = std::fs::canonicalize(parent).map_err(|_| {
+        CandleBackendError::InvalidRequest(format!(
+            "image.save target path parent directory is inaccessible: {}",
+            parent.display()
+        ))
+    })?;
+
+    if !parent_canon.starts_with(&output_dir_canon) {
+        return Err(CandleBackendError::InvalidRequest(format!(
+            "image.save target path escapes workspace output directory: {}",
+            path.display()
+        )));
+    }
+
+    Ok(())
+}
+
+fn encode_tensor_to_png(
+    image: &crate::store::CandleImage,
+    _device: &Device,
+) -> Result<Vec<u8>, CandleBackendError> {
+    let tensor = image.tensor();
+
+    let tensor_on_cpu = if is_cpu_device(tensor.device()) {
+        tensor.clone()
+    } else {
+        tensor.to_device(&Device::Cpu).map_err(|e| {
+            CandleBackendError::InvalidRequest(format!(
+                "image.save failed to move tensor to CPU: {e}"
+            ))
+        })?
+    };
+
+    let dims = tensor_on_cpu.shape().dims();
+    if dims.len() != 4 {
+        return Err(CandleBackendError::InvalidRequest(format!(
+            "image.save expected 4D tensor [batch, channels, height, width], got {}-D shape {:?}",
+            dims.len(),
+            dims
+        )));
+    }
+
+    let batch = dims[0];
+    let channels = dims[1];
+    let height = dims[2];
+    let width = dims[3];
+
+    if batch != 1 {
+        return Err(CandleBackendError::InvalidRequest(format!(
+            "image.save only supports batch=1 (got batch={})",
+            batch
+        )));
+    }
+
+    if channels != 3 {
+        return Err(CandleBackendError::InvalidRequest(format!(
+            "image.save only supports 3-channel RGB images (got channels={})",
+            channels
+        )));
+    }
+
+    let float_vec = tensor_on_cpu
+        .flatten_all()
+        .map_err(|e| {
+            CandleBackendError::InvalidRequest(format!("image.save failed to flatten tensor: {e}"))
+        })?
+        .to_vec1::<f32>()
+        .map_err(|e| {
+            CandleBackendError::InvalidRequest(format!(
+                "image.save failed to convert tensor data: {e}"
+            ))
+        })?;
+
+    let rgb = nchw_f32_to_interleaved_rgb8(&float_vec, width, height);
+
+    Ok(encode_rgb8_to_png(&rgb, width, height))
+}
+
+fn nchw_f32_to_interleaved_rgb8(data: &[f32], width: usize, height: usize) -> Vec<u8> {
+    let plane_len = width * height;
+    let mut rgb = Vec::with_capacity(plane_len * 3);
+    for idx in 0..plane_len {
+        for channel in 0..3 {
+            let value = data[channel * plane_len + idx].clamp(0.0, 1.0);
+            rgb.push((value * 255.0).round() as u8);
+        }
+    }
+    rgb
+}
+
+fn encode_rgb8_to_png(rgb: &[u8], width: usize, height: usize) -> Vec<u8> {
+    let mut out = Vec::with_capacity(width * height * 3 + 1024);
+
+    out.extend_from_slice(&[0x89, 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A]);
+
+    let mut ihdr_data = Vec::with_capacity(13);
+    ihdr_data.extend_from_slice(&(width as u32).to_be_bytes());
+    ihdr_data.extend_from_slice(&(height as u32).to_be_bytes());
+    ihdr_data.push(8);
+    ihdr_data.push(2);
+    ihdr_data.push(0);
+    ihdr_data.push(0);
+    ihdr_data.push(0);
+    write_chunk(&mut out, b"IHDR", &ihdr_data);
+
+    let filtered = add_filter_bytes(rgb, width, height);
+    let compressed = encode_zlib_stored(&filtered);
+    write_chunk(&mut out, b"IDAT", &compressed);
+
+    write_chunk(&mut out, b"IEND", &[]);
+
+    out
+}
+
+fn write_chunk(out: &mut Vec<u8>, chunk_type: &[u8; 4], data: &[u8]) {
+    let len = data.len() as u32;
+    out.extend_from_slice(&len.to_be_bytes());
+    out.extend_from_slice(chunk_type);
+    out.extend_from_slice(data);
+
+    let mut crc_input = Vec::with_capacity(4 + data.len());
+    crc_input.extend_from_slice(chunk_type);
+    crc_input.extend_from_slice(data);
+    let crc = crc32(&crc_input);
+    out.extend_from_slice(&crc.to_be_bytes());
+}
+
+fn crc32(data: &[u8]) -> u32 {
+    let table = make_crc32_table();
+    let mut crc = 0xFFFFFFFF_u32;
+    for &byte in data {
+        crc = table[((crc ^ byte as u32) & 0xFF) as usize] ^ (crc >> 8);
+    }
+    crc ^ 0xFFFFFFFF_u32
+}
+
+fn make_crc32_table() -> [u32; 256] {
+    let mut table = [0u32; 256];
+    for i in 0..256 {
+        let mut c = i as u32;
+        for _ in 0..8 {
+            if c & 1 != 0 {
+                c = 0xEDB88320_u32 ^ (c >> 1);
+            } else {
+                c = c >> 1;
+            }
+        }
+        table[i] = c;
+    }
+    table
+}
+
+fn add_filter_bytes(rgb: &[u8], width: usize, height: usize) -> Vec<u8> {
+    let mut filtered = Vec::with_capacity(width * height * 3 + height);
+    for y in 0..height {
+        filtered.push(0);
+        let row_start = y * width * 3;
+        let row_end = row_start + width * 3;
+        filtered.extend_from_slice(&rgb[row_start..row_end]);
+    }
+    filtered
+}
+
+fn encode_zlib_stored(data: &[u8]) -> Vec<u8> {
+    let mut out = Vec::with_capacity(data.len() + 64);
+
+    out.push(0x78);
+    out.push(0x01);
+
+    let mut pos = 0;
+    while pos < data.len() {
+        let remaining = data.len() - pos;
+        let block_len = remaining.min(65535);
+        let is_final = pos + block_len >= data.len();
+
+        let header = if is_final { 0x01 } else { 0x00 };
+        out.push(header);
+
+        let len = block_len as u16;
+        out.extend_from_slice(&len.to_le_bytes());
+        out.extend_from_slice(&(!(len)).to_le_bytes());
+
+        out.extend_from_slice(&data[pos..pos + block_len]);
+        pos += block_len;
+    }
+
+    let adler = adler32(data);
+    out.extend_from_slice(&adler.to_be_bytes());
+
+    out
+}
+
+fn adler32(data: &[u8]) -> u32 {
+    let mut a: u32 = 1;
+    let mut b: u32 = 0;
+    for &byte in data {
+        a = (a + byte as u32) % 65521;
+        b = (b + a) % 65521;
+    }
+    (b << 16) | a
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn sanitize_allows_alphanumeric_dash_underscore() {
+        assert_eq!(sanitize_component("abc-123_xyz", 64), "abc-123_xyz");
+    }
+
+    #[test]
+    fn sanitize_replaces_invalid_chars() {
+        assert_eq!(sanitize_component("a/b:c*d", 64), "a_b_c_d");
+    }
+
+    #[test]
+    fn sanitize_empty_becomes_unnamed() {
+        assert_eq!(sanitize_component("", 64), "_unnamed");
+    }
+
+    #[test]
+    fn sanitize_truncates_long_input() {
+        let long = "a".repeat(200);
+        let result = sanitize_component(&long, 64);
+        assert_eq!(result.chars().count(), 64);
+        assert!(result.chars().all(|c| c == 'a'));
+    }
+
+    #[test]
+    fn build_safe_filename_format() {
+        let filename = build_safe_filename("reimagine", "run-test", "node-a", 5);
+        assert_eq!(filename, "reimagine_run-test_node-a_5.png");
+    }
+
+    #[test]
+    fn build_safe_filename_sanitizes_path_traversal() {
+        let filename = build_safe_filename("../../etc", "run", "node", 0);
+        assert!(!filename.contains(".."));
+        assert!(filename.contains("_"));
+    }
+
+    #[test]
+    fn png_signature_bytes() {
+        let rgb = vec![0u8; 64 * 64 * 3];
+        let png = encode_rgb8_to_png(&rgb, 64, 64);
+        assert_eq!(
+            &png[0..8],
+            &[0x89, 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A]
+        );
+    }
+
+    #[test]
+    fn interleaves_nchw_rgb_planes() {
+        let data = vec![
+            1.0, 0.0, 0.0, 1.0, // R
+            0.0, 1.0, 0.0, 1.0, // G
+            0.0, 0.0, 1.0, 1.0, // B
+        ];
+        let rgb = nchw_f32_to_interleaved_rgb8(&data, 2, 2);
+        assert_eq!(
+            rgb,
+            vec![
+                255, 0, 0, // pixel 0
+                0, 255, 0, // pixel 1
+                0, 0, 255, // pixel 2
+                255, 255, 255, // pixel 3
+            ]
+        );
+    }
+
+    #[test]
+    fn png_zlib_stored_blocks_use_little_endian_lengths() {
+        let filtered = add_filter_bytes(&[255, 0, 0], 1, 1);
+        let zlib = encode_zlib_stored(&filtered);
+
+        assert_eq!(&zlib[0..2], &[0x78, 0x01]);
+        assert_eq!(zlib[2], 0x01, "single block should be final");
+
+        let len = u16::from_le_bytes([zlib[3], zlib[4]]);
+        let nlen = u16::from_le_bytes([zlib[5], zlib[6]]);
+        assert_eq!(len as usize, filtered.len());
+        assert_eq!(nlen, !len);
+        assert_eq!(&zlib[7..7 + filtered.len()], filtered.as_slice());
+    }
+
+    #[test]
+    fn png_ihdr_contains_correct_dimensions() {
+        let rgb = vec![0u8; 32 * 16 * 3];
+        let png = encode_rgb8_to_png(&rgb, 32, 16);
+
+        let sig_len = 8;
+        let ihdr_offset = sig_len + 4 + 4;
+        let width = u32::from_be_bytes([
+            png[ihdr_offset],
+            png[ihdr_offset + 1],
+            png[ihdr_offset + 2],
+            png[ihdr_offset + 3],
+        ]);
+        let height = u32::from_be_bytes([
+            png[ihdr_offset + 4],
+            png[ihdr_offset + 5],
+            png[ihdr_offset + 6],
+            png[ihdr_offset + 7],
+        ]);
+
+        assert_eq!(width, 32);
+        assert_eq!(height, 16);
+        assert_eq!(png[ihdr_offset + 10], 0);
+        assert_eq!(png[ihdr_offset + 11], 0);
+        assert_eq!(png[ihdr_offset + 12], 0);
+    }
+
+    #[test]
+    fn png_ihdr_has_thirteen_byte_payload() {
+        let rgb = vec![0u8; 4 * 4 * 3];
+        let png = encode_rgb8_to_png(&rgb, 4, 4);
+
+        let sig_len = 8;
+        let len_offset = sig_len;
+        let ihdr_len = u32::from_be_bytes([
+            png[len_offset],
+            png[len_offset + 1],
+            png[len_offset + 2],
+            png[len_offset + 3],
+        ]);
+        assert_eq!(ihdr_len, 13, "IHDR chunk length field must be 13");
+
+        let ihdr_data_len = ihdr_len as usize;
+        assert_eq!(
+            ihdr_data_len, 13,
+            "IHDR data section must be exactly 13 bytes"
+        );
+    }
+
+    #[test]
+    fn png_ihdr_ends_with_compression_filter_interlace_zero() {
+        let rgb = vec![0u8; 4 * 4 * 3];
+        let png = encode_rgb8_to_png(&rgb, 4, 4);
+
+        let sig_len = 8;
+        let ihdr_data_offset = sig_len + 4 + 4;
+        assert_eq!(
+            png[ihdr_data_offset + 10],
+            0,
+            "compression method must be 0"
+        );
+        assert_eq!(png[ihdr_data_offset + 11], 0, "filter method must be 0");
+        assert_eq!(png[ihdr_data_offset + 12], 0, "interlace method must be 0");
+    }
+
+    #[test]
+    fn adler32_is_deterministic() {
+        let data = b"hello world";
+        let a = adler32(data);
+        let b = adler32(data);
+        assert_eq!(a, b);
+    }
+
+    #[test]
+    fn adler32_differs_for_different_data() {
+        let a = adler32(b"hello");
+        let b = adler32(b"world");
+        assert_ne!(a, b);
+    }
 }

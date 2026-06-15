@@ -5,13 +5,9 @@
 //! matching `sdxl-base-1.0` manifest entry, and runs the workflow
 //! through a real `WorkspaceHost` constructed with the Candle backend.
 //!
-//! The heavy Candle kernels are not fully implemented yet, so the run
-//! is expected to fail at `builtin.vae_decode` (`latent.decode`) with
-//! a precise backend-not-implemented diagnostic. The test proves that
-//! `model.load_bundle`, `latent.create_empty`, `text.encode`, and
-//! `diffusion.sample` all succeed through the runtime executor
-//! registry and that the failure is surfaced cleanly at the next
-//! unimplemented heavy operation.
+//! The full pipeline (model.load_bundle → text.encode × 2 →
+//! empty_latent_image → diffusion.sample → latent.decode → image.save)
+//! completes end-to-end with an image artifact written to the output dir.
 
 use std::path::PathBuf;
 use std::sync::Arc;
@@ -83,7 +79,7 @@ async fn run_to_completion(host: &WorkspaceHost, run_id: &reimagine_core::model:
 }
 
 #[tokio::test]
-async fn candle_backend_sdxl_workflow_fails_at_latent_decode() {
+async fn candle_backend_sdxl_workflow_completes_with_image_artifact() {
     let base = unique_temp_dir("app-host");
     let paths = AppPaths::new(&base);
     tokio::fs::create_dir_all(paths.models_dir()).await.unwrap();
@@ -131,16 +127,40 @@ async fn candle_backend_sdxl_workflow_fails_at_latent_decode() {
         .summary(handle.run_id())
         .expect("summary should exist after completion");
 
-    assert_eq!(summary.state, RunState::Failed);
-    let messages: Vec<String> = summary
-        .diagnostics
-        .iter()
-        .map(|d| d.message().to_string())
-        .collect();
+    assert_eq!(
+        summary.state,
+        RunState::Completed,
+        "expected run to complete successfully"
+    );
     assert!(
-        messages
-            .iter()
-            .any(|m| m.contains("latent.decode") || m.contains("does not implement")),
-        "expected failure to name latent.decode or backend-not-implemented, got {messages:?}"
+        !summary.artifacts.is_empty(),
+        "expected at least one artifact in run summary"
+    );
+
+    let output_dir = paths.output_dir();
+    let mut entries = tokio::fs::read_dir(output_dir)
+        .await
+        .expect("output dir should exist");
+    let png_path = loop {
+        let entry = entries
+            .next_entry()
+            .await
+            .expect("output dir entry read")
+            .expect("output dir should contain a PNG file");
+        let path = entry.path();
+        if path.extension().and_then(|s| s.to_str()) == Some("png") {
+            break path;
+        }
+    };
+
+    let metadata = tokio::fs::metadata(&png_path)
+        .await
+        .expect("png file metadata");
+    assert!(metadata.len() > 0, "PNG file should be non-empty");
+
+    let bytes = tokio::fs::read(&png_path).await.expect("png file read");
+    assert!(
+        bytes.starts_with(&[0x89, b'P', b'N', b'G', 0x0d, 0x0a, 0x1a, 0x0a]),
+        "PNG file should have PNG signature"
     );
 }

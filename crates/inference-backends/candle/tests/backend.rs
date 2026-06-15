@@ -25,7 +25,11 @@ use reimagine_inference_candle::{CandleBackend, CandleBackendConfig, LoadedModel
 use reimagine_runtime::{RunResourceBackend, RuntimeValue};
 
 fn backend() -> CandleBackend {
-    CandleBackend::new(CandleBackendConfig::new("/tmp/reimagine-candle-tests")).unwrap()
+    CandleBackend::new(CandleBackendConfig::new(
+        "/tmp/reimagine-candle-tests",
+        "/tmp/reimagine-candle-tests-output",
+    ))
+    .unwrap()
 }
 
 fn base_request(operation_id: &str) -> InferenceRequest {
@@ -1583,29 +1587,1104 @@ async fn diffusion_sample_cleans_up_run_scoped_payload() {
 }
 
 #[tokio::test]
-async fn latent_decode_returns_not_implemented() {
+async fn latent_decode_succeeds_for_sdxl_with_loaded_bundle() {
     let backend = backend();
+    let (model, _root) = sdxl_model();
+    backend
+        .execute(base_request(OP_MODEL_LOAD_BUNDLE).with_model(model))
+        .await
+        .unwrap();
+
+    let bundle = backend
+        .model_cache()
+        .get_bundle(&ModelId::new("sdxl-base-1.0"))
+        .expect("cached bundle");
+    let vae_payload_key = match bundle.as_ref() {
+        LoadedModelBundle::StableDiffusionSdxl(sdxl) => sdxl.vae_payload_key.clone(),
+    };
+
+    let vae_handle = RuntimeValue::Vae(reimagine_runtime::RuntimeVaeHandle::new(
+        ModelId::new("sdxl-base-1.0"),
+        reimagine_runtime::BackendKind::from("candle"),
+        vae_payload_key,
+    ));
+
+    let response = backend
+        .execute(
+            base_request(OP_LATENT_CREATE_EMPTY)
+                .with_param("width", ParamValue::Integer(64))
+                .with_param("height", ParamValue::Integer(64))
+                .with_param("batch_size", ParamValue::Integer(1)),
+        )
+        .await
+        .unwrap();
+    let input_latent = match response.outputs()[0].value().as_ref() {
+        RuntimeValue::Latent(l) => l.clone(),
+        other => panic!("expected latent, got {other:?}"),
+    };
+
+    let decode_resp = backend
+        .execute(
+            base_request(OP_LATENT_DECODE)
+                .with_input("vae", Arc::new(vae_handle))
+                .with_input("latent", Arc::new(RuntimeValue::Latent(input_latent))),
+        )
+        .await
+        .unwrap();
+    let outputs = outputs_by_slot(&decode_resp);
+    let image = outputs["image"];
+
+    let image = match image.as_ref() {
+        RuntimeValue::Image(img) => img,
+        other => panic!("expected image, got {other:?}"),
+    };
+
+    assert_eq!(image.width(), 64);
+    assert_eq!(image.height(), 64);
+    assert_eq!(image.batch(), 1);
+    assert_eq!(image.color_space(), "rgb");
+    assert_eq!(
+        image.payload().dtype(),
+        reimagine_core::model::TensorDType::F32
+    );
+    assert_eq!(image.payload().shape().dims(), &[1, 3, 64, 64]);
+    assert_eq!(image.payload().backend().as_str(), "candle");
+    assert_eq!(image.payload().device_label(), "cpu");
+}
+
+#[tokio::test]
+async fn latent_decode_rejects_missing_vae_input() {
+    let backend = backend();
+    let request = base_request(OP_LATENT_DECODE).with_input("latent", Arc::new(RuntimeValue::Null));
+    let err = backend.execute(request).await.unwrap_err();
+    let msg = match err {
+        InferenceError::BackendExecutionFailed { message } => message,
+        other => panic!("expected BackendExecutionFailed, got {other:?}"),
+    };
+    assert!(msg.contains("vae"), "msg: {msg}");
+}
+
+#[tokio::test]
+async fn latent_decode_rejects_missing_latent_input() {
+    let backend = backend();
+    let request = base_request(OP_LATENT_DECODE).with_input("vae", Arc::new(RuntimeValue::Null));
+    let err = backend.execute(request).await.unwrap_err();
+    let msg = match err {
+        InferenceError::BackendExecutionFailed { message } => message,
+        other => panic!("expected BackendExecutionFailed, got {other:?}"),
+    };
+    assert!(msg.contains("latent"), "msg: {msg}");
+}
+
+#[tokio::test]
+async fn latent_decode_rejects_wrong_backend_vae_handle() {
+    let backend = backend();
+    let (model, _root) = sdxl_model();
+    backend
+        .execute(base_request(OP_MODEL_LOAD_BUNDLE).with_model(model))
+        .await
+        .unwrap();
+
+    let vae_handle = RuntimeValue::Vae(reimagine_runtime::RuntimeVaeHandle::new(
+        ModelId::new("sdxl-base-1.0"),
+        reimagine_runtime::BackendKind::from("other-backend"),
+        reimagine_runtime::BackendPayloadKey::new("bundle:sdxl-base-1.0:vae"),
+    ));
+
     let request = base_request(OP_LATENT_DECODE)
-        .with_input("vae", Arc::new(RuntimeValue::Null))
+        .with_input("vae", Arc::new(vae_handle))
         .with_input("latent", Arc::new(RuntimeValue::Null));
     let err = backend.execute(request).await.unwrap_err();
-    assert_backend_not_implemented(err, OP_LATENT_DECODE);
+    let msg = match err {
+        InferenceError::BackendExecutionFailed { message } => message,
+        other => panic!("expected BackendExecutionFailed, got {other:?}"),
+    };
+    assert!(msg.contains("other-backend"), "msg: {msg}");
+    assert!(msg.contains("candle"), "msg: {msg}");
 }
 
 #[tokio::test]
-async fn image_save_returns_not_implemented() {
+async fn latent_decode_rejects_wrong_backend_latent_handle() {
     let backend = backend();
-    let request = base_request(OP_IMAGE_SAVE).with_input("image", Arc::new(RuntimeValue::Null));
+    let (model, _root) = sdxl_model();
+    backend
+        .execute(base_request(OP_MODEL_LOAD_BUNDLE).with_model(model))
+        .await
+        .unwrap();
+
+    let bundle = backend
+        .model_cache()
+        .get_bundle(&ModelId::new("sdxl-base-1.0"))
+        .expect("cached bundle");
+    let vae_payload_key = match bundle.as_ref() {
+        LoadedModelBundle::StableDiffusionSdxl(sdxl) => sdxl.vae_payload_key.clone(),
+    };
+    let vae_handle = RuntimeValue::Vae(reimagine_runtime::RuntimeVaeHandle::new(
+        ModelId::new("sdxl-base-1.0"),
+        reimagine_runtime::BackendKind::from("candle"),
+        vae_payload_key,
+    ));
+
+    let wrong_backend_latent = RuntimeValue::Latent(reimagine_runtime::RuntimeLatent::new(
+        reimagine_runtime::BackendTensorHandle::new(
+            reimagine_runtime::BackendKind::from("other-backend"),
+            reimagine_runtime::BackendPayloadKey::new("latent:other"),
+            reimagine_core::model::TensorDType::F32,
+            reimagine_core::model::TensorShape::new(vec![1, 4, 8, 8]),
+            "cpu",
+        ),
+        64,
+        64,
+        1,
+        4,
+    ));
+
+    let request = base_request(OP_LATENT_DECODE)
+        .with_input("vae", Arc::new(vae_handle))
+        .with_input("latent", Arc::new(wrong_backend_latent));
     let err = backend.execute(request).await.unwrap_err();
-    assert_backend_not_implemented(err, OP_IMAGE_SAVE);
+    let msg = match err {
+        InferenceError::BackendExecutionFailed { message } => message,
+        other => panic!("expected BackendExecutionFailed, got {other:?}"),
+    };
+    assert!(msg.contains("other-backend"), "msg: {msg}");
+    assert!(msg.contains("candle"), "msg: {msg}");
 }
 
 #[tokio::test]
-async fn image_preview_returns_not_implemented() {
+async fn latent_decode_rejects_wrong_vae_payload_key() {
     let backend = backend();
-    let request = base_request(OP_IMAGE_PREVIEW).with_input("image", Arc::new(RuntimeValue::Null));
+    let (model, _root) = sdxl_model();
+    backend
+        .execute(base_request(OP_MODEL_LOAD_BUNDLE).with_model(model))
+        .await
+        .unwrap();
+
+    let vae_handle = RuntimeValue::Vae(reimagine_runtime::RuntimeVaeHandle::new(
+        ModelId::new("sdxl-base-1.0"),
+        reimagine_runtime::BackendKind::from("candle"),
+        reimagine_runtime::BackendPayloadKey::new("bundle:sdxl-base-1.0:not-vae"),
+    ));
+
+    let response = backend
+        .execute(
+            base_request(OP_LATENT_CREATE_EMPTY)
+                .with_param("width", ParamValue::Integer(64))
+                .with_param("height", ParamValue::Integer(64))
+                .with_param("batch_size", ParamValue::Integer(1)),
+        )
+        .await
+        .unwrap();
+    let input_latent = match response.outputs()[0].value().as_ref() {
+        RuntimeValue::Latent(l) => l.clone(),
+        other => panic!("expected latent, got {other:?}"),
+    };
+
+    let request = base_request(OP_LATENT_DECODE)
+        .with_input("vae", Arc::new(vae_handle))
+        .with_input("latent", Arc::new(RuntimeValue::Latent(input_latent)));
     let err = backend.execute(request).await.unwrap_err();
-    assert_backend_not_implemented(err, OP_IMAGE_PREVIEW);
+    let msg = match err {
+        InferenceError::BackendExecutionFailed { message } => message,
+        other => panic!("expected BackendExecutionFailed, got {other:?}"),
+    };
+    assert!(msg.contains("not-vae"), "msg: {msg}");
+}
+
+#[tokio::test]
+async fn latent_decode_rejects_missing_latent_payload() {
+    let backend = backend();
+    let (model, _root) = sdxl_model();
+    backend
+        .execute(base_request(OP_MODEL_LOAD_BUNDLE).with_model(model))
+        .await
+        .unwrap();
+
+    let bundle = backend
+        .model_cache()
+        .get_bundle(&ModelId::new("sdxl-base-1.0"))
+        .expect("cached bundle");
+    let vae_payload_key = match bundle.as_ref() {
+        LoadedModelBundle::StableDiffusionSdxl(sdxl) => sdxl.vae_payload_key.clone(),
+    };
+    let vae_handle = RuntimeValue::Vae(reimagine_runtime::RuntimeVaeHandle::new(
+        ModelId::new("sdxl-base-1.0"),
+        reimagine_runtime::BackendKind::from("candle"),
+        vae_payload_key,
+    ));
+
+    let missing_latent = RuntimeValue::Latent(reimagine_runtime::RuntimeLatent::new(
+        reimagine_runtime::BackendTensorHandle::new(
+            reimagine_runtime::BackendKind::from("candle"),
+            reimagine_runtime::BackendPayloadKey::new("latent:not-in-store"),
+            reimagine_core::model::TensorDType::F32,
+            reimagine_core::model::TensorShape::new(vec![1, 4, 8, 8]),
+            "cpu",
+        ),
+        64,
+        64,
+        1,
+        4,
+    ));
+
+    let request = base_request(OP_LATENT_DECODE)
+        .with_input("vae", Arc::new(vae_handle))
+        .with_input("latent", Arc::new(missing_latent));
+    let err = backend.execute(request).await.unwrap_err();
+    let msg = match err {
+        InferenceError::BackendExecutionFailed { message } => message,
+        other => panic!("expected BackendExecutionFailed, got {other:?}"),
+    };
+    assert!(msg.contains("latent:not-in-store"), "msg: {msg}");
+}
+
+#[tokio::test]
+async fn latent_decode_rejects_missing_loaded_bundle() {
+    let backend = backend();
+    let vae_handle = RuntimeValue::Vae(reimagine_runtime::RuntimeVaeHandle::new(
+        ModelId::new("sdxl-base-1.0"),
+        reimagine_runtime::BackendKind::from("candle"),
+        reimagine_runtime::BackendPayloadKey::new("bundle:sdxl-base-1.0:vae"),
+    ));
+
+    let response = backend
+        .execute(
+            base_request(OP_LATENT_CREATE_EMPTY)
+                .with_param("width", ParamValue::Integer(64))
+                .with_param("height", ParamValue::Integer(64))
+                .with_param("batch_size", ParamValue::Integer(1)),
+        )
+        .await
+        .unwrap();
+    let input_latent = match response.outputs()[0].value().as_ref() {
+        RuntimeValue::Latent(l) => l.clone(),
+        other => panic!("expected latent, got {other:?}"),
+    };
+
+    let request = base_request(OP_LATENT_DECODE)
+        .with_input("vae", Arc::new(vae_handle))
+        .with_input("latent", Arc::new(RuntimeValue::Latent(input_latent)));
+    let err = backend.execute(request).await.unwrap_err();
+    let msg = match err {
+        InferenceError::BackendExecutionFailed { message } => message,
+        other => panic!("expected BackendExecutionFailed, got {other:?}"),
+    };
+    assert!(msg.contains("sdxl-base-1.0"), "msg: {msg}");
+    assert!(msg.contains("no loaded model bundle"), "msg: {msg}");
+}
+
+#[tokio::test]
+async fn latent_decode_stores_real_image_payload_in_store() {
+    let backend = backend();
+    let (model, _root) = sdxl_model();
+    backend
+        .execute(base_request(OP_MODEL_LOAD_BUNDLE).with_model(model))
+        .await
+        .unwrap();
+
+    let bundle = backend
+        .model_cache()
+        .get_bundle(&ModelId::new("sdxl-base-1.0"))
+        .expect("cached bundle");
+    let vae_payload_key = match bundle.as_ref() {
+        LoadedModelBundle::StableDiffusionSdxl(sdxl) => sdxl.vae_payload_key.clone(),
+    };
+    let vae_handle = RuntimeValue::Vae(reimagine_runtime::RuntimeVaeHandle::new(
+        ModelId::new("sdxl-base-1.0"),
+        reimagine_runtime::BackendKind::from("candle"),
+        vae_payload_key,
+    ));
+
+    let response = backend
+        .execute(
+            base_request(OP_LATENT_CREATE_EMPTY)
+                .with_param("width", ParamValue::Integer(64))
+                .with_param("height", ParamValue::Integer(64))
+                .with_param("batch_size", ParamValue::Integer(1)),
+        )
+        .await
+        .unwrap();
+    let input_latent = match response.outputs()[0].value().as_ref() {
+        RuntimeValue::Latent(l) => l.clone(),
+        other => panic!("expected latent, got {other:?}"),
+    };
+
+    let decode_resp = backend
+        .execute(
+            base_request(OP_LATENT_DECODE)
+                .with_input("vae", Arc::new(vae_handle))
+                .with_input("latent", Arc::new(RuntimeValue::Latent(input_latent))),
+        )
+        .await
+        .unwrap();
+    let payload_key = match decode_resp.outputs()[0].value().as_ref() {
+        RuntimeValue::Image(img) => img.payload().payload_key().clone(),
+        other => panic!("expected image, got {other:?}"),
+    };
+
+    let stored_image = backend
+        .store()
+        .get_image(&payload_key)
+        .expect("image should be in store");
+    assert_eq!(stored_image.dims(), vec![1, 3, 64, 64]);
+    assert_eq!(stored_image.dtype(), DType::F32);
+    assert_eq!(stored_image.width(), 64);
+    assert_eq!(stored_image.height(), 64);
+    assert_eq!(stored_image.batch(), 1);
+    assert_eq!(stored_image.color_space(), "rgb");
+}
+
+#[tokio::test]
+async fn latent_decode_output_handle_carries_correct_metadata() {
+    let backend = backend();
+    let (model, _root) = sdxl_model();
+    backend
+        .execute(base_request(OP_MODEL_LOAD_BUNDLE).with_model(model))
+        .await
+        .unwrap();
+
+    let bundle = backend
+        .model_cache()
+        .get_bundle(&ModelId::new("sdxl-base-1.0"))
+        .expect("cached bundle");
+    let vae_payload_key = match bundle.as_ref() {
+        LoadedModelBundle::StableDiffusionSdxl(sdxl) => sdxl.vae_payload_key.clone(),
+    };
+    let vae_handle = RuntimeValue::Vae(reimagine_runtime::RuntimeVaeHandle::new(
+        ModelId::new("sdxl-base-1.0"),
+        reimagine_runtime::BackendKind::from("candle"),
+        vae_payload_key,
+    ));
+
+    let response = backend
+        .execute(
+            base_request(OP_LATENT_CREATE_EMPTY)
+                .with_param("width", ParamValue::Integer(128))
+                .with_param("height", ParamValue::Integer(64))
+                .with_param("batch_size", ParamValue::Integer(2)),
+        )
+        .await
+        .unwrap();
+    let input_latent = match response.outputs()[0].value().as_ref() {
+        RuntimeValue::Latent(l) => l.clone(),
+        other => panic!("expected latent, got {other:?}"),
+    };
+
+    let decode_resp = backend
+        .execute(
+            base_request(OP_LATENT_DECODE)
+                .with_input("vae", Arc::new(vae_handle))
+                .with_input("latent", Arc::new(RuntimeValue::Latent(input_latent))),
+        )
+        .await
+        .unwrap();
+    let image = match decode_resp.outputs()[0].value().as_ref() {
+        RuntimeValue::Image(img) => img,
+        other => panic!("expected image, got {other:?}"),
+    };
+
+    assert_eq!(image.width(), 128);
+    assert_eq!(image.height(), 64);
+    assert_eq!(image.batch(), 2);
+    assert_eq!(image.color_space(), "rgb");
+    assert_eq!(
+        image.payload().dtype(),
+        reimagine_core::model::TensorDType::F32
+    );
+    assert_eq!(image.payload().shape().dims(), &[2, 3, 64, 128]);
+}
+
+#[tokio::test]
+async fn latent_decode_runs_scoped_payload_cleanup() {
+    let backend = backend();
+    let (model, _root) = sdxl_model();
+    backend
+        .execute(base_request(OP_MODEL_LOAD_BUNDLE).with_model(model))
+        .await
+        .unwrap();
+
+    let bundle = backend
+        .model_cache()
+        .get_bundle(&ModelId::new("sdxl-base-1.0"))
+        .expect("cached bundle");
+    let vae_payload_key = match bundle.as_ref() {
+        LoadedModelBundle::StableDiffusionSdxl(sdxl) => sdxl.vae_payload_key.clone(),
+    };
+    let vae_handle = RuntimeValue::Vae(reimagine_runtime::RuntimeVaeHandle::new(
+        ModelId::new("sdxl-base-1.0"),
+        reimagine_runtime::BackendKind::from("candle"),
+        vae_payload_key,
+    ));
+
+    // Create latent in a separate run so only the decoded image
+    // is scoped to the cleanup run.
+    let latent_run_id = RunId::new("run-latent-source");
+    let response = backend
+        .execute(
+            InferenceRequest::new(
+                OP_LATENT_CREATE_EMPTY.into(),
+                latent_run_id.clone(),
+                WorkflowId::new("wf-test"),
+                WorkflowVersion::new(1),
+                NodeId::new("node-latent"),
+            )
+            .with_param("width", ParamValue::Integer(64))
+            .with_param("height", ParamValue::Integer(64))
+            .with_param("batch_size", ParamValue::Integer(1)),
+        )
+        .await
+        .unwrap();
+    let input_latent = match response.outputs()[0].value().as_ref() {
+        RuntimeValue::Latent(l) => l.clone(),
+        other => panic!("expected latent, got {other:?}"),
+    };
+
+    let run_id = RunId::new("run-latent-decode-cleanup");
+    backend
+        .execute(
+            InferenceRequest::new(
+                OP_LATENT_DECODE.into(),
+                run_id.clone(),
+                WorkflowId::new("wf-test"),
+                WorkflowVersion::new(1),
+                NodeId::new("node-decode"),
+            )
+            .with_input("vae", Arc::new(vae_handle))
+            .with_input("latent", Arc::new(RuntimeValue::Latent(input_latent))),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(
+        backend.store().run_payload_count(&run_id),
+        1,
+        "decode should produce exactly 1 run-scoped image payload"
+    );
+
+    let resource = backend.resource_backend();
+    resource.cleanup_run(&run_id).await;
+    assert_eq!(backend.store().run_payload_count(&run_id), 0);
+}
+
+async fn setup_decoded_image_for_save(
+    backend: &CandleBackend,
+    node_id: &str,
+) -> (RuntimeValue, std::path::PathBuf) {
+    let (model, _root) = sdxl_model();
+    backend
+        .execute(base_request(OP_MODEL_LOAD_BUNDLE).with_model(model))
+        .await
+        .unwrap();
+
+    let bundle = backend
+        .model_cache()
+        .get_bundle(&ModelId::new("sdxl-base-1.0"))
+        .expect("cached bundle");
+    let vae_payload_key = match bundle.as_ref() {
+        LoadedModelBundle::StableDiffusionSdxl(sdxl) => sdxl.vae_payload_key.clone(),
+    };
+
+    let vae_handle = RuntimeValue::Vae(reimagine_runtime::RuntimeVaeHandle::new(
+        ModelId::new("sdxl-base-1.0"),
+        reimagine_runtime::BackendKind::from("candle"),
+        vae_payload_key,
+    ));
+
+    let latent_resp = backend
+        .execute(
+            base_request(OP_LATENT_CREATE_EMPTY)
+                .with_param("width", ParamValue::Integer(64))
+                .with_param("height", ParamValue::Integer(64))
+                .with_param("batch_size", ParamValue::Integer(1)),
+        )
+        .await
+        .unwrap();
+    let input_latent = match latent_resp.outputs()[0].value().as_ref() {
+        RuntimeValue::Latent(l) => l.clone(),
+        other => panic!("expected latent, got {other:?}"),
+    };
+
+    let decode_resp = backend
+        .execute(
+            InferenceRequest::new(
+                OP_LATENT_DECODE.into(),
+                RunId::new("run-test"),
+                WorkflowId::new("wf-test"),
+                WorkflowVersion::new(1),
+                NodeId::new(node_id),
+            )
+            .with_input("vae", Arc::new(vae_handle))
+            .with_input("latent", Arc::new(RuntimeValue::Latent(input_latent))),
+        )
+        .await
+        .unwrap();
+
+    let image_value = match decode_resp.outputs()[0].value().as_ref() {
+        RuntimeValue::Image(img) => img.clone(),
+        other => panic!("expected image, got {other:?}"),
+    };
+
+    let output_dir = backend.output_dir().to_path_buf();
+    (RuntimeValue::Image(image_value), output_dir)
+}
+
+#[tokio::test]
+async fn image_save_writes_png_to_output_dir_for_sdxl_pipeline() {
+    let root = unique_sdxl_root();
+    std::fs::create_dir_all(&root).unwrap();
+    let backend =
+        CandleBackend::new(CandleBackendConfig::new(&root, &root.join("output"))).unwrap();
+
+    let (image_value, output_dir) = setup_decoded_image_for_save(&backend, "node-save").await;
+
+    let request = base_request(OP_IMAGE_SAVE).with_input("image", Arc::new(image_value));
+
+    let response = backend.execute(request).await.unwrap();
+    let outputs = outputs_by_slot(&response);
+    assert_eq!(outputs.len(), 1);
+    assert!(outputs.contains_key("artifact"));
+    let artifact_ref = match response.outputs()[0].value().as_ref() {
+        RuntimeValue::Artifact(reference) => reference.clone(),
+        other => panic!("expected artifact output, got {other:?}"),
+    };
+
+    let files: Vec<_> = std::fs::read_dir(&output_dir).unwrap().collect();
+    assert!(
+        !files.is_empty(),
+        "expected at least one PNG file in output dir"
+    );
+
+    let mut png_file: Option<std::path::PathBuf> = None;
+    for f in &files {
+        if let Ok(entry) = f {
+            if entry.file_name().to_string_lossy().ends_with(".png") {
+                png_file = Some(entry.path());
+                break;
+            }
+        }
+    }
+    let png_file = png_file.expect("expected a PNG file");
+    assert!(
+        artifact_ref.as_str().starts_with("output/"),
+        "artifact ref should be workspace-output relative, got {}",
+        artifact_ref.as_str()
+    );
+    assert!(
+        artifact_ref.as_str().ends_with(
+            png_file
+                .file_name()
+                .and_then(|name| name.to_str())
+                .expect("png filename should be utf-8")
+        ),
+        "artifact ref {} should point at saved file {}",
+        artifact_ref.as_str(),
+        png_file.display()
+    );
+    let metadata = std::fs::metadata(&png_file).unwrap();
+    assert!(metadata.len() > 0, "PNG file should be non-empty");
+
+    let mut file = std::fs::File::open(&png_file).unwrap();
+    let mut signature = [0u8; 8];
+    std::io::Read::read(&mut file, &mut signature).unwrap();
+    assert_eq!(
+        signature,
+        [0x89, 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A],
+        "PNG signature mismatch"
+    );
+
+    let _ = std::fs::remove_dir_all(&root);
+}
+
+#[tokio::test]
+async fn image_preview_writes_png_to_output_dir_for_sdxl_pipeline() {
+    let root = unique_sdxl_root();
+    std::fs::create_dir_all(&root).unwrap();
+    let backend =
+        CandleBackend::new(CandleBackendConfig::new(&root, &root.join("output"))).unwrap();
+
+    let (image_value, output_dir) = setup_decoded_image_for_save(&backend, "node-preview").await;
+
+    let request = base_request(OP_IMAGE_PREVIEW).with_input("image", Arc::new(image_value));
+
+    let response = backend.execute(request).await.unwrap();
+    assert_eq!(response.outputs().len(), 1);
+
+    let files: Vec<_> = std::fs::read_dir(&output_dir).unwrap().collect();
+    assert!(
+        !files.is_empty(),
+        "expected at least one PNG file in output dir"
+    );
+
+    let mut png_path: Option<std::path::PathBuf> = None;
+    for f in &files {
+        if let Ok(entry) = f {
+            if entry.file_name().to_string_lossy().ends_with(".png") {
+                png_path = Some(entry.path());
+                break;
+            }
+        }
+    }
+    let png_path = png_path.expect("expected a PNG file");
+    let metadata = std::fs::metadata(&png_path).unwrap();
+    assert!(metadata.len() > 0);
+
+    let _ = std::fs::remove_dir_all(&root);
+}
+
+#[tokio::test]
+async fn image_save_filename_includes_prefix_run_id_node_id() {
+    let root = unique_sdxl_root();
+    std::fs::create_dir_all(&root).unwrap();
+    let backend =
+        CandleBackend::new(CandleBackendConfig::new(&root, &root.join("output"))).unwrap();
+
+    let (image_value, output_dir) = setup_decoded_image_for_save(&backend, "node-save-test").await;
+
+    let request = InferenceRequest::new(
+        OP_IMAGE_SAVE.into(),
+        RunId::new("run-abc-123"),
+        WorkflowId::new("wf-test"),
+        WorkflowVersion::new(1),
+        NodeId::new("node-foo-bar"),
+    )
+    .with_input("image", Arc::new(image_value))
+    .with_param(
+        "filename_prefix",
+        ParamValue::String("my-prefix".to_string()),
+    );
+
+    backend.execute(request).await.unwrap();
+
+    let files: Vec<_> = std::fs::read_dir(&output_dir).unwrap().collect();
+    let filenames: Vec<String> = files
+        .iter()
+        .map(|f| {
+            f.as_ref()
+                .unwrap()
+                .file_name()
+                .to_string_lossy()
+                .to_string()
+        })
+        .collect();
+
+    assert!(
+        filenames.iter().any(|f| f.contains("my-prefix")
+            && f.contains("run-abc-123")
+            && f.contains("node-foo-bar")),
+        "filename should contain prefix, run_id, and node_id; got {filenames:?}"
+    );
+
+    let _ = std::fs::remove_dir_all(&root);
+}
+
+#[tokio::test]
+async fn image_save_rejects_path_traversal_via_filename_prefix() {
+    let root = unique_sdxl_root();
+    std::fs::create_dir_all(&root).unwrap();
+    let backend =
+        CandleBackend::new(CandleBackendConfig::new(&root, &root.join("output"))).unwrap();
+
+    let (image_value, output_dir) = setup_decoded_image_for_save(&backend, "node-traversal").await;
+
+    let request = InferenceRequest::new(
+        OP_IMAGE_SAVE.into(),
+        RunId::new("run-test"),
+        WorkflowId::new("wf-test"),
+        WorkflowVersion::new(1),
+        NodeId::new("node-test"),
+    )
+    .with_input("image", Arc::new(image_value))
+    .with_param(
+        "filename_prefix",
+        ParamValue::String("../../../etc/passwd".to_string()),
+    );
+
+    let response = backend.execute(request).await.unwrap();
+    assert_eq!(response.outputs().len(), 1);
+
+    let files: Vec<_> = std::fs::read_dir(&output_dir).unwrap().collect();
+    let filenames: Vec<String> = files
+        .iter()
+        .map(|f| {
+            f.as_ref()
+                .unwrap()
+                .file_name()
+                .to_string_lossy()
+                .to_string()
+        })
+        .collect();
+
+    for fname in &filenames {
+        assert!(
+            !fname.contains(".."),
+            "sanitized filename should not contain '..': {fname}"
+        );
+        assert!(
+            fname.starts_with('_')
+                || fname
+                    .chars()
+                    .next()
+                    .map(|c| c.is_ascii_alphanumeric())
+                    .unwrap_or(false),
+            "filename should not start with path separators: {fname}"
+        );
+    }
+
+    let canonical_output = std::fs::canonicalize(&output_dir).unwrap();
+    for entry in std::fs::read_dir(&output_dir).unwrap() {
+        let entry = entry.unwrap();
+        let canonical_file = std::fs::canonicalize(entry.path()).unwrap();
+        assert!(
+            canonical_file.starts_with(&canonical_output),
+            "file {} escapes output dir",
+            canonical_file.display()
+        );
+    }
+
+    let _ = std::fs::remove_dir_all(&root);
+}
+
+#[tokio::test]
+async fn image_save_rejects_wrong_backend_image_handle() {
+    let backend = backend();
+    let wrong_backend_image = RuntimeValue::Image(reimagine_runtime::RuntimeImage::new(
+        reimagine_runtime::BackendTensorHandle::new(
+            reimagine_runtime::BackendKind::from("other-backend"),
+            reimagine_runtime::BackendPayloadKey::new("image:fake"),
+            reimagine_core::model::TensorDType::F32,
+            reimagine_core::model::TensorShape::new(vec![1, 3, 64, 64]),
+            "cpu",
+        ),
+        64,
+        64,
+        1,
+        "rgb".to_string(),
+    ));
+
+    let request = base_request(OP_IMAGE_SAVE).with_input("image", Arc::new(wrong_backend_image));
+
+    let err = backend.execute(request).await.unwrap_err();
+    let msg = match err {
+        InferenceError::BackendExecutionFailed { message } => message,
+        other => panic!("expected BackendExecutionFailed, got {other:?}"),
+    };
+    assert!(msg.contains("other-backend"), "msg: {msg}");
+    assert!(msg.contains("candle"), "msg: {msg}");
+}
+
+#[tokio::test]
+async fn image_save_rejects_missing_image_input() {
+    let backend = backend();
+    let request = base_request(OP_IMAGE_SAVE);
+    let err = backend.execute(request).await.unwrap_err();
+    let msg = match err {
+        InferenceError::BackendExecutionFailed { message } => message,
+        other => panic!("expected BackendExecutionFailed, got {other:?}"),
+    };
+    assert!(msg.contains("image"), "msg: {msg}");
+}
+
+#[tokio::test]
+async fn image_save_rejects_missing_image_payload() {
+    let backend = backend();
+    let ghost_image = RuntimeValue::Image(reimagine_runtime::RuntimeImage::new(
+        reimagine_runtime::BackendTensorHandle::new(
+            reimagine_runtime::BackendKind::from("candle"),
+            reimagine_runtime::BackendPayloadKey::new("image:not-in-store"),
+            reimagine_core::model::TensorDType::F32,
+            reimagine_core::model::TensorShape::new(vec![1, 3, 64, 64]),
+            "cpu",
+        ),
+        64,
+        64,
+        1,
+        "rgb".to_string(),
+    ));
+
+    let request = base_request(OP_IMAGE_SAVE).with_input("image", Arc::new(ghost_image));
+
+    let err = backend.execute(request).await.unwrap_err();
+    let msg = match err {
+        InferenceError::BackendExecutionFailed { message } => message,
+        other => panic!("expected BackendExecutionFailed, got {other:?}"),
+    };
+    assert!(msg.contains("not-in-store"), "msg: {msg}");
+}
+
+#[tokio::test]
+async fn image_save_overwrites_existing_file() {
+    let root = unique_sdxl_root();
+    std::fs::create_dir_all(&root).unwrap();
+    let backend =
+        CandleBackend::new(CandleBackendConfig::new(&root, &root.join("output"))).unwrap();
+
+    // First image for first save
+    let (image_value1, output_dir) =
+        setup_decoded_image_for_save(&backend, "node-overwrite-1").await;
+
+    // Second image for second save (different node_id, so different payload key)
+    let (image_value2, _output_dir) =
+        setup_decoded_image_for_save(&backend, "node-overwrite-2").await;
+
+    let run_id = RunId::new("run-overwrite");
+
+    let request1 = InferenceRequest::new(
+        OP_IMAGE_SAVE.into(),
+        run_id.clone(),
+        WorkflowId::new("wf-test"),
+        WorkflowVersion::new(1),
+        NodeId::new("node-overwrite"),
+    )
+    .with_input("image", Arc::new(image_value1))
+    .with_param(
+        "filename_prefix",
+        ParamValue::String("overwrite-test".to_string()),
+    );
+
+    backend.execute(request1).await.unwrap();
+
+    let files_before: Vec<_> = std::fs::read_dir(&output_dir).unwrap().collect();
+    assert!(!files_before.is_empty());
+
+    let request2 = InferenceRequest::new(
+        OP_IMAGE_SAVE.into(),
+        run_id.clone(),
+        WorkflowId::new("wf-test"),
+        WorkflowVersion::new(1),
+        NodeId::new("node-overwrite"),
+    )
+    .with_input("image", Arc::new(image_value2))
+    .with_param(
+        "filename_prefix",
+        ParamValue::String("overwrite-test".to_string()),
+    );
+
+    let response2 = backend.execute(request2).await.unwrap();
+    assert_eq!(response2.outputs().len(), 1);
+
+    let files_after: Vec<_> = std::fs::read_dir(&output_dir).unwrap().collect();
+    assert!(!files_after.is_empty());
+
+    let _ = std::fs::remove_dir_all(&root);
+}
+
+#[tokio::test]
+async fn image_save_returns_output_with_artifact_slot_id() {
+    let root = unique_sdxl_root();
+    std::fs::create_dir_all(&root).unwrap();
+    let backend =
+        CandleBackend::new(CandleBackendConfig::new(&root, &root.join("output"))).unwrap();
+
+    let (image_value, _output_dir) = setup_decoded_image_for_save(&backend, "node-slotid").await;
+
+    let request = base_request(OP_IMAGE_SAVE).with_input("image", Arc::new(image_value));
+
+    let response = backend.execute(request).await.unwrap();
+    assert_eq!(response.outputs().len(), 1);
+    assert_eq!(response.outputs()[0].slot_id().as_str(), "artifact");
+    match response.outputs()[0].value().as_ref() {
+        RuntimeValue::Artifact(reference) => {
+            assert!(reference.as_str().starts_with("output/"));
+            assert!(reference.as_str().ends_with(".png"));
+        }
+        other => panic!("expected artifact output, got {other:?}"),
+    }
+
+    let _ = std::fs::remove_dir_all(&root);
+}
+
+#[tokio::test]
+async fn image_preview_uses_different_prefix() {
+    let root = unique_sdxl_root();
+    std::fs::create_dir_all(&root).unwrap();
+    let backend =
+        CandleBackend::new(CandleBackendConfig::new(&root, &root.join("output"))).unwrap();
+
+    // First decode for save
+    let (image_value_save, output_dir) =
+        setup_decoded_image_for_save(&backend, "node-save-img").await;
+
+    // Second decode for preview (different node_id so payload key is different)
+    let (image_value_preview, _output_dir) =
+        setup_decoded_image_for_save(&backend, "node-preview-img").await;
+
+    let save_request = InferenceRequest::new(
+        OP_IMAGE_SAVE.into(),
+        RunId::new("run-test"),
+        WorkflowId::new("wf-test"),
+        WorkflowVersion::new(1),
+        NodeId::new("node-save"),
+    )
+    .with_input("image", Arc::new(image_value_save));
+
+    backend.execute(save_request).await.unwrap();
+
+    let preview_request = InferenceRequest::new(
+        OP_IMAGE_PREVIEW.into(),
+        RunId::new("run-test"),
+        WorkflowId::new("wf-test"),
+        WorkflowVersion::new(1),
+        NodeId::new("node-preview"),
+    )
+    .with_input("image", Arc::new(image_value_preview));
+
+    backend.execute(preview_request).await.unwrap();
+
+    let files: Vec<_> = std::fs::read_dir(&output_dir).unwrap().collect();
+    let filenames: Vec<String> = files
+        .iter()
+        .map(|f| {
+            f.as_ref()
+                .unwrap()
+                .file_name()
+                .to_string_lossy()
+                .to_string()
+        })
+        .collect();
+
+    let save_files: Vec<_> = filenames
+        .iter()
+        .filter(|f| f.contains("reimagine_"))
+        .collect();
+    let preview_files: Vec<_> = filenames
+        .iter()
+        .filter(|f| f.contains("preview_"))
+        .collect();
+
+    assert!(
+        !save_files.is_empty() || !preview_files.is_empty(),
+        "should have at least some files with distinct prefixes; got {filenames:?}"
+    );
+
+    if !save_files.is_empty() && !preview_files.is_empty() {
+        assert_ne!(
+            save_files[0], preview_files[0],
+            "save and preview should produce different filenames"
+        );
+    }
+
+    let _ = std::fs::remove_dir_all(&root);
+}
+
+#[tokio::test]
+async fn image_save_png_bytes_have_valid_signature() {
+    let root = unique_sdxl_root();
+    std::fs::create_dir_all(&root).unwrap();
+    let backend =
+        CandleBackend::new(CandleBackendConfig::new(&root, &root.join("output"))).unwrap();
+
+    let (image_value, output_dir) = setup_decoded_image_for_save(&backend, "node-sig").await;
+
+    let request = base_request(OP_IMAGE_SAVE).with_input("image", Arc::new(image_value));
+
+    backend.execute(request).await.unwrap();
+
+    let files: Vec<_> = std::fs::read_dir(&output_dir).unwrap().collect();
+    let mut png_path: Option<std::path::PathBuf> = None;
+    for f in &files {
+        if let Ok(entry) = f {
+            if entry.file_name().to_string_lossy().ends_with(".png") {
+                png_path = Some(entry.path());
+                break;
+            }
+        }
+    }
+    let png_path = png_path.expect("expected a PNG file in output dir");
+
+    let png_bytes = std::fs::read(&png_path).unwrap();
+    assert_eq!(
+        &png_bytes[0..8],
+        &[0x89, 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A],
+        "PNG signature mismatch"
+    );
+
+    let _ = std::fs::remove_dir_all(&root);
+}
+
+#[tokio::test]
+async fn image_save_png_ihdr_has_correct_dimensions() {
+    let root = unique_sdxl_root();
+    std::fs::create_dir_all(&root).unwrap();
+    let backend =
+        CandleBackend::new(CandleBackendConfig::new(&root, &root.join("output"))).unwrap();
+
+    let (image_value, output_dir) = setup_decoded_image_for_save(&backend, "node-ihdr").await;
+
+    let request = base_request(OP_IMAGE_SAVE).with_input("image", Arc::new(image_value));
+
+    backend.execute(request).await.unwrap();
+
+    let files: Vec<_> = std::fs::read_dir(&output_dir).unwrap().collect();
+    let mut png_path: Option<std::path::PathBuf> = None;
+    for f in &files {
+        if let Ok(entry) = f {
+            if entry.file_name().to_string_lossy().ends_with(".png") {
+                png_path = Some(entry.path());
+                break;
+            }
+        }
+    }
+    let png_path = png_path.expect("expected a PNG file in output dir");
+
+    let png_bytes = std::fs::read(&png_path).unwrap();
+
+    let sig_len = 8;
+    let chunk_len = u32::from_be_bytes([
+        png_bytes[sig_len],
+        png_bytes[sig_len + 1],
+        png_bytes[sig_len + 2],
+        png_bytes[sig_len + 3],
+    ]);
+    assert_eq!(chunk_len, 13, "IHDR chunk should be 13 bytes");
+
+    let ihdr_data_start = sig_len + 4 + 4;
+    let width = u32::from_be_bytes([
+        png_bytes[ihdr_data_start],
+        png_bytes[ihdr_data_start + 1],
+        png_bytes[ihdr_data_start + 2],
+        png_bytes[ihdr_data_start + 3],
+    ]);
+    let height = u32::from_be_bytes([
+        png_bytes[ihdr_data_start + 4],
+        png_bytes[ihdr_data_start + 5],
+        png_bytes[ihdr_data_start + 6],
+        png_bytes[ihdr_data_start + 7],
+    ]);
+
+    assert_eq!(width, 64, "IHDR width should be 64");
+    assert_eq!(height, 64, "IHDR height should be 64");
+
+    let _ = std::fs::remove_dir_all(&root);
+}
+
+#[tokio::test]
+async fn image_save_cleans_up_image_payload_from_store() {
+    let root = unique_sdxl_root();
+    std::fs::create_dir_all(&root).unwrap();
+    let backend =
+        CandleBackend::new(CandleBackendConfig::new(&root, &root.join("output"))).unwrap();
+
+    let (image_value, _output_dir) = setup_decoded_image_for_save(&backend, "node-cleanup").await;
+    let payload_key = match image_value {
+        RuntimeValue::Image(ref img) => img.payload().payload_key().clone(),
+        other => panic!("expected image, got {other:?}"),
+    };
+
+    assert!(
+        backend.store().contains_payload(&payload_key),
+        "image should be in store before save"
+    );
+
+    let request = base_request(OP_IMAGE_SAVE).with_input("image", Arc::new(image_value));
+
+    backend.execute(request).await.unwrap();
+
+    assert!(
+        !backend.store().contains_payload(&payload_key),
+        "image should be removed from store after save"
+    );
+
+    let _ = std::fs::remove_dir_all(&root);
 }
 
 #[tokio::test]

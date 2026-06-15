@@ -222,8 +222,11 @@ fn build_candle_backend(
     backend_config: &InferenceBackendConfig,
 ) -> Result<Arc<CandleBackend>, CandleBackendError> {
     let device = CandleDevice::new(&backend_config.candle_device);
-    let candle_config =
-        CandleBackendConfig::new(app_paths.models_dir().to_path_buf()).with_device(device);
+    let candle_config = CandleBackendConfig::new(
+        app_paths.models_dir().to_path_buf(),
+        app_paths.output_dir().to_path_buf(),
+    )
+    .with_device(device);
     Ok(Arc::new(CandleBackend::new(candle_config)?))
 }
 
