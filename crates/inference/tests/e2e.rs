@@ -10,7 +10,7 @@ use std::sync::{Arc, Mutex};
 
 use reimagine_core::diagnostic::CorrelationId;
 use reimagine_core::model::{
-    ModelId, ModelRef, ModelRole, ModelSeries, ModelVariant, ParamValue, SlotId,
+    ArtifactRef, ModelId, ModelRef, ModelRole, ModelSeries, ModelVariant, ParamValue, SlotId,
 };
 use reimagine_runtime::{BackendKind, RuntimeClipHandle, RuntimeModelHandle, RuntimeVaeHandle};
 use reimagine_runtime::{
@@ -195,15 +195,54 @@ fn make_context(
     )
 }
 
+fn make_context_with_artifact_store(
+    node_id: &str,
+    type_id: &str,
+    inputs: NodeInputs,
+    params: reimagine_runtime::NodeParams,
+) -> (
+    NodeExecutionContext,
+    Arc<tokio::sync::Mutex<reimagine_runtime::ArtifactStore>>,
+) {
+    let node_id_value = reimagine_core::model::NodeId::new(node_id);
+    let store = Arc::new(tokio::sync::Mutex::new(
+        reimagine_runtime::ArtifactStore::new(),
+    ));
+    let capability = make_artifact_capability_with_store(node_id_value.clone(), Arc::clone(&store));
+    (
+        NodeExecutionContext::new(
+            reimagine_core::model::RunId::new("run-test"),
+            reimagine_core::model::WorkflowId::new("wf-test"),
+            reimagine_core::model::WorkflowVersion::new(1),
+            Some(CorrelationId::new("corr-test")),
+            node_id_value,
+            reimagine_core::model::NodeTypeId::new(type_id),
+            inputs,
+            params,
+            capability,
+            CancellationToken::new(),
+            reimagine_core::event::Timestamp::new("2026-06-13T00:00:00Z"),
+        ),
+        store,
+    )
+}
+
 fn make_artifact_capability(
     node_id: reimagine_core::model::NodeId,
+) -> reimagine_runtime::NodeArtifactCapability {
+    let store = Arc::new(tokio::sync::Mutex::new(
+        reimagine_runtime::ArtifactStore::new(),
+    ));
+    make_artifact_capability_with_store(node_id, store)
+}
+
+fn make_artifact_capability_with_store(
+    node_id: reimagine_core::model::NodeId,
+    store: Arc<tokio::sync::Mutex<reimagine_runtime::ArtifactStore>>,
 ) -> reimagine_runtime::NodeArtifactCapability {
     use reimagine_runtime::{Clock, RunEventSink, SystemClock};
     use std::sync::Arc;
 
-    let store = Arc::new(tokio::sync::Mutex::new(
-        reimagine_runtime::ArtifactStore::new(),
-    ));
     let sink: Arc<dyn RunEventSink> = Arc::new(VecRunEventSink::new());
     let clock: Arc<dyn Clock> = Arc::new(SystemClock);
     reimagine_runtime::NodeArtifactCapability::new(
@@ -463,6 +502,63 @@ async fn all_v1_executors_register_successfully() {
             "executor for `{type_id}` should be registered"
         );
     }
+}
+
+#[tokio::test]
+async fn save_image_records_backend_returned_artifact_reference() {
+    let artifact_ref = ArtifactRef::new("output/reimagine_run-test_save_0.png");
+    let backend = Arc::new(FakeBackend::new("fake").with_operation(
+        OP_IMAGE_SAVE,
+        vec![(
+            SlotId::new("artifact"),
+            Arc::new(RuntimeValue::Artifact(artifact_ref.clone())),
+        )],
+    ));
+    let resolver = Arc::new(FakeResolver::new("/models/sdxl-base.safetensors"));
+
+    let mut registry = NodeExecutorRegistry::default();
+    register_builtin_inference_executors(&mut registry, backend, resolver)
+        .expect("register executors");
+
+    let executor = registry
+        .get(&reimagine_core::model::NodeTypeId::new(
+            "builtin.save_image",
+        ))
+        .expect("executor registered");
+
+    let mut inputs = NodeInputs::new();
+    inputs.insert(
+        SlotId::new("image"),
+        Arc::new(RuntimeValue::Image(reimagine_runtime::RuntimeImage::new(
+            reimagine_runtime::BackendTensorHandle::new(
+                BackendKind::new("fake"),
+                reimagine_runtime::BackendPayloadKey::new("image:payload"),
+                reimagine_core::model::TensorDType::F32,
+                reimagine_core::model::TensorShape::new(vec![1, 3, 64, 64]),
+                "cpu",
+            ),
+            64,
+            64,
+            1,
+            "rgb",
+        ))),
+    );
+
+    let (context, artifact_store) = make_context_with_artifact_store(
+        "save",
+        "builtin.save_image",
+        inputs,
+        reimagine_runtime::NodeParams::new(),
+    );
+
+    let result = executor.execute(context).await.expect("execute ok");
+    assert!(result.is_empty(), "save node should not expose outputs");
+
+    let store = artifact_store.lock().await;
+    let records: Vec<_> = store.iter_ordered().collect();
+    assert_eq!(records.len(), 1);
+    assert_eq!(records[0].reference, artifact_ref);
+    assert_eq!(records[0].slot_id.as_str(), "artifact");
 }
 
 #[tokio::test]

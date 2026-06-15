@@ -98,14 +98,75 @@ impl CandleConditioning {
     }
 }
 
+/// Backend-owned image tensor wrapper.
+///
+/// SDXL VAE decodes to `[batch, 3, height, width]` float32 with values
+/// roughly in `[-1, 1]`. V1 uses `"rgb"` color space.
+#[derive(Debug, Clone)]
+pub struct CandleImage {
+    tensor: Tensor,
+    width: u32,
+    height: u32,
+    batch: u32,
+    color_space: String,
+}
+
+impl CandleImage {
+    pub fn new(tensor: Tensor, width: u32, height: u32, batch: u32, color_space: String) -> Self {
+        Self {
+            tensor,
+            width,
+            height,
+            batch,
+            color_space,
+        }
+    }
+
+    pub fn tensor(&self) -> &Tensor {
+        &self.tensor
+    }
+
+    pub fn into_tensor(self) -> Tensor {
+        self.tensor
+    }
+
+    pub fn dims(&self) -> Vec<usize> {
+        self.tensor.shape().dims().to_vec()
+    }
+
+    pub fn dtype(&self) -> DType {
+        self.tensor.dtype()
+    }
+
+    pub fn byte_size(&self) -> usize {
+        self.tensor.elem_count() * dtype_byte_size(self.tensor.dtype())
+    }
+
+    pub fn width(&self) -> u32 {
+        self.width
+    }
+
+    pub fn height(&self) -> u32 {
+        self.height
+    }
+
+    pub fn batch(&self) -> u32 {
+        self.batch
+    }
+
+    pub fn color_space(&self) -> &str {
+        &self.color_space
+    }
+}
+
 /// Backend-owned payload enum.
 ///
-/// V1 carries latent and conditioning variants; later milestones add
-/// image payloads behind the same typed-accessor boundary.
+/// V1 carries latent, conditioning, and image variants.
 #[derive(Debug, Clone)]
 pub enum CandlePayload {
     Latent(CandleLatent),
     Conditioning(CandleConditioning),
+    Image(CandleImage),
 }
 
 impl CandlePayload {
@@ -113,6 +174,7 @@ impl CandlePayload {
         match self {
             Self::Latent(_) => "latent",
             Self::Conditioning(_) => "conditioning",
+            Self::Image(_) => "image",
         }
     }
 }
@@ -191,7 +253,6 @@ impl CandleStore {
     /// reference-counted tensor. The lock is released as soon as the
     /// cheap Arc-internal clone completes; no work is done outside the
     /// lock beyond the return.
-    #[allow(unreachable_patterns)] // reserved for future image/conditioning kinds
     pub fn get_latent(&self, key: &BackendPayloadKey) -> Result<CandleLatent, StoreError> {
         let inner = self.inner.lock().expect("store poisoned");
         let cloned = inner.payloads.get(key).cloned();
@@ -215,7 +276,6 @@ impl CandleStore {
 
     /// Take ownership of a latent payload, removing it from the store
     /// and unpinning it from any run index.
-    #[allow(unreachable_patterns)] // reserved for future image/conditioning kinds
     pub fn take_latent(&self, key: &BackendPayloadKey) -> Result<Tensor, StoreError> {
         let mut inner = self.inner.lock().expect("store poisoned");
         match inner.payloads.remove(key) {
@@ -275,7 +335,6 @@ impl CandleStore {
 
     /// Clone a conditioning payload handle. The lock is released as
     /// soon as the cheap Arc-internal clone completes.
-    #[allow(unreachable_patterns)]
     pub fn get_conditioning(
         &self,
         key: &BackendPayloadKey,
@@ -299,7 +358,6 @@ impl CandleStore {
 
     /// Take ownership of a conditioning payload, removing it from the
     /// store and unpinning it from any run index.
-    #[allow(unreachable_patterns)]
     pub fn take_conditioning(
         &self,
         key: &BackendPayloadKey,
@@ -320,6 +378,58 @@ impl CandleStore {
             None => Err(StoreError::PayloadNotFound {
                 key: key.clone(),
                 expected: "conditioning",
+            }),
+        }
+    }
+
+    /// Insert an image payload and pin it to the run.
+    pub fn insert_image(&self, run_id: RunId, key: BackendPayloadKey, image: CandleImage) {
+        let mut inner = self.inner.lock().expect("store poisoned");
+        inner
+            .payloads
+            .insert(key.clone(), CandlePayload::Image(image));
+        inner.run_index.entry(run_id).or_default().push(key);
+    }
+
+    /// Clone an image payload handle. The lock is released as soon as
+    /// the cheap Arc-internal clone completes.
+    pub fn get_image(&self, key: &BackendPayloadKey) -> Result<CandleImage, StoreError> {
+        let inner = self.inner.lock().expect("store poisoned");
+        let cloned = inner.payloads.get(key).cloned();
+        drop(inner);
+        match cloned {
+            Some(CandlePayload::Image(image)) => Ok(image),
+            Some(other) => Err(StoreError::WrongPayloadKind {
+                key: key.clone(),
+                expected: "image",
+                actual: other.kind(),
+            }),
+            None => Err(StoreError::PayloadNotFound {
+                key: key.clone(),
+                expected: "image",
+            }),
+        }
+    }
+
+    /// Take ownership of an image payload, removing it from the store
+    /// and unpinning it from any run index.
+    pub fn take_image(&self, key: &BackendPayloadKey) -> Result<CandleImage, StoreError> {
+        let mut inner = self.inner.lock().expect("store poisoned");
+        match inner.payloads.remove(key) {
+            Some(CandlePayload::Image(image)) => {
+                for keys in inner.run_index.values_mut() {
+                    keys.retain(|k| k != key);
+                }
+                Ok(image)
+            }
+            Some(other) => Err(StoreError::WrongPayloadKind {
+                key: key.clone(),
+                expected: "image",
+                actual: other.kind(),
+            }),
+            None => Err(StoreError::PayloadNotFound {
+                key: key.clone(),
+                expected: "image",
             }),
         }
     }
@@ -358,6 +468,7 @@ impl CandleStore {
             .map(|payload| match payload {
                 CandlePayload::Latent(latent) => latent.byte_size(),
                 CandlePayload::Conditioning(cond) => cond.byte_size(),
+                CandlePayload::Image(image) => image.byte_size(),
             })
             .sum()
     }
@@ -440,6 +551,15 @@ mod tests {
     }
 
     fn build_latent_tensor(shape: &[usize]) -> Tensor {
+        Tensor::zeros(
+            shape,
+            DType::F32,
+            &CandleDevice::new("cpu").try_build_device().unwrap(),
+        )
+        .expect("zeros tensor")
+    }
+
+    fn build_image_tensor(shape: &[usize]) -> Tensor {
         Tensor::zeros(
             shape,
             DType::F32,
@@ -645,5 +765,135 @@ mod tests {
         assert!(msg.contains("latent:misuse"), "{msg}");
         assert!(msg.contains("image"), "{msg}");
         assert!(msg.contains("latent"), "{msg}");
+    }
+
+    #[test]
+    fn store_insert_image_registers_payload_and_run_pin() {
+        let store = CandleStore::new();
+        let run_id = RunId::new("run-img-1");
+        let key = BackendPayloadKey::new("image:run-img-1:node-a");
+        let tensor = build_image_tensor(&[1, 3, 64, 64]);
+        let image = CandleImage::new(tensor, 64, 64, 1, "rgb".to_string());
+        store.insert_image(run_id.clone(), key.clone(), image);
+        assert_eq!(store.payload_count(), 1);
+        assert_eq!(store.run_payload_count(&run_id), 1);
+        assert!(store.contains_payload(&key));
+    }
+
+    #[test]
+    fn store_get_image_clones_handle_with_useful_metadata() {
+        let store = CandleStore::new();
+        let run_id = RunId::new("run-img-1");
+        let key = BackendPayloadKey::new("image:run-img-1:node-a");
+        let tensor = build_image_tensor(&[1, 3, 64, 64]);
+        let image = CandleImage::new(tensor, 64, 64, 1, "rgb".to_string());
+        store.insert_image(run_id, key.clone(), image);
+
+        let retrieved = store.get_image(&key).expect("image payload");
+        assert_eq!(retrieved.dims(), vec![1, 3, 64, 64]);
+        assert_eq!(retrieved.dtype(), DType::F32);
+        assert_eq!(retrieved.byte_size(), 1 * 3 * 64 * 64 * 4);
+        assert_eq!(retrieved.width(), 64);
+        assert_eq!(retrieved.height(), 64);
+        assert_eq!(retrieved.batch(), 1);
+        assert_eq!(retrieved.color_space(), "rgb");
+    }
+
+    #[test]
+    fn store_get_image_reports_missing_key() {
+        let store = CandleStore::new();
+        let key = BackendPayloadKey::new("image:missing");
+        let err = store.get_image(&key).unwrap_err();
+        assert!(matches!(err, StoreError::PayloadNotFound { .. }));
+        let msg = err.to_string();
+        assert!(msg.contains("image:missing"), "msg: {msg}");
+        assert!(msg.contains("image"), "msg: {msg}");
+    }
+
+    #[test]
+    fn store_take_image_removes_entry_and_returns_wrapper() {
+        let store = CandleStore::new();
+        let run_id = RunId::new("run-img-1");
+        let key = BackendPayloadKey::new("image:run-img-1:node-a");
+        let tensor = build_image_tensor(&[1, 3, 64, 64]);
+        let image = CandleImage::new(tensor, 64, 64, 1, "rgb".to_string());
+        store.insert_image(run_id.clone(), key.clone(), image);
+
+        let taken = store.take_image(&key).expect("image wrapper");
+        assert_eq!(taken.dims(), vec![1, 3, 64, 64]);
+        assert_eq!(taken.width(), 64);
+        assert_eq!(taken.height(), 64);
+        assert_eq!(taken.batch(), 1);
+        assert_eq!(taken.color_space(), "rgb");
+        assert!(!store.contains_payload(&key));
+        assert_eq!(store.run_payload_count(&run_id), 0);
+    }
+
+    #[test]
+    fn store_take_image_on_missing_key_returns_error() {
+        let store = CandleStore::new();
+        let key = BackendPayloadKey::new("image:absent");
+        let err = store.take_image(&key).unwrap_err();
+        assert!(matches!(err, StoreError::PayloadNotFound { .. }));
+    }
+
+    #[test]
+    fn store_take_image_on_wrong_kind_returns_error() {
+        let store = CandleStore::new();
+        let run_id = RunId::new("run-img-1");
+        let key = BackendPayloadKey::new("latent:run-img-1:node-a");
+        store.insert_latent(run_id, key.clone(), build_latent_tensor(&[1, 4, 8, 8]));
+
+        let err = store.take_image(&key).unwrap_err();
+        assert!(matches!(err, StoreError::WrongPayloadKind { .. }));
+        let msg = err.to_string();
+        assert!(msg.contains("image"), "{msg}");
+        assert!(msg.contains("latent"), "{msg}");
+    }
+
+    #[test]
+    fn store_release_payload_removes_image_payload() {
+        let store = CandleStore::new();
+        let run_id = RunId::new("run-img-1");
+        let key = BackendPayloadKey::new("image:run-img-1:node-a");
+        let tensor = build_image_tensor(&[1, 3, 64, 64]);
+        let image = CandleImage::new(tensor, 64, 64, 1, "rgb".to_string());
+        store.insert_image(run_id.clone(), key.clone(), image);
+        assert!(store.release_payload(&key));
+        assert!(!store.contains_payload(&key));
+        assert_eq!(store.run_payload_count(&run_id), 0);
+    }
+
+    #[test]
+    fn store_cleanup_run_removes_image_payloads() {
+        let store = CandleStore::new();
+        let run_id = RunId::new("run-img-1");
+        let key = BackendPayloadKey::new("image:run-img-1:node-a");
+        let tensor = build_image_tensor(&[1, 3, 64, 64]);
+        let image = CandleImage::new(tensor, 64, 64, 1, "rgb".to_string());
+        store.insert_image(run_id.clone(), key.clone(), image);
+        store.cleanup_run(&run_id);
+        assert_eq!(store.payload_count(), 0);
+        assert_eq!(store.run_payload_count(&run_id), 0);
+        assert!(!store.contains_payload(&key));
+    }
+
+    #[test]
+    fn store_image_byte_size_includes_in_total() {
+        let store = CandleStore::new();
+        let run_id = RunId::new("run-img-bytes");
+        let key_latent = BackendPayloadKey::new("latent:run-img-bytes:a");
+        let key_image = BackendPayloadKey::new("image:run-img-bytes:b");
+        // 1 * 4 * 8 * 8 = 256 f32 elements = 1024 bytes per latent
+        store.insert_latent(
+            run_id.clone(),
+            key_latent,
+            build_latent_tensor(&[1, 4, 8, 8]),
+        );
+        // 1 * 3 * 64 * 64 = 12288 f32 elements = 49152 bytes per image
+        let image_tensor = build_image_tensor(&[1, 3, 64, 64]);
+        let image = CandleImage::new(image_tensor, 64, 64, 1, "rgb".to_string());
+        store.insert_image(run_id, key_image, image);
+        assert_eq!(store.payload_byte_size(), 1024 + 49152);
     }
 }

@@ -154,7 +154,11 @@ async fn build_ready_host(
 async fn build_candle_ready_host(
     manifest: ModelManifest,
     base: &str,
-) -> (Arc<WorkspaceHost>, Arc<RunEventRecorder>) {
+) -> (
+    Arc<WorkspaceHost>,
+    Arc<RunEventRecorder>,
+    std::path::PathBuf,
+) {
     let base_path = unique_temp_dir(base);
     let paths = AppPaths::new(&base_path);
     tokio::fs::create_dir_all(paths.models_dir()).await.unwrap();
@@ -174,7 +178,7 @@ async fn build_candle_ready_host(
         BackendSelection::Candle,
         recorder.clone() as Arc<dyn RunEventSink>,
     );
-    (Arc::new(host), recorder)
+    (Arc::new(host), recorder, base_path)
 }
 
 fn load_sdxl_workflow_json() -> serde_json::Value {
@@ -572,9 +576,9 @@ async fn run_handoff_uses_explicit_target_selection() {
 }
 
 #[tokio::test]
-async fn candle_sdxl_workflow_run_returns_precise_backend_failure() {
+async fn candle_sdxl_workflow_run_completes_with_image_artifact() {
     let model_id = ModelId::new(MODEL_ID);
-    let (host, recorder) = build_candle_ready_host(
+    let (host, recorder, base_path) = build_candle_ready_host(
         manifest_with_model(&model_id, CHECKPOINT_FILENAME),
         "candle-sdxl",
     )
@@ -630,19 +634,8 @@ async fn candle_sdxl_workflow_run_returns_precise_backend_failure() {
             );
             assert_eq!(
                 summary.state,
-                reimagine_runtime::RunState::Failed,
-                "expected run to fail at an unimplemented kernel"
-            );
-            let messages: Vec<String> = summary
-                .diagnostics
-                .iter()
-                .map(|d| d.message().to_string())
-                .collect();
-            assert!(
-                messages
-                    .iter()
-                    .any(|m| { m.contains("latent.decode") || m.contains("does not implement") }),
-                "expected latent.decode / backend-not-implemented diagnostic, got {messages:?}"
+                reimagine_runtime::RunState::Completed,
+                "expected run to complete successfully"
             );
             break;
         }
@@ -652,7 +645,7 @@ async fn candle_sdxl_workflow_run_returns_precise_backend_failure() {
         tokio::time::sleep(Duration::from_millis(5)).await;
     }
 
-    // GET /runs/:id should return a summary with the same failure.
+    // GET /runs/:id should return a summary with Completed state.
     let response = app
         .clone()
         .oneshot(json_request("GET", &format!("/runs/{run_id_str}"), None))
@@ -662,10 +655,9 @@ async fn candle_sdxl_workflow_run_returns_precise_backend_failure() {
     let bytes = body_bytes(response.into_body()).await;
     let json: Value = serde_json::from_slice(&bytes).unwrap();
     assert_eq!(json["kind"], "summary");
-    assert_eq!(json["state"], "Failed");
+    assert_eq!(json["state"], "Completed");
 
-    // GET /runs/:id/events should include lifecycle events emitted via
-    // the same recorder used by the Axum host.
+    // GET /runs/:id/events should include lifecycle events and no RunFailed.
     let response = app
         .oneshot(json_request(
             "GET",
@@ -687,12 +679,48 @@ async fn candle_sdxl_workflow_run_returns_precise_backend_failure() {
         kinds.iter().any(|k| *k == "RunStarted"),
         "kinds = {kinds:?}"
     );
-    assert!(kinds.iter().any(|k| *k == "RunFailed"), "kinds = {kinds:?}");
+    assert!(
+        kinds.iter().any(|k| *k == "RunCompleted"),
+        "kinds = {kinds:?}"
+    );
+    assert!(
+        !kinds.iter().any(|k| *k == "RunFailed"),
+        "expected no RunFailed event, got {kinds:?}"
+    );
     assert!(
         events.iter().any(|e| e["correlation_id"]
             .as_str()
             .unwrap_or("")
             .contains("corr-candle-sdxl")),
         "expected an event to carry the correlation id, got {events:?}"
+    );
+
+    // Verify a PNG file was written to the workspace output dir.
+    let paths = AppPaths::new(&base_path);
+    let output_dir = paths.output_dir();
+    let mut entries = tokio::fs::read_dir(output_dir)
+        .await
+        .expect("output dir should exist");
+    let png_path = loop {
+        let entry = entries
+            .next_entry()
+            .await
+            .expect("output dir entry read")
+            .expect("output dir should contain a PNG file");
+        let path = entry.path();
+        if path.extension().and_then(|s| s.to_str()) == Some("png") {
+            break path;
+        }
+    };
+
+    let metadata = tokio::fs::metadata(&png_path)
+        .await
+        .expect("png file metadata");
+    assert!(metadata.len() > 0, "PNG file should be non-empty");
+
+    let bytes = tokio::fs::read(&png_path).await.expect("png file read");
+    assert!(
+        bytes.starts_with(&[0x89, b'P', b'N', b'G', 0x0d, 0x0a, 0x1a, 0x0a]),
+        "PNG file should have PNG signature"
     );
 }
