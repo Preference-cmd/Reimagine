@@ -21,7 +21,7 @@ use reimagine_inference::{
     InferenceBackend, InferenceError, InferenceRequest, InferenceResponse, ModelFormat,
     ResolvedInferenceModel, operation::*,
 };
-use reimagine_inference_candle::{CandleBackend, CandleBackendConfig};
+use reimagine_inference_candle::{CandleBackend, CandleBackendConfig, LoadedModelBundle};
 use reimagine_runtime::{RunResourceBackend, RuntimeValue};
 
 fn backend() -> CandleBackend {
@@ -492,13 +492,300 @@ async fn latent_create_empty_rejects_non_multiple_of_8_dimensions() {
 }
 
 #[tokio::test]
-async fn text_encode_returns_not_implemented() {
+async fn text_encode_returns_conditioning_for_sdxl_bundle() {
     let backend = backend();
+    let (model, _root) = sdxl_model();
+
+    // Load the bundle first
+    backend
+        .execute(base_request(OP_MODEL_LOAD_BUNDLE).with_model(model))
+        .await
+        .unwrap();
+
+    // Get the clip handle from the cached bundle
+    let bundle = backend
+        .model_cache()
+        .get_bundle(&reimagine_core::model::ModelId::new("sdxl-base-1.0"))
+        .expect("cached bundle");
+    let clip_key = match bundle.as_ref() {
+        LoadedModelBundle::StableDiffusionSdxl(sdxl) => sdxl.clip_payload_key.clone(),
+    };
+    let clip_handle = RuntimeValue::Clip(reimagine_runtime::RuntimeClipHandle::new(
+        reimagine_core::model::ModelId::new("sdxl-base-1.0"),
+        reimagine_runtime::BackendKind::from("candle"),
+        clip_key,
+    ));
+
     let request = base_request(OP_TEXT_ENCODE)
-        .with_input("clip", Arc::new(RuntimeValue::Null))
-        .with_input("text", Arc::new(RuntimeValue::Null));
+        .with_input("clip", Arc::new(clip_handle))
+        .with_input(
+            "text",
+            Arc::new(RuntimeValue::Param(
+                reimagine_core::model::ParamValue::String(
+                    "a cinematic lake at sunrise".to_string(),
+                ),
+            )),
+        );
+
+    let response = backend.execute(request).await.unwrap();
+    let outputs = outputs_by_slot(&response);
+    assert_eq!(outputs.len(), 1);
+
+    let conditioning = outputs["conditioning"];
+    assert!(
+        matches!(conditioning.as_ref(), RuntimeValue::Conditioning(handle) if
+            handle.text_embedding().dtype() == reimagine_core::model::TensorDType::F32
+            && handle.text_embedding().shape().dims() == &[1, 77, 2048]
+            && handle.pooled_embedding().is_some()
+        ),
+        "expected Conditioning with correct shapes, got {conditioning:?}"
+    );
+}
+
+#[tokio::test]
+async fn text_encode_positive_and_negative_prompts_both_succeed() {
+    let backend = backend();
+    let (model, _root) = sdxl_model();
+
+    backend
+        .execute(base_request(OP_MODEL_LOAD_BUNDLE).with_model(model))
+        .await
+        .unwrap();
+
+    let bundle = backend
+        .model_cache()
+        .get_bundle(&reimagine_core::model::ModelId::new("sdxl-base-1.0"))
+        .expect("cached bundle");
+    let clip_key = match bundle.as_ref() {
+        LoadedModelBundle::StableDiffusionSdxl(sdxl) => sdxl.clip_payload_key.clone(),
+    };
+    let make_clip = || {
+        RuntimeValue::Clip(reimagine_runtime::RuntimeClipHandle::new(
+            reimagine_core::model::ModelId::new("sdxl-base-1.0"),
+            reimagine_runtime::BackendKind::from("candle"),
+            clip_key.clone(),
+        ))
+    };
+
+    // Positive prompt (uses different node_id to produce distinct payload key)
+    let positive_req = InferenceRequest::new(
+        OP_TEXT_ENCODE.into(),
+        RunId::new("run-test"),
+        WorkflowId::new("wf-test"),
+        WorkflowVersion::new(1),
+        NodeId::new("node-positive-encode"),
+    )
+    .with_input("clip", Arc::new(make_clip()))
+    .with_input(
+        "text",
+        Arc::new(RuntimeValue::Param(
+            reimagine_core::model::ParamValue::String("cinematic lake at sunrise".to_string()),
+        )),
+    );
+    let positive_resp = backend.execute(positive_req).await.unwrap();
+    assert_eq!(positive_resp.outputs().len(), 1);
+
+    // Negative prompt (uses different node_id to produce distinct payload key)
+    let negative_req = InferenceRequest::new(
+        OP_TEXT_ENCODE.into(),
+        RunId::new("run-test"),
+        WorkflowId::new("wf-test"),
+        WorkflowVersion::new(1),
+        NodeId::new("node-negative-encode"),
+    )
+    .with_input("clip", Arc::new(make_clip()))
+    .with_input(
+        "text",
+        Arc::new(RuntimeValue::Param(
+            reimagine_core::model::ParamValue::String("low quality, blurry".to_string()),
+        )),
+    );
+    let negative_resp = backend.execute(negative_req).await.unwrap();
+    assert_eq!(negative_resp.outputs().len(), 1);
+
+    // Both should have stored conditioning payloads
+    assert_eq!(backend.store().payload_count(), 2);
+}
+
+#[tokio::test]
+async fn text_encode_conditioning_is_run_scoped_and_cleaned() {
+    let backend = backend();
+    let (model, _root) = sdxl_model();
+
+    backend
+        .execute(base_request(OP_MODEL_LOAD_BUNDLE).with_model(model))
+        .await
+        .unwrap();
+
+    let run_id = reimagine_core::model::RunId::new("run-conditioning-cleanup");
+    let bundle = backend
+        .model_cache()
+        .get_bundle(&reimagine_core::model::ModelId::new("sdxl-base-1.0"))
+        .expect("cached bundle");
+    let clip_key = match bundle.as_ref() {
+        LoadedModelBundle::StableDiffusionSdxl(sdxl) => sdxl.clip_payload_key.clone(),
+    };
+    let clip_handle = RuntimeValue::Clip(reimagine_runtime::RuntimeClipHandle::new(
+        reimagine_core::model::ModelId::new("sdxl-base-1.0"),
+        reimagine_runtime::BackendKind::from("candle"),
+        clip_key,
+    ));
+
+    let request = InferenceRequest::new(
+        OP_TEXT_ENCODE.into(),
+        run_id.clone(),
+        WorkflowId::new("wf-test"),
+        WorkflowVersion::new(1),
+        NodeId::new("node-encode"),
+    )
+    .with_input("clip", Arc::new(clip_handle))
+    .with_input(
+        "text",
+        Arc::new(RuntimeValue::Param(
+            reimagine_core::model::ParamValue::String("test prompt".to_string()),
+        )),
+    );
+
+    backend.execute(request).await.unwrap();
+    assert_eq!(backend.store().run_payload_count(&run_id), 1);
+
+    let resource = backend.resource_backend();
+    resource.cleanup_run(&run_id).await;
+
+    assert_eq!(backend.store().run_payload_count(&run_id), 0);
+    assert_eq!(backend.store().payload_count(), 0);
+}
+
+#[tokio::test]
+async fn text_encode_missing_clip_input_returns_error() {
+    let backend = backend();
+    let request = base_request(OP_TEXT_ENCODE).with_input(
+        "text",
+        Arc::new(RuntimeValue::Param(
+            reimagine_core::model::ParamValue::String("test".to_string()),
+        )),
+    );
     let err = backend.execute(request).await.unwrap_err();
-    assert_backend_not_implemented(err, OP_TEXT_ENCODE);
+    assert!(
+        matches!(err, InferenceError::BackendExecutionFailed { ref message } if message.contains("clip")),
+        "expected error about missing clip input, got {err:?}"
+    );
+}
+
+#[tokio::test]
+async fn text_encode_missing_text_input_returns_error() {
+    let backend = backend();
+    let (model, _root) = sdxl_model();
+    backend
+        .execute(base_request(OP_MODEL_LOAD_BUNDLE).with_model(model))
+        .await
+        .unwrap();
+
+    let bundle = backend
+        .model_cache()
+        .get_bundle(&reimagine_core::model::ModelId::new("sdxl-base-1.0"))
+        .expect("cached bundle");
+    let clip_key = match bundle.as_ref() {
+        LoadedModelBundle::StableDiffusionSdxl(sdxl) => sdxl.clip_payload_key.clone(),
+    };
+    let clip_handle = RuntimeValue::Clip(reimagine_runtime::RuntimeClipHandle::new(
+        reimagine_core::model::ModelId::new("sdxl-base-1.0"),
+        reimagine_runtime::BackendKind::from("candle"),
+        clip_key,
+    ));
+
+    let request = base_request(OP_TEXT_ENCODE).with_input("clip", Arc::new(clip_handle));
+    let err = backend.execute(request).await.unwrap_err();
+    assert!(
+        matches!(err, InferenceError::BackendExecutionFailed { ref message } if message.contains("text")),
+        "expected error about missing text input, got {err:?}"
+    );
+}
+
+#[tokio::test]
+async fn text_encode_without_loaded_bundle_returns_error() {
+    let backend = backend();
+    let clip_handle = RuntimeValue::Clip(reimagine_runtime::RuntimeClipHandle::new(
+        reimagine_core::model::ModelId::new("sdxl-base-1.0"),
+        reimagine_runtime::BackendKind::from("candle"),
+        reimagine_runtime::BackendPayloadKey::new("bundle:sdxl-base-1.0:clip"),
+    ));
+
+    let request = base_request(OP_TEXT_ENCODE)
+        .with_input("clip", Arc::new(clip_handle))
+        .with_input(
+            "text",
+            Arc::new(RuntimeValue::Param(
+                reimagine_core::model::ParamValue::String("test".to_string()),
+            )),
+        );
+    let err = backend.execute(request).await.unwrap_err();
+    assert!(
+        matches!(err, InferenceError::BackendExecutionFailed { ref message } if message.contains("no loaded model bundle")),
+        "expected error about missing bundle, got {err:?}"
+    );
+}
+
+#[tokio::test]
+async fn text_encode_rejects_wrong_backend_clip_handle() {
+    let backend = backend();
+    let (model, _root) = sdxl_model();
+    backend
+        .execute(base_request(OP_MODEL_LOAD_BUNDLE).with_model(model))
+        .await
+        .unwrap();
+
+    let clip_handle = RuntimeValue::Clip(reimagine_runtime::RuntimeClipHandle::new(
+        reimagine_core::model::ModelId::new("sdxl-base-1.0"),
+        reimagine_runtime::BackendKind::from("other-backend"),
+        reimagine_runtime::BackendPayloadKey::new("bundle:sdxl-base-1.0:clip"),
+    ));
+
+    let request = base_request(OP_TEXT_ENCODE)
+        .with_input("clip", Arc::new(clip_handle))
+        .with_input(
+            "text",
+            Arc::new(RuntimeValue::Param(
+                reimagine_core::model::ParamValue::String("test".to_string()),
+            )),
+        );
+    let err = backend.execute(request).await.unwrap_err();
+    assert!(
+        matches!(err, InferenceError::BackendExecutionFailed { ref message }
+            if message.contains("other-backend") && message.contains("expected `candle`")),
+        "expected wrong-backend clip error, got {err:?}"
+    );
+}
+
+#[tokio::test]
+async fn text_encode_rejects_wrong_clip_payload_key() {
+    let backend = backend();
+    let (model, _root) = sdxl_model();
+    backend
+        .execute(base_request(OP_MODEL_LOAD_BUNDLE).with_model(model))
+        .await
+        .unwrap();
+
+    let clip_handle = RuntimeValue::Clip(reimagine_runtime::RuntimeClipHandle::new(
+        reimagine_core::model::ModelId::new("sdxl-base-1.0"),
+        reimagine_runtime::BackendKind::from("candle"),
+        reimagine_runtime::BackendPayloadKey::new("bundle:sdxl-base-1.0:not-clip"),
+    ));
+
+    let request = base_request(OP_TEXT_ENCODE)
+        .with_input("clip", Arc::new(clip_handle))
+        .with_input(
+            "text",
+            Arc::new(RuntimeValue::Param(
+                reimagine_core::model::ParamValue::String("test".to_string()),
+            )),
+        );
+    let err = backend.execute(request).await.unwrap_err();
+    assert!(
+        matches!(err, InferenceError::BackendExecutionFailed { ref message }
+            if message.contains("not-clip") && message.contains("loaded SDXL CLIP payload")),
+        "expected wrong-payload clip error, got {err:?}"
+    );
 }
 
 #[tokio::test]

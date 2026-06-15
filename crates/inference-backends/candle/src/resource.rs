@@ -52,7 +52,7 @@ impl RunResourceBackend for CandleRunResourceBackend {
         );
         observations.insert(
             "bytes_approximate".to_string(),
-            self.store.latent_byte_size().to_string(),
+            self.store.payload_byte_size().to_string(),
         );
         MemorySnapshot { observations }
     }

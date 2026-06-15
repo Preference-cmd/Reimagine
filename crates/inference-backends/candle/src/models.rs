@@ -5,7 +5,7 @@
 //! flux, ...) lives under its own module and contributes a variant
 //! to the wrapper.
 
-mod stable_diffusion;
+pub mod stable_diffusion;
 
 pub use stable_diffusion::LoadedModelBundle;
 pub use stable_diffusion::sdxl::LoadedSdxlBundle;

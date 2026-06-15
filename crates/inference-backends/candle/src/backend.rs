@@ -83,7 +83,7 @@ impl InferenceBackend for CandleBackend {
         let result = match request.operation_id().as_str() {
             OP_MODEL_LOAD_BUNDLE => execute_model_load_bundle(&request, self),
             OP_LATENT_CREATE_EMPTY => execute_latent_create_empty(self, &request),
-            OP_TEXT_ENCODE => execute_text_encode(&request, self.backend_kind()),
+            OP_TEXT_ENCODE => execute_text_encode(&request, self),
             OP_DIFFUSION_SAMPLE => execute_diffusion_sample(&request, self.backend_kind()),
             OP_LATENT_DECODE => execute_latent_decode(&request, self.backend_kind()),
             OP_IMAGE_SAVE => execute_image_save(&request, self.backend_kind()),
@@ -174,7 +174,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn execute_text_encode_preserves_backend_message() {
+    async fn execute_text_encode_requires_clip_input() {
         let backend = backend();
         let err = backend
             .execute(base_request(OP_TEXT_ENCODE))
@@ -182,7 +182,6 @@ mod tests {
             .unwrap_err();
         let exec_err = err.into_executor_error();
         let msg = exec_err.to_string();
-        assert!(msg.contains("text.encode"), "{msg}");
-        assert!(msg.contains("text encode not implemented"), "{msg}");
+        assert!(msg.contains("clip"), "{msg}");
     }
 }
