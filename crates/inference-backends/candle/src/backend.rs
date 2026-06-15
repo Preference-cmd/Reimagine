@@ -1,5 +1,6 @@
 use std::sync::Arc;
 
+use candle_core::Device;
 use reimagine_inference::InferenceBackend;
 use reimagine_inference::capability::{InferenceBackendCapabilities, InferenceOperationSupport};
 use reimagine_inference::operation::*;
@@ -7,7 +8,6 @@ use reimagine_inference::request::InferenceRequest;
 use reimagine_inference::response::InferenceResponse;
 
 use crate::config::CandleBackendConfig;
-use crate::device::CandleDevice;
 use crate::error::{BackendNotImplementedError, CandleBackendError};
 use crate::operation::*;
 use crate::resource::CandleRunResourceBackend;
@@ -16,14 +16,17 @@ use crate::store::{CandleModelCache, CandleStore};
 #[derive(Debug, Clone)]
 pub struct CandleBackend {
     config: CandleBackendConfig,
+    device: Arc<Device>,
     store: Arc<CandleStore>,
     model_cache: Arc<CandleModelCache>,
 }
 
 impl CandleBackend {
     pub fn new(config: CandleBackendConfig) -> Result<Self, CandleBackendError> {
+        let device = config.device().try_build_device()?;
         Ok(Self {
             config,
+            device: Arc::new(device),
             store: Arc::new(CandleStore::new()),
             model_cache: Arc::new(CandleModelCache::new()),
         })
@@ -33,8 +36,12 @@ impl CandleBackend {
         &self.config
     }
 
-    pub fn device(&self) -> &CandleDevice {
-        self.config.device()
+    pub fn device(&self) -> &Arc<Device> {
+        &self.device
+    }
+
+    pub fn device_label(&self) -> &str {
+        self.config.device().label()
     }
 
     pub fn store(&self) -> &Arc<CandleStore> {
@@ -100,6 +107,20 @@ impl InferenceBackend for CandleBackend {
             CandleBackendError::InvalidRequest(message) => {
                 reimagine_inference::error::InferenceError::BackendExecutionFailed { message }
             }
+            CandleBackendError::DeviceUnavailable { reason, .. } => {
+                reimagine_inference::error::InferenceError::BackendExecutionFailed {
+                    message: reason,
+                }
+            }
+            CandleBackendError::UnsupportedModelFamily {
+                model_id,
+                series,
+                variant,
+            } => reimagine_inference::error::InferenceError::BackendExecutionFailed {
+                message: format!(
+                    "candle backend has no loader for model `{model_id}` (series `{series}`, variant `{variant}`)"
+                ),
+            },
         })
     }
 }

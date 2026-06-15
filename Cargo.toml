@@ -42,3 +42,4 @@ schemars = "0.8"
 trybuild = "1"
 tower = "0.5"
 rig-core = { version = "0.31", default-features = false, features = ["reqwest-middleware-rustls"] }
+candle-core = { version = "0.10", default-features = false, features = ["metal"] }

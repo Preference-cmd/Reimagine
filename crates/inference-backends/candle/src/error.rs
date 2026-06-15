@@ -51,6 +51,15 @@ impl BackendNotImplementedError {
 pub enum CandleBackendError {
     BackendNotImplemented(BackendNotImplementedError),
     InvalidRequest(String),
+    DeviceUnavailable {
+        requested: String,
+        reason: String,
+    },
+    UnsupportedModelFamily {
+        model_id: String,
+        series: String,
+        variant: String,
+    },
 }
 
 impl std::fmt::Display for CandleBackendError {
@@ -63,6 +72,17 @@ impl std::fmt::Display for CandleBackendError {
                 err.backend_kind()
             ),
             Self::InvalidRequest(msg) => f.write_str(msg),
+            Self::DeviceUnavailable { requested, reason } => {
+                write!(f, "candle device `{requested}` unavailable: {reason}")
+            }
+            Self::UnsupportedModelFamily {
+                model_id,
+                series,
+                variant,
+            } => write!(
+                f,
+                "candle backend has no loader for model `{model_id}` (series `{series}`, variant `{variant}`)"
+            ),
         }
     }
 }
@@ -115,5 +135,29 @@ mod tests {
     fn invalid_request_display() {
         let err = CandleBackendError::InvalidRequest("bad param".to_string());
         assert_eq!(err.to_string(), "bad param");
+    }
+
+    #[test]
+    fn device_unavailable_display() {
+        let err = CandleBackendError::DeviceUnavailable {
+            requested: "tpu".to_string(),
+            reason: "unsupported".to_string(),
+        };
+        let msg = err.to_string();
+        assert!(msg.contains("tpu"), "{msg}");
+        assert!(msg.contains("unsupported"), "{msg}");
+    }
+
+    #[test]
+    fn unsupported_model_family_display() {
+        let err = CandleBackendError::UnsupportedModelFamily {
+            model_id: "flux-dev".to_string(),
+            series: "flux".to_string(),
+            variant: "dev".to_string(),
+        };
+        let msg = err.to_string();
+        assert!(msg.contains("flux-dev"), "{msg}");
+        assert!(msg.contains("flux"), "{msg}");
+        assert!(msg.contains("dev"), "{msg}");
     }
 }

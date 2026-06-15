@@ -191,6 +191,103 @@ The workflow/runtime surface still sees three typed values. Only the Candle
 backend knows whether those handles point into one shared bundle or separate
 backend payloads.
 
+## Code Organization
+
+The Candle backend should keep the same modern module style as the rest of the
+workspace. Do not introduce `mod.rs` files or `#[path = "..."]` attributes.
+Keep `lib.rs` as a facade of private modules plus explicit re-exports.
+
+Suggested layout for the real Candle backend path:
+
+```text
+src/
+  backend.rs
+  config.rs
+  device.rs
+  error.rs
+  lib.rs
+  operation.rs
+  operation/
+    diffusion.rs
+    image.rs
+    latent.rs
+    model.rs
+    text.rs
+  resource.rs
+  store.rs
+  models.rs
+  models/
+    stable_diffusion.rs
+    stable_diffusion/
+      sdxl.rs
+      sdxl/
+        bundle.rs
+        text.rs
+        diffusion.rs
+        vae.rs
+        tokenizer.rs
+```
+
+`operation/*` modules translate backend-neutral `InferenceRequest` values into
+backend-local model/store calls and translate results back into
+`InferenceResponse`. They should not become large kernel implementation files.
+
+Standard operations must stay standard:
+
+- `operation/text.rs` owns the `text.encode` request/response contract.
+- `operation/diffusion.rs` owns the `diffusion.sample` request/response
+  contract.
+- `operation/latent.rs` owns `latent.create_empty` and `latent.decode`
+  request/response contracts.
+- `operation/image.rs` owns `image.save` and `image.preview` request/response
+  contracts.
+
+These modules may inspect backend-local model metadata and dispatch to a model
+series/variant implementation, but they must not rename the operation into an
+SDXL-specific concept or encode SDXL-only assumptions into the public operation
+protocol. SDXL is the first V1 implementation behind those operations, not the
+operation shape itself.
+
+Model-family code belongs below `models/<series>/<variant>/...`. For V1 this
+means stable-diffusion SDXL helpers for loading, tokenization, text encoding,
+sampling, and VAE decode. Existing `models/sdxl/*` code is a transitional
+layout; move it toward `models/stable_diffusion/sdxl/*` before adding another
+model family.
+
+`store.rs` owns backend payload maps and safe access helpers. As real tensors
+land, `CandlePayload` may become:
+
+```text
+CandlePayload
+  Latent(...)
+  Conditioning(...)
+  Image(...)
+```
+
+Callers should access payloads through typed store methods such as
+`get_latent`, `insert_conditioning`, or `take_image_for_save` rather than
+matching on the payload enum throughout operation modules. This keeps lock
+scope, error messages, and payload ownership policy centralized.
+
+The variant bundle module owns the concrete loaded bundle type. The public
+runtime-facing result of `model.load_bundle` remains three lightweight
+`RuntimeValue` handles; the loaded Candle objects stay behind the cache entry.
+
+## Artifact Boundary
+
+Image save/preview has two responsibilities that must stay distinct:
+
+- Candle backend code may encode a backend-owned image payload and write bytes
+  to a safe workspace-relative destination, or return a backend image/artifact
+  intent that lets the executor write through a host capability.
+- The inference executor records the artifact with runtime
+  `NodeArtifactCapability` so run snapshots and run events stay host-neutral.
+
+`InferenceRequest` must not carry `NodeArtifactCapability`. Runtime owns the
+artifact store and event semantics. The backend owns only image tensor/payload
+conversion and encoding details. A saved file path must stay under the
+workspace output directory selected by app-host/config.
+
 ## Model Resolution Handoff
 
 `checkpoint_loader` receives a workflow `ModelRef` as a static param. The
@@ -228,7 +325,13 @@ M1 should prioritize an executable vertical slice over complete SDXL quality:
    runtime value shapes and artifact path identical to the eventual real SDXL
    path.
 6. Replace stubs with real Candle CLIP/UNet/VAE implementation behind the same
-   inference/backend API.
+   inference/backend API in small standard-operation milestones:
+   - model cache / dependency contract;
+   - real latent tensor store;
+   - `text.encode` with SDXL as the first supported variant;
+   - `diffusion.sample` with SDXL as the first supported variant;
+   - `latent.decode` plus `image.save` / `image.preview` with SDXL as the
+     first supported variant.
 
 The first M1 issue should not try to perfect sampling quality, device offload,
 or streaming progress. It should make the SDXL example produce a deterministic
