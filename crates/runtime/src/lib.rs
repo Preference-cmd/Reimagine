@@ -45,9 +45,10 @@ pub use store::{RunStore, RunStoreInner};
 pub use value_store::{OutputKey, RunValueStore};
 
 pub use value::{
-    BackendKind, BackendPayloadKey, BackendTensorHandle, ConditioningMetadata, RuntimeClipHandle,
-    RuntimeConditioning, RuntimeImage, RuntimeLatent, RuntimeModelHandle, RuntimeVaeHandle,
-    RuntimeValue,
+    BackendKind, BackendPayloadKey, BackendTensorHandle, BackendTensorMetadata,
+    ConditioningMetadata, ExecutionConditioning, ExecutionValue, ExecutionValueKind,
+    RuntimeClipHandle, RuntimeConditioning, RuntimeImage, RuntimeLatent, RuntimeModelHandle,
+    RuntimeVaeHandle, RuntimeValue,
 };
 
 pub mod value;

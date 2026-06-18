@@ -1,10 +1,10 @@
 use reimagine_core::model::{
     ArtifactRef, ModelId, ModelRole, ParamValue, TensorDType, TensorShape,
 };
-use reimagine_runtime::{
-    BackendKind, BackendPayloadKey, BackendTensorHandle, ConditioningMetadata, RuntimeClipHandle,
-    RuntimeConditioning, RuntimeImage, RuntimeLatent, RuntimeModelHandle, RuntimeVaeHandle,
-    RuntimeValue,
+use reimagine_core::{
+    BackendKind, BackendPayloadKey, BackendTensorHandle, ConditioningMetadata,
+    ExecutionConditioning, ExecutionValue, RuntimeClipHandle, RuntimeImage, RuntimeLatent,
+    RuntimeModelHandle, RuntimeVaeHandle,
 };
 
 #[test]
@@ -26,8 +26,8 @@ fn runtime_values_can_express_the_minimal_sdxl_base_intermediates() {
         .with_device(device);
 
     assert!(matches!(
-        RuntimeValue::Model(model.clone()),
-        RuntimeValue::Model(_)
+        ExecutionValue::Model(model.clone()),
+        ExecutionValue::Model(_)
     ));
     assert_eq!(model.model_id(), &checkpoint);
     assert_eq!(model.role(), ModelRole::DiffusionModel);
@@ -51,9 +51,9 @@ fn runtime_values_can_express_the_minimal_sdxl_base_intermediates() {
     let metadata = ConditioningMetadata::new(1024, 1024)
         .with_crop(0, 0)
         .with_target_size(1024, 1024);
-    let positive = RuntimeConditioning::new(text_embedding.clone(), metadata.clone())
+    let positive = ExecutionConditioning::new(text_embedding.clone(), metadata.clone())
         .with_pooled_embedding(pooled_embedding.clone());
-    let negative = RuntimeConditioning::new(
+    let negative = ExecutionConditioning::new(
         BackendTensorHandle::new(
             backend.clone(),
             BackendPayloadKey::new("negative/text"),
@@ -68,8 +68,8 @@ fn runtime_values_can_express_the_minimal_sdxl_base_intermediates() {
     assert_eq!(positive.pooled_embedding(), Some(&pooled_embedding));
     assert_eq!(positive.metadata().target_width(), 1024);
     assert!(matches!(
-        RuntimeValue::Conditioning(negative),
-        RuntimeValue::Conditioning(_)
+        ExecutionValue::Conditioning(negative),
+        ExecutionValue::Conditioning(_)
     ));
 
     let latent_tensor = BackendTensorHandle::new(
@@ -83,8 +83,8 @@ fn runtime_values_can_express_the_minimal_sdxl_base_intermediates() {
     assert_eq!(latent.payload(), &latent_tensor);
     assert_eq!(latent.width(), 1024);
     assert!(matches!(
-        RuntimeValue::Latent(latent),
-        RuntimeValue::Latent(_)
+        ExecutionValue::Latent(latent),
+        ExecutionValue::Latent(_)
     ));
 
     let image_tensor = BackendTensorHandle::new(
@@ -97,15 +97,18 @@ fn runtime_values_can_express_the_minimal_sdxl_base_intermediates() {
     let image = RuntimeImage::new(image_tensor.clone(), 1024, 1024, 1, "rgb");
     assert_eq!(image.payload(), &image_tensor);
     assert_eq!(image.color_space(), "rgb");
-    assert!(matches!(RuntimeValue::Image(image), RuntimeValue::Image(_)));
+    assert!(matches!(
+        ExecutionValue::Image(image),
+        ExecutionValue::Image(_)
+    ));
 
-    let artifact = RuntimeValue::Artifact(ArtifactRef::new("outputs/sdxl.png"));
-    assert!(matches!(artifact, RuntimeValue::Artifact(_)));
+    let artifact = ExecutionValue::Artifact(ArtifactRef::new("outputs/sdxl.png"));
+    assert!(matches!(artifact, ExecutionValue::Artifact(_)));
 }
 
 #[test]
 fn runtime_values_do_not_require_candle_types() {
-    let value = RuntimeValue::Param(ParamValue::String("a cinematic lake".to_owned()));
+    let value = ExecutionValue::Param(ParamValue::String("a cinematic lake".to_owned()));
     assert_eq!(
         value.as_param(),
         Some(&ParamValue::String("a cinematic lake".to_owned()))
