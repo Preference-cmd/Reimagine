@@ -19,7 +19,7 @@ It must not depend on Tauri, Axum, Candle internals, React Flow, Rig, provider S
 - Structural validation and executable readiness diagnostics.
 - Shared diagnostic model and diagnostic targets.
 - `ExecutionPlan` and `RunEvent` schemas.
-- Backend-neutral inference contracts and public semantic values.
+- Public execution values shared across runtime, inference, and backends.
 
 ## Non-Responsibilities
 
@@ -91,7 +91,13 @@ src/
   proposal.rs
   execution_plan.rs
   run_event.rs
-  inference.rs
+  execution_value.rs
+  execution_value/
+    value.rs
+    handles.rs
+    conditioning.rs
+    tensor.rs
+    backend.rs
 ```
 
 Use modern Rust module layout. Do not introduce `mod.rs` files, and prefer ordinary `mod foo;` declarations over `#[path = "..."]` attributes.
@@ -145,13 +151,113 @@ Artifacts:
   ArtifactRef
 ```
 
-`core::model` does not own runtime values, loaded model handles, agent tools, provider config, ComfyUI schema, Candle tensors, or host DTOs.
+`core::model` does not own agent tools, provider config, ComfyUI schema,
+Candle tensors, host DTOs, or the run-time execution value implementation.
+
+Runtime execution values live under a focused `core::execution_value` module
+and are re-exported through stable facade paths. Do not put the implementation
+inside `core::model`; `model` remains the saved/editor semantic model facade,
+while `execution_value` is the run-time value envelope.
+
+Recommended public imports:
+
+```rust
+use reimagine_core::{
+    ExecutionValue,
+    ExecutionConditioning,
+};
+
+use reimagine_core::model::{
+    ModelId, ModelRef, NodeValue, ParamValue,
+};
+```
+
+The important boundary is that execution values are core-owned public handles,
+not runtime-owned store internals and not inference-owned backend contracts.
+
+## Public Execution Values
+
+`core` owns the public value envelope used during workflow execution:
+
+```text
+ExecutionValue
+  Param
+  Model
+  Clip
+  Vae
+  Latent
+  Conditioning
+  Image
+  Artifact
+  Null
+```
+
+The canonical name is `ExecutionValue`. Existing code may temporarily expose
+`RuntimeValue` as a compatibility alias during migration, but new architecture
+and new issue text should use `ExecutionValue`.
+
+These values are the stable cross-crate handle shape that runtime stores,
+inference executors consume, and backends construct or reinterpret through
+typed capability requests. They are not workflow file contents and they are not
+backend-local tensors.
+
+`ExecutionConditioning` is the concrete value carried by
+`ExecutionValue::Conditioning`. It represents conditioning produced during a
+run, such as text embeddings and optional pooled embeddings, using
+backend-affine tensor handles. Existing code may temporarily expose the old
+`RuntimeConditioning` name as a compatibility alias during migration. Its
+current `metadata` field is considered part of the conditioning value and does
+not need a separate public abstraction in V1.
+
+Conditioning metadata may include spatial context such as width, height, crop,
+and target size. It must stay limited to information that node orchestration or
+backend compatibility checks can treat as public execution context. Model-family
+private conditioning internals must remain in backend-owned payloads.
+
+Suggested internal shape:
+
+```text
+execution_value.rs
+  facade and public re-exports
+
+execution_value/value.rs
+  ExecutionValue enum
+  ExecutionValueKind
+
+execution_value/handles.rs
+  RuntimeModelHandle
+  RuntimeClipHandle
+  RuntimeVaeHandle
+  RuntimeLatent
+  RuntimeImage
+  BackendTensorHandle
+
+execution_value/conditioning.rs
+  ExecutionConditioning
+  ConditioningMetadata
+
+execution_value/tensor.rs
+  BackendTensorMetadata
+  TensorShape / dtype references from model facade where reusable
+
+execution_value/backend.rs
+  BackendKind
+  BackendPayloadKey
+  BackendDeviceLabel
+```
+
+`lib.rs` should re-export the public execution value types directly from
+`reimagine_core::*` where they are part of the cross-crate execution contract.
+The implementation submodules should stay private. Consumers should not need to
+import paths such as `core::execution_value::handles::RuntimeLatent`.
 
 ## Key Decisions
 
 - Workflow JSON stores graph structure, node params, model refs, layout, interface, and metadata.
 - Workflow JSON stores `ModelRef.id`, not model file paths.
 - Workflow JSON does not store runtime values, backend tensor handles, loaded model handles, run sessions, diagnostics snapshots, or intermediate tensors.
+- `core` owns the node-definition schema language: `NodeDef`, `InputSlotDef`, `OutputSlotDef`, `SlotKind`, `NodeEffect`, and the read-only `NodeCatalog` interface.
+- `core` does not own the built-in node catalog data. Built-in definitions live in `crates/nodes` and consume the core schema.
 - Node inputs are slot-based. `WorkflowNode.params` stores fallback values for `dynamic=false` input slots.
 - Edges always connect slots. If an edge and param both provide a value for an input slot, the edge wins.
 - `dynamic=true` input slots are edge-only and cannot appear in `WorkflowNode.params`.

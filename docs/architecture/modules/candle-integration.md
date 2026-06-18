@@ -2,25 +2,24 @@
 
 > Status: working draft
 > Crate: `crates/inference-backends/candle` (`reimagine-inference-candle`)
-> Legacy placeholder: `crates/candle-integration`
 
 ## Role
 
 The Candle backend adapter is the local Candle implementation of the
-backend-neutral inference layer. It implements the operation protocol from
-`crates/inference` and owns Candle-specific model loading, tensor storage,
+backend-neutral inference contract. It implements typed backend capabilities
+from `crates/inference-core` and owns Candle-specific model loading, tensor storage,
 device policy, and image encoding.
 
 Concrete inference backend crates are grouped under
-`crates/inference-backends/*`. `crates/candle-integration` is a legacy
-placeholder from the pre-`inference` architecture and should be migrated,
-renamed, or removed as the Candle adapter becomes `reimagine-inference-candle`.
-The preferred V1 path is direct migration into the grouped backend crate, not a
-long-lived compatibility layer.
+`crates/inference-backends/*`. The previous standalone Candle integration path
+has been replaced by `crates/inference-backends/candle`; do not introduce a
+compatibility crate or a second backend path.
 
 ## V1 Target
 
-V1 must support SDXL base-only text-to-image inference. SDXL refiner support is deferred.
+V1 must support SDXL base-only text-to-image inference. SDXL refiner support is
+deferred. SDXL is the first backend implementation behind typed backend
+capabilities; it is not a public capability family.
 
 ## Responsibilities
 
@@ -29,7 +28,7 @@ V1 must support SDXL base-only text-to-image inference. SDXL refiner support is 
 - Model loading and cache.
 - CLIP, UNet, VAE implementations.
 - Tensor conversion between `core` data and Candle tensors.
-- Operation implementations consumed by inference-layer executors.
+- Typed backend capability implementations consumed by inference-layer executors.
 - Artifact encoding for image outputs produced by `builtin.save_image`.
 
 ## Non-Responsibilities
@@ -44,8 +43,9 @@ V1 must support SDXL base-only text-to-image inference. SDXL refiner support is 
 
 ```text
 app-host -> inference
+app-host -> inference-core
 app-host -> inference-backends/candle
-inference-backends/candle -> inference
+inference-backends/candle -> inference-core
 inference-backends/candle -> runtime
 inference-backends/candle -> core
 inference-backends/candle must not -> app-host
@@ -54,14 +54,16 @@ inference-backends/candle must not -> axum
 inference-backends/candle must not -> model-manager
 ```
 
-`app-host` resolves model descriptors through `model-manager`, then injects the
-chosen inference backend and node executor registry into runtime. The Candle
-adapter consumes resolved paths/metadata; it does not scan directories or read
-manifests.
+`app-host` resolves model descriptors through `model-manager`, registers the
+Candle adapter in the `inference-core` backend registry, constructs the
+`inference-core` runtime/router, then injects inference-backed node executors
+into runtime. The Candle adapter consumes resolved paths/metadata; it does not
+scan directories or read manifests.
 
-Backend selection is owned by app-host/config. Candle can be the default V1
-backend, but it should be selected through an enum/config value rather than
-being hard-coded into runtime, inference executors, Axum, or Tauri.
+Backend construction is owned by app-host/config. Candle can be the default V1
+backend, but it should be registered behind `BackendKind` and reached through
+the `inference-core` runtime/router rather than being hard-coded into runtime,
+inference executors, Axum, or Tauri.
 
 ## Runtime Integration
 
@@ -71,12 +73,13 @@ The runtime already owns the host-neutral execution boundary:
 RuntimeService
   -> NodeExecutorRegistry
   -> NodeExecutor::execute(NodeExecutionContext)
-  -> Vec<(SlotId, Arc<RuntimeValue>)>
+  -> Vec<(SlotId, Arc<ExecutionValue>)>
 ```
 
 `inference` provides backend-neutral `NodeExecutor` implementations or
-factories for the V1 built-ins. The Candle adapter implements the operations
-consumed by those executors. Runtime remains backend-agnostic.
+factories for the V1 built-ins. Those executors call the `inference-core`
+runtime/router. The Candle adapter implements typed backend capability methods
+selected by the router. Runtime remains backend-agnostic.
 
 Initial executor set:
 
@@ -96,8 +99,8 @@ text-to-image save path.
 
 ## Candle Backend Shape
 
-V1 should introduce a Candle backend service with explicit configuration and
-interior synchronization so executors can share it safely:
+The Candle backend service has explicit configuration and interior
+synchronization so executors can share it safely:
 
 ```text
 CandleBackend
@@ -111,7 +114,7 @@ The backend owns:
 - Candle device and dtype policy;
 - loaded checkpoint/model component cache;
 - backend tensor payload store keyed by `BackendPayloadKey`;
-- conversion between backend tensors and `RuntimeValue` handles;
+- conversion between backend tensors and `ExecutionValue` handles;
 - image encoding/write helpers used by `save_image`.
 
 `CandleBackend` owns both the backend payload store and the model cache. Runtime
@@ -146,8 +149,8 @@ force a release strategy:
 It may implement both:
 
 ```text
-InferenceBackend
-  execute(operation_request)
+inference-core::InferenceBackend
+  load_bundle / text_encode / diffusion_sample / ...
 
 RunResourceBackend
   begin_run / release_runtime_value / cleanup_run / memory_snapshot
@@ -155,22 +158,22 @@ RunResourceBackend
 
 These roles stay separate even when implemented by the same concrete object.
 
-The runtime only sees lightweight `RuntimeValue` handles:
+The runtime only sees lightweight `ExecutionValue` handles:
 
 ```text
-RuntimeValue::Model(RuntimeModelHandle)
-RuntimeValue::Clip(RuntimeClipHandle)
-RuntimeValue::Vae(RuntimeVaeHandle)
-RuntimeValue::Conditioning(RuntimeConditioning)
-RuntimeValue::Latent(RuntimeLatent)
-RuntimeValue::Image(RuntimeImage)
-RuntimeValue::Artifact(ArtifactRef)
+ExecutionValue::Model(RuntimeModelHandle)
+ExecutionValue::Clip(RuntimeClipHandle)
+ExecutionValue::Vae(RuntimeVaeHandle)
+ExecutionValue::Conditioning(ExecutionConditioning)
+ExecutionValue::Latent(RuntimeLatent)
+ExecutionValue::Image(RuntimeImage)
+ExecutionValue::Artifact(ArtifactRef)
 ```
 
 No `candle_core::Tensor` should appear in `runtime`, `app-host`, `axum-host`,
 or workflow JSON.
 
-`model.load_bundle` should avoid duplicating loaded SDXL components. Internally,
+`load_bundle` should avoid duplicating loaded SDXL components. Internally,
 the backend may store one loaded bundle and expose separate typed handles for
 the workflow outputs:
 
@@ -181,15 +184,17 @@ LoadedSdxlBundle
   VAE
   metadata
 
-model.load_bundle outputs
-  RuntimeValue::Model(handle to bundle model role)
-  RuntimeValue::Clip(handle to bundle clip role)
-  RuntimeValue::Vae(handle to bundle vae role)
+load_bundle outputs
+  ExecutionValue::Model(handle to bundle model role)
+  ExecutionValue::Clip(handle to bundle clip role)
+  ExecutionValue::Vae(handle to bundle vae role)
 ```
 
-The workflow/runtime surface still sees three typed values. Only the Candle
-backend knows whether those handles point into one shared bundle or separate
-backend payloads.
+The workflow/runtime/inference-executor surface still sees three typed values.
+Only the Candle backend knows whether those handles point into one shared
+bundle, separate backend payloads, placeholder V1 objects, or real loaded
+Candle modules. Higher modules must not infer model architecture from the
+handle shape.
 
 ## Code Organization
 
@@ -228,31 +233,86 @@ src/
         tokenizer.rs
 ```
 
-`operation/*` modules translate backend-neutral `InferenceRequest` values into
-backend-local model/store calls and translate results back into
-`InferenceResponse`. They should not become large kernel implementation files.
+Backend capability modules translate typed backend-neutral request DTOs into
+backend-local model/store calls and translate results back into typed response
+DTOs. They should not become large kernel implementation files.
 
-Standard operations must stay standard:
+Standard backend capabilities must stay standard:
 
-- `operation/text.rs` owns the `text.encode` request/response contract.
-- `operation/diffusion.rs` owns the `diffusion.sample` request/response
+- `operation/text.rs` owns the `text_encode` request/response contract.
+- `operation/diffusion.rs` owns the `diffusion_sample` request/response
   contract.
-- `operation/latent.rs` owns `latent.create_empty` and `latent.decode`
+- `operation/latent.rs` owns `create_empty_latent` and `latent_decode`
   request/response contracts.
-- `operation/image.rs` owns `image.save` and `image.preview` request/response
+- `operation/image.rs` owns `image_save` and `image_preview` request/response
   contracts.
 
 These modules may inspect backend-local model metadata and dispatch to a model
-series/variant implementation, but they must not rename the operation into an
+series/variant implementation, but they must not rename the capability into an
 SDXL-specific concept or encode SDXL-only assumptions into the public operation
-protocol. SDXL is the first V1 implementation behind those operations, not the
-operation shape itself.
+protocol. SDXL is the first V1 implementation behind those capabilities, not
+the capability shape itself.
+
+Node orchestration remains above the backend in the inference layer. The Candle
+backend receives typed capability requests over abstract runtime handles; it
+does not define what `builtin.ksampler` or `builtin.clip_text_encode` means as a
+workflow node. Its job is to interpret handles such as `Model`, `Clip`, `Vae`,
+`Latent`, and `Conditioning` against backend-owned loaded bundles and payloads.
+
+The same rule applies inside the Candle backend implementation. It is acceptable
+for V1 to route a typed capability to an SDXL implementation because only SDXL
+is currently loaded. It is not acceptable for the backend design to imply that
+every future model family should receive a parallel copy of the same operation
+infrastructure.
+
+Preferred shape:
+
+```text
+operation/text.rs
+  validates `text_encode`
+  resolves loaded text encoder role(s)
+  dispatches to a model graph / kernel adapter selected by loaded bundle metadata
+
+operation/diffusion.rs
+  validates `diffusion_sample`
+  resolves diffusion model + scheduler configuration
+  dispatches to a sampler/kernel adapter selected by loaded bundle metadata
+
+operation/latent.rs
+  validates `latent_decode`
+  resolves VAE/image decoder role
+  dispatches to a decoder adapter selected by loaded bundle metadata
+```
+
+The backend-private trait chain for sampling can be:
+
+```text
+inference-core::InferenceBackend::diffusion_sample(DiffusionSampleRequest)
+  -> CandleBackend::diffusion_sample(...)
+  -> LoadedModelGraph::diffusion_sampler(...)
+  -> DiffusionSampler::sample(...)
+  -> LoadedSdxlBundle / future model implementation
+```
+
+These backend-private traits may use Candle tensors, tokenizer state, scheduler
+configuration, device policy, and loaded bundle metadata. They must not use
+workflow `NodeTypeId` values or catalog metadata.
+
+In this shape, `models/stable_diffusion/sdxl/*` is the first concrete backend
+implementation selected by the loaded bundle. It is not the shape of the
+capability protocol, and it should not be copied as a template for every future
+model family.
+
+Model-specific code may exist below `models/<series>/<variant>/...`, but it
+should trend toward reusable backend-local traits or graph adapters where the
+algorithm is common and only loaded weights/config differ. If the implementation
+for a new model would duplicate most of SDXL's text/sampling/decode operation
+logic, that is a signal to deepen the backend model graph abstraction before
+adding the model.
 
 Model-family code belongs below `models/<series>/<variant>/...`. For V1 this
 means stable-diffusion SDXL helpers for loading, tokenization, text encoding,
-sampling, and VAE decode. Existing `models/sdxl/*` code is a transitional
-layout; move it toward `models/stable_diffusion/sdxl/*` before adding another
-model family.
+sampling, and VAE decode under `models/stable_diffusion/sdxl/*`.
 
 `store.rs` owns backend payload maps and safe access helpers. As real tensors
 land, `CandlePayload` may become:
@@ -270,8 +330,8 @@ matching on the payload enum throughout operation modules. This keeps lock
 scope, error messages, and payload ownership policy centralized.
 
 The variant bundle module owns the concrete loaded bundle type. The public
-runtime-facing result of `model.load_bundle` remains three lightweight
-`RuntimeValue` handles; the loaded Candle objects stay behind the cache entry.
+runtime-facing result of `load_bundle` remains three lightweight
+`ExecutionValue` handles; the loaded Candle objects stay behind the cache entry.
 
 ## Artifact Boundary
 
@@ -283,10 +343,10 @@ Image save/preview has two responsibilities that must stay distinct:
 - The inference executor records the artifact with runtime
   `NodeArtifactCapability` so run snapshots and run events stay host-neutral.
 
-`InferenceRequest` must not carry `NodeArtifactCapability`. Runtime owns the
-artifact store and event semantics. The backend owns only image tensor/payload
-conversion and encoding details. A saved file path must stay under the
-workspace output directory selected by app-host/config.
+Typed backend requests must not carry `NodeArtifactCapability`. Runtime owns
+the artifact store and event semantics. The backend owns only image
+tensor/payload conversion and encoding details. A saved file path must stay
+under the workspace output directory selected by app-host/config.
 
 ## Model Resolution Handoff
 
@@ -299,44 +359,25 @@ The dependency direction is:
 ```text
 workflow ModelRef
   -> app-host ModelService::resolve_descriptor
-  -> inference model resolver capability
-  -> InferenceRequest(model.load_bundle)
-  -> CandleBackend
-  -> RuntimeValue::Model / Clip / Vae handles
+  -> inference-core model resolver capability
+  -> LoadBundleRequest
+  -> inference-core::InferenceBackend::load_bundle(...)
+  -> ExecutionValue::Model / Clip / Vae handles
 ```
 
 The resolver capability should be defined at the app-host/inference boundary,
 not inside runtime. Runtime passes params to the executor but does not resolve
 models itself.
 
-## M1 Strategy
+## Current Implementation Notes
 
-M1 should prioritize an executable vertical slice over complete SDXL quality:
+The first executable SDXL path now runs through the real app-host/runtime/
+inference/backend registration path and can produce a PNG artifact under the
+workspace output directory. The current backend math is still a V1 placeholder
+for the heavy model kernels; real weight-driven CLIP/UNet/VAE execution should
+land behind the same typed backend capability protocol.
 
-1. Introduce the `inference` crate boundary and backend-neutral executor
-   registration shape.
-2. Directly migrate the current `candle-integration` placeholder into
-   `crates/inference-backends/candle` as `reimagine-inference-candle`, replacing
-   the legacy crate unless a very small temporary shim is required.
-3. Register concrete executors through app-host into runtime.
-4. Prove the existing SDXL workflow executes through Axum HTTP using the real
-   registry path.
-5. Initially allow backend stubs for heavy kernels where needed, but keep the
-   runtime value shapes and artifact path identical to the eventual real SDXL
-   path.
-6. Replace stubs with real Candle CLIP/UNet/VAE implementation behind the same
-   inference/backend API in small standard-operation milestones:
-   - model cache / dependency contract;
-   - real latent tensor store;
-   - `text.encode` with SDXL as the first supported variant;
-   - `diffusion.sample` with SDXL as the first supported variant;
-   - `latent.decode` plus `image.save` / `image.preview` with SDXL as the
-     first supported variant.
-
-The first M1 issue should not try to perfect sampling quality, device offload,
-or streaming progress. It should make the SDXL example produce a deterministic
-artifact or a precise backend-not-implemented diagnostic through the real
-executor registration path. It is acceptable for `model.load_bundle` and
-`latent.create_empty` to succeed and for the run to fail at the first heavy
-unimplemented operation, such as `text.encode`, as long as the diagnostic names
-the unsupported backend operation precisely.
+Follow-up implementation should prioritize backend-internal model graph and
+kernel adapter boundaries before adding another model family. If supporting a
+new model would require copying SDXL text/sampling/decode operation modules,
+deepen the backend abstraction first.
