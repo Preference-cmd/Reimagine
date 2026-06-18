@@ -72,6 +72,13 @@ runtime scheduler
 The runtime execution unit remains a workflow node invocation. Backend
 capability calls are not runtime scheduling units.
 
+`inference` calls the executor-facing `InferenceRuntime` router, not
+`InferenceBackend` directly. The two traits are deliberately not equivalent:
+the runtime/router trait validates handles, selects a backend, applies bridge
+policy, and emits routing diagnostics; the backend trait is the concrete
+adapter seam for one backend implementation. Inference executors should depend
+on the router trait even if a workspace currently registers only Candle.
+
 ## Runtime Value Usage
 
 `inference` consumes and returns public execution values owned by `core`.
@@ -280,6 +287,23 @@ remain explicit. Do not replace them with a mandatory table-driven
 The next correction is to make existing executors depend on
 `inference-core::InferenceRuntime` rather than a single
 `Arc<dyn InferenceBackend>` or stringly `operation_id` dispatch.
+
+`operation_id` is not part of the target executor path. A concrete executor
+should call a typed method such as:
+
+```text
+InferenceRuntime::diffusion_sample(DiffusionSampleRequest)
+```
+
+It should not build a generic envelope whose correctness depends on:
+
+```text
+operation_id = "diffusion.sample"
+```
+
+If labels are needed for diagnostics, tracing, capability reports, or bridge
+policy, they should be derived from an `InferenceCapability`/capability label
+owned by `inference-core`, not used as the primary dispatch key.
 
 Real CLIP/UNet/VAE work should land behind the same typed backend capability
 protocol. Do not add model-family-specific executor infrastructure unless a

@@ -143,6 +143,32 @@ impl InferenceRuntime for DefaultInferenceRuntime
   dispatch to Arc<dyn InferenceBackend>
 ```
 
+`InferenceRuntime` and `InferenceBackend` are intentionally not equivalent
+interfaces, even when they expose the same capability method names.
+
+```text
+InferenceRuntime
+  executor-facing router interface
+  validates public handles and request invariants
+  selects a backend from explicit target / handle affinity / capability support
+  applies bridge policy before crossing backend affinity
+  turns routing failures into inference diagnostics
+  calls one selected InferenceBackend
+
+InferenceBackend
+  concrete backend adapter interface
+  assumes the request has been routed to this backend
+  resolves backend-private payload keys
+  runs model graph / tensor / device implementation
+  returns public core::ExecutionValue handles or typed backend responses
+```
+
+Do not collapse these traits because a V1 workspace has only one backend. A
+single-backend workspace is still routed through `InferenceRuntime`; the router
+is where multi-backend readiness, bridge diagnostics, capability reports, and
+future backend selection policy live. The backend trait is the adapter seam for
+one implementation such as Candle, ONNX, remote inference, or a test fake.
+
 ## Backend Registry
 
 ```text
@@ -189,6 +215,45 @@ pub trait InferenceBackend: Send + Sync + 'static {
 }
 ```
 
+## Capability Identity
+
+`operation_id` is not part of the target execution interface.
+
+The primary execution interface is the typed capability method itself:
+
+```text
+InferenceRuntime::diffusion_sample(DiffusionSampleRequest)
+InferenceBackend::diffusion_sample(DiffusionSampleRequest)
+```
+
+Do not route V1 execution through:
+
+```text
+execute(InferenceRequest { operation_id, inputs, params })
+match operation_id
+```
+
+The remaining stable identity concept should be a capability label/kind used
+for diagnostics, capability reports, tracing, and bridge policy context:
+
+```text
+InferenceCapability
+  LoadBundle
+  TextEncode
+  CreateEmptyLatent
+  DiffusionSample
+  LatentDecode
+  ImageSave
+  ImagePreview
+```
+
+`InferenceCapability` may render to strings such as `diffusion.sample` for logs
+or external diagnostics, but it must not be the runtime/backend dispatch key.
+Generic `InferenceRequest`, `InferenceResponse`, and `InferenceOperationId`
+may exist only as migration shims while old code is moved to typed DTOs. New
+executor and backend code should not add fields that require a caller to set an
+operation id correctly before a typed method can run.
+
 ## Typed Requests And Responses
 
 Typed requests own cheap, shareable handles rather than borrowing from
@@ -220,6 +285,10 @@ DiffusionSampleRequest
   run_id
   node_id
 ```
+
+Typed requests do not carry `operation_id`; the method call already identifies
+the capability. They may carry explicit target/backend preferences only when
+that is a routing decision rather than an operation identifier.
 
 Typed responses return public core handles or artifact intents. They should not
 carry output `SlotId`; slot mapping belongs to the inference executor that knows
@@ -254,19 +323,50 @@ BackendBridgeRequired
   source_backend
   target_backend
   value_kind
-  operation
+  capability
 
 BackendBridgeUnsupported
   source_backend
   target_backend
   value_kind
-  operation
+  capability
   reason
 ```
 
 These diagnostics belong to `inference-core` error/diagnostic projection, not
 runtime. Runtime may surface them through node failure events, but it does not
 decide bridge policy.
+
+## Resource And Device Policy Handoff
+
+`inference-core` routes typed capability calls, but it is not a memory manager.
+It should carry enough public context for routing and diagnostics while leaving
+real resource policy to the selected backend.
+
+```text
+InferenceRuntime
+  validates backend affinity on handles
+  chooses the backend for a typed capability call
+  asks bridge policy before cross-backend/device transfer
+  forwards request context and cancellation/provenance metadata
+
+InferenceBackend
+  owns loaded model cache and tensor payload store
+  pins/unpins backend-private resources according to backend policy
+  decides CPU/GPU placement, offload, transfer, and eviction
+  returns public ExecutionValue handles or typed responses
+```
+
+For multi-image generation, the router may repeatedly route `diffusion_sample`
+to the same backend because the `Model` and `Conditioning` handles have the
+same backend affinity. It does not decide that the diffusion model stays loaded
+between samples; that is a backend cache/pinning decision informed by runtime
+lifecycle intent and backend policy.
+
+If `latent_decode` is routed to a different backend or device than
+`diffusion_sample`, `InferenceRuntime` must require an explicit bridge plan.
+It must not silently reinterpret a latent payload key produced by one backend
+as a payload key for another backend.
 
 ## Model Resolver Handoff
 
@@ -321,3 +421,5 @@ router implementation. `backend.rs` should contain only the concrete backend
 adapter trait. `registry.rs` should own registration and lookup. `bridge.rs`
 should own bridge policy, bridge plans, and reject-all behavior. Request and
 response modules should stay typed by capability, not by workflow node type.
+`capability.rs` should own capability report types and the optional diagnostic
+label/kind, not a stringly execution dispatcher.
