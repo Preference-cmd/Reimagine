@@ -1,6 +1,6 @@
 use std::sync::Arc;
 
-use reimagine_config::{AppConfig, InferenceBackendConfig};
+use reimagine_config::{AppConfig, InferenceBackendConfig, InferenceBackendKind};
 use reimagine_inference::registry::register_builtin_inference_executors;
 use reimagine_inference::{
     DefaultInferenceRuntime, InferenceBackend, InferenceBackendRegistry, InferenceRuntime,
@@ -15,6 +15,16 @@ use crate::ModelService;
 use crate::inference::resolver::ModelResolverAdapter;
 
 #[derive(Debug)]
+pub(crate) struct ComposedBackends {
+    registry: InferenceBackendRegistry,
+    #[cfg(test)]
+    selected_backend_kind: InferenceBackendKind,
+    #[cfg(test)]
+    selected_device_label: String,
+    resource_backend: CandleRunResourceBackend,
+}
+
+#[derive(Debug)]
 pub(crate) struct ComposedInferenceRuntime {
     pub(crate) executor_registry: NodeExecutorRegistry,
     pub(crate) resource_backend: CandleRunResourceBackend,
@@ -25,9 +35,8 @@ pub(crate) fn compose_inference_runtime(
     backend_config: &InferenceBackendConfig,
     model_service: Arc<ModelService>,
 ) -> Result<ComposedInferenceRuntime, CandleBackendError> {
-    let candle_backend = build_candle_backend(config, backend_config)?;
-    let inference_runtime = compose_runtime_router(Arc::clone(&candle_backend));
-    let resource_backend = candle_backend.resource_backend();
+    let composed_backends = compose_inference_backends(config, backend_config)?;
+    let inference_runtime = compose_runtime_router(composed_backends.registry);
 
     let mut executor_registry = NodeExecutorRegistry::default();
     register_builtin_inference_executors(
@@ -42,6 +51,31 @@ pub(crate) fn compose_inference_runtime(
 
     Ok(ComposedInferenceRuntime {
         executor_registry,
+        resource_backend: composed_backends.resource_backend,
+    })
+}
+
+fn compose_inference_backends(
+    config: &AppConfig,
+    backend_config: &InferenceBackendConfig,
+) -> Result<ComposedBackends, CandleBackendError> {
+    let mut registry = InferenceBackendRegistry::new();
+    let resource_backend = match backend_config.backend {
+        InferenceBackendKind::Candle => {
+            let backend = build_candle_backend(config, backend_config)?;
+            let resource_backend = backend.resource_backend();
+            let backend: Arc<dyn InferenceBackend> = backend;
+            registry.register(backend);
+            resource_backend
+        }
+    };
+
+    Ok(ComposedBackends {
+        registry,
+        #[cfg(test)]
+        selected_backend_kind: backend_config.backend,
+        #[cfg(test)]
+        selected_device_label: backend_config.candle_device.clone(),
         resource_backend,
     })
 }
@@ -59,12 +93,52 @@ fn build_candle_backend(
     Ok(Arc::new(CandleBackend::new(candle_config)?))
 }
 
-fn compose_runtime_router(backend: Arc<CandleBackend>) -> Arc<dyn InferenceRuntime> {
-    let backend: Arc<dyn InferenceBackend> = backend;
-    let mut inference_registry = InferenceBackendRegistry::new();
-    inference_registry.register(backend);
+fn compose_runtime_router(registry: InferenceBackendRegistry) -> Arc<dyn InferenceRuntime> {
     Arc::new(DefaultInferenceRuntime::new(
-        Arc::new(inference_registry),
+        Arc::new(registry),
         Arc::new(RejectAllBridgePolicy),
     ))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use reimagine_config::{AppPaths, InferenceBackendKind};
+
+    fn temp_dir(prefix: &str) -> std::path::PathBuf {
+        let nonce = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_nanos();
+        std::env::temp_dir().join(format!("reimagine-app-host-compose-{prefix}-{nonce}"))
+    }
+
+    #[test]
+    fn compose_backends_uses_selected_backend_branch_and_device() {
+        let base = temp_dir("selected-backend");
+        let config = AppConfig::new(AppPaths::new(&base));
+        let backend_config = InferenceBackendConfig {
+            backend: InferenceBackendKind::Candle,
+            candle_device: "cpu".to_string(),
+            ..InferenceBackendConfig::default()
+        };
+
+        let composed = compose_inference_backends(&config, &backend_config).expect("backends");
+
+        assert_eq!(
+            composed.registry.len(),
+            1,
+            "selected backend should register once"
+        );
+        assert_eq!(
+            composed.selected_backend_kind,
+            InferenceBackendKind::Candle,
+            "compose helper should branch on backend_config.backend"
+        );
+        assert_eq!(
+            composed.selected_device_label, "cpu",
+            "selected backend branch should carry configured candle device"
+        );
+        let _ = std::fs::remove_dir_all(&base);
+    }
 }
