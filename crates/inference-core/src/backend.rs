@@ -1,16 +1,27 @@
 //! The backend-neutral inference execution trait.
 //!
 //! [`InferenceBackend`] is the central async trait that concrete
-//! backends implement. The executor-facing router dispatches
-//! requests to the selected backend via this trait.
+//! backends implement. The executor-facing router dispatches typed
+//! capability calls to the selected backend via this trait.
+//!
+//! The primary surface is the typed capability methods. Each method
+//! takes a capability-specific request DTO and returns a
+//! capability-specific response DTO. The trait does not expose a
+//! `Vec<SlotId, ExecutionValue>` envelope and does not require
+//! callers to construct an `InferenceOperationId`.
 
 use crate::capability::InferenceBackendCapabilities;
 use crate::error::InferenceError;
-use crate::request::{
-    InferenceRequest, OP_DIFFUSION_SAMPLE, OP_IMAGE_PREVIEW, OP_IMAGE_SAVE, OP_LATENT_CREATE_EMPTY,
-    OP_LATENT_DECODE, OP_MODEL_LOAD_BUNDLE, OP_TEXT_ENCODE,
-};
-use crate::response::InferenceResponse;
+use crate::request::diffusion::DiffusionSampleRequest;
+use crate::request::image::{ImagePreviewRequest, ImageSaveRequest};
+use crate::request::latent::{CreateEmptyLatentRequest, LatentDecodeRequest};
+use crate::request::model::LoadBundleRequest;
+use crate::request::text::TextEncodeRequest;
+use crate::response::diffusion::DiffusionSampleResponse;
+use crate::response::image::{ImagePreviewResponse, ImageSaveResponse};
+use crate::response::latent::{CreateEmptyLatentResponse, LatentDecodeResponse};
+use crate::response::model::LoadBundleResponse;
+use crate::response::text::TextEncodeResponse;
 use reimagine_core::BackendKind;
 
 /// Backend-neutral inference execution trait.
@@ -27,68 +38,38 @@ pub trait InferenceBackend: Send + Sync + 'static {
     /// The capabilities this backend advertises.
     fn capabilities(&self) -> InferenceBackendCapabilities;
 
-    /// Execute a single inference operation.
-    ///
-    /// Compatibility envelope for existing backend implementations. Typed
-    /// capability methods below are the primary contract. Backends may keep
-    /// this dispatcher while migrating, but router/executor code should prefer
-    /// the typed methods.
-    async fn execute(&self, request: InferenceRequest)
-    -> Result<InferenceResponse, InferenceError>;
-
     async fn load_bundle(
         &self,
-        request: InferenceRequest,
-    ) -> Result<InferenceResponse, InferenceError> {
-        debug_assert_eq!(request.operation_id().as_str(), OP_MODEL_LOAD_BUNDLE);
-        self.execute(request).await
-    }
+        request: LoadBundleRequest,
+    ) -> Result<LoadBundleResponse, InferenceError>;
 
     async fn text_encode(
         &self,
-        request: InferenceRequest,
-    ) -> Result<InferenceResponse, InferenceError> {
-        debug_assert_eq!(request.operation_id().as_str(), OP_TEXT_ENCODE);
-        self.execute(request).await
-    }
+        request: TextEncodeRequest,
+    ) -> Result<TextEncodeResponse, InferenceError>;
 
     async fn create_empty_latent(
         &self,
-        request: InferenceRequest,
-    ) -> Result<InferenceResponse, InferenceError> {
-        debug_assert_eq!(request.operation_id().as_str(), OP_LATENT_CREATE_EMPTY);
-        self.execute(request).await
-    }
+        request: CreateEmptyLatentRequest,
+    ) -> Result<CreateEmptyLatentResponse, InferenceError>;
 
     async fn diffusion_sample(
         &self,
-        request: InferenceRequest,
-    ) -> Result<InferenceResponse, InferenceError> {
-        debug_assert_eq!(request.operation_id().as_str(), OP_DIFFUSION_SAMPLE);
-        self.execute(request).await
-    }
+        request: DiffusionSampleRequest,
+    ) -> Result<DiffusionSampleResponse, InferenceError>;
 
     async fn latent_decode(
         &self,
-        request: InferenceRequest,
-    ) -> Result<InferenceResponse, InferenceError> {
-        debug_assert_eq!(request.operation_id().as_str(), OP_LATENT_DECODE);
-        self.execute(request).await
-    }
+        request: LatentDecodeRequest,
+    ) -> Result<LatentDecodeResponse, InferenceError>;
 
     async fn image_save(
         &self,
-        request: InferenceRequest,
-    ) -> Result<InferenceResponse, InferenceError> {
-        debug_assert_eq!(request.operation_id().as_str(), OP_IMAGE_SAVE);
-        self.execute(request).await
-    }
+        request: ImageSaveRequest,
+    ) -> Result<ImageSaveResponse, InferenceError>;
 
     async fn image_preview(
         &self,
-        request: InferenceRequest,
-    ) -> Result<InferenceResponse, InferenceError> {
-        debug_assert_eq!(request.operation_id().as_str(), OP_IMAGE_PREVIEW);
-        self.execute(request).await
-    }
+        request: ImagePreviewRequest,
+    ) -> Result<ImagePreviewResponse, InferenceError>;
 }

@@ -28,12 +28,12 @@ impl IntoNodeExecutorError for InferenceError {
     fn into_executor_error(self) -> NodeExecutorError {
         match self {
             InferenceError::BackendNotImplemented {
-                operation_id,
+                capability,
                 backend_kind,
                 message,
             } => {
                 let base = format!(
-                    "backend `{backend_kind}` does not implement operation `{operation_id}`"
+                    "backend `{backend_kind}` does not implement capability `{capability}`"
                 );
                 NodeExecutorError::Failed {
                     message: match message {
@@ -59,10 +59,10 @@ impl IntoNodeExecutorError for InferenceError {
                     "backend `{kind}` is not registered in the inference-core registry"
                 ),
             },
-            InferenceError::BackendCapabilityUnsupported { kind, operation_id } => {
+            InferenceError::BackendCapabilityUnsupported { kind, capability } => {
                 NodeExecutorError::Failed {
                     message: format!(
-                        "backend `{kind}` does not advertise capability for `{operation_id}`"
+                        "backend `{kind}` does not advertise capability for `{capability}`"
                     ),
                 }
             }
@@ -76,20 +76,20 @@ impl IntoNodeExecutorError for InferenceError {
             InferenceError::BackendBridgeRequired {
                 source,
                 target,
-                operation_id,
+                capability,
             } => NodeExecutorError::Failed {
                 message: format!(
-                    "operation `{operation_id}` would require a cross-backend bridge from `{source}` to `{target}`"
+                    "capability `{capability}` would require a cross-backend bridge from `{source}` to `{target}`"
                 ),
             },
             InferenceError::BackendBridgeUnsupported {
                 source,
                 target,
-                operation_id,
+                capability,
                 reason,
             } => NodeExecutorError::Failed {
                 message: format!(
-                    "bridge policy forbids transfer from `{source}` to `{target}` for operation `{operation_id}`: {reason}"
+                    "bridge policy forbids transfer from `{source}` to `{target}` for capability `{capability}`: {reason}"
                 ),
             },
         }
@@ -105,11 +105,12 @@ pub fn into_executor_error(err: InferenceError) -> NodeExecutorError {
 mod tests {
     use super::*;
     use reimagine_core::model::SlotId;
+    use reimagine_inference_core::InferenceCapability;
 
     #[test]
     fn backend_not_implemented_converts_to_failed() {
         let err = InferenceError::BackendNotImplemented {
-            operation_id: "diffusion.sample".to_string(),
+            capability: InferenceCapability::DiffusionSample,
             backend_kind: "fake".to_string(),
             message: None,
         };
@@ -142,7 +143,7 @@ mod tests {
         let err = InferenceError::BackendBridgeUnsupported {
             source: "candle".to_string(),
             target: "remote".to_string(),
-            operation_id: "diffusion.sample".to_string(),
+            capability: InferenceCapability::DiffusionSample,
             reason: "no bridge registered".to_string(),
         };
         let exec_err = into_executor_error(err);
@@ -156,7 +157,7 @@ mod tests {
     fn backend_capability_unsupported_converts_to_failed() {
         let err = InferenceError::BackendCapabilityUnsupported {
             kind: "candle".to_string(),
-            operation_id: "diffusion.sample".to_string(),
+            capability: InferenceCapability::DiffusionSample,
         };
         let exec_err = into_executor_error(err);
         let msg = exec_err.to_string();

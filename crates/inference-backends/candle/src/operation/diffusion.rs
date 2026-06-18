@@ -1,8 +1,8 @@
 //! `diffusion.sample` operation.
 //!
-//! Translates a backend-neutral [`InferenceRequest`] for SDXL sampling
-//! into a backend-local sampler pass and returns a
-//! `ExecutionValue::Latent` handle.
+//! Translates a [`DiffusionSampleRequest`] into a backend-local
+//! sampler pass and returns a [`DiffusionSampleResponse`] carrying a
+//! `RuntimeLatent` handle.
 //!
 //! The operation is model-family-neutral at the protocol level.
 //! SDXL-specific tokenization, sampling, and UNet work live in
@@ -13,16 +13,13 @@
 //! `diffusion.sample` call still produces a real latent tensor that
 //! flows through the existing typed `CandleStore` accessors.
 
-use std::sync::Arc;
-
-use reimagine_core::model::SlotId;
 use reimagine_core::model::{TensorDType, TensorShape};
 use reimagine_core::{
-    BackendKind, BackendPayloadKey, ExecutionConditioning, ExecutionValue, RuntimeLatent,
+    BackendPayloadKey, BackendTensorHandle, ExecutionConditioning, RuntimeLatent,
 };
-use reimagine_inference_core::InferenceBackend;
-use reimagine_inference_core::InferenceRequest;
-use reimagine_inference_core::{InferenceOutput, InferenceResponse};
+use reimagine_inference_core::{
+    DiffusionSampleRequest, DiffusionSampleResponse, InferenceBackend, SamplerName, SchedulerName,
+};
 
 use crate::backend::CandleBackend;
 use crate::error::CandleBackendError;
@@ -30,20 +27,15 @@ use crate::models::LoadedModelBundle;
 use crate::models::stable_diffusion::sdxl::diffusion::{SdxlSampleRequest, SdxlSampler};
 
 pub fn execute_diffusion_sample(
-    request: &InferenceRequest,
+    request: DiffusionSampleRequest,
     backend: &CandleBackend,
-) -> Result<InferenceResponse, CandleBackendError> {
-    let model = require_input(request, "model")?;
-    let positive = require_input(request, "positive")?;
-    let negative = require_input(request, "negative")?;
-    let latent = require_input(request, "latent")?;
+) -> Result<DiffusionSampleResponse, CandleBackendError> {
+    let model_handle = require_model_handle(request.model(), backend)?;
+    let positive_handle = require_conditioning_handle(request.positive(), backend)?;
+    let negative_handle = require_conditioning_handle(request.negative(), backend)?;
+    let latent_handle = require_latent_handle(request.latent(), backend)?;
 
-    let model_handle = require_model_handle(model, backend)?;
-    let positive_handle = require_conditioning_handle(positive, backend)?;
-    let negative_handle = require_conditioning_handle(negative, backend)?;
-    let latent_handle = require_latent_handle(latent, backend)?;
-
-    let sample_request = SdxlSampleRequest::from_params(request.params())?;
+    let sample_request = build_sdxl_sample_request(&request)?;
 
     let bundle = backend
         .model_cache()
@@ -106,124 +98,98 @@ pub fn execute_diffusion_sample(
     let latent_batch = latent_handle.batch();
     let latent_channels = latent_handle.channels();
 
-    let latent = ExecutionValue::Latent(RuntimeLatent::new(
-        make_tensor_handle(
-            backend.backend_kind().as_str(),
+    let latent = RuntimeLatent::new(
+        BackendTensorHandle::new(
+            backend.backend_kind().clone(),
             payload_key,
-            output_dims,
+            TensorDType::F32,
+            TensorShape::new(output_dims),
             backend.device_label(),
         ),
         latent_width,
         latent_height,
         latent_batch,
         latent_channels,
-    ));
+    );
 
-    Ok(InferenceResponse::new(vec![InferenceOutput::new(
-        "latent",
-        Arc::new(latent),
-    )]))
+    Ok(DiffusionSampleResponse::new(latent))
 }
 
-fn require_input<'a>(
-    request: &'a InferenceRequest,
-    slot: &str,
-) -> Result<&'a Arc<ExecutionValue>, CandleBackendError> {
-    request.inputs().get(&SlotId::new(slot)).ok_or_else(|| {
-        CandleBackendError::InvalidRequest(format!("diffusion.sample requires a `{slot}` input"))
-    })
+fn build_sdxl_sample_request(
+    request: &DiffusionSampleRequest,
+) -> Result<SdxlSampleRequest, CandleBackendError> {
+    let sampler = match request.sampler() {
+        SamplerName::Euler => "euler".to_string(),
+        SamplerName::Other(name) => name.clone(),
+    };
+    let scheduler = match request.scheduler() {
+        SchedulerName::Normal => "normal".to_string(),
+        SchedulerName::Other(name) => name.clone(),
+    };
+    SdxlSampleRequest::new(
+        request.seed(),
+        request.steps(),
+        request.cfg(),
+        sampler,
+        scheduler,
+        request.denoise(),
+    )
 }
 
 fn require_model_handle(
-    value: &ExecutionValue,
+    handle: &reimagine_core::RuntimeModelHandle,
     backend: &CandleBackend,
 ) -> Result<reimagine_core::RuntimeModelHandle, CandleBackendError> {
-    match value {
-        ExecutionValue::Model(handle) => {
-            if handle.backend() != backend.backend_kind() {
-                return Err(CandleBackendError::InvalidRequest(format!(
-                    "diffusion.sample `model` handle belongs to backend `{}`, expected `{}`",
-                    handle.backend().as_str(),
-                    backend.backend_kind()
-                )));
-            }
-            Ok(handle.clone())
-        }
-        _ => Err(CandleBackendError::InvalidRequest(
-            "diffusion.sample `model` input must be a Model handle".to_string(),
-        )),
+    if handle.backend() != backend.backend_kind() {
+        return Err(CandleBackendError::InvalidRequest(format!(
+            "diffusion.sample `model` handle belongs to backend `{}`, expected `{}`",
+            handle.backend().as_str(),
+            backend.backend_kind()
+        )));
     }
+    Ok(handle.clone())
 }
 
 fn require_conditioning_handle(
-    value: &ExecutionValue,
+    handle: &ExecutionConditioning,
     backend: &CandleBackend,
 ) -> Result<ExecutionConditioning, CandleBackendError> {
-    match value {
-        ExecutionValue::Conditioning(handle) => {
-            if handle.text_embedding().backend() != backend.backend_kind() {
-                return Err(CandleBackendError::InvalidRequest(format!(
-                    "diffusion.sample conditioning handle belongs to backend `{}`, expected `{}`",
-                    handle.text_embedding().backend().as_str(),
-                    backend.backend_kind()
-                )));
-            }
-            if let Some(pooled) = handle.pooled_embedding() {
-                if pooled.backend() != backend.backend_kind() {
-                    return Err(CandleBackendError::InvalidRequest(format!(
-                        "diffusion.sample pooled conditioning handle belongs to backend `{}`, expected `{}`",
-                        pooled.backend().as_str(),
-                        backend.backend_kind()
-                    )));
-                }
-                if pooled.payload_key() != handle.text_embedding().payload_key() {
-                    return Err(CandleBackendError::InvalidRequest(format!(
-                        "diffusion.sample pooled conditioning payload `{}` does not match text conditioning payload `{}`",
-                        pooled.payload_key().as_str(),
-                        handle.text_embedding().payload_key().as_str()
-                    )));
-                }
-            }
-            Ok(handle.clone())
-        }
-        _ => Err(CandleBackendError::InvalidRequest(
-            "diffusion.sample conditioning input must be a Conditioning handle".to_string(),
-        )),
+    if handle.text_embedding().backend() != backend.backend_kind() {
+        return Err(CandleBackendError::InvalidRequest(format!(
+            "diffusion.sample conditioning handle belongs to backend `{}`, expected `{}`",
+            handle.text_embedding().backend().as_str(),
+            backend.backend_kind()
+        )));
     }
+    if let Some(pooled) = handle.pooled_embedding() {
+        if pooled.backend() != backend.backend_kind() {
+            return Err(CandleBackendError::InvalidRequest(format!(
+                "diffusion.sample pooled conditioning handle belongs to backend `{}`, expected `{}`",
+                pooled.backend().as_str(),
+                backend.backend_kind()
+            )));
+        }
+        if pooled.payload_key() != handle.text_embedding().payload_key() {
+            return Err(CandleBackendError::InvalidRequest(format!(
+                "diffusion.sample pooled conditioning payload `{}` does not match text conditioning payload `{}`",
+                pooled.payload_key().as_str(),
+                handle.text_embedding().payload_key().as_str()
+            )));
+        }
+    }
+    Ok(handle.clone())
 }
 
 fn require_latent_handle(
-    value: &ExecutionValue,
+    handle: &reimagine_core::RuntimeLatent,
     backend: &CandleBackend,
-) -> Result<RuntimeLatent, CandleBackendError> {
-    match value {
-        ExecutionValue::Latent(handle) => {
-            if handle.payload().backend() != backend.backend_kind() {
-                return Err(CandleBackendError::InvalidRequest(format!(
-                    "diffusion.sample `latent` handle belongs to backend `{}`, expected `{}`",
-                    handle.payload().backend().as_str(),
-                    backend.backend_kind()
-                )));
-            }
-            Ok(handle.clone())
-        }
-        _ => Err(CandleBackendError::InvalidRequest(
-            "diffusion.sample `latent` input must be a Latent handle".to_string(),
-        )),
+) -> Result<reimagine_core::RuntimeLatent, CandleBackendError> {
+    if handle.payload().backend() != backend.backend_kind() {
+        return Err(CandleBackendError::InvalidRequest(format!(
+            "diffusion.sample `latent` handle belongs to backend `{}`, expected `{}`",
+            handle.payload().backend().as_str(),
+            backend.backend_kind()
+        )));
     }
-}
-
-fn make_tensor_handle(
-    backend_kind: &str,
-    payload_key: BackendPayloadKey,
-    shape: Vec<usize>,
-    device_label: &str,
-) -> reimagine_core::BackendTensorHandle {
-    reimagine_core::BackendTensorHandle::new(
-        BackendKind::from(backend_kind),
-        payload_key,
-        TensorDType::F32,
-        TensorShape::new(shape),
-        device_label,
-    )
+    Ok(handle.clone())
 }

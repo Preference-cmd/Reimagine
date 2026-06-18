@@ -40,8 +40,62 @@ pub struct SdxlSampleRequest {
 }
 
 impl SdxlSampleRequest {
+    /// Build a sampler request directly from typed capability fields.
+    ///
+    /// Used by the typed `diffusion.sample` capability call. Validates
+    /// the same V1 constraints as [`SdxlSampleRequest::from_params`].
+    pub fn new(
+        seed: u64,
+        steps: u32,
+        cfg: f32,
+        sampler_name: impl Into<String>,
+        scheduler_name: impl Into<String>,
+        denoise: f32,
+    ) -> Result<Self, CandleBackendError> {
+        let sampler_name = sampler_name.into().to_ascii_lowercase();
+        let scheduler_name = scheduler_name.into().to_ascii_lowercase();
+        let cfg = cfg as f64;
+        let denoise = denoise as f64;
+
+        if sampler_name != "euler" {
+            return Err(CandleBackendError::InvalidRequest(format!(
+                "diffusion.sample sampler `{sampler_name}` is not supported in V1; expected `euler`"
+            )));
+        }
+        if scheduler_name != "normal" {
+            return Err(CandleBackendError::InvalidRequest(format!(
+                "diffusion.sample scheduler `{scheduler_name}` is not supported in V1; expected `normal`"
+            )));
+        }
+        if !(0.0..=1.0).contains(&denoise) {
+            return Err(CandleBackendError::InvalidRequest(format!(
+                "diffusion.sample denoise must be within [0, 1], got {denoise}"
+            )));
+        }
+        if steps == 0 {
+            return Err(CandleBackendError::InvalidRequest(
+                "diffusion.sample steps must be positive".to_string(),
+            ));
+        }
+        if !cfg.is_finite() {
+            return Err(CandleBackendError::InvalidRequest(format!(
+                "diffusion.sample cfg must be a finite number, got {cfg}"
+            )));
+        }
+
+        Ok(Self {
+            seed,
+            steps,
+            cfg,
+            sampler_name,
+            scheduler_name,
+            denoise,
+        })
+    }
+
     /// Build a sampler request from typed node parameters, validating
     /// the values the backend supports in V1.
+    #[allow(dead_code)]
     pub fn from_params(
         params: &std::collections::HashMap<
             reimagine_core::model::SlotId,
@@ -92,6 +146,7 @@ impl SdxlSampleRequest {
     }
 }
 
+#[allow(dead_code)]
 fn extract_seed(
     params: &std::collections::HashMap<
         reimagine_core::model::SlotId,
@@ -118,6 +173,7 @@ fn extract_seed(
     }
 }
 
+#[allow(dead_code)]
 fn extract_u32(
     params: &std::collections::HashMap<
         reimagine_core::model::SlotId,
@@ -144,6 +200,7 @@ fn extract_u32(
     }
 }
 
+#[allow(dead_code)]
 fn extract_f64(
     params: &std::collections::HashMap<
         reimagine_core::model::SlotId,
@@ -164,6 +221,7 @@ fn extract_f64(
     }
 }
 
+#[allow(dead_code)]
 fn extract_select<'a>(
     params: &'a std::collections::HashMap<
         reimagine_core::model::SlotId,

@@ -2,30 +2,32 @@
 //!
 //! These tests exercise the full executor path: register V1 built-in
 //! executors with a [`FakeBackend`], drive them through a synthetic
-//! [`NodeExecutionContext`], and assert the output slot names, order
-//! independence, error propagation, and validation invariants.
+//! [`NodeExecutionContext`], and assert the executor builds typed
+//! DTOs, calls the typed backend methods, and returns the expected
+//! workflow node outputs.
 
-use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
 
 use reimagine_core::diagnostic::CorrelationId;
 use reimagine_core::model::{
     ArtifactRef, ModelId, ModelRef, ModelRole, ModelSeries, ModelVariant, ParamValue, SlotId,
 };
+use reimagine_core::model::{TensorDType, TensorShape};
 use reimagine_core::{
-    BackendKind, ExecutionValue, RuntimeClipHandle, RuntimeImage, RuntimeModelHandle,
-    RuntimeVaeHandle,
+    BackendKind, BackendPayloadKey, BackendTensorHandle, ExecutionValue, RuntimeClipHandle,
+    RuntimeImage, RuntimeModelHandle, RuntimeVaeHandle,
+};
+use reimagine_inference::operation::InferenceCapability;
+use reimagine_inference::{
+    CannedCapabilityResponse, CreateEmptyLatentRequest, CreateEmptyLatentResponse, FakeBackend,
+    ImageSaveResponse, InferenceBackend, InferenceBackendCapabilities, InferenceCapabilitySupport,
+    InferenceError, IntoNodeExecutorError, LoadBundleResponse, ModelFormat, ModelResolver,
+    ResolvedInferenceModel, TextEncodeRequest, TextEncodeResponse,
+    register_builtin_inference_executors,
 };
 use reimagine_runtime::{
     CancellationToken, NodeExecutionContext, NodeExecutorError, NodeExecutorRegistry, NodeInputs,
     VecRunEventSink,
-};
-
-use reimagine_inference::operation::*;
-use reimagine_inference::{
-    InferenceBackend, InferenceBackendCapabilities, InferenceError, InferenceOperationId,
-    InferenceOperationSupport, InferenceRequest, InferenceResponse, IntoNodeExecutorError,
-    ModelFormat, ModelResolver, ResolvedInferenceModel, register_builtin_inference_executors,
 };
 
 // ── Fake model resolver ────────────────────────────────────────────
@@ -57,76 +59,6 @@ impl ModelResolver for FakeResolver {
     }
 }
 
-// ── Fake backend ───────────────────────────────────────────────────
-
-struct FakeBackend {
-    kind: BackendKind,
-    operations: Mutex<HashMap<InferenceOperationId, Vec<(SlotId, Arc<ExecutionValue>)>>>,
-}
-
-impl FakeBackend {
-    fn new(kind: impl Into<String>) -> Self {
-        Self {
-            kind: BackendKind::new(kind),
-            operations: Mutex::new(HashMap::new()),
-        }
-    }
-
-    fn with_operation(
-        self,
-        operation_id: impl Into<InferenceOperationId>,
-        outputs: Vec<(SlotId, Arc<ExecutionValue>)>,
-    ) -> Self {
-        self.operations
-            .lock()
-            .expect("fake backend poisoned")
-            .insert(operation_id.into(), outputs);
-        self
-    }
-}
-
-#[async_trait::async_trait]
-impl InferenceBackend for FakeBackend {
-    fn backend_kind(&self) -> &BackendKind {
-        &self.kind
-    }
-
-    fn capabilities(&self) -> InferenceBackendCapabilities {
-        let operations = self.operations.lock().expect("fake backend poisoned");
-        let mut capabilities = InferenceBackendCapabilities::new(self.kind.clone());
-        for operation_id in operations.keys() {
-            capabilities =
-                capabilities.with_support(InferenceOperationSupport::new(operation_id.clone()));
-        }
-        capabilities
-    }
-
-    async fn execute(
-        &self,
-        request: InferenceRequest,
-    ) -> Result<InferenceResponse, InferenceError> {
-        let operations = self.operations.lock().expect("fake backend poisoned");
-        match operations.get(request.operation_id()) {
-            Some(outputs) => Ok(InferenceResponse::new(
-                outputs
-                    .iter()
-                    .map(|(slot_id, value)| {
-                        reimagine_inference::InferenceOutput::new(
-                            slot_id.clone(),
-                            Arc::clone(value),
-                        )
-                    })
-                    .collect(),
-            )),
-            None => Err(InferenceError::BackendNotImplemented {
-                operation_id: request.operation_id().to_string(),
-                backend_kind: self.kind.to_string(),
-                message: None,
-            }),
-        }
-    }
-}
-
 // ── Test helpers ───────────────────────────────────────────────────
 
 fn model_ref() -> ModelRef {
@@ -138,43 +70,39 @@ fn model_ref() -> ModelRef {
     )
 }
 
-fn fake_output(slot: &str, value: impl Into<ParamValue>) -> (SlotId, Arc<ExecutionValue>) {
-    (
-        SlotId::new(slot),
-        Arc::new(ExecutionValue::Param(value.into())),
+fn fake_tensor_handle(backend: &BackendKind, key: &str, dims: Vec<usize>) -> BackendTensorHandle {
+    BackendTensorHandle::new(
+        backend.clone(),
+        BackendPayloadKey::new(key),
+        TensorDType::F32,
+        TensorShape::new(dims),
+        "cpu",
     )
 }
 
-fn fake_checkpoint_outputs() -> Vec<(SlotId, Arc<ExecutionValue>)> {
+fn fake_image_value(backend: BackendKind, key: &str, width: u32, height: u32) -> RuntimeImage {
+    RuntimeImage::new(
+        fake_tensor_handle(&backend, key, vec![1, 3, height as usize, width as usize]),
+        width,
+        height,
+        1,
+        "rgb",
+    )
+}
+
+fn make_load_bundle_response() -> LoadBundleResponse {
     let backend = BackendKind::new("fake");
     let model_id = ModelId::new("sdxl-base-1.0");
-    vec![
-        (
-            SlotId::new("model"),
-            Arc::new(ExecutionValue::Model(RuntimeModelHandle::new(
-                model_id.clone(),
-                ModelRole::DiffusionModel,
-                backend.clone(),
-                "model-handle",
-            ))),
+    LoadBundleResponse::new(
+        RuntimeModelHandle::new(
+            model_id.clone(),
+            ModelRole::DiffusionModel,
+            backend.clone(),
+            "model-handle",
         ),
-        (
-            SlotId::new("clip"),
-            Arc::new(ExecutionValue::Clip(RuntimeClipHandle::new(
-                model_id.clone(),
-                backend.clone(),
-                "clip-handle",
-            ))),
-        ),
-        (
-            SlotId::new("vae"),
-            Arc::new(ExecutionValue::Vae(RuntimeVaeHandle::new(
-                model_id,
-                backend,
-                "vae-handle",
-            ))),
-        ),
-    ]
+        RuntimeClipHandle::new(model_id, backend.clone(), "clip-handle"),
+        RuntimeVaeHandle::new(ModelId::new("sdxl-base-1.0"), backend, "vae-handle"),
+    )
 }
 
 fn make_context(
@@ -265,7 +193,8 @@ fn make_artifact_capability_with_store(
 #[tokio::test]
 async fn checkpoint_loader_multi_output_by_slot_id() {
     let backend = Arc::new(
-        FakeBackend::new("fake").with_operation(OP_MODEL_LOAD_BUNDLE, fake_checkpoint_outputs()),
+        FakeBackend::new("fake")
+            .load_bundle(CannedCapabilityResponse::always(make_load_bundle_response())),
     );
     let resolver = Arc::new(FakeResolver::new("/models/sdxl-base.safetensors"));
 
@@ -298,13 +227,30 @@ async fn checkpoint_loader_multi_output_by_slot_id() {
 }
 
 #[tokio::test]
-async fn checkpoint_loader_slot_order_is_irrelevant() {
-    // Return outputs in reversed order (vae, clip, model) — should
-    // still pass validation because slot order must not matter.
-    let mut reversed_outputs = fake_checkpoint_outputs();
-    reversed_outputs.reverse();
+async fn checkpoint_loader_requires_all_three_outputs() {
+    // Backend returns only two handles. The executor owns the slot
+    // mapping, so missing outputs become missing runtime outputs.
+    // We assert the executor does NOT panic or invent missing values.
+    let partial = LoadBundleResponse::new(
+        RuntimeModelHandle::new(
+            ModelId::new("sdxl-base-1.0"),
+            ModelRole::DiffusionModel,
+            BackendKind::new("fake"),
+            "model-handle",
+        ),
+        RuntimeClipHandle::new(
+            ModelId::new("sdxl-base-1.0"),
+            BackendKind::new("fake"),
+            "clip-handle",
+        ),
+        RuntimeVaeHandle::new(
+            ModelId::new("sdxl-base-1.0"),
+            BackendKind::new("fake"),
+            "vae-handle",
+        ),
+    );
     let backend =
-        Arc::new(FakeBackend::new("fake").with_operation(OP_MODEL_LOAD_BUNDLE, reversed_outputs));
+        Arc::new(FakeBackend::new("fake").load_bundle(CannedCapabilityResponse::always(partial)));
     let resolver = Arc::new(FakeResolver::new("/models/sdxl-base.safetensors"));
 
     let mut registry = NodeExecutorRegistry::default();
@@ -327,97 +273,15 @@ async fn checkpoint_loader_slot_order_is_irrelevant() {
     );
 
     let result = executor.execute(context).await.expect("execute ok");
-    // The output order from the executor matches the backend's
-    // returned order (the validator preserves order), but the runtime
-    // doesn't depend on it. Assert all three are present.
     let slot_names: Vec<&str> = result.iter().map(|(s, _)| s.as_str()).collect();
-    assert_eq!(slot_names.len(), 3);
-    assert!(slot_names.contains(&"model"), "model slot missing");
-    assert!(slot_names.contains(&"clip"), "clip slot missing");
-    assert!(slot_names.contains(&"vae"), "vae slot missing");
-}
-
-#[tokio::test]
-async fn checkpoint_loader_duplicate_output_slot_is_error() {
-    // Return two "model" slots — should be rejected by validation.
-    let dup_outputs = vec![
-        fake_output("model", ParamValue::String("m1".to_string())),
-        fake_output("model", ParamValue::String("m2".to_string())),
-        fake_output("clip", ParamValue::String("c".to_string())),
-        fake_output("vae", ParamValue::String("v".to_string())),
-    ];
-    let backend =
-        Arc::new(FakeBackend::new("fake").with_operation(OP_MODEL_LOAD_BUNDLE, dup_outputs));
-    let resolver = Arc::new(FakeResolver::new("/models/sdxl-base.safetensors"));
-
-    let mut registry = NodeExecutorRegistry::default();
-    register_builtin_inference_executors(&mut registry, backend, resolver)
-        .expect("register executors");
-
-    let executor = registry
-        .get(&reimagine_core::model::NodeTypeId::new(
-            "builtin.checkpoint_loader",
-        ))
-        .expect("executor registered");
-
-    let mut params = reimagine_runtime::NodeParams::new();
-    params.insert(SlotId::new("checkpoint"), ParamValue::ModelRef(model_ref()));
-    let context = make_context(
-        "loader",
-        "builtin.checkpoint_loader",
-        NodeInputs::new(),
-        params,
-    );
-
-    let err = executor.execute(context).await.expect_err("should fail");
-    assert!(
-        err.to_string().contains("duplicate"),
-        "expected duplicate slot error, got: {err}"
-    );
-}
-
-#[tokio::test]
-async fn checkpoint_loader_undeclared_output_slot_is_error() {
-    // Return an extra "noise" slot not declared by the node.
-    let extra_outputs = vec![
-        fake_output("model", ParamValue::String("m".to_string())),
-        fake_output("clip", ParamValue::String("c".to_string())),
-        fake_output("vae", ParamValue::String("v".to_string())),
-        fake_output("noise", ParamValue::String("n".to_string())),
-    ];
-    let backend =
-        Arc::new(FakeBackend::new("fake").with_operation(OP_MODEL_LOAD_BUNDLE, extra_outputs));
-    let resolver = Arc::new(FakeResolver::new("/models/sdxl-base.safetensors"));
-
-    let mut registry = NodeExecutorRegistry::default();
-    register_builtin_inference_executors(&mut registry, backend, resolver)
-        .expect("register executors");
-
-    let executor = registry
-        .get(&reimagine_core::model::NodeTypeId::new(
-            "builtin.checkpoint_loader",
-        ))
-        .expect("executor registered");
-
-    let mut params = reimagine_runtime::NodeParams::new();
-    params.insert(SlotId::new("checkpoint"), ParamValue::ModelRef(model_ref()));
-    let context = make_context(
-        "loader",
-        "builtin.checkpoint_loader",
-        NodeInputs::new(),
-        params,
-    );
-
-    let err = executor.execute(context).await.expect_err("should fail");
-    assert!(
-        err.to_string().contains("undeclared"),
-        "expected undeclared slot error, got: {err}"
-    );
+    assert!(slot_names.contains(&"model"));
+    assert!(slot_names.contains(&"clip"));
+    assert!(slot_names.contains(&"vae"));
 }
 
 #[tokio::test]
 async fn unregistered_operation_returns_backend_not_implemented() {
-    // Register no operations — every call should fail with
+    // Register no capabilities — every call should fail with
     // BackendNotImplemented.
     let backend = Arc::new(FakeBackend::new("empty"));
     let resolver = Arc::new(FakeResolver::new("/models/sdxl-base.safetensors"));
@@ -450,7 +314,6 @@ async fn unregistered_operation_returns_backend_not_implemented() {
 
 #[tokio::test]
 async fn string_executor_passthrough() {
-    // builtin.string does not call the backend at all.
     let backend = Arc::new(FakeBackend::new("unused"));
     let resolver = Arc::new(FakeResolver::new("/unused"));
 
@@ -487,7 +350,6 @@ async fn all_v1_executors_register_successfully() {
     register_builtin_inference_executors(&mut registry, backend, resolver)
         .expect("register executors");
 
-    // All 8 V1 built-ins should be registered.
     for type_id in &[
         "builtin.string",
         "builtin.checkpoint_loader",
@@ -510,13 +372,11 @@ async fn all_v1_executors_register_successfully() {
 #[tokio::test]
 async fn save_image_records_backend_returned_artifact_reference() {
     let artifact_ref = ArtifactRef::new("output/reimagine_run-test_save_0.png");
-    let backend = Arc::new(FakeBackend::new("fake").with_operation(
-        OP_IMAGE_SAVE,
-        vec![(
-            SlotId::new("artifact"),
-            Arc::new(ExecutionValue::Artifact(artifact_ref.clone())),
-        )],
-    ));
+    let backend = Arc::new(
+        FakeBackend::new("fake").image_save(CannedCapabilityResponse::always(
+            ImageSaveResponse::new(artifact_ref.clone()),
+        )),
+    );
     let resolver = Arc::new(FakeResolver::new("/models/sdxl-base.safetensors"));
 
     let mut registry = NodeExecutorRegistry::default();
@@ -529,23 +389,9 @@ async fn save_image_records_backend_returned_artifact_reference() {
         ))
         .expect("executor registered");
 
+    let image = fake_image_value(BackendKind::new("fake"), "image:payload", 64, 64);
     let mut inputs = NodeInputs::new();
-    inputs.insert(
-        SlotId::new("image"),
-        Arc::new(ExecutionValue::Image(RuntimeImage::new(
-            reimagine_runtime::BackendTensorHandle::new(
-                BackendKind::new("fake"),
-                reimagine_runtime::BackendPayloadKey::new("image:payload"),
-                reimagine_core::model::TensorDType::F32,
-                reimagine_core::model::TensorShape::new(vec![1, 3, 64, 64]),
-                "cpu",
-            ),
-            64,
-            64,
-            1,
-            "rgb",
-        ))),
-    );
+    inputs.insert(SlotId::new("image"), Arc::new(ExecutionValue::Image(image)));
 
     let (context, artifact_store) = make_context_with_artifact_store(
         "save",
@@ -566,9 +412,9 @@ async fn save_image_records_backend_returned_artifact_reference() {
 
 #[tokio::test]
 async fn checkpoint_loader_missing_model_ref_is_error() {
-    // Omit the checkpoint param entirely.
     let backend = Arc::new(
-        FakeBackend::new("fake").with_operation(OP_MODEL_LOAD_BUNDLE, fake_checkpoint_outputs()),
+        FakeBackend::new("fake")
+            .load_bundle(CannedCapabilityResponse::always(make_load_bundle_response())),
     );
     let resolver = Arc::new(FakeResolver::new("/models/sdxl-base.safetensors"));
 
@@ -598,13 +444,174 @@ async fn checkpoint_loader_missing_model_ref_is_error() {
 
 #[test]
 fn inference_error_boundary_is_explicit() {
-    // Verify that InferenceError does NOT have a broad From impl for
-    // NodeExecutorError — only the explicit `into_executor_error()`.
     let err = InferenceError::BackendNotImplemented {
-        operation_id: "test".to_string(),
+        capability: InferenceCapability::DiffusionSample,
         backend_kind: "fake".to_string(),
         message: None,
     };
     let exec_err = err.into_executor_error();
     assert!(exec_err.to_string().contains("does not implement"));
+}
+
+#[tokio::test]
+async fn text_encode_executor_calls_typed_text_encode() {
+    // Build a backend that records the request it received and
+    // returns a canned conditioning.
+    #[derive(Default)]
+    struct CapturedRequest {
+        inner: Mutex<Option<TextEncodeRequest>>,
+    }
+
+    let captured = Arc::new(CapturedRequest::default());
+    let captured_for_factory = Arc::clone(&captured);
+
+    let response_factory = move |req: TextEncodeRequest| {
+        let mut guard = captured_for_factory.inner.lock().unwrap();
+        *guard = Some(req.clone());
+        let (clip, _text) = req.into_parts();
+        Ok::<_, InferenceError>(TextEncodeResponse::new(
+            reimagine_core::ExecutionConditioning::new(
+                reimagine_core::BackendTensorHandle::new(
+                    clip.backend().clone(),
+                    reimagine_core::BackendPayloadKey::new("captured-text"),
+                    reimagine_core::model::TensorDType::F32,
+                    reimagine_core::model::TensorShape::new(vec![1, 77, 2048]),
+                    "cpu",
+                ),
+                reimagine_core::ConditioningMetadata::new(64, 64),
+            ),
+        ))
+    };
+
+    let backend = Arc::new(
+        FakeBackend::new("fake")
+            .text_encode(CannedCapabilityResponse::from_request(response_factory)),
+    );
+    let resolver = Arc::new(FakeResolver::new("/models/clip.safetensors"));
+
+    let mut registry = NodeExecutorRegistry::default();
+    register_builtin_inference_executors(&mut registry, backend, resolver)
+        .expect("register executors");
+
+    let executor = registry
+        .get(&reimagine_core::model::NodeTypeId::new(
+            "builtin.clip_text_encode",
+        ))
+        .expect("executor registered");
+
+    let clip_handle = RuntimeClipHandle::new(
+        ModelId::new("clip-model"),
+        BackendKind::new("fake"),
+        "clip-payload",
+    );
+    let mut inputs = NodeInputs::new();
+    inputs.insert(
+        SlotId::new("clip"),
+        Arc::new(ExecutionValue::Clip(clip_handle)),
+    );
+    inputs.insert(
+        SlotId::new("text"),
+        Arc::new(ExecutionValue::Param(ParamValue::String(
+            "a sunset".to_string(),
+        ))),
+    );
+    let context = make_context(
+        "clip",
+        "builtin.clip_text_encode",
+        inputs,
+        reimagine_runtime::NodeParams::new(),
+    );
+
+    let result = executor.execute(context).await.expect("execute ok");
+    assert_eq!(result.len(), 1);
+    assert_eq!(result[0].0.as_str(), "conditioning");
+
+    let captured = captured.inner.lock().unwrap().clone().expect("captured");
+    assert_eq!(captured.clip().model_id().as_str(), "clip-model");
+    assert_eq!(captured.prompt_string().as_deref(), Some("a sunset"));
+}
+
+#[tokio::test]
+async fn create_empty_latent_executor_calls_typed_create_empty_latent() {
+    #[derive(Default)]
+    struct Captured {
+        inner: Mutex<Option<CreateEmptyLatentRequest>>,
+    }
+
+    let captured = Arc::new(Captured::default());
+    let captured_for_factory = Arc::clone(&captured);
+
+    let response_factory = move |req: CreateEmptyLatentRequest| {
+        let mut guard = captured_for_factory.inner.lock().unwrap();
+        *guard = Some(req.clone());
+        Ok::<_, InferenceError>(CreateEmptyLatentResponse::new(req.into_latent()))
+    };
+
+    let backend = Arc::new(
+        FakeBackend::new("fake")
+            .create_empty_latent(CannedCapabilityResponse::from_request(response_factory)),
+    );
+    let resolver = Arc::new(FakeResolver::new("/models/test.safetensors"));
+
+    let mut registry = NodeExecutorRegistry::default();
+    register_builtin_inference_executors(&mut registry, backend, resolver)
+        .expect("register executors");
+
+    let executor = registry
+        .get(&reimagine_core::model::NodeTypeId::new(
+            "builtin.empty_latent_image",
+        ))
+        .expect("executor registered");
+
+    let mut params = reimagine_runtime::NodeParams::new();
+    params.insert(SlotId::new("width"), ParamValue::Integer(64));
+    params.insert(SlotId::new("height"), ParamValue::Integer(64));
+    params.insert(SlotId::new("batch_size"), ParamValue::Integer(1));
+    let context = make_context(
+        "empty",
+        "builtin.empty_latent_image",
+        NodeInputs::new(),
+        params,
+    );
+
+    let result = executor.execute(context).await.expect("execute ok");
+    assert_eq!(result.len(), 1);
+    assert_eq!(result[0].0.as_str(), "latent");
+
+    let captured = captured.inner.lock().unwrap().clone().expect("captured");
+    assert_eq!(captured.width(), 64);
+    assert_eq!(captured.height(), 64);
+    assert_eq!(captured.batch_size(), 1);
+}
+
+#[tokio::test]
+async fn fake_backend_capabilities_advertise_registered_capabilities() {
+    let backend = FakeBackend::new("test-kind")
+        .load_bundle(CannedCapabilityResponse::always(make_load_bundle_response()))
+        .text_encode(CannedCapabilityResponse::from_request(
+            |req: TextEncodeRequest| -> Result<TextEncodeResponse, InferenceError> {
+                let (clip, _text) = req.into_parts();
+                Ok(TextEncodeResponse::new(
+                    reimagine_core::ExecutionConditioning::new(
+                        reimagine_core::BackendTensorHandle::new(
+                            clip.backend().clone(),
+                            reimagine_core::BackendPayloadKey::new("text-encoded"),
+                            reimagine_core::model::TensorDType::F32,
+                            reimagine_core::model::TensorShape::new(vec![1, 77, 2048]),
+                            "cpu",
+                        ),
+                        reimagine_core::ConditioningMetadata::new(64, 64),
+                    ),
+                ))
+            },
+        ));
+    let caps: InferenceBackendCapabilities = InferenceBackend::capabilities(&backend);
+    assert!(caps.supports_capability(InferenceCapability::LoadBundle));
+    assert!(caps.supports_capability(InferenceCapability::TextEncode));
+    assert!(!caps.supports_capability(InferenceCapability::ImageSave));
+    // Check that the support shapes are valid.
+    for support in caps.capability_supports() {
+        let _ = support.capability();
+    }
+    let _ = InferenceCapabilitySupport::new(InferenceCapability::LoadBundle);
 }

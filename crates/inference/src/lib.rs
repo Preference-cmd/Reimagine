@@ -1,8 +1,8 @@
 //! Backend-neutral node orchestration layer for built-in V1
 //! inference-backed node executors.
 //!
-//! The backend contract (trait, request/response DTOs, capability
-//! report, model resolver, runtime/router, bridge policy,
+//! The backend contract (trait, typed request/response DTOs,
+//! capability report, model resolver, runtime/router, bridge policy,
 //! registry) lives in `reimagine-inference-core`. This crate
 //! re-exports those public types so existing
 //! `use reimagine_inference::*` call sites keep working, and owns
@@ -18,20 +18,33 @@ mod error;
 mod executors;
 pub mod operation;
 pub mod registry;
-#[cfg(any(test, feature = "testing"))]
+/// Test-only fake backend and canned-response helpers.
+///
+/// Compiled for both unit tests and integration tests so downstream
+/// `tests/` files can register executors with a `FakeBackend`
+/// without enabling a feature flag. Production code must not depend
+/// on this module.
+#[doc(hidden)]
 pub mod testing;
 
+pub use reimagine_core::{
+    BackendTensorHandle, ConditioningMetadata, ExecutionConditioning, RuntimeClipHandle,
+    RuntimeImage, RuntimeLatent, RuntimeModelHandle, RuntimeVaeHandle,
+};
+
 pub use reimagine_inference_core::{
-    ALL_V1_OPERATIONS, BackendBridge, BackendBridgePolicy, BridgePlan, BridgeSupport,
-    DefaultInferenceRuntime, InferenceBackend, InferenceBackendCapabilities,
-    InferenceBackendRegistry, InferenceError, InferenceOperationId, InferenceOperationSupport,
-    InferenceOutput, InferenceRequest, InferenceResponse, InferenceRuntime,
-    MergedInferenceBackendCapabilities, ModelFormat, ModelResolver, OP_DIFFUSION_SAMPLE,
-    OP_IMAGE_PREVIEW, OP_IMAGE_SAVE, OP_LATENT_CREATE_EMPTY, OP_LATENT_DECODE,
-    OP_MODEL_LOAD_BUNDLE, OP_TEXT_ENCODE, RejectAllBridgePolicy, ResolvedInferenceModel,
+    BackendBridge, BackendBridgePolicy, BridgePlan, BridgeSupport, CreateEmptyLatentRequest,
+    CreateEmptyLatentResponse, DefaultInferenceRuntime, DiffusionSampleRequest,
+    DiffusionSampleResponse, FilenamePrefix, ImagePreviewRequest, ImagePreviewResponse,
+    ImageSaveRequest, ImageSaveResponse, InferenceBackend, InferenceBackendCapabilities,
+    InferenceBackendRegistry, InferenceCapability, InferenceCapabilitySupport, InferenceError,
+    InferenceRuntime, LatentDecodeRequest, LatentDecodeResponse, LoadBundleRequest,
+    LoadBundleResponse, MergedInferenceBackendCapabilities, ModelFormat, ModelResolver,
+    RejectAllBridgePolicy, ResolvedInferenceModel, SamplerName, SchedulerName, TextEncodeRequest,
+    TextEncodeResponse,
 };
 
 pub use error::{IntoNodeExecutorError, into_executor_error};
 pub use registry::register_builtin_inference_executors;
-#[cfg(any(test, feature = "testing"))]
-pub use testing::FakeBackend;
+#[doc(hidden)]
+pub use testing::{CannedCapabilityResponse, FakeBackend};

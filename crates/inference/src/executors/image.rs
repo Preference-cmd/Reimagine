@@ -4,24 +4,75 @@
 //! - `vae_decode` maps to `latent.decode`. Reads `vae` and `latent`
 //!   inputs, returns an `image` output.
 //! - `save_image` maps to `image.save`. Reads `image` input plus
-//!   optional `filename_prefix` param. No backend outputs are
-//!   required; the executor records the artifact.
+//!   optional `filename_prefix` param. The executor records the
+//!   artifact via [`NodeArtifactCapability`].
 //! - `preview_image` maps to `image.preview`. Reads `image` input.
-//!   No backend outputs are required; the executor records the
-//!   artifact.
+//!   The executor records the artifact.
+//!
+//! Slot mapping (`image` for `vae_decode`, no outputs for
+//! `save_image` / `preview_image`) is executor-owned. The backend's
+//! typed responses return the value or artifact handle without any
+//! `SlotId` mapping.
 
 use std::sync::Arc;
 
-use reimagine_core::model::{SlotId, SlotKind};
+use reimagine_core::ExecutionValue;
+use reimagine_core::model::{ArtifactRef, ParamValue, SlotId};
+use reimagine_inference_core::{
+    ImagePreviewRequest, ImagePreviewResponse, ImageSaveRequest, ImageSaveResponse,
+    InferenceBackend, LatentDecodeRequest, LatentDecodeResponse,
+};
 use reimagine_runtime::{
     ArtifactEventKind, NodeExecutionContext, NodeExecutor, NodeExecutorError, RuntimeValue,
 };
 
-use crate::operation::{OP_IMAGE_PREVIEW, OP_IMAGE_SAVE, OP_LATENT_DECODE};
-use reimagine_inference_core::InferenceBackend;
-use reimagine_inference_core::InferenceRequest;
+use crate::error::into_executor_error;
 
-use super::validation::{ExpectedOutputSlot, validate_response};
+fn required_input(
+    context: &NodeExecutionContext,
+    slot: &str,
+) -> Result<Arc<ExecutionValue>, NodeExecutorError> {
+    context
+        .inputs()
+        .get(&SlotId::new(slot))
+        .cloned()
+        .ok_or_else(|| NodeExecutorError::MissingInput {
+            slot_id: slot.to_string(),
+        })
+}
+
+fn extract_vae(
+    value: Arc<ExecutionValue>,
+) -> Result<reimagine_core::RuntimeVaeHandle, NodeExecutorError> {
+    match value.as_ref() {
+        ExecutionValue::Vae(handle) => Ok(handle.clone()),
+        _ => Err(NodeExecutorError::Failed {
+            message: "latent.decode `vae` input must be a Vae handle".to_string(),
+        }),
+    }
+}
+
+fn extract_latent(
+    value: Arc<ExecutionValue>,
+) -> Result<reimagine_core::RuntimeLatent, NodeExecutorError> {
+    match value.as_ref() {
+        ExecutionValue::Latent(handle) => Ok(handle.clone()),
+        _ => Err(NodeExecutorError::Failed {
+            message: "latent.decode `latent` input must be a Latent handle".to_string(),
+        }),
+    }
+}
+
+fn extract_image(
+    value: Arc<ExecutionValue>,
+) -> Result<reimagine_core::RuntimeImage, NodeExecutorError> {
+    match value.as_ref() {
+        ExecutionValue::Image(handle) => Ok(handle.clone()),
+        _ => Err(NodeExecutorError::Failed {
+            message: "image.save/image.preview `image` input must be an Image handle".to_string(),
+        }),
+    }
+}
 
 /// `builtin.vae_decode` executor.
 pub struct VaeDecodeExecutor {
@@ -40,44 +91,36 @@ impl NodeExecutor for VaeDecodeExecutor {
         &self,
         context: NodeExecutionContext,
     ) -> Result<Vec<(SlotId, Arc<RuntimeValue>)>, NodeExecutorError> {
-        let vae = context.inputs().get(&SlotId::new("vae")).cloned().ok_or(
-            NodeExecutorError::MissingInput {
-                slot_id: "vae".to_string(),
-            },
-        )?;
-        let latent = context
-            .inputs()
-            .get(&SlotId::new("latent"))
-            .cloned()
-            .ok_or(NodeExecutorError::MissingInput {
-                slot_id: "latent".to_string(),
-            })?;
+        let vae = extract_vae(required_input(&context, "vae")?)?;
+        let latent = extract_latent(required_input(&context, "latent")?)?;
 
-        let request = InferenceRequest::new(
-            OP_LATENT_DECODE.into(),
+        let correlation_id = context.correlation_id().cloned();
+        let mut request = LatentDecodeRequest::new(
+            vae,
+            latent,
             context.run_id().clone(),
             context.workflow_id().clone(),
             context.workflow_version(),
             context.node_id().clone(),
-        )
-        .with_input("vae", vae)
-        .with_input("latent", latent);
+        );
+        if let Some(cid) = correlation_id {
+            request = request.with_correlation_id(cid);
+        }
 
-        let response = self
+        let response: LatentDecodeResponse = self
             .backend
-            .execute(request)
+            .latent_decode(request)
             .await
-            .map_err(|e| crate::error::into_executor_error(e))?;
+            .map_err(into_executor_error)?;
 
-        let expected = vec![ExpectedOutputSlot::required("image", SlotKind::Image)];
-        validate_response(&response, &expected, false)
+        Ok(vec![(
+            SlotId::new("image"),
+            Arc::new(RuntimeValue::Image(response.into_image())),
+        )])
     }
 }
 
 /// `builtin.save_image` executor.
-///
-/// After the backend returns, the executor records an artifact via
-/// the runtime's [`NodeArtifactCapability`].
 pub struct SaveImageExecutor {
     backend: Arc<dyn InferenceBackend>,
 }
@@ -94,50 +137,34 @@ impl NodeExecutor for SaveImageExecutor {
         &self,
         context: NodeExecutionContext,
     ) -> Result<Vec<(SlotId, Arc<RuntimeValue>)>, NodeExecutorError> {
-        let image = context.inputs().get(&SlotId::new("image")).cloned().ok_or(
-            NodeExecutorError::MissingInput {
-                slot_id: "image".to_string(),
-            },
-        )?;
+        let image = extract_image(required_input(&context, "image")?)?;
 
-        let mut request = InferenceRequest::new(
-            OP_IMAGE_SAVE.into(),
+        let mut request = ImageSaveRequest::new(
+            image,
             context.run_id().clone(),
             context.workflow_id().clone(),
             context.workflow_version(),
             context.node_id().clone(),
-        )
-        .with_input("image", image);
-
+        );
         if let Some(prefix) = context.params().get(&SlotId::new("filename_prefix")) {
-            request = request.with_param("filename_prefix", prefix.clone());
+            if let ParamValue::String(s) = prefix {
+                request = request.with_filename_prefix(s.clone());
+            }
+        }
+        if let Some(cid) = context.correlation_id().cloned() {
+            request = request.with_correlation_id(cid);
         }
 
-        let response = self
+        let response: ImageSaveResponse = self
             .backend
-            .execute(request)
+            .image_save(request)
             .await
-            .map_err(|e| crate::error::into_executor_error(e))?;
+            .map_err(into_executor_error)?;
+        let reference: ArtifactRef = response.into_artifact();
 
-        // The save backend MUST return at least one output so we
-        // have something to record. An empty response is a backend
-        // bug, not a silent no-op.
-        let first = response
-            .outputs()
-            .first()
-            .ok_or(NodeExecutorError::Failed {
-                message: "image.save backend returned no outputs".to_string(),
-            })?;
-
-        let reference = artifact_reference_from_output(first.value()).unwrap_or_else(|| {
-            reimagine_core::model::ArtifactRef::new(format!(
-                "save-image-{}",
-                context.node_id().as_str()
-            ))
-        });
         let _ = context
             .artifacts()
-            .record(first.slot_id().clone(), reference, ArtifactEventKind::Saved)
+            .record(SlotId::new("artifact"), reference, ArtifactEventKind::Saved)
             .await;
 
         // Save/preview nodes have no required runtime outputs.
@@ -146,8 +173,6 @@ impl NodeExecutor for SaveImageExecutor {
 }
 
 /// `builtin.preview_image` executor.
-///
-/// Like `SaveImageExecutor` but records as a preview artifact.
 pub struct PreviewImageExecutor {
     backend: Arc<dyn InferenceBackend>,
 }
@@ -164,58 +189,35 @@ impl NodeExecutor for PreviewImageExecutor {
         &self,
         context: NodeExecutionContext,
     ) -> Result<Vec<(SlotId, Arc<RuntimeValue>)>, NodeExecutorError> {
-        let image = context.inputs().get(&SlotId::new("image")).cloned().ok_or(
-            NodeExecutorError::MissingInput {
-                slot_id: "image".to_string(),
-            },
-        )?;
+        let image = extract_image(required_input(&context, "image")?)?;
 
-        let request = InferenceRequest::new(
-            OP_IMAGE_PREVIEW.into(),
+        let mut request = ImagePreviewRequest::new(
+            image,
             context.run_id().clone(),
             context.workflow_id().clone(),
             context.workflow_version(),
             context.node_id().clone(),
-        )
-        .with_input("image", image);
+        );
+        if let Some(cid) = context.correlation_id().cloned() {
+            request = request.with_correlation_id(cid);
+        }
 
-        let response = self
+        let response: ImagePreviewResponse = self
             .backend
-            .execute(request)
+            .image_preview(request)
             .await
-            .map_err(|e| crate::error::into_executor_error(e))?;
+            .map_err(into_executor_error)?;
+        let reference: ArtifactRef = response.into_artifact();
 
-        let first = response
-            .outputs()
-            .first()
-            .ok_or(NodeExecutorError::Failed {
-                message: "image.preview backend returned no outputs".to_string(),
-            })?;
-
-        let reference = artifact_reference_from_output(first.value()).unwrap_or_else(|| {
-            reimagine_core::model::ArtifactRef::new(format!(
-                "preview-image-{}",
-                context.node_id().as_str()
-            ))
-        });
         let _ = context
             .artifacts()
             .record(
-                first.slot_id().clone(),
+                SlotId::new("artifact"),
                 reference,
                 ArtifactEventKind::Preview,
             )
             .await;
 
         Ok(Vec::new())
-    }
-}
-
-fn artifact_reference_from_output(
-    value: &RuntimeValue,
-) -> Option<reimagine_core::model::ArtifactRef> {
-    match value {
-        RuntimeValue::Artifact(reference) => Some(reference.clone()),
-        _ => None,
     }
 }

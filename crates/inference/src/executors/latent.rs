@@ -2,17 +2,34 @@
 //!
 //! Maps to `latent.create_empty`. Reads `width`, `height`, and
 //! `batch_size` params and returns a `latent` output.
+//!
+//! Slot mapping (`latent`) is executor-owned. The backend's typed
+//! [`CreateEmptyLatentResponse`] returns the latent handle without
+//! any `SlotId` mapping.
 
 use std::sync::Arc;
 
-use reimagine_core::model::{ParamValue, SlotId, SlotKind};
+use reimagine_core::model::{ParamValue, SlotId};
+use reimagine_inference_core::{
+    CreateEmptyLatentRequest, CreateEmptyLatentResponse, InferenceBackend,
+};
 use reimagine_runtime::{NodeExecutionContext, NodeExecutor, NodeExecutorError, RuntimeValue};
 
-use reimagine_inference_core::InferenceBackend;
-use reimagine_inference_core::InferenceRequest;
-use reimagine_inference_core::OP_LATENT_CREATE_EMPTY;
+use crate::error::into_executor_error;
 
-use super::validation::{ExpectedOutputSlot, validate_response};
+fn extract_u32(context: &NodeExecutionContext, slot: &str) -> Result<u32, NodeExecutorError> {
+    match context.params().get(&SlotId::new(slot)) {
+        Some(ParamValue::Integer(v)) => u32::try_from(*v).map_err(|_| NodeExecutorError::Failed {
+            message: format!("param `{slot}` must fit in u32, got {v}"),
+        }),
+        Some(_) => Err(NodeExecutorError::Failed {
+            message: format!("param `{slot}` must be an integer"),
+        }),
+        None => Err(NodeExecutorError::MissingInput {
+            slot_id: slot.to_string(),
+        }),
+    }
+}
 
 /// `builtin.empty_latent_image` executor.
 pub struct EmptyLatentImageExecutor {
@@ -25,48 +42,39 @@ impl EmptyLatentImageExecutor {
     }
 }
 
-fn extract_i64(context: &NodeExecutionContext, slot: &str) -> Result<i64, NodeExecutorError> {
-    match context.params().get(&SlotId::new(slot)) {
-        Some(param) => match param {
-            ParamValue::Integer(v) => Ok(*v),
-            _ => Err(NodeExecutorError::Failed {
-                message: format!("param `{slot}` must be an integer"),
-            }),
-        },
-        None => Err(NodeExecutorError::MissingInput {
-            slot_id: slot.to_string(),
-        }),
-    }
-}
-
 #[async_trait::async_trait]
 impl NodeExecutor for EmptyLatentImageExecutor {
     async fn execute(
         &self,
         context: NodeExecutionContext,
     ) -> Result<Vec<(SlotId, Arc<RuntimeValue>)>, NodeExecutorError> {
-        let width = extract_i64(&context, "width")?;
-        let height = extract_i64(&context, "height")?;
-        let batch_size = extract_i64(&context, "batch_size")?;
+        let width = extract_u32(&context, "width")?;
+        let height = extract_u32(&context, "height")?;
+        let batch_size = extract_u32(&context, "batch_size")?;
 
-        let request = InferenceRequest::new(
-            OP_LATENT_CREATE_EMPTY.into(),
+        let correlation_id = context.correlation_id().cloned();
+        let mut request = CreateEmptyLatentRequest::new(
+            width,
+            height,
+            batch_size,
             context.run_id().clone(),
             context.workflow_id().clone(),
             context.workflow_version(),
             context.node_id().clone(),
-        )
-        .with_param("width", ParamValue::Integer(width))
-        .with_param("height", ParamValue::Integer(height))
-        .with_param("batch_size", ParamValue::Integer(batch_size));
+        );
+        if let Some(cid) = correlation_id {
+            request = request.with_correlation_id(cid);
+        }
 
-        let response = self
+        let response: CreateEmptyLatentResponse = self
             .backend
-            .execute(request)
+            .create_empty_latent(request)
             .await
-            .map_err(|e| crate::error::into_executor_error(e))?;
+            .map_err(into_executor_error)?;
 
-        let expected = vec![ExpectedOutputSlot::required("latent", SlotKind::Latent)];
-        validate_response(&response, &expected, false)
+        Ok(vec![(
+            SlotId::new("latent"),
+            Arc::new(RuntimeValue::Latent(response.into_latent())),
+        )])
     }
 }

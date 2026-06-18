@@ -1,10 +1,9 @@
 //! Inference-backed node executor adapters.
 //!
-//! Each executor maps a built-in node type to an
-//! [`InferenceOperationId`](crate::operation::InferenceOperationId),
-//! builds an [`InferenceRequest`](crate::request::InferenceRequest),
-//! calls the backend, validates the response, and returns
-//! `NodeExecutionOutputs`.
+//! Each executor maps a built-in node type to a typed capability
+//! method on [`InferenceBackend`](crate::InferenceBackend), builds
+//! the corresponding typed request DTO, calls the backend, and maps
+//! the typed response into the workflow node's slot-shaped outputs.
 //!
 //! These are *adapters*, not backend implementations. They contain no
 //! backend-specific behavior.
@@ -15,4 +14,3 @@ pub mod latent;
 pub mod model;
 pub mod string;
 pub mod text;
-pub mod validation;

@@ -1,9 +1,10 @@
 //! `image.save` and `image.preview` operations.
 //!
-//! Both operations consume a `ExecutionValue::Image`, encode the image tensor
-//! to PNG format, write it to the workspace output directory, and return
-//! a single `InferenceOutput` so the inference executor can record the
-//! artifact via `NodeArtifactCapability`.
+//! Both operations consume a `RuntimeImage`, encode the image tensor
+//! to PNG format, write it to the workspace output directory, and
+//! return a typed response carrying an [`ArtifactRef`] so the
+//! inference executor can record the artifact via
+//! `NodeArtifactCapability`.
 //!
 //! ## Sanitization policy
 //!
@@ -14,14 +15,12 @@
 //! - Result is bounded to avoid OS path limits (prefix: 64 chars,
 //!   run_id/node_id: 128 chars)
 
-use std::sync::Arc;
-
 use candle_core::Device;
-use reimagine_core::ExecutionValue;
-use reimagine_core::model::{ArtifactRef, SlotId};
-use reimagine_inference_core::InferenceBackend;
-use reimagine_inference_core::InferenceRequest;
-use reimagine_inference_core::{InferenceOutput, InferenceResponse};
+use reimagine_core::model::ArtifactRef;
+use reimagine_inference_core::{
+    FilenamePrefix, ImagePreviewRequest, ImagePreviewResponse, ImageSaveRequest, ImageSaveResponse,
+    InferenceBackend,
+};
 
 use crate::backend::CandleBackend;
 use crate::error::CandleBackendError;
@@ -30,55 +29,39 @@ fn is_cpu_device(device: &Device) -> bool {
     matches!(device, Device::Cpu)
 }
 
-fn extract_optional_string_param(
-    params: &std::collections::HashMap<
-        reimagine_core::model::SlotId,
-        reimagine_core::model::ParamValue,
-    >,
-    slot: &str,
-) -> Option<String> {
-    params
-        .get(&reimagine_core::model::SlotId::new(slot))
-        .and_then(|v| match v {
-            reimagine_core::model::ParamValue::String(s) => Some(s.clone()),
-            _ => None,
-        })
-}
-
 pub fn execute_image_save(
-    request: &InferenceRequest,
+    request: ImageSaveRequest,
     backend: &CandleBackend,
-) -> Result<InferenceResponse, CandleBackendError> {
-    let prefix = extract_optional_string_param(request.params(), "filename_prefix")
-        .unwrap_or_else(|| "reimagine".to_string());
-    execute_image_persist(request, backend, &prefix)
+) -> Result<ImageSaveResponse, CandleBackendError> {
+    let prefix = match request.filename_prefix() {
+        FilenamePrefix::Default => "reimagine".to_string(),
+        FilenamePrefix::Custom(s) => s.clone(),
+    };
+    let run_id = request.run_id().clone();
+    let node_id = request.node_id().clone();
+    let response_artifact =
+        persist_image(request.into_image(), &prefix, &run_id, &node_id, backend)?;
+    Ok(ImageSaveResponse::new(response_artifact))
 }
 
 pub fn execute_image_preview(
-    request: &InferenceRequest,
+    request: ImagePreviewRequest,
     backend: &CandleBackend,
-) -> Result<InferenceResponse, CandleBackendError> {
-    execute_image_persist(request, backend, "preview")
+) -> Result<ImagePreviewResponse, CandleBackendError> {
+    let run_id = request.run_id().clone();
+    let node_id = request.node_id().clone();
+    let response_artifact =
+        persist_image(request.into_image(), "preview", &run_id, &node_id, backend)?;
+    Ok(ImagePreviewResponse::new(response_artifact))
 }
 
-fn execute_image_persist(
-    request: &InferenceRequest,
-    backend: &CandleBackend,
+fn persist_image(
+    image_value: reimagine_core::RuntimeImage,
     prefix: &str,
-) -> Result<InferenceResponse, CandleBackendError> {
-    let image_value = request.inputs().get(&SlotId::new("image")).ok_or_else(|| {
-        CandleBackendError::InvalidRequest("image.save requires an `image` input".to_string())
-    })?;
-
-    let image_value = match image_value.as_ref() {
-        ExecutionValue::Image(img) => img,
-        _ => {
-            return Err(CandleBackendError::InvalidRequest(
-                "image.save requires an `image` input".to_string(),
-            ));
-        }
-    };
-
+    run_id: &reimagine_core::model::RunId,
+    node_id: &reimagine_core::model::NodeId,
+    backend: &CandleBackend,
+) -> Result<ArtifactRef, CandleBackendError> {
     if image_value.payload().backend() != backend.backend_kind() {
         return Err(CandleBackendError::InvalidRequest(format!(
             "image.save `image` handle belongs to backend `{}`, expected `{}`",
@@ -99,8 +82,8 @@ fn execute_image_persist(
 
     let filename = build_safe_filename(
         prefix,
-        request.run_id().as_str(),
-        request.node_id().as_str(),
+        run_id.as_str(),
+        node_id.as_str(),
         backend.next_image_seq(),
     );
 
@@ -125,11 +108,7 @@ fn execute_image_persist(
         .ok()
         .map(|relative| format!("output/{}", relative.to_string_lossy()))
         .unwrap_or_else(|| output_path.to_string_lossy().to_string());
-    let output = InferenceOutput::new(
-        "artifact",
-        Arc::new(ExecutionValue::Artifact(ArtifactRef::new(reference))),
-    );
-    Ok(InferenceResponse::new(vec![output]))
+    Ok(ArtifactRef::new(reference))
 }
 
 fn build_safe_filename(prefix: &str, run_id: &str, node_id: &str, seq: u64) -> String {
