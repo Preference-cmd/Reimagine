@@ -13,7 +13,8 @@ It must not depend on Tauri or Axum.
 
 - Execute prepared `core::ExecutionPlan` values through `RuntimeService` / `ExecutionRunner`.
 - Own `RunSession` and run state.
-- Schedule DAG stages and parallel nodes.
+- Schedule DAG stages. The target architecture supports same-stage
+  parallelism, but the current runner is an initial sequential scheduler.
 - Handle cancellation.
 - Coordinate node execution through a `NodeExecutorRegistry`.
 - Route preview and saved artifacts through injected artifact capabilities.
@@ -40,6 +41,7 @@ runtime must not -> tauri
 runtime must not -> axum
 runtime must not -> model-manager
 runtime must not -> inference
+runtime must not -> inference-core
 runtime must not -> inference-backends/*
 ```
 
@@ -64,6 +66,11 @@ src/
 ```
 
 Use modern Rust module layout. Do not introduce `mod.rs`, and prefer ordinary `mod foo;` declarations over `#[path = "..."]` attributes.
+
+The migration target is that `store.rs`, `node_context.rs`, `executor.rs`, and
+`resources.rs` refer to `core::ExecutionValue`. They must not define the
+canonical value enum themselves. A temporary `RuntimeValue` alias may exist
+only as a migration shim while downstream crates are updated.
 
 ## Public Run Boundary
 
@@ -190,7 +197,8 @@ Cancellation is not a diagnostic error by default. Cleanup failures may produce 
 
 V1 uses fail-fast downstream scheduling.
 
-When a node in a parallel stage fails:
+When a node in a stage fails, and especially once same-stage parallelism is
+introduced:
 
 ```text
 Stage: A, B, C
@@ -240,24 +248,64 @@ runtime:
 runtime scheduler
   -> NodeExecutor::execute(NodeExecutionContext)
   -> inference-backed executor
-  -> InferenceBackend::execute(operation_request)
-  -> RuntimeValue outputs
+  -> typed inference-core capability call
+  -> selected backend typed capability method
+  -> core::ExecutionValue outputs
 ```
 
 This prevents `inference` from becoming a second runtime. `runtime` owns run
 state, scheduling, cancellation, value storage, snapshots, summaries, and run
-events. `inference` owns only the node-to-operation protocol and backend
-adapter boundary.
+events. `inference` owns only built-in node orchestration over abstract
+handles. The typed backend capability boundary lives in `inference-core`, not
+in `runtime`.
 
-V1 runtime does not select inference backends per node. Backend selection is
-resolved by app-host before a run/execution unit starts, by constructing the
-executor registry and resource backend for the selected backend profile.
-Runtime executes the registry it was given and does not perform implicit
-cross-backend tensor conversion.
+Runtime's execution unit is a workflow node invocation:
+
+```text
+ExecutionNode
+  node_id
+  type_id
+  input bindings
+  params
+```
+
+The scheduler invokes one `NodeExecutor` for each execution node. It does not
+know whether that node uses SDXL, Flux, a remote backend, or a future fused
+graph. Model identity enters runtime only as opaque `ExecutionValue` handles
+flowing between node invocations.
+
+Asynchronous and parallel scheduling are orthogonal to this boundary. The
+scheduler may run independent node invocations concurrently, await async
+executors, cancel in-flight siblings, or release values after last use. Those
+policies change when node invocations are called, not what the execution unit
+is. Runtime must not turn `text_encode`, `diffusion_sample`, SDXL CLIP, or a
+backend kernel graph into its scheduling unit.
+
+Runtime does not select inference backends per node. Backend selection,
+resource compatibility, and explicit transfer/bridge policy belong to the
+inference runtime/router assembled by app-host. Runtime executes the registry
+it was given, passes opaque runtime handles into `NodeExecutionContext`, and
+does not perform implicit cross-backend tensor conversion.
 
 `RunResourceBackend` remains a runtime lifecycle hook, not the inference
 execution API. A concrete backend may implement both `RunResourceBackend` and
 the inference backend trait, but runtime only sees `RunResourceBackend`.
+
+## Review Notes
+
+As of 2026-06-15, the public runtime seam is still correct, but the current
+runner implementation should be treated as an initial sequential scheduler, not
+as the final DAG-parallel implementation described above.
+
+Follow-up candidates:
+
+- deepen the internal scheduler module so stage concurrency, fail-fast sibling
+  cancellation, cancellation checks, and snapshot cadence live behind one
+  implementation;
+- carry artifact references through `RunArtifactRef` so host snapshots and
+  summaries can expose the actual workspace-relative artifact destination;
+- keep `RuntimeService::run` plan-oriented even if the internal scheduler later
+  compiles plans into lower-level execution units.
 
 `RunStore` tracks active runs and summaries:
 
@@ -330,14 +378,15 @@ RunSession
 
 ```text
 RunValueStore
-  values: OutputKey -> RuntimeValue
+  values: OutputKey -> ExecutionValue
 
 OutputKey
   node_id
   slot_id
 ```
 
-`RuntimeValue` may contain backend-native handles for cheap in-run sharing:
+`core::ExecutionValue` may contain backend-affine handles for cheap in-run
+sharing:
 
 ```text
 Param
@@ -351,7 +400,16 @@ Artifact
 Null
 ```
 
-`RunValueStore` should store `Arc<RuntimeValue>` handles. Large tensor buffers and loaded model payloads must not be copied into `RunValueStore`; they remain in backend-owned stores and are referenced by lightweight handles such as `BackendTensorHandle` or `RuntimeModelHandle`.
+`RunValueStore` should store `Arc<core::ExecutionValue>` handles. Large tensor
+buffers and loaded model payloads must not be copied into `RunValueStore`; they
+remain in backend-owned stores and are referenced by lightweight handles such
+as `BackendTensorHandle` or `RuntimeModelHandle`.
+
+`ExecutionConditioning` is one of the `core::ExecutionValue` variants. Its
+current `metadata` lives with the conditioning value and should be treated as
+public execution context rather than a separate runtime subsystem. Existing code
+may temporarily expose the old `RuntimeConditioning` name as a compatibility
+alias during migration.
 
 These values are not owned by app state and are not exposed to UI. Host state keeps run handles, summaries, diagnostics, and artifact references only.
 
@@ -363,7 +421,10 @@ Node executors should not receive the whole `RunValueStore`. Runtime resolves gr
 
 V1 `NodeExecutor` may use `async-trait` for a readable async trait-object boundary. If profiling later shows this boundary matters, it can be replaced with boxed futures without changing the runtime's public run/plan API.
 
-V1 scheduling executes stages in order and may run nodes within a stage concurrently. Deterministic stage order and deterministic event/snapshot semantics are still required even when same-stage work is concurrent.
+Current V1 scheduling executes stages in order and runs nodes within a stage
+sequentially. The architecture should still preserve deterministic stage order
+and deterministic event/snapshot semantics when a follow-up scheduler deepening
+issue introduces same-stage concurrency.
 
 ## Backend Resource Lifecycle
 
@@ -372,7 +433,7 @@ Runtime owns run dependency lifetime. Backend capabilities own real model/tensor
 ```text
 Runtime owns:
   RunValueStore
-  OutputKey -> Arc<RuntimeValue>
+  OutputKey -> Arc<ExecutionValue>
   dependency order
   stage/last-use knowledge
   run cancellation and cleanup timing
@@ -406,17 +467,25 @@ The backend decides the mechanism:
 
 V1 may keep all intermediate tensor handles until run cleanup. The runtime type shape should still allow future last-use analysis to call `release_runtime_value` earlier after the last downstream consumer completes.
 
-Model loading remains executor/backend capability work:
+Model loading remains inference/backend adapter work:
 
 ```text
 checkpoint_loader executor
-  -> backend model capability get_or_load(...)
-  -> RuntimeValue::Model(handle)
+  -> inference-core typed capability call
+  -> backend load_bundle(...)
+  -> core::ExecutionValue::Model(handle)
 ```
 
-Runtime stores and routes the returned handle, but it does not resolve manifests or own the loaded payload.
+Runtime stores and routes the returned handle, but it does not resolve
+manifests, inspect the resolved model descriptor, or own the loaded payload.
+Only the inference backend knows what concrete model object, graph, tokenizer,
+weights, or device allocations sit behind that handle.
 
-Device placement and transfer are backend policy decisions surfaced through handles, run events, diagnostics, or memory snapshots. Runtime may pass cancellation and context to executors, but backend capabilities decide whether CPU/GPU transfer, offload, or eviction is allowed.
+Device placement and transfer are inference runtime/backend policy decisions
+surfaced through handles, run events, diagnostics, or memory snapshots. Runtime
+may pass cancellation and context to executors, but the inference
+runtime/router and backend capabilities decide whether CPU/GPU transfer,
+offload, or eviction is allowed.
 
 Run cleanup:
 
@@ -440,9 +509,12 @@ Execution flow:
 ```text
 Workflow ModelRef
   -> model-manager readiness resolver reports availability diagnostics
-  -> app-host builds execution plan and node executor capabilities
-  -> checkpoint/model-loading node executor resolves/loads through injected capability
-  -> RuntimeValue::Model / Clip / Vae
+  -> app-host builds execution plan and node executor adapters
+  -> checkpoint node executor calls inference-core typed capability
+  -> inference backend resolves concrete loaded model object
+  -> core::ExecutionValue::Model / Clip / Vae
 ```
 
-The loaded backend payload stays in the backend model store owned by the injected backend capability. Runtime passes typed handles between nodes.
+The loaded backend payload stays in the backend model store owned by the
+inference backend. Runtime passes typed handles between nodes and never learns
+which concrete model architecture or checkpoint was loaded.

@@ -40,7 +40,7 @@ ExecutionStage
 
 The plan is derived from a structurally valid workflow plus a node catalog. It includes only the execution subgraph needed for the selected run targets.
 
-Core does not store resolved `RuntimeValue` payloads in the plan. Runtime resolves node inputs into `RuntimeValue` at execution time using the run value store.
+Core does not store resolved `ExecutionValue` payloads in the plan. Runtime resolves node inputs into `ExecutionValue` at execution time using the run value store.
 
 ## Plan Result
 

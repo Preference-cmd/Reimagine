@@ -18,7 +18,7 @@ Workflow JSON stores:
 
 Workflow JSON does not store:
 
-- `RuntimeValue`;
+- `ExecutionValue`;
 - backend tensor handles;
 - loaded model handles;
 - Candle tensors;
@@ -143,7 +143,7 @@ Params are not runtime values. They are saved editor/configuration values.
 
 If an input slot has both a param and an incoming edge, the edge is the effective value during execution. The param remains saved as a fallback and becomes effective again if the edge is disconnected.
 
-`ParamValue` should remain the saved/editor value enum. It may contain `ModelRef`, strings, numbers, booleans, seeds, selects, paths, and null-like values. It must not contain `RuntimeValue`, loaded handles, or Candle tensor payloads.
+`ParamValue` should remain the saved/editor value enum. It may contain `ModelRef`, strings, numbers, booleans, seeds, selects, paths, and null-like values. It must not contain `ExecutionValue`, loaded handles, or Candle tensor payloads.
 
 ## Interface
 

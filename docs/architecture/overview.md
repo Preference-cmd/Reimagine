@@ -1,7 +1,7 @@
 # Reimagine Architecture Overview
 
 > Status: working draft
-> Last updated: 2026-06-13
+> Last updated: 2026-06-15
 
 ## Purpose
 
@@ -77,22 +77,42 @@ Diagnostics are user/Agent-facing and structured. Logs/traces are developer/runt
 
 New Rust modules use the standard modern file layout and avoid the old `mod.rs` directory pattern. Prefer ordinary `mod foo;` declarations that resolve to `foo.rs` or `foo/bar.rs`; do not use `#[path = "..."]` unless there is a concrete interop reason. Large files should be split by domain concept before they become review-hostile.
 
+### Node definitions have one source of truth
+
+`core` defines the `NodeDef` schema language. `nodes` owns the V1 built-in node
+catalog data. Hosts, UI projection, Agent tools, import adapters, validation,
+readiness, and execution planning must all consume that catalog rather than
+redefining node slots or params.
+
+`NodeExecutorRegistry` answers how a `NodeTypeId` runs. It is not a source of
+truth for what inputs, outputs, params, effects, aliases, or target semantics a
+node has.
+
+`inference-core` owns the typed backend capability contract and router.
+`inference` owns node orchestration. Concrete backends implement the contract.
+
 ## Crate and Host Map
 
 ```text
 crates/core
   Pure domain kernel:
   - canonical workflow schema
-  - shared NodeDef / SocketDef / ParamDef schema
+  - shared NodeDef / InputSlotDef / OutputSlotDef schema
   - WorkflowSession, WorkflowCommand, history, diagnostics
   - execution plan and RunEvent schema
-  - backend-agnostic inference contracts
+  - public execution values shared across runtime, inference, and backends
+
+crates/inference-core
+  Backend contract kernel:
+  - typed backend capability protocol
+  - inference router / registry / bridge policy
+  - model resolver handoff and inference diagnostics
 
 crates/nodes
   Built-in node package:
   - V1 built-in NodeDef catalog
   - static NodeRegistry
-  - execution capabilities
+  - node metadata and UI/import aliases
   - ComfyUI aliases
 
 crates/adapters
@@ -157,17 +177,18 @@ crates/runtime
 
 crates/inference
   Backend-neutral inference layer:
-  - operation-based inference backend protocol
-  - model resolver capability shape
-  - backend-neutral executor factories
-  - inference diagnostics/errors
+  - built-in node executors
+  - executor helpers
+  - built-in node orchestration over abstract runtime handles
+  - executor registration helpers
 
 crates/inference-backends/candle
   V1 configured default local inference backend:
   - CandleBackend
   - model loader/cache
   - tensor payload store
-  - SDXL base-only operation implementation
+  - backend-private model graph / kernel adapters
+  - SDXL base-only first implementation behind typed capabilities
 
 crates/axum-host
   HTTP host adapter:

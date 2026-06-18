@@ -5,297 +5,105 @@
 
 ## Role
 
-`inference` is the backend-neutral image generation inference layer. It defines
-an operation-based backend protocol, executor factory shape, backend-neutral
-errors, and runtime value conventions needed to run built-in generation nodes
-without making `runtime`, `app-host`, Tauri, or Axum depend on a concrete
-inference backend.
+`inference` is the backend-neutral node orchestration layer for built-in
+generation nodes. It implements `runtime::NodeExecutor` adapters that map a
+workflow node invocation to typed backend capability calls.
 
-Concrete inference adapters live under grouped backend crates:
-
-```text
-crates/inference/
-  Cargo.toml              # reimagine-inference
-
-crates/inference-backends/
-  candle/
-    Cargo.toml            # reimagine-inference-candle
-  fake/                   # optional test/dev backend
-  remote/                 # future
-  onnx/                   # future
-```
-
-This keeps the top-level `crates/` directory readable while preserving separate
-Cargo crates and clean optional dependencies for each backend.
+It does not define the backend contract itself. Shared backend traits, typed
+capability request/response DTOs, backend registry, router, bridge policy, and
+inference errors belong to [`inference-core`](inference-core.md).
 
 ## Responsibilities
 
-- Define backend-neutral inference backend and operation protocol.
-- Define executor factory / registration helpers for V1 built-in nodes.
-- Define backend-neutral inference errors and diagnostic projection.
-- Define model resolution capability interfaces consumed by executors.
-- Preserve runtime value handle conventions for model, CLIP, VAE, latent,
-  conditioning, image, and artifact values.
-- Provide fake/stub backend seams for tests when useful.
+- Provide built-in inference-backed node executors.
+- Convert `runtime::NodeExecutionContext` inputs and params into typed
+  `inference-core` requests.
+- Call the injected `inference-core::InferenceRuntime` router.
+- Validate typed responses against the node's output slots.
+- Record save/preview artifacts through runtime artifact capabilities.
+- Provide executor registration helpers for app-host bootstrap.
 
 ## Non-Responsibilities
 
-- Runtime scheduling.
-- Workflow graph validation.
-- Model manifest scanning or persistence.
+- Runtime scheduling, cancellation, run state, snapshots, or value-store
+  ownership.
+- Backend trait definitions, backend registry, bridge policy, or capability
+  DTO ownership.
 - Concrete Candle, ONNX, remote, or Comfy implementations.
+- Model manifest scanning or persistence.
 - Tauri IPC, Axum routes, or UI state.
 - Agent policy.
 
 ## Dependency Direction
 
 ```text
-app-host -> inference
-app-host -> inference-backends/candle     # V1 configured default backend assembly
-
-inference -> runtime
 inference -> core
+inference -> runtime
+inference -> inference-core
 
-inference-backends/candle -> inference
-inference-backends/candle -> runtime
-inference-backends/candle -> core
-
-runtime must not -> inference
-runtime must not -> inference-backends/*
-axum-host must not -> inference-backends/*
-src-tauri should not directly -> inference-backends/*
+inference must not -> inference-backends/*
+inference must not -> model-manager
+inference must not -> app-host
+inference must not -> tauri
+inference must not -> axum
 ```
 
-`app-host` is the composition root. It chooses the configured backend, builds
-the backend adapter object, registers inference-backed executors into
-`RuntimeService`, and hands host adapters an `Arc<WorkspaceHost>`.
+`runtime` must not depend on `inference`. `app-host` composes the pieces by
+constructing an `inference-core` router and asking `inference` to register
+node executors into a runtime `NodeExecutorRegistry`.
 
-The configured backend applies at workspace/run/execution-unit granularity in
-V1. `inference` does not define node-level backend overrides, implicit
-cross-backend transfer, or backend-specific scheduler decisions. Those require
-an explicit future bridge/conversion design.
+## Boundary
 
-## Runtime And Inference Boundary
-
-`runtime` owns the execution loop. `inference` must not become a second
-runtime.
+`runtime` owns the execution loop. `inference` owns node orchestration.
+`inference-core` owns the backend contract. Concrete backends own payloads,
+model graphs, tensors, and device policy.
 
 ```text
-runtime
-  owns:
-    ExecutionPlan
-    DAG stage scheduling
-    RunSession / RunValueStore
-    cancellation
-    RunSnapshot / RunSummary
-    RunEventSink
-    NodeExecutor trait
-    RuntimeValue envelope
-    RunResourceBackend lifecycle hook
-
-inference
-  owns:
-    operation protocol
-    built-in node -> operation mapping
-    backend-neutral inference errors
-    model resolver capability shape
-    fake backend for tests
-    inference-backed NodeExecutor registration
-
-backend adapter
-  owns:
-    supported operation matrix
-    tensor/model cache
-    device/dtype/offload policy
-    concrete operation implementation
+runtime scheduler
+  -> NodeExecutor::execute(NodeExecutionContext)
+  -> inference executor
+  -> inference-core typed request
+  -> inference-core InferenceRuntime/router
+  -> selected inference-core InferenceBackend method
+  -> backend-private model graph / payload store
+  -> core::ExecutionValue outputs
 ```
 
-`NodeExecutor` remains a runtime trait. `inference` produces `NodeExecutor`
-implementations that map node execution contexts into inference operations.
+The runtime execution unit remains a workflow node invocation. Backend
+capability calls are not runtime scheduling units.
+
+## Runtime Value Usage
+
+`inference` consumes and returns public execution values owned by `core`.
 
 ```text
-NodeExecutionContext
-  -> inference-backed NodeExecutor
-  -> InferenceRequest
-  -> InferenceBackend::execute
-  -> InferenceResponse
-  -> Vec<(SlotId, Arc<RuntimeValue>)>
+core::ExecutionValue
+  Param
+  Model
+  Clip
+  Vae
+  Latent
+  Conditioning
+  Image
+  Artifact
+  Null
 ```
 
-## Suggested Module Layout
+`inference` may inspect the public handle shape, such as `BackendKind`,
+`BackendPayloadKey`, tensor shape, dtype, model role, and device label. It must
+not inspect backend-local tensors, loaded model objects, tokenizer state, or
+kernel graphs.
 
-```text
-src/
-  lib.rs
-  error.rs
-  operation.rs
-  request.rs
-  response.rs
-  capability.rs
-  backend.rs
-  resolver.rs
-  registry.rs
-  executors.rs
-  executors/
-    validation.rs
-    string.rs
-    model.rs
-    text.rs
-    latent.rs
-    diffusion.rs
-    image.rs
-  testing.rs
-```
+## Executor Shape
 
-`lib.rs` should stay as a facade of private modules plus explicit public
-re-exports. Keep the operation protocol, backend trait, resolver trait, and
-executor adapters in separate files; do not collect the crate's core model into
-one large `lib.rs` or `backend.rs`.
+Each executor should be explicit and small:
 
-`testing.rs` may expose fake/stub helpers behind `#[cfg(any(test, feature =
-"testing"))]` if downstream tests need them. The default public API should not
-require test-only fake types.
-
-## Operation Protocol
-
-The central abstraction is an operation-based backend adapter:
-
-```text
-InferenceBackend
-  backend_kind()
-  capabilities()
-  execute(request)
-  memory_snapshot()
-```
-
-V1 should use the same `async_trait` style already used by `runtime` and
-`agent` for async trait objects:
-
-```text
-#[async_trait]
-trait InferenceBackend: Send + Sync + 'static {
-  async fn execute(&self, request: InferenceRequest)
-    -> Result<InferenceResponse, InferenceError>;
-}
-```
-
-The request owns cheap, shareable handles rather than borrowing from
-`NodeExecutionContext`. In practice that means `SlotId -> Arc<RuntimeValue>`
-maps, typed params, and resolved model DTOs are cloned into the request. This
-keeps the backend call lifetime simple across `.await` while preserving
-zero-copy behavior for tensors and loaded models, because large data remains
-inside backend-owned stores referenced by runtime handles.
-
-`InferenceRequest` carries:
-
-- `operation_id`;
-- `models: Vec<ResolvedInferenceModel>` when the operation needs model
-  context;
-- input `RuntimeValue` values keyed by `SlotId`;
-- typed node params;
-- run/correlation context.
-
-Use a vector even for single-model operations. A request with one checkpoint
-bundle simply carries one resolved model, while future operations can carry a
-base model plus LoRA, ControlNet, refiner, or multiple text encoders without
-changing the protocol.
-
-`InferenceRequest` must not carry `NodeArtifactCapability`. Artifact recording
-belongs to the inference-backed executor adapter because runtime owns the
-artifact store. A backend may return an image value, an artifact intent, or a
-backend payload handle, but the executor records the artifact through
-`NodeArtifactCapability::record`.
-
-`InferenceResponse` carries slot-aware named `RuntimeValue` outputs or an
-`InferenceError`:
-
-```text
-InferenceResponse
-  outputs: Vec<InferenceOutput>
-
-InferenceOutput
-  slot_id: SlotId
-  value: Arc<RuntimeValue>
-```
-
-`SlotId` is the core model identifier for a node input or output slot. It is
-not a backend field name and it is not an array index. Inference executors use
-the workflow/node declaration to translate operation inputs and outputs into
-these slot ids. This mirrors runtime's `NodeExecutionOutputs` shape and avoids
-relying on array order for multi-output nodes such as
-`builtin.checkpoint_loader`.
-
-Response validation belongs to the inference-backed executor adapter:
-
-- every returned `slot_id` must be declared by the node's `output_slots`;
-- required output slots must be present before the executor returns;
-- returned values must match the expected runtime value kind for the slot;
-- duplicate output slot ids are errors;
-- extra backend outputs are errors unless the node type explicitly declares an
-  extension/dynamic output policy.
-
-This keeps runtime generic. Runtime stores whatever
-`Vec<(SlotId, Arc<RuntimeValue>)>` the executor returns; it does not understand
-inference operation ids or backend-native output names.
-
-Put shared validation code in `executors/validation.rs` rather than duplicating
-it across node executors. Individual executor modules should declare their
-expected output slots and value kinds, call the shared validator, and then
-return `NodeExecutionOutputs`.
-
-`InferenceError` should convert into runtime's `NodeExecutorError` through an
-explicit method such as `InferenceError::into_executor_error()`. Avoid a broad
-`From<InferenceError> for NodeExecutorError` implementation in V1 so call sites
-make the inference-to-runtime boundary visible.
-
-The operation protocol is model-family-neutral. SDXL is a V1 consumer of the
-protocol, not the shape of the protocol.
-
-Initial operation ids:
-
-```text
-model.load_bundle
-text.encode
-latent.create_empty
-diffusion.sample
-latent.decode
-image.save
-image.preview
-```
-
-Backends publish a capability report that says which operations they support
-for which model families/variants:
-
-```text
-InferenceBackendCapabilities
-  backend_kind
-  operations: Vec<InferenceOperationSupport>
-
-InferenceOperationSupport
-  operation_id
-  model_series: Option<ModelSeries>
-  variant: Option<ModelVariant>
-  roles: Vec<ModelRole>
-```
-
-Future Flux, video, ONNX, or remote backends extend the support matrix. They do
-not require new infrastructure traits per model family unless a genuinely new
-operation kind is needed.
-
-## Runtime Integration
-
-`runtime` already exposes:
-
-```text
-NodeExecutorRegistry
-NodeExecutor::execute(NodeExecutionContext)
-RuntimeValue
-NodeArtifactCapability
-```
-
-`inference` should produce `NodeExecutor` implementations or factories that use
-`InferenceBackend::execute` and return `RuntimeValue` handles. No concrete
-backend tensor type may cross this boundary.
+- read required inputs and params from `NodeExecutionContext`;
+- build a typed `inference-core` request;
+- call the corresponding `InferenceRuntime` capability method;
+- validate response value kinds and required outputs;
+- map typed responses into `NodeExecutionOutputs`;
+- record artifacts through runtime artifact capabilities when needed.
 
 The initial executor set remains:
 
@@ -307,133 +115,172 @@ builtin.empty_latent_image
 builtin.ksampler
 builtin.vae_decode
 builtin.save_image
+builtin.preview_image
 ```
-
-### Executor Adapter Organization
-
-Inference-backed executors are node adapters, not backend implementations.
-Each executor should be small and focused:
-
-- read required inputs/params from `NodeExecutionContext`;
-- produce one `InferenceRequest` with a stable `InferenceOperationId`;
-- call `InferenceBackend::execute`;
-- validate response slot names and value kinds;
-- record artifacts through `NodeArtifactCapability` for save/preview
-  operations;
-- return `NodeExecutionOutputs`.
-
-Keep backend-specific behavior out of these executor files. For example,
-`executors/diffusion.rs` may map `builtin.ksampler` to
-`diffusion.sample`, but it must not branch on Candle model internals.
 
 Executor registration belongs in a narrow API such as:
 
 ```text
-register_builtin_inference_executors(registry, backend, resolver)
+register_builtin_inference_executors(
+  registry,
+  Arc<dyn inference_core::InferenceRuntime>,
+  Arc<dyn inference_core::ModelResolver>,
+)
 ```
 
-The exact function name can vary, but the registration entrypoint should live
-in `registry.rs` or a similarly focused module. It should not require
-`app-host`, `model-manager`, or a concrete backend crate.
+The registration helper must not require `app-host`, `model-manager`, or a
+concrete backend crate.
 
-Save/preview executors should treat artifact recording as a runtime-facing
-adapter concern:
+## KSampler Example
+
+```text
+core::NodeCatalog
+  get("builtin.ksampler") -> NodeDef
+
+runtime::NodeExecutorRegistry
+  get("builtin.ksampler") -> Arc<dyn NodeExecutor>
+
+inference::KSamplerExecutor
+  reads: Model + positive Conditioning + negative Conditioning + Latent
+  reads: seed / steps / cfg / sampler / scheduler / denoise
+  builds: DiffusionSampleRequest
+  calls: InferenceRuntime::diffusion_sample(...)
+  returns: ExecutionValue::Latent
+
+inference-core::InferenceRuntime
+  validates handle compatibility
+  applies explicit bridge policy if available
+  routes to selected backend
+
+inference-backend
+  resolves backend-private payload keys
+  runs model graph / kernel adapter
+  stores new payload
+  returns public ExecutionValue handle
+```
+
+Rust-shaped sketch:
+
+```rust
+pub struct KSamplerExecutor {
+    inference: Arc<dyn inference_core::InferenceRuntime>,
+}
+
+#[async_trait]
+impl runtime::NodeExecutor for KSamplerExecutor {
+    async fn execute(
+        &self,
+        context: NodeExecutionContext,
+    ) -> Result<NodeExecutionOutputs, NodeExecutorError> {
+        let request = DiffusionSampleRequest::from_context(&context)?;
+        let response = self.inference.diffusion_sample(request).await?;
+        Ok(latent_output(response))
+    }
+}
+```
+
+`KSamplerExecutor` may encode node-level semantics. It may not encode
+SDXL-specific tensor shapes, Candle device policy, loaded bundle internals, or
+future model-family branches.
+
+## Artifact Boundary
+
+Save/preview executors are runtime-facing adapters:
 
 ```text
 image.save executor
-  -> InferenceBackend::execute(image.save)
+  -> InferenceRuntime::image_save(...)
   -> validate image/artifact response
   -> NodeArtifactCapability::record(slot_id, ArtifactRef, ArtifactEventKind)
-  -> RuntimeValue::Artifact(...)
+  -> ExecutionValue::Artifact(...)
 ```
 
-This keeps concrete backends independent from runtime's artifact store while
-still letting remote or local backends produce saveable image data.
-
-## RunResourceBackend Relationship
-
-`RunResourceBackend` and `InferenceBackend` are separate roles.
-
-```text
-RunResourceBackend
-  called by runtime
-  begin_run / release_runtime_value / cleanup_run / memory_snapshot
-
-InferenceBackend
-  called by inference-backed node executors
-  execute(operation_request)
-```
-
-A concrete backend adapter, such as Candle, may implement both roles. Runtime
-still only knows the `RunResourceBackend` trait, while inference-backed
-executors know the `InferenceBackend` trait.
+Backend requests must not carry runtime's artifact store. Backends may encode
+or write image data according to their configured output policy, but artifact
+recording remains an executor/runtime concern.
 
 ## Model Resolution Handoff
 
-Model manifest semantics stay outside inference. `checkpoint_loader` receives a
-workflow `ModelRef`; a host-supplied resolver capability maps that reference to
-a resolved descriptor/path before loading.
+Model manifest semantics stay outside `inference`.
 
 ```text
 workflow ModelRef
   -> app-host ModelService / model-manager resolver
-  -> inference model resolver capability
-  -> InferenceRequest(model.load_bundle)
-  -> backend adapter
-  -> RuntimeValue::Model / Clip / Vae handles
+  -> inference-core ModelResolver adapter
+  -> LoadBundleRequest
+  -> InferenceRuntime::load_bundle(...)
+  -> ExecutionValue::Model / Clip / Vae handles
 ```
 
-This keeps `model-manager` independent from backend crates and keeps runtime
-free of model manifest knowledge.
+`inference` depends on a resolver trait from `inference-core`, not directly on
+`model-manager`.
 
-The model resolver trait should return inference-layer resolved model metadata,
-not `model-manager::ModelDescriptor` directly. `app-host` can adapt
-`ModelDescriptor` into that shape.
-
-`ResolvedInferenceModel` is type-independent from `model-manager`, but it
-should reuse stable cross-module semantics from `core::model`. In practice,
-that means fields such as `ModelId`, `ModelSeries`, `ModelVariant`, and
-`ModelRole` come from `core`, while manifest-only details such as scan source,
-root declarations, user classification rules, fingerprint status, or
-model-manager diagnostics stay outside inference.
-
-Suggested shape:
+## Suggested Module Layout
 
 ```text
-ResolvedInferenceModel
-  model_id
-  model_series
-  variant
-  role
-  source_path
-  format
-  metadata
+src/
+  lib.rs
+  executors.rs
+  executors/
+    common.rs
+    validation.rs
+    string.rs
+    model.rs
+    text.rs
+    latent.rs
+    diffusion.rs
+    image.rs
+  registry.rs
+  testing.rs
 ```
 
-This prevents `inference` from depending on `model-manager` while still
-preserving the path and identity needed by `model.load_bundle`.
+`lib.rs` should stay as a facade of private modules plus explicit public
+re-exports. Do not collect executor logic into one large file.
 
-## Backend Crate Placement
+Executor code architecture:
 
-Backend adapters should be grouped under `crates/inference-backends/` instead
-of being fully flat in `crates/`.
+```text
+executors.rs
+  register_builtin_inference_executors(...)
+  public executor re-exports
 
-Reasons:
+executors/common.rs
+  typed input extraction helpers
+  param conversion helpers
+  InferenceRuntime error mapping
+  NodeExecutionOutputs builders
 
-- the top-level `crates/` directory stays focused on architectural layers;
-- each backend remains a separate Cargo crate with independent dependencies;
-- optional backend selection remains clean for future packaging;
-- backend implementations are visually subordinate to the inference layer.
+executors/validation.rs
+  output slot and value-kind validation
+
+executors/model.rs
+  CheckpointLoaderExecutor
+
+executors/text.rs
+  ClipTextEncodeExecutor
+
+executors/latent.rs
+  EmptyLatentImageExecutor
+  VaeDecodeExecutor
+
+executors/diffusion.rs
+  KSamplerExecutor
+
+executors/image.rs
+  SaveImageExecutor
+  PreviewImageExecutor
+```
+
+The helper layer should remove boilerplate, but concrete executor structs
+remain explicit. Do not replace them with a mandatory table-driven
+`operation_id -> backend call` interpreter.
 
 ## V1 Strategy
 
-1. Introduce `crates/inference` with the operation-based backend protocol and
-   generic executor registration shape.
-2. Directly migrate the legacy `crates/candle-integration` placeholder into
-   `crates/inference-backends/candle` as `reimagine-inference-candle`.
-3. Wire app-host to select the configured backend enum value, with Candle as
-   the V1 default backend.
-4. Prove the SDXL example workflow runs through Axum using the same app-host
-   and runtime path.
-5. Replace stubbed backend kernels with real Candle CLIP/UNet/VAE behavior
-   behind the same operation protocol.
+The next correction is to make existing executors depend on
+`inference-core::InferenceRuntime` rather than a single
+`Arc<dyn InferenceBackend>` or stringly `operation_id` dispatch.
+
+Real CLIP/UNet/VAE work should land behind the same typed backend capability
+protocol. Do not add model-family-specific executor infrastructure unless a
+genuinely new capability kind is required.

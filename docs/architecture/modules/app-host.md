@@ -38,6 +38,7 @@ app-host -> core
 app-host -> config
 app-host -> model-manager
 app-host -> runtime
+app-host -> inference-core
 app-host -> inference
 app-host -> inference-backends/candle   # concrete backend crate selected by config in V1
 app-host -> agent
@@ -88,6 +89,19 @@ The type shape should still make the workspace boundary explicit so future multi
 
 `app-host` owns the unified bootstrap entry that assembles `WorkspaceHost`. Tauri and Axum adapters should receive an already-built workspace handle rather than duplicating service composition.
 
+`node_catalog` is the workspace handle to the built-in node catalog from
+`crates/nodes`. It is the catalog exposed to host adapters, UI DTOs, Agent
+tools, validation/readiness flows, and import adapters. `app-host` may project
+or serialize the catalog for clients, but it must not maintain a second copy of
+node slots, params, output rules, or aliases.
+
+`NodeExecutorRegistry` is assembled alongside the catalog but serves a
+different purpose: it maps catalog `NodeTypeId` values to execution behavior.
+If an executor exists for a node type that is absent from the catalog, or a
+catalog entry lacks an executor for a runnable workflow path, app-host should
+surface a bootstrap or readiness diagnostic rather than treating the executor
+as a node definition.
+
 ## Backend Selection
 
 `app-host` is the composition root for inference backends, but it should not
@@ -109,37 +123,51 @@ AppConfig
 
 WorkspaceHost::new(config)
   -> match config.inference.backend
-  -> construct selected backend
+  -> construct backend adapters from config
   -> construct ModelResolver adapter
+  -> build inference-core::InferenceBackendRegistry
+  -> construct inference-core::InferenceRuntime / router
   -> register_builtin_inference_executors(...)
   -> construct RuntimeService
 ```
+
+`app-host` assembles the runtime-facing trait chain:
+
+```text
+BuiltinNodeCatalog
+  -> NodeExecutorRegistry
+    -> inference concrete NodeExecutor
+      -> Arc<dyn inference_core::InferenceRuntime>
+        -> registry-backed backend selection
+        -> concrete inference_core::InferenceBackend
+```
+
+It should not move node orchestration into itself; orchestration belongs to the
+concrete inference executors.
 
 Candle may be the V1 default, but the default is still a config value, not a
 runtime or executor constant. Runtime receives only the populated executor
 registry and optional resource backend; it does not know which concrete backend
 was selected.
 
-Backend selection is not per-node in V1. It is a workspace/run/execution-unit
-profile selected before runtime execution begins:
+V1 may configure only one backend by default, but the app-host composition shape
+should still build a registry-backed `inference-core::InferenceRuntime`.
+Backend selection is a router/resource concern based on handle affinity and
+capability support, not a runtime scheduler decision:
 
 ```text
-workspace/run inference backend profile
-  -> app-host constructs selected backend
-  -> app-host registers executor set for that backend
-  -> runtime executes the prepared plan with that registry/resource backend
+inference backend config
+  -> app-host constructs backend adapters
+  -> app-host registers adapters by BackendKind
+  -> app-host constructs inference-core InferenceRuntime/router
+  -> app-host registers inference executors with the router
+  -> runtime executes the prepared plan with that executor registry
 ```
 
-V1 does not support node-level backend overrides or implicit cross-backend
-tensor transfer. A workflow run should not execute one inference node with
-Candle and another inference node with a different backend. Non-inference nodes,
-such as string input or artifact saving, may still use ordinary runtime
-executors; that is not considered backend switching.
-
-Future node-level or stage-level backend selection would require explicit value
-conversion/bridge design, compatibility diagnostics, and scheduler cost/lifetime
-awareness. It should be treated as a later architecture decision, not an
-implicit extension of the V1 config enum.
+Implicit cross-backend tensor transfer is not allowed. If the router sees
+handles from incompatible backends or devices, it must use an explicit bridge or
+return a readiness/runtime diagnostic. Runtime itself should not inspect
+backend internals to make that decision.
 
 Workspace construction follows a fixed capability-surface flow:
 

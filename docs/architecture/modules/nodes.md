@@ -7,11 +7,15 @@
 
 `nodes` provides the V1 built-in node catalog, static registry, execution capability metadata, and external aliases. It uses `core` node-definition schemas and must not define a competing schema.
 
+`nodes` is the single source of truth for built-in node catalog data in V1. The
+schema for that data is still owned by `core`.
+
 ## Responsibilities
 
 - Built-in `NodeDef` catalog.
 - Static `NodeRegistry`.
-- Execution capabilities.
+- Node metadata used by validation, readiness, UI projection, Agent tools, and
+  import adapters.
 - ComfyUI aliases.
 - Node-local definition validation.
 
@@ -19,6 +23,7 @@
 
 - Canonical workflow storage.
 - Core graph validation.
+- Runtime executor registration.
 - ComfyUI parsing.
 - Tauri IPC.
 - Candle internals.
@@ -47,6 +52,10 @@ src/
 ## V1 Built-In SDXL Nodes
 
 V1 should start with a small built-in catalog sufficient to express the SDXL base workflow example. These definitions live in `crates/nodes` but use the `core` node definition schema.
+
+The built-in catalog defines what each node is. It does not define how a node
+runs. Execution remains attached later through `NodeExecutorRegistry`, assembled
+by `app-host`.
 
 ### Input and Utility
 

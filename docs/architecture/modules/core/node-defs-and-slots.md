@@ -15,6 +15,33 @@ WorkflowNode.type_id = builtin.clip_text_encode
 
 Multiple workflow nodes may share the same `type_id`; each must have a unique `id`.
 
+## Single Source of Truth
+
+Node metadata has one source of truth:
+
+```text
+core
+  defines the NodeDef schema language and NodeCatalog lookup interface
+
+nodes
+  owns the V1 built-in NodeDef catalog data
+
+app-host
+  holds the workspace catalog handle and exposes it to hosts/Agent services
+
+runtime
+  receives validated execution plans and an executor registry
+```
+
+UI node libraries, Agent tool schemas, ComfyUI import aliases, workflow
+validation, readiness, and execution planning must consume the same `NodeDef`
+catalog. They must not maintain separate lists of node inputs, params, outputs,
+required flags, or target-capable semantics.
+
+`NodeExecutorRegistry` is intentionally not a node-definition source. It maps
+`NodeTypeId` to execution behavior. A registry entry cannot redefine slots,
+param compatibility, node effects, or target semantics.
+
 ## Slot-Based Inputs
 
 Node inputs are modeled as input slots. Params are not a separate connectability system; they are saved fallback values for input slots.
