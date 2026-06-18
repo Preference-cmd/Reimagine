@@ -2,8 +2,8 @@ use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
 
 use candle_core::{DType, Tensor};
+use reimagine_core::BackendPayloadKey;
 use reimagine_core::model::{ModelId, RunId};
-use reimagine_runtime::BackendPayloadKey;
 
 use crate::error::CandleBackendError;
 use crate::models::LoadedModelBundle;
@@ -523,7 +523,7 @@ impl CandleModelCache {
 mod tests {
     use super::*;
     use crate::device::CandleDevice;
-    use reimagine_inference::ModelFormat;
+    use reimagine_inference_core::ModelFormat;
     use std::fs;
 
     fn unique_temp_dir() -> std::path::PathBuf {

@@ -13,7 +13,7 @@
 use reimagine_core::model::{ParamValue, SlotId, SlotKind};
 use reimagine_runtime::{NodeExecutorError, RuntimeValue};
 
-use crate::response::InferenceResponse;
+use reimagine_inference_core::InferenceResponse;
 
 /// Expected output slot descriptor for validation.
 #[derive(Debug, Clone)]
@@ -176,7 +176,7 @@ mod tests {
     use reimagine_runtime::RuntimeValue;
     use std::sync::Arc;
 
-    use crate::response::InferenceOutput;
+    use reimagine_inference_core::InferenceOutput;
 
     fn make_response(outputs: Vec<(&str, &str)>) -> InferenceResponse {
         InferenceResponse::new(

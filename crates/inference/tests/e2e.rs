@@ -12,17 +12,20 @@ use reimagine_core::diagnostic::CorrelationId;
 use reimagine_core::model::{
     ArtifactRef, ModelId, ModelRef, ModelRole, ModelSeries, ModelVariant, ParamValue, SlotId,
 };
-use reimagine_runtime::{BackendKind, RuntimeClipHandle, RuntimeModelHandle, RuntimeVaeHandle};
+use reimagine_core::{
+    BackendKind, ExecutionValue, RuntimeClipHandle, RuntimeImage, RuntimeModelHandle,
+    RuntimeVaeHandle,
+};
 use reimagine_runtime::{
     CancellationToken, NodeExecutionContext, NodeExecutorError, NodeExecutorRegistry, NodeInputs,
-    RuntimeValue, VecRunEventSink,
+    VecRunEventSink,
 };
 
 use reimagine_inference::operation::*;
 use reimagine_inference::{
     InferenceBackend, InferenceBackendCapabilities, InferenceError, InferenceOperationId,
-    InferenceOperationSupport, InferenceRequest, InferenceResponse, ModelFormat, ModelResolver,
-    ResolvedInferenceModel, register_builtin_inference_executors,
+    InferenceOperationSupport, InferenceRequest, InferenceResponse, IntoNodeExecutorError,
+    ModelFormat, ModelResolver, ResolvedInferenceModel, register_builtin_inference_executors,
 };
 
 // ── Fake model resolver ────────────────────────────────────────────
@@ -57,14 +60,14 @@ impl ModelResolver for FakeResolver {
 // ── Fake backend ───────────────────────────────────────────────────
 
 struct FakeBackend {
-    kind: String,
-    operations: Mutex<HashMap<InferenceOperationId, Vec<(SlotId, Arc<RuntimeValue>)>>>,
+    kind: BackendKind,
+    operations: Mutex<HashMap<InferenceOperationId, Vec<(SlotId, Arc<ExecutionValue>)>>>,
 }
 
 impl FakeBackend {
     fn new(kind: impl Into<String>) -> Self {
         Self {
-            kind: kind.into(),
+            kind: BackendKind::new(kind),
             operations: Mutex::new(HashMap::new()),
         }
     }
@@ -72,7 +75,7 @@ impl FakeBackend {
     fn with_operation(
         self,
         operation_id: impl Into<InferenceOperationId>,
-        outputs: Vec<(SlotId, Arc<RuntimeValue>)>,
+        outputs: Vec<(SlotId, Arc<ExecutionValue>)>,
     ) -> Self {
         self.operations
             .lock()
@@ -84,13 +87,13 @@ impl FakeBackend {
 
 #[async_trait::async_trait]
 impl InferenceBackend for FakeBackend {
-    fn backend_kind(&self) -> &str {
+    fn backend_kind(&self) -> &BackendKind {
         &self.kind
     }
 
     fn capabilities(&self) -> InferenceBackendCapabilities {
         let operations = self.operations.lock().expect("fake backend poisoned");
-        let mut capabilities = InferenceBackendCapabilities::new(&self.kind);
+        let mut capabilities = InferenceBackendCapabilities::new(self.kind.clone());
         for operation_id in operations.keys() {
             capabilities =
                 capabilities.with_support(InferenceOperationSupport::new(operation_id.clone()));
@@ -117,7 +120,7 @@ impl InferenceBackend for FakeBackend {
             )),
             None => Err(InferenceError::BackendNotImplemented {
                 operation_id: request.operation_id().to_string(),
-                backend_kind: self.kind.clone(),
+                backend_kind: self.kind.to_string(),
                 message: None,
             }),
         }
@@ -135,20 +138,20 @@ fn model_ref() -> ModelRef {
     )
 }
 
-fn fake_output(slot: &str, value: impl Into<ParamValue>) -> (SlotId, Arc<RuntimeValue>) {
+fn fake_output(slot: &str, value: impl Into<ParamValue>) -> (SlotId, Arc<ExecutionValue>) {
     (
         SlotId::new(slot),
-        Arc::new(RuntimeValue::Param(value.into())),
+        Arc::new(ExecutionValue::Param(value.into())),
     )
 }
 
-fn fake_checkpoint_outputs() -> Vec<(SlotId, Arc<RuntimeValue>)> {
+fn fake_checkpoint_outputs() -> Vec<(SlotId, Arc<ExecutionValue>)> {
     let backend = BackendKind::new("fake");
     let model_id = ModelId::new("sdxl-base-1.0");
     vec![
         (
             SlotId::new("model"),
-            Arc::new(RuntimeValue::Model(RuntimeModelHandle::new(
+            Arc::new(ExecutionValue::Model(RuntimeModelHandle::new(
                 model_id.clone(),
                 ModelRole::DiffusionModel,
                 backend.clone(),
@@ -157,7 +160,7 @@ fn fake_checkpoint_outputs() -> Vec<(SlotId, Arc<RuntimeValue>)> {
         ),
         (
             SlotId::new("clip"),
-            Arc::new(RuntimeValue::Clip(RuntimeClipHandle::new(
+            Arc::new(ExecutionValue::Clip(RuntimeClipHandle::new(
                 model_id.clone(),
                 backend.clone(),
                 "clip-handle",
@@ -165,7 +168,7 @@ fn fake_checkpoint_outputs() -> Vec<(SlotId, Arc<RuntimeValue>)> {
         ),
         (
             SlotId::new("vae"),
-            Arc::new(RuntimeValue::Vae(RuntimeVaeHandle::new(
+            Arc::new(ExecutionValue::Vae(RuntimeVaeHandle::new(
                 model_id,
                 backend,
                 "vae-handle",
@@ -470,7 +473,7 @@ async fn string_executor_passthrough() {
     assert_eq!(result.len(), 1);
     assert_eq!(result[0].0.as_str(), "value");
     match result[0].1.as_ref() {
-        RuntimeValue::Param(ParamValue::String(s)) => assert_eq!(s, "hello world"),
+        ExecutionValue::Param(ParamValue::String(s)) => assert_eq!(s, "hello world"),
         other => panic!("expected Param(String), got {other:?}"),
     }
 }
@@ -511,7 +514,7 @@ async fn save_image_records_backend_returned_artifact_reference() {
         OP_IMAGE_SAVE,
         vec![(
             SlotId::new("artifact"),
-            Arc::new(RuntimeValue::Artifact(artifact_ref.clone())),
+            Arc::new(ExecutionValue::Artifact(artifact_ref.clone())),
         )],
     ));
     let resolver = Arc::new(FakeResolver::new("/models/sdxl-base.safetensors"));
@@ -529,7 +532,7 @@ async fn save_image_records_backend_returned_artifact_reference() {
     let mut inputs = NodeInputs::new();
     inputs.insert(
         SlotId::new("image"),
-        Arc::new(RuntimeValue::Image(reimagine_runtime::RuntimeImage::new(
+        Arc::new(ExecutionValue::Image(RuntimeImage::new(
             reimagine_runtime::BackendTensorHandle::new(
                 BackendKind::new("fake"),
                 reimagine_runtime::BackendPayloadKey::new("image:payload"),

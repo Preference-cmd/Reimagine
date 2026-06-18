@@ -1,47 +1,33 @@
-//! Backend-neutral inference errors.
+//! Inference-to-runtime error bridge.
 //!
-//! [`InferenceError`] is the canonical error type returned by
-//! [`InferenceBackend::execute`](crate::InferenceBackend::execute).
-//! It converts into [`reimagine_runtime::NodeExecutorError`] through
-//! an explicit [`into_executor_error`](InferenceError::into_executor_error)
-//! method so the inference-to-runtime boundary remains visible at
-//! every call site.
+//! The canonical [`InferenceError`](reimagine_inference_core::InferenceError)
+//! lives in `reimagine-inference-core`, which cannot depend on
+//! `reimagine-runtime` (the architecture explicitly forbids that
+//! edge). This module owns the explicit, call-site-visible
+//! conversion from the inference-core error to the runtime
+//! [`NodeExecutorError`].
+//!
+//! Two equivalent forms are provided:
+//!
+//! - [`IntoNodeExecutorError`] trait — for callers that prefer the
+//!   method form: `err.into_executor_error()`.
+//! - [`into_executor_error`] free function — preferred at executor
+//!   call sites; it stays explicit even if the trait method is
+//!   shadowed by another implementation.
 
-use reimagine_core::model::SlotId;
+use reimagine_inference_core::InferenceError;
+use reimagine_runtime::NodeExecutorError;
 
-/// Errors produced by the inference layer.
-#[derive(Debug)]
-pub enum InferenceError {
-    /// The backend does not implement the requested operation for the
-    /// given model series/variant combination. The executor should
-    /// surface this as a deterministic, non-retryable node failure.
-    BackendNotImplemented {
-        operation_id: String,
-        backend_kind: String,
-        message: Option<String>,
-    },
-    /// The backend returned a response that fails the executor's
-    /// output validation. The executor should surface this as a
-    /// deterministic node failure.
-    InvalidResponse { reason: String },
-    /// A required input was missing from the request.
-    MissingInput { slot_id: SlotId },
-    /// The backend encountered an internal execution failure.
-    BackendExecutionFailed { message: String },
-    /// The model resolver could not resolve the requested model
-    /// reference.
-    ModelResolutionFailed { message: String },
+/// Trait that maps `inference_core::InferenceError` to
+/// `runtime::NodeExecutorError` at the inference-to-runtime boundary.
+pub trait IntoNodeExecutorError {
+    fn into_executor_error(self) -> NodeExecutorError;
 }
 
-impl InferenceError {
-    /// Map this error into a [`reimagine_runtime::NodeExecutorError`].
-    ///
-    /// V1 uses an explicit method rather than a broad `From`
-    /// implementation so every call site makes the inference-to-runtime
-    /// boundary visible.
-    pub fn into_executor_error(self) -> reimagine_runtime::NodeExecutorError {
+impl IntoNodeExecutorError for InferenceError {
+    fn into_executor_error(self) -> NodeExecutorError {
         match self {
-            Self::BackendNotImplemented {
+            InferenceError::BackendNotImplemented {
                 operation_id,
                 backend_kind,
                 message,
@@ -49,61 +35,76 @@ impl InferenceError {
                 let base = format!(
                     "backend `{backend_kind}` does not implement operation `{operation_id}`"
                 );
-                reimagine_runtime::NodeExecutorError::Failed {
+                NodeExecutorError::Failed {
                     message: match message {
                         Some(m) => format!("{base}: {m}"),
                         None => base,
                     },
                 }
             }
-            Self::InvalidResponse { reason } => reimagine_runtime::NodeExecutorError::Failed {
+            InferenceError::InvalidResponse { reason } => NodeExecutorError::Failed {
                 message: format!("invalid backend response: {reason}"),
             },
-            Self::MissingInput { slot_id } => reimagine_runtime::NodeExecutorError::MissingInput {
+            InferenceError::MissingInput { slot_id } => NodeExecutorError::MissingInput {
                 slot_id: slot_id.to_string(),
             },
-            Self::BackendExecutionFailed { message } => {
-                reimagine_runtime::NodeExecutorError::Failed { message }
+            InferenceError::BackendExecutionFailed { message } => {
+                NodeExecutorError::Failed { message }
             }
-            Self::ModelResolutionFailed { message } => {
-                reimagine_runtime::NodeExecutorError::Failed {
-                    message: format!("model resolution failed: {message}"),
+            InferenceError::ModelResolutionFailed { message } => NodeExecutorError::Failed {
+                message: format!("model resolution failed: {message}"),
+            },
+            InferenceError::BackendNotRegistered { kind } => NodeExecutorError::Failed {
+                message: format!(
+                    "backend `{kind}` is not registered in the inference-core registry"
+                ),
+            },
+            InferenceError::BackendCapabilityUnsupported { kind, operation_id } => {
+                NodeExecutorError::Failed {
+                    message: format!(
+                        "backend `{kind}` does not advertise capability for `{operation_id}`"
+                    ),
                 }
             }
-        }
-    }
-}
-
-impl std::fmt::Display for InferenceError {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        match self {
-            Self::BackendNotImplemented {
+            InferenceError::IncompatibleHandleAffinity { expected, actual } => {
+                NodeExecutorError::Failed {
+                    message: format!(
+                        "incompatible handle affinity: expected `{expected}`, got `{actual}`"
+                    ),
+                }
+            }
+            InferenceError::BackendBridgeRequired {
+                source,
+                target,
                 operation_id,
-                backend_kind,
-                message,
-            } => {
-                write!(
-                    f,
-                    "backend `{backend_kind}` does not implement `{operation_id}`"
-                )?;
-                if let Some(m) = message {
-                    write!(f, ": {m}")?;
-                }
-                Ok(())
-            }
-            Self::InvalidResponse { reason } => write!(f, "invalid response: {reason}"),
-            Self::MissingInput { slot_id } => write!(f, "missing input slot `{slot_id}`"),
-            Self::BackendExecutionFailed { message } => write!(f, "backend error: {message}"),
-            Self::ModelResolutionFailed { message } => write!(f, "model resolution: {message}"),
+            } => NodeExecutorError::Failed {
+                message: format!(
+                    "operation `{operation_id}` would require a cross-backend bridge from `{source}` to `{target}`"
+                ),
+            },
+            InferenceError::BackendBridgeUnsupported {
+                source,
+                target,
+                operation_id,
+                reason,
+            } => NodeExecutorError::Failed {
+                message: format!(
+                    "bridge policy forbids transfer from `{source}` to `{target}` for operation `{operation_id}`: {reason}"
+                ),
+            },
         }
     }
 }
 
-impl std::error::Error for InferenceError {}
+/// Free-function form preferred by executor call sites.
+pub fn into_executor_error(err: InferenceError) -> NodeExecutorError {
+    IntoNodeExecutorError::into_executor_error(err)
+}
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use reimagine_core::model::SlotId;
 
     #[test]
     fn backend_not_implemented_converts_to_failed() {
@@ -112,11 +113,8 @@ mod tests {
             backend_kind: "fake".to_string(),
             message: None,
         };
-        let exec_err = err.into_executor_error();
-        assert!(matches!(
-            exec_err,
-            reimagine_runtime::NodeExecutorError::Failed { .. }
-        ));
+        let exec_err = into_executor_error(err);
+        assert!(matches!(exec_err, NodeExecutorError::Failed { .. }));
         assert!(exec_err.to_string().contains("diffusion.sample"));
     }
 
@@ -125,11 +123,8 @@ mod tests {
         let err = InferenceError::MissingInput {
             slot_id: SlotId::new("text"),
         };
-        let exec_err = err.into_executor_error();
-        assert!(matches!(
-            exec_err,
-            reimagine_runtime::NodeExecutorError::MissingInput { .. }
-        ));
+        let exec_err = into_executor_error(err);
+        assert!(matches!(exec_err, NodeExecutorError::MissingInput { .. }));
     }
 
     #[test]
@@ -137,11 +132,35 @@ mod tests {
         let err = InferenceError::InvalidResponse {
             reason: "duplicate slot".to_string(),
         };
-        let exec_err = err.into_executor_error();
-        assert!(matches!(
-            exec_err,
-            reimagine_runtime::NodeExecutorError::Failed { .. }
-        ));
+        let exec_err = into_executor_error(err);
+        assert!(matches!(exec_err, NodeExecutorError::Failed { .. }));
         assert!(exec_err.to_string().contains("duplicate slot"));
+    }
+
+    #[test]
+    fn backend_bridge_unsupported_converts_to_failed_with_reason() {
+        let err = InferenceError::BackendBridgeUnsupported {
+            source: "candle".to_string(),
+            target: "remote".to_string(),
+            operation_id: "diffusion.sample".to_string(),
+            reason: "no bridge registered".to_string(),
+        };
+        let exec_err = into_executor_error(err);
+        let msg = exec_err.to_string();
+        assert!(msg.contains("candle"), "{msg}");
+        assert!(msg.contains("remote"), "{msg}");
+        assert!(msg.contains("no bridge registered"), "{msg}");
+    }
+
+    #[test]
+    fn backend_capability_unsupported_converts_to_failed() {
+        let err = InferenceError::BackendCapabilityUnsupported {
+            kind: "candle".to_string(),
+            operation_id: "diffusion.sample".to_string(),
+        };
+        let exec_err = into_executor_error(err);
+        let msg = exec_err.to_string();
+        assert!(msg.contains("candle"), "{msg}");
+        assert!(msg.contains("diffusion.sample"), "{msg}");
     }
 }

@@ -13,6 +13,7 @@ members = [
     "crates/agent-provider",
     "crates/axum-host",
     "crates/inference",
+    "crates/inference-core",
     "crates/inference-backends/candle",
 ]
 

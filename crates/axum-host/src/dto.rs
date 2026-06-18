@@ -18,12 +18,12 @@
 
 use std::collections::HashMap;
 
+use reimagine_core::ExecutionValue;
 use reimagine_core::event::RunEvent;
 use reimagine_core::model::{NodeId, RunId, WorkflowId, WorkflowVersion};
 use reimagine_core::readiness::{RunTarget, RunTargetSelection};
 use reimagine_runtime::NodeState;
 use reimagine_runtime::RunState;
-use reimagine_runtime::value::RuntimeValue;
 use reimagine_runtime::{RunArtifactRef, RunSnapshot, RunSummary};
 use serde::{Deserialize, Serialize};
 
@@ -385,12 +385,12 @@ impl From<RunEvent> for RunEventDto {
 }
 
 /// Marker that the type is host-safe: it never carries
-/// [`RuntimeValue`]-shaped payloads.
+/// [`ExecutionValue`]-shaped payloads.
 #[allow(dead_code)]
 const fn _assert_no_runtime_values() {
     // The DTOs above are JSON-only; if a future change accidentally
     // re-introduces a runtime value handle, the API surface breaks.
     // The constant below documents the invariant and gives the next
     // reviewer a hint where to look.
-    let _ = std::mem::size_of::<RuntimeValue>();
+    let _ = std::mem::size_of::<ExecutionValue>();
 }

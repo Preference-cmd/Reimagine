@@ -17,9 +17,9 @@ use reimagine_runtime::{
     ArtifactEventKind, NodeExecutionContext, NodeExecutor, NodeExecutorError, RuntimeValue,
 };
 
-use crate::backend::InferenceBackend;
 use crate::operation::{OP_IMAGE_PREVIEW, OP_IMAGE_SAVE, OP_LATENT_DECODE};
-use crate::request::InferenceRequest;
+use reimagine_inference_core::InferenceBackend;
+use reimagine_inference_core::InferenceRequest;
 
 use super::validation::{ExpectedOutputSlot, validate_response};
 
@@ -67,7 +67,7 @@ impl NodeExecutor for VaeDecodeExecutor {
             .backend
             .execute(request)
             .await
-            .map_err(|e| e.into_executor_error())?;
+            .map_err(|e| crate::error::into_executor_error(e))?;
 
         let expected = vec![ExpectedOutputSlot::required("image", SlotKind::Image)];
         validate_response(&response, &expected, false)
@@ -117,7 +117,7 @@ impl NodeExecutor for SaveImageExecutor {
             .backend
             .execute(request)
             .await
-            .map_err(|e| e.into_executor_error())?;
+            .map_err(|e| crate::error::into_executor_error(e))?;
 
         // The save backend MUST return at least one output so we
         // have something to record. An empty response is a backend
@@ -183,7 +183,7 @@ impl NodeExecutor for PreviewImageExecutor {
             .backend
             .execute(request)
             .await
-            .map_err(|e| e.into_executor_error())?;
+            .map_err(|e| crate::error::into_executor_error(e))?;
 
         let first = response
             .outputs()

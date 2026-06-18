@@ -62,7 +62,7 @@ impl NodeExecutor for MockLoaderExecutor {
         &self,
         _context: NodeExecutionContext,
     ) -> Result<
-        Vec<(SlotId, Arc<reimagine_runtime::RuntimeValue>)>,
+        Vec<(SlotId, Arc<reimagine_core::ExecutionValue>)>,
         reimagine_runtime::NodeExecutorError,
     > {
         Ok(Vec::new())

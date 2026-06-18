@@ -10,13 +10,13 @@ use std::sync::Arc;
 use reimagine_core::model::NodeTypeId;
 use reimagine_runtime::NodeExecutorRegistry;
 
-use crate::backend::InferenceBackend;
+use reimagine_inference_core::{InferenceBackend, ModelResolver};
+
 use crate::executors::{
     diffusion::KSamplerExecutor, image::PreviewImageExecutor, image::SaveImageExecutor,
     image::VaeDecodeExecutor, latent::EmptyLatentImageExecutor, model::CheckpointLoaderExecutor,
     string::StringExecutor, text::ClipTextEncodeExecutor,
 };
-use crate::resolver::ModelResolver;
 
 /// Register all V1 built-in inference-backed executors into the given
 /// registry.

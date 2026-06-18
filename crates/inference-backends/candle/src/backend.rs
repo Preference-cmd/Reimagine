@@ -3,11 +3,12 @@ use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, Ordering};
 
 use candle_core::Device;
-use reimagine_inference::InferenceBackend;
-use reimagine_inference::capability::{InferenceBackendCapabilities, InferenceOperationSupport};
-use reimagine_inference::operation::*;
-use reimagine_inference::request::InferenceRequest;
-use reimagine_inference::response::InferenceResponse;
+use reimagine_core::BackendKind;
+use reimagine_inference_core::{
+    InferenceBackend, InferenceBackendCapabilities, InferenceOperationSupport, InferenceRequest,
+    InferenceResponse, OP_DIFFUSION_SAMPLE, OP_IMAGE_PREVIEW, OP_IMAGE_SAVE,
+    OP_LATENT_CREATE_EMPTY, OP_LATENT_DECODE, OP_MODEL_LOAD_BUNDLE, OP_TEXT_ENCODE,
+};
 
 use crate::config::CandleBackendConfig;
 use crate::error::{BackendNotImplementedError, CandleBackendError};
@@ -83,12 +84,13 @@ impl CandleBackend {
 
 #[async_trait::async_trait]
 impl InferenceBackend for CandleBackend {
-    fn backend_kind(&self) -> &str {
-        "candle"
+    fn backend_kind(&self) -> &BackendKind {
+        static KIND: std::sync::OnceLock<BackendKind> = std::sync::OnceLock::new();
+        KIND.get_or_init(|| BackendKind::new("candle"))
     }
 
     fn capabilities(&self) -> InferenceBackendCapabilities {
-        InferenceBackendCapabilities::new(self.backend_kind())
+        InferenceBackendCapabilities::new(self.backend_kind().clone())
             .with_support(InferenceOperationSupport::new(OP_MODEL_LOAD_BUNDLE.into()))
             .with_support(InferenceOperationSupport::new(
                 OP_LATENT_CREATE_EMPTY.into(),
@@ -103,7 +105,7 @@ impl InferenceBackend for CandleBackend {
     async fn execute(
         &self,
         request: InferenceRequest,
-    ) -> Result<InferenceResponse, reimagine_inference::error::InferenceError> {
+    ) -> Result<InferenceResponse, reimagine_inference_core::InferenceError> {
         let result = match request.operation_id().as_str() {
             OP_MODEL_LOAD_BUNDLE => execute_model_load_bundle(&request, self),
             OP_LATENT_CREATE_EMPTY => execute_latent_create_empty(self, &request),
@@ -114,7 +116,7 @@ impl InferenceBackend for CandleBackend {
             OP_IMAGE_PREVIEW => execute_image_preview(&request, self),
             _ => Err(CandleBackendError::BackendNotImplemented(
                 BackendNotImplementedError::new(
-                    self.backend_kind(),
+                    self.backend_kind().to_string(),
                     request.operation_id().clone(),
                     "operation not implemented",
                 ),
@@ -122,17 +124,17 @@ impl InferenceBackend for CandleBackend {
         };
         result.map_err(|e| match e {
             CandleBackendError::BackendNotImplemented(err) => {
-                reimagine_inference::error::InferenceError::BackendNotImplemented {
+                reimagine_inference_core::InferenceError::BackendNotImplemented {
                     operation_id: err.operation_id().to_string(),
                     backend_kind: err.backend_kind().to_string(),
                     message: Some(err.message().to_string()),
                 }
             }
             CandleBackendError::InvalidRequest(message) => {
-                reimagine_inference::error::InferenceError::BackendExecutionFailed { message }
+                reimagine_inference_core::InferenceError::BackendExecutionFailed { message }
             }
             CandleBackendError::DeviceUnavailable { reason, .. } => {
-                reimagine_inference::error::InferenceError::BackendExecutionFailed {
+                reimagine_inference_core::InferenceError::BackendExecutionFailed {
                     message: reason,
                 }
             }
@@ -140,7 +142,7 @@ impl InferenceBackend for CandleBackend {
                 model_id,
                 series,
                 variant,
-            } => reimagine_inference::error::InferenceError::BackendExecutionFailed {
+            } => reimagine_inference_core::InferenceError::BackendExecutionFailed {
                 message: format!(
                     "candle backend has no loader for model `{model_id}` (series `{series}`, variant `{variant}`)"
                 ),
@@ -153,7 +155,7 @@ impl InferenceBackend for CandleBackend {
 mod tests {
     use super::*;
     use reimagine_core::model::{NodeId, RunId, WorkflowId, WorkflowVersion};
-    use reimagine_inference::operation::OP_TEXT_ENCODE;
+    use reimagine_inference_core::OP_TEXT_ENCODE;
 
     fn backend() -> CandleBackend {
         CandleBackend::new(CandleBackendConfig::new(
@@ -176,15 +178,15 @@ mod tests {
     #[test]
     fn backend_kind_is_candle() {
         let backend = backend();
-        assert_eq!(backend.backend_kind(), "candle");
+        assert_eq!(backend.backend_kind().as_str(), "candle");
     }
 
     #[test]
     fn capabilities_lists_all_v1_operations() {
         let backend = backend();
         let caps = backend.capabilities();
-        assert_eq!(caps.backend_kind(), "candle");
-        for op in reimagine_inference::operation::ALL_V1_OPERATIONS {
+        assert_eq!(caps.backend_kind().as_str(), "candle");
+        for op in reimagine_inference_core::ALL_V1_OPERATIONS {
             assert!(caps.supports_operation(&(*op).into()));
         }
     }
@@ -208,7 +210,7 @@ mod tests {
             .execute(base_request(OP_TEXT_ENCODE))
             .await
             .unwrap_err();
-        let exec_err = err.into_executor_error();
+        let exec_err = reimagine_inference::into_executor_error(err);
         let msg = exec_err.to_string();
         assert!(msg.contains("clip"), "{msg}");
     }

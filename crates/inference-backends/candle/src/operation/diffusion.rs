@@ -2,7 +2,7 @@
 //!
 //! Translates a backend-neutral [`InferenceRequest`] for SDXL sampling
 //! into a backend-local sampler pass and returns a
-//! `RuntimeValue::Latent` handle.
+//! `ExecutionValue::Latent` handle.
 //!
 //! The operation is model-family-neutral at the protocol level.
 //! SDXL-specific tokenization, sampling, and UNet work live in
@@ -17,10 +17,12 @@ use std::sync::Arc;
 
 use reimagine_core::model::SlotId;
 use reimagine_core::model::{TensorDType, TensorShape};
-use reimagine_inference::InferenceBackend;
-use reimagine_inference::request::InferenceRequest;
-use reimagine_inference::response::{InferenceOutput, InferenceResponse};
-use reimagine_runtime::{BackendKind, BackendPayloadKey, RuntimeLatent, RuntimeValue};
+use reimagine_core::{
+    BackendKind, BackendPayloadKey, ExecutionConditioning, ExecutionValue, RuntimeLatent,
+};
+use reimagine_inference_core::InferenceBackend;
+use reimagine_inference_core::InferenceRequest;
+use reimagine_inference_core::{InferenceOutput, InferenceResponse};
 
 use crate::backend::CandleBackend;
 use crate::error::CandleBackendError;
@@ -104,9 +106,9 @@ pub fn execute_diffusion_sample(
     let latent_batch = latent_handle.batch();
     let latent_channels = latent_handle.channels();
 
-    let latent = RuntimeValue::Latent(RuntimeLatent::new(
+    let latent = ExecutionValue::Latent(RuntimeLatent::new(
         make_tensor_handle(
-            backend.backend_kind(),
+            backend.backend_kind().as_str(),
             payload_key,
             output_dims,
             backend.device_label(),
@@ -126,19 +128,19 @@ pub fn execute_diffusion_sample(
 fn require_input<'a>(
     request: &'a InferenceRequest,
     slot: &str,
-) -> Result<&'a Arc<RuntimeValue>, CandleBackendError> {
+) -> Result<&'a Arc<ExecutionValue>, CandleBackendError> {
     request.inputs().get(&SlotId::new(slot)).ok_or_else(|| {
         CandleBackendError::InvalidRequest(format!("diffusion.sample requires a `{slot}` input"))
     })
 }
 
 fn require_model_handle(
-    value: &RuntimeValue,
+    value: &ExecutionValue,
     backend: &CandleBackend,
-) -> Result<reimagine_runtime::RuntimeModelHandle, CandleBackendError> {
+) -> Result<reimagine_core::RuntimeModelHandle, CandleBackendError> {
     match value {
-        RuntimeValue::Model(handle) => {
-            if handle.backend().as_str() != backend.backend_kind() {
+        ExecutionValue::Model(handle) => {
+            if handle.backend() != backend.backend_kind() {
                 return Err(CandleBackendError::InvalidRequest(format!(
                     "diffusion.sample `model` handle belongs to backend `{}`, expected `{}`",
                     handle.backend().as_str(),
@@ -154,12 +156,12 @@ fn require_model_handle(
 }
 
 fn require_conditioning_handle(
-    value: &RuntimeValue,
+    value: &ExecutionValue,
     backend: &CandleBackend,
-) -> Result<reimagine_runtime::RuntimeConditioning, CandleBackendError> {
+) -> Result<ExecutionConditioning, CandleBackendError> {
     match value {
-        RuntimeValue::Conditioning(handle) => {
-            if handle.text_embedding().backend().as_str() != backend.backend_kind() {
+        ExecutionValue::Conditioning(handle) => {
+            if handle.text_embedding().backend() != backend.backend_kind() {
                 return Err(CandleBackendError::InvalidRequest(format!(
                     "diffusion.sample conditioning handle belongs to backend `{}`, expected `{}`",
                     handle.text_embedding().backend().as_str(),
@@ -167,7 +169,7 @@ fn require_conditioning_handle(
                 )));
             }
             if let Some(pooled) = handle.pooled_embedding() {
-                if pooled.backend().as_str() != backend.backend_kind() {
+                if pooled.backend() != backend.backend_kind() {
                     return Err(CandleBackendError::InvalidRequest(format!(
                         "diffusion.sample pooled conditioning handle belongs to backend `{}`, expected `{}`",
                         pooled.backend().as_str(),
@@ -191,12 +193,12 @@ fn require_conditioning_handle(
 }
 
 fn require_latent_handle(
-    value: &RuntimeValue,
+    value: &ExecutionValue,
     backend: &CandleBackend,
-) -> Result<reimagine_runtime::RuntimeLatent, CandleBackendError> {
+) -> Result<RuntimeLatent, CandleBackendError> {
     match value {
-        RuntimeValue::Latent(handle) => {
-            if handle.payload().backend().as_str() != backend.backend_kind() {
+        ExecutionValue::Latent(handle) => {
+            if handle.payload().backend() != backend.backend_kind() {
                 return Err(CandleBackendError::InvalidRequest(format!(
                     "diffusion.sample `latent` handle belongs to backend `{}`, expected `{}`",
                     handle.payload().backend().as_str(),
@@ -216,8 +218,8 @@ fn make_tensor_handle(
     payload_key: BackendPayloadKey,
     shape: Vec<usize>,
     device_label: &str,
-) -> reimagine_runtime::BackendTensorHandle {
-    reimagine_runtime::BackendTensorHandle::new(
+) -> reimagine_core::BackendTensorHandle {
+    reimagine_core::BackendTensorHandle::new(
         BackendKind::from(backend_kind),
         payload_key,
         TensorDType::F32,

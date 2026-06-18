@@ -3,14 +3,14 @@
 //! ## `latent.create_empty`
 //!
 //! Allocates a zero-initialized SDXL latent tensor in the backend store
-//! and returns a lightweight `RuntimeValue::Latent` handle.
+//! and returns a lightweight `ExecutionValue::Latent` handle.
 //!
 //! ## `latent.decode`
 //!
 //! Consumes a VAE handle and a sampled latent, dispatches to the SDXL VAE
 //! placeholder decoder ([`SdxlVaeDecoder`]), stores the resulting image
 //! payload in the backend store, and returns a lightweight
-//! `RuntimeValue::Image` handle.
+//! `ExecutionValue::Image` handle.
 //!
 //! The operation is model-family-neutral at the protocol level.
 //! SDXL-specific VAE decoding lives in
@@ -20,12 +20,13 @@ use std::sync::Arc;
 
 use candle_core::{DType, Tensor};
 use reimagine_core::model::{ParamValue, SlotId, TensorDType, TensorShape};
-use reimagine_inference::InferenceBackend;
-use reimagine_inference::request::InferenceRequest;
-use reimagine_inference::response::{InferenceOutput, InferenceResponse};
-use reimagine_runtime::{
-    BackendKind, BackendPayloadKey, RuntimeImage, RuntimeLatent, RuntimeVaeHandle, RuntimeValue,
+use reimagine_core::{
+    BackendPayloadKey, BackendTensorHandle, ExecutionValue, RuntimeImage, RuntimeLatent,
+    RuntimeVaeHandle,
 };
+use reimagine_inference_core::InferenceBackend;
+use reimagine_inference_core::InferenceRequest;
+use reimagine_inference_core::{InferenceOutput, InferenceResponse};
 
 use crate::backend::CandleBackend;
 use crate::error::CandleBackendError;
@@ -125,9 +126,9 @@ pub fn execute_latent_create_empty(
         .store()
         .insert_latent(request.run_id().clone(), payload_key.clone(), tensor);
 
-    let latent = RuntimeValue::Latent(RuntimeLatent::new(
-        reimagine_runtime::BackendTensorHandle::new(
-            BackendKind::from(backend.backend_kind()),
+    let latent = ExecutionValue::Latent(RuntimeLatent::new(
+        BackendTensorHandle::new(
+            backend.backend_kind().clone(),
             payload_key,
             TensorDType::F32,
             TensorShape::new(shape),
@@ -181,9 +182,9 @@ pub fn execute_latent_decode(
         .store()
         .insert_image(request.run_id().clone(), payload_key.clone(), image.clone());
 
-    let image_value = RuntimeValue::Image(RuntimeImage::new(
-        reimagine_runtime::BackendTensorHandle::new(
-            BackendKind::from(backend.backend_kind()),
+    let image_value = ExecutionValue::Image(RuntimeImage::new(
+        BackendTensorHandle::new(
+            backend.backend_kind().clone(),
             payload_key,
             TensorDType::F32,
             TensorShape::new(image.dims()),
@@ -204,19 +205,19 @@ pub fn execute_latent_decode(
 fn require_input<'a>(
     request: &'a InferenceRequest,
     slot: &str,
-) -> Result<&'a Arc<RuntimeValue>, CandleBackendError> {
+) -> Result<&'a Arc<ExecutionValue>, CandleBackendError> {
     request.inputs().get(&SlotId::new(slot)).ok_or_else(|| {
         CandleBackendError::InvalidRequest(format!("latent.decode requires a `{slot}` input"))
     })
 }
 
 fn require_vae_handle(
-    value: &RuntimeValue,
+    value: &ExecutionValue,
     backend: &CandleBackend,
 ) -> Result<RuntimeVaeHandle, CandleBackendError> {
     match value {
-        RuntimeValue::Vae(handle) => {
-            if handle.backend().as_str() != backend.backend_kind() {
+        ExecutionValue::Vae(handle) => {
+            if handle.backend() != backend.backend_kind() {
                 return Err(CandleBackendError::InvalidRequest(format!(
                     "latent.decode `vae` handle belongs to backend `{}`, expected `{}`",
                     handle.backend().as_str(),
@@ -232,12 +233,12 @@ fn require_vae_handle(
 }
 
 fn require_latent_handle(
-    value: &RuntimeValue,
+    value: &ExecutionValue,
     backend: &CandleBackend,
-) -> Result<reimagine_runtime::RuntimeLatent, CandleBackendError> {
+) -> Result<RuntimeLatent, CandleBackendError> {
     match value {
-        RuntimeValue::Latent(handle) => {
-            if handle.payload().backend().as_str() != backend.backend_kind() {
+        ExecutionValue::Latent(handle) => {
+            if handle.payload().backend() != backend.backend_kind() {
                 return Err(CandleBackendError::InvalidRequest(format!(
                     "latent.decode `latent` handle belongs to backend `{}`, expected `{}`",
                     handle.payload().backend().as_str(),
@@ -253,7 +254,7 @@ fn require_latent_handle(
 }
 
 fn require_sdxl_bundle_for_vae(
-    vae: &reimagine_runtime::RuntimeVaeHandle,
+    vae: &RuntimeVaeHandle,
     backend: &CandleBackend,
 ) -> Result<Arc<LoadedSdxlBundle>, CandleBackendError> {
     let bundle = backend

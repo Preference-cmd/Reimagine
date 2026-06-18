@@ -8,9 +8,9 @@ use std::sync::Arc;
 use reimagine_core::model::{SlotId, SlotKind};
 use reimagine_runtime::{NodeExecutionContext, NodeExecutor, NodeExecutorError, RuntimeValue};
 
-use crate::backend::InferenceBackend;
-use crate::operation::OP_TEXT_ENCODE;
-use crate::request::InferenceRequest;
+use reimagine_inference_core::InferenceBackend;
+use reimagine_inference_core::InferenceRequest;
+use reimagine_inference_core::OP_TEXT_ENCODE;
 
 use super::validation::{ExpectedOutputSlot, validate_response};
 
@@ -56,7 +56,7 @@ impl NodeExecutor for ClipTextEncodeExecutor {
             .backend
             .execute(request)
             .await
-            .map_err(|e| e.into_executor_error())?;
+            .map_err(|e| crate::error::into_executor_error(e))?;
 
         let expected = vec![ExpectedOutputSlot::required(
             "conditioning",

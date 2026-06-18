@@ -2,7 +2,7 @@
 //!
 //! Translates a backend-neutral [`InferenceRequest`] into
 //! backend-local SDXL text encoding calls and returns a
-//! `RuntimeValue::Conditioning` handle.
+//! `ExecutionValue::Conditioning` handle.
 //!
 //! The operation is model-family-neutral at the protocol level.
 //! SDXL-specific tokenization and dual CLIP encoding live in
@@ -11,10 +11,10 @@
 
 use std::sync::Arc;
 
-use reimagine_inference::InferenceBackend;
-use reimagine_inference::request::InferenceRequest;
-use reimagine_inference::response::{InferenceOutput, InferenceResponse};
-use reimagine_runtime::RuntimeValue;
+use reimagine_core::ExecutionValue;
+use reimagine_inference_core::InferenceBackend;
+use reimagine_inference_core::InferenceRequest;
+use reimagine_inference_core::{InferenceOutput, InferenceResponse};
 
 use crate::backend::CandleBackend;
 use crate::error::CandleBackendError;
@@ -44,9 +44,9 @@ pub fn execute_text_encode(
             CandleBackendError::InvalidRequest("text.encode requires a `text` input".to_string())
         })?;
 
-    // Get the prompt text from the RuntimeValue
+    // Get the prompt text from the ExecutionValue
     let prompt = match text.as_ref() {
-        RuntimeValue::Param(reimagine_core::model::ParamValue::String(s)) => s.clone(),
+        ExecutionValue::Param(reimagine_core::model::ParamValue::String(s)) => s.clone(),
         _ => {
             return Err(CandleBackendError::InvalidRequest(
                 "text.encode `text` input must be a string parameter".to_string(),
@@ -55,7 +55,7 @@ pub fn execute_text_encode(
     };
 
     let clip_handle = match clip.as_ref() {
-        RuntimeValue::Clip(handle) => handle,
+        ExecutionValue::Clip(handle) => handle,
         _ => {
             return Err(CandleBackendError::InvalidRequest(
                 "text.encode `clip` input must be a Clip handle".to_string(),
@@ -63,7 +63,7 @@ pub fn execute_text_encode(
         }
     };
 
-    if clip_handle.backend().as_str() != backend.backend_kind() {
+    if clip_handle.backend() != backend.backend_kind() {
         return Err(CandleBackendError::InvalidRequest(format!(
             "text.encode `clip` handle belongs to backend `{}`, expected `{}`",
             clip_handle.backend().as_str(),
@@ -104,7 +104,7 @@ fn encode_sdxl(
 ) -> Result<InferenceResponse, CandleBackendError> {
     let encoder = SdxlTextEncoder::new();
     let device = backend.device();
-    let backend_kind = backend.backend_kind();
+    let backend_kind = backend.backend_kind().as_str();
     let device_label = backend.device_label();
 
     let (payload_key, text_emb, pooled_emb) = encoder.encode_and_store(
