@@ -14,7 +14,8 @@ use reimagine_core::ExecutionValue;
 use reimagine_core::diagnostic::DiagnosticCode;
 use reimagine_core::event::{RunEvent, RunEventKind, Timestamp};
 use reimagine_core::model::{
-    NodeId, NodeTypeId, ParamValue, SlotId, WorkflowId, WorkflowInputId, WorkflowVersion,
+    ArtifactRef, NodeId, NodeTypeId, ParamValue, SlotId, WorkflowId, WorkflowInputId,
+    WorkflowVersion,
 };
 use reimagine_core::readiness::{
     ExecutionEdge, ExecutionInputBinding, ExecutionInputSource, ExecutionNode, ExecutionPlan,
@@ -108,6 +109,28 @@ impl NodeExecutor for CancelImmediatelyExecutor {
     ) -> Result<Vec<(SlotId, Arc<ExecutionValue>)>, NodeExecutorError> {
         self.count.fetch_add(1, Ordering::SeqCst);
         Err(NodeExecutorError::Cancelled)
+    }
+}
+
+struct ArtifactExecutor {
+    reference: ArtifactRef,
+}
+
+#[async_trait]
+impl NodeExecutor for ArtifactExecutor {
+    async fn execute(
+        &self,
+        context: NodeExecutionContext,
+    ) -> Result<Vec<(SlotId, Arc<ExecutionValue>)>, NodeExecutorError> {
+        context
+            .artifacts()
+            .record(
+                SlotId::new("artifact"),
+                self.reference.clone(),
+                reimagine_runtime::ArtifactEventKind::Saved,
+            )
+            .await;
+        Ok(Vec::new())
     }
 }
 
@@ -235,6 +258,47 @@ fn runtime_run_starts_and_completes_a_mock_plan() {
         assert!(kinds.contains(&RunEventKind::NodeStarted));
         assert!(kinds.contains(&RunEventKind::NodeCompleted));
         assert!(kinds.contains(&RunEventKind::RunCompleted));
+    });
+}
+
+#[test]
+fn runtime_observations_include_host_neutral_artifact_reference() {
+    let rt = test_runtime();
+    rt.block_on(async {
+        let mut registry = NodeExecutorRegistry::default();
+        registry
+            .register(
+                "mock.artifact",
+                Arc::new(ArtifactExecutor {
+                    reference: ArtifactRef::new("output/mock-image.png"),
+                }),
+            )
+            .expect("register executor");
+        let sink = Arc::new(VecRunEventSink::new());
+        let service = RuntimeService::new(
+            registry,
+            Arc::new(NoopRunResourceBackend),
+            sink,
+            Arc::new(FixedClock),
+        );
+
+        let plan = Arc::new(one_node_plan("mock.artifact", "node_save"));
+        let handle = service
+            .run(plan, Default::default(), RuntimeOptions::default())
+            .expect("start run");
+        run_to_completion(&service, &handle);
+
+        let summary = service.summary(handle.run_id()).expect("summary");
+        assert_eq!(summary.artifacts.len(), 1);
+        let artifact = &summary.artifacts[0];
+        assert_eq!(artifact.node_id, NodeId::new("node_save"));
+        assert_eq!(artifact.reference.as_str(), "output/mock-image.png");
+
+        let snapshot = service.snapshot(handle.run_id()).expect("snapshot");
+        assert_eq!(
+            snapshot.artifacts[0].reference.as_str(),
+            "output/mock-image.png"
+        );
     });
 }
 

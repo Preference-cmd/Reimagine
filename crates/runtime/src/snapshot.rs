@@ -4,7 +4,7 @@ use std::collections::HashMap;
 
 use reimagine_core::diagnostic::Diagnostic;
 use reimagine_core::event::Timestamp;
-use reimagine_core::model::{ArtifactId, NodeId, RunId, WorkflowId, WorkflowVersion};
+use reimagine_core::model::{ArtifactId, ArtifactRef, NodeId, RunId, WorkflowId, WorkflowVersion};
 
 use crate::handle::RunState;
 use crate::scheduler::NodeState;
@@ -14,11 +14,16 @@ use crate::scheduler::NodeState;
 pub struct RunArtifactRef {
     pub id: ArtifactId,
     pub node_id: NodeId,
+    pub reference: ArtifactRef,
 }
 
 impl RunArtifactRef {
-    pub fn new(id: ArtifactId, node_id: NodeId) -> Self {
-        Self { id, node_id }
+    pub fn new(id: ArtifactId, node_id: NodeId, reference: ArtifactRef) -> Self {
+        Self {
+            id,
+            node_id,
+            reference,
+        }
     }
 }
 
