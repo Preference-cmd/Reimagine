@@ -20,10 +20,10 @@ use reimagine_core::{
 use reimagine_inference::operation::InferenceCapability;
 use reimagine_inference::{
     CannedCapabilityResponse, CreateEmptyLatentRequest, CreateEmptyLatentResponse, FakeBackend,
-    ImageSaveResponse, InferenceBackend, InferenceBackendCapabilities, InferenceCapabilitySupport,
-    InferenceError, IntoNodeExecutorError, LoadBundleResponse, ModelFormat, ModelResolver,
-    ResolvedInferenceModel, TextEncodeRequest, TextEncodeResponse,
-    register_builtin_inference_executors,
+    ImageSaveResponse, InferenceBackend, InferenceBackendCapabilities, InferenceBackendRegistry,
+    InferenceCapabilitySupport, InferenceError, InferenceRuntime, IntoNodeExecutorError,
+    LoadBundleResponse, ModelFormat, ModelResolver, RejectAllBridgePolicy, ResolvedInferenceModel,
+    TextEncodeRequest, TextEncodeResponse, register_builtin_inference_executors,
 };
 use reimagine_runtime::{
     CancellationToken, NodeExecutionContext, NodeExecutorError, NodeExecutorRegistry, NodeInputs,
@@ -103,6 +103,15 @@ fn make_load_bundle_response() -> LoadBundleResponse {
         RuntimeClipHandle::new(model_id, backend.clone(), "clip-handle"),
         RuntimeVaeHandle::new(ModelId::new("sdxl-base-1.0"), backend, "vae-handle"),
     )
+}
+
+fn runtime_for_backend(backend: Arc<dyn InferenceBackend>) -> Arc<dyn InferenceRuntime> {
+    let mut registry = InferenceBackendRegistry::new();
+    registry.register(backend);
+    Arc::new(reimagine_inference::DefaultInferenceRuntime::new(
+        Arc::new(registry),
+        Arc::new(RejectAllBridgePolicy),
+    ))
 }
 
 fn make_context(
@@ -199,7 +208,7 @@ async fn checkpoint_loader_multi_output_by_slot_id() {
     let resolver = Arc::new(FakeResolver::new("/models/sdxl-base.safetensors"));
 
     let mut registry = NodeExecutorRegistry::default();
-    register_builtin_inference_executors(&mut registry, backend, resolver)
+    register_builtin_inference_executors(&mut registry, runtime_for_backend(backend), resolver)
         .expect("register executors");
 
     let executor = registry
@@ -254,7 +263,7 @@ async fn checkpoint_loader_requires_all_three_outputs() {
     let resolver = Arc::new(FakeResolver::new("/models/sdxl-base.safetensors"));
 
     let mut registry = NodeExecutorRegistry::default();
-    register_builtin_inference_executors(&mut registry, backend, resolver)
+    register_builtin_inference_executors(&mut registry, runtime_for_backend(backend), resolver)
         .expect("register executors");
 
     let executor = registry
@@ -280,14 +289,15 @@ async fn checkpoint_loader_requires_all_three_outputs() {
 }
 
 #[tokio::test]
-async fn unregistered_operation_returns_backend_not_implemented() {
-    // Register no capabilities — every call should fail with
-    // BackendNotImplemented.
+async fn unregistered_capability_is_rejected_by_inference_runtime_router() {
+    // Register no capabilities. The executor must go through the
+    // InferenceRuntime router, which rejects unsupported capabilities
+    // before invoking the backend.
     let backend = Arc::new(FakeBackend::new("empty"));
     let resolver = Arc::new(FakeResolver::new("/models/sdxl-base.safetensors"));
 
     let mut registry = NodeExecutorRegistry::default();
-    register_builtin_inference_executors(&mut registry, backend, resolver)
+    register_builtin_inference_executors(&mut registry, runtime_for_backend(backend), resolver)
         .expect("register executors");
 
     let executor = registry
@@ -307,8 +317,8 @@ async fn unregistered_operation_returns_backend_not_implemented() {
 
     let err = executor.execute(context).await.expect_err("should fail");
     assert!(
-        err.to_string().contains("does not implement"),
-        "expected backend-not-implemented, got: {err}"
+        err.to_string().contains("does not advertise capability"),
+        "expected router capability rejection, got: {err}"
     );
 }
 
@@ -318,7 +328,7 @@ async fn string_executor_passthrough() {
     let resolver = Arc::new(FakeResolver::new("/unused"));
 
     let mut registry = NodeExecutorRegistry::default();
-    register_builtin_inference_executors(&mut registry, backend, resolver)
+    register_builtin_inference_executors(&mut registry, runtime_for_backend(backend), resolver)
         .expect("register executors");
 
     let executor = registry
@@ -347,7 +357,7 @@ async fn all_v1_executors_register_successfully() {
     let resolver = Arc::new(FakeResolver::new("/models/test.safetensors"));
 
     let mut registry = NodeExecutorRegistry::default();
-    register_builtin_inference_executors(&mut registry, backend, resolver)
+    register_builtin_inference_executors(&mut registry, runtime_for_backend(backend), resolver)
         .expect("register executors");
 
     for type_id in &[
@@ -380,7 +390,7 @@ async fn save_image_records_backend_returned_artifact_reference() {
     let resolver = Arc::new(FakeResolver::new("/models/sdxl-base.safetensors"));
 
     let mut registry = NodeExecutorRegistry::default();
-    register_builtin_inference_executors(&mut registry, backend, resolver)
+    register_builtin_inference_executors(&mut registry, runtime_for_backend(backend), resolver)
         .expect("register executors");
 
     let executor = registry
@@ -419,7 +429,7 @@ async fn checkpoint_loader_missing_model_ref_is_error() {
     let resolver = Arc::new(FakeResolver::new("/models/sdxl-base.safetensors"));
 
     let mut registry = NodeExecutorRegistry::default();
-    register_builtin_inference_executors(&mut registry, backend, resolver)
+    register_builtin_inference_executors(&mut registry, runtime_for_backend(backend), resolver)
         .expect("register executors");
 
     let executor = registry
@@ -490,7 +500,7 @@ async fn text_encode_executor_calls_typed_text_encode() {
     let resolver = Arc::new(FakeResolver::new("/models/clip.safetensors"));
 
     let mut registry = NodeExecutorRegistry::default();
-    register_builtin_inference_executors(&mut registry, backend, resolver)
+    register_builtin_inference_executors(&mut registry, runtime_for_backend(backend), resolver)
         .expect("register executors");
 
     let executor = registry
@@ -554,7 +564,7 @@ async fn create_empty_latent_executor_calls_typed_create_empty_latent() {
     let resolver = Arc::new(FakeResolver::new("/models/test.safetensors"));
 
     let mut registry = NodeExecutorRegistry::default();
-    register_builtin_inference_executors(&mut registry, backend, resolver)
+    register_builtin_inference_executors(&mut registry, runtime_for_backend(backend), resolver)
         .expect("register executors");
 
     let executor = registry

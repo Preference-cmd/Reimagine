@@ -15,7 +15,7 @@ use std::sync::Arc;
 
 use reimagine_core::model::{ModelRef, ParamValue, SlotId};
 use reimagine_inference_core::{
-    InferenceBackend, LoadBundleRequest, LoadBundleResponse, ModelResolver,
+    InferenceRuntime, LoadBundleRequest, LoadBundleResponse, ModelResolver,
 };
 use reimagine_runtime::{NodeExecutionContext, NodeExecutor, NodeExecutorError, RuntimeValue};
 
@@ -23,13 +23,16 @@ use crate::error::into_executor_error;
 
 /// `builtin.checkpoint_loader` executor.
 pub struct CheckpointLoaderExecutor {
-    backend: Arc<dyn InferenceBackend>,
+    inference: Arc<dyn InferenceRuntime>,
     resolver: Arc<dyn ModelResolver>,
 }
 
 impl CheckpointLoaderExecutor {
-    pub fn new(backend: Arc<dyn InferenceBackend>, resolver: Arc<dyn ModelResolver>) -> Self {
-        Self { backend, resolver }
+    pub fn new(inference: Arc<dyn InferenceRuntime>, resolver: Arc<dyn ModelResolver>) -> Self {
+        Self {
+            inference,
+            resolver,
+        }
     }
 }
 
@@ -67,7 +70,7 @@ impl NodeExecutor for CheckpointLoaderExecutor {
         }
 
         let response: LoadBundleResponse = self
-            .backend
+            .inference
             .load_bundle(request)
             .await
             .map_err(into_executor_error)?;

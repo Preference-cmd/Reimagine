@@ -20,7 +20,7 @@ use reimagine_core::ExecutionValue;
 use reimagine_core::model::{ArtifactRef, ParamValue, SlotId};
 use reimagine_inference_core::{
     ImagePreviewRequest, ImagePreviewResponse, ImageSaveRequest, ImageSaveResponse,
-    InferenceBackend, LatentDecodeRequest, LatentDecodeResponse,
+    InferenceRuntime, LatentDecodeRequest, LatentDecodeResponse,
 };
 use reimagine_runtime::{
     ArtifactEventKind, NodeExecutionContext, NodeExecutor, NodeExecutorError, RuntimeValue,
@@ -76,12 +76,12 @@ fn extract_image(
 
 /// `builtin.vae_decode` executor.
 pub struct VaeDecodeExecutor {
-    backend: Arc<dyn InferenceBackend>,
+    inference: Arc<dyn InferenceRuntime>,
 }
 
 impl VaeDecodeExecutor {
-    pub fn new(backend: Arc<dyn InferenceBackend>) -> Self {
-        Self { backend }
+    pub fn new(inference: Arc<dyn InferenceRuntime>) -> Self {
+        Self { inference }
     }
 }
 
@@ -108,7 +108,7 @@ impl NodeExecutor for VaeDecodeExecutor {
         }
 
         let response: LatentDecodeResponse = self
-            .backend
+            .inference
             .latent_decode(request)
             .await
             .map_err(into_executor_error)?;
@@ -122,12 +122,12 @@ impl NodeExecutor for VaeDecodeExecutor {
 
 /// `builtin.save_image` executor.
 pub struct SaveImageExecutor {
-    backend: Arc<dyn InferenceBackend>,
+    inference: Arc<dyn InferenceRuntime>,
 }
 
 impl SaveImageExecutor {
-    pub fn new(backend: Arc<dyn InferenceBackend>) -> Self {
-        Self { backend }
+    pub fn new(inference: Arc<dyn InferenceRuntime>) -> Self {
+        Self { inference }
     }
 }
 
@@ -156,7 +156,7 @@ impl NodeExecutor for SaveImageExecutor {
         }
 
         let response: ImageSaveResponse = self
-            .backend
+            .inference
             .image_save(request)
             .await
             .map_err(into_executor_error)?;
@@ -174,12 +174,12 @@ impl NodeExecutor for SaveImageExecutor {
 
 /// `builtin.preview_image` executor.
 pub struct PreviewImageExecutor {
-    backend: Arc<dyn InferenceBackend>,
+    inference: Arc<dyn InferenceRuntime>,
 }
 
 impl PreviewImageExecutor {
-    pub fn new(backend: Arc<dyn InferenceBackend>) -> Self {
-        Self { backend }
+    pub fn new(inference: Arc<dyn InferenceRuntime>) -> Self {
+        Self { inference }
     }
 }
 
@@ -203,7 +203,7 @@ impl NodeExecutor for PreviewImageExecutor {
         }
 
         let response: ImagePreviewResponse = self
-            .backend
+            .inference
             .image_preview(request)
             .await
             .map_err(into_executor_error)?;
