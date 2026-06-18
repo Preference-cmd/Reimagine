@@ -10,6 +10,7 @@ use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 use async_trait::async_trait;
+use reimagine_core::ExecutionValue;
 use reimagine_core::diagnostic::DiagnosticCode;
 use reimagine_core::event::{RunEvent, RunEventKind, Timestamp};
 use reimagine_core::model::{
@@ -22,7 +23,7 @@ use reimagine_core::readiness::{
 use reimagine_runtime::{
     CancellationToken, Clock, NodeExecutionContext, NodeExecutor, NodeExecutorError,
     NodeExecutorRegistry, NoopRunResourceBackend, RunEventSink, RunHandle, RunInputs, RuntimeError,
-    RuntimeOptions, RuntimeService, RuntimeServiceError, RuntimeValue, VecRunEventSink,
+    RuntimeOptions, RuntimeService, RuntimeServiceError, VecRunEventSink,
 };
 
 /// A clock that always returns the same string timestamp.
@@ -70,7 +71,7 @@ impl NodeExecutor for MockExecutor {
     async fn execute(
         &self,
         context: NodeExecutionContext,
-    ) -> Result<Vec<(SlotId, Arc<RuntimeValue>)>, NodeExecutorError> {
+    ) -> Result<Vec<(SlotId, Arc<ExecutionValue>)>, NodeExecutorError> {
         self.count.fetch_add(1, Ordering::SeqCst);
         if self.delay > Duration::ZERO {
             // Observe cancellation while we wait.
@@ -88,7 +89,7 @@ impl NodeExecutor for MockExecutor {
         }
         Ok(vec![(
             SlotId::new("out"),
-            Arc::new(RuntimeValue::Param(
+            Arc::new(ExecutionValue::Param(
                 reimagine_core::model::ParamValue::String(self.label.clone()),
             )),
         )])
@@ -104,7 +105,7 @@ impl NodeExecutor for CancelImmediatelyExecutor {
     async fn execute(
         &self,
         _context: NodeExecutionContext,
-    ) -> Result<Vec<(SlotId, Arc<RuntimeValue>)>, NodeExecutorError> {
+    ) -> Result<Vec<(SlotId, Arc<ExecutionValue>)>, NodeExecutorError> {
         self.count.fetch_add(1, Ordering::SeqCst);
         Err(NodeExecutorError::Cancelled)
     }
@@ -120,7 +121,7 @@ impl NodeExecutor for InspectInputsExecutor {
     async fn execute(
         &self,
         context: NodeExecutionContext,
-    ) -> Result<Vec<(SlotId, Arc<RuntimeValue>)>, NodeExecutorError> {
+    ) -> Result<Vec<(SlotId, Arc<ExecutionValue>)>, NodeExecutorError> {
         if let Some((slot_id, expected)) = &self.expected_input {
             let actual = context
                 .inputs()
@@ -153,7 +154,7 @@ impl NodeExecutor for InspectInputsExecutor {
 
         Ok(vec![(
             SlotId::new("out"),
-            Arc::new(RuntimeValue::Param(ParamValue::String("ok".to_owned()))),
+            Arc::new(ExecutionValue::Param(ParamValue::String("ok".to_owned()))),
         )])
     }
 }
@@ -325,11 +326,11 @@ impl NodeExecutor for OrderedExecutor {
     async fn execute(
         &self,
         _context: NodeExecutionContext,
-    ) -> Result<Vec<(SlotId, Arc<RuntimeValue>)>, NodeExecutorError> {
+    ) -> Result<Vec<(SlotId, Arc<ExecutionValue>)>, NodeExecutorError> {
         self.order.lock().unwrap().push(self.label.clone());
         Ok(vec![(
             SlotId::new("out"),
-            Arc::new(RuntimeValue::Param(
+            Arc::new(ExecutionValue::Param(
                 reimagine_core::model::ParamValue::String(self.label.clone()),
             )),
         )])
@@ -782,7 +783,7 @@ fn workflow_input_bindings_read_from_workflow_input_run_inputs() {
         let mut inputs = RunInputs::new();
         inputs.insert_workflow_input(
             WorkflowInputId::new("positive_prompt"),
-            Arc::new(RuntimeValue::Param(ParamValue::Text(
+            Arc::new(ExecutionValue::Param(ParamValue::Text(
                 "a quiet forest".to_owned(),
             ))),
         );

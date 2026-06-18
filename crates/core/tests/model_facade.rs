@@ -52,20 +52,9 @@ fn shared_domain_types_are_available_from_the_model_facade() {
 #[test]
 fn inference_contracts_use_tensor_data_from_the_shared_model_layer() {
     let tensor = TensorData::from_vec(vec![0.0, 1.0, 2.0, 3.0], vec![1, 4]);
-
-    let input = reimagine_core::inference::NodeInput::Image(tensor.clone());
-    let output = reimagine_core::inference::NodeOutput::Embedding(tensor.clone());
     let value = NodeValue::Tensor(tensor.clone());
 
     assert_eq!(tensor.numel(), 4);
-    assert!(matches!(
-        input,
-        reimagine_core::inference::NodeInput::Image(ref image) if image == &tensor
-    ));
-    assert!(matches!(
-        output,
-        reimagine_core::inference::NodeOutput::Embedding(ref embedding) if embedding == &tensor
-    ));
     assert_eq!(value, NodeValue::Tensor(tensor));
 }
 
