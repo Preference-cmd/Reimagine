@@ -6,8 +6,9 @@
 
 use std::sync::Arc;
 
+use reimagine_core::ExecutionValue;
 use reimagine_core::model::{ParamValue, SlotId};
-use reimagine_runtime::{NodeExecutionContext, NodeExecutor, NodeExecutorError, RuntimeValue};
+use reimagine_runtime::{NodeExecutionContext, NodeExecutor, NodeExecutorError};
 
 /// `builtin.string` executor. Pure param passthrough, no backend call.
 pub struct StringExecutor;
@@ -17,7 +18,7 @@ impl NodeExecutor for StringExecutor {
     async fn execute(
         &self,
         context: NodeExecutionContext,
-    ) -> Result<Vec<(SlotId, Arc<RuntimeValue>)>, NodeExecutorError> {
+    ) -> Result<Vec<(SlotId, Arc<ExecutionValue>)>, NodeExecutorError> {
         let value = context
             .params()
             .get(&SlotId::new("value"))
@@ -25,7 +26,7 @@ impl NodeExecutor for StringExecutor {
             .unwrap_or(ParamValue::String(String::new()));
         Ok(vec![(
             SlotId::new("value"),
-            Arc::new(RuntimeValue::Param(value)),
+            Arc::new(ExecutionValue::Param(value)),
         )])
     }
 }

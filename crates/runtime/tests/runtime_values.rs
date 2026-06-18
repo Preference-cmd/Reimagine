@@ -1,11 +1,14 @@
 use reimagine_core::model::{
-    ArtifactRef, ModelId, ModelRole, ParamValue, TensorDType, TensorShape,
+    ArtifactRef, ModelId, ModelRole, NodeId, ParamValue, SlotId, TensorDType, TensorShape,
+    WorkflowInputId,
 };
 use reimagine_core::{
     BackendKind, BackendPayloadKey, BackendTensorHandle, ConditioningMetadata,
     ExecutionConditioning, ExecutionValue, RuntimeClipHandle, RuntimeImage, RuntimeLatent,
     RuntimeModelHandle, RuntimeVaeHandle,
 };
+use reimagine_runtime::{NodeInputs, OutputKey, RunInputs, RunValueStore};
+use std::sync::Arc;
 
 #[test]
 fn runtime_values_can_express_the_minimal_sdxl_base_intermediates() {
@@ -127,4 +130,45 @@ fn runtime_values_do_not_require_candle_types() {
     assert_eq!(tensor.dtype(), TensorDType::F32);
     assert_eq!(tensor.shape().dims(), &[1, 4, 8, 8]);
     assert_eq!(tensor.device_label(), "cpu");
+}
+
+#[test]
+fn runtime_api_surfaces_accept_execution_value_directly() {
+    let value = Arc::new(ExecutionValue::Param(ParamValue::String(
+        "hello".to_owned(),
+    )));
+
+    let mut node_inputs = NodeInputs::new();
+    node_inputs.insert(SlotId::new("text"), value.clone());
+    assert_eq!(
+        node_inputs
+            .get(&SlotId::new("text"))
+            .and_then(|input| input.as_param()),
+        Some(&ParamValue::String("hello".to_owned()))
+    );
+
+    let mut run_inputs = RunInputs::new();
+    run_inputs.insert(NodeId::new("node-a"), SlotId::new("text"), value.clone());
+    run_inputs.insert_workflow_input(WorkflowInputId::new("prompt"), value.clone());
+    assert_eq!(
+        run_inputs
+            .get(&NodeId::new("node-a"), &SlotId::new("text"))
+            .and_then(|input| input.as_param()),
+        Some(&ParamValue::String("hello".to_owned()))
+    );
+    assert_eq!(
+        run_inputs
+            .workflow_input(&WorkflowInputId::new("prompt"))
+            .and_then(|input| input.as_param()),
+        Some(&ParamValue::String("hello".to_owned()))
+    );
+
+    let mut store = RunValueStore::new();
+    let key = OutputKey::new(NodeId::new("node-a"), SlotId::new("text"));
+    store.insert(key.clone(), value);
+    let stored = store.get(&key).expect("stored output");
+    assert_eq!(
+        stored.as_param(),
+        Some(&ParamValue::String("hello".to_owned()))
+    );
 }

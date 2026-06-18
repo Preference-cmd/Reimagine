@@ -6,7 +6,7 @@ use std::sync::Arc;
 
 use reimagine_core::model::RunId;
 
-use crate::value::RuntimeValue;
+use crate::value::ExecutionValue;
 
 /// Snapshot of backend memory / cache state, returned for diagnostics.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
@@ -29,7 +29,7 @@ pub trait RunResourceBackend: Send + Sync + 'static {
 
     /// Called when the runtime drops a value (V1: at run cleanup). The
     /// backend may decrement a refcount, free a tensor, or keep it pooled.
-    async fn release_runtime_value(&self, run_id: &RunId, value: Arc<RuntimeValue>);
+    async fn release_runtime_value(&self, run_id: &RunId, value: Arc<ExecutionValue>);
 
     /// Called once after the run finishes (success/failure/cancel). The
     /// backend may release run-pinned resources. Cached models remain under
@@ -47,7 +47,7 @@ pub struct NoopRunResourceBackend;
 #[async_trait::async_trait]
 impl RunResourceBackend for NoopRunResourceBackend {
     async fn begin_run(&self, _run_id: &RunId) {}
-    async fn release_runtime_value(&self, _run_id: &RunId, _value: Arc<RuntimeValue>) {}
+    async fn release_runtime_value(&self, _run_id: &RunId, _value: Arc<ExecutionValue>) {}
     async fn cleanup_run(&self, _run_id: &RunId) {}
     async fn memory_snapshot(&self) -> MemorySnapshot {
         MemorySnapshot::default()
