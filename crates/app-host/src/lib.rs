@@ -10,6 +10,7 @@ mod agent_provider;
 mod agent_service;
 mod app_host;
 mod error;
+mod inference;
 mod inference_backend;
 mod model_service;
 mod policy;

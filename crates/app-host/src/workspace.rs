@@ -3,18 +3,10 @@ use std::sync::Arc;
 
 use reimagine_agent::{AgentToolRegistry, WorkspaceScope};
 use reimagine_config::{AppConfig, AppPaths, ConfigDocument, InferenceBackendConfig};
-use reimagine_core::model::ModelRef;
-use reimagine_inference::registry::register_builtin_inference_executors;
-use reimagine_inference::{
-    DefaultInferenceRuntime, InferenceBackendRegistry, InferenceError, ModelResolver,
-    RejectAllBridgePolicy, ResolvedInferenceModel,
-};
-use reimagine_inference_candle::{
-    CandleBackend, CandleBackendConfig, CandleBackendError, CandleDevice,
-};
 use reimagine_nodes::BuiltinNodeCatalog;
-use reimagine_runtime::{BoxedRunEventSink, NodeExecutorRegistry, RuntimeService, VecRunEventSink};
+use reimagine_runtime::{BoxedRunEventSink, RuntimeService, VecRunEventSink};
 
+use crate::inference::compose::compose_inference_runtime;
 use crate::services::WorkspaceServices;
 use crate::tools::register_app_tools;
 use crate::{AgentService, AppHostError, BackendSelection, ModelService, WorkflowService};
@@ -139,29 +131,11 @@ impl WorkspaceHost {
         event_sink: BoxedRunEventSink,
     ) -> Self {
         let model_service = Arc::new(ModelService::new(config.paths().clone()));
-        let candle_backend =
-            build_candle_backend(config.paths(), &backend_config).expect("backend");
-        let backend: Arc<dyn reimagine_inference::InferenceBackend> = candle_backend.clone();
-        let mut inference_registry = InferenceBackendRegistry::new();
-        inference_registry.register(backend);
-        let inference_runtime = Arc::new(DefaultInferenceRuntime::new(
-            Arc::new(inference_registry),
-            Arc::new(RejectAllBridgePolicy),
-        ));
-        let resource_backend = candle_backend.resource_backend();
-        let mut registry = NodeExecutorRegistry::default();
-        register_builtin_inference_executors(
-            &mut registry,
-            inference_runtime,
-            Arc::new(ModelResolverAdapter::new(
-                model_service.clone(),
-                config.paths().clone(),
-            )),
-        )
-        .expect("register executors");
+        let composed = compose_inference_runtime(&config, &backend_config, model_service.clone())
+            .expect("backend");
         let runtime_service = Arc::new(RuntimeService::new(
-            registry,
-            Arc::new(resource_backend),
+            composed.executor_registry,
+            Arc::new(composed.resource_backend),
             event_sink,
             Arc::new(reimagine_runtime::SystemClock),
         ));
@@ -226,99 +200,11 @@ async fn load_backend_config_result(
     Ok(backend_config)
 }
 
-fn build_candle_backend(
-    app_paths: &AppPaths,
-    backend_config: &InferenceBackendConfig,
-) -> Result<Arc<CandleBackend>, CandleBackendError> {
-    let device = CandleDevice::new(&backend_config.candle_device);
-    let candle_config = CandleBackendConfig::new(
-        app_paths.models_dir().to_path_buf(),
-        app_paths.output_dir().to_path_buf(),
-    )
-    .with_device(device);
-    Ok(Arc::new(CandleBackend::new(candle_config)?))
-}
-
-struct ModelResolverAdapter {
-    model_service: Arc<ModelService>,
-    app_paths: AppPaths,
-}
-
-impl ModelResolverAdapter {
-    fn new(model_service: Arc<ModelService>, app_paths: AppPaths) -> Self {
-        Self {
-            model_service,
-            app_paths,
-        }
-    }
-}
-
-#[async_trait::async_trait]
-impl ModelResolver for ModelResolverAdapter {
-    async fn resolve(
-        &self,
-        model_ref: &ModelRef,
-    ) -> Result<ResolvedInferenceModel, InferenceError> {
-        let resolution = self
-            .model_service
-            .resolve_descriptor(model_ref)
-            .await
-            .map_err(|error| InferenceError::ModelResolutionFailed {
-                message: error.to_string(),
-            })?;
-
-        let Some(descriptor) = resolution.into_value() else {
-            return Err(InferenceError::ModelResolutionFailed {
-                message: format!("model ref {} could not be resolved", model_ref.id()),
-            });
-        };
-
-        let manifest = self.model_service.cached_manifest().ok_or_else(|| {
-            InferenceError::ModelResolutionFailed {
-                message: "model manifest not cached after resolution".to_string(),
-            }
-        })?;
-
-        let source_path = reimagine_model_manager::resolve_source_path(
-            &manifest,
-            descriptor.source(),
-            self.app_paths.models_dir(),
-        )
-        .ok_or_else(|| InferenceError::ModelResolutionFailed {
-            message: format!(
-                "could not resolve source path for model {}",
-                descriptor.id()
-            ),
-        })?;
-
-        Ok(ResolvedInferenceModel::new(
-            descriptor.id().clone(),
-            descriptor.model_series().clone(),
-            descriptor.variant().clone(),
-            model_ref.role(),
-            source_path,
-            map_model_format(descriptor.format()),
-        ))
-    }
-}
-
-fn map_model_format(
-    format: reimagine_model_manager::ModelFormat,
-) -> reimagine_inference::ModelFormat {
-    match format {
-        reimagine_model_manager::ModelFormat::Safetensors => {
-            reimagine_inference::ModelFormat::SafeTensors
-        }
-        reimagine_model_manager::ModelFormat::Gguf => reimagine_inference::ModelFormat::Gguf,
-        reimagine_model_manager::ModelFormat::Ckpt => reimagine_inference::ModelFormat::PyTorch,
-        reimagine_model_manager::ModelFormat::Unknown => reimagine_inference::ModelFormat::Other,
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
     use reimagine_config::InferenceBackendKind;
+    use reimagine_core::model::NodeTypeId;
     use std::fs;
 
     fn temp_dir(prefix: &str) -> std::path::PathBuf {
@@ -375,6 +261,36 @@ mod tests {
             InferenceBackendKind::Candle
         );
         assert_eq!(workspace.backend_config().candle_device, "cpu");
+        let _ = fs::remove_dir_all(&base);
+    }
+
+    #[test]
+    fn app_host_inference_composition_registers_builtin_executors() {
+        let base = temp_dir("compose-runtime");
+        let config = AppConfig::new(reimagine_config::AppPaths::new(&base));
+        let model_service = Arc::new(ModelService::new(config.paths().clone()));
+
+        let composed = super::compose_inference_runtime(
+            &config,
+            &InferenceBackendConfig::default(),
+            Arc::clone(&model_service),
+        )
+        .expect("compose inference runtime");
+
+        assert!(
+            composed
+                .executor_registry
+                .get(&NodeTypeId::new("builtin.checkpoint_loader"))
+                .is_some(),
+            "checkpoint loader executor should be registered"
+        );
+        assert!(
+            composed
+                .executor_registry
+                .get(&NodeTypeId::new("builtin.ksampler"))
+                .is_some(),
+            "ksampler executor should be registered"
+        );
         let _ = fs::remove_dir_all(&base);
     }
 
