@@ -13,7 +13,7 @@
 
 use candle_core::{DType, Device, Tensor};
 use reimagine_core::model::{TensorDType, TensorShape};
-use reimagine_runtime::{BackendKind, BackendPayloadKey, BackendTensorHandle};
+use reimagine_core::{BackendKind, BackendPayloadKey, BackendTensorHandle};
 
 use crate::error::CandleBackendError;
 use crate::models::stable_diffusion::sdxl::tokenizer::{MAX_SEQUENCE_LENGTH, SdxlTokenizer};
@@ -109,7 +109,7 @@ impl Default for SdxlTextEncoder {
     }
 }
 
-/// Build a `RuntimeValue::Conditioning` from stored tensors.
+/// Build a `ExecutionValue::Conditioning` from stored tensors.
 ///
 /// This helper constructs the lightweight `BackendTensorHandle` values
 /// that cross the backend boundary. The actual tensors remain in the
@@ -120,7 +120,7 @@ pub fn build_conditioning_runtime_value(
     pooled_embedding_shape: Vec<usize>,
     backend_kind: &str,
     device_label: &str,
-) -> reimagine_runtime::RuntimeValue {
+) -> reimagine_core::ExecutionValue {
     let text_handle = BackendTensorHandle::new(
         BackendKind::from(backend_kind),
         payload_key.clone(),
@@ -137,10 +137,10 @@ pub fn build_conditioning_runtime_value(
         device_label,
     );
 
-    let metadata = reimagine_runtime::ConditioningMetadata::new(0, 0);
+    let metadata = reimagine_core::ConditioningMetadata::new(0, 0);
 
-    reimagine_runtime::RuntimeValue::Conditioning(
-        reimagine_runtime::RuntimeConditioning::new(text_handle, metadata)
+    reimagine_core::ExecutionValue::Conditioning(
+        reimagine_core::ExecutionConditioning::new(text_handle, metadata)
             .with_pooled_embedding(pooled_handle),
     )
 }
@@ -249,7 +249,7 @@ mod tests {
         );
         assert!(matches!(
             value,
-            reimagine_runtime::RuntimeValue::Conditioning(_)
+            reimagine_core::ExecutionValue::Conditioning(_)
         ));
     }
 }

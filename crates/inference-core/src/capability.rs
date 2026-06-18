@@ -4,22 +4,23 @@
 //! registration layer and app-host can determine which operations
 //! are supported before attempting to run a workflow.
 
+use reimagine_core::BackendKind;
 use reimagine_core::model::{ModelRole, ModelSeries, ModelVariant};
 
-use crate::operation::InferenceOperationId;
+use crate::request::InferenceOperationId;
 
 /// Describes which operations a backend supports and which model
 /// families/variants those operations apply to.
 #[derive(Debug, Clone)]
 pub struct InferenceBackendCapabilities {
-    backend_kind: String,
+    backend_kind: BackendKind,
     operations: Vec<InferenceOperationSupport>,
 }
 
 impl InferenceBackendCapabilities {
-    pub fn new(backend_kind: impl Into<String>) -> Self {
+    pub fn new(backend_kind: BackendKind) -> Self {
         Self {
-            backend_kind: backend_kind.into(),
+            backend_kind,
             operations: Vec::new(),
         }
     }
@@ -29,7 +30,7 @@ impl InferenceBackendCapabilities {
         self
     }
 
-    pub fn backend_kind(&self) -> &str {
+    pub fn backend_kind(&self) -> &BackendKind {
         &self.backend_kind
     }
 

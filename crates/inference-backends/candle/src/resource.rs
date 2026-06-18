@@ -1,7 +1,8 @@
 use std::sync::Arc;
 
+use reimagine_core::ExecutionValue;
 use reimagine_core::model::RunId;
-use reimagine_runtime::{MemorySnapshot, RunResourceBackend, RuntimeValue};
+use reimagine_runtime::{MemorySnapshot, RunResourceBackend};
 
 use crate::store::{CandleModelCache, CandleStore};
 
@@ -21,14 +22,14 @@ impl CandleRunResourceBackend {
 impl RunResourceBackend for CandleRunResourceBackend {
     async fn begin_run(&self, _run_id: &RunId) {}
 
-    async fn release_runtime_value(&self, _run_id: &RunId, value: Arc<RuntimeValue>) {
+    async fn release_runtime_value(&self, _run_id: &RunId, value: Arc<ExecutionValue>) {
         let key = match value.as_ref() {
-            RuntimeValue::Latent(l) => Some(l.payload().payload_key()),
-            RuntimeValue::Model(m) => Some(m.payload_key()),
-            RuntimeValue::Clip(c) => Some(c.payload_key()),
-            RuntimeValue::Vae(v) => Some(v.payload_key()),
-            RuntimeValue::Image(i) => Some(i.payload().payload_key()),
-            RuntimeValue::Conditioning(c) => Some(c.text_embedding().payload_key()),
+            ExecutionValue::Latent(l) => Some(l.payload().payload_key()),
+            ExecutionValue::Model(m) => Some(m.payload_key()),
+            ExecutionValue::Clip(c) => Some(c.payload_key()),
+            ExecutionValue::Vae(v) => Some(v.payload_key()),
+            ExecutionValue::Image(i) => Some(i.payload().payload_key()),
+            ExecutionValue::Conditioning(c) => Some(c.text_embedding().payload_key()),
             _ => None,
         };
         if let Some(key) = key {

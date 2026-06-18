@@ -3,7 +3,7 @@
 //! Translates a resolved [`ResolvedInferenceModel`] into a
 //! family-aware [`LoadedModelBundle`] entry that lives in
 //! [`CandleModelCache`], then emits three lightweight
-//! `RuntimeValue` handles for the workflow: `model`, `clip`, `vae`.
+//! `ExecutionValue` handles for the workflow: `model`, `clip`, `vae`.
 //!
 //! The first call for a given resolved model dispatches on
 //! `series` + `variant` to the right family loader and caches the
@@ -13,12 +13,10 @@
 use std::sync::Arc;
 
 use reimagine_core::model::ModelRole;
-use reimagine_inference::InferenceBackend;
-use reimagine_inference::request::InferenceRequest;
-use reimagine_inference::response::{InferenceOutput, InferenceResponse};
-use reimagine_runtime::{
-    BackendKind, RuntimeClipHandle, RuntimeModelHandle, RuntimeVaeHandle, RuntimeValue,
-};
+use reimagine_core::{ExecutionValue, RuntimeClipHandle, RuntimeModelHandle, RuntimeVaeHandle};
+use reimagine_inference_core::InferenceBackend;
+use reimagine_inference_core::InferenceRequest;
+use reimagine_inference_core::{InferenceOutput, InferenceResponse};
 
 use crate::backend::CandleBackend;
 use crate::error::CandleBackendError;
@@ -68,9 +66,9 @@ fn bundle_response(bundle: &LoadedModelBundle, backend: &CandleBackend) -> Infer
 }
 
 fn sdxl_response(bundle: &LoadedSdxlBundle, backend: &CandleBackend) -> InferenceResponse {
-    let backend_kind = BackendKind::from(backend.backend_kind());
+    let backend_kind = backend.backend_kind().clone();
     let device_label = backend.device_label();
-    let model = RuntimeValue::Model(
+    let model = ExecutionValue::Model(
         RuntimeModelHandle::new(
             bundle.model_id.clone(),
             ModelRole::CheckpointBundle,
@@ -79,7 +77,7 @@ fn sdxl_response(bundle: &LoadedSdxlBundle, backend: &CandleBackend) -> Inferenc
         )
         .with_device(device_label),
     );
-    let clip = RuntimeValue::Clip(
+    let clip = ExecutionValue::Clip(
         RuntimeClipHandle::new(
             bundle.model_id.clone(),
             backend_kind.clone(),
@@ -87,7 +85,7 @@ fn sdxl_response(bundle: &LoadedSdxlBundle, backend: &CandleBackend) -> Inferenc
         )
         .with_device(device_label),
     );
-    let vae = RuntimeValue::Vae(
+    let vae = ExecutionValue::Vae(
         RuntimeVaeHandle::new(
             bundle.model_id.clone(),
             backend_kind,

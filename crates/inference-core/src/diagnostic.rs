@@ -1,0 +1,174 @@
+//! Inference-core diagnostic helpers.
+//!
+//! Each helper returns a structured [`Diagnostic`] for the matching
+//! [`InferenceError`](crate::error::InferenceError) variant so
+//! the router, app-host, and host adapters can surface the same
+//! shape without a manual `format!` per call site.
+
+use reimagine_core::diagnostic::{
+    Diagnostic, DiagnosticCode, DiagnosticSeverity, DiagnosticSourceName, DiagnosticTarget,
+    DiagnosticTargetDomain,
+};
+use reimagine_core::model::DiagnosticId;
+
+fn source() -> DiagnosticSourceName {
+    DiagnosticSourceName::new("inference-core")
+}
+
+fn domain(domain: &str, path: impl Into<String>) -> DiagnosticTarget {
+    DiagnosticTarget::new(DiagnosticTargetDomain::new(domain)).with_path(path.into())
+}
+
+/// [`InferenceError::BackendBridgeRequired`](crate::error::InferenceError::BackendBridgeRequired) diagnostic.
+pub fn backend_bridge_required(
+    source_backend: &str,
+    target_backend: &str,
+    value_kind: &str,
+    operation_id: &str,
+) -> Diagnostic {
+    let id =
+        format!("inference-core-bridge-required-{operation_id}-{source_backend}-{target_backend}");
+    let target = domain(
+        "inference.bridge",
+        format!("{source_backend}->{target_backend}"),
+    );
+    Diagnostic::new(
+        DiagnosticId::new(id),
+        DiagnosticCode::new("INFERENCE_CORE/BRIDGE_REQUIRED"),
+        DiagnosticSeverity::Error,
+        source(),
+        format!(
+            "operation `{operation_id}` requires cross-backend transfer from `{source_backend}` to `{target_backend}` for value kind `{value_kind}`"
+        ),
+        target,
+    )
+}
+
+/// [`InferenceError::BackendBridgeUnsupported`](crate::error::InferenceError::BackendBridgeUnsupported) diagnostic.
+pub fn backend_bridge_unsupported(
+    source_backend: &str,
+    target_backend: &str,
+    value_kind: &str,
+    operation_id: &str,
+    reason: &str,
+) -> Diagnostic {
+    let id = format!(
+        "inference-core-bridge-unsupported-{operation_id}-{source_backend}-{target_backend}"
+    );
+    let target = domain(
+        "inference.bridge",
+        format!("{source_backend}->{target_backend}"),
+    );
+    Diagnostic::new(
+        DiagnosticId::new(id),
+        DiagnosticCode::new("INFERENCE_CORE/BRIDGE_UNSUPPORTED"),
+        DiagnosticSeverity::Error,
+        source(),
+        format!(
+            "operation `{operation_id}` bridge from `{source_backend}` to `{target_backend}` for value kind `{value_kind}` is unsupported: {reason}"
+        ),
+        target,
+    )
+}
+
+/// [`InferenceError::BackendNotRegistered`](crate::error::InferenceError::BackendNotRegistered) diagnostic.
+pub fn backend_not_registered(kind: &str) -> Diagnostic {
+    let id = format!("inference-core-backend-not-registered-{kind}");
+    let target = domain("inference.runtime", kind);
+    Diagnostic::new(
+        DiagnosticId::new(id),
+        DiagnosticCode::new("INFERENCE_CORE/BACKEND_NOT_REGISTERED"),
+        DiagnosticSeverity::Error,
+        source(),
+        format!("backend `{kind}` is not registered in the inference-core registry"),
+        target,
+    )
+}
+
+/// [`InferenceError::BackendCapabilityUnsupported`](crate::error::InferenceError::BackendCapabilityUnsupported) diagnostic.
+pub fn backend_capability_unsupported(kind: &str, operation_id: &str) -> Diagnostic {
+    let id = format!("inference-core-capability-unsupported-{kind}-{operation_id}");
+    let target = domain("inference.runtime", format!("{kind}/{operation_id}"));
+    Diagnostic::new(
+        DiagnosticId::new(id),
+        DiagnosticCode::new("INFERENCE_CORE/BACKEND_CAPABILITY_UNSUPPORTED"),
+        DiagnosticSeverity::Error,
+        source(),
+        format!("backend `{kind}` does not advertise capability for `{operation_id}`"),
+        target,
+    )
+}
+
+/// [`InferenceError::IncompatibleHandleAffinity`](crate::error::InferenceError::IncompatibleHandleAffinity) diagnostic.
+pub fn incompatible_handle_affinity(expected: &str, actual: &str) -> Diagnostic {
+    let id = format!("inference-core-incompatible-handle-affinity-{expected}-{actual}");
+    let target = domain("inference.runtime", format!("{expected}->{actual}"));
+    Diagnostic::new(
+        DiagnosticId::new(id),
+        DiagnosticCode::new("INFERENCE_CORE/INCOMPATIBLE_HANDLE_AFFINITY"),
+        DiagnosticSeverity::Error,
+        source(),
+        format!("incompatible handle affinity: expected `{expected}`, got `{actual}`"),
+        target,
+    )
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn bridge_required_diagnostic_carries_all_fields() {
+        let d = backend_bridge_required("candle", "remote", "latent", "diffusion.sample");
+        assert_eq!(d.code().as_str(), "INFERENCE_CORE/BRIDGE_REQUIRED");
+        let msg = d.message().to_string();
+        assert!(msg.contains("candle"), "{msg}");
+        assert!(msg.contains("remote"), "{msg}");
+        assert!(msg.contains("latent"), "{msg}");
+        assert!(msg.contains("diffusion.sample"), "{msg}");
+    }
+
+    #[test]
+    fn bridge_unsupported_diagnostic_carries_reason() {
+        let d = backend_bridge_unsupported(
+            "candle",
+            "remote",
+            "latent",
+            "diffusion.sample",
+            "no bridge registered",
+        );
+        assert_eq!(d.code().as_str(), "INFERENCE_CORE/BRIDGE_UNSUPPORTED");
+        assert!(d.message().to_string().contains("no bridge registered"));
+    }
+
+    #[test]
+    fn backend_not_registered_diagnostic_uses_kind() {
+        let d = backend_not_registered("candle");
+        assert_eq!(d.code().as_str(), "INFERENCE_CORE/BACKEND_NOT_REGISTERED");
+        assert!(d.message().to_string().contains("candle"));
+    }
+
+    #[test]
+    fn capability_unsupported_diagnostic_uses_kind_and_op() {
+        let d = backend_capability_unsupported("candle", "diffusion.sample");
+        assert_eq!(
+            d.code().as_str(),
+            "INFERENCE_CORE/BACKEND_CAPABILITY_UNSUPPORTED"
+        );
+        let msg = d.message().to_string();
+        assert!(msg.contains("candle"), "{msg}");
+        assert!(msg.contains("diffusion.sample"), "{msg}");
+    }
+
+    #[test]
+    fn incompatible_handle_affinity_diagnostic_uses_both_sides() {
+        let d = incompatible_handle_affinity("candle", "remote");
+        assert_eq!(
+            d.code().as_str(),
+            "INFERENCE_CORE/INCOMPATIBLE_HANDLE_AFFINITY"
+        );
+        let msg = d.message().to_string();
+        assert!(msg.contains("candle"), "{msg}");
+        assert!(msg.contains("remote"), "{msg}");
+    }
+}

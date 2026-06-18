@@ -1,6 +1,6 @@
 //! `image.save` and `image.preview` operations.
 //!
-//! Both operations consume a `RuntimeValue::Image`, encode the image tensor
+//! Both operations consume a `ExecutionValue::Image`, encode the image tensor
 //! to PNG format, write it to the workspace output directory, and return
 //! a single `InferenceOutput` so the inference executor can record the
 //! artifact via `NodeArtifactCapability`.
@@ -17,11 +17,11 @@
 use std::sync::Arc;
 
 use candle_core::Device;
+use reimagine_core::ExecutionValue;
 use reimagine_core::model::{ArtifactRef, SlotId};
-use reimagine_inference::InferenceBackend;
-use reimagine_inference::request::InferenceRequest;
-use reimagine_inference::response::{InferenceOutput, InferenceResponse};
-use reimagine_runtime::RuntimeValue;
+use reimagine_inference_core::InferenceBackend;
+use reimagine_inference_core::InferenceRequest;
+use reimagine_inference_core::{InferenceOutput, InferenceResponse};
 
 use crate::backend::CandleBackend;
 use crate::error::CandleBackendError;
@@ -71,7 +71,7 @@ fn execute_image_persist(
     })?;
 
     let image_value = match image_value.as_ref() {
-        RuntimeValue::Image(img) => img,
+        ExecutionValue::Image(img) => img,
         _ => {
             return Err(CandleBackendError::InvalidRequest(
                 "image.save requires an `image` input".to_string(),
@@ -79,7 +79,7 @@ fn execute_image_persist(
         }
     };
 
-    if image_value.payload().backend().as_str() != backend.backend_kind() {
+    if image_value.payload().backend() != backend.backend_kind() {
         return Err(CandleBackendError::InvalidRequest(format!(
             "image.save `image` handle belongs to backend `{}`, expected `{}`",
             image_value.payload().backend().as_str(),
@@ -127,7 +127,7 @@ fn execute_image_persist(
         .unwrap_or_else(|| output_path.to_string_lossy().to_string());
     let output = InferenceOutput::new(
         "artifact",
-        Arc::new(RuntimeValue::Artifact(ArtifactRef::new(reference))),
+        Arc::new(ExecutionValue::Artifact(ArtifactRef::new(reference))),
     );
     Ok(InferenceResponse::new(vec![output]))
 }

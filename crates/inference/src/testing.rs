@@ -13,23 +13,20 @@ use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
 
 use reimagine_core::model::{ParamValue, SlotId};
-use reimagine_runtime::RuntimeValue;
-
-use crate::backend::InferenceBackend;
-use crate::capability::{InferenceBackendCapabilities, InferenceOperationSupport};
-use crate::error::InferenceError;
-use crate::operation::InferenceOperationId;
-use crate::request::InferenceRequest;
-use crate::response::{InferenceOutput, InferenceResponse};
+use reimagine_core::{BackendKind, ExecutionValue};
+use reimagine_inference_core::{
+    InferenceBackend, InferenceBackendCapabilities, InferenceError, InferenceOperationId,
+    InferenceOperationSupport, InferenceOutput, InferenceRequest, InferenceResponse,
+};
 
 /// A canned response for a specific operation id.
 #[derive(Debug, Clone)]
 pub struct FakeOperationResponse {
-    pub outputs: Vec<(SlotId, Arc<RuntimeValue>)>,
+    pub outputs: Vec<(SlotId, Arc<ExecutionValue>)>,
 }
 
 impl FakeOperationResponse {
-    pub fn new(outputs: Vec<(SlotId, Arc<RuntimeValue>)>) -> Self {
+    pub fn new(outputs: Vec<(SlotId, Arc<ExecutionValue>)>) -> Self {
         Self { outputs }
     }
 }
@@ -52,14 +49,14 @@ impl FakeOperationResponse {
 ///     .supports_operation(&OP_LATENT_CREATE_EMPTY.into()));
 /// ```
 pub struct FakeBackend {
-    kind: String,
+    kind: BackendKind,
     operations: Mutex<HashMap<InferenceOperationId, FakeOperationResponse>>,
 }
 
 impl FakeBackend {
     pub fn new(kind: impl Into<String>) -> Self {
         Self {
-            kind: kind.into(),
+            kind: BackendKind::new(kind),
             operations: Mutex::new(HashMap::new()),
         }
     }
@@ -68,7 +65,7 @@ impl FakeBackend {
     pub fn with_operation(
         self,
         operation_id: impl Into<InferenceOperationId>,
-        outputs: Vec<(SlotId, Arc<RuntimeValue>)>,
+        outputs: Vec<(SlotId, Arc<ExecutionValue>)>,
     ) -> Self {
         self.insert_operation(operation_id, outputs);
         self
@@ -78,7 +75,7 @@ impl FakeBackend {
     pub fn insert_operation(
         &self,
         operation_id: impl Into<InferenceOperationId>,
-        outputs: Vec<(SlotId, Arc<RuntimeValue>)>,
+        outputs: Vec<(SlotId, Arc<ExecutionValue>)>,
     ) {
         let mut ops = self.operations.lock().expect("fake backend poisoned");
         ops.insert(operation_id.into(), FakeOperationResponse::new(outputs));
@@ -87,13 +84,13 @@ impl FakeBackend {
 
 #[async_trait::async_trait]
 impl InferenceBackend for FakeBackend {
-    fn backend_kind(&self) -> &str {
+    fn backend_kind(&self) -> &BackendKind {
         &self.kind
     }
 
     fn capabilities(&self) -> InferenceBackendCapabilities {
         let ops = self.operations.lock().expect("fake backend poisoned");
-        let mut caps = InferenceBackendCapabilities::new(&self.kind);
+        let mut caps = InferenceBackendCapabilities::new(self.kind.clone());
         for op_id in ops.keys() {
             caps = caps.with_support(InferenceOperationSupport::new(op_id.clone()));
         }
@@ -115,7 +112,7 @@ impl InferenceBackend for FakeBackend {
             )),
             None => Err(InferenceError::BackendNotImplemented {
                 operation_id: request.operation_id().to_string(),
-                backend_kind: self.kind.clone(),
+                backend_kind: self.kind.to_string(),
                 message: None,
             }),
         }
@@ -132,10 +129,10 @@ impl std::fmt::Debug for FakeBackend {
     }
 }
 
-/// Helper to build a simple `Arc<RuntimeValue>` output pair for tests.
-pub fn fake_output(slot: &str, value: impl Into<ParamValue>) -> (SlotId, Arc<RuntimeValue>) {
+/// Helper to build a simple `Arc<ExecutionValue>` output pair for tests.
+pub fn fake_output(slot: &str, value: impl Into<ParamValue>) -> (SlotId, Arc<ExecutionValue>) {
     (
         SlotId::new(slot),
-        Arc::new(RuntimeValue::Param(value.into())),
+        Arc::new(ExecutionValue::Param(value.into())),
     )
 }

@@ -11,10 +11,10 @@ use std::sync::Arc;
 use reimagine_core::model::{ModelRef, ParamValue, SlotId, SlotKind};
 use reimagine_runtime::{NodeExecutionContext, NodeExecutor, NodeExecutorError, RuntimeValue};
 
-use crate::backend::InferenceBackend;
-use crate::operation::OP_MODEL_LOAD_BUNDLE;
-use crate::request::InferenceRequest;
-use crate::resolver::ModelResolver;
+use reimagine_inference_core::InferenceBackend;
+use reimagine_inference_core::InferenceRequest;
+use reimagine_inference_core::ModelResolver;
+use reimagine_inference_core::OP_MODEL_LOAD_BUNDLE;
 
 use super::validation::{ExpectedOutputSlot, validate_response};
 
@@ -55,7 +55,7 @@ impl NodeExecutor for CheckpointLoaderExecutor {
             .resolver
             .resolve(&model_ref)
             .await
-            .map_err(|e| e.into_executor_error())?;
+            .map_err(|e| crate::error::into_executor_error(e))?;
 
         // Build the request.
         let request = InferenceRequest::new(
@@ -72,7 +72,7 @@ impl NodeExecutor for CheckpointLoaderExecutor {
             .backend
             .execute(request)
             .await
-            .map_err(|e| e.into_executor_error())?;
+            .map_err(|e| crate::error::into_executor_error(e))?;
 
         // Validate.
         let expected = vec![
