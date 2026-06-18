@@ -333,6 +333,40 @@ The variant bundle module owns the concrete loaded bundle type. The public
 runtime-facing result of `load_bundle` remains three lightweight
 `ExecutionValue` handles; the loaded Candle objects stay behind the cache entry.
 
+## Resource And Device Lifecycle
+
+Candle owns the concrete model and tensor lifecycle behind public
+`ExecutionValue` handles. Runtime communicates lifecycle intent; Candle decides
+the mechanism.
+
+```text
+Runtime / RunResourceBackend intent
+  begin_run
+  release_runtime_value
+  cleanup_run
+  memory_snapshot
+
+CandleBackend policy
+  pin or unpin loaded model bundles
+  keep diffusion model hot across repeated KSampler calls
+  release or pool run-scoped latent / conditioning / image tensors
+  decide CPU / GPU / Metal / CUDA placement
+  decide whether VAE decode runs on CPU while diffusion sampling continues
+  report memory/cache observations without exposing Candle internals
+```
+
+For the common SDXL multi-image path, Candle should be able to keep the
+diffusion model loaded across repeated `diffusion_sample` calls, reuse
+conditioning tensors produced by one `text_encode`, and run `latent_decode`
+for each completed latent without waiting for every sample in the run. The
+runtime scheduler can emit value release and artifact completion events as
+nodes finish, but Candle decides whether a release intent unloads a payload,
+decrements a refcount, keeps it pinned, or moves it between devices.
+
+This policy remains backend-local. Higher modules must not special-case CLIP,
+UNet, VAE, SDXL tensors, or Candle device handles. They observe public handles,
+diagnostics, artifact references, and memory snapshots only.
+
 ## Artifact Boundary
 
 Image save/preview has two responsibilities that must stay distinct:

@@ -467,6 +467,67 @@ The backend decides the mechanism:
 
 V1 may keep all intermediate tensor handles until run cleanup. The runtime type shape should still allow future last-use analysis to call `release_runtime_value` earlier after the last downstream consumer completes.
 
+Runtime scheduling and backend resource scheduling are separate concerns. A
+workflow node invocation remains the runtime execution unit, while model
+pinning, tensor residency, CPU/GPU placement, offload, and eviction remain
+backend-owned policies.
+
+For an SDXL workflow that generates multiple images from the same prompt, the
+desired behavior is:
+
+```text
+checkpoint_loader
+  -> backend loads or reuses one bundle
+  -> returns Model / Clip / Vae handles
+
+clip_text_encode positive / negative
+  -> uses Clip once
+  -> stores reusable Conditioning handles
+  -> CLIP payload may become unpinned after the final text_encode consumer
+
+empty_latent_image x N
+  -> creates independent Latent handles
+
+ksampler x N
+  -> consumes the same Model and Conditioning handles
+  -> consumes one Latent per sample
+  -> diffusion model should stay pinned for the generation group
+  -> concurrency is controlled by scheduler/backend resource policy
+
+vae_decode x N
+  -> may start as soon as each sampled latent is ready
+  -> may run on a different device or backend, such as CPU VAE decode
+  -> cross-backend/device transfer must go through explicit bridge policy
+
+save_image / preview_image x N
+  -> emits an artifact event as each image completes
+  -> UI does not need to wait for the whole run to finish before showing output
+```
+
+This requires the scheduler to expose lifecycle intent and progressive
+completion without taking ownership of backend memory policy:
+
+```text
+Scheduler / RunSession
+  knows last downstream consumer for an ExecutionValue
+  can release a value after its last consumer completes
+  can emit artifact observations when a target/save/preview node completes
+  can keep deterministic run state while independent nodes execute concurrently
+
+RunResourceBackend / inference backend
+  decides whether release means unpin, decrement refcount, move to CPU, evict,
+  pool, or no-op
+  decides whether a model such as the diffusion model remains pinned across a
+  generation group
+  decides whether VAE decode can run on CPU while diffusion sampling continues
+```
+
+The scheduler may discover that `Clip` is no longer needed while
+`Conditioning` remains live, or that the diffusion model is still needed by
+later KSampler nodes. It reports those lifecycle facts through resource
+capabilities; it does not unload CLIP, UNet, VAE, tensors, or device buffers
+directly.
+
 Model loading remains inference/backend adapter work:
 
 ```text
