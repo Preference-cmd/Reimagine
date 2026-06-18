@@ -17,10 +17,6 @@ use crate::inference::resolver::ModelResolverAdapter;
 #[derive(Debug)]
 pub(crate) struct ComposedBackends {
     registry: InferenceBackendRegistry,
-    #[cfg(test)]
-    selected_backend_kind: InferenceBackendKind,
-    #[cfg(test)]
-    selected_device_label: String,
     resource_backend: CandleRunResourceBackend,
 }
 
@@ -72,10 +68,6 @@ fn compose_inference_backends(
 
     Ok(ComposedBackends {
         registry,
-        #[cfg(test)]
-        selected_backend_kind: backend_config.backend,
-        #[cfg(test)]
-        selected_device_label: backend_config.candle_device.clone(),
         resource_backend,
     })
 }
@@ -104,6 +96,7 @@ fn compose_runtime_router(registry: InferenceBackendRegistry) -> Arc<dyn Inferen
 mod tests {
     use super::*;
     use reimagine_config::{AppPaths, InferenceBackendKind};
+    use reimagine_inference_candle::CandleBackendError;
 
     fn temp_dir(prefix: &str) -> std::path::PathBuf {
         let nonce = std::time::SystemTime::now()
@@ -114,7 +107,7 @@ mod tests {
     }
 
     #[test]
-    fn compose_backends_uses_selected_backend_branch_and_device() {
+    fn compose_backends_registers_selected_candle_backend() {
         let base = temp_dir("selected-backend");
         let config = AppConfig::new(AppPaths::new(&base));
         let backend_config = InferenceBackendConfig {
@@ -130,15 +123,28 @@ mod tests {
             1,
             "selected backend should register once"
         );
-        assert_eq!(
-            composed.selected_backend_kind,
-            InferenceBackendKind::Candle,
-            "compose helper should branch on backend_config.backend"
-        );
-        assert_eq!(
-            composed.selected_device_label, "cpu",
-            "selected backend branch should carry configured candle device"
-        );
+        let _ = std::fs::remove_dir_all(&base);
+    }
+
+    #[test]
+    fn compose_backends_applies_selected_candle_device() {
+        let base = temp_dir("selected-device");
+        let config = AppConfig::new(AppPaths::new(&base));
+        let backend_config = InferenceBackendConfig {
+            backend: InferenceBackendKind::Candle,
+            candle_device: "tpu".to_string(),
+            ..InferenceBackendConfig::default()
+        };
+
+        let err = compose_inference_backends(&config, &backend_config)
+            .expect_err("invalid selected Candle device should be rejected");
+
+        match err {
+            CandleBackendError::DeviceUnavailable { requested, .. } => {
+                assert_eq!(requested, "tpu");
+            }
+            other => panic!("expected DeviceUnavailable, got {other:?}"),
+        }
         let _ = std::fs::remove_dir_all(&base);
     }
 }
