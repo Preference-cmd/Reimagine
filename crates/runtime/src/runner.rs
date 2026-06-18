@@ -24,7 +24,7 @@ use crate::node_context::{NodeExecutionContext, NodeInputs, NodeParams};
 use crate::resources::RunResourceBackend;
 use crate::run_inputs::RunInputs;
 use crate::run_session::{NodeOutcome, RunSession};
-use crate::scheduler::NodeState;
+use crate::scheduler::{NodeState, StageExecutionPolicy, StageNodeDecision};
 use crate::snapshot::{RunArtifactRef, RunSnapshot, RunSummary};
 use crate::store::RunStore;
 use crate::value::ExecutionValue;
@@ -358,38 +358,13 @@ impl Runner {
         artifact_store: Arc<Mutex<ArtifactStore>>,
     ) -> RunSession {
         let started_at = self.clock.now();
-        let mut failed_node: Option<(NodeId, String)> = None;
+        let mut policy = StageExecutionPolicy::new();
 
         for stage in self.plan.stages() {
             if self.cancellation.is_cancelled() {
                 self.handle_cancellation(&mut session, &started_at, &artifact_store)
                     .await;
                 return session;
-            }
-            if failed_node.is_some() {
-                for node_id in stage.node_ids() {
-                    let reason = format!(
-                        "upstream node {} failed",
-                        failed_node.as_ref().unwrap().0.as_str()
-                    );
-                    // Look up the real node type id from the plan; emit a
-                    // proper NodeSkipped event rather than a placeholder.
-                    let type_id = self
-                        .plan
-                        .nodes()
-                        .iter()
-                        .find(|n| n.node_id() == node_id)
-                        .map(|n| n.type_id().clone())
-                        .unwrap_or_else(|| reimagine_core::model::NodeTypeId::new("unknown"));
-                    self.emit_node_skipped(node_id, &type_id, &reason);
-                    session.record_outcome(
-                        node_id.clone(),
-                        NodeOutcome::Skipped {
-                            reason: reason.clone(),
-                        },
-                    );
-                }
-                continue;
             }
 
             for node_id in stage.node_ids() {
@@ -404,22 +379,20 @@ impl Runner {
                     None => continue,
                 };
 
-                // If a previous sibling in this stage already failed or was
-                // cancelled, skip every remaining sibling here too. The
-                // outer stage loop's `failed_node` check only fires at
-                // stage boundaries; intra-stage fail-fast must happen here.
-                if let Some((ref failing_node, _)) = failed_node {
-                    let reason = format!("upstream node {failing_node} failed");
-                    self.emit_node_skipped(node_id, &node.type_id().clone(), &reason);
-                    session.record_outcome(
-                        node_id.clone(),
-                        NodeOutcome::Skipped {
-                            reason: reason.clone(),
-                        },
-                    );
-                    self.publish_snapshot(&session, &started_at, &artifact_store)
-                        .await;
-                    continue;
+                match policy.decision_for(node_id) {
+                    StageNodeDecision::Skip { reason } => {
+                        self.emit_node_skipped(node_id, &node.type_id().clone(), &reason);
+                        session.record_outcome(
+                            node_id.clone(),
+                            NodeOutcome::Skipped {
+                                reason: reason.clone(),
+                            },
+                        );
+                        self.publish_snapshot(&session, &started_at, &artifact_store)
+                            .await;
+                        continue;
+                    }
+                    StageNodeDecision::Execute => {}
                 }
 
                 session.record_outcome(node_id.clone(), NodeOutcome::Queued);
@@ -453,9 +426,7 @@ impl Runner {
                             RunEventKind::NodeFailed,
                             std::slice::from_ref(&diagnostic),
                         );
-                        if failed_node.is_none() {
-                            failed_node = Some((node_id.clone(), message));
-                        }
+                        policy.record_failure(node_id.clone(), message);
                     }
                     Err(NodeFailure::Cancelled) => {
                         session.record_outcome(node_id.clone(), NodeOutcome::Cancelled);
@@ -471,7 +442,7 @@ impl Runner {
         }
 
         let finished_at = self.clock.now();
-        let (state, lifecycle_kind, diagnostics) = if let Some((_, message)) = &failed_node {
+        let (state, lifecycle_kind, diagnostics) = if let Some(message) = policy.failed_message() {
             let diag = make_run_diagnostic(&self.run_id, message);
             (RunState::Failed, RunEventKind::RunFailed, vec![diag])
         } else {
@@ -731,7 +702,7 @@ impl Runner {
             let store = artifact_store.lock().await;
             store
                 .iter_ordered()
-                .map(|a| RunArtifactRef::new(a.id.clone(), a.node_id.clone()))
+                .map(|a| RunArtifactRef::new(a.id.clone(), a.node_id.clone(), a.reference.clone()))
                 .collect()
         };
         let diagnostics: Vec<Diagnostic> = node_outcomes
@@ -770,7 +741,7 @@ impl Runner {
             let store = artifact_store.lock().await;
             store
                 .iter_ordered()
-                .map(|a| RunArtifactRef::new(a.id.clone(), a.node_id.clone()))
+                .map(|a| RunArtifactRef::new(a.id.clone(), a.node_id.clone(), a.reference.clone()))
                 .collect()
         };
         let summary = RunSummary::new(

@@ -14,7 +14,7 @@ It must not depend on Tauri or Axum.
 - Execute prepared `core::ExecutionPlan` values through `RuntimeService` / `ExecutionRunner`.
 - Own `RunSession` and run state.
 - Schedule DAG stages. The target architecture supports same-stage
-  parallelism, but the current runner is an initial sequential scheduler.
+  parallelism, but the current runner remains sequential.
 - Handle cancellation.
 - Coordinate node execution through a `NodeExecutorRegistry`.
 - Route preview and saved artifacts through injected artifact capabilities.
@@ -218,6 +218,13 @@ Runtime behavior:
 
 This avoids continuing expensive downstream work after the run is already unrecoverable, while still leaving room for in-flight tasks to shut down cleanly.
 
+Current implementation note: `scheduler.rs` owns the small
+`StageExecutionPolicy` used by the sequential runner to decide whether a
+workflow node invocation should execute or be skipped after the first failure.
+The policy is intentionally backend-neutral and does not touch value stores,
+artifact stores, or node executor internals. Future same-stage concurrency can
+deepen this module without changing the public `RuntimeService::run` seam.
+
 ## Runtime Store
 
 Runtime state is layered:
@@ -293,17 +300,16 @@ the inference backend trait, but runtime only sees `RunResourceBackend`.
 
 ## Review Notes
 
-As of 2026-06-15, the public runtime seam is still correct, but the current
-runner implementation should be treated as an initial sequential scheduler, not
-as the final DAG-parallel implementation described above.
+As of 2026-06-15, the public runtime seam is still correct. The current runner
+implementation should be treated as a sequential scheduler with a small
+scheduler-owned fail-fast policy, not as the final DAG-parallel implementation
+described above.
 
 Follow-up candidates:
 
-- deepen the internal scheduler module so stage concurrency, fail-fast sibling
-  cancellation, cancellation checks, and snapshot cadence live behind one
-  implementation;
-- carry artifact references through `RunArtifactRef` so host snapshots and
-  summaries can expose the actual workspace-relative artifact destination;
+- deepen the internal scheduler module further so stage concurrency, fail-fast
+  sibling cancellation, cancellation checks, and snapshot cadence live behind
+  one implementation;
 - keep `RuntimeService::run` plan-oriented even if the internal scheduler later
   compiles plans into lower-level execution units.
 
@@ -358,6 +364,20 @@ RunSummary
 ```
 
 Snapshots and summaries must not expose `RunValueStore`, backend tensor payloads, loaded model payloads, or mutable session handles.
+
+`RunSnapshot.artifacts` and `RunSummary.artifacts` carry host-neutral
+`RunArtifactRef` values:
+
+```text
+RunArtifactRef
+  id
+  node_id
+  reference
+```
+
+`reference` is a `core::model::ArtifactRef`, such as a workspace-relative
+output path. It is not a backend tensor payload, image buffer, or absolute
+filesystem capability.
 
 `RunSession` is internal to the runner task:
 

@@ -297,13 +297,15 @@ impl From<RunSummary> for RunSummaryDto {
 pub struct ArtifactDto {
     pub id: reimagine_core::model::ArtifactId,
     pub node_id: NodeId,
+    pub reference: reimagine_core::model::ArtifactRef,
 }
 
 impl From<RunArtifactRef> for ArtifactDto {
     fn from(value: RunArtifactRef) -> Self {
         Self {
-            id: value.id.clone(),
-            node_id: value.node_id.clone(),
+            id: value.id,
+            node_id: value.node_id,
+            reference: value.reference,
         }
     }
 }

@@ -656,6 +656,17 @@ async fn candle_sdxl_workflow_run_completes_with_image_artifact() {
     let json: Value = serde_json::from_slice(&bytes).unwrap();
     assert_eq!(json["kind"], "summary");
     assert_eq!(json["state"], "Completed");
+    let artifacts = json["artifacts"]
+        .as_array()
+        .expect("summary artifacts should be an array");
+    assert_eq!(artifacts.len(), 1, "summary should expose one artifact");
+    let reference = artifacts[0]["reference"]
+        .as_str()
+        .expect("artifact should expose host-neutral reference");
+    assert!(
+        reference.ends_with(".png"),
+        "artifact reference should point at the generated PNG, got {reference}"
+    );
 
     // GET /runs/:id/events should include lifecycle events and no RunFailed.
     let response = app

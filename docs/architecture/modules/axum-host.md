@@ -64,7 +64,8 @@ The first slice supports workflow run testing against the existing
   `{ "outcome": "started" | "blocked", ... }`.
 - `GET /runs/:id` returns
   `{ "kind": "snapshot" | "summary", ... }` depending on the run's
-  terminal state.
+  terminal state. Snapshot and summary artifact DTOs include the runtime
+  artifact id, producing node id, and host-neutral `reference`.
 - `GET /runs/:id/events` returns
   `{ "run_id", "events": [ { "kind": "RunQueued", ... } ] }`.
 
