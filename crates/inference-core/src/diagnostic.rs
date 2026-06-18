@@ -1,15 +1,22 @@
 //! Inference-core diagnostic helpers.
 //!
 //! Each helper returns a structured [`Diagnostic`] for the matching
-//! [`InferenceError`](crate::error::InferenceError) variant so
-//! the router, app-host, and host adapters can surface the same
-//! shape without a manual `format!` per call site.
+//! [`InferenceError`](crate::error::InferenceError) variant so the
+//! router, app-host, and host adapters can surface the same shape
+//! without a manual `format!` per call site.
+//!
+//! Diagnostic ids carry the capability's dot-separated label (e.g.
+//! `inference-core-bridge-required-diffusion.sample-candle-remote`)
+//! so existing diagnostic consumers see the same ids they did before
+//! the typed-DTO refactor.
 
 use reimagine_core::diagnostic::{
     Diagnostic, DiagnosticCode, DiagnosticSeverity, DiagnosticSourceName, DiagnosticTarget,
     DiagnosticTargetDomain,
 };
 use reimagine_core::model::DiagnosticId;
+
+use crate::capability::InferenceCapability;
 
 fn source() -> DiagnosticSourceName {
     DiagnosticSourceName::new("inference-core")
@@ -24,10 +31,10 @@ pub fn backend_bridge_required(
     source_backend: &str,
     target_backend: &str,
     value_kind: &str,
-    operation_id: &str,
+    capability: InferenceCapability,
 ) -> Diagnostic {
-    let id =
-        format!("inference-core-bridge-required-{operation_id}-{source_backend}-{target_backend}");
+    let label = capability.as_str();
+    let id = format!("inference-core-bridge-required-{label}-{source_backend}-{target_backend}");
     let target = domain(
         "inference.bridge",
         format!("{source_backend}->{target_backend}"),
@@ -38,7 +45,7 @@ pub fn backend_bridge_required(
         DiagnosticSeverity::Error,
         source(),
         format!(
-            "operation `{operation_id}` requires cross-backend transfer from `{source_backend}` to `{target_backend}` for value kind `{value_kind}`"
+            "capability `{label}` requires cross-backend transfer from `{source_backend}` to `{target_backend}` for value kind `{value_kind}`"
         ),
         target,
     )
@@ -49,12 +56,11 @@ pub fn backend_bridge_unsupported(
     source_backend: &str,
     target_backend: &str,
     value_kind: &str,
-    operation_id: &str,
+    capability: InferenceCapability,
     reason: &str,
 ) -> Diagnostic {
-    let id = format!(
-        "inference-core-bridge-unsupported-{operation_id}-{source_backend}-{target_backend}"
-    );
+    let label = capability.as_str();
+    let id = format!("inference-core-bridge-unsupported-{label}-{source_backend}-{target_backend}");
     let target = domain(
         "inference.bridge",
         format!("{source_backend}->{target_backend}"),
@@ -65,7 +71,7 @@ pub fn backend_bridge_unsupported(
         DiagnosticSeverity::Error,
         source(),
         format!(
-            "operation `{operation_id}` bridge from `{source_backend}` to `{target_backend}` for value kind `{value_kind}` is unsupported: {reason}"
+            "capability `{label}` bridge from `{source_backend}` to `{target_backend}` for value kind `{value_kind}` is unsupported: {reason}"
         ),
         target,
     )
@@ -86,15 +92,16 @@ pub fn backend_not_registered(kind: &str) -> Diagnostic {
 }
 
 /// [`InferenceError::BackendCapabilityUnsupported`](crate::error::InferenceError::BackendCapabilityUnsupported) diagnostic.
-pub fn backend_capability_unsupported(kind: &str, operation_id: &str) -> Diagnostic {
-    let id = format!("inference-core-capability-unsupported-{kind}-{operation_id}");
-    let target = domain("inference.runtime", format!("{kind}/{operation_id}"));
+pub fn backend_capability_unsupported(kind: &str, capability: InferenceCapability) -> Diagnostic {
+    let label = capability.as_str();
+    let id = format!("inference-core-capability-unsupported-{kind}-{label}");
+    let target = domain("inference.runtime", format!("{kind}/{label}"));
     Diagnostic::new(
         DiagnosticId::new(id),
         DiagnosticCode::new("INFERENCE_CORE/BACKEND_CAPABILITY_UNSUPPORTED"),
         DiagnosticSeverity::Error,
         source(),
-        format!("backend `{kind}` does not advertise capability for `{operation_id}`"),
+        format!("backend `{kind}` does not advertise capability for `{label}`"),
         target,
     )
 }
@@ -119,7 +126,12 @@ mod tests {
 
     #[test]
     fn bridge_required_diagnostic_carries_all_fields() {
-        let d = backend_bridge_required("candle", "remote", "latent", "diffusion.sample");
+        let d = backend_bridge_required(
+            "candle",
+            "remote",
+            "latent",
+            InferenceCapability::DiffusionSample,
+        );
         assert_eq!(d.code().as_str(), "INFERENCE_CORE/BRIDGE_REQUIRED");
         let msg = d.message().to_string();
         assert!(msg.contains("candle"), "{msg}");
@@ -134,7 +146,7 @@ mod tests {
             "candle",
             "remote",
             "latent",
-            "diffusion.sample",
+            InferenceCapability::DiffusionSample,
             "no bridge registered",
         );
         assert_eq!(d.code().as_str(), "INFERENCE_CORE/BRIDGE_UNSUPPORTED");
@@ -149,8 +161,8 @@ mod tests {
     }
 
     #[test]
-    fn capability_unsupported_diagnostic_uses_kind_and_op() {
-        let d = backend_capability_unsupported("candle", "diffusion.sample");
+    fn capability_unsupported_diagnostic_uses_kind_and_capability() {
+        let d = backend_capability_unsupported("candle", InferenceCapability::DiffusionSample);
         assert_eq!(
             d.code().as_str(),
             "INFERENCE_CORE/BACKEND_CAPABILITY_UNSUPPORTED"

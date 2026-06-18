@@ -1,13 +1,9 @@
-//! V1 operation id constants.
+//! V1 capability identifiers.
 //!
-//! Re-exports the V1 constants from `reimagine-inference-core` so
-//! existing call sites under `reimagine_inference::operation::OP_X`
-//! keep working during the V1 transition window. The canonical
-//! home of the V1 enum and the constants is
-//! `reimagine_inference_core::request`; new code should prefer
-//! that path.
+//! [`InferenceCapability`] is the closed V1 capability identity used
+//! for diagnostics, capability reports, tracing, and bridge policy
+//! context. The primary execution dispatch is the typed method call,
+//! not the capability identifier — see
+//! `reimagine_inference_core::request` and `reimagine_inference_core::response`.
 
-pub use reimagine_inference_core::{
-    ALL_V1_OPERATIONS, OP_DIFFUSION_SAMPLE, OP_IMAGE_PREVIEW, OP_IMAGE_SAVE,
-    OP_LATENT_CREATE_EMPTY, OP_LATENT_DECODE, OP_MODEL_LOAD_BUNDLE, OP_TEXT_ENCODE,
-};
+pub use reimagine_inference_core::InferenceCapability;

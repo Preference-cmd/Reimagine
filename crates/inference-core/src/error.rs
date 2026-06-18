@@ -1,25 +1,34 @@
 //! Backend-neutral inference errors.
 //!
-//! [`InferenceError`] is the canonical error type returned by
-//! [`InferenceBackend::execute`](crate::backend::InferenceBackend::execute).
+//! [`InferenceError`] is the canonical error type returned by the
+//! typed capability methods on
+//! [`crate::backend::InferenceBackend`] and
+//! [`crate::runtime::InferenceRuntime`].
 //!
 //! The mapping from [`InferenceError`] to
-//! [`reimagine_runtime::NodeExecutorError`] is intentionally NOT
+//! `reimagine_runtime::NodeExecutorError` is intentionally NOT
 //! defined here: doing so would force `inference-core` to depend on
 //! `reimagine-runtime`, which would create a `runtime -> inference-core`
 //! dependency cycle. The mapping lives in `reimagine-inference` as
 //! the `IntoNodeExecutorError` trait + `into_executor_error` function.
+//!
+//! Error variants that previously carried `operation_id: String` now
+//! carry the structured [`crate::capability::InferenceCapability`]
+//! so the error message and diagnostic label stay in lockstep with
+//! the capability report.
 
 use reimagine_core::model::SlotId;
+
+use crate::capability::InferenceCapability;
 
 /// Errors produced by the inference layer.
 #[derive(Debug)]
 pub enum InferenceError {
-    /// The backend does not implement the requested operation for the
+    /// The backend does not implement the requested capability for the
     /// given model series/variant combination. The executor should
     /// surface this as a deterministic, non-retryable node failure.
     BackendNotImplemented {
-        operation_id: String,
+        capability: InferenceCapability,
         backend_kind: String,
         message: Option<String>,
     },
@@ -38,14 +47,17 @@ pub enum InferenceError {
     /// registry had nothing registered. Routers and executors should
     /// surface this as a deterministic configuration failure.
     BackendNotRegistered { kind: String },
-    /// The selected backend does not advertise capability for the
-    /// operation id the request asked for. Routers must surface this
-    /// as a deterministic node failure rather than silently dispatching
-    /// to the backend.
-    BackendCapabilityUnsupported { kind: String, operation_id: String },
+    /// The selected backend does not advertise support for the
+    /// capability the request asked for. Routers must surface this as
+    /// a deterministic node failure rather than silently dispatching to
+    /// the backend.
+    BackendCapabilityUnsupported {
+        kind: String,
+        capability: InferenceCapability,
+    },
     /// A value carried by the request is owned by a different backend
-    /// than the one the request is targeting. The router should
-    /// refuse the request unless an explicit bridge transfers it.
+    /// than the one the request is targeting. The router should refuse
+    /// the request unless an explicit bridge transfers it.
     IncompatibleHandleAffinity { expected: String, actual: String },
     /// The request would require a cross-backend transfer through a
     /// bridge. No bridge was attempted, but the request is structurally
@@ -53,7 +65,7 @@ pub enum InferenceError {
     BackendBridgeRequired {
         source: String,
         target: String,
-        operation_id: String,
+        capability: InferenceCapability,
     },
     /// The bridge policy explicitly refused a cross-backend transfer
     /// for the request. Carries the structured reason for diagnostic
@@ -61,7 +73,7 @@ pub enum InferenceError {
     BackendBridgeUnsupported {
         source: String,
         target: String,
-        operation_id: String,
+        capability: InferenceCapability,
         reason: String,
     },
 }
@@ -70,13 +82,13 @@ impl std::fmt::Display for InferenceError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
             Self::BackendNotImplemented {
-                operation_id,
+                capability,
                 backend_kind,
                 message,
             } => {
                 write!(
                     f,
-                    "backend `{backend_kind}` does not implement `{operation_id}`"
+                    "backend `{backend_kind}` does not implement capability `{capability}`"
                 )?;
                 if let Some(m) = message {
                     write!(f, ": {m}")?;
@@ -90,9 +102,9 @@ impl std::fmt::Display for InferenceError {
             Self::BackendNotRegistered { kind } => {
                 write!(f, "no backend registered for kind `{kind}`")
             }
-            Self::BackendCapabilityUnsupported { kind, operation_id } => write!(
+            Self::BackendCapabilityUnsupported { kind, capability } => write!(
                 f,
-                "backend `{kind}` does not advertise capability for `{operation_id}`"
+                "backend `{kind}` does not advertise capability for `{capability}`"
             ),
             Self::IncompatibleHandleAffinity { expected, actual } => write!(
                 f,
@@ -101,19 +113,19 @@ impl std::fmt::Display for InferenceError {
             Self::BackendBridgeRequired {
                 source,
                 target,
-                operation_id,
+                capability,
             } => write!(
                 f,
-                "operation `{operation_id}` would require a cross-backend bridge from `{source}` to `{target}`"
+                "capability `{capability}` would require a cross-backend bridge from `{source}` to `{target}`"
             ),
             Self::BackendBridgeUnsupported {
                 source,
                 target,
-                operation_id,
+                capability,
                 reason,
             } => write!(
                 f,
-                "bridge policy forbids transfer from `{source}` to `{target}` for operation `{operation_id}`: {reason}"
+                "bridge policy forbids transfer from `{source}` to `{target}` for capability `{capability}`: {reason}"
             ),
         }
     }
@@ -128,7 +140,7 @@ mod tests {
     #[test]
     fn backend_not_implemented_display() {
         let err = InferenceError::BackendNotImplemented {
-            operation_id: "diffusion.sample".to_string(),
+            capability: InferenceCapability::DiffusionSample,
             backend_kind: "fake".to_string(),
             message: Some("no kernel".to_string()),
         };
@@ -169,11 +181,11 @@ mod tests {
     fn backend_capability_unsupported_display() {
         let err = InferenceError::BackendCapabilityUnsupported {
             kind: "candle".to_string(),
-            operation_id: "flux.sample".to_string(),
+            capability: InferenceCapability::ImageSave,
         };
         let msg = err.to_string();
         assert!(msg.contains("candle"), "{msg}");
-        assert!(msg.contains("flux.sample"), "{msg}");
+        assert!(msg.contains("image.save"), "{msg}");
     }
 
     #[test]
@@ -192,7 +204,7 @@ mod tests {
         let err = InferenceError::BackendBridgeRequired {
             source: "candle".to_string(),
             target: "remote".to_string(),
-            operation_id: "diffusion.sample".to_string(),
+            capability: InferenceCapability::DiffusionSample,
         };
         let msg = err.to_string();
         assert!(msg.contains("candle"), "{msg}");
@@ -205,7 +217,7 @@ mod tests {
         let err = InferenceError::BackendBridgeUnsupported {
             source: "candle".to_string(),
             target: "remote".to_string(),
-            operation_id: "diffusion.sample".to_string(),
+            capability: InferenceCapability::DiffusionSample,
             reason: "no bridge registered".to_string(),
         };
         let msg = err.to_string();

@@ -5,13 +5,15 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use candle_core::Device;
 use reimagine_core::BackendKind;
 use reimagine_inference_core::{
-    InferenceBackend, InferenceBackendCapabilities, InferenceOperationSupport, InferenceRequest,
-    InferenceResponse, OP_DIFFUSION_SAMPLE, OP_IMAGE_PREVIEW, OP_IMAGE_SAVE,
-    OP_LATENT_CREATE_EMPTY, OP_LATENT_DECODE, OP_MODEL_LOAD_BUNDLE, OP_TEXT_ENCODE,
+    CreateEmptyLatentRequest, CreateEmptyLatentResponse, DiffusionSampleRequest,
+    DiffusionSampleResponse, ImagePreviewRequest, ImagePreviewResponse, ImageSaveRequest,
+    ImageSaveResponse, InferenceBackend, InferenceBackendCapabilities, InferenceCapability,
+    InferenceCapabilitySupport, InferenceError, LatentDecodeRequest, LatentDecodeResponse,
+    LoadBundleRequest, LoadBundleResponse, TextEncodeRequest, TextEncodeResponse,
 };
 
 use crate::config::CandleBackendConfig;
-use crate::error::{BackendNotImplementedError, CandleBackendError};
+use crate::error::CandleBackendError;
 use crate::operation::*;
 use crate::resource::CandleRunResourceBackend;
 use crate::store::{CandleModelCache, CandleStore};
@@ -90,72 +92,113 @@ impl InferenceBackend for CandleBackend {
     }
 
     fn capabilities(&self) -> InferenceBackendCapabilities {
-        InferenceBackendCapabilities::new(self.backend_kind().clone())
-            .with_support(InferenceOperationSupport::new(OP_MODEL_LOAD_BUNDLE.into()))
-            .with_support(InferenceOperationSupport::new(
-                OP_LATENT_CREATE_EMPTY.into(),
+        let caps = InferenceBackendCapabilities::new(self.backend_kind().clone())
+            .with_support(InferenceCapabilitySupport::new(
+                InferenceCapability::LoadBundle,
             ))
-            .with_support(InferenceOperationSupport::new(OP_TEXT_ENCODE.into()))
-            .with_support(InferenceOperationSupport::new(OP_DIFFUSION_SAMPLE.into()))
-            .with_support(InferenceOperationSupport::new(OP_LATENT_DECODE.into()))
-            .with_support(InferenceOperationSupport::new(OP_IMAGE_SAVE.into()))
-            .with_support(InferenceOperationSupport::new(OP_IMAGE_PREVIEW.into()))
+            .with_support(InferenceCapabilitySupport::new(
+                InferenceCapability::CreateEmptyLatent,
+            ))
+            .with_support(InferenceCapabilitySupport::new(
+                InferenceCapability::TextEncode,
+            ))
+            .with_support(InferenceCapabilitySupport::new(
+                InferenceCapability::DiffusionSample,
+            ))
+            .with_support(InferenceCapabilitySupport::new(
+                InferenceCapability::LatentDecode,
+            ))
+            .with_support(InferenceCapabilitySupport::new(
+                InferenceCapability::ImageSave,
+            ))
+            .with_support(InferenceCapabilitySupport::new(
+                InferenceCapability::ImagePreview,
+            ));
+        caps
     }
 
-    async fn execute(
+    async fn load_bundle(
         &self,
-        request: InferenceRequest,
-    ) -> Result<InferenceResponse, reimagine_inference_core::InferenceError> {
-        let result = match request.operation_id().as_str() {
-            OP_MODEL_LOAD_BUNDLE => execute_model_load_bundle(&request, self),
-            OP_LATENT_CREATE_EMPTY => execute_latent_create_empty(self, &request),
-            OP_TEXT_ENCODE => execute_text_encode(&request, self),
-            OP_DIFFUSION_SAMPLE => execute_diffusion_sample(&request, self),
-            OP_LATENT_DECODE => execute_latent_decode(&request, self),
-            OP_IMAGE_SAVE => execute_image_save(&request, self),
-            OP_IMAGE_PREVIEW => execute_image_preview(&request, self),
-            _ => Err(CandleBackendError::BackendNotImplemented(
-                BackendNotImplementedError::new(
-                    self.backend_kind().to_string(),
-                    request.operation_id().clone(),
-                    "operation not implemented",
-                ),
-            )),
-        };
-        result.map_err(|e| match e {
-            CandleBackendError::BackendNotImplemented(err) => {
-                reimagine_inference_core::InferenceError::BackendNotImplemented {
-                    operation_id: err.operation_id().to_string(),
-                    backend_kind: err.backend_kind().to_string(),
-                    message: Some(err.message().to_string()),
-                }
-            }
-            CandleBackendError::InvalidRequest(message) => {
-                reimagine_inference_core::InferenceError::BackendExecutionFailed { message }
-            }
-            CandleBackendError::DeviceUnavailable { reason, .. } => {
-                reimagine_inference_core::InferenceError::BackendExecutionFailed {
-                    message: reason,
-                }
-            }
-            CandleBackendError::UnsupportedModelFamily {
-                model_id,
-                series,
-                variant,
-            } => reimagine_inference_core::InferenceError::BackendExecutionFailed {
-                message: format!(
-                    "candle backend has no loader for model `{model_id}` (series `{series}`, variant `{variant}`)"
-                ),
-            },
-        })
+        request: LoadBundleRequest,
+    ) -> Result<LoadBundleResponse, InferenceError> {
+        map_err(execute_model_load_bundle(request, self))
     }
+
+    async fn text_encode(
+        &self,
+        request: TextEncodeRequest,
+    ) -> Result<TextEncodeResponse, InferenceError> {
+        map_err(execute_text_encode(request, self))
+    }
+
+    async fn create_empty_latent(
+        &self,
+        request: CreateEmptyLatentRequest,
+    ) -> Result<CreateEmptyLatentResponse, InferenceError> {
+        map_err(execute_latent_create_empty(self, request))
+    }
+
+    async fn diffusion_sample(
+        &self,
+        request: DiffusionSampleRequest,
+    ) -> Result<DiffusionSampleResponse, InferenceError> {
+        map_err(execute_diffusion_sample(request, self))
+    }
+
+    async fn latent_decode(
+        &self,
+        request: LatentDecodeRequest,
+    ) -> Result<LatentDecodeResponse, InferenceError> {
+        map_err(execute_latent_decode(request, self))
+    }
+
+    async fn image_save(
+        &self,
+        request: ImageSaveRequest,
+    ) -> Result<ImageSaveResponse, InferenceError> {
+        map_err(execute_image_save(request, self))
+    }
+
+    async fn image_preview(
+        &self,
+        request: ImagePreviewRequest,
+    ) -> Result<ImagePreviewResponse, InferenceError> {
+        map_err(execute_image_preview(request, self))
+    }
+}
+
+fn map_err<T>(result: Result<T, CandleBackendError>) -> Result<T, InferenceError> {
+    result.map_err(|e| match e {
+        CandleBackendError::BackendNotImplemented(err) => {
+            InferenceError::BackendNotImplemented {
+                capability: err.capability(),
+                backend_kind: err.backend_kind().to_string(),
+                message: Some(err.message().to_string()),
+            }
+        }
+        CandleBackendError::InvalidRequest(message) => {
+            InferenceError::BackendExecutionFailed { message }
+        }
+        CandleBackendError::DeviceUnavailable { reason, .. } => {
+            InferenceError::BackendExecutionFailed { message: reason }
+        }
+        CandleBackendError::UnsupportedModelFamily {
+            model_id,
+            series,
+            variant,
+        } => InferenceError::BackendExecutionFailed {
+            message: format!(
+                "candle backend has no loader for model `{model_id}` (series `{series}`, variant `{variant}`)"
+            ),
+        },
+    })
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
     use reimagine_core::model::{NodeId, RunId, WorkflowId, WorkflowVersion};
-    use reimagine_inference_core::OP_TEXT_ENCODE;
+    use reimagine_inference_core::TextEncodeRequest;
 
     fn backend() -> CandleBackend {
         CandleBackend::new(CandleBackendConfig::new(
@@ -165,14 +208,10 @@ mod tests {
         .unwrap()
     }
 
-    fn base_request(operation_id: &str) -> InferenceRequest {
-        InferenceRequest::new(
-            operation_id.into(),
-            RunId::new("run-test"),
-            WorkflowId::new("wf-test"),
-            WorkflowVersion::new(1),
-            NodeId::new("node-test"),
-        )
+    fn base_load_bundle_request() -> LoadBundleRequest {
+        // We can't actually call load_bundle without a resolved model,
+        // but we can verify capabilities advertise it.
+        unimplemented!()
     }
 
     #[test]
@@ -182,36 +221,50 @@ mod tests {
     }
 
     #[test]
-    fn capabilities_lists_all_v1_operations() {
+    fn capabilities_lists_all_v1_capabilities() {
         let backend = backend();
         let caps = backend.capabilities();
         assert_eq!(caps.backend_kind().as_str(), "candle");
-        for op in reimagine_inference_core::ALL_V1_OPERATIONS {
-            assert!(caps.supports_operation(&(*op).into()));
+        for cap in InferenceCapability::all_v1() {
+            assert!(
+                caps.supports_capability(*cap),
+                "capability report should include {cap}"
+            );
         }
     }
 
     #[tokio::test]
-    async fn execute_unknown_operation_returns_not_implemented_with_message() {
+    async fn text_encode_without_loaded_bundle_returns_error() {
         let backend = backend();
-        let err = backend
-            .execute(base_request("custom.unknown"))
-            .await
-            .unwrap_err();
-        let msg = err.to_string();
-        assert!(msg.contains("candle"), "{msg}");
-        assert!(msg.contains("custom.unknown"), "{msg}");
+        let clip = reimagine_core::RuntimeClipHandle::new(
+            reimagine_core::model::ModelId::new("missing"),
+            BackendKind::new("candle"),
+            reimagine_core::BackendPayloadKey::new("k"),
+        );
+        let text = std::sync::Arc::new(reimagine_core::ExecutionValue::Param(
+            reimagine_core::model::ParamValue::String("hi".to_string()),
+        ));
+        let req = TextEncodeRequest::new(
+            clip,
+            text,
+            RunId::new("r"),
+            WorkflowId::new("w"),
+            WorkflowVersion::new(1),
+            NodeId::new("n"),
+        );
+        let err = backend.text_encode(req).await.unwrap_err();
+        let msg = match err {
+            InferenceError::BackendExecutionFailed { message } => message,
+            other => panic!("expected BackendExecutionFailed, got {other:?}"),
+        };
+        assert!(
+            msg.contains("no loaded model bundle"),
+            "expected missing-bundle error, got {msg}"
+        );
     }
 
-    #[tokio::test]
-    async fn execute_text_encode_requires_clip_input() {
-        let backend = backend();
-        let err = backend
-            .execute(base_request(OP_TEXT_ENCODE))
-            .await
-            .unwrap_err();
-        let exec_err = reimagine_inference::into_executor_error(err);
-        let msg = exec_err.to_string();
-        assert!(msg.contains("clip"), "{msg}");
+    #[allow(dead_code)]
+    fn _referenced() {
+        let _ = base_load_bundle_request();
     }
 }

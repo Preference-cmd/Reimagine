@@ -1,18 +1,45 @@
 //! `builtin.clip_text_encode` executor.
 //!
 //! Maps to `text.encode`. Reads the `clip` and `text` inputs,
-//! builds a `text.encode` request, and returns a `conditioning` output.
+//! builds a `TextEncodeRequest`, and returns a `conditioning`
+//! output.
+//!
+//! Slot mapping (`conditioning`) is executor-owned. The backend's
+//! typed [`TextEncodeResponse`] returns the conditioning handle
+//! without any `SlotId` mapping.
 
 use std::sync::Arc;
 
-use reimagine_core::model::{SlotId, SlotKind};
+use reimagine_core::ExecutionValue;
+use reimagine_core::model::SlotId;
+use reimagine_inference_core::{InferenceBackend, TextEncodeRequest, TextEncodeResponse};
 use reimagine_runtime::{NodeExecutionContext, NodeExecutor, NodeExecutorError, RuntimeValue};
 
-use reimagine_inference_core::InferenceBackend;
-use reimagine_inference_core::InferenceRequest;
-use reimagine_inference_core::OP_TEXT_ENCODE;
+use crate::error::into_executor_error;
 
-use super::validation::{ExpectedOutputSlot, validate_response};
+fn required_input(
+    context: &NodeExecutionContext,
+    slot: &str,
+) -> Result<Arc<ExecutionValue>, NodeExecutorError> {
+    context
+        .inputs()
+        .get(&SlotId::new(slot))
+        .cloned()
+        .ok_or_else(|| NodeExecutorError::MissingInput {
+            slot_id: slot.to_string(),
+        })
+}
+
+fn extract_clip(
+    value: Arc<ExecutionValue>,
+) -> Result<reimagine_core::RuntimeClipHandle, NodeExecutorError> {
+    match value.as_ref() {
+        ExecutionValue::Clip(handle) => Ok(handle.clone()),
+        _ => Err(NodeExecutorError::Failed {
+            message: "text.encode `clip` input must be a Clip handle".to_string(),
+        }),
+    }
+}
 
 /// `builtin.clip_text_encode` executor.
 pub struct ClipTextEncodeExecutor {
@@ -31,37 +58,31 @@ impl NodeExecutor for ClipTextEncodeExecutor {
         &self,
         context: NodeExecutionContext,
     ) -> Result<Vec<(SlotId, Arc<RuntimeValue>)>, NodeExecutorError> {
-        let clip = context.inputs().get(&SlotId::new("clip")).cloned().ok_or(
-            NodeExecutorError::MissingInput {
-                slot_id: "clip".to_string(),
-            },
-        )?;
-        let text = context.inputs().get(&SlotId::new("text")).cloned().ok_or(
-            NodeExecutorError::MissingInput {
-                slot_id: "text".to_string(),
-            },
-        )?;
+        let clip = extract_clip(required_input(&context, "clip")?)?;
+        let text = required_input(&context, "text")?;
 
-        let request = InferenceRequest::new(
-            OP_TEXT_ENCODE.into(),
+        let correlation_id = context.correlation_id().cloned();
+        let mut request = TextEncodeRequest::new(
+            clip,
+            text,
             context.run_id().clone(),
             context.workflow_id().clone(),
             context.workflow_version(),
             context.node_id().clone(),
-        )
-        .with_input("clip", clip)
-        .with_input("text", text);
+        );
+        if let Some(cid) = correlation_id {
+            request = request.with_correlation_id(cid);
+        }
 
-        let response = self
+        let response: TextEncodeResponse = self
             .backend
-            .execute(request)
+            .text_encode(request)
             .await
-            .map_err(|e| crate::error::into_executor_error(e))?;
+            .map_err(into_executor_error)?;
 
-        let expected = vec![ExpectedOutputSlot::required(
-            "conditioning",
-            SlotKind::Conditioning,
-        )];
-        validate_response(&response, &expected, false)
+        Ok(vec![(
+            SlotId::new("conditioning"),
+            Arc::new(RuntimeValue::Conditioning(response.into_conditioning())),
+        )])
     }
 }

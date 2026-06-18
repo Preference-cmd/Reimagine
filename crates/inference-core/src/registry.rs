@@ -10,8 +10,8 @@ use reimagine_core::BackendKind;
 /// Registry that holds concrete backends and dispatches by `kind`.
 ///
 /// `kind` is the stable backend identifier (e.g. `"candle"`,
-/// `"remote"`). V1 keeps the registry in app-host and exposes it
-/// to the executor-facing router through `DefaultInferenceRuntime`.
+/// `"remote"`). V1 keeps the registry in app-host and exposes it to
+/// the executor-facing router through `DefaultInferenceRuntime`.
 #[derive(Default)]
 pub struct InferenceBackendRegistry {
     backends: HashMap<BackendKind, Arc<dyn InferenceBackend>>,
@@ -79,7 +79,7 @@ impl std::fmt::Debug for InferenceBackendRegistry {
 /// Merged capability report across every registered backend.
 ///
 /// V1 stores per-kind capabilities and exposes them as a flat
-/// slice. Future per-operation aggregation can be added without
+/// slice. Future per-capability aggregation can be added without
 /// breaking the current shape.
 #[derive(Debug, Clone, Default)]
 pub struct MergedInferenceBackendCapabilities {
@@ -103,16 +103,23 @@ impl MergedInferenceBackendCapabilities {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::capability::InferenceOperationSupport;
+    use crate::capability::{InferenceCapability, InferenceCapabilitySupport};
     use crate::error::InferenceError;
-    use crate::request::InferenceRequest;
-    use crate::request::OP_LATENT_CREATE_EMPTY;
-    use crate::response::InferenceResponse;
+    use crate::request::diffusion::DiffusionSampleRequest;
+    use crate::request::image::{ImagePreviewRequest, ImageSaveRequest};
+    use crate::request::latent::{CreateEmptyLatentRequest, LatentDecodeRequest};
+    use crate::request::model::LoadBundleRequest;
+    use crate::request::text::TextEncodeRequest;
+    use crate::response::diffusion::DiffusionSampleResponse;
+    use crate::response::image::{ImagePreviewResponse, ImageSaveResponse};
+    use crate::response::latent::{CreateEmptyLatentResponse, LatentDecodeResponse};
+    use crate::response::model::LoadBundleResponse;
+    use crate::response::text::TextEncodeResponse;
     use reimagine_core::BackendKind;
 
     fn echo_caps() -> InferenceBackendCapabilities {
         InferenceBackendCapabilities::new(BackendKind::new("echo")).with_support(
-            InferenceOperationSupport::new(OP_LATENT_CREATE_EMPTY.into()),
+            InferenceCapabilitySupport::new(InferenceCapability::CreateEmptyLatent),
         )
     }
 
@@ -127,11 +134,47 @@ mod tests {
         fn capabilities(&self) -> InferenceBackendCapabilities {
             echo_caps()
         }
-        async fn execute(
+        async fn load_bundle(
             &self,
-            _request: InferenceRequest,
-        ) -> Result<InferenceResponse, InferenceError> {
-            Ok(InferenceResponse::new(vec![]))
+            _request: LoadBundleRequest,
+        ) -> Result<LoadBundleResponse, InferenceError> {
+            unimplemented!()
+        }
+        async fn text_encode(
+            &self,
+            _request: TextEncodeRequest,
+        ) -> Result<TextEncodeResponse, InferenceError> {
+            unimplemented!()
+        }
+        async fn create_empty_latent(
+            &self,
+            _request: CreateEmptyLatentRequest,
+        ) -> Result<CreateEmptyLatentResponse, InferenceError> {
+            unimplemented!()
+        }
+        async fn diffusion_sample(
+            &self,
+            _request: DiffusionSampleRequest,
+        ) -> Result<DiffusionSampleResponse, InferenceError> {
+            unimplemented!()
+        }
+        async fn latent_decode(
+            &self,
+            _request: LatentDecodeRequest,
+        ) -> Result<LatentDecodeResponse, InferenceError> {
+            unimplemented!()
+        }
+        async fn image_save(
+            &self,
+            _request: ImageSaveRequest,
+        ) -> Result<ImageSaveResponse, InferenceError> {
+            unimplemented!()
+        }
+        async fn image_preview(
+            &self,
+            _request: ImagePreviewRequest,
+        ) -> Result<ImagePreviewResponse, InferenceError> {
+            unimplemented!()
         }
     }
 

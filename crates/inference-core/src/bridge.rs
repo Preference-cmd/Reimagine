@@ -1,7 +1,8 @@
 //! Bridge policy and bridge trait shapes for cross-backend value transfer.
 
-use crate::request::InferenceOperationId;
 use reimagine_core::BackendKind;
+
+use crate::capability::InferenceCapability;
 
 /// How a [`BackendBridgePolicy`] classifies a potential value
 /// transfer between two backends.
@@ -18,9 +19,9 @@ pub enum BridgeSupport {
 
 /// Concrete plan returned by a [`BackendBridgePolicy`].
 ///
-/// V1 routers either pass the value through unchanged (`Direct`)
-/// or refuse the transfer (`Unsupported`). `Bridgeable` is reserved
-/// for future bridge implementations.
+/// V1 routers either pass the value through unchanged (`Direct`) or
+/// refuse the transfer (`Unsupported`). `Bridgeable` is reserved for
+/// future bridge implementations.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum BridgePlan {
     Direct,
@@ -29,13 +30,18 @@ pub enum BridgePlan {
 }
 
 /// Bridge policy decides whether a value owned by `source_backend`
-/// may be used inside a request targeting `target_backend`.
+/// may be used inside a request targeting `target_backend` for the
+/// given capability.
+///
+/// `capability` is a diagnostic / context label, not a dispatch key.
+/// It is the caller's responsibility to pass the correct capability
+/// for the call being planned.
 pub trait BackendBridgePolicy: Send + Sync + 'static {
     fn plan_transfer(
         &self,
         source_backend: &BackendKind,
         target_backend: &BackendKind,
-        operation_id: &InferenceOperationId,
+        capability: InferenceCapability,
     ) -> BridgePlan;
 }
 
@@ -51,7 +57,7 @@ pub trait BackendBridge: Send + Sync + 'static {
         &self,
         source: &BackendKind,
         target: &BackendKind,
-        operation_id: &InferenceOperationId,
+        capability: InferenceCapability,
     ) -> BridgeSupport;
 }
 
@@ -71,14 +77,14 @@ impl BackendBridgePolicy for RejectAllBridgePolicy {
         &self,
         source_backend: &BackendKind,
         target_backend: &BackendKind,
-        operation_id: &InferenceOperationId,
+        capability: InferenceCapability,
     ) -> BridgePlan {
         if source_backend == target_backend {
             BridgePlan::Direct
         } else {
             BridgePlan::Unsupported {
                 reason: format!(
-                    "bridge policy rejects cross-backend transfer from `{source_backend}` to `{target_backend}` for operation `{operation_id}`"
+                    "bridge policy rejects cross-backend transfer from `{source_backend}` to `{target_backend}` for capability `{capability}`"
                 ),
             }
         }
@@ -88,7 +94,6 @@ impl BackendBridgePolicy for RejectAllBridgePolicy {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::request::{OP_DIFFUSION_SAMPLE, OP_LATENT_CREATE_EMPTY};
 
     #[test]
     fn same_backend_returns_direct() {
@@ -96,7 +101,7 @@ mod tests {
         let plan = p.plan_transfer(
             &BackendKind::new("candle"),
             &BackendKind::new("candle"),
-            &OP_LATENT_CREATE_EMPTY.into(),
+            InferenceCapability::CreateEmptyLatent,
         );
         assert!(matches!(plan, BridgePlan::Direct));
     }
@@ -107,7 +112,7 @@ mod tests {
         let plan = p.plan_transfer(
             &BackendKind::new("candle"),
             &BackendKind::new("remote"),
-            &OP_DIFFUSION_SAMPLE.into(),
+            InferenceCapability::DiffusionSample,
         );
         match plan {
             BridgePlan::Unsupported { reason } => {
