@@ -9,11 +9,12 @@
 
 use std::sync::Arc;
 
+use reimagine_core::ExecutionValue;
 use reimagine_core::model::{ParamValue, SlotId};
 use reimagine_inference_core::{
     CreateEmptyLatentRequest, CreateEmptyLatentResponse, InferenceRuntime,
 };
-use reimagine_runtime::{NodeExecutionContext, NodeExecutor, NodeExecutorError, RuntimeValue};
+use reimagine_runtime::{NodeExecutionContext, NodeExecutor, NodeExecutorError};
 
 use crate::error::into_executor_error;
 
@@ -47,7 +48,7 @@ impl NodeExecutor for EmptyLatentImageExecutor {
     async fn execute(
         &self,
         context: NodeExecutionContext,
-    ) -> Result<Vec<(SlotId, Arc<RuntimeValue>)>, NodeExecutorError> {
+    ) -> Result<Vec<(SlotId, Arc<ExecutionValue>)>, NodeExecutorError> {
         let width = extract_u32(&context, "width")?;
         let height = extract_u32(&context, "height")?;
         let batch_size = extract_u32(&context, "batch_size")?;
@@ -74,7 +75,7 @@ impl NodeExecutor for EmptyLatentImageExecutor {
 
         Ok(vec![(
             SlotId::new("latent"),
-            Arc::new(RuntimeValue::Latent(response.into_latent())),
+            Arc::new(ExecutionValue::Latent(response.into_latent())),
         )])
     }
 }

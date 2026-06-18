@@ -6,14 +6,14 @@ use std::sync::Arc;
 use reimagine_core::model::NodeTypeId;
 
 use crate::node_context::NodeExecutionContext;
-use crate::value::RuntimeValue;
+use crate::value::ExecutionValue;
 
 /// Result of executing one node.
 ///
-/// V1 returns a `Vec<(SlotId, Arc<RuntimeValue>)>` of outputs. The runner
+/// V1 returns a `Vec<(SlotId, Arc<ExecutionValue>)>` of outputs. The runner
 /// task is responsible for inserting these into the [`RunValueStore`] using
 /// the node's declared `output_slots`.
-pub type NodeExecutionOutputs = Vec<(reimagine_core::model::SlotId, Arc<RuntimeValue>)>;
+pub type NodeExecutionOutputs = Vec<(reimagine_core::model::SlotId, Arc<ExecutionValue>)>;
 
 /// Errors returned from a node executor.
 ///

@@ -5,7 +5,7 @@ use std::sync::Arc;
 
 use reimagine_core::model::{NodeId, SlotId};
 
-use crate::value::RuntimeValue;
+use crate::value::ExecutionValue;
 
 /// Key for a value produced by a node and stored in the run value store.
 ///
@@ -36,12 +36,12 @@ impl OutputKey {
 
 /// Per-run value store keyed by [`OutputKey`].
 ///
-/// Stores lightweight `Arc<RuntimeValue>` handles, not large tensor or model
+/// Stores lightweight `Arc<ExecutionValue>` handles, not large tensor or model
 /// payloads — those remain in backend-owned stores and are referenced by
-/// handles carried inside [`RuntimeValue`].
+/// handles carried inside [`ExecutionValue`].
 #[derive(Debug, Default)]
 pub struct RunValueStore {
-    values: HashMap<OutputKey, Arc<RuntimeValue>>,
+    values: HashMap<OutputKey, Arc<ExecutionValue>>,
 }
 
 impl RunValueStore {
@@ -50,12 +50,12 @@ impl RunValueStore {
     }
 
     /// Insert a value for the given output key.
-    pub fn insert(&mut self, key: OutputKey, value: Arc<RuntimeValue>) {
+    pub fn insert(&mut self, key: OutputKey, value: Arc<ExecutionValue>) {
         self.values.insert(key, value);
     }
 
     /// Get a value for the given key.
-    pub fn get(&self, key: &OutputKey) -> Option<Arc<RuntimeValue>> {
+    pub fn get(&self, key: &OutputKey) -> Option<Arc<ExecutionValue>> {
         self.values.get(key).cloned()
     }
 
@@ -75,12 +75,12 @@ impl RunValueStore {
     }
 
     /// Iterate all stored `(key, value)` pairs.
-    pub fn iter(&self) -> impl Iterator<Item = (&OutputKey, &Arc<RuntimeValue>)> {
+    pub fn iter(&self) -> impl Iterator<Item = (&OutputKey, &Arc<ExecutionValue>)> {
         self.values.iter()
     }
 
     /// Remove and return the value for the given key.
-    pub fn remove(&mut self, key: &OutputKey) -> Option<Arc<RuntimeValue>> {
+    pub fn remove(&mut self, key: &OutputKey) -> Option<Arc<ExecutionValue>> {
         self.values.remove(key)
     }
 }

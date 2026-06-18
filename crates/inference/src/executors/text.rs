@@ -13,7 +13,7 @@ use std::sync::Arc;
 use reimagine_core::ExecutionValue;
 use reimagine_core::model::SlotId;
 use reimagine_inference_core::{InferenceRuntime, TextEncodeRequest, TextEncodeResponse};
-use reimagine_runtime::{NodeExecutionContext, NodeExecutor, NodeExecutorError, RuntimeValue};
+use reimagine_runtime::{NodeExecutionContext, NodeExecutor, NodeExecutorError};
 
 use crate::error::into_executor_error;
 
@@ -57,7 +57,7 @@ impl NodeExecutor for ClipTextEncodeExecutor {
     async fn execute(
         &self,
         context: NodeExecutionContext,
-    ) -> Result<Vec<(SlotId, Arc<RuntimeValue>)>, NodeExecutorError> {
+    ) -> Result<Vec<(SlotId, Arc<ExecutionValue>)>, NodeExecutorError> {
         let clip = extract_clip(required_input(&context, "clip")?)?;
         let text = required_input(&context, "text")?;
 
@@ -82,7 +82,7 @@ impl NodeExecutor for ClipTextEncodeExecutor {
 
         Ok(vec![(
             SlotId::new("conditioning"),
-            Arc::new(RuntimeValue::Conditioning(response.into_conditioning())),
+            Arc::new(ExecutionValue::Conditioning(response.into_conditioning())),
         )])
     }
 }

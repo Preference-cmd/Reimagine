@@ -22,9 +22,7 @@ use reimagine_inference_core::{
     ImagePreviewRequest, ImagePreviewResponse, ImageSaveRequest, ImageSaveResponse,
     InferenceRuntime, LatentDecodeRequest, LatentDecodeResponse,
 };
-use reimagine_runtime::{
-    ArtifactEventKind, NodeExecutionContext, NodeExecutor, NodeExecutorError, RuntimeValue,
-};
+use reimagine_runtime::{ArtifactEventKind, NodeExecutionContext, NodeExecutor, NodeExecutorError};
 
 use crate::error::into_executor_error;
 
@@ -90,7 +88,7 @@ impl NodeExecutor for VaeDecodeExecutor {
     async fn execute(
         &self,
         context: NodeExecutionContext,
-    ) -> Result<Vec<(SlotId, Arc<RuntimeValue>)>, NodeExecutorError> {
+    ) -> Result<Vec<(SlotId, Arc<ExecutionValue>)>, NodeExecutorError> {
         let vae = extract_vae(required_input(&context, "vae")?)?;
         let latent = extract_latent(required_input(&context, "latent")?)?;
 
@@ -115,7 +113,7 @@ impl NodeExecutor for VaeDecodeExecutor {
 
         Ok(vec![(
             SlotId::new("image"),
-            Arc::new(RuntimeValue::Image(response.into_image())),
+            Arc::new(ExecutionValue::Image(response.into_image())),
         )])
     }
 }
@@ -136,7 +134,7 @@ impl NodeExecutor for SaveImageExecutor {
     async fn execute(
         &self,
         context: NodeExecutionContext,
-    ) -> Result<Vec<(SlotId, Arc<RuntimeValue>)>, NodeExecutorError> {
+    ) -> Result<Vec<(SlotId, Arc<ExecutionValue>)>, NodeExecutorError> {
         let image = extract_image(required_input(&context, "image")?)?;
 
         let mut request = ImageSaveRequest::new(
@@ -188,7 +186,7 @@ impl NodeExecutor for PreviewImageExecutor {
     async fn execute(
         &self,
         context: NodeExecutionContext,
-    ) -> Result<Vec<(SlotId, Arc<RuntimeValue>)>, NodeExecutorError> {
+    ) -> Result<Vec<(SlotId, Arc<ExecutionValue>)>, NodeExecutorError> {
         let image = extract_image(required_input(&context, "image")?)?;
 
         let mut request = ImagePreviewRequest::new(

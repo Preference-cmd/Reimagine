@@ -16,7 +16,7 @@ use reimagine_core::model::{ParamValue, SlotId};
 use reimagine_inference_core::{
     DiffusionSampleRequest, DiffusionSampleResponse, InferenceRuntime, SamplerName, SchedulerName,
 };
-use reimagine_runtime::{NodeExecutionContext, NodeExecutor, NodeExecutorError, RuntimeValue};
+use reimagine_runtime::{NodeExecutionContext, NodeExecutor, NodeExecutorError};
 
 use crate::error::into_executor_error;
 
@@ -175,7 +175,7 @@ impl NodeExecutor for KSamplerExecutor {
     async fn execute(
         &self,
         context: NodeExecutionContext,
-    ) -> Result<Vec<(SlotId, Arc<RuntimeValue>)>, NodeExecutorError> {
+    ) -> Result<Vec<(SlotId, Arc<ExecutionValue>)>, NodeExecutorError> {
         let model_handle = extract_model_handle(required_input(&context, "model")?)?;
         let positive = extract_conditioning(required_input(&context, "positive")?)?;
         let negative = extract_conditioning(required_input(&context, "negative")?)?;
@@ -222,7 +222,7 @@ impl NodeExecutor for KSamplerExecutor {
 
         Ok(vec![(
             SlotId::new("latent"),
-            Arc::new(RuntimeValue::Latent(response.into_latent())),
+            Arc::new(ExecutionValue::Latent(response.into_latent())),
         )])
     }
 }

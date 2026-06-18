@@ -44,11 +44,12 @@ pub use snapshot::{RunArtifactRef, RunSnapshot, RunSummary};
 pub use store::{RunStore, RunStoreInner};
 pub use value_store::{OutputKey, RunValueStore};
 
+pub use value::RuntimeValue;
 pub use value::{
     BackendKind, BackendPayloadKey, BackendTensorHandle, BackendTensorMetadata,
     ConditioningMetadata, ExecutionConditioning, ExecutionValue, ExecutionValueKind,
     RuntimeClipHandle, RuntimeConditioning, RuntimeImage, RuntimeLatent, RuntimeModelHandle,
-    RuntimeVaeHandle, RuntimeValue,
+    RuntimeVaeHandle,
 };
 
 pub mod value;

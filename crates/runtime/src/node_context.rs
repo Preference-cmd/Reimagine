@@ -11,12 +11,12 @@ use reimagine_core::model::{
 
 use crate::artifacts::NodeArtifactCapability;
 use crate::cancellation::CancellationToken;
-use crate::value::RuntimeValue;
+use crate::value::ExecutionValue;
 
 /// Resolved input values for a single node, keyed by input `SlotId`.
 #[derive(Debug, Clone, Default)]
 pub struct NodeInputs {
-    values: HashMap<SlotId, Arc<RuntimeValue>>,
+    values: HashMap<SlotId, Arc<ExecutionValue>>,
 }
 
 impl NodeInputs {
@@ -24,15 +24,15 @@ impl NodeInputs {
         Self::default()
     }
 
-    pub fn insert(&mut self, slot_id: impl Into<SlotId>, value: Arc<RuntimeValue>) {
+    pub fn insert(&mut self, slot_id: impl Into<SlotId>, value: Arc<ExecutionValue>) {
         self.values.insert(slot_id.into(), value);
     }
 
-    pub fn get(&self, slot_id: &SlotId) -> Option<&Arc<RuntimeValue>> {
+    pub fn get(&self, slot_id: &SlotId) -> Option<&Arc<ExecutionValue>> {
         self.values.get(slot_id)
     }
 
-    pub fn iter(&self) -> impl Iterator<Item = (&SlotId, &Arc<RuntimeValue>)> {
+    pub fn iter(&self) -> impl Iterator<Item = (&SlotId, &Arc<ExecutionValue>)> {
         self.values.iter()
     }
 

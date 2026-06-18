@@ -27,7 +27,7 @@ use crate::run_session::{NodeOutcome, RunSession};
 use crate::scheduler::NodeState;
 use crate::snapshot::{RunArtifactRef, RunSnapshot, RunSummary};
 use crate::store::RunStore;
-use crate::value::RuntimeValue;
+use crate::value::ExecutionValue;
 use crate::value_store::OutputKey;
 
 /// Options passed to [`RuntimeService::run`].
@@ -498,7 +498,7 @@ impl Runner {
         node: &reimagine_core::readiness::ExecutionNode,
         session: &RunSession,
         artifact_store: Arc<Mutex<ArtifactStore>>,
-    ) -> Result<Vec<(reimagine_core::model::SlotId, Arc<RuntimeValue>)>, NodeFailure> {
+    ) -> Result<Vec<(reimagine_core::model::SlotId, Arc<ExecutionValue>)>, NodeFailure> {
         self.emit_node_event(node, RunEventKind::NodeStarted, &[]);
         self.publish_node_running_snapshot(node, session, &artifact_store)
             .await;

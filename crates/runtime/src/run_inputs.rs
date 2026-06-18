@@ -4,17 +4,17 @@ use std::collections::HashMap;
 
 use reimagine_core::model::{NodeId, ParamValue, SlotId, WorkflowInputId};
 
-use crate::value::RuntimeValue;
+use crate::value::ExecutionValue;
 
 /// Map of node inputs that are not resolved from plan edges.
 ///
-/// Keyed by `(node_id, slot_id)`. Values are `Arc<RuntimeValue>` so the
+/// Keyed by `(node_id, slot_id)`. Values are `Arc<ExecutionValue>` so the
 /// caller can share backend-owned payload handles cheaply.
 #[derive(Debug, Default, Clone)]
 pub struct RunInputs {
-    values: HashMap<(NodeId, SlotId), std::sync::Arc<RuntimeValue>>,
+    values: HashMap<(NodeId, SlotId), std::sync::Arc<ExecutionValue>>,
     node_params: HashMap<(NodeId, SlotId), ParamValue>,
-    workflow_inputs: HashMap<WorkflowInputId, std::sync::Arc<RuntimeValue>>,
+    workflow_inputs: HashMap<WorkflowInputId, std::sync::Arc<ExecutionValue>>,
 }
 
 impl RunInputs {
@@ -26,12 +26,16 @@ impl RunInputs {
         &mut self,
         node_id: impl Into<NodeId>,
         slot_id: impl Into<SlotId>,
-        value: std::sync::Arc<RuntimeValue>,
+        value: std::sync::Arc<ExecutionValue>,
     ) {
         self.values.insert((node_id.into(), slot_id.into()), value);
     }
 
-    pub fn get(&self, node_id: &NodeId, slot_id: &SlotId) -> Option<&std::sync::Arc<RuntimeValue>> {
+    pub fn get(
+        &self,
+        node_id: &NodeId,
+        slot_id: &SlotId,
+    ) -> Option<&std::sync::Arc<ExecutionValue>> {
         self.values.get(&(node_id.clone(), slot_id.clone()))
     }
 
@@ -52,7 +56,7 @@ impl RunInputs {
     pub fn insert_workflow_input(
         &mut self,
         workflow_input_id: impl Into<WorkflowInputId>,
-        value: std::sync::Arc<RuntimeValue>,
+        value: std::sync::Arc<ExecutionValue>,
     ) {
         self.workflow_inputs.insert(workflow_input_id.into(), value);
     }
@@ -60,7 +64,7 @@ impl RunInputs {
     pub fn workflow_input(
         &self,
         workflow_input_id: &WorkflowInputId,
-    ) -> Option<&std::sync::Arc<RuntimeValue>> {
+    ) -> Option<&std::sync::Arc<ExecutionValue>> {
         self.workflow_inputs.get(workflow_input_id)
     }
 }
