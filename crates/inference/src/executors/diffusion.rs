@@ -14,7 +14,7 @@ use std::sync::Arc;
 use reimagine_core::ExecutionValue;
 use reimagine_core::model::{ParamValue, SlotId};
 use reimagine_inference_core::{
-    DiffusionSampleRequest, DiffusionSampleResponse, InferenceBackend, SamplerName, SchedulerName,
+    DiffusionSampleRequest, DiffusionSampleResponse, InferenceRuntime, SamplerName, SchedulerName,
 };
 use reimagine_runtime::{NodeExecutionContext, NodeExecutor, NodeExecutorError, RuntimeValue};
 
@@ -161,12 +161,12 @@ fn extract_latent(
 
 /// `builtin.ksampler` executor.
 pub struct KSamplerExecutor {
-    backend: Arc<dyn InferenceBackend>,
+    inference: Arc<dyn InferenceRuntime>,
 }
 
 impl KSamplerExecutor {
-    pub fn new(backend: Arc<dyn InferenceBackend>) -> Self {
-        Self { backend }
+    pub fn new(inference: Arc<dyn InferenceRuntime>) -> Self {
+        Self { inference }
     }
 }
 
@@ -215,7 +215,7 @@ impl NodeExecutor for KSamplerExecutor {
         }
 
         let response: DiffusionSampleResponse = self
-            .backend
+            .inference
             .diffusion_sample(request)
             .await
             .map_err(into_executor_error)?;

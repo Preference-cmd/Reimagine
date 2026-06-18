@@ -5,7 +5,10 @@ use reimagine_agent::{AgentToolRegistry, WorkspaceScope};
 use reimagine_config::{AppConfig, AppPaths, ConfigDocument, InferenceBackendConfig};
 use reimagine_core::model::ModelRef;
 use reimagine_inference::registry::register_builtin_inference_executors;
-use reimagine_inference::{InferenceError, ModelResolver, ResolvedInferenceModel};
+use reimagine_inference::{
+    DefaultInferenceRuntime, InferenceBackendRegistry, InferenceError, ModelResolver,
+    RejectAllBridgePolicy, ResolvedInferenceModel,
+};
 use reimagine_inference_candle::{
     CandleBackend, CandleBackendConfig, CandleBackendError, CandleDevice,
 };
@@ -139,11 +142,17 @@ impl WorkspaceHost {
         let candle_backend =
             build_candle_backend(config.paths(), &backend_config).expect("backend");
         let backend: Arc<dyn reimagine_inference::InferenceBackend> = candle_backend.clone();
+        let mut inference_registry = InferenceBackendRegistry::new();
+        inference_registry.register(backend);
+        let inference_runtime = Arc::new(DefaultInferenceRuntime::new(
+            Arc::new(inference_registry),
+            Arc::new(RejectAllBridgePolicy),
+        ));
         let resource_backend = candle_backend.resource_backend();
         let mut registry = NodeExecutorRegistry::default();
         register_builtin_inference_executors(
             &mut registry,
-            backend,
+            inference_runtime,
             Arc::new(ModelResolverAdapter::new(
                 model_service.clone(),
                 config.paths().clone(),

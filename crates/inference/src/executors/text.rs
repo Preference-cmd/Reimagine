@@ -12,7 +12,7 @@ use std::sync::Arc;
 
 use reimagine_core::ExecutionValue;
 use reimagine_core::model::SlotId;
-use reimagine_inference_core::{InferenceBackend, TextEncodeRequest, TextEncodeResponse};
+use reimagine_inference_core::{InferenceRuntime, TextEncodeRequest, TextEncodeResponse};
 use reimagine_runtime::{NodeExecutionContext, NodeExecutor, NodeExecutorError, RuntimeValue};
 
 use crate::error::into_executor_error;
@@ -43,12 +43,12 @@ fn extract_clip(
 
 /// `builtin.clip_text_encode` executor.
 pub struct ClipTextEncodeExecutor {
-    backend: Arc<dyn InferenceBackend>,
+    inference: Arc<dyn InferenceRuntime>,
 }
 
 impl ClipTextEncodeExecutor {
-    pub fn new(backend: Arc<dyn InferenceBackend>) -> Self {
-        Self { backend }
+    pub fn new(inference: Arc<dyn InferenceRuntime>) -> Self {
+        Self { inference }
     }
 }
 
@@ -75,7 +75,7 @@ impl NodeExecutor for ClipTextEncodeExecutor {
         }
 
         let response: TextEncodeResponse = self
-            .backend
+            .inference
             .text_encode(request)
             .await
             .map_err(into_executor_error)?;

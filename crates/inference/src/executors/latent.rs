@@ -11,7 +11,7 @@ use std::sync::Arc;
 
 use reimagine_core::model::{ParamValue, SlotId};
 use reimagine_inference_core::{
-    CreateEmptyLatentRequest, CreateEmptyLatentResponse, InferenceBackend,
+    CreateEmptyLatentRequest, CreateEmptyLatentResponse, InferenceRuntime,
 };
 use reimagine_runtime::{NodeExecutionContext, NodeExecutor, NodeExecutorError, RuntimeValue};
 
@@ -33,12 +33,12 @@ fn extract_u32(context: &NodeExecutionContext, slot: &str) -> Result<u32, NodeEx
 
 /// `builtin.empty_latent_image` executor.
 pub struct EmptyLatentImageExecutor {
-    backend: Arc<dyn InferenceBackend>,
+    inference: Arc<dyn InferenceRuntime>,
 }
 
 impl EmptyLatentImageExecutor {
-    pub fn new(backend: Arc<dyn InferenceBackend>) -> Self {
-        Self { backend }
+    pub fn new(inference: Arc<dyn InferenceRuntime>) -> Self {
+        Self { inference }
     }
 }
 
@@ -67,7 +67,7 @@ impl NodeExecutor for EmptyLatentImageExecutor {
         }
 
         let response: CreateEmptyLatentResponse = self
-            .backend
+            .inference
             .create_empty_latent(request)
             .await
             .map_err(into_executor_error)?;
