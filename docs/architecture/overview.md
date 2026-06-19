@@ -1,7 +1,7 @@
 # Reimagine Architecture Overview
 
 > Status: working draft
-> Last updated: 2026-06-15
+> Last updated: 2026-06-19
 
 ## Purpose
 
@@ -88,8 +88,10 @@ redefining node slots or params.
 truth for what inputs, outputs, params, effects, aliases, or target semantics a
 node has.
 
-`inference-core` owns the typed backend capability contract and router.
-`inference` owns node orchestration. Concrete backends implement the contract.
+`inference-core` owns the internal execution value/handle model, typed backend
+capability contract, and router. `inference` owns the runtime-facing executor
+facade and built-in node orchestration. Concrete backends implement the backend
+contract.
 
 ## Crate and Host Map
 
@@ -100,10 +102,11 @@ crates/core
   - shared NodeDef / InputSlotDef / OutputSlotDef schema
   - WorkflowSession, WorkflowCommand, history, diagnostics
   - execution plan and RunEvent schema
-  - public execution values shared across runtime, inference, and backends
+  - host-safe ids, params, model refs, artifact refs, and observation schemas
 
 crates/inference-core
-  Backend contract kernel:
+  Inference execution contract kernel:
+  - internal ExecutionValue and backend-affine handles
   - typed backend capability protocol
   - inference router / registry / bridge policy
   - model resolver handoff and inference diagnostics
@@ -174,12 +177,15 @@ crates/runtime
   - cancellation
   - artifact routing
   - RunEventSink boundary
+  - Arc<ExecutionValue> value store and retention enforcement through the
+    inference facade
 
 crates/inference
   Backend-neutral inference layer:
+  - runtime-facing NodeExecutor and execution output facade
   - built-in node executors
   - executor helpers
-  - built-in node orchestration over abstract runtime handles
+  - built-in node orchestration over abstract execution handles
   - executor registration helpers
 
 crates/inference-backends/candle
