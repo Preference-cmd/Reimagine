@@ -5,7 +5,11 @@
 
 ## Role
 
-`runtime` is the host-independent workflow execution layer. It executes `core::ExecutionPlan` values using injected node capabilities, manages run sessions, schedules stages, handles cancellation, routes artifacts through injected artifact capabilities, and emits `core::RunEvent` values through a host-provided sink.
+`runtime` is the host-independent workflow execution layer. It executes
+`core::ExecutionPlan` values using the `inference` executor facade, manages run
+sessions, schedules stages, handles cancellation, routes artifacts through
+injected artifact capabilities, and emits `core::RunEvent` values through a
+host-provided sink.
 
 It must not depend on Tauri or Axum.
 
@@ -37,15 +41,16 @@ It must not depend on Tauri or Axum.
 
 ```text
 runtime -> core
+runtime -> inference
 runtime must not -> tauri
 runtime must not -> axum
 runtime must not -> model-manager
-runtime must not -> inference
-runtime must not -> inference-core
 runtime must not -> inference-backends/*
 ```
 
-Concrete node executors and backend capabilities are assembled by `app-host`. Runtime defines the execution traits and consumes trait objects/registries.
+Concrete node executors and backend capabilities are assembled by `app-host`.
+Runtime consumes the executor/value facade from `inference` and must not depend
+on concrete backend crates.
 
 ## Suggested Module Layout
 
@@ -59,18 +64,16 @@ src/
   cancellation.rs
   artifacts.rs
   events.rs
-  node_context.rs
-  executor.rs
-  resources.rs
   store.rs
 ```
 
 Use modern Rust module layout. Do not introduce `mod.rs`, and prefer ordinary `mod foo;` declarations over `#[path = "..."]` attributes.
 
-The migration target is that `store.rs`, `node_context.rs`, `executor.rs`, and
-`resources.rs` refer to `core::ExecutionValue`. They must not define the
-canonical value enum themselves. A temporary `RuntimeValue` alias may exist
-only as a migration shim while downstream crates are updated.
+The migration target is that runtime imports execution values, executor
+contracts, node context, execution outputs, and retention policies from the
+`inference` facade. Runtime must not define the canonical value enum or own the
+node executor contract. A temporary `RuntimeValue` alias may exist only as a
+migration shim while downstream crates are updated.
 
 ## Public Run Boundary
 
@@ -246,18 +249,18 @@ RuntimeService
 
 Workspace config, model manager, backend model stores, and concrete node executor construction belong to `app-host`.
 
-`runtime` does not know whether a `NodeExecutor` is hand-written, inference
-backed, Candle backed, or remote. It schedules nodes and calls the
-`NodeExecutor` trait object. Inference-backed executors are adapters outside
-runtime:
+`runtime` does not know whether a `NodeExecutor` is hand-written,
+inference-backed, Candle-backed, or remote. It schedules nodes and calls the
+`inference::NodeExecutor` trait object. Built-in inference executors are
+provided by `inference` and assembled by `app-host`:
 
 ```text
 runtime scheduler
-  -> NodeExecutor::execute(NodeExecutionContext)
+  -> inference::NodeExecutor::execute(NodeExecutionContext)
   -> inference-backed executor
   -> typed inference-core capability call
   -> selected backend typed capability method
-  -> core::ExecutionValue outputs
+  -> inference::ExecutionOutput values
 ```
 
 This prevents `inference` from becoming a second runtime. `runtime` owns run
@@ -278,8 +281,8 @@ ExecutionNode
 
 The scheduler invokes one `NodeExecutor` for each execution node. It does not
 know whether that node uses SDXL, Flux, a remote backend, or a future fused
-graph. Model identity enters runtime only as opaque `ExecutionValue` handles
-flowing between node invocations.
+graph. Model identity enters runtime only as opaque `inference::ExecutionValue`
+handles flowing between node invocations.
 
 Asynchronous and parallel scheduling are orthogonal to this boundary. The
 scheduler may run independent node invocations concurrently, await async
@@ -291,12 +294,13 @@ backend kernel graph into its scheduling unit.
 Runtime does not select inference backends per node. Backend selection,
 resource compatibility, and explicit transfer/bridge policy belong to the
 inference runtime/router assembled by app-host. Runtime executes the registry
-it was given, passes opaque runtime handles into `NodeExecutionContext`, and
+it was given, passes opaque execution handles into `NodeExecutionContext`, and
 does not perform implicit cross-backend tensor conversion.
 
-`RunResourceBackend` remains a runtime lifecycle hook, not the inference
-execution API. A concrete backend may implement both `RunResourceBackend` and
-the inference backend trait, but runtime only sees `RunResourceBackend`.
+Runtime lifecycle is driven by `Arc<ExecutionValue>` ownership and
+producer-declared retention policies. Runtime should not introduce a separate
+backend release-intent protocol for ordinary value lifecycle. Backend caches may
+remain live by holding their own handles or internal owners.
 
 ## Review Notes
 
@@ -398,14 +402,18 @@ RunSession
 
 ```text
 RunValueStore
-  values: OutputKey -> ExecutionValue
+  values: OutputKey -> RuntimeValueRecord
 
 OutputKey
   node_id
   slot_id
+
+RuntimeValueRecord
+  value: Arc<ExecutionValue>
+  retention: ExecutionValueRetention
 ```
 
-`core::ExecutionValue` may contain backend-affine handles for cheap in-run
+`inference::ExecutionValue` may contain backend-affine handles for cheap in-run
 sharing:
 
 ```text
@@ -420,16 +428,17 @@ Artifact
 Null
 ```
 
-`RunValueStore` should store `Arc<core::ExecutionValue>` handles. Large tensor
-buffers and loaded model payloads must not be copied into `RunValueStore`; they
-remain in backend-owned stores and are referenced by lightweight handles such
-as `BackendTensorHandle` or `RuntimeModelHandle`.
+`RunValueStore` should store `Arc<ExecutionValue>` handles with an
+`ExecutionValueRetention` declared by the producer. Large tensor buffers and
+loaded model payloads must not be copied into `RunValueStore`; they remain in
+backend-owned stores and are referenced by lightweight handles such as
+`BackendTensorHandle` or `RuntimeModelHandle`.
 
-`ExecutionConditioning` is one of the `core::ExecutionValue` variants. Its
+`ExecutionConditioning` is one of the `inference::ExecutionValue` variants. Its
 current `metadata` lives with the conditioning value and should be treated as
-public execution context rather than a separate runtime subsystem. Existing code
-may temporarily expose the old `RuntimeConditioning` name as a compatibility
-alias during migration.
+internal execution context rather than a separate runtime subsystem. Existing
+code may temporarily expose the old `RuntimeConditioning` name as a
+compatibility alias during migration.
 
 These values are not owned by app state and are not exposed to UI. Host state keeps run handles, summaries, diagnostics, and artifact references only.
 
@@ -448,14 +457,15 @@ issue introduces same-stage concurrency.
 
 ## Backend Resource Lifecycle
 
-Runtime owns run dependency lifetime. Backend capabilities own real model/tensor/device memory lifetime.
+Runtime owns run dependency lifetime. Backend capabilities own real
+model/tensor/device memory lifetime.
 
 ```text
 Runtime owns:
   RunValueStore
-  OutputKey -> Arc<ExecutionValue>
+  OutputKey -> Arc<ExecutionValue> + ExecutionValueRetention
   dependency order
-  stage/last-use knowledge
+  producer-declared retention enforcement
   run cancellation and cleanup timing
 
 Backend owns:
@@ -468,24 +478,29 @@ Backend owns:
   memory budget and eviction
 ```
 
-Runtime should not directly unload a specific model, move a tensor to a device, compact a memory pool, or decide GPU/CPU placement. It should call a thin resource capability that communicates lifecycle intent:
+Runtime should not directly unload a specific model, move a tensor to a device,
+compact a memory pool, or decide GPU/CPU placement. Ordinary value lifecycle is
+managed by inserting and dropping `Arc<ExecutionValue>` records according to
+retention:
 
 ```text
-RunResourceBackend
-  begin_run(run_id)
-  release_runtime_value(run_id, value)
-  cleanup_run(run_id)
-  memory_snapshot()
+SingleUse
+  dropped after its unique consumer completes
+  fan-out greater than one is rejected or diagnosed before execution
+
+RunScoped
+  kept until terminal run cleanup
+
+WorkspaceScoped
+  may be passed during the run
+  dropping the run reference must not imply workspace cache eviction
 ```
 
-The backend decides the mechanism:
-
-- `begin_run` may create run-scoped allocation state or pin already loaded models.
-- `release_runtime_value` may release a tensor immediately, decrement a backend refcount, or keep it in a pool.
-- `cleanup_run` releases run-scoped tensor payloads and run pins. Cached models may remain loaded according to backend policy.
-- `memory_snapshot` returns backend-specific memory/cache observations for diagnostics and UI, without giving runtime ownership of backend internals.
-
-V1 may keep all intermediate tensor handles until run cleanup. The runtime type shape should still allow future last-use analysis to call `release_runtime_value` earlier after the last downstream consumer completes.
+If a backend or workspace cache needs a value to outlive the run, it must hold
+its own `Arc` or internal resource owner. Runtime dropping its run-scoped
+reference is the lifecycle signal; it is not an imperative unload command.
+Memory/cache observations should be surfaced through explicit host-neutral
+snapshot/diagnostic shapes rather than backend internals.
 
 Runtime scheduling and backend resource scheduling are separate concerns. A
 workflow node invocation remains the runtime execution unit, while model
@@ -524,29 +539,27 @@ save_image / preview_image x N
   -> UI does not need to wait for the whole run to finish before showing output
 ```
 
-This requires the scheduler to expose lifecycle intent and progressive
-completion without taking ownership of backend memory policy:
+This requires the scheduler to honor retention and progressive completion
+without taking ownership of backend memory policy:
 
 ```text
 Scheduler / RunSession
-  knows last downstream consumer for an ExecutionValue
-  can release a value after its last consumer completes
+  stores producer-declared retention for each ExecutionValue
+  can drop SingleUse values after their unique consumer completes
+  can keep RunScoped values until terminal cleanup
   can emit artifact observations when a target/save/preview node completes
   can keep deterministic run state while independent nodes execute concurrently
 
-RunResourceBackend / inference backend
-  decides whether release means unpin, decrement refcount, move to CPU, evict,
-  pool, or no-op
-  decides whether a model such as the diffusion model remains pinned across a
-  generation group
+inference backend / workspace cache
+  keeps any workspace-scoped resources it owns
+  decides model pinning, pooling, eviction, and device placement
   decides whether VAE decode can run on CPU while diffusion sampling continues
 ```
 
-The scheduler may discover that `Clip` is no longer needed while
-`Conditioning` remains live, or that the diffusion model is still needed by
-later KSampler nodes. It reports those lifecycle facts through resource
-capabilities; it does not unload CLIP, UNet, VAE, tensors, or device buffers
-directly.
+The scheduler may drop a run-owned `Clip` handle while `Conditioning` remains
+live, or keep a `Model` handle across later KSampler nodes. Dropping runtime's
+`Arc` does not directly unload CLIP, UNet, VAE, tensors, or device buffers; the
+backend/cache lifetime follows its own ownership.
 
 Model loading remains inference/backend adapter work:
 
@@ -554,7 +567,7 @@ Model loading remains inference/backend adapter work:
 checkpoint_loader executor
   -> inference-core typed capability call
   -> backend load_bundle(...)
-  -> core::ExecutionValue::Model(handle)
+  -> inference::ExecutionValue::Model(handle)
 ```
 
 Runtime stores and routes the returned handle, but it does not resolve
@@ -593,7 +606,7 @@ Workflow ModelRef
   -> app-host builds execution plan and node executor adapters
   -> checkpoint node executor calls inference-core typed capability
   -> inference backend resolves concrete loaded model object
-  -> core::ExecutionValue::Model / Clip / Vae
+  -> inference::ExecutionValue::Model / Clip / Vae
 ```
 
 The loaded backend payload stays in the backend model store owned by the

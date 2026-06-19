@@ -5,19 +5,21 @@
 
 ## Role
 
-`inference-core` is the backend contract crate. It defines the typed
-capability protocol between inference node executors, the inference runtime
-router, and concrete inference backends.
+`inference-core` is the low-level inference execution contract crate. It
+defines the canonical execution value envelope, backend-affine handles, typed
+capability protocol, inference runtime router, and concrete inference backend
+traits.
 
 It must not own workflow scheduling, node orchestration, concrete backend
-payloads, or public execution values. Public execution values and backend-affine
-handles belong to `core`.
+payloads, host DTOs, workflow JSON, or UI/Agent observation shapes.
 
 ## Responsibilities
 
 - Define `InferenceRuntime`, the executor-facing router trait.
 - Define `InferenceBackend`, the concrete backend adapter trait.
-- Define `InferenceBackendRegistry` keyed by `core::BackendKind`.
+- Define `InferenceBackendRegistry` keyed by `BackendKind`.
+- Own `ExecutionValue`, `ExecutionValueKind`, `ExecutionConditioning`, and
+  backend-affine tensor/model/image handles.
 - Define typed capability request/response DTOs.
 - Define backend capability reports.
 - Define model resolver handoff DTOs and traits.
@@ -29,7 +31,7 @@ handles belong to `core`.
 - Runtime scheduling, cancellation, run store, snapshots, or summaries.
 - Built-in node executor implementation.
 - Workflow graph validation.
-- Public execution value ownership.
+- Host-facing execution DTOs, run snapshots, run summaries, or workflow JSON.
 - Concrete Candle, ONNX, remote, or Comfy implementation.
 - Model manifest scanning or persistence.
 - Tauri IPC, Axum routes, UI state, or Agent policy.
@@ -39,7 +41,6 @@ handles belong to `core`.
 ```text
 inference-core -> core
 
-runtime must not -> inference-core
 inference-core must not -> runtime
 inference-core must not -> inference
 inference-core must not -> inference-backends/*
@@ -52,54 +53,63 @@ Consumers:
 ```text
 inference -> inference-core
 inference-backends/candle -> inference-core
+runtime -> inference -> inference-core
 app-host -> inference-core
 ```
 
-This keeps backend data flow and crate dependency direction separate. A backend
-may construct `core::ExecutionValue` handles and return them through
-`inference-core` responses, but `inference-core` does not depend on that backend
-crate and `runtime` does not depend on `inference-core`.
+This keeps backend data flow and crate dependency direction separate.
+`inference-core` may depend on lightweight `core::model` ids, params, artifact
+refs, and run metadata, but `core` must not depend back on inference execution
+types. Concrete backend crates depend on `inference-core`; `inference-core`
+does not depend on any concrete backend crate.
 
-## Public Values Stay In Core
+## Internal Execution Values
 
-The shared execution value envelope is owned by `core`, not `inference-core`:
+The shared execution value envelope is owned by `inference-core` and
+re-exported by `inference` as the runtime-facing facade:
 
 ```text
-core::ExecutionValue
-core::BackendKind
-core::BackendPayloadKey
-core::BackendTensorHandle
-core::RuntimeModelHandle
-core::RuntimeClipHandle
-core::RuntimeVaeHandle
-core::RuntimeLatent
-core::ExecutionConditioning
-core::RuntimeImage
+inference_core::ExecutionValue
+inference_core::BackendKind
+inference_core::BackendPayloadKey
+inference_core::BackendTensorHandle
+inference_core::BackendTensorMetadata
+inference_core::RuntimeModelHandle
+inference_core::RuntimeClipHandle
+inference_core::RuntimeVaeHandle
+inference_core::RuntimeLatent
+inference_core::ExecutionConditioning
+inference_core::ConditioningMetadata
+inference_core::RuntimeImage
 ```
 
 The canonical architecture name is `ExecutionValue`. A temporary
-`RuntimeValue` alias is acceptable only as a migration aid while moving the
-current implementation out of `crates/runtime`.
+`RuntimeValue` alias is acceptable only as a migration aid while moving old
+runtime-facing imports.
 
 Reason:
 
-- `runtime` must store and pass these values without depending on inference.
+- `runtime` stores and passes these values through the `inference` facade.
 - `inference` must inspect them when constructing requests.
 - backend adapters must construct them as opaque handles to backend-owned
   payloads.
-- host observations may expose selected artifact/value metadata.
+- host observations must not expose them as external DTOs.
 
 Concrete backend types such as `CandleTensor`, `LoadedSdxlBundle`, tokenizer
 state, scheduler graphs, and backend-local store keys must not cross this
-public value boundary.
+execution value boundary.
 
-`ExecutionConditioning` belongs to this public execution-value set. It is not
-an `inference-core` DTO. `inference-core` requests may carry it, routers may
-inspect its public handles and metadata for compatibility, and backends may use
-its payload keys to resolve backend-owned conditioning tensors. Its metadata
-stays inside `ExecutionConditioning` for V1. Existing code may temporarily
-expose the old `RuntimeConditioning` name as a compatibility alias during
-migration.
+`ExecutionValue` is not workflow file content, not a run event payload, not an
+Axum/Tauri DTO, and not an Agent tool result. Host-safe observations remain
+snapshots, summaries, diagnostics, node/run states, artifact references, and
+memory/cache summaries projected through explicit observation shapes.
+
+`ExecutionConditioning` belongs to this execution-value set. Requests may carry
+it, routers may inspect its handles and metadata for compatibility, and
+backends may use its payload keys to resolve backend-owned conditioning
+tensors. Its metadata stays inside `ExecutionConditioning` for V1. Existing
+code may temporarily expose the old `RuntimeConditioning` name as a
+compatibility alias during migration.
 
 ## Inference Runtime / Router
 
@@ -160,7 +170,7 @@ InferenceBackend
   assumes the request has been routed to this backend
   resolves backend-private payload keys
   runs model graph / tensor / device implementation
-  returns public core::ExecutionValue handles or typed backend responses
+  returns ExecutionValue handles or typed backend responses
 ```
 
 Do not collapse these traits because a V1 workspace has only one backend. A
@@ -178,9 +188,9 @@ InferenceBackendRegistry
   capabilities() -> merged capability report
 ```
 
-`BackendKind` is a stable core-owned label used by config, runtime handles,
-diagnostics, and registry lookup. It should not replace the backend trait with a
-giant closed enum.
+`BackendKind` is a stable inference execution label used by config, runtime
+handles, diagnostics, and registry lookup. It should not replace the backend
+trait with a giant closed enum.
 
 ## Backend Capability Trait
 
@@ -259,7 +269,8 @@ operation id correctly before a typed method can run.
 Typed requests own cheap, shareable handles rather than borrowing from
 `runtime::NodeExecutionContext`. This keeps backend calls simple across
 `.await` while preserving zero-copy behavior for tensors and loaded models,
-because large data remains in backend-owned stores referenced by core handles.
+because large data remains in backend-owned stores referenced by execution
+handles.
 
 Example DTOs:
 
@@ -290,7 +301,7 @@ Typed requests do not carry `operation_id`; the method call already identifies
 the capability. They may carry explicit target/backend preferences only when
 that is a routing decision rather than an operation identifier.
 
-Typed responses return public core handles or artifact intents. They should not
+Typed responses return execution handles or artifact intents. They should not
 carry output `SlotId`; slot mapping belongs to the inference executor that knows
 which workflow node it is running.
 

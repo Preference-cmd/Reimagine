@@ -6,8 +6,9 @@
 ## Role
 
 `inference` is the backend-neutral node orchestration layer for built-in
-generation nodes. It implements `runtime::NodeExecutor` adapters that map a
-workflow node invocation to typed backend capability calls.
+generation nodes. It defines the runtime-facing executor contract/facade and
+implements built-in executors that map a workflow node invocation to typed
+backend capability calls.
 
 It does not define the backend contract itself. Shared backend traits, typed
 capability request/response DTOs, backend registry, router, bridge policy, and
@@ -16,12 +17,16 @@ inference errors belong to [`inference-core`](inference-core.md).
 ## Responsibilities
 
 - Provide built-in inference-backed node executors.
-- Convert `runtime::NodeExecutionContext` inputs and params into typed
-  `inference-core` requests.
+- Define runtime-facing node executor contracts, node execution context, output
+  contracts, and executor registration helpers.
+- Convert node execution context inputs and params into typed `inference-core`
+  requests.
 - Call the injected `inference-core::InferenceRuntime` router.
 - Validate typed responses against the node's output slots.
-- Record save/preview artifacts through runtime artifact capabilities.
+- Record save/preview artifacts through injected artifact capabilities.
 - Provide executor registration helpers for app-host bootstrap.
+- Re-export `inference-core` execution values and handles as the facade runtime
+  consumes.
 
 ## Non-Responsibilities
 
@@ -38,19 +43,20 @@ inference errors belong to [`inference-core`](inference-core.md).
 
 ```text
 inference -> core
-inference -> runtime
 inference -> inference-core
 
 inference must not -> inference-backends/*
+inference must not -> runtime
 inference must not -> model-manager
 inference must not -> app-host
 inference must not -> tauri
 inference must not -> axum
 ```
 
-`runtime` must not depend on `inference`. `app-host` composes the pieces by
-constructing an `inference-core` router and asking `inference` to register
-node executors into a runtime `NodeExecutorRegistry`.
+`runtime` depends on `inference` as its executor/value facade. `app-host`
+composes the pieces by constructing an `inference-core` router and asking
+`inference` to register node executors into the executor registry consumed by
+runtime.
 
 ## Boundary
 
@@ -60,13 +66,13 @@ model graphs, tensors, and device policy.
 
 ```text
 runtime scheduler
-  -> NodeExecutor::execute(NodeExecutionContext)
+  -> inference::NodeExecutor::execute(NodeExecutionContext)
   -> inference executor
   -> inference-core typed request
   -> inference-core InferenceRuntime/router
   -> selected inference-core InferenceBackend method
   -> backend-private model graph / payload store
-  -> core::ExecutionValue outputs
+  -> inference::ExecutionValue outputs
 ```
 
 The runtime execution unit remains a workflow node invocation. Backend
@@ -79,12 +85,13 @@ policy, and emits routing diagnostics; the backend trait is the concrete
 adapter seam for one backend implementation. Inference executors should depend
 on the router trait even if a workspace currently registers only Candle.
 
-## Runtime Value Usage
+## Execution Value Usage
 
-`inference` consumes and returns public execution values owned by `core`.
+`inference` consumes and returns execution values owned by `inference-core` and
+re-exported by `inference`.
 
 ```text
-core::ExecutionValue
+inference::ExecutionValue
   Param
   Model
   Clip
@@ -101,6 +108,10 @@ core::ExecutionValue
 not inspect backend-local tensors, loaded model objects, tokenizer state, or
 kernel graphs.
 
+`ExecutionValue` is internal execution data. It must not be exposed through
+workflow JSON, run snapshots, run summaries, run events, Axum/Tauri DTOs, or
+Agent tool results.
+
 ## Executor Shape
 
 Each executor should be explicit and small:
@@ -109,8 +120,8 @@ Each executor should be explicit and small:
 - build a typed `inference-core` request;
 - call the corresponding `InferenceRuntime` capability method;
 - validate response value kinds and required outputs;
-- map typed responses into `NodeExecutionOutputs`;
-- record artifacts through runtime artifact capabilities when needed.
+- map typed responses into `ExecutionOutput` / `NodeExecutionOutputs`;
+- record artifacts through injected artifact capabilities when needed.
 
 The initial executor set remains:
 
@@ -144,7 +155,7 @@ concrete backend crate.
 core::NodeCatalog
   get("builtin.ksampler") -> NodeDef
 
-runtime::NodeExecutorRegistry
+inference::NodeExecutorRegistry
   get("builtin.ksampler") -> Arc<dyn NodeExecutor>
 
 inference::KSamplerExecutor
@@ -163,7 +174,7 @@ inference-backend
   resolves backend-private payload keys
   runs model graph / kernel adapter
   stores new payload
-  returns public ExecutionValue handle
+  returns internal ExecutionValue handle
 ```
 
 Rust-shaped sketch:
@@ -174,7 +185,7 @@ pub struct KSamplerExecutor {
 }
 
 #[async_trait]
-impl runtime::NodeExecutor for KSamplerExecutor {
+impl inference::NodeExecutor for KSamplerExecutor {
     async fn execute(
         &self,
         context: NodeExecutionContext,
@@ -227,6 +238,10 @@ workflow ModelRef
 ```text
 src/
   lib.rs
+  value.rs
+  executor.rs
+  node_context.rs
+  artifacts.rs
   executors.rs
   executors/
     common.rs
@@ -247,6 +262,24 @@ re-exports. Do not collect executor logic into one large file.
 Executor code architecture:
 
 ```text
+value.rs
+  re-export inference-core execution values and handles
+
+executor.rs
+  NodeExecutor
+  NodeExecutorError
+  ExecutionOutput
+  ExecutionValueRetention
+  NodeExecutionOutputs
+  NodeExecutorRegistry
+
+node_context.rs
+  NodeExecutionContext
+  NodeInputs
+  NodeParams
+  cancellation facade
+  artifact capability facade
+
 executors.rs
   register_builtin_inference_executors(...)
   public executor re-exports

@@ -81,7 +81,9 @@ builtin.checkpoint_loader
     vae: Vae, required=true
 ```
 
-The node receives a `ModelRef` saved in workflow params. Its runtime executor uses app-host-injected model resolution and backend loading capabilities to produce runtime handles.
+The node receives a `ModelRef` saved in workflow params. Its executor uses
+app-host-injected model resolution and backend loading capabilities to produce
+execution handles.
 
 ### Conditioning
 

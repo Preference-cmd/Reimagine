@@ -27,7 +27,7 @@ capabilities; it is not a public capability family.
 - Device and dtype configuration.
 - Model loading and cache.
 - CLIP, UNet, VAE implementations.
-- Tensor conversion between `core` data and Candle tensors.
+- Tensor conversion between inference execution handles and Candle tensors.
 - Typed backend capability implementations consumed by inference-layer executors.
 - Artifact encoding for image outputs produced by `builtin.save_image`.
 
@@ -46,8 +46,8 @@ app-host -> inference
 app-host -> inference-core
 app-host -> inference-backends/candle
 inference-backends/candle -> inference-core
-inference-backends/candle -> runtime
 inference-backends/candle -> core
+inference-backends/candle must not -> runtime
 inference-backends/candle must not -> app-host
 inference-backends/candle must not -> tauri
 inference-backends/candle must not -> axum
@@ -57,8 +57,8 @@ inference-backends/candle must not -> model-manager
 `app-host` resolves model descriptors through `model-manager`, registers the
 Candle adapter in the `inference-core` backend registry, constructs the
 `inference-core` runtime/router, then injects inference-backed node executors
-into runtime. The Candle adapter consumes resolved paths/metadata; it does not
-scan directories or read manifests.
+into runtime through the inference facade. The Candle adapter consumes resolved
+paths/metadata; it does not scan directories or read manifests.
 
 Backend construction is owned by app-host/config. Candle can be the default V1
 backend, but it should be registered behind `BackendKind` and reached through
@@ -71,9 +71,9 @@ The runtime already owns the host-neutral execution boundary:
 
 ```text
 RuntimeService
-  -> NodeExecutorRegistry
-  -> NodeExecutor::execute(NodeExecutionContext)
-  -> Vec<(SlotId, Arc<ExecutionValue>)>
+  -> inference::NodeExecutorRegistry
+  -> inference::NodeExecutor::execute(NodeExecutionContext)
+  -> Vec<ExecutionOutput>
 ```
 
 `inference` provides backend-neutral `NodeExecutor` implementations or
@@ -135,30 +135,24 @@ CandleStore
   indexed by RunId and BackendPayloadKey
 ```
 
-`RunResourceBackend` communicates lifecycle intent to the backend. It does not
-force a release strategy:
+Runtime communicates ordinary execution value lifetime by dropping its
+`Arc<ExecutionValue>` references according to producer-declared retention. It
+does not send a separate release-intent command for normal value lifecycle.
+Candle decides whether cached model payloads, tensor payloads, or device
+allocations remain live by holding its own owners or cache entries.
 
-- `begin_run` can create run-local indexes or pins;
-- `release_runtime_value` can release immediately, decrement backend refs, or
-  keep a payload in a pool;
-- `cleanup_run` releases run-scoped payloads and run pins;
-- cached model payloads may remain loaded according to backend policy;
-- `memory_snapshot` reports backend cache/device observations without exposing
-  backend internals.
-
-It may implement both:
+Candle implements:
 
 ```text
 inference-core::InferenceBackend
   load_bundle / text_encode / diffusion_sample / ...
-
-RunResourceBackend
-  begin_run / release_runtime_value / cleanup_run / memory_snapshot
 ```
 
-These roles stay separate even when implemented by the same concrete object.
+Memory/cache observations should be exposed through explicit host-neutral
+summary or diagnostic shapes, without making runtime own Candle internals.
 
-The runtime only sees lightweight `ExecutionValue` handles:
+Runtime only sees lightweight `ExecutionValue` handles through the inference
+facade:
 
 ```text
 ExecutionValue::Model(RuntimeModelHandle)
@@ -254,7 +248,7 @@ protocol. SDXL is the first V1 implementation behind those capabilities, not
 the capability shape itself.
 
 Node orchestration remains above the backend in the inference layer. The Candle
-backend receives typed capability requests over abstract runtime handles; it
+backend receives typed capability requests over abstract execution handles; it
 does not define what `builtin.ksampler` or `builtin.clip_text_encode` means as a
 workflow node. Its job is to interpret handles such as `Model`, `Clip`, `Vae`,
 `Latent`, and `Conditioning` against backend-owned loaded bundles and payloads.
@@ -329,22 +323,21 @@ Callers should access payloads through typed store methods such as
 matching on the payload enum throughout operation modules. This keeps lock
 scope, error messages, and payload ownership policy centralized.
 
-The variant bundle module owns the concrete loaded bundle type. The public
-runtime-facing result of `load_bundle` remains three lightweight
+The variant bundle module owns the concrete loaded bundle type. The
+inference-facing result of `load_bundle` remains three lightweight
 `ExecutionValue` handles; the loaded Candle objects stay behind the cache entry.
 
 ## Resource And Device Lifecycle
 
-Candle owns the concrete model and tensor lifecycle behind public
-`ExecutionValue` handles. Runtime communicates lifecycle intent; Candle decides
-the mechanism.
+Candle owns the concrete model and tensor lifecycle behind internal
+`ExecutionValue` handles. Runtime owns only its `Arc<ExecutionValue>` records
+and retention policy; Candle decides concrete cache and device behavior.
 
 ```text
-Runtime / RunResourceBackend intent
-  begin_run
-  release_runtime_value
-  cleanup_run
-  memory_snapshot
+Runtime value retention
+  SingleUse
+  RunScoped
+  WorkspaceScoped
 
 CandleBackend policy
   pin or unpin loaded model bundles
@@ -360,8 +353,8 @@ diffusion model loaded across repeated `diffusion_sample` calls, reuse
 conditioning tensors produced by one `text_encode`, and run `latent_decode`
 for each completed latent without waiting for every sample in the run. The
 runtime scheduler can emit value release and artifact completion events as
-nodes finish, but Candle decides whether a release intent unloads a payload,
-decrements a refcount, keeps it pinned, or moves it between devices.
+nodes finish, but Candle decides whether a cache owner keeps a payload pinned,
+evicts it, pools it, or moves it between devices.
 
 This policy remains backend-local. Higher modules must not special-case CLIP,
 UNet, VAE, SDXL tensors, or Candle device handles. They observe public handles,

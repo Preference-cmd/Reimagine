@@ -218,7 +218,7 @@ ModelRef
   resolved outside core by a model-management service
 
 Model / Clip / Vae
-  runtime handles
+  execution handles
   produced by loader nodes
   consumed by inference nodes
   not saved in workflow JSON
@@ -241,7 +241,7 @@ Loader or selector nodes use `ModelRef` as an input:
 }
 ```
 
-Execution nodes consume runtime handles:
+Execution nodes consume execution handles:
 
 ```text
 KSampler.model = Model
