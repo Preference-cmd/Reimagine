@@ -2,9 +2,9 @@ use std::sync::Arc;
 
 use reimagine_agent::WorkspaceScope;
 use reimagine_config::AppConfig;
-use reimagine_nodes::BuiltinNodeCatalog;
 use reimagine_runtime::RuntimeService;
 
+use crate::node_catalog::NodeCatalogService;
 use crate::{ModelService, WorkflowService};
 
 /// Service container captured by app-host agent tools.
@@ -19,7 +19,7 @@ pub struct WorkspaceServices {
     workflow_service: Arc<WorkflowService>,
     model_service: Arc<ModelService>,
     runtime_service: Arc<RuntimeService>,
-    node_catalog: Arc<BuiltinNodeCatalog>,
+    node_catalog: Arc<NodeCatalogService>,
 }
 
 impl WorkspaceServices {
@@ -29,7 +29,7 @@ impl WorkspaceServices {
         workflow_service: Arc<WorkflowService>,
         model_service: Arc<ModelService>,
         runtime_service: Arc<RuntimeService>,
-        node_catalog: Arc<BuiltinNodeCatalog>,
+        node_catalog: Arc<NodeCatalogService>,
     ) -> Self {
         Self {
             workspace_scope,
@@ -61,7 +61,7 @@ impl WorkspaceServices {
         &self.runtime_service
     }
 
-    pub fn node_catalog(&self) -> &Arc<BuiltinNodeCatalog> {
+    pub fn node_catalog(&self) -> &Arc<NodeCatalogService> {
         &self.node_catalog
     }
 }

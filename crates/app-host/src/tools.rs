@@ -573,6 +573,13 @@ impl AgentTool for DiagnosticsForWorkflowTool {
 
         let mut diagnostics = Vec::new();
 
+        // Workspace bootstrap invariant: surface catalog/executor
+        // alignment problems so users and Agent tools can see them
+        // without having to call `run_workflow` first.
+        let alignment = self.services.runtime_service().registry();
+        let alignment_report = self.services.node_catalog().check_alignment(alignment);
+        diagnostics.extend(alignment_report.diagnostics());
+
         // Workflow structural diagnostics (via readiness snapshot)
         let workflow = self
             .services

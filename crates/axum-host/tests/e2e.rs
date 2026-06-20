@@ -24,7 +24,7 @@ use reimagine_core::workflow::{Workflow, WorkflowNode};
 use reimagine_model_manager::{
     ModelDescriptor, ModelFormat, ModelManifest, ModelRoot, ModelSource, ModelSourceStatus,
 };
-use reimagine_nodes::{BUILTIN_CHECKPOINT_LOADER, BuiltinNodeCatalog};
+use reimagine_nodes::{BUILTIN_CHECKPOINT_LOADER, BUILTIN_KSAMPLER, BuiltinNodeCatalog};
 use reimagine_runtime::RunEventSink;
 use reimagine_runtime::{
     BoxedNodeExecutor, ExecutionOutput, NodeExecutionContext, NodeExecutor, NodeExecutorRegistry,
@@ -241,6 +241,43 @@ async fn health_returns_workspace_scope() {
     let json: Value = serde_json::from_slice(&bytes).unwrap();
     assert_eq!(json["status"], "ok");
     assert!(json["workspace"].as_str().unwrap().starts_with("ws-"));
+}
+
+#[tokio::test]
+async fn nodes_route_returns_workspace_catalog_projection() {
+    let (host, _runtime, recorder) = build_ready_host(manifest_with_missing_model(), "nodes").await;
+    let expected_len = host.list_node_defs().len();
+    let app = build_router().with_state(build_state(host, recorder));
+
+    let response = app
+        .oneshot(json_request("GET", "/nodes", None))
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+    let bytes = body_bytes(response.into_body()).await;
+    let json: Value = serde_json::from_slice(&bytes).unwrap();
+    let nodes = json["nodes"].as_array().expect("nodes array");
+    assert_eq!(nodes.len(), expected_len);
+
+    let ksampler = nodes
+        .iter()
+        .find(|node| node["type"] == BUILTIN_KSAMPLER)
+        .expect("builtin.ksampler is projected from app-host catalog");
+    assert_eq!(ksampler["displayName"], "KSampler");
+    assert!(
+        ksampler["inputs"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|slot| slot["id"] == "model")
+    );
+    assert!(
+        ksampler["parameters"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|param| param["id"] == "seed")
+    );
 }
 
 #[tokio::test]

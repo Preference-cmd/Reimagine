@@ -326,6 +326,7 @@ async fn run_workflow_handoff_completes_when_readiness_passes() {
     let RunWorkflowResult::Started {
         handle,
         initial_snapshot,
+        report: _,
     } = result
     else {
         panic!("expected Started, got {result:?}");

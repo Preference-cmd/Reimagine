@@ -65,6 +65,11 @@ impl RunWorkflowRequest {
 /// surface the diagnostics. `Started` carries the host-safe [`RunHandle`]
 /// and the initial [`RunSnapshot`]; it never exposes the runtime value
 /// store or backend tensor handles.
+///
+/// `Started` also carries the readiness `OperationReport` so the host
+/// can surface non-blocking warnings (for example, the catalog/executor
+/// orphan warnings produced by the alignment check). An empty report
+/// means the run is fully clean.
 #[derive(Debug, Clone)]
 pub enum RunWorkflowResult {
     Blocked {
@@ -73,6 +78,7 @@ pub enum RunWorkflowResult {
     Started {
         handle: RunHandle,
         initial_snapshot: RunSnapshot,
+        report: OperationReport,
     },
 }
 
@@ -125,6 +131,8 @@ impl WorkspaceHost {
             });
         };
 
+        let started_report = plan_result.report().clone();
+
         let plan = Arc::new(plan.clone());
         let handle = self.runtime_service().run(plan, run_inputs, options)?;
 
@@ -138,6 +146,7 @@ impl WorkspaceHost {
         Ok(RunWorkflowResult::Started {
             handle,
             initial_snapshot,
+            report: started_report,
         })
     }
 
@@ -150,13 +159,51 @@ impl WorkspaceHost {
             .model_service()
             .build_readiness_snapshot(workflow)
             .await?;
-        Ok(build_execution_plan(
+        let result = build_execution_plan(
             workflow,
-            &**self.node_catalog(),
+            self.node_catalog().as_ref(),
             target_selection,
             Some(&provider),
-        ))
+        );
+
+        // Catalog / executor alignment is a workspace bootstrap invariant
+        // and should always be checked, not only for workflows that
+        // referenced a specific node type. Orphan executors are surfaced
+        // as warnings; missing executors referenced by the workflow
+        // turn the run into a `Blocked` report so callers can fix the
+        // catalog before retrying.
+        let alignment = self.check_node_catalog_alignment();
+        let alignment_diagnostics = alignment.diagnostics();
+        if alignment_diagnostics.is_empty() {
+            return Ok(result);
+        }
+
+        let mut report = result.report().clone();
+        for diagnostic in alignment_diagnostics {
+            report.push_diagnostic(diagnostic);
+        }
+
+        let has_blocking = alignment
+            .missing_executors()
+            .iter()
+            .any(|id| workflow_uses_node_type(workflow, id));
+        if has_blocking {
+            return Ok(ExecutionPlanResult::new(None, report));
+        }
+
+        let plan = result.plan().cloned();
+        Ok(ExecutionPlanResult::new(plan, report))
     }
+}
+
+fn workflow_uses_node_type(
+    workflow: &Workflow,
+    type_id: &reimagine_core::model::NodeTypeId,
+) -> bool {
+    workflow
+        .nodes()
+        .iter()
+        .any(|node| node.type_id() == type_id)
 }
 
 /// Recover the [`RunId`] of a started run, if the host already holds a
