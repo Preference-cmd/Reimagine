@@ -393,10 +393,10 @@ InferenceBackend
 ```
 
 The V1 `RunResourceBackend` hook is a coarse run-lifecycle mechanism. It is not
-enough for long-term multi-backend resource coordination, and
-`release_runtime_value(value)` must not become the normal per-value resource
-control protocol. Future mechanism contracts should be capability-shaped and
-host-neutral, for example:
+enough for long-term multi-backend resource coordination, and the per-value
+`release_runtime_value(value)` hook should be removed rather than promoted into
+a resource-control protocol. Future mechanism contracts should be
+capability-shaped and host-neutral, for example:
 
 ```text
 BackendResourceMechanism
@@ -404,7 +404,6 @@ BackendResourceMechanism
   prepare_run(run_context)
   cleanup_run(run_id)
   prepare_value(handle, desired_residency)
-  release_run_values(run_id)
   apply_budget(resource_budget)
 ```
 
