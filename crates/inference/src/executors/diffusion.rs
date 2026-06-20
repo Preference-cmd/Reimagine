@@ -9,110 +9,24 @@
 //! [`DiffusionSampleResponse`] returns the latent handle without any
 //! `SlotId` mapping.
 //!
-//! Retention: the sampled `latent` is declared `RunScoped` during
-//! this migration, until single-use fan-out diagnostics are
-//! implemented in issue 05.
+//! Retention: the sampled `latent` is declared `RunScoped`. Runtime
+//! owns retention enforcement and value lifetime.
 
 use std::sync::Arc;
 
-use reimagine_core::model::{ParamValue, SlotId};
 use reimagine_inference_core::{
-    DiffusionSampleRequest, DiffusionSampleResponse, ExecutionConditioning, ExecutionOutput,
-    ExecutionValue, InferenceRuntime, RuntimeLatent, RuntimeModelHandle, SamplerName,
-    SchedulerName,
+    DiffusionSampleRequest, DiffusionSampleResponse, ExecutionOutput, InferenceRuntime,
+    SamplerName, SchedulerName,
 };
 
 use crate::error::into_executor_error;
 use crate::executor::{NodeExecutionContext, NodeExecutor, NodeExecutorError};
-
-fn required_input(
-    context: &NodeExecutionContext,
-    slot: &str,
-) -> Result<Arc<ExecutionValue>, NodeExecutorError> {
-    context
-        .inputs()
-        .get(&SlotId::new(slot))
-        .cloned()
-        .ok_or_else(|| NodeExecutorError::MissingInput {
-            slot_id: slot.to_string(),
-        })
-}
-
-fn required_param_seed(
-    context: &NodeExecutionContext,
-    slot: &str,
-) -> Result<u64, NodeExecutorError> {
-    match context.params().get(&SlotId::new(slot)) {
-        Some(ParamValue::Seed(v)) => Ok(*v),
-        Some(other) => Err(NodeExecutorError::Failed {
-            message: format!(
-                "param `{slot}` must be a seed, got {}",
-                param_kind_name(other)
-            ),
-        }),
-        None => Err(NodeExecutorError::MissingInput {
-            slot_id: slot.to_string(),
-        }),
-    }
-}
-
-fn required_param_i64(
-    context: &NodeExecutionContext,
-    slot: &str,
-) -> Result<i64, NodeExecutorError> {
-    match context.params().get(&SlotId::new(slot)) {
-        Some(ParamValue::Integer(v)) => Ok(*v),
-        Some(other) => Err(NodeExecutorError::Failed {
-            message: format!(
-                "param `{slot}` must be an integer, got {}",
-                param_kind_name(other)
-            ),
-        }),
-        None => Err(NodeExecutorError::MissingInput {
-            slot_id: slot.to_string(),
-        }),
-    }
-}
-
-fn required_param_f32(
-    context: &NodeExecutionContext,
-    slot: &str,
-) -> Result<f32, NodeExecutorError> {
-    match context.params().get(&SlotId::new(slot)) {
-        Some(ParamValue::Float(v)) => Ok(*v as f32),
-        Some(other) => Err(NodeExecutorError::Failed {
-            message: format!(
-                "param `{slot}` must be a float, got {}",
-                param_kind_name(other)
-            ),
-        }),
-        None => Err(NodeExecutorError::MissingInput {
-            slot_id: slot.to_string(),
-        }),
-    }
-}
-
-fn optional_param_string(context: &NodeExecutionContext, slot: &str) -> Option<String> {
-    match context.params().get(&SlotId::new(slot)) {
-        Some(ParamValue::String(s)) => Some(s.clone()),
-        _ => None,
-    }
-}
-
-fn param_kind_name(value: &ParamValue) -> &'static str {
-    match value {
-        ParamValue::String(_) => "string",
-        ParamValue::Text(_) => "text",
-        ParamValue::Integer(_) => "integer",
-        ParamValue::Float(_) => "float",
-        ParamValue::Bool(_) => "bool",
-        ParamValue::Seed(_) => "seed",
-        ParamValue::Select(_) => "select",
-        ParamValue::Path(_) => "path",
-        ParamValue::ModelRef(_) => "model_ref",
-        ParamValue::Null => "null",
-    }
-}
+use crate::executors::common::{
+    optional_correlation_id, optional_string_param, required_conditioning_input,
+    required_f32_param, required_i64_param, required_latent_input, required_model_input,
+    required_seed_param,
+};
+use crate::executors::validation::sampled_latent_output;
 
 fn select_sampler(name: Option<String>) -> SamplerName {
     match name.as_deref() {
@@ -127,38 +41,6 @@ fn select_scheduler(name: Option<String>) -> SchedulerName {
         Some("normal") => SchedulerName::Normal,
         Some(other) => SchedulerName::Other(other.to_string()),
         None => SchedulerName::Normal,
-    }
-}
-
-fn extract_model_handle(
-    value: Arc<ExecutionValue>,
-) -> Result<RuntimeModelHandle, NodeExecutorError> {
-    match value.as_ref() {
-        ExecutionValue::Model(handle) => Ok(handle.clone()),
-        _ => Err(NodeExecutorError::Failed {
-            message: "diffusion.sample `model` input must be a Model handle".to_string(),
-        }),
-    }
-}
-
-fn extract_conditioning(
-    value: Arc<ExecutionValue>,
-) -> Result<ExecutionConditioning, NodeExecutorError> {
-    match value.as_ref() {
-        ExecutionValue::Conditioning(handle) => Ok(handle.clone()),
-        _ => Err(NodeExecutorError::Failed {
-            message: "diffusion.sample conditioning input must be a Conditioning handle"
-                .to_string(),
-        }),
-    }
-}
-
-fn extract_latent(value: Arc<ExecutionValue>) -> Result<RuntimeLatent, NodeExecutorError> {
-    match value.as_ref() {
-        ExecutionValue::Latent(handle) => Ok(handle.clone()),
-        _ => Err(NodeExecutorError::Failed {
-            message: "diffusion.sample `latent` input must be a Latent handle".to_string(),
-        }),
     }
 }
 
@@ -179,24 +61,23 @@ impl NodeExecutor for KSamplerExecutor {
         &self,
         context: NodeExecutionContext,
     ) -> Result<Vec<ExecutionOutput>, NodeExecutorError> {
-        let model_handle = extract_model_handle(required_input(&context, "model")?)?;
-        let positive = extract_conditioning(required_input(&context, "positive")?)?;
-        let negative = extract_conditioning(required_input(&context, "negative")?)?;
-        let latent = extract_latent(required_input(&context, "latent")?)?;
+        let model_handle = required_model_input(&context, "model", "diffusion.sample")?;
+        let positive = required_conditioning_input(&context, "positive", "diffusion.sample")?;
+        let negative = required_conditioning_input(&context, "negative", "diffusion.sample")?;
+        let latent = required_latent_input(&context, "latent", "diffusion.sample")?;
 
-        let seed = required_param_seed(&context, "seed")?;
-        let steps_i64 = required_param_i64(&context, "steps")?;
+        let seed = required_seed_param(&context, "seed")?;
+        let steps_i64 = required_i64_param(&context, "steps")?;
         let steps: u32 = steps_i64
             .try_into()
             .map_err(|_| NodeExecutorError::Failed {
                 message: format!("param `steps` must be a non-negative u32, got {steps_i64}"),
             })?;
-        let cfg = required_param_f32(&context, "cfg")?;
-        let sampler = select_sampler(optional_param_string(&context, "sampler"));
-        let scheduler = select_scheduler(optional_param_string(&context, "scheduler"));
-        let denoise = required_param_f32(&context, "denoise")?;
+        let cfg = required_f32_param(&context, "cfg")?;
+        let sampler = select_sampler(optional_string_param(&context, "sampler"));
+        let scheduler = select_scheduler(optional_string_param(&context, "scheduler"));
+        let denoise = required_f32_param(&context, "denoise")?;
 
-        let correlation_id = context.correlation_id().cloned();
         let mut request = DiffusionSampleRequest::new(
             model_handle,
             positive,
@@ -213,7 +94,7 @@ impl NodeExecutor for KSamplerExecutor {
             context.workflow_version(),
             context.node_id().clone(),
         );
-        if let Some(cid) = correlation_id {
+        if let Some(cid) = optional_correlation_id(&context) {
             request = request.with_correlation_id(cid);
         }
 
@@ -223,9 +104,6 @@ impl NodeExecutor for KSamplerExecutor {
             .await
             .map_err(into_executor_error)?;
 
-        Ok(vec![ExecutionOutput::run_scoped(
-            SlotId::new("latent"),
-            Arc::new(ExecutionValue::Latent(response.into_latent())),
-        )])
+        Ok(vec![sampled_latent_output(&response)])
     }
 }

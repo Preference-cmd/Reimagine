@@ -7,34 +7,18 @@
 //! [`CreateEmptyLatentResponse`] returns the latent handle without
 //! any `SlotId` mapping.
 //!
-//! Retention: the empty latent is declared `RunScoped` during this
-//! migration, until single-use fan-out diagnostics are implemented in
-//! issue 05.
+//! Retention: the empty latent is declared `RunScoped`. Runtime owns
+//! retention enforcement and value lifetime.
 
-use std::sync::Arc;
-
-use reimagine_core::model::{ParamValue, SlotId};
 use reimagine_inference_core::{
-    CreateEmptyLatentRequest, CreateEmptyLatentResponse, ExecutionOutput, ExecutionValue,
-    InferenceRuntime,
+    CreateEmptyLatentRequest, CreateEmptyLatentResponse, ExecutionOutput, InferenceRuntime,
 };
 
 use crate::error::into_executor_error;
 use crate::executor::{NodeExecutionContext, NodeExecutor, NodeExecutorError};
-
-fn extract_u32(context: &NodeExecutionContext, slot: &str) -> Result<u32, NodeExecutorError> {
-    match context.params().get(&SlotId::new(slot)) {
-        Some(ParamValue::Integer(v)) => u32::try_from(*v).map_err(|_| NodeExecutorError::Failed {
-            message: format!("param `{slot}` must fit in u32, got {v}"),
-        }),
-        Some(_) => Err(NodeExecutorError::Failed {
-            message: format!("param `{slot}` must be an integer"),
-        }),
-        None => Err(NodeExecutorError::MissingInput {
-            slot_id: slot.to_string(),
-        }),
-    }
-}
+use crate::executors::common::{optional_correlation_id, required_u32_param};
+use crate::executors::validation::latent_output;
+use std::sync::Arc;
 
 /// `builtin.empty_latent_image` executor.
 pub struct EmptyLatentImageExecutor {
@@ -53,11 +37,10 @@ impl NodeExecutor for EmptyLatentImageExecutor {
         &self,
         context: NodeExecutionContext,
     ) -> Result<Vec<ExecutionOutput>, NodeExecutorError> {
-        let width = extract_u32(&context, "width")?;
-        let height = extract_u32(&context, "height")?;
-        let batch_size = extract_u32(&context, "batch_size")?;
+        let width = required_u32_param(&context, "width")?;
+        let height = required_u32_param(&context, "height")?;
+        let batch_size = required_u32_param(&context, "batch_size")?;
 
-        let correlation_id = context.correlation_id().cloned();
         let mut request = CreateEmptyLatentRequest::new(
             width,
             height,
@@ -67,7 +50,7 @@ impl NodeExecutor for EmptyLatentImageExecutor {
             context.workflow_version(),
             context.node_id().clone(),
         );
-        if let Some(cid) = correlation_id {
+        if let Some(cid) = optional_correlation_id(&context) {
             request = request.with_correlation_id(cid);
         }
 
@@ -77,9 +60,6 @@ impl NodeExecutor for EmptyLatentImageExecutor {
             .await
             .map_err(into_executor_error)?;
 
-        Ok(vec![ExecutionOutput::run_scoped(
-            SlotId::new("latent"),
-            Arc::new(ExecutionValue::Latent(response.into_latent())),
-        )])
+        Ok(vec![latent_output(&response)])
     }
 }

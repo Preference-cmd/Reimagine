@@ -9,41 +9,19 @@
 //! without any `SlotId` mapping.
 //!
 //! Retention: the conditioning output is declared `RunScoped`. It is
-//! typically consumed by the ksampler in the same run and then can be
-//! released. Single-use fan-out diagnostics are owned by issue 05.
+//! typically consumed by the ksampler in the same run. Runtime owns
+//! retention enforcement and value lifetime.
 
 use std::sync::Arc;
 
-use reimagine_core::model::SlotId;
 use reimagine_inference_core::{
-    ExecutionOutput, ExecutionValue, InferenceRuntime, RuntimeClipHandle, TextEncodeRequest,
-    TextEncodeResponse,
+    ExecutionOutput, InferenceRuntime, TextEncodeRequest, TextEncodeResponse,
 };
 
 use crate::error::into_executor_error;
 use crate::executor::{NodeExecutionContext, NodeExecutor, NodeExecutorError};
-
-fn required_input(
-    context: &NodeExecutionContext,
-    slot: &str,
-) -> Result<Arc<ExecutionValue>, NodeExecutorError> {
-    context
-        .inputs()
-        .get(&SlotId::new(slot))
-        .cloned()
-        .ok_or_else(|| NodeExecutorError::MissingInput {
-            slot_id: slot.to_string(),
-        })
-}
-
-fn extract_clip(value: Arc<ExecutionValue>) -> Result<RuntimeClipHandle, NodeExecutorError> {
-    match value.as_ref() {
-        ExecutionValue::Clip(handle) => Ok(handle.clone()),
-        _ => Err(NodeExecutorError::Failed {
-            message: "text.encode `clip` input must be a Clip handle".to_string(),
-        }),
-    }
-}
+use crate::executors::common::{optional_correlation_id, required_clip_input, required_input};
+use crate::executors::validation::conditioning_output;
 
 /// `builtin.clip_text_encode` executor.
 pub struct ClipTextEncodeExecutor {
@@ -62,10 +40,9 @@ impl NodeExecutor for ClipTextEncodeExecutor {
         &self,
         context: NodeExecutionContext,
     ) -> Result<Vec<ExecutionOutput>, NodeExecutorError> {
-        let clip = extract_clip(required_input(&context, "clip")?)?;
+        let clip = required_clip_input(&context, "clip", "text.encode")?;
         let text = required_input(&context, "text")?;
 
-        let correlation_id = context.correlation_id().cloned();
         let mut request = TextEncodeRequest::new(
             clip,
             text,
@@ -74,7 +51,7 @@ impl NodeExecutor for ClipTextEncodeExecutor {
             context.workflow_version(),
             context.node_id().clone(),
         );
-        if let Some(cid) = correlation_id {
+        if let Some(cid) = optional_correlation_id(&context) {
             request = request.with_correlation_id(cid);
         }
 
@@ -84,9 +61,6 @@ impl NodeExecutor for ClipTextEncodeExecutor {
             .await
             .map_err(into_executor_error)?;
 
-        Ok(vec![ExecutionOutput::run_scoped(
-            SlotId::new("conditioning"),
-            Arc::new(ExecutionValue::Conditioning(response.into_conditioning())),
-        )])
+        Ok(vec![conditioning_output(&response)])
     }
 }

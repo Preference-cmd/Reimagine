@@ -20,56 +20,20 @@
 
 use std::sync::Arc;
 
-use reimagine_core::model::{ArtifactRef, ParamValue, SlotId};
+use reimagine_core::model::{ArtifactRef, SlotId};
 use reimagine_inference_core::{
-    ExecutionOutput, ExecutionValue, ImagePreviewRequest, ImagePreviewResponse, ImageSaveRequest,
-    ImageSaveResponse, InferenceRuntime, LatentDecodeRequest, LatentDecodeResponse, RuntimeImage,
-    RuntimeLatent, RuntimeVaeHandle,
+    ExecutionOutput, ImagePreviewRequest, ImagePreviewResponse, ImageSaveRequest,
+    ImageSaveResponse, InferenceRuntime, LatentDecodeRequest, LatentDecodeResponse,
 };
 
 use crate::artifact_publisher::ArtifactEventKind;
 use crate::error::into_executor_error;
 use crate::executor::{NodeExecutionContext, NodeExecutor, NodeExecutorError};
-
-fn required_input(
-    context: &NodeExecutionContext,
-    slot: &str,
-) -> Result<Arc<ExecutionValue>, NodeExecutorError> {
-    context
-        .inputs()
-        .get(&SlotId::new(slot))
-        .cloned()
-        .ok_or_else(|| NodeExecutorError::MissingInput {
-            slot_id: slot.to_string(),
-        })
-}
-
-fn extract_vae(value: Arc<ExecutionValue>) -> Result<RuntimeVaeHandle, NodeExecutorError> {
-    match value.as_ref() {
-        ExecutionValue::Vae(handle) => Ok(handle.clone()),
-        _ => Err(NodeExecutorError::Failed {
-            message: "latent.decode `vae` input must be a Vae handle".to_string(),
-        }),
-    }
-}
-
-fn extract_latent(value: Arc<ExecutionValue>) -> Result<RuntimeLatent, NodeExecutorError> {
-    match value.as_ref() {
-        ExecutionValue::Latent(handle) => Ok(handle.clone()),
-        _ => Err(NodeExecutorError::Failed {
-            message: "latent.decode `latent` input must be a Latent handle".to_string(),
-        }),
-    }
-}
-
-fn extract_image(value: Arc<ExecutionValue>) -> Result<RuntimeImage, NodeExecutorError> {
-    match value.as_ref() {
-        ExecutionValue::Image(handle) => Ok(handle.clone()),
-        _ => Err(NodeExecutorError::Failed {
-            message: "image.save/image.preview `image` input must be an Image handle".to_string(),
-        }),
-    }
-}
+use crate::executors::common::{
+    optional_correlation_id, optional_string_param, required_image_input, required_latent_input,
+    required_vae_input,
+};
+use crate::executors::validation::image_output;
 
 /// `builtin.vae_decode` executor.
 pub struct VaeDecodeExecutor {
@@ -88,10 +52,9 @@ impl NodeExecutor for VaeDecodeExecutor {
         &self,
         context: NodeExecutionContext,
     ) -> Result<Vec<ExecutionOutput>, NodeExecutorError> {
-        let vae = extract_vae(required_input(&context, "vae")?)?;
-        let latent = extract_latent(required_input(&context, "latent")?)?;
+        let vae = required_vae_input(&context, "vae", "latent.decode")?;
+        let latent = required_latent_input(&context, "latent", "latent.decode")?;
 
-        let correlation_id = context.correlation_id().cloned();
         let mut request = LatentDecodeRequest::new(
             vae,
             latent,
@@ -100,7 +63,7 @@ impl NodeExecutor for VaeDecodeExecutor {
             context.workflow_version(),
             context.node_id().clone(),
         );
-        if let Some(cid) = correlation_id {
+        if let Some(cid) = optional_correlation_id(&context) {
             request = request.with_correlation_id(cid);
         }
 
@@ -110,10 +73,7 @@ impl NodeExecutor for VaeDecodeExecutor {
             .await
             .map_err(into_executor_error)?;
 
-        Ok(vec![ExecutionOutput::run_scoped(
-            SlotId::new("image"),
-            Arc::new(ExecutionValue::Image(response.into_image())),
-        )])
+        Ok(vec![image_output(&response)])
     }
 }
 
@@ -134,7 +94,7 @@ impl NodeExecutor for SaveImageExecutor {
         &self,
         context: NodeExecutionContext,
     ) -> Result<Vec<ExecutionOutput>, NodeExecutorError> {
-        let image = extract_image(required_input(&context, "image")?)?;
+        let image = required_image_input(&context, "image", "image.save/image.preview")?;
 
         let mut request = ImageSaveRequest::new(
             image,
@@ -143,12 +103,10 @@ impl NodeExecutor for SaveImageExecutor {
             context.workflow_version(),
             context.node_id().clone(),
         );
-        if let Some(prefix) = context.params().get(&SlotId::new("filename_prefix")) {
-            if let ParamValue::String(s) = prefix {
-                request = request.with_filename_prefix(s.clone());
-            }
+        if let Some(prefix) = optional_string_param(&context, "filename_prefix") {
+            request = request.with_filename_prefix(prefix);
         }
-        if let Some(cid) = context.correlation_id().cloned() {
+        if let Some(cid) = optional_correlation_id(&context) {
             request = request.with_correlation_id(cid);
         }
 
@@ -186,7 +144,7 @@ impl NodeExecutor for PreviewImageExecutor {
         &self,
         context: NodeExecutionContext,
     ) -> Result<Vec<ExecutionOutput>, NodeExecutorError> {
-        let image = extract_image(required_input(&context, "image")?)?;
+        let image = required_image_input(&context, "image", "image.save/image.preview")?;
 
         let mut request = ImagePreviewRequest::new(
             image,
@@ -195,7 +153,7 @@ impl NodeExecutor for PreviewImageExecutor {
             context.workflow_version(),
             context.node_id().clone(),
         );
-        if let Some(cid) = context.correlation_id().cloned() {
+        if let Some(cid) = optional_correlation_id(&context) {
             request = request.with_correlation_id(cid);
         }
 

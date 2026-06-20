@@ -13,18 +13,17 @@
 //!
 //! Retention: model/clip/vae handles are declared `WorkspaceScoped`
 //! because they back the rest of the workflow and should outlive any
-//! single run. Runtime stores the retention for issue 05 to act on.
-
-use std::sync::Arc;
+//! single run. Runtime owns retention enforcement and value lifetime.
 
 use reimagine_core::model::{ModelRef, ParamValue, SlotId};
 use reimagine_inference_core::{
-    ExecutionOutput, ExecutionValue, InferenceRuntime, LoadBundleRequest, LoadBundleResponse,
-    ModelResolver,
+    ExecutionOutput, InferenceRuntime, LoadBundleRequest, LoadBundleResponse, ModelResolver,
 };
 
 use crate::error::into_executor_error;
 use crate::executor::{NodeExecutionContext, NodeExecutor, NodeExecutorError};
+use crate::executors::validation::load_bundle_outputs;
+use std::sync::Arc;
 
 /// `builtin.checkpoint_loader` executor.
 pub struct CheckpointLoaderExecutor {
@@ -80,19 +79,6 @@ impl NodeExecutor for CheckpointLoaderExecutor {
             .await
             .map_err(into_executor_error)?;
 
-        Ok(vec![
-            ExecutionOutput::workspace_scoped(
-                SlotId::new("model"),
-                Arc::new(ExecutionValue::Model(response.model().clone())),
-            ),
-            ExecutionOutput::workspace_scoped(
-                SlotId::new("clip"),
-                Arc::new(ExecutionValue::Clip(response.clip().clone())),
-            ),
-            ExecutionOutput::workspace_scoped(
-                SlotId::new("vae"),
-                Arc::new(ExecutionValue::Vae(response.vae().clone())),
-            ),
-        ])
+        Ok(load_bundle_outputs(&response))
     }
 }

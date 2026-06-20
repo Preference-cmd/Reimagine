@@ -8,9 +8,11 @@
 //! These are *adapters*, not backend implementations. They contain no
 //! backend-specific behavior.
 
+pub mod common;
 pub mod diffusion;
 pub mod image;
 pub mod latent;
 pub mod model;
 pub mod string;
 pub mod text;
+pub mod validation;
