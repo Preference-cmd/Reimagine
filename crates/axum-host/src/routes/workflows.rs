@@ -121,11 +121,17 @@ pub async fn run(
         RunWorkflowResult::Started {
             handle,
             initial_snapshot,
+            report,
         } => RunWorkflowResponse::Started {
             run_id: handle.run_id().clone(),
             workflow_id: handle.workflow_id().clone(),
             workflow_version: handle.workflow_version(),
             initial_snapshot: initial_snapshot.into(),
+            diagnostics: report
+                .diagnostics()
+                .iter()
+                .map(|d| d.clone().into())
+                .collect(),
         },
         RunWorkflowResult::Blocked { report } => RunWorkflowResponse::Blocked {
             workflow_id,

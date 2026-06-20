@@ -146,6 +146,15 @@ impl NodeExecutorRegistry {
         self.executors.get(type_id)
     }
 
+    /// Borrow an iterator over every registered executor type id.
+    ///
+    /// This is for catalog/executor alignment reporting. The registry
+    /// does not expose node metadata; it only enumerates the set of
+    /// `NodeTypeId` values it knows how to execute.
+    pub fn iter_type_ids(&self) -> impl Iterator<Item = &NodeTypeId> {
+        self.executors.keys()
+    }
+
     /// Number of registered executors.
     pub fn len(&self) -> usize {
         self.executors.len()

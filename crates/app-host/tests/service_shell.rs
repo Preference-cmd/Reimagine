@@ -7,14 +7,14 @@ use reimagine_core::command::{
 };
 use reimagine_core::event::Timestamp;
 use reimagine_core::model::{
-    CommandBatchId, ModelId, ModelRef, ModelRole, ModelSeries, ModelVariant, NodeId, NodeTypeId,
-    ParamValue, SlotId, WorkflowVersion,
+    CommandBatchId, ModelId, ModelRef, ModelRole, ModelSeries, ModelVariant, NodeCatalog, NodeId,
+    NodeTypeId, ParamValue, SlotId, WorkflowVersion,
 };
 use reimagine_core::workflow::Workflow;
 use reimagine_model_manager::{
     ModelDescriptor, ModelFormat, ModelManifest, ModelRoot, ModelSource, ModelSourceStatus,
 };
-use reimagine_nodes::{BUILTIN_STRING, BuiltinNodeCatalog};
+use reimagine_nodes::{BUILTIN_CHECKPOINT_LOADER, BUILTIN_STRING, BuiltinNodeCatalog};
 
 #[test]
 fn app_host_owns_single_workspace_arc() {
@@ -150,6 +150,86 @@ fn agent_service_creates_workspace_scoped_sessions() {
     );
 }
 
+#[test]
+fn workspace_host_exposes_v1_builtin_catalog_via_host_neutral_helpers() {
+    let workspace =
+        WorkspaceHost::with_defaults(WorkspaceScope::new("ws-catalog"), temp_dir("catalog"));
+    let builtin = workspace.builtin_node_catalog();
+    assert_eq!(builtin.len(), BuiltinNodeCatalog::v1().len());
+
+    let defs = workspace.list_node_defs();
+    assert_eq!(defs.len(), builtin.len());
+    let string_def = workspace
+        .find_node_def(&NodeTypeId::new(BUILTIN_STRING))
+        .expect("builtin.string should be exposed");
+    assert_eq!(string_def.type_id().as_str(), BUILTIN_STRING);
+
+    assert!(
+        workspace
+            .find_node_def(&NodeTypeId::new("builtin.does_not_exist"))
+            .is_none()
+    );
+
+    // Catalog must be a `NodeCatalog` so core validation and readiness
+    // can consume it through the host service.
+    let checkpoint_def = workspace
+        .node_catalog()
+        .get(&NodeTypeId::new(BUILTIN_CHECKPOINT_LOADER))
+        .expect("checkpoint loader should be present");
+    assert_eq!(checkpoint_def.type_id().as_str(), BUILTIN_CHECKPOINT_LOADER);
+}
+
+#[test]
+fn workspace_host_alignment_is_clean_for_v1_default_composition() {
+    let workspace =
+        WorkspaceHost::with_defaults(WorkspaceScope::new("ws-aligned"), temp_dir("aligned"));
+    let report = workspace.check_node_catalog_alignment();
+    assert!(
+        report.is_aligned(),
+        "V1 default composition should be fully aligned; missing={:?} orphan={:?}",
+        report.missing_executors(),
+        report.orphan_executors()
+    );
+    assert!(report.diagnostics().is_empty());
+}
+
+#[test]
+fn host_neutral_catalog_drives_workflow_validation() {
+    // Locks in that the host-neutral `NodeCatalogService` exposed by
+    // `WorkspaceHost` is the same catalog the readiness/validation
+    // path consumes. This prevents accidental drift between the
+    // surface UI/Tauri/Axum/Agent read from and the surface the
+    // workflow validation reads from.
+    let workspace = WorkspaceHost::with_defaults(
+        WorkspaceScope::new("ws-host-catalog"),
+        temp_dir("host-catalog"),
+    );
+    let service = workspace.workflow_service().clone();
+    let workflow_id =
+        service.register_workflow(Workflow::new("wf-host-catalog", WorkflowVersion::new(0)));
+
+    let batch = add_string_node_batch(WorkflowVersion::new(0), "hello");
+    let preview = service
+        .preview_batch(&workflow_id, workspace.node_catalog().as_ref(), batch)
+        .expect("preview should succeed through host-neutral catalog");
+    assert_eq!(preview.status(), CommandResultStatus::Applied);
+
+    // `find_node_def` and `node_catalog().get(...)` must agree: both
+    // go through the same catalog.
+    let via_helper = workspace
+        .find_node_def(&NodeTypeId::new(BUILTIN_STRING))
+        .expect("builtin.string should be discoverable via host helper");
+    let via_trait = workspace
+        .node_catalog()
+        .get(&NodeTypeId::new(BUILTIN_STRING))
+        .expect("builtin.string should be discoverable via NodeCatalog trait");
+    assert_eq!(via_helper.type_id().as_str(), via_trait.type_id().as_str());
+    assert_eq!(
+        via_helper.input_slots().len(),
+        via_trait.input_slots().len()
+    );
+}
+
 fn add_string_node_batch(base_version: WorkflowVersion, value: &str) -> CommandBatch {
     CommandBatch::new(
         CommandBatchId::new(format!("batch-{base_version}")),
@@ -172,5 +252,6 @@ fn temp_dir(prefix: &str) -> std::path::PathBuf {
         .duration_since(std::time::UNIX_EPOCH)
         .expect("system clock before unix epoch")
         .as_nanos();
-    std::env::temp_dir().join(format!("reimagine-app-host-{prefix}-{nonce}"))
+    let tid = std::thread::current().id();
+    std::env::temp_dir().join(format!("reimagine-app-host-{prefix}-{nonce:?}-{tid:?}"))
 }

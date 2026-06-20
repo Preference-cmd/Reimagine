@@ -95,12 +95,65 @@ tools, validation/readiness flows, and import adapters. `app-host` may project
 or serialize the catalog for clients, but it must not maintain a second copy of
 node slots, params, output rules, or aliases.
 
+`app-host` exposes the catalog through a single `NodeCatalogService`. The
+service is the host-neutral surface for `list_node_defs` / `find_node_def`
+operations, implements `core::model::NodeCatalog` so core validation and
+readiness can consume it through the host, and owns the catalog/executor
+alignment check. UI, Tauri, Axum, and Agent tools must read node metadata
+through this service; they must not derive `NodeDef` data from any other
+source.
+
 `NodeExecutorRegistry` is assembled alongside the catalog but serves a
 different purpose: it maps catalog `NodeTypeId` values to execution behavior.
-If an executor exists for a node type that is absent from the catalog, or a
-catalog entry lacks an executor for a runnable workflow path, app-host should
-surface a bootstrap or readiness diagnostic rather than treating the executor
-as a node definition.
+The registry is not a node metadata source and is not iterated as such.
+
+`NodeCatalogService::check_alignment(&registry)` produces a
+`NodeCatalogAlignment` report with two collections:
+
+```text
+NodeCatalogAlignment
+  backend: BackendSelection
+  missing_executors: Vec<NodeTypeId>  # catalog entries with no registered executor
+  orphan_executors:  Vec<NodeTypeId>  # executors with no catalog entry
+```
+
+The report converts into a stream of host-facing `Diagnostic` values:
+
+```text
+APP_HOST/NODE_CATALOG_MISSING_EXECUTOR  Error    — node type is in the catalog
+                                                       but has no executor for the
+                                                       selected backend
+APP_HOST/NODE_CATALOG_ORPHAN_EXECUTOR   Warning  — executor is registered for the
+                                                       selected backend but has no
+                                                       catalog entry
+```
+
+The alignment check is wired into `WorkspaceHost::build_plan` and the
+`diagnostics.for_workflow` Agent tool. A missing executor that the workflow
+references blocks the run; orphan executors surface as warnings so users
+can fix drift without breaking currently-runnable workflows. Diagnostics
+reference the `NodeTypeId` and the selected backend profile and do not
+leak backend internals.
+
+The readiness `OperationReport` (which now carries the alignment
+diagnostics) is returned to host adapters through both
+`RunWorkflowResult::Started` and `RunWorkflowResult::Blocked`. `Started`
+typically carries an empty or warning-only report; `Blocked` carries
+error-severity diagnostics that prevented the run. The Axum DTO mirrors
+this with a `diagnostics` field on the `Started` variant so HTTP clients
+can surface non-blocking drift.
+
+Axum exposes the same catalog as `GET /nodes`, projecting
+`WorkspaceHost::list_node_defs()` into the frontend-friendly node definition
+DTO. This route is an adapter projection, not a second catalog. The UI may use
+it as the development and HTTP source for node metadata; it must not keep a
+parallel hard-coded list of built-in node slots, params, or outputs.
+
+The diagnostic target domain for catalog/executor alignment diagnostics
+is `"app-host.node_catalog"`, scoped to the affected `NodeTypeId`. This
+is the first dotted sub-domain style in app-host diagnostics; the
+dotted convention lets UI and Agent consumers route or de-duplicate
+by `app-host.<subsystem>` without parsing the message.
 
 ## Backend Selection
 

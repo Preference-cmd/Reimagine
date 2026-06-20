@@ -3,10 +3,12 @@ use std::sync::Arc;
 
 use reimagine_agent::{AgentToolRegistry, WorkspaceScope};
 use reimagine_config::{AppConfig, AppPaths, ConfigDocument, InferenceBackendConfig};
+use reimagine_core::model::NodeDef;
 use reimagine_nodes::BuiltinNodeCatalog;
 use reimagine_runtime::{BoxedRunEventSink, RuntimeService, VecRunEventSink};
 
 use crate::inference::compose::compose_inference_runtime;
+use crate::node_catalog::{NodeCatalogAlignment, NodeCatalogService};
 use crate::services::WorkspaceServices;
 use crate::tools::register_app_tools;
 use crate::{AgentService, AppHostError, BackendSelection, ModelService, WorkflowService};
@@ -20,7 +22,8 @@ pub struct WorkspaceHost {
     model_service: Arc<ModelService>,
     runtime_service: Arc<RuntimeService>,
     agent_service: Arc<AgentService>,
-    node_catalog: Arc<BuiltinNodeCatalog>,
+    node_catalog: Arc<NodeCatalogService>,
+    builtin_catalog: Arc<BuiltinNodeCatalog>,
     services: Arc<WorkspaceServices>,
 }
 
@@ -30,11 +33,16 @@ impl WorkspaceHost {
         config: AppConfig,
         backend_config: InferenceBackendConfig,
         runtime_service: Arc<RuntimeService>,
-        node_catalog: Arc<BuiltinNodeCatalog>,
+        builtin_catalog: Arc<BuiltinNodeCatalog>,
     ) -> Self {
         let config = Arc::new(config);
         let workflow_service = Arc::new(WorkflowService::new(config.paths().clone()));
         let model_service = Arc::new(ModelService::new(config.paths().clone()));
+        let backend = BackendSelection::from(backend_config.backend);
+        let node_catalog = Arc::new(NodeCatalogService::new(
+            Arc::clone(&builtin_catalog),
+            backend,
+        ));
         let services = Arc::new(WorkspaceServices::new(
             workspace_scope.clone(),
             Arc::clone(&config),
@@ -59,6 +67,7 @@ impl WorkspaceHost {
             runtime_service,
             agent_service,
             node_catalog,
+            builtin_catalog,
             services,
         }
     }
@@ -139,13 +148,13 @@ impl WorkspaceHost {
             event_sink,
             Arc::new(reimagine_runtime::SystemClock),
         ));
-        let node_catalog = Arc::new(BuiltinNodeCatalog::v1());
+        let builtin_catalog = Arc::new(BuiltinNodeCatalog::v1());
         Self::new(
             workspace_scope,
             config,
             backend_config,
             runtime_service,
-            node_catalog,
+            builtin_catalog,
         )
     }
 
@@ -170,8 +179,36 @@ impl WorkspaceHost {
     pub fn agent_service(&self) -> &Arc<AgentService> {
         &self.agent_service
     }
-    pub fn node_catalog(&self) -> &Arc<BuiltinNodeCatalog> {
+    pub fn node_catalog(&self) -> &Arc<NodeCatalogService> {
         &self.node_catalog
+    }
+
+    /// Borrow the underlying built-in catalog handle.
+    ///
+    /// Most host adapters should use [`Self::node_catalog`] and the
+    /// `NodeCatalogService` host-neutral list/fetch helpers instead of
+    /// reading the catalog directly. This accessor is kept for callers
+    /// (such as tests) that need direct access to the V1
+    /// [`BuiltinNodeCatalog`].
+    pub fn builtin_node_catalog(&self) -> &Arc<BuiltinNodeCatalog> {
+        &self.builtin_catalog
+    }
+
+    /// List every `NodeDef` exposed by the workspace catalog.
+    pub fn list_node_defs(&self) -> Vec<NodeDef> {
+        self.node_catalog.list_node_defs()
+    }
+
+    /// Fetch a single `NodeDef` by `NodeTypeId` from the workspace catalog.
+    pub fn find_node_def(&self, type_id: &reimagine_core::model::NodeTypeId) -> Option<NodeDef> {
+        self.node_catalog.find_node_def(type_id)
+    }
+
+    /// Compute the alignment report between the workspace catalog and
+    /// the runtime executor registry.
+    pub fn check_node_catalog_alignment(&self) -> NodeCatalogAlignment {
+        self.node_catalog
+            .check_alignment(self.runtime_service.registry())
     }
     pub fn services(&self) -> &Arc<WorkspaceServices> {
         &self.services
