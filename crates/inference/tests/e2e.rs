@@ -26,9 +26,9 @@ use reimagine_inference::{
     LoadBundleResponse, ModelFormat, ModelResolver, RejectAllBridgePolicy, ResolvedInferenceModel,
     TextEncodeRequest, TextEncodeResponse, register_builtin_inference_executors,
 };
-use reimagine_runtime::{
-    CancellationToken, NodeExecutionContext, NodeExecutorError, NodeExecutorRegistry, NodeInputs,
-    VecRunEventSink,
+use reimagine_inference::{
+    NodeExecutionContext, NodeExecutorError, NodeExecutorRegistry, NodeInputs, NodeParams,
+    NoopNodeCancellation, RecordingArtifactPublisher,
 };
 
 // ── Fake model resolver ────────────────────────────────────────────
@@ -119,8 +119,12 @@ fn make_context(
     node_id: &str,
     type_id: &str,
     inputs: NodeInputs,
-    params: reimagine_runtime::NodeParams,
+    params: NodeParams,
 ) -> NodeExecutionContext {
+    let publisher: Arc<dyn reimagine_inference::ArtifactPublisher> =
+        Arc::new(RecordingArtifactPublisher::new());
+    let cancellation: Arc<dyn reimagine_inference::NodeCancellation> =
+        Arc::new(NoopNodeCancellation::new());
     NodeExecutionContext::new(
         reimagine_core::model::RunId::new("run-test"),
         reimagine_core::model::WorkflowId::new("wf-test"),
@@ -130,72 +134,36 @@ fn make_context(
         reimagine_core::model::NodeTypeId::new(type_id),
         inputs,
         params,
-        make_artifact_capability(reimagine_core::model::NodeId::new(node_id)),
-        CancellationToken::new(),
+        publisher,
+        cancellation,
         reimagine_core::event::Timestamp::new("2026-06-13T00:00:00Z"),
     )
 }
 
-fn make_context_with_artifact_store(
+fn make_context_with_recording(
     node_id: &str,
     type_id: &str,
     inputs: NodeInputs,
-    params: reimagine_runtime::NodeParams,
-) -> (
-    NodeExecutionContext,
-    Arc<tokio::sync::Mutex<reimagine_runtime::ArtifactStore>>,
-) {
-    let node_id_value = reimagine_core::model::NodeId::new(node_id);
-    let store = Arc::new(tokio::sync::Mutex::new(
-        reimagine_runtime::ArtifactStore::new(),
-    ));
-    let capability = make_artifact_capability_with_store(node_id_value.clone(), Arc::clone(&store));
-    (
-        NodeExecutionContext::new(
-            reimagine_core::model::RunId::new("run-test"),
-            reimagine_core::model::WorkflowId::new("wf-test"),
-            reimagine_core::model::WorkflowVersion::new(1),
-            Some(CorrelationId::new("corr-test")),
-            node_id_value,
-            reimagine_core::model::NodeTypeId::new(type_id),
-            inputs,
-            params,
-            capability,
-            CancellationToken::new(),
-            reimagine_core::event::Timestamp::new("2026-06-13T00:00:00Z"),
-        ),
-        store,
-    )
-}
-
-fn make_artifact_capability(
-    node_id: reimagine_core::model::NodeId,
-) -> reimagine_runtime::NodeArtifactCapability {
-    let store = Arc::new(tokio::sync::Mutex::new(
-        reimagine_runtime::ArtifactStore::new(),
-    ));
-    make_artifact_capability_with_store(node_id, store)
-}
-
-fn make_artifact_capability_with_store(
-    node_id: reimagine_core::model::NodeId,
-    store: Arc<tokio::sync::Mutex<reimagine_runtime::ArtifactStore>>,
-) -> reimagine_runtime::NodeArtifactCapability {
-    use reimagine_runtime::{Clock, RunEventSink, SystemClock};
-    use std::sync::Arc;
-
-    let sink: Arc<dyn RunEventSink> = Arc::new(VecRunEventSink::new());
-    let clock: Arc<dyn Clock> = Arc::new(SystemClock);
-    reimagine_runtime::NodeArtifactCapability::new(
+    params: NodeParams,
+) -> (NodeExecutionContext, Arc<RecordingArtifactPublisher>) {
+    let recorder = Arc::new(RecordingArtifactPublisher::new());
+    let publisher: Arc<dyn reimagine_inference::ArtifactPublisher> = recorder.clone();
+    let cancellation: Arc<dyn reimagine_inference::NodeCancellation> =
+        Arc::new(NoopNodeCancellation::new());
+    let ctx = NodeExecutionContext::new(
         reimagine_core::model::RunId::new("run-test"),
         reimagine_core::model::WorkflowId::new("wf-test"),
         reimagine_core::model::WorkflowVersion::new(1),
-        node_id,
-        store,
-        sink,
-        clock,
-        CancellationToken::new(),
-    )
+        Some(CorrelationId::new("corr-test")),
+        reimagine_core::model::NodeId::new(node_id),
+        reimagine_core::model::NodeTypeId::new(type_id),
+        inputs,
+        params,
+        publisher,
+        cancellation,
+        reimagine_core::event::Timestamp::new("2026-06-13T00:00:00Z"),
+    );
+    (ctx, recorder)
 }
 
 // ── Tests ──────────────────────────────────────────────────────────
@@ -218,7 +186,7 @@ async fn checkpoint_loader_multi_output_by_slot_id() {
         ))
         .expect("executor registered");
 
-    let mut params = reimagine_runtime::NodeParams::new();
+    let mut params = NodeParams::new();
     params.insert(SlotId::new("checkpoint"), ParamValue::ModelRef(model_ref()));
     let context = make_context(
         "loader",
@@ -273,7 +241,7 @@ async fn checkpoint_loader_requires_all_three_outputs() {
         ))
         .expect("executor registered");
 
-    let mut params = reimagine_runtime::NodeParams::new();
+    let mut params = NodeParams::new();
     params.insert(SlotId::new("checkpoint"), ParamValue::ModelRef(model_ref()));
     let context = make_context(
         "loader",
@@ -307,7 +275,7 @@ async fn unregistered_capability_is_rejected_by_inference_runtime_router() {
         ))
         .expect("executor registered");
 
-    let mut params = reimagine_runtime::NodeParams::new();
+    let mut params = NodeParams::new();
     params.insert(SlotId::new("checkpoint"), ParamValue::ModelRef(model_ref()));
     let context = make_context(
         "loader",
@@ -336,7 +304,7 @@ async fn string_executor_passthrough() {
         .get(&reimagine_core::model::NodeTypeId::new("builtin.string"))
         .expect("executor registered");
 
-    let mut params = reimagine_runtime::NodeParams::new();
+    let mut params = NodeParams::new();
     params.insert(
         SlotId::new("value"),
         ParamValue::String("hello world".to_string()),
@@ -404,18 +372,13 @@ async fn save_image_records_backend_returned_artifact_reference() {
     let mut inputs = NodeInputs::new();
     inputs.insert(SlotId::new("image"), Arc::new(ExecutionValue::Image(image)));
 
-    let (context, artifact_store) = make_context_with_artifact_store(
-        "save",
-        "builtin.save_image",
-        inputs,
-        reimagine_runtime::NodeParams::new(),
-    );
+    let (context, recorder) =
+        make_context_with_recording("save", "builtin.save_image", inputs, NodeParams::new());
 
     let result = executor.execute(context).await.expect("execute ok");
     assert!(result.is_empty(), "save node should not expose outputs");
 
-    let store = artifact_store.lock().await;
-    let records: Vec<_> = store.iter_ordered().collect();
+    let records = recorder.records();
     assert_eq!(records.len(), 1);
     assert_eq!(records[0].reference, artifact_ref);
     assert_eq!(records[0].slot_id.as_str(), "artifact");
@@ -443,7 +406,7 @@ async fn checkpoint_loader_missing_model_ref_is_error() {
         "loader",
         "builtin.checkpoint_loader",
         NodeInputs::new(),
-        reimagine_runtime::NodeParams::new(),
+        NodeParams::new(),
     );
 
     let err = executor.execute(context).await.expect_err("should fail");
@@ -528,7 +491,7 @@ async fn text_encode_executor_calls_typed_text_encode() {
         "clip",
         "builtin.clip_text_encode",
         inputs,
-        reimagine_runtime::NodeParams::new(),
+        NodeParams::new(),
     );
 
     let result = executor.execute(context).await.expect("execute ok");
@@ -572,7 +535,7 @@ async fn create_empty_latent_executor_calls_typed_create_empty_latent() {
         ))
         .expect("executor registered");
 
-    let mut params = reimagine_runtime::NodeParams::new();
+    let mut params = NodeParams::new();
     params.insert(SlotId::new("width"), ParamValue::Integer(64));
     params.insert(SlotId::new("height"), ParamValue::Integer(64));
     params.insert(SlotId::new("batch_size"), ParamValue::Integer(1));

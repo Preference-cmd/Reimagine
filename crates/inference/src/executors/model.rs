@@ -22,9 +22,9 @@ use reimagine_inference_core::{
     ExecutionOutput, ExecutionValue, InferenceRuntime, LoadBundleRequest, LoadBundleResponse,
     ModelResolver,
 };
-use reimagine_runtime::{NodeExecutionContext, NodeExecutor, NodeExecutorError};
 
 use crate::error::into_executor_error;
+use crate::executor::{NodeExecutionContext, NodeExecutor, NodeExecutorError};
 
 /// `builtin.checkpoint_loader` executor.
 pub struct CheckpointLoaderExecutor {

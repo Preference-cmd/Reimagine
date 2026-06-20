@@ -13,21 +13,25 @@ use reimagine_core::model::{NodeId, RunId, WorkflowId, WorkflowVersion};
 use reimagine_core::readiness::ExecutionPlan;
 use tokio::sync::Mutex;
 
-use crate::artifacts::{ArtifactStore, NodeArtifactCapability};
+use crate::artifacts::{ArtifactStore, RuntimeNodeArtifactCapability};
 use crate::cancellation::CancellationToken;
 use crate::clock::{Clock, SystemClock};
 use crate::error::RuntimeError;
 use crate::events::RunEventSink;
-use crate::executor::NodeExecutorRegistry;
 use crate::handle::{RunHandle, RunState};
-use crate::node_context::{NodeExecutionContext, NodeInputs, NodeParams};
-use crate::resources::RunResourceBackend;
+use crate::resources::NoopRunResourceBackend;
 use crate::run_inputs::RunInputs;
 use crate::run_session::{NodeOutcome, RunSession};
 use crate::scheduler::{NodeState, StageExecutionPolicy, StageNodeDecision};
 use crate::snapshot::{RunArtifactRef, RunSnapshot, RunSummary};
 use crate::store::RunStore;
 use crate::value_store::OutputKey;
+
+use reimagine_inference::{
+    ArtifactPublisher, NodeCancellation, NodeExecutionContext, NodeExecutorError,
+    NodeExecutorRegistry, NodeInputs, NodeParams,
+};
+use reimagine_inference_core::RunResourceBackend;
 
 /// Options passed to [`RuntimeService::run`].
 ///
@@ -133,7 +137,7 @@ impl RuntimeService {
     pub fn with_defaults(registry: NodeExecutorRegistry, sink: Arc<dyn RunEventSink>) -> Self {
         Self::new(
             registry,
-            Arc::new(crate::resources::NoopRunResourceBackend),
+            Arc::new(NoopRunResourceBackend),
             sink,
             Arc::new(SystemClock),
         )
@@ -525,7 +529,7 @@ impl Runner {
             }
         }
 
-        let capability = NodeArtifactCapability::new(
+        let publisher: Arc<dyn ArtifactPublisher> = Arc::new(RuntimeNodeArtifactCapability::new(
             self.run_id.clone(),
             self.plan.workflow_id().clone(),
             self.plan.workflow_version(),
@@ -534,7 +538,8 @@ impl Runner {
             self.sink.clone(),
             self.clock.clone(),
             self.cancellation.clone(),
-        );
+        ));
+        let cancellation: Arc<dyn NodeCancellation> = Arc::new(self.cancellation.clone());
 
         let ctx = NodeExecutionContext::new(
             self.run_id.clone(),
@@ -545,8 +550,8 @@ impl Runner {
             node.type_id().clone(),
             inputs,
             params,
-            capability,
-            self.cancellation.clone(),
+            publisher,
+            cancellation,
             self.clock.now(),
         );
 
@@ -556,16 +561,12 @@ impl Runner {
         let result = executor.execute(ctx).await;
         match result {
             Ok(outputs) => Ok(outputs),
-            Err(crate::executor::NodeExecutorError::Cancelled) => Err(NodeFailure::Cancelled),
-            Err(crate::executor::NodeExecutorError::MissingInput { slot_id }) => {
+            Err(NodeExecutorError::Cancelled) => Err(NodeFailure::Cancelled),
+            Err(NodeExecutorError::MissingInput { slot_id }) => {
                 Err(NodeFailure::Failed(format!("missing input {slot_id}")))
             }
-            Err(crate::executor::NodeExecutorError::Failed { message }) => {
-                Err(NodeFailure::Failed(message))
-            }
-            Err(crate::executor::NodeExecutorError::Infra { message }) => {
-                Err(NodeFailure::Failed(message))
-            }
+            Err(NodeExecutorError::Failed { message }) => Err(NodeFailure::Failed(message)),
+            Err(NodeExecutorError::Infra { message }) => Err(NodeFailure::Failed(message)),
         }
     }
 

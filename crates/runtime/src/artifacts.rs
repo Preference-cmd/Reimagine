@@ -1,14 +1,16 @@
-//! Per-run artifact store and the per-node artifact capability exposed to
-//! executors during execution.
+//! Per-run artifact store and the runtime impl of the executor-side
+//! [`ArtifactPublisher`](reimagine_inference::ArtifactPublisher) trait.
 
 use std::collections::HashMap;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, Ordering};
 
+use async_trait::async_trait;
 use reimagine_core::event::{RunEvent, RunEventId, RunEventKind};
 use reimagine_core::model::{
     ArtifactId, ArtifactRef, NodeId, RunId, SlotId, WorkflowId, WorkflowVersion,
 };
+use reimagine_inference::{ArtifactEventKind, ArtifactPublisher};
 
 use crate::cancellation::CancellationToken;
 use crate::clock::Clock;
@@ -76,15 +78,13 @@ impl ArtifactStore {
     }
 }
 
-/// Which host-facing event to emit alongside an artifact record.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum ArtifactEventKind {
-    Saved,
-    Preview,
-}
-
-/// Capability given to node executors so they can publish artifacts.
-pub struct NodeArtifactCapability {
+/// Runtime-side concrete implementation of
+/// [`ArtifactPublisher`](reimagine_inference::ArtifactPublisher).
+///
+/// Records artifacts into the per-run [`ArtifactStore`] and emits the
+/// matching [`RunEvent`] via the [`RunEventSink`]. Built fresh per
+/// node invocation by the runner task.
+pub struct RuntimeNodeArtifactCapability {
     node_id: NodeId,
     store: Arc<tokio::sync::Mutex<ArtifactStore>>,
     sink: Arc<dyn RunEventSink>,
@@ -97,7 +97,7 @@ pub struct NodeArtifactCapability {
     clock: Arc<dyn Clock>,
 }
 
-impl NodeArtifactCapability {
+impl RuntimeNodeArtifactCapability {
     #[allow(clippy::too_many_arguments)]
     pub fn new(
         run_id: RunId,
@@ -122,22 +122,19 @@ impl NodeArtifactCapability {
             clock,
         }
     }
+}
 
-    /// Record an artifact and emit the corresponding event.
-    ///
-    /// Returns `None` when the run has been cancelled. Callers that
-    /// receive `None` should treat the artifact as dropped and not surface
-    /// a phantom id to the host.
-    pub async fn record(
+#[async_trait]
+impl ArtifactPublisher for RuntimeNodeArtifactCapability {
+    async fn record(
         &self,
-        slot_id: impl Into<SlotId>,
+        slot_id: SlotId,
         reference: ArtifactRef,
         kind: ArtifactEventKind,
     ) -> Option<ArtifactId> {
         if self.cancellation.is_cancelled() {
             return None;
         }
-        let slot_id = slot_id.into();
         let id_index = self.next_artifact_id.fetch_add(1, Ordering::Relaxed);
         let id = ArtifactId::new(format!(
             "{}-{}-{}",

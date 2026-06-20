@@ -19,9 +19,9 @@ use reimagine_inference_core::{
     ExecutionOutput, ExecutionValue, InferenceRuntime, RuntimeClipHandle, TextEncodeRequest,
     TextEncodeResponse,
 };
-use reimagine_runtime::{NodeExecutionContext, NodeExecutor, NodeExecutorError};
 
 use crate::error::into_executor_error;
+use crate::executor::{NodeExecutionContext, NodeExecutor, NodeExecutorError};
 
 fn required_input(
     context: &NodeExecutionContext,

@@ -54,13 +54,21 @@ Consumers:
 inference -> inference-core
 inference-backends/candle -> inference-core
 app-host -> inference-core
+runtime -> inference-core
 ```
 
 Runtime-facing code should consume these contracts through the `inference`
-facade (`runtime -> inference -> inference-core`). A temporary direct
-`runtime -> inference-core` dependency is acceptable only during the
-inference-runtime-boundary migration, before the node executor contract is
-moved out of `runtime`.
+facade (`runtime -> inference -> inference-core`). The direct
+`runtime -> inference-core` edge carries only the resource lifecycle
+contract ([`RunResourceBackend`](https://example.com)) and the
+execution value envelope types; the node executor contract itself
+lives in `inference`.
+
+`inference-core` also owns the [`RunResourceBackend`] trait and
+[`MemorySnapshot`] struct (moved out of `runtime` as part of the
+inference-runtime-boundary migration) so that concrete backends such
+as `candle` can implement the runtime lifecycle contract without
+depending on `runtime`.
 
 This keeps backend data flow and crate dependency direction separate.
 `inference-core` may depend on lightweight `core::model` ids, params, artifact

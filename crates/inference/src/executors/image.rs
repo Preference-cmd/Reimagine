@@ -5,7 +5,7 @@
 //!   inputs, returns an `image` output.
 //! - `save_image` maps to `image.save`. Reads `image` input plus
 //!   optional `filename_prefix` param. The executor records the
-//!   artifact via [`NodeArtifactCapability`].
+//!   artifact via [`ArtifactPublisher`](crate::artifact_publisher::ArtifactPublisher).
 //! - `preview_image` maps to `image.preview`. Reads `image` input.
 //!   The executor records the artifact.
 //!
@@ -26,9 +26,10 @@ use reimagine_inference_core::{
     ImageSaveResponse, InferenceRuntime, LatentDecodeRequest, LatentDecodeResponse, RuntimeImage,
     RuntimeLatent, RuntimeVaeHandle,
 };
-use reimagine_runtime::{ArtifactEventKind, NodeExecutionContext, NodeExecutor, NodeExecutorError};
 
+use crate::artifact_publisher::ArtifactEventKind;
 use crate::error::into_executor_error;
+use crate::executor::{NodeExecutionContext, NodeExecutor, NodeExecutorError};
 
 fn required_input(
     context: &NodeExecutionContext,

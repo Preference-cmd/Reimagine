@@ -1,11 +1,11 @@
-//! Inference-to-runtime error bridge.
+//! Inference-to-executor error bridge.
 //!
 //! The canonical [`InferenceError`](reimagine_inference_core::InferenceError)
 //! lives in `reimagine-inference-core`, which cannot depend on
-//! `reimagine-runtime` (the architecture explicitly forbids that
-//! edge). This module owns the explicit, call-site-visible
-//! conversion from the inference-core error to the runtime
-//! [`NodeExecutorError`].
+//! `reimagine-inference` (the architecture forbids that edge). This
+//! module owns the explicit, call-site-visible conversion from the
+//! inference-core error to the executor
+//! [`NodeExecutorError`](crate::executor::NodeExecutorError).
 //!
 //! Two equivalent forms are provided:
 //!
@@ -15,11 +15,11 @@
 //!   call sites; it stays explicit even if the trait method is
 //!   shadowed by another implementation.
 
+use crate::executor::NodeExecutorError;
 use reimagine_inference_core::InferenceError;
-use reimagine_runtime::NodeExecutorError;
 
-/// Trait that maps `inference_core::InferenceError` to
-/// `runtime::NodeExecutorError` at the inference-to-runtime boundary.
+/// Trait that maps `inference_core::InferenceError` to the executor
+/// `NodeExecutorError` at the inference boundary.
 pub trait IntoNodeExecutorError {
     fn into_executor_error(self) -> NodeExecutorError;
 }

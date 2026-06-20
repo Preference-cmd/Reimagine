@@ -4211,7 +4211,6 @@ dependencies = [
  "async-trait",
  "reimagine-core",
  "reimagine-inference-core",
- "reimagine-runtime",
  "serde",
  "tokio",
  "tracing",
@@ -4226,7 +4225,6 @@ dependencies = [
  "reimagine-core",
  "reimagine-inference",
  "reimagine-inference-core",
- "reimagine-runtime",
  "serde",
  "tokio",
 ]
@@ -4269,6 +4267,7 @@ version = "0.1.0"
 dependencies = [
  "async-trait",
  "reimagine-core",
+ "reimagine-inference",
  "reimagine-inference-core",
  "serde",
  "tokio",

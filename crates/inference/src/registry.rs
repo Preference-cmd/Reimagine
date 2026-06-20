@@ -1,17 +1,16 @@
 //! Executor registration for V1 built-in node types.
 //!
 //! [`register_builtin_inference_executors`] installs all inference-backed
-//! executors into a [`NodeExecutorRegistry`](reimagine_runtime::NodeExecutorRegistry).
-//! It requires an inference runtime/router, a resolver, and an already-existing
-//! registry (usually the one owned by the [`RuntimeService`](reimagine_runtime::RuntimeService)).
+//! executors into a [`NodeExecutorRegistry`]. It requires an inference
+//! runtime/router and a resolver; the registry itself is typically
+//! constructed by app-host and handed to the runtime.
 
 use std::sync::Arc;
 
 use reimagine_core::model::NodeTypeId;
-use reimagine_runtime::NodeExecutorRegistry;
-
 use reimagine_inference_core::{InferenceRuntime, ModelResolver};
 
+use crate::executor::{NodeExecutorRegistry, NodeExecutorRegistryError};
 use crate::executors::{
     diffusion::KSamplerExecutor, image::PreviewImageExecutor, image::SaveImageExecutor,
     image::VaeDecodeExecutor, latent::EmptyLatentImageExecutor, model::CheckpointLoaderExecutor,
@@ -31,7 +30,7 @@ pub fn register_builtin_inference_executors(
     registry: &mut NodeExecutorRegistry,
     inference: Arc<dyn InferenceRuntime>,
     resolver: Arc<dyn ModelResolver>,
-) -> Result<(), reimagine_runtime::NodeExecutorRegistryError> {
+) -> Result<(), NodeExecutorRegistryError> {
     // builtin.string — pure passthrough, no backend call
     registry.register(NodeTypeId::new("builtin.string"), Arc::new(StringExecutor))?;
 

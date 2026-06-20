@@ -1,4 +1,12 @@
 //! Per-node execution context passed to `NodeExecutor::execute`.
+//!
+//! The context shape is owned by `reimagine-inference` (this crate)
+//! so that built-in inference executors can read it without depending
+//! on `reimagine-runtime`. The runtime builds each context from its
+//! `RunSession`, `RunInputs`, artifact store, and cancellation token,
+//! wrapping the latter two in trait objects
+//! ([`ArtifactPublisher`](crate::artifact_publisher::ArtifactPublisher)
+//! and [`NodeCancellation`](crate::cancellation::NodeCancellation)).
 
 use std::collections::HashMap;
 use std::sync::Arc;
@@ -8,10 +16,10 @@ use reimagine_core::event::Timestamp;
 use reimagine_core::model::{
     NodeId, NodeTypeId, ParamValue, RunId, SlotId, WorkflowId, WorkflowVersion,
 };
+use reimagine_inference_core::ExecutionValue;
 
-use crate::artifacts::NodeArtifactCapability;
-use crate::cancellation::CancellationToken;
-use crate::value::ExecutionValue;
+use crate::artifact_publisher::ArtifactPublisher;
+use crate::cancellation::NodeCancellation;
 
 /// Resolved input values for a single node, keyed by input `SlotId`.
 #[derive(Debug, Clone, Default)]
@@ -91,8 +99,8 @@ pub struct NodeExecutionContext {
     type_id: NodeTypeId,
     inputs: NodeInputs,
     params: NodeParams,
-    artifacts: NodeArtifactCapability,
-    cancellation: CancellationToken,
+    artifacts: Arc<dyn ArtifactPublisher>,
+    cancellation: Arc<dyn NodeCancellation>,
     started_at: Timestamp,
 }
 
@@ -107,8 +115,8 @@ impl NodeExecutionContext {
         type_id: NodeTypeId,
         inputs: NodeInputs,
         params: NodeParams,
-        artifacts: NodeArtifactCapability,
-        cancellation: CancellationToken,
+        artifacts: Arc<dyn ArtifactPublisher>,
+        cancellation: Arc<dyn NodeCancellation>,
         started_at: Timestamp,
     ) -> Self {
         Self {
@@ -158,11 +166,11 @@ impl NodeExecutionContext {
         &self.params
     }
 
-    pub fn artifacts(&self) -> &NodeArtifactCapability {
+    pub fn artifacts(&self) -> &Arc<dyn ArtifactPublisher> {
         &self.artifacts
     }
 
-    pub fn cancellation(&self) -> &CancellationToken {
+    pub fn cancellation(&self) -> &Arc<dyn NodeCancellation> {
         &self.cancellation
     }
 
