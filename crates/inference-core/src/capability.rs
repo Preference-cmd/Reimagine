@@ -10,7 +10,7 @@
 //! describe which capabilities a backend advertises and which model
 //! series / variant / role constraints each capability carries.
 
-use reimagine_core::BackendKind;
+use crate::BackendKind;
 use reimagine_core::model::{ModelRole, ModelSeries, ModelVariant};
 
 // ── InferenceCapability ────────────────────────────────────────────

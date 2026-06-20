@@ -18,12 +18,12 @@ use reimagine_core::model::{
     WorkflowVersion,
 };
 use reimagine_core::model::{TensorDType, TensorShape};
-use reimagine_core::{
-    BackendKind, BackendPayloadKey, BackendTensorHandle, ConditioningMetadata,
-    ExecutionConditioning, RuntimeClipHandle, RuntimeImage, RuntimeLatent, RuntimeModelHandle,
-    RuntimeVaeHandle,
-};
 use reimagine_inference_candle::{CandleBackend, CandleBackendConfig, LoadedModelBundle};
+use reimagine_inference_core::{
+    BackendKind, BackendPayloadKey, BackendTensorHandle, ConditioningMetadata,
+    ExecutionConditioning, ExecutionValue, RuntimeClipHandle, RuntimeImage, RuntimeLatent,
+    RuntimeModelHandle, RuntimeVaeHandle,
+};
 use reimagine_inference_core::{
     CreateEmptyLatentRequest, CreateEmptyLatentResponse, DiffusionSampleRequest,
     DiffusionSampleResponse, ImagePreviewRequest, ImagePreviewResponse, ImageSaveRequest,
@@ -92,9 +92,7 @@ fn base_text_encode_request(
 ) -> TextEncodeRequest {
     TextEncodeRequest::new(
         clip,
-        Arc::new(reimagine_core::ExecutionValue::Param(ParamValue::String(
-            text,
-        ))),
+        Arc::new(ExecutionValue::Param(ParamValue::String(text))),
         RunId::new("run-test"),
         WorkflowId::new("wf-test"),
         WorkflowVersion::new(1),
@@ -692,7 +690,7 @@ async fn text_encode_conditioning_is_run_scoped_and_cleaned() {
     let response: TextEncodeResponse = backend
         .text_encode(TextEncodeRequest::new(
             clip_handle,
-            Arc::new(reimagine_core::ExecutionValue::Param(ParamValue::String(
+            Arc::new(ExecutionValue::Param(ParamValue::String(
                 "test prompt".to_string(),
             ))),
             run_id.clone(),
@@ -726,7 +724,7 @@ async fn text_encode_missing_clip_input_returns_error() {
     let err = backend
         .text_encode(TextEncodeRequest::new(
             fake_runtime_clip_handle("missing-clip-key"),
-            Arc::new(reimagine_core::ExecutionValue::Param(ParamValue::String(
+            Arc::new(ExecutionValue::Param(ParamValue::String(
                 "test".to_string(),
             ))),
             RunId::new("run-test"),
@@ -751,7 +749,7 @@ async fn text_encode_missing_text_input_returns_error() {
     let err = backend
         .text_encode(TextEncodeRequest::new(
             clip_handle,
-            Arc::new(reimagine_core::ExecutionValue::Param(ParamValue::Null)),
+            Arc::new(ExecutionValue::Param(ParamValue::Null)),
             RunId::new("run-test"),
             WorkflowId::new("wf-test"),
             WorkflowVersion::new(1),
@@ -1320,7 +1318,7 @@ async fn diffusion_sample_cleans_up_run_scoped_payload() {
     let positive = backend
         .text_encode(TextEncodeRequest::new(
             clip_handle_factory(),
-            Arc::new(reimagine_core::ExecutionValue::Param(ParamValue::String(
+            Arc::new(ExecutionValue::Param(ParamValue::String(
                 "a cat".to_string(),
             ))),
             run_id.clone(),
@@ -1333,7 +1331,7 @@ async fn diffusion_sample_cleans_up_run_scoped_payload() {
     let negative = backend
         .text_encode(TextEncodeRequest::new(
             clip_handle_factory(),
-            Arc::new(reimagine_core::ExecutionValue::Param(ParamValue::String(
+            Arc::new(ExecutionValue::Param(ParamValue::String(
                 "blurry".to_string(),
             ))),
             run_id.clone(),

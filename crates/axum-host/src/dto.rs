@@ -18,12 +18,12 @@
 
 use std::collections::HashMap;
 
-use reimagine_core::ExecutionValue;
 use reimagine_core::event::RunEvent;
 use reimagine_core::model::{NodeId, RunId, WorkflowId, WorkflowVersion};
 use reimagine_core::readiness::{RunTarget, RunTargetSelection};
 use reimagine_runtime::NodeState;
 use reimagine_runtime::RunState;
+use reimagine_runtime::value::ExecutionValue;
 use reimagine_runtime::{RunArtifactRef, RunSnapshot, RunSummary};
 use serde::{Deserialize, Serialize};
 

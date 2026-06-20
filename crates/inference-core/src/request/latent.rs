@@ -1,7 +1,7 @@
 //! `latent.create_empty` and `latent.decode` request DTOs.
 
-use reimagine_core::RuntimeLatent;
-use reimagine_core::RuntimeVaeHandle;
+use crate::RuntimeLatent;
+use crate::RuntimeVaeHandle;
 use reimagine_core::diagnostic::CorrelationId;
 use reimagine_core::model::{NodeId, RunId, WorkflowId, WorkflowVersion};
 
@@ -81,9 +81,9 @@ impl CreateEmptyLatentRequest {
     /// whose payload is built from the request's run/node identity.
     pub fn into_latent(self) -> RuntimeLatent {
         RuntimeLatent::new(
-            reimagine_core::BackendTensorHandle::new(
-                reimagine_core::BackendKind::from("request"),
-                reimagine_core::BackendPayloadKey::new(format!(
+            crate::BackendTensorHandle::new(
+                crate::BackendKind::from("request"),
+                crate::BackendPayloadKey::new(format!(
                     "latent:{}:{}",
                     self.run_id.as_str(),
                     self.node_id.as_str()
@@ -104,7 +104,7 @@ impl CreateEmptyLatentRequest {
         )
     }
 
-    pub fn backend_affinities(&self) -> Vec<reimagine_core::BackendKind> {
+    pub fn backend_affinities(&self) -> Vec<crate::BackendKind> {
         Vec::new()
     }
 }
@@ -174,7 +174,7 @@ impl LatentDecodeRequest {
         &self.node_id
     }
 
-    pub fn backend_affinities(&self) -> Vec<reimagine_core::BackendKind> {
+    pub fn backend_affinities(&self) -> Vec<crate::BackendKind> {
         let mut kinds = Vec::new();
         push_unique(&mut kinds, self.vae.backend());
         push_unique(&mut kinds, self.latent.payload().backend());
@@ -182,7 +182,7 @@ impl LatentDecodeRequest {
     }
 }
 
-fn push_unique(kinds: &mut Vec<reimagine_core::BackendKind>, kind: &reimagine_core::BackendKind) {
+fn push_unique(kinds: &mut Vec<crate::BackendKind>, kind: &crate::BackendKind) {
     if !kinds.iter().any(|existing| existing == kind) {
         kinds.push(kind.clone());
     }

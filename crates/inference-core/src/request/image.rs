@@ -1,6 +1,6 @@
 //! `image.save` and `image.preview` request DTOs.
 
-use reimagine_core::RuntimeImage;
+use crate::RuntimeImage;
 use reimagine_core::diagnostic::CorrelationId;
 use reimagine_core::model::{NodeId, RunId, WorkflowId, WorkflowVersion};
 
@@ -101,7 +101,7 @@ impl ImageSaveRequest {
         &self.node_id
     }
 
-    pub fn backend_affinities(&self) -> Vec<reimagine_core::BackendKind> {
+    pub fn backend_affinities(&self) -> Vec<crate::BackendKind> {
         vec![self.image.payload().backend().clone()]
     }
 }
@@ -169,7 +169,7 @@ impl ImagePreviewRequest {
         &self.node_id
     }
 
-    pub fn backend_affinities(&self) -> Vec<reimagine_core::BackendKind> {
+    pub fn backend_affinities(&self) -> Vec<crate::BackendKind> {
         vec![self.image.payload().backend().clone()]
     }
 }

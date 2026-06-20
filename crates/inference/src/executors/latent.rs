@@ -6,13 +6,17 @@
 //! Slot mapping (`latent`) is executor-owned. The backend's typed
 //! [`CreateEmptyLatentResponse`] returns the latent handle without
 //! any `SlotId` mapping.
+//!
+//! Retention: the empty latent is declared `RunScoped` during this
+//! migration, until single-use fan-out diagnostics are implemented in
+//! issue 05.
 
 use std::sync::Arc;
 
-use reimagine_core::ExecutionValue;
 use reimagine_core::model::{ParamValue, SlotId};
 use reimagine_inference_core::{
-    CreateEmptyLatentRequest, CreateEmptyLatentResponse, InferenceRuntime,
+    CreateEmptyLatentRequest, CreateEmptyLatentResponse, ExecutionOutput, ExecutionValue,
+    InferenceRuntime,
 };
 use reimagine_runtime::{NodeExecutionContext, NodeExecutor, NodeExecutorError};
 
@@ -48,7 +52,7 @@ impl NodeExecutor for EmptyLatentImageExecutor {
     async fn execute(
         &self,
         context: NodeExecutionContext,
-    ) -> Result<Vec<(SlotId, Arc<ExecutionValue>)>, NodeExecutorError> {
+    ) -> Result<Vec<ExecutionOutput>, NodeExecutorError> {
         let width = extract_u32(&context, "width")?;
         let height = extract_u32(&context, "height")?;
         let batch_size = extract_u32(&context, "batch_size")?;
@@ -73,7 +77,7 @@ impl NodeExecutor for EmptyLatentImageExecutor {
             .await
             .map_err(into_executor_error)?;
 
-        Ok(vec![(
+        Ok(vec![ExecutionOutput::run_scoped(
             SlotId::new("latent"),
             Arc::new(ExecutionValue::Latent(response.into_latent())),
         )])

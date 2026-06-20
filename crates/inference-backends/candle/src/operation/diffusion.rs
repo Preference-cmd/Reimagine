@@ -14,11 +14,10 @@
 //! flows through the existing typed `CandleStore` accessors.
 
 use reimagine_core::model::{TensorDType, TensorShape};
-use reimagine_core::{
-    BackendPayloadKey, BackendTensorHandle, ExecutionConditioning, RuntimeLatent,
-};
 use reimagine_inference_core::{
-    DiffusionSampleRequest, DiffusionSampleResponse, InferenceBackend, SamplerName, SchedulerName,
+    BackendPayloadKey, BackendTensorHandle, DiffusionSampleRequest, DiffusionSampleResponse,
+    ExecutionConditioning, InferenceBackend, RuntimeLatent, RuntimeModelHandle, SamplerName,
+    SchedulerName,
 };
 
 use crate::backend::CandleBackend;
@@ -137,9 +136,9 @@ fn build_sdxl_sample_request(
 }
 
 fn require_model_handle(
-    handle: &reimagine_core::RuntimeModelHandle,
+    handle: &RuntimeModelHandle,
     backend: &CandleBackend,
-) -> Result<reimagine_core::RuntimeModelHandle, CandleBackendError> {
+) -> Result<RuntimeModelHandle, CandleBackendError> {
     if handle.backend() != backend.backend_kind() {
         return Err(CandleBackendError::InvalidRequest(format!(
             "diffusion.sample `model` handle belongs to backend `{}`, expected `{}`",
@@ -181,9 +180,9 @@ fn require_conditioning_handle(
 }
 
 fn require_latent_handle(
-    handle: &reimagine_core::RuntimeLatent,
+    handle: &RuntimeLatent,
     backend: &CandleBackend,
-) -> Result<reimagine_core::RuntimeLatent, CandleBackendError> {
+) -> Result<RuntimeLatent, CandleBackendError> {
     if handle.payload().backend() != backend.backend_kind() {
         return Err(CandleBackendError::InvalidRequest(format!(
             "diffusion.sample `latent` handle belongs to backend `{}`, expected `{}`",

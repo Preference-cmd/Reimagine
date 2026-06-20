@@ -1,6 +1,6 @@
 //! `text.encode` response DTO.
 
-use reimagine_core::ExecutionConditioning;
+use crate::ExecutionConditioning;
 
 /// `text.encode` response.
 #[derive(Debug, Clone)]

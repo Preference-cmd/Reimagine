@@ -2,9 +2,8 @@ use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
 use candle_core::Device;
-use reimagine_core::BackendPayloadKey;
 use reimagine_core::model::ModelId;
-use reimagine_inference_core::ModelFormat;
+use reimagine_inference_core::{BackendPayloadKey, ModelFormat};
 
 use crate::error::CandleBackendError;
 

@@ -1,7 +1,7 @@
 //! `latent.create_empty` and `latent.decode` response DTOs.
 
-use reimagine_core::RuntimeImage;
-use reimagine_core::RuntimeLatent;
+use crate::RuntimeImage;
+use crate::RuntimeLatent;
 
 /// `latent.create_empty` response.
 #[derive(Debug, Clone)]

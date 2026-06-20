@@ -3,9 +3,9 @@
 use std::collections::HashMap;
 use std::sync::Arc;
 
+use crate::BackendKind;
 use crate::backend::InferenceBackend;
 use crate::capability::InferenceBackendCapabilities;
-use reimagine_core::BackendKind;
 
 /// Registry that holds concrete backends and dispatches by `kind`.
 ///
@@ -103,6 +103,7 @@ impl MergedInferenceBackendCapabilities {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::BackendKind;
     use crate::capability::{InferenceCapability, InferenceCapabilitySupport};
     use crate::error::InferenceError;
     use crate::request::diffusion::DiffusionSampleRequest;
@@ -115,7 +116,6 @@ mod tests {
     use crate::response::latent::{CreateEmptyLatentResponse, LatentDecodeResponse};
     use crate::response::model::LoadBundleResponse;
     use crate::response::text::TextEncodeResponse;
-    use reimagine_core::BackendKind;
 
     fn echo_caps() -> InferenceBackendCapabilities {
         InferenceBackendCapabilities::new(BackendKind::new("echo")).with_support(

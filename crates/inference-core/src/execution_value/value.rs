@@ -1,5 +1,5 @@
-//! Public execution value envelope used by runtime, inference,
-//! inference-core, backend crates, and host observations.
+//! Internal execution value envelope used by runtime, inference,
+//! inference-core, and concrete backend crates.
 //!
 //! The canonical name is `ExecutionValue`. V1 contains the variants
 //! that the workflow executor, the inference executors, and the
@@ -20,10 +20,13 @@
 //! - [`Null`](ExecutionValue::Null) as the explicit no-value variant
 //!
 //! `ExecutionValue` is the run-time envelope. It is **not** the
-//! workflow JSON value and it is **not** [`core::model::NodeValue`],
-//! which stays as the saved/editor semantic value model.
+//! workflow JSON value, **not** a host DTO, **not** a snapshot /
+//! event payload, and **not** an Agent tool result. Host observations
+//! stay in snapshots, summaries, diagnostics, node/run states, and
+//! artifact references. The editor / saved semantic value model
+//! remains [`reimagine_core::model::NodeValue`].
 
-use crate::model::{ArtifactRef, ParamValue};
+use reimagine_core::model::{ArtifactRef, ParamValue};
 
 use super::conditioning::ExecutionConditioning;
 use super::handles::{
@@ -31,7 +34,7 @@ use super::handles::{
     RuntimeVaeHandle,
 };
 
-#[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize)]
+#[derive(Debug, Clone, PartialEq)]
 pub enum ExecutionValue {
     Param(ParamValue),
     Model(RuntimeModelHandle),

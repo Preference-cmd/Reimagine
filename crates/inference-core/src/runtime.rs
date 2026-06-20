@@ -2,6 +2,7 @@
 
 use std::sync::Arc;
 
+use crate::BackendKind;
 use crate::backend::InferenceBackend;
 use crate::bridge::{BackendBridgePolicy, BridgePlan};
 use crate::capability::{InferenceBackendCapabilities, InferenceCapability};
@@ -17,7 +18,6 @@ use crate::response::image::{ImagePreviewResponse, ImageSaveResponse};
 use crate::response::latent::{CreateEmptyLatentResponse, LatentDecodeResponse};
 use crate::response::model::LoadBundleResponse;
 use crate::response::text::TextEncodeResponse;
-use reimagine_core::BackendKind;
 
 /// Executor-facing router. Built-in executors call this trait rather
 /// than a concrete backend directly.
@@ -266,13 +266,13 @@ impl std::fmt::Debug for DefaultInferenceRuntime {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::RuntimeLatent;
     use crate::backend::InferenceBackend;
     use crate::capability::{InferenceBackendCapabilities, InferenceCapabilitySupport};
     use crate::error::InferenceError;
     use crate::registry::InferenceBackendRegistry;
     use crate::request::latent::CreateEmptyLatentRequest;
     use crate::response::latent::CreateEmptyLatentResponse;
-    use reimagine_core::RuntimeLatent;
     use reimagine_core::model::{NodeId, RunId, WorkflowId, WorkflowVersion};
 
     struct EchoBackend;
@@ -313,9 +313,9 @@ mod tests {
             _request: CreateEmptyLatentRequest,
         ) -> Result<CreateEmptyLatentResponse, InferenceError> {
             Ok(CreateEmptyLatentResponse::new(RuntimeLatent::new(
-                reimagine_core::BackendTensorHandle::new(
+                crate::BackendTensorHandle::new(
                     BackendKind::new("echo"),
-                    reimagine_core::BackendPayloadKey::new("empty"),
+                    crate::BackendPayloadKey::new("empty"),
                     reimagine_core::model::TensorDType::F32,
                     reimagine_core::model::TensorShape::new(vec![1, 4, 8, 8]),
                     "cpu",
@@ -418,12 +418,12 @@ mod tests {
         );
         // Echo backend does not advertise TextEncode. Call text_encode to
         // exercise the unsupported path.
-        let clip = reimagine_core::RuntimeClipHandle::new(
+        let clip = crate::RuntimeClipHandle::new(
             reimagine_core::model::ModelId::new("clip"),
             BackendKind::new("echo"),
-            reimagine_core::BackendPayloadKey::new("k"),
+            crate::BackendPayloadKey::new("k"),
         );
-        let text = std::sync::Arc::new(reimagine_core::ExecutionValue::Param(
+        let text = std::sync::Arc::new(crate::ExecutionValue::Param(
             reimagine_core::model::ParamValue::String("hello".to_string()),
         ));
         let req = TextEncodeRequest::new(

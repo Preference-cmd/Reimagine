@@ -17,7 +17,7 @@ use reimagine_agent::WorkspaceScope;
 use reimagine_app_host::{BackendSelection, ModelService, WorkspaceHost};
 use reimagine_config::{AppConfig, AppPaths};
 use reimagine_core::model::{
-    ModelId, ModelRef, ModelRole, ModelSeries, ModelVariant, ParamValue, SlotId, WorkflowId,
+    ModelId, ModelRef, ModelRole, ModelSeries, ModelVariant, ParamValue, WorkflowId,
     WorkflowVersion,
 };
 use reimagine_core::workflow::{Workflow, WorkflowNode};
@@ -27,7 +27,8 @@ use reimagine_model_manager::{
 use reimagine_nodes::{BUILTIN_CHECKPOINT_LOADER, BuiltinNodeCatalog};
 use reimagine_runtime::RunEventSink;
 use reimagine_runtime::{
-    BoxedNodeExecutor, NodeExecutionContext, NodeExecutor, NodeExecutorRegistry, RuntimeService,
+    BoxedNodeExecutor, ExecutionOutput, NodeExecutionContext, NodeExecutor, NodeExecutorRegistry,
+    RuntimeService,
 };
 use serde_json::Value;
 use tower::ServiceExt;
@@ -61,10 +62,7 @@ impl NodeExecutor for MockLoaderExecutor {
     async fn execute(
         &self,
         _context: NodeExecutionContext,
-    ) -> Result<
-        Vec<(SlotId, Arc<reimagine_core::ExecutionValue>)>,
-        reimagine_runtime::NodeExecutorError,
-    > {
+    ) -> Result<Vec<ExecutionOutput>, reimagine_runtime::NodeExecutorError> {
         Ok(Vec::new())
     }
 }

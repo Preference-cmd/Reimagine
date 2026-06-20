@@ -9,6 +9,18 @@
 //! the built-in `NodeExecutor` implementations plus the executor
 //! registration helper.
 //!
+//! The canonical execution value envelope and backend-affine handle
+//! types (`ExecutionValue`, `ExecutionValueKind`, `BackendKind`,
+//! `BackendPayloadKey`, `BackendTensorHandle`,
+//! `BackendTensorMetadata`, `RuntimeModelHandle`, `RuntimeClipHandle`,
+//! `RuntimeVaeHandle`, `RuntimeLatent`, `RuntimeImage`,
+//! `ExecutionConditioning`, `ConditioningMetadata`) plus the
+//! producer-declared output contract (`ExecutionOutput`,
+//! `ExecutionValueRetention`) are owned by
+//! `reimagine-inference-core` and re-exported here as the
+//! runtime-facing facade. New runtime-facing code should import
+//! execution values from `reimagine_inference::*`.
+//!
 //! See `docs/architecture/modules/inference.md` for the
 //! architecture source of truth.
 
@@ -27,9 +39,11 @@ pub mod registry;
 #[doc(hidden)]
 pub mod testing;
 
-pub use reimagine_core::{
-    BackendTensorHandle, ConditioningMetadata, ExecutionConditioning, RuntimeClipHandle,
-    RuntimeImage, RuntimeLatent, RuntimeModelHandle, RuntimeVaeHandle,
+pub use reimagine_inference_core::{
+    BackendKind, BackendPayloadKey, BackendTensorHandle, BackendTensorMetadata,
+    ConditioningMetadata, ExecutionConditioning, ExecutionOutput, ExecutionValue,
+    ExecutionValueKind, ExecutionValueRetention, RuntimeClipHandle, RuntimeImage, RuntimeLatent,
+    RuntimeModelHandle, RuntimeVaeHandle,
 };
 
 pub use reimagine_inference_core::{

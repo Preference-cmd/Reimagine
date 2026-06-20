@@ -1,8 +1,8 @@
 //! `diffusion.sample` request DTO.
 
-use reimagine_core::ExecutionConditioning;
-use reimagine_core::RuntimeLatent;
-use reimagine_core::RuntimeModelHandle;
+use crate::ExecutionConditioning;
+use crate::RuntimeLatent;
+use crate::RuntimeModelHandle;
 use reimagine_core::diagnostic::CorrelationId;
 use reimagine_core::model::{NodeId, RunId, WorkflowId, WorkflowVersion};
 
@@ -174,7 +174,7 @@ impl DiffusionSampleRequest {
 
     /// Backend affinity derived from the model, conditioning, and
     /// latent handles.
-    pub fn backend_affinities(&self) -> Vec<reimagine_core::BackendKind> {
+    pub fn backend_affinities(&self) -> Vec<crate::BackendKind> {
         let mut kinds = Vec::new();
         push_unique(&mut kinds, self.model.backend());
         push_unique(&mut kinds, self.positive.text_embedding().backend());
@@ -190,7 +190,7 @@ impl DiffusionSampleRequest {
     }
 }
 
-fn push_unique(kinds: &mut Vec<reimagine_core::BackendKind>, kind: &reimagine_core::BackendKind) {
+fn push_unique(kinds: &mut Vec<crate::BackendKind>, kind: &crate::BackendKind) {
     if !kinds.iter().any(|existing| existing == kind) {
         kinds.push(kind.clone());
     }

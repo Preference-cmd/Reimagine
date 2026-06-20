@@ -1,6 +1,6 @@
 //! `diffusion.sample` response DTO.
 
-use reimagine_core::RuntimeLatent;
+use crate::RuntimeLatent;
 
 /// `diffusion.sample` response.
 #[derive(Debug, Clone)]

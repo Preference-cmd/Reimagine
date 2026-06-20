@@ -6,7 +6,7 @@
 //! shape/dtype/device, model id and role) without copying the heavy
 //! payload.
 
-use crate::model::{ModelId, ModelRole, TensorDType, TensorShape};
+use reimagine_core::model::{ModelId, ModelRole, TensorDType, TensorShape};
 
 use super::backend::{BackendKind, BackendPayloadKey};
 use super::tensor::BackendTensorMetadata;

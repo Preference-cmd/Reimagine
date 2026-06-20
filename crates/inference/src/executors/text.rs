@@ -7,12 +7,18 @@
 //! Slot mapping (`conditioning`) is executor-owned. The backend's
 //! typed [`TextEncodeResponse`] returns the conditioning handle
 //! without any `SlotId` mapping.
+//!
+//! Retention: the conditioning output is declared `RunScoped`. It is
+//! typically consumed by the ksampler in the same run and then can be
+//! released. Single-use fan-out diagnostics are owned by issue 05.
 
 use std::sync::Arc;
 
-use reimagine_core::ExecutionValue;
 use reimagine_core::model::SlotId;
-use reimagine_inference_core::{InferenceRuntime, TextEncodeRequest, TextEncodeResponse};
+use reimagine_inference_core::{
+    ExecutionOutput, ExecutionValue, InferenceRuntime, RuntimeClipHandle, TextEncodeRequest,
+    TextEncodeResponse,
+};
 use reimagine_runtime::{NodeExecutionContext, NodeExecutor, NodeExecutorError};
 
 use crate::error::into_executor_error;
@@ -30,9 +36,7 @@ fn required_input(
         })
 }
 
-fn extract_clip(
-    value: Arc<ExecutionValue>,
-) -> Result<reimagine_core::RuntimeClipHandle, NodeExecutorError> {
+fn extract_clip(value: Arc<ExecutionValue>) -> Result<RuntimeClipHandle, NodeExecutorError> {
     match value.as_ref() {
         ExecutionValue::Clip(handle) => Ok(handle.clone()),
         _ => Err(NodeExecutorError::Failed {
@@ -57,7 +61,7 @@ impl NodeExecutor for ClipTextEncodeExecutor {
     async fn execute(
         &self,
         context: NodeExecutionContext,
-    ) -> Result<Vec<(SlotId, Arc<ExecutionValue>)>, NodeExecutorError> {
+    ) -> Result<Vec<ExecutionOutput>, NodeExecutorError> {
         let clip = extract_clip(required_input(&context, "clip")?)?;
         let text = required_input(&context, "text")?;
 
@@ -80,7 +84,7 @@ impl NodeExecutor for ClipTextEncodeExecutor {
             .await
             .map_err(into_executor_error)?;
 
-        Ok(vec![(
+        Ok(vec![ExecutionOutput::run_scoped(
             SlotId::new("conditioning"),
             Arc::new(ExecutionValue::Conditioning(response.into_conditioning())),
         )])

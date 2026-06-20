@@ -10,13 +10,17 @@
 //! because it knows the workflow node shape. The backend's typed
 //! [`LoadBundleResponse`] returns the three handles without any
 //! `SlotId` mapping.
+//!
+//! Retention: model/clip/vae handles are declared `WorkspaceScoped`
+//! because they back the rest of the workflow and should outlive any
+//! single run. Runtime stores the retention for issue 05 to act on.
 
 use std::sync::Arc;
 
-use reimagine_core::ExecutionValue;
 use reimagine_core::model::{ModelRef, ParamValue, SlotId};
 use reimagine_inference_core::{
-    InferenceRuntime, LoadBundleRequest, LoadBundleResponse, ModelResolver,
+    ExecutionOutput, ExecutionValue, InferenceRuntime, LoadBundleRequest, LoadBundleResponse,
+    ModelResolver,
 };
 use reimagine_runtime::{NodeExecutionContext, NodeExecutor, NodeExecutorError};
 
@@ -42,7 +46,7 @@ impl NodeExecutor for CheckpointLoaderExecutor {
     async fn execute(
         &self,
         context: NodeExecutionContext,
-    ) -> Result<Vec<(SlotId, Arc<ExecutionValue>)>, NodeExecutorError> {
+    ) -> Result<Vec<ExecutionOutput>, NodeExecutorError> {
         let model_ref: ModelRef = match context.params().get(&SlotId::new("checkpoint")) {
             Some(ParamValue::ModelRef(mr)) => mr.clone(),
             _ => {
@@ -76,35 +80,19 @@ impl NodeExecutor for CheckpointLoaderExecutor {
             .await
             .map_err(into_executor_error)?;
 
-        Ok(checked_output(
-            response,
-            context.correlation_id(),
-            context.node_id().as_str(),
-        ))
+        Ok(vec![
+            ExecutionOutput::workspace_scoped(
+                SlotId::new("model"),
+                Arc::new(ExecutionValue::Model(response.model().clone())),
+            ),
+            ExecutionOutput::workspace_scoped(
+                SlotId::new("clip"),
+                Arc::new(ExecutionValue::Clip(response.clip().clone())),
+            ),
+            ExecutionOutput::workspace_scoped(
+                SlotId::new("vae"),
+                Arc::new(ExecutionValue::Vae(response.vae().clone())),
+            ),
+        ])
     }
-}
-
-fn checked_output(
-    response: LoadBundleResponse,
-    correlation_id: Option<&reimagine_core::diagnostic::CorrelationId>,
-    node_id: &str,
-) -> Vec<(SlotId, Arc<ExecutionValue>)> {
-    if let Some(cid) = correlation_id {
-        let _ = cid;
-    }
-    let _ = node_id;
-    vec![
-        (
-            SlotId::new("model"),
-            Arc::new(ExecutionValue::Model(response.model().clone())),
-        ),
-        (
-            SlotId::new("clip"),
-            Arc::new(ExecutionValue::Clip(response.clip().clone())),
-        ),
-        (
-            SlotId::new("vae"),
-            Arc::new(ExecutionValue::Vae(response.vae().clone())),
-        ),
-    ]
 }

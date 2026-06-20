@@ -13,11 +13,12 @@ use reimagine_core::model::{
     ArtifactRef, ModelId, ModelRef, ModelRole, ModelSeries, ModelVariant, ParamValue, SlotId,
 };
 use reimagine_core::model::{TensorDType, TensorShape};
-use reimagine_core::{
-    BackendKind, BackendPayloadKey, BackendTensorHandle, ExecutionValue, RuntimeClipHandle,
-    RuntimeImage, RuntimeModelHandle, RuntimeVaeHandle,
-};
 use reimagine_inference::operation::InferenceCapability;
+use reimagine_inference::{
+    BackendKind, BackendPayloadKey, BackendTensorHandle, ConditioningMetadata,
+    ExecutionConditioning, ExecutionValue, RuntimeClipHandle, RuntimeImage, RuntimeModelHandle,
+    RuntimeVaeHandle,
+};
 use reimagine_inference::{
     CannedCapabilityResponse, CreateEmptyLatentRequest, CreateEmptyLatentResponse, FakeBackend,
     ImageSaveResponse, InferenceBackend, InferenceBackendCapabilities, InferenceBackendRegistry,
@@ -229,7 +230,7 @@ async fn checkpoint_loader_multi_output_by_slot_id() {
     let result = executor.execute(context).await.expect("execute ok");
     assert_eq!(result.len(), 3);
 
-    let slot_names: Vec<&str> = result.iter().map(|(s, _)| s.as_str()).collect();
+    let slot_names: Vec<&str> = result.iter().map(|o| o.slot_id().as_str()).collect();
     assert!(slot_names.contains(&"model"));
     assert!(slot_names.contains(&"clip"));
     assert!(slot_names.contains(&"vae"));
@@ -282,7 +283,7 @@ async fn checkpoint_loader_requires_all_three_outputs() {
     );
 
     let result = executor.execute(context).await.expect("execute ok");
-    let slot_names: Vec<&str> = result.iter().map(|(s, _)| s.as_str()).collect();
+    let slot_names: Vec<&str> = result.iter().map(|o| o.slot_id().as_str()).collect();
     assert!(slot_names.contains(&"model"));
     assert!(slot_names.contains(&"clip"));
     assert!(slot_names.contains(&"vae"));
@@ -344,8 +345,8 @@ async fn string_executor_passthrough() {
 
     let result = executor.execute(context).await.expect("execute ok");
     assert_eq!(result.len(), 1);
-    assert_eq!(result[0].0.as_str(), "value");
-    match result[0].1.as_ref() {
+    assert_eq!(result[0].slot_id().as_str(), "value");
+    match result[0].value().as_ref() {
         ExecutionValue::Param(ParamValue::String(s)) => assert_eq!(s, "hello world"),
         other => panic!("expected Param(String), got {other:?}"),
     }
@@ -479,18 +480,16 @@ async fn text_encode_executor_calls_typed_text_encode() {
         let mut guard = captured_for_factory.inner.lock().unwrap();
         *guard = Some(req.clone());
         let (clip, _text) = req.into_parts();
-        Ok::<_, InferenceError>(TextEncodeResponse::new(
-            reimagine_core::ExecutionConditioning::new(
-                reimagine_core::BackendTensorHandle::new(
-                    clip.backend().clone(),
-                    reimagine_core::BackendPayloadKey::new("captured-text"),
-                    reimagine_core::model::TensorDType::F32,
-                    reimagine_core::model::TensorShape::new(vec![1, 77, 2048]),
-                    "cpu",
-                ),
-                reimagine_core::ConditioningMetadata::new(64, 64),
+        Ok::<_, InferenceError>(TextEncodeResponse::new(ExecutionConditioning::new(
+            BackendTensorHandle::new(
+                clip.backend().clone(),
+                BackendPayloadKey::new("captured-text"),
+                reimagine_core::model::TensorDType::F32,
+                reimagine_core::model::TensorShape::new(vec![1, 77, 2048]),
+                "cpu",
             ),
-        ))
+            ConditioningMetadata::new(64, 64),
+        )))
     };
 
     let backend = Arc::new(
@@ -534,7 +533,7 @@ async fn text_encode_executor_calls_typed_text_encode() {
 
     let result = executor.execute(context).await.expect("execute ok");
     assert_eq!(result.len(), 1);
-    assert_eq!(result[0].0.as_str(), "conditioning");
+    assert_eq!(result[0].slot_id().as_str(), "conditioning");
 
     let captured = captured.inner.lock().unwrap().clone().expect("captured");
     assert_eq!(captured.clip().model_id().as_str(), "clip-model");
@@ -586,7 +585,7 @@ async fn create_empty_latent_executor_calls_typed_create_empty_latent() {
 
     let result = executor.execute(context).await.expect("execute ok");
     assert_eq!(result.len(), 1);
-    assert_eq!(result[0].0.as_str(), "latent");
+    assert_eq!(result[0].slot_id().as_str(), "latent");
 
     let captured = captured.inner.lock().unwrap().clone().expect("captured");
     assert_eq!(captured.width(), 64);
@@ -601,18 +600,16 @@ async fn fake_backend_capabilities_advertise_registered_capabilities() {
         .text_encode(CannedCapabilityResponse::from_request(
             |req: TextEncodeRequest| -> Result<TextEncodeResponse, InferenceError> {
                 let (clip, _text) = req.into_parts();
-                Ok(TextEncodeResponse::new(
-                    reimagine_core::ExecutionConditioning::new(
-                        reimagine_core::BackendTensorHandle::new(
-                            clip.backend().clone(),
-                            reimagine_core::BackendPayloadKey::new("text-encoded"),
-                            reimagine_core::model::TensorDType::F32,
-                            reimagine_core::model::TensorShape::new(vec![1, 77, 2048]),
-                            "cpu",
-                        ),
-                        reimagine_core::ConditioningMetadata::new(64, 64),
+                Ok(TextEncodeResponse::new(ExecutionConditioning::new(
+                    BackendTensorHandle::new(
+                        clip.backend().clone(),
+                        BackendPayloadKey::new("text-encoded"),
+                        reimagine_core::model::TensorDType::F32,
+                        reimagine_core::model::TensorShape::new(vec![1, 77, 2048]),
+                        "cpu",
                     ),
-                ))
+                    ConditioningMetadata::new(64, 64),
+                )))
             },
         ));
     let caps: InferenceBackendCapabilities = InferenceBackend::capabilities(&backend);

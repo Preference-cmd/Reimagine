@@ -27,7 +27,6 @@ use crate::run_session::{NodeOutcome, RunSession};
 use crate::scheduler::{NodeState, StageExecutionPolicy, StageNodeDecision};
 use crate::snapshot::{RunArtifactRef, RunSnapshot, RunSummary};
 use crate::store::RunStore;
-use crate::value::ExecutionValue;
 use crate::value_store::OutputKey;
 
 /// Options passed to [`RuntimeService::run`].
@@ -406,10 +405,14 @@ impl Runner {
                 {
                     Ok(outputs) => {
                         session.record_outcome(node_id.clone(), NodeOutcome::Completed);
-                        for (slot_id, value) in outputs {
-                            session
-                                .values_mut()
-                                .insert(OutputKey::new(node_id.clone(), slot_id), value);
+                        for output in outputs {
+                            let key = OutputKey::new(node_id.clone(), output.slot_id().clone());
+                            let retention = output.retention();
+                            session.values_mut().insert_with_retention(
+                                key,
+                                output.into_value(),
+                                retention,
+                            );
                         }
                         self.emit_node_event(&node, RunEventKind::NodeCompleted, &[]);
                     }
@@ -469,7 +472,7 @@ impl Runner {
         node: &reimagine_core::readiness::ExecutionNode,
         session: &RunSession,
         artifact_store: Arc<Mutex<ArtifactStore>>,
-    ) -> Result<Vec<(reimagine_core::model::SlotId, Arc<ExecutionValue>)>, NodeFailure> {
+    ) -> Result<Vec<reimagine_inference_core::ExecutionOutput>, NodeFailure> {
         self.emit_node_event(node, RunEventKind::NodeStarted, &[]);
         self.publish_node_running_snapshot(node, session, &artifact_store)
             .await;

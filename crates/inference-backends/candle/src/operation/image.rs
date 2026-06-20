@@ -19,7 +19,7 @@ use candle_core::Device;
 use reimagine_core::model::ArtifactRef;
 use reimagine_inference_core::{
     FilenamePrefix, ImagePreviewRequest, ImagePreviewResponse, ImageSaveRequest, ImageSaveResponse,
-    InferenceBackend,
+    InferenceBackend, RuntimeImage,
 };
 
 use crate::backend::CandleBackend;
@@ -56,7 +56,7 @@ pub fn execute_image_preview(
 }
 
 fn persist_image(
-    image_value: reimagine_core::RuntimeImage,
+    image_value: RuntimeImage,
     prefix: &str,
     run_id: &reimagine_core::model::RunId,
     node_id: &reimagine_core::model::NodeId,

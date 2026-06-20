@@ -1,8 +1,8 @@
 //! `model.load_bundle` response DTO.
 
-use reimagine_core::RuntimeClipHandle;
-use reimagine_core::RuntimeModelHandle;
-use reimagine_core::RuntimeVaeHandle;
+use crate::RuntimeClipHandle;
+use crate::RuntimeModelHandle;
+use crate::RuntimeVaeHandle;
 
 /// `model.load_bundle` response.
 ///

@@ -10,6 +10,7 @@
 //! `Vec<SlotId, ExecutionValue>` envelope and does not require
 //! callers to construct an `InferenceOperationId`.
 
+use crate::BackendKind;
 use crate::capability::InferenceBackendCapabilities;
 use crate::error::InferenceError;
 use crate::request::diffusion::DiffusionSampleRequest;
@@ -22,7 +23,6 @@ use crate::response::image::{ImagePreviewResponse, ImageSaveResponse};
 use crate::response::latent::{CreateEmptyLatentResponse, LatentDecodeResponse};
 use crate::response::model::LoadBundleResponse;
 use crate::response::text::TextEncodeResponse;
-use reimagine_core::BackendKind;
 
 /// Backend-neutral inference execution trait.
 ///

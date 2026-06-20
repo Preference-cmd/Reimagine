@@ -72,7 +72,7 @@ impl LoadBundleRequest {
     /// affinity derives solely from the resolved model. Today the
     /// resolved model carries no backend affinity; V2 may grow that
     /// constraint.
-    pub fn backend_affinities(&self) -> Vec<reimagine_core::BackendKind> {
+    pub fn backend_affinities(&self) -> Vec<crate::BackendKind> {
         Vec::new()
     }
 }
