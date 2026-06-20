@@ -18,7 +18,6 @@ use reimagine_app_host::{
     SnapshotExternalReadinessProvider, WorkspaceHost,
 };
 use reimagine_config::{AppConfig, AppPaths};
-use reimagine_core::ExecutionValue;
 use reimagine_core::diagnostic::DiagnosticSeverity;
 use reimagine_core::event::OperationReport;
 use reimagine_core::model::{
@@ -35,8 +34,8 @@ use reimagine_model_manager::{
 };
 use reimagine_nodes::{BUILTIN_CHECKPOINT_LOADER, BuiltinNodeCatalog};
 use reimagine_runtime::{
-    BoxedNodeExecutor, NodeExecutionContext, NodeExecutor, NodeExecutorRegistry, RunInputs,
-    RunState, RuntimeOptions, RuntimeService, VecRunEventSink,
+    BoxedNodeExecutor, ExecutionOutput, NodeExecutionContext, NodeExecutor, NodeExecutorRegistry,
+    RunInputs, RunState, RuntimeOptions, RuntimeService, VecRunEventSink,
 };
 
 const WORKFLOW_ID: &str = "wf-run-test";
@@ -108,7 +107,7 @@ impl NodeExecutor for MockLoaderExecutor {
     async fn execute(
         &self,
         _context: NodeExecutionContext,
-    ) -> Result<Vec<(SlotId, Arc<ExecutionValue>)>, reimagine_runtime::NodeExecutorError> {
+    ) -> Result<Vec<ExecutionOutput>, reimagine_runtime::NodeExecutorError> {
         Ok(Vec::new())
     }
 }

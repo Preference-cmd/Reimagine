@@ -9,7 +9,7 @@
 //! `models/stable_diffusion/sdxl/text.rs` and
 //! `models/stable_diffusion/sdxl/tokenizer.rs`.
 
-use reimagine_core::ExecutionValue;
+use reimagine_inference_core::ExecutionValue;
 use reimagine_inference_core::{InferenceBackend, TextEncodeRequest, TextEncodeResponse};
 
 use crate::backend::CandleBackend;

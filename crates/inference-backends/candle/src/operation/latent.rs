@@ -20,10 +20,10 @@
 
 use candle_core::{DType, Tensor};
 use reimagine_core::model::{TensorDType, TensorShape};
-use reimagine_core::{BackendTensorHandle, RuntimeImage, RuntimeLatent, RuntimeVaeHandle};
 use reimagine_inference_core::{
-    CreateEmptyLatentRequest, CreateEmptyLatentResponse, InferenceBackend, LatentDecodeRequest,
-    LatentDecodeResponse,
+    BackendPayloadKey, BackendTensorHandle, CreateEmptyLatentRequest, CreateEmptyLatentResponse,
+    InferenceBackend, LatentDecodeRequest, LatentDecodeResponse, RuntimeImage, RuntimeLatent,
+    RuntimeVaeHandle,
 };
 
 use crate::backend::CandleBackend;
@@ -91,7 +91,7 @@ pub fn execute_latent_create_empty(
             ))
         })?;
 
-    let payload_key = reimagine_core::BackendPayloadKey::new(format!(
+    let payload_key = BackendPayloadKey::new(format!(
         "latent:{}:{}",
         request.run_id().as_str(),
         request.node_id().as_str()
@@ -157,7 +157,7 @@ pub fn execute_latent_decode(
     let decoder = SdxlVaeDecoder::new();
     let image = decoder.decode(&input_latent, backend.device().as_ref())?;
 
-    let payload_key = reimagine_core::BackendPayloadKey::new(format!(
+    let payload_key = BackendPayloadKey::new(format!(
         "image:{}:{}",
         request.run_id().as_str(),
         request.node_id().as_str()

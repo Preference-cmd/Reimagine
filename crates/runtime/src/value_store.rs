@@ -4,6 +4,7 @@ use std::collections::HashMap;
 use std::sync::Arc;
 
 use reimagine_core::model::{NodeId, SlotId};
+use reimagine_inference_core::ExecutionValueRetention;
 
 use crate::value::ExecutionValue;
 
@@ -39,9 +40,15 @@ impl OutputKey {
 /// Stores lightweight `Arc<ExecutionValue>` handles, not large tensor or model
 /// payloads — those remain in backend-owned stores and are referenced by
 /// handles carried inside [`ExecutionValue`].
+///
+/// The store also records the producer-declared
+/// [`ExecutionValueRetention`] policy for each output. Issue 02 stores the
+/// policy without acting on it; issue 05 will use it to drive early
+/// release of single-use and run-scoped values.
 #[derive(Debug, Default)]
 pub struct RunValueStore {
     values: HashMap<OutputKey, Arc<ExecutionValue>>,
+    retention: HashMap<OutputKey, ExecutionValueRetention>,
 }
 
 impl RunValueStore {
@@ -49,14 +56,39 @@ impl RunValueStore {
         Self::default()
     }
 
-    /// Insert a value for the given output key.
+    /// Insert a value for the given output key with the default
+    /// [`ExecutionValueRetention::RunScoped`] retention.
+    ///
+    /// Existing callers that pre-date the retention contract continue to
+    /// compile and behave identically — the runtime holds the value for
+    /// the entire run.
     pub fn insert(&mut self, key: OutputKey, value: Arc<ExecutionValue>) {
-        self.values.insert(key, value);
+        self.values.insert(key.clone(), value);
+        self.retention
+            .insert(key, ExecutionValueRetention::RunScoped);
+    }
+
+    /// Insert a value with an explicit retention policy declared by the
+    /// producer (an [`ExecutionOutput`](reimagine_inference_core::ExecutionOutput)).
+    pub fn insert_with_retention(
+        &mut self,
+        key: OutputKey,
+        value: Arc<ExecutionValue>,
+        retention: ExecutionValueRetention,
+    ) {
+        self.values.insert(key.clone(), value);
+        self.retention.insert(key, retention);
     }
 
     /// Get a value for the given key.
     pub fn get(&self, key: &OutputKey) -> Option<Arc<ExecutionValue>> {
         self.values.get(key).cloned()
+    }
+
+    /// Returns the producer-declared retention policy for the given key,
+    /// or `None` if the key is not present.
+    pub fn retention(&self, key: &OutputKey) -> Option<ExecutionValueRetention> {
+        self.retention.get(key).copied()
     }
 
     /// Returns `true` if the store contains a value for the given key.
@@ -79,8 +111,14 @@ impl RunValueStore {
         self.values.iter()
     }
 
+    /// Iterate all stored `(key, retention)` pairs.
+    pub fn retention_iter(&self) -> impl Iterator<Item = (&OutputKey, &ExecutionValueRetention)> {
+        self.retention.iter()
+    }
+
     /// Remove and return the value for the given key.
     pub fn remove(&mut self, key: &OutputKey) -> Option<Arc<ExecutionValue>> {
+        self.retention.remove(key);
         self.values.remove(key)
     }
 }

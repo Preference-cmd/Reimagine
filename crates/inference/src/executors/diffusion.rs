@@ -8,13 +8,18 @@
 //! slot for `KSamplerExecutor`. The backend's typed
 //! [`DiffusionSampleResponse`] returns the latent handle without any
 //! `SlotId` mapping.
+//!
+//! Retention: the sampled `latent` is declared `RunScoped` during
+//! this migration, until single-use fan-out diagnostics are
+//! implemented in issue 05.
 
 use std::sync::Arc;
 
-use reimagine_core::ExecutionValue;
 use reimagine_core::model::{ParamValue, SlotId};
 use reimagine_inference_core::{
-    DiffusionSampleRequest, DiffusionSampleResponse, InferenceRuntime, SamplerName, SchedulerName,
+    DiffusionSampleRequest, DiffusionSampleResponse, ExecutionConditioning, ExecutionOutput,
+    ExecutionValue, InferenceRuntime, RuntimeLatent, RuntimeModelHandle, SamplerName,
+    SchedulerName,
 };
 use reimagine_runtime::{NodeExecutionContext, NodeExecutor, NodeExecutorError};
 
@@ -127,7 +132,7 @@ fn select_scheduler(name: Option<String>) -> SchedulerName {
 
 fn extract_model_handle(
     value: Arc<ExecutionValue>,
-) -> Result<reimagine_core::RuntimeModelHandle, NodeExecutorError> {
+) -> Result<RuntimeModelHandle, NodeExecutorError> {
     match value.as_ref() {
         ExecutionValue::Model(handle) => Ok(handle.clone()),
         _ => Err(NodeExecutorError::Failed {
@@ -138,7 +143,7 @@ fn extract_model_handle(
 
 fn extract_conditioning(
     value: Arc<ExecutionValue>,
-) -> Result<reimagine_core::ExecutionConditioning, NodeExecutorError> {
+) -> Result<ExecutionConditioning, NodeExecutorError> {
     match value.as_ref() {
         ExecutionValue::Conditioning(handle) => Ok(handle.clone()),
         _ => Err(NodeExecutorError::Failed {
@@ -148,9 +153,7 @@ fn extract_conditioning(
     }
 }
 
-fn extract_latent(
-    value: Arc<ExecutionValue>,
-) -> Result<reimagine_core::RuntimeLatent, NodeExecutorError> {
+fn extract_latent(value: Arc<ExecutionValue>) -> Result<RuntimeLatent, NodeExecutorError> {
     match value.as_ref() {
         ExecutionValue::Latent(handle) => Ok(handle.clone()),
         _ => Err(NodeExecutorError::Failed {
@@ -175,7 +178,7 @@ impl NodeExecutor for KSamplerExecutor {
     async fn execute(
         &self,
         context: NodeExecutionContext,
-    ) -> Result<Vec<(SlotId, Arc<ExecutionValue>)>, NodeExecutorError> {
+    ) -> Result<Vec<ExecutionOutput>, NodeExecutorError> {
         let model_handle = extract_model_handle(required_input(&context, "model")?)?;
         let positive = extract_conditioning(required_input(&context, "positive")?)?;
         let negative = extract_conditioning(required_input(&context, "negative")?)?;
@@ -220,7 +223,7 @@ impl NodeExecutor for KSamplerExecutor {
             .await
             .map_err(into_executor_error)?;
 
-        Ok(vec![(
+        Ok(vec![ExecutionOutput::run_scoped(
             SlotId::new("latent"),
             Arc::new(ExecutionValue::Latent(response.into_latent())),
         )])

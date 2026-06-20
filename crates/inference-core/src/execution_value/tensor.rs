@@ -1,13 +1,13 @@
-//! Tensor metadata that flows on a public execution value.
+//! Tensor metadata that flows on an internal execution value.
 //!
 //! The actual tensor payload lives in backend-owned stores; only the
-//! `dtype` / `shape` / `device_label` triple is part of the public
-//! value envelope. `TensorDType` and `TensorShape` are reused from the
-//! `core::model` facade; this module introduces a small group type
-//! `BackendTensorMetadata` for callers that want to pass or display
-//! the triple as a unit.
+//! `dtype` / `shape` / `device_label` triple is part of the value
+//! envelope. `TensorDType` and `TensorShape` are reused from the
+//! `reimagine_core::model` facade; this module introduces a small
+//! group type `BackendTensorMetadata` for callers that want to pass
+//! or display the triple as a unit.
 
-use crate::model::{TensorDType, TensorShape};
+use reimagine_core::model::{TensorDType, TensorShape};
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash, serde::Serialize, serde::Deserialize)]
 pub struct BackendTensorMetadata {

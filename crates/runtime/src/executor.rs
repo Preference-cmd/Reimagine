@@ -4,16 +4,19 @@ use std::collections::HashMap;
 use std::sync::Arc;
 
 use reimagine_core::model::NodeTypeId;
+use reimagine_inference_core::ExecutionOutput;
 
 use crate::node_context::NodeExecutionContext;
-use crate::value::ExecutionValue;
 
 /// Result of executing one node.
 ///
-/// V1 returns a `Vec<(SlotId, Arc<ExecutionValue>)>` of outputs. The runner
-/// task is responsible for inserting these into the [`RunValueStore`] using
-/// the node's declared `output_slots`.
-pub type NodeExecutionOutputs = Vec<(reimagine_core::model::SlotId, Arc<ExecutionValue>)>;
+/// V1 returns a `Vec<ExecutionOutput>` of declared outputs. Each output
+/// bundles the produced value with the slot id it should be stored
+/// under and the [`ExecutionValueRetention`](reimagine_inference_core::ExecutionValueRetention)
+/// policy the executor intends. The runner task is responsible for
+/// inserting these into the [`RunValueStore`] using the node's declared
+/// `output_slots` and recording the retention alongside the value.
+pub type NodeExecutionOutputs = Vec<ExecutionOutput>;
 
 /// Errors returned from a node executor.
 ///

@@ -41,7 +41,7 @@ It must not depend on Tauri or Axum.
 
 ```text
 runtime -> core
-runtime -> inference
+runtime -> inference -> inference-core
 runtime must not -> tauri
 runtime must not -> axum
 runtime must not -> model-manager
@@ -49,8 +49,15 @@ runtime must not -> inference-backends/*
 ```
 
 Concrete node executors and backend capabilities are assembled by `app-host`.
-Runtime consumes the executor/value facade from `inference` and must not depend
-on concrete backend crates.
+Runtime should consume executor contracts, execution values, execution outputs,
+and backend handle types through the `inference` facade. The canonical low-level
+definitions live in `inference-core`, but `runtime` should not treat
+`inference-core` as its long-term application-facing dependency. During the
+01/02 migration window, runtime may temporarily import from `inference-core`
+until the node executor contract moves behind the `inference` facade in the
+03/04 boundary issues.
+
+Runtime must not depend on concrete backend crates.
 
 ## Suggested Module Layout
 

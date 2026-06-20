@@ -10,7 +10,6 @@ use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 use async_trait::async_trait;
-use reimagine_core::ExecutionValue;
 use reimagine_core::diagnostic::DiagnosticCode;
 use reimagine_core::event::{RunEvent, RunEventKind, Timestamp};
 use reimagine_core::model::{
@@ -22,9 +21,9 @@ use reimagine_core::readiness::{
     ExecutionStage, RunTarget, RunTargetSelection,
 };
 use reimagine_runtime::{
-    CancellationToken, Clock, NodeExecutionContext, NodeExecutor, NodeExecutorError,
-    NodeExecutorRegistry, NoopRunResourceBackend, RunEventSink, RunHandle, RunInputs, RuntimeError,
-    RuntimeOptions, RuntimeService, RuntimeServiceError, VecRunEventSink,
+    CancellationToken, Clock, ExecutionValue, NodeExecutionContext, NodeExecutor,
+    NodeExecutorError, NodeExecutorRegistry, NoopRunResourceBackend, RunEventSink, RunHandle,
+    RunInputs, RuntimeError, RuntimeOptions, RuntimeService, RuntimeServiceError, VecRunEventSink,
 };
 
 /// A clock that always returns the same string timestamp.
@@ -72,7 +71,7 @@ impl NodeExecutor for MockExecutor {
     async fn execute(
         &self,
         context: NodeExecutionContext,
-    ) -> Result<Vec<(SlotId, Arc<ExecutionValue>)>, NodeExecutorError> {
+    ) -> Result<Vec<reimagine_inference_core::ExecutionOutput>, NodeExecutorError> {
         self.count.fetch_add(1, Ordering::SeqCst);
         if self.delay > Duration::ZERO {
             // Observe cancellation while we wait.
@@ -88,7 +87,7 @@ impl NodeExecutor for MockExecutor {
                 message: message.clone(),
             });
         }
-        Ok(vec![(
+        Ok(vec![reimagine_inference_core::ExecutionOutput::run_scoped(
             SlotId::new("out"),
             Arc::new(ExecutionValue::Param(
                 reimagine_core::model::ParamValue::String(self.label.clone()),
@@ -106,7 +105,7 @@ impl NodeExecutor for CancelImmediatelyExecutor {
     async fn execute(
         &self,
         _context: NodeExecutionContext,
-    ) -> Result<Vec<(SlotId, Arc<ExecutionValue>)>, NodeExecutorError> {
+    ) -> Result<Vec<reimagine_inference_core::ExecutionOutput>, NodeExecutorError> {
         self.count.fetch_add(1, Ordering::SeqCst);
         Err(NodeExecutorError::Cancelled)
     }
@@ -121,7 +120,7 @@ impl NodeExecutor for ArtifactExecutor {
     async fn execute(
         &self,
         context: NodeExecutionContext,
-    ) -> Result<Vec<(SlotId, Arc<ExecutionValue>)>, NodeExecutorError> {
+    ) -> Result<Vec<reimagine_inference_core::ExecutionOutput>, NodeExecutorError> {
         context
             .artifacts()
             .record(
@@ -144,7 +143,7 @@ impl NodeExecutor for InspectInputsExecutor {
     async fn execute(
         &self,
         context: NodeExecutionContext,
-    ) -> Result<Vec<(SlotId, Arc<ExecutionValue>)>, NodeExecutorError> {
+    ) -> Result<Vec<reimagine_inference_core::ExecutionOutput>, NodeExecutorError> {
         if let Some((slot_id, expected)) = &self.expected_input {
             let actual = context
                 .inputs()
@@ -175,7 +174,7 @@ impl NodeExecutor for InspectInputsExecutor {
             }
         }
 
-        Ok(vec![(
+        Ok(vec![reimagine_inference_core::ExecutionOutput::run_scoped(
             SlotId::new("out"),
             Arc::new(ExecutionValue::Param(ParamValue::String("ok".to_owned()))),
         )])
@@ -390,9 +389,9 @@ impl NodeExecutor for OrderedExecutor {
     async fn execute(
         &self,
         _context: NodeExecutionContext,
-    ) -> Result<Vec<(SlotId, Arc<ExecutionValue>)>, NodeExecutorError> {
+    ) -> Result<Vec<reimagine_inference_core::ExecutionOutput>, NodeExecutorError> {
         self.order.lock().unwrap().push(self.label.clone());
-        Ok(vec![(
+        Ok(vec![reimagine_inference_core::ExecutionOutput::run_scoped(
             SlotId::new("out"),
             Arc::new(ExecutionValue::Param(
                 reimagine_core::model::ParamValue::String(self.label.clone()),

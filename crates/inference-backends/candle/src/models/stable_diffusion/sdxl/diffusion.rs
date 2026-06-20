@@ -245,8 +245,8 @@ fn extract_select<'a>(
 ///
 /// V1 stores the sampled latent tensor through the existing
 /// [`CandleStore`] accessors; the operation layer wraps it into a
-/// lightweight `RuntimeValue::Latent` handle. The `summary` is kept on
-/// the public surface so downstream diagnostic / event sinks can
+/// lightweight `ExecutionValue::Latent` handle. The `summary` is kept
+/// on the public surface so downstream diagnostic / event sinks can
 /// consume it once the operation layer exposes a sampling trace
 /// channel; V1 currently only validates it through unit tests.
 #[derive(Debug)]

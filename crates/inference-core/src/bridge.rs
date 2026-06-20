@@ -1,6 +1,6 @@
 //! Bridge policy and bridge trait shapes for cross-backend value transfer.
 
-use reimagine_core::BackendKind;
+use crate::BackendKind;
 
 use crate::capability::InferenceCapability;
 

@@ -2,8 +2,8 @@
 
 use std::sync::Arc;
 
-use reimagine_core::ExecutionValue;
-use reimagine_core::RuntimeClipHandle;
+use crate::ExecutionValue;
+use crate::RuntimeClipHandle;
 use reimagine_core::diagnostic::CorrelationId;
 use reimagine_core::model::{NodeId, ParamValue, RunId, WorkflowId, WorkflowVersion};
 
@@ -94,7 +94,7 @@ impl TextEncodeRequest {
     }
 
     /// Backend affinity observed from the clip handle.
-    pub fn backend_affinities(&self) -> Vec<reimagine_core::BackendKind> {
+    pub fn backend_affinities(&self) -> Vec<crate::BackendKind> {
         vec![self.clip.backend().clone()]
     }
 }

@@ -13,14 +13,18 @@
 //! `save_image` / `preview_image`) is executor-owned. The backend's
 //! typed responses return the value or artifact handle without any
 //! `SlotId` mapping.
+//!
+//! Retention: the decoded `image` is declared `RunScoped`. Save and
+//! preview nodes emit no execution value outputs; they publish
+//! artifact observations instead.
 
 use std::sync::Arc;
 
-use reimagine_core::ExecutionValue;
 use reimagine_core::model::{ArtifactRef, ParamValue, SlotId};
 use reimagine_inference_core::{
-    ImagePreviewRequest, ImagePreviewResponse, ImageSaveRequest, ImageSaveResponse,
-    InferenceRuntime, LatentDecodeRequest, LatentDecodeResponse,
+    ExecutionOutput, ExecutionValue, ImagePreviewRequest, ImagePreviewResponse, ImageSaveRequest,
+    ImageSaveResponse, InferenceRuntime, LatentDecodeRequest, LatentDecodeResponse, RuntimeImage,
+    RuntimeLatent, RuntimeVaeHandle,
 };
 use reimagine_runtime::{ArtifactEventKind, NodeExecutionContext, NodeExecutor, NodeExecutorError};
 
@@ -39,9 +43,7 @@ fn required_input(
         })
 }
 
-fn extract_vae(
-    value: Arc<ExecutionValue>,
-) -> Result<reimagine_core::RuntimeVaeHandle, NodeExecutorError> {
+fn extract_vae(value: Arc<ExecutionValue>) -> Result<RuntimeVaeHandle, NodeExecutorError> {
     match value.as_ref() {
         ExecutionValue::Vae(handle) => Ok(handle.clone()),
         _ => Err(NodeExecutorError::Failed {
@@ -50,9 +52,7 @@ fn extract_vae(
     }
 }
 
-fn extract_latent(
-    value: Arc<ExecutionValue>,
-) -> Result<reimagine_core::RuntimeLatent, NodeExecutorError> {
+fn extract_latent(value: Arc<ExecutionValue>) -> Result<RuntimeLatent, NodeExecutorError> {
     match value.as_ref() {
         ExecutionValue::Latent(handle) => Ok(handle.clone()),
         _ => Err(NodeExecutorError::Failed {
@@ -61,9 +61,7 @@ fn extract_latent(
     }
 }
 
-fn extract_image(
-    value: Arc<ExecutionValue>,
-) -> Result<reimagine_core::RuntimeImage, NodeExecutorError> {
+fn extract_image(value: Arc<ExecutionValue>) -> Result<RuntimeImage, NodeExecutorError> {
     match value.as_ref() {
         ExecutionValue::Image(handle) => Ok(handle.clone()),
         _ => Err(NodeExecutorError::Failed {
@@ -88,7 +86,7 @@ impl NodeExecutor for VaeDecodeExecutor {
     async fn execute(
         &self,
         context: NodeExecutionContext,
-    ) -> Result<Vec<(SlotId, Arc<ExecutionValue>)>, NodeExecutorError> {
+    ) -> Result<Vec<ExecutionOutput>, NodeExecutorError> {
         let vae = extract_vae(required_input(&context, "vae")?)?;
         let latent = extract_latent(required_input(&context, "latent")?)?;
 
@@ -111,7 +109,7 @@ impl NodeExecutor for VaeDecodeExecutor {
             .await
             .map_err(into_executor_error)?;
 
-        Ok(vec![(
+        Ok(vec![ExecutionOutput::run_scoped(
             SlotId::new("image"),
             Arc::new(ExecutionValue::Image(response.into_image())),
         )])
@@ -134,7 +132,7 @@ impl NodeExecutor for SaveImageExecutor {
     async fn execute(
         &self,
         context: NodeExecutionContext,
-    ) -> Result<Vec<(SlotId, Arc<ExecutionValue>)>, NodeExecutorError> {
+    ) -> Result<Vec<ExecutionOutput>, NodeExecutorError> {
         let image = extract_image(required_input(&context, "image")?)?;
 
         let mut request = ImageSaveRequest::new(
@@ -186,7 +184,7 @@ impl NodeExecutor for PreviewImageExecutor {
     async fn execute(
         &self,
         context: NodeExecutionContext,
-    ) -> Result<Vec<(SlotId, Arc<ExecutionValue>)>, NodeExecutorError> {
+    ) -> Result<Vec<ExecutionOutput>, NodeExecutorError> {
         let image = extract_image(required_input(&context, "image")?)?;
 
         let mut request = ImagePreviewRequest::new(

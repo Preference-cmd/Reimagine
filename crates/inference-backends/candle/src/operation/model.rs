@@ -11,8 +11,10 @@
 //! re-reading the file.
 
 use reimagine_core::model::ModelRole;
-use reimagine_core::{RuntimeClipHandle, RuntimeModelHandle, RuntimeVaeHandle};
-use reimagine_inference_core::{InferenceBackend, LoadBundleRequest, LoadBundleResponse};
+use reimagine_inference_core::{
+    InferenceBackend, LoadBundleRequest, LoadBundleResponse, RuntimeClipHandle, RuntimeModelHandle,
+    RuntimeVaeHandle,
+};
 
 use crate::backend::CandleBackend;
 use crate::error::CandleBackendError;

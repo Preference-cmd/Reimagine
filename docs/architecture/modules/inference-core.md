@@ -53,9 +53,14 @@ Consumers:
 ```text
 inference -> inference-core
 inference-backends/candle -> inference-core
-runtime -> inference -> inference-core
 app-host -> inference-core
 ```
+
+Runtime-facing code should consume these contracts through the `inference`
+facade (`runtime -> inference -> inference-core`). A temporary direct
+`runtime -> inference-core` dependency is acceptable only during the
+inference-runtime-boundary migration, before the node executor contract is
+moved out of `runtime`.
 
 This keeps backend data flow and crate dependency direction separate.
 `inference-core` may depend on lightweight `core::model` ids, params, artifact

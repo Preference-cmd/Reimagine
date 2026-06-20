@@ -16,9 +16,8 @@
 
 use std::sync::Mutex;
 
-use reimagine_core::BackendKind;
 use reimagine_inference_core::{
-    CreateEmptyLatentRequest, CreateEmptyLatentResponse, DiffusionSampleRequest,
+    BackendKind, CreateEmptyLatentRequest, CreateEmptyLatentResponse, DiffusionSampleRequest,
     DiffusionSampleResponse, ImagePreviewRequest, ImagePreviewResponse, ImageSaveRequest,
     ImageSaveResponse, InferenceBackend, InferenceBackendCapabilities, InferenceCapability,
     InferenceCapabilitySupport, InferenceError, LatentDecodeRequest, LatentDecodeResponse,
@@ -74,7 +73,7 @@ impl<Req, Resp> CannedCapabilityResponse<Req, Resp> {
 /// ```
 /// use reimagine_inference::{FakeBackend, CannedCapabilityResponse};
 /// use reimagine_inference::operation::InferenceCapability;
-/// use reimagine_core::{
+/// use reimagine_inference::{
 ///     BackendKind, BackendPayloadKey, BackendTensorHandle, RuntimeLatent,
 /// };
 /// use reimagine_core::model::{TensorDType, TensorShape};
