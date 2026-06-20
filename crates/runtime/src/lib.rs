@@ -17,6 +17,7 @@
 mod artifacts;
 mod cancellation;
 mod clock;
+mod consumer_index;
 mod error;
 mod events;
 mod handle;
@@ -32,6 +33,7 @@ mod value_store;
 pub use artifacts::{ArtifactRecord, ArtifactStore, RuntimeNodeArtifactCapability};
 pub use cancellation::CancellationToken;
 pub use clock::{Clock, SystemClock};
+pub use consumer_index::{ConsumerBinding, PlanConsumerIndex};
 pub use error::RuntimeError;
 pub use events::{BoxedRunEventSink, RunEventSink, VecRunEventSink};
 pub use handle::{RunHandle, RunState};
@@ -42,7 +44,7 @@ pub use runner::{RuntimeOptions, RuntimeService, RuntimeServiceError};
 pub use scheduler::NodeState;
 pub use snapshot::{RunArtifactRef, RunSnapshot, RunSummary};
 pub use store::{RunStore, RunStoreInner};
-pub use value_store::{OutputKey, RunValueStore};
+pub use value_store::{OutputKey, RunValueStore, RuntimeValueRecord};
 
 pub use value::RuntimeValue;
 pub use value::{

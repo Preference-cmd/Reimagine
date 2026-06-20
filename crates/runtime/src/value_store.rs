@@ -35,20 +35,53 @@ impl OutputKey {
     }
 }
 
+/// Single record for a stored intermediate value, pairing the value with
+/// the producer-declared [`ExecutionValueRetention`].
+///
+/// Issue 05 collapses the previous `values` / `retention` parallel maps
+/// into a single record map so retention and value lifetimes are kept
+/// together for the lifetime of the record.
+#[derive(Debug, Clone)]
+pub struct RuntimeValueRecord {
+    value: Arc<ExecutionValue>,
+    retention: ExecutionValueRetention,
+}
+
+impl RuntimeValueRecord {
+    pub fn new(value: Arc<ExecutionValue>, retention: ExecutionValueRetention) -> Self {
+        Self { value, retention }
+    }
+
+    pub fn value(&self) -> &Arc<ExecutionValue> {
+        &self.value
+    }
+
+    pub fn retention(&self) -> ExecutionValueRetention {
+        self.retention
+    }
+
+    /// Consume the record and return the inner `Arc<ExecutionValue>`.
+    pub fn into_value(self) -> Arc<ExecutionValue> {
+        self.value
+    }
+}
+
 /// Per-run value store keyed by [`OutputKey`].
 ///
 /// Stores lightweight `Arc<ExecutionValue>` handles, not large tensor or model
 /// payloads — those remain in backend-owned stores and are referenced by
 /// handles carried inside [`ExecutionValue`].
 ///
-/// The store also records the producer-declared
-/// [`ExecutionValueRetention`] policy for each output. Issue 02 stores the
-/// policy without acting on it; issue 05 will use it to drive early
-/// release of single-use and run-scoped values.
+/// Each stored record carries the producer-declared
+/// [`ExecutionValueRetention`] policy. The runtime uses the policy to
+/// decide when to drop its run-scoped `Arc<ExecutionValue>` references:
+/// `SingleUse` values are dropped after their unique consumer
+/// completes, `RunScoped` values live until terminal cleanup, and
+/// `WorkspaceScoped` values are treated as opaque run-owned handles
+/// whose drop is detached from any backend cache eviction.
 #[derive(Debug, Default)]
 pub struct RunValueStore {
-    values: HashMap<OutputKey, Arc<ExecutionValue>>,
-    retention: HashMap<OutputKey, ExecutionValueRetention>,
+    records: HashMap<OutputKey, RuntimeValueRecord>,
 }
 
 impl RunValueStore {
@@ -63,9 +96,10 @@ impl RunValueStore {
     /// compile and behave identically — the runtime holds the value for
     /// the entire run.
     pub fn insert(&mut self, key: OutputKey, value: Arc<ExecutionValue>) {
-        self.values.insert(key.clone(), value);
-        self.retention
-            .insert(key, ExecutionValueRetention::RunScoped);
+        self.records.insert(
+            key,
+            RuntimeValueRecord::new(value, ExecutionValueRetention::RunScoped),
+        );
     }
 
     /// Insert a value with an explicit retention policy declared by the
@@ -76,49 +110,55 @@ impl RunValueStore {
         value: Arc<ExecutionValue>,
         retention: ExecutionValueRetention,
     ) {
-        self.values.insert(key.clone(), value);
-        self.retention.insert(key, retention);
+        self.records
+            .insert(key, RuntimeValueRecord::new(value, retention));
     }
 
     /// Get a value for the given key.
     pub fn get(&self, key: &OutputKey) -> Option<Arc<ExecutionValue>> {
-        self.values.get(key).cloned()
+        self.records.get(key).map(|r| r.value().clone())
     }
 
     /// Returns the producer-declared retention policy for the given key,
     /// or `None` if the key is not present.
     pub fn retention(&self, key: &OutputKey) -> Option<ExecutionValueRetention> {
-        self.retention.get(key).copied()
+        self.records.get(key).map(|r| r.retention())
     }
 
     /// Returns `true` if the store contains a value for the given key.
     pub fn contains(&self, key: &OutputKey) -> bool {
-        self.values.contains_key(key)
+        self.records.contains_key(key)
     }
 
     /// Number of stored values.
     pub fn len(&self) -> usize {
-        self.values.len()
+        self.records.len()
     }
 
     /// Returns `true` if the store is empty.
     pub fn is_empty(&self) -> bool {
-        self.values.is_empty()
+        self.records.is_empty()
     }
 
     /// Iterate all stored `(key, value)` pairs.
     pub fn iter(&self) -> impl Iterator<Item = (&OutputKey, &Arc<ExecutionValue>)> {
-        self.values.iter()
+        self.records.iter().map(|(k, r)| (k, r.value()))
     }
 
-    /// Iterate all stored `(key, retention)` pairs.
-    pub fn retention_iter(&self) -> impl Iterator<Item = (&OutputKey, &ExecutionValueRetention)> {
-        self.retention.iter()
+    /// Iterate all stored `(key, record)` pairs.
+    pub fn record_iter(&self) -> impl Iterator<Item = (&OutputKey, &RuntimeValueRecord)> {
+        self.records.iter()
     }
 
     /// Remove and return the value for the given key.
     pub fn remove(&mut self, key: &OutputKey) -> Option<Arc<ExecutionValue>> {
-        self.retention.remove(key);
-        self.values.remove(key)
+        self.records.remove(key).map(|r| r.into_value())
+    }
+
+    /// Drop every stored record, releasing the runtime's run-scoped
+    /// `Arc<ExecutionValue>` references. Backend-owned payloads that
+    /// outlive the run must hold their own handles.
+    pub fn clear(&mut self) {
+        self.records.clear();
     }
 }
