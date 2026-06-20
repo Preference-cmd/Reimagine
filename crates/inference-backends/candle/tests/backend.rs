@@ -28,10 +28,9 @@ use reimagine_inference_core::{
     CreateEmptyLatentRequest, CreateEmptyLatentResponse, DiffusionSampleRequest,
     DiffusionSampleResponse, ImagePreviewRequest, ImagePreviewResponse, ImageSaveRequest,
     ImageSaveResponse, InferenceBackend, InferenceCapability, InferenceError, LatentDecodeRequest,
-    LatentDecodeResponse, LoadBundleRequest, ModelFormat, ResolvedInferenceModel, SamplerName,
-    SchedulerName, TextEncodeRequest, TextEncodeResponse,
+    LatentDecodeResponse, LoadBundleRequest, ModelFormat, ResolvedInferenceModel,
+    RunResourceBackend, SamplerName, SchedulerName, TextEncodeRequest, TextEncodeResponse,
 };
-use reimagine_runtime::RunResourceBackend;
 
 fn backend() -> CandleBackend {
     CandleBackend::new(CandleBackendConfig::new(

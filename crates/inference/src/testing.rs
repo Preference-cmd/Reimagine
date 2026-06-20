@@ -14,8 +14,13 @@
 //! should enable the `testing` feature. Production code must not
 //! depend on `FakeBackend`.
 
+use std::sync::Arc;
 use std::sync::Mutex;
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
+use std::time::Duration;
 
+use async_trait::async_trait;
+use reimagine_core::model::{ArtifactId, ArtifactRef, SlotId};
 use reimagine_inference_core::{
     BackendKind, CreateEmptyLatentRequest, CreateEmptyLatentResponse, DiffusionSampleRequest,
     DiffusionSampleResponse, ImagePreviewRequest, ImagePreviewResponse, ImageSaveRequest,
@@ -23,6 +28,9 @@ use reimagine_inference_core::{
     InferenceCapabilitySupport, InferenceError, LatentDecodeRequest, LatentDecodeResponse,
     LoadBundleRequest, LoadBundleResponse, TextEncodeRequest, TextEncodeResponse,
 };
+
+use crate::artifact_publisher::{ArtifactEventKind, ArtifactPublisher};
+use crate::cancellation::NodeCancellation;
 
 /// A canned response factory for a single capability.
 pub struct CannedCapabilityResponse<Req, Resp> {
@@ -380,5 +388,123 @@ impl CannedCapabilities {
     #[allow(dead_code)]
     fn _referenced(&self) -> bool {
         self.load_bundle.is_some() || self.text_encode.is_some()
+    }
+}
+
+/// No-op [`ArtifactPublisher`] for tests.
+///
+/// Records nothing, returns a deterministic `ArtifactId` so executors
+/// that observe the returned id don't panic. Tests that need to assert
+/// on recorded artifacts should wrap a different publisher.
+#[derive(Debug, Default, Clone)]
+pub struct NoopArtifactPublisher {
+    counter: Arc<AtomicU64>,
+}
+
+impl NoopArtifactPublisher {
+    pub fn new() -> Self {
+        Self::default()
+    }
+}
+
+#[async_trait]
+impl ArtifactPublisher for NoopArtifactPublisher {
+    async fn record(
+        &self,
+        _slot_id: SlotId,
+        _reference: ArtifactRef,
+        _kind: ArtifactEventKind,
+    ) -> Option<ArtifactId> {
+        let index = self.counter.fetch_add(1, Ordering::Relaxed);
+        Some(ArtifactId::new(format!("noop-{index}")))
+    }
+}
+
+/// One artifact observation captured by [`RecordingArtifactPublisher`].
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct RecordedArtifact {
+    pub slot_id: SlotId,
+    pub reference: ArtifactRef,
+    pub kind: ArtifactEventKind,
+}
+
+/// [`ArtifactPublisher`] implementation that records every call into
+/// an in-memory `Vec` so tests can assert on what executors published.
+#[derive(Debug, Default)]
+pub struct RecordingArtifactPublisher {
+    records: Arc<Mutex<Vec<RecordedArtifact>>>,
+    counter: Arc<AtomicU64>,
+}
+
+impl RecordingArtifactPublisher {
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    pub fn records(&self) -> Vec<RecordedArtifact> {
+        self.records.lock().expect("records poisoned").clone()
+    }
+}
+
+#[async_trait]
+impl ArtifactPublisher for RecordingArtifactPublisher {
+    async fn record(
+        &self,
+        slot_id: SlotId,
+        reference: ArtifactRef,
+        kind: ArtifactEventKind,
+    ) -> Option<ArtifactId> {
+        self.records
+            .lock()
+            .expect("records poisoned")
+            .push(RecordedArtifact {
+                slot_id,
+                reference,
+                kind,
+            });
+        let index = self.counter.fetch_add(1, Ordering::Relaxed);
+        Some(ArtifactId::new(format!("rec-{index}")))
+    }
+}
+
+/// No-op [`NodeCancellation`] for tests.
+///
+/// Polls the cancelled flag with a short `tokio::time::sleep` so
+/// executors that `await cancellation().cancelled()` yield back to the
+/// runtime. Tests that need a more responsive signal can call
+/// [`cancel`](Self::cancel) before the await.
+#[derive(Debug, Clone)]
+pub struct NoopNodeCancellation {
+    cancelled: Arc<AtomicBool>,
+}
+
+impl Default for NoopNodeCancellation {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+impl NoopNodeCancellation {
+    pub fn new() -> Self {
+        Self {
+            cancelled: Arc::new(AtomicBool::new(false)),
+        }
+    }
+
+    pub fn cancel(&self) {
+        self.cancelled.store(true, Ordering::SeqCst);
+    }
+}
+
+#[async_trait]
+impl NodeCancellation for NoopNodeCancellation {
+    fn is_cancelled(&self) -> bool {
+        self.cancelled.load(Ordering::SeqCst)
+    }
+
+    async fn cancelled(&self) {
+        while !self.is_cancelled() {
+            tokio::time::sleep(Duration::from_millis(1)).await;
+        }
     }
 }

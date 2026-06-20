@@ -18,9 +18,9 @@ use reimagine_inference_core::{
     CreateEmptyLatentRequest, CreateEmptyLatentResponse, ExecutionOutput, ExecutionValue,
     InferenceRuntime,
 };
-use reimagine_runtime::{NodeExecutionContext, NodeExecutor, NodeExecutorError};
 
 use crate::error::into_executor_error;
+use crate::executor::{NodeExecutionContext, NodeExecutor, NodeExecutorError};
 
 fn extract_u32(context: &NodeExecutionContext, slot: &str) -> Result<u32, NodeExecutorError> {
     match context.params().get(&SlotId::new(slot)) {

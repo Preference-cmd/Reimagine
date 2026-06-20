@@ -3,12 +3,16 @@
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 
+use async_trait::async_trait;
+use reimagine_inference::NodeCancellation;
 use tokio::sync::Notify;
 
 /// Shared, cloneable cancellation token used by the runtime.
 ///
 /// Internally uses an [`AtomicBool`] for fast poll checks and a [`Notify`]
-/// so callers can also `await` cancellation.
+/// so callers can also `await` cancellation. Implements the inference-side
+/// [`NodeCancellation`] trait so the runner can wrap it in an
+/// `Arc<dyn NodeCancellation>` and pass it through [`reimagine_inference::NodeExecutionContext`].
 #[derive(Debug, Clone)]
 pub struct CancellationToken {
     cancelled: Arc<AtomicBool>,
@@ -60,6 +64,17 @@ impl CancellationToken {
             return;
         }
         notified.await;
+    }
+}
+
+#[async_trait]
+impl NodeCancellation for CancellationToken {
+    fn is_cancelled(&self) -> bool {
+        CancellationToken::is_cancelled(self)
+    }
+
+    async fn cancelled(&self) {
+        CancellationToken::cancelled(self).await;
     }
 }
 

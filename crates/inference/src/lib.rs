@@ -3,11 +3,19 @@
 //!
 //! The backend contract (trait, typed request/response DTOs,
 //! capability report, model resolver, runtime/router, bridge policy,
-//! registry) lives in `reimagine-inference-core`. This crate
-//! re-exports those public types so existing
-//! `use reimagine_inference::*` call sites keep working, and owns
-//! the built-in `NodeExecutor` implementations plus the executor
-//! registration helper.
+//! registry, resource lifecycle) lives in
+//! `reimagine-inference-core`. This crate owns the **node executor
+//! contract** (`NodeExecutor` trait, `NodeExecutionContext`,
+//! `NodeInputs`/`NodeParams`, `NodeExecutorRegistry`,
+//! `ArtifactPublisher`, `NodeCancellation`, `ArtifactEventKind`,
+//! `NodeExecutorError`) plus the built-in V1 executors and the
+//! executor registration helper.
+//!
+//! This crate deliberately does **not** depend on `reimagine-runtime`.
+//! The runtime depends on this crate as its executor/value facade.
+//! Concrete artifact and cancellation impls live in the runtime and
+//! are wrapped in trait objects at context construction time, so the
+//! executor contract stays backend- and runtime-neutral.
 //!
 //! The canonical execution value envelope and backend-affine handle
 //! types (`ExecutionValue`, `ExecutionValueKind`, `BackendKind`,
@@ -26,8 +34,12 @@
 
 #![deny(unsafe_code)]
 
+mod artifact_publisher;
+mod cancellation;
 mod error;
+mod executor;
 mod executors;
+pub mod node_context;
 pub mod operation;
 pub mod registry;
 /// Test-only fake backend and canned-response helpers.
@@ -58,7 +70,17 @@ pub use reimagine_inference_core::{
     TextEncodeResponse,
 };
 
+pub use artifact_publisher::{ArtifactEventKind, ArtifactPublisher};
+pub use cancellation::NodeCancellation;
 pub use error::{IntoNodeExecutorError, into_executor_error};
+pub use executor::{
+    BoxedNodeExecutor, NodeExecutionOutputs, NodeExecutor, NodeExecutorError, NodeExecutorRegistry,
+    NodeExecutorRegistryError,
+};
+pub use node_context::{NodeExecutionContext, NodeInputs, NodeParams};
 pub use registry::register_builtin_inference_executors;
 #[doc(hidden)]
-pub use testing::{CannedCapabilityResponse, FakeBackend};
+pub use testing::{
+    CannedCapabilityResponse, FakeBackend, NoopArtifactPublisher, NoopNodeCancellation,
+    RecordedArtifact, RecordingArtifactPublisher,
+};

@@ -10,8 +10,8 @@ rust-version.workspace = true
 async-trait = { workspace = true }
 reimagine-core = { path = "../core" }
 reimagine-inference-core = { path = "../inference-core" }
-reimagine-runtime = { path = "../runtime" }
 serde = { workspace = true }
+tokio = { workspace = true, features = ["time"] }
 tracing = "0.1"
 
 [features]

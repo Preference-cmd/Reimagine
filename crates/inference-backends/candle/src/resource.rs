@@ -1,8 +1,7 @@
 use std::sync::Arc;
 
 use reimagine_core::model::RunId;
-use reimagine_inference_core::ExecutionValue;
-use reimagine_runtime::{MemorySnapshot, RunResourceBackend};
+use reimagine_inference_core::{ExecutionValue, MemorySnapshot, RunResourceBackend};
 
 use crate::store::{CandleModelCache, CandleStore};
 

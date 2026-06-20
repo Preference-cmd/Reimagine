@@ -1,20 +1,32 @@
-//! Node executor trait and registry.
+//! Node executor trait and registry contract.
+//!
+//! The executor contract is owned by `reimagine-inference` (this crate)
+//! so that built-in inference executors can implement it without
+//! creating a `inference -> runtime` dependency edge. The runtime
+//! composes an [`NodeExecutorRegistry`] (typically constructed by
+//! app-host) and invokes `dyn NodeExecutor::execute` against an
+//! inference-owned [`NodeExecutionContext`](crate::node_context::NodeExecutionContext).
 
 use std::collections::HashMap;
-use std::sync::Arc;
 
 use reimagine_core::model::NodeTypeId;
 use reimagine_inference_core::ExecutionOutput;
 
-use crate::node_context::NodeExecutionContext;
+// Re-export the context type so executor modules can import it
+// through `crate::executor::NodeExecutionContext` alongside the trait.
+// `NodeInputs` / `NodeParams` remain available via
+// `reimagine_inference::{NodeInputs, NodeParams}` (re-exported from
+// `lib.rs`) — they don't need to live next to the trait.
+pub use crate::node_context::NodeExecutionContext;
 
 /// Result of executing one node.
 ///
 /// V1 returns a `Vec<ExecutionOutput>` of declared outputs. Each output
 /// bundles the produced value with the slot id it should be stored
-/// under and the [`ExecutionValueRetention`](reimagine_inference_core::ExecutionValueRetention)
+/// under and the
+/// [`ExecutionValueRetention`](reimagine_inference_core::ExecutionValueRetention)
 /// policy the executor intends. The runner task is responsible for
-/// inserting these into the [`RunValueStore`] using the node's declared
+/// inserting these into the `RunValueStore` using the node's declared
 /// `output_slots` and recording the retention alongside the value.
 pub type NodeExecutionOutputs = Vec<ExecutionOutput>;
 
@@ -62,7 +74,7 @@ pub trait NodeExecutor: Send + Sync + 'static {
 }
 
 /// Convenience type alias for boxed node executors.
-pub type BoxedNodeExecutor = Arc<dyn NodeExecutor>;
+pub type BoxedNodeExecutor = std::sync::Arc<dyn NodeExecutor>;
 
 /// Errors from constructing or querying a registry.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -147,8 +159,8 @@ impl NodeExecutorRegistry {
     /// Build a shallow, shareable snapshot of the registry for a runner task.
     /// The cloned registry shares each `Arc<dyn NodeExecutor>` with the
     /// original so executors are not duplicated.
-    pub fn clone_for_runner(&self) -> Arc<NodeExecutorRegistry> {
-        Arc::new(NodeExecutorRegistry {
+    pub fn clone_for_runner(&self) -> std::sync::Arc<NodeExecutorRegistry> {
+        std::sync::Arc::new(NodeExecutorRegistry {
             executors: self.executors.clone(),
         })
     }

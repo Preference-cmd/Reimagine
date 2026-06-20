@@ -58,6 +58,32 @@ composes the pieces by constructing an `inference-core` router and asking
 `inference` to register node executors into the executor registry consumed by
 runtime.
 
+## Node Executor Contract
+
+The executor contract — `NodeExecutor` trait, `NodeExecutorError`,
+`NodeExecutionContext` / `NodeInputs` / `NodeParams`,
+`NodeExecutorRegistry` (with `BoxedNodeExecutor`,
+`NodeExecutorRegistryError`), plus the `ArtifactPublisher` /
+`NodeCancellation` abstractions and the `ArtifactEventKind` enum — is
+owned by `inference` (this crate). The runtime consumes the contract
+and provides the concrete impls:
+
+- `runtime::CancellationToken` implements `inference::NodeCancellation`.
+- `runtime::RuntimeNodeArtifactCapability` implements
+  `inference::ArtifactPublisher` and holds the runtime-owned
+  `ArtifactStore` and `RunEventSink`.
+
+The runner task constructs each `NodeExecutionContext` by wrapping a
+fresh `CancellationToken` and `RuntimeNodeArtifactCapability` in
+`Arc<dyn NodeCancellation>` and `Arc<dyn ArtifactPublisher>` and
+hands the context to `dyn NodeExecutor::execute`. Executors never see
+the runtime's concrete artifact or cancellation types.
+
+`runtime::NodeExecutor`, `runtime::NodeExecutionContext`,
+`runtime::NodeExecutorRegistry`, `runtime::ArtifactEventKind`, and
+the other moved types are re-exported from `reimagine_inference` for
+backward compatibility with call sites that pre-date the inversion.
+
 ## Boundary
 
 `runtime` owns the execution loop. `inference` owns node orchestration.

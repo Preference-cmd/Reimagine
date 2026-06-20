@@ -11,7 +11,8 @@ use std::sync::Arc;
 
 use reimagine_core::model::{ParamValue, SlotId};
 use reimagine_inference_core::ExecutionOutput;
-use reimagine_runtime::{NodeExecutionContext, NodeExecutor, NodeExecutorError};
+
+use crate::executor::{NodeExecutionContext, NodeExecutor, NodeExecutorError};
 
 /// `builtin.string` executor. Pure param passthrough, no backend call.
 pub struct StringExecutor;
