@@ -491,7 +491,9 @@ retention:
 ```text
 SingleUse
   dropped after its unique consumer completes
-  fan-out greater than one is rejected or diagnosed before execution
+  fan-out means edge-sourced consumers in the active execution plan
+  fan-out greater than one fails the run when the value is produced
+  fan-out zero is kept until cleanup in V1
 
 RunScoped
   kept until terminal run cleanup
@@ -502,10 +504,10 @@ WorkspaceScoped
 ```
 
 If a backend or workspace cache needs a value to outlive the run, it must hold
-its own `Arc` or internal resource owner. Runtime dropping its run-scoped
-reference is the lifecycle signal; it is not an imperative unload command.
-Memory/cache observations should be surfaced through explicit host-neutral
-snapshot/diagnostic shapes rather than backend internals.
+its own internal resource owner. Runtime dropping its run-scoped reference is
+not an imperative unload command. Memory/cache observations should be surfaced
+through explicit host-neutral snapshot/diagnostic shapes rather than backend
+internals.
 
 Runtime scheduling and backend resource scheduling are separate concerns. A
 workflow node invocation remains the runtime execution unit, while model
