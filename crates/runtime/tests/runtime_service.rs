@@ -71,7 +71,7 @@ impl NodeExecutor for MockExecutor {
     async fn execute(
         &self,
         context: NodeExecutionContext,
-    ) -> Result<Vec<reimagine_inference_core::ExecutionOutput>, NodeExecutorError> {
+    ) -> Result<Vec<reimagine_runtime::ExecutionOutput>, NodeExecutorError> {
         self.count.fetch_add(1, Ordering::SeqCst);
         if self.delay > Duration::ZERO {
             // Observe cancellation while we wait.
@@ -87,7 +87,7 @@ impl NodeExecutor for MockExecutor {
                 message: message.clone(),
             });
         }
-        Ok(vec![reimagine_inference_core::ExecutionOutput::run_scoped(
+        Ok(vec![reimagine_runtime::ExecutionOutput::run_scoped(
             SlotId::new("out"),
             Arc::new(ExecutionValue::Param(
                 reimagine_core::model::ParamValue::String(self.label.clone()),
@@ -105,7 +105,7 @@ impl NodeExecutor for CancelImmediatelyExecutor {
     async fn execute(
         &self,
         _context: NodeExecutionContext,
-    ) -> Result<Vec<reimagine_inference_core::ExecutionOutput>, NodeExecutorError> {
+    ) -> Result<Vec<reimagine_runtime::ExecutionOutput>, NodeExecutorError> {
         self.count.fetch_add(1, Ordering::SeqCst);
         Err(NodeExecutorError::Cancelled)
     }
@@ -120,7 +120,7 @@ impl NodeExecutor for ArtifactExecutor {
     async fn execute(
         &self,
         context: NodeExecutionContext,
-    ) -> Result<Vec<reimagine_inference_core::ExecutionOutput>, NodeExecutorError> {
+    ) -> Result<Vec<reimagine_runtime::ExecutionOutput>, NodeExecutorError> {
         context
             .artifacts()
             .record(
@@ -143,7 +143,7 @@ impl NodeExecutor for InspectInputsExecutor {
     async fn execute(
         &self,
         context: NodeExecutionContext,
-    ) -> Result<Vec<reimagine_inference_core::ExecutionOutput>, NodeExecutorError> {
+    ) -> Result<Vec<reimagine_runtime::ExecutionOutput>, NodeExecutorError> {
         if let Some((slot_id, expected)) = &self.expected_input {
             let actual = context
                 .inputs()
@@ -174,7 +174,7 @@ impl NodeExecutor for InspectInputsExecutor {
             }
         }
 
-        Ok(vec![reimagine_inference_core::ExecutionOutput::run_scoped(
+        Ok(vec![reimagine_runtime::ExecutionOutput::run_scoped(
             SlotId::new("out"),
             Arc::new(ExecutionValue::Param(ParamValue::String("ok".to_owned()))),
         )])
@@ -389,9 +389,9 @@ impl NodeExecutor for OrderedExecutor {
     async fn execute(
         &self,
         _context: NodeExecutionContext,
-    ) -> Result<Vec<reimagine_inference_core::ExecutionOutput>, NodeExecutorError> {
+    ) -> Result<Vec<reimagine_runtime::ExecutionOutput>, NodeExecutorError> {
         self.order.lock().unwrap().push(self.label.clone());
-        Ok(vec![reimagine_inference_core::ExecutionOutput::run_scoped(
+        Ok(vec![reimagine_runtime::ExecutionOutput::run_scoped(
             SlotId::new("out"),
             Arc::new(ExecutionValue::Param(
                 reimagine_core::model::ParamValue::String(self.label.clone()),
