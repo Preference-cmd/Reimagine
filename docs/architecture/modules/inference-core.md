@@ -60,9 +60,8 @@ runtime -> inference-core
 Runtime-facing code should consume these contracts through the `inference`
 facade (`runtime -> inference -> inference-core`). The direct
 `runtime -> inference-core` edge carries only the resource lifecycle
-contract ([`RunResourceBackend`](https://example.com)) and the
-execution value envelope types; the node executor contract itself
-lives in `inference`.
+contract (`RunResourceBackend`) and the execution value envelope types; the
+node executor contract itself lives in `inference`.
 
 `inference-core` also owns the [`RunResourceBackend`] trait and
 [`MemorySnapshot`] struct (moved out of `runtime` as part of the
@@ -279,11 +278,10 @@ operation id correctly before a typed method can run.
 
 ## Typed Requests And Responses
 
-Typed requests own cheap, shareable handles rather than borrowing from
-`runtime::NodeExecutionContext`. This keeps backend calls simple across
-`.await` while preserving zero-copy behavior for tensors and loaded models,
-because large data remains in backend-owned stores referenced by execution
-handles.
+Typed requests own cheap, shareable handles rather than borrowing from an
+executor context. This keeps backend calls simple across `.await` while
+preserving zero-copy behavior for tensors and loaded models, because large data
+remains in backend-owned stores referenced by execution handles.
 
 Example DTOs:
 

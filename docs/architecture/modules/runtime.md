@@ -51,11 +51,9 @@ runtime must not -> inference-backends/*
 Concrete node executors and backend capabilities are assembled by `app-host`.
 Runtime should consume executor contracts, execution values, execution outputs,
 and backend handle types through the `inference` facade. The canonical low-level
-definitions live in `inference-core`, but `runtime` should not treat
-`inference-core` as its long-term application-facing dependency. During the
-01/02 migration window, runtime may temporarily import from `inference-core`
-until the node executor contract moves behind the `inference` facade in the
-03/04 boundary issues.
+definitions live in `inference-core`; runtime's direct `inference-core` edge is
+limited to resource lifecycle traits and execution value storage internals while
+the node executor contract lives in `inference`.
 
 Runtime must not depend on concrete backend crates.
 
@@ -76,11 +74,11 @@ src/
 
 Use modern Rust module layout. Do not introduce `mod.rs`, and prefer ordinary `mod foo;` declarations over `#[path = "..."]` attributes.
 
-The migration target is that runtime imports execution values, executor
-contracts, node context, execution outputs, and retention policies from the
-`inference` facade. Runtime must not define the canonical value enum or own the
-node executor contract. A temporary `RuntimeValue` alias may exist only as a
-migration shim while downstream crates are updated.
+Runtime imports executor contracts, node context, execution outputs, and
+retention policies from the `inference` facade. Runtime must not define the
+canonical value enum or own the node executor contract. A temporary
+`RuntimeValue` alias may exist only as a migration shim while downstream crates
+are updated.
 
 ## Public Run Boundary
 

@@ -79,10 +79,10 @@ fresh `CancellationToken` and `RuntimeNodeArtifactCapability` in
 hands the context to `dyn NodeExecutor::execute`. Executors never see
 the runtime's concrete artifact or cancellation types.
 
-`runtime::NodeExecutor`, `runtime::NodeExecutionContext`,
-`runtime::NodeExecutorRegistry`, `runtime::ArtifactEventKind`, and
-the other moved types are re-exported from `reimagine_inference` for
-backward compatibility with call sites that pre-date the inversion.
+`reimagine-runtime` temporarily re-exports the moved executor types from
+`reimagine-inference` for backward compatibility with call sites that pre-date
+the inversion. New code should import the executor contract from
+`reimagine-inference`.
 
 ## Boundary
 
