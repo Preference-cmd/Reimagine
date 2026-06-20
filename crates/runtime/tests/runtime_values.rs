@@ -2,7 +2,7 @@ use reimagine_core::model::{
     ArtifactRef, ModelId, ModelRole, NodeId, ParamValue, SlotId, TensorDType, TensorShape,
     WorkflowInputId,
 };
-use reimagine_inference_core::{
+use reimagine_inference::{
     BackendKind, BackendPayloadKey, BackendTensorHandle, ConditioningMetadata,
     ExecutionConditioning, ExecutionValue, RuntimeClipHandle, RuntimeImage, RuntimeLatent,
     RuntimeModelHandle, RuntimeVaeHandle,

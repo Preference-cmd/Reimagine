@@ -4,7 +4,8 @@
 use std::sync::Arc;
 
 use reimagine_core::model::RunId;
-use reimagine_inference_core::{ExecutionValue, MemorySnapshot, RunResourceBackend};
+use reimagine_inference::ExecutionValue;
+use reimagine_inference_core::{MemorySnapshot, RunResourceBackend};
 
 /// Default no-op backend used in tests and when no backend is wired.
 #[derive(Debug, Default, Clone, Copy)]

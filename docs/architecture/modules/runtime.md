@@ -510,7 +510,11 @@ snapshot/diagnostic shapes rather than backend internals.
 Runtime scheduling and backend resource scheduling are separate concerns. A
 workflow node invocation remains the runtime execution unit, while model
 pinning, tensor residency, CPU/GPU placement, offload, and eviction remain
-backend-owned policies.
+backend-owned mechanisms. Runtime or a future resource coordinator may own
+global resource policy because it has the active-run and execution-plan view
+that individual backends do not have. That coordinator should communicate
+through backend mechanism traits defined in `inference-core`, not through
+concrete backend types and not by interpreting backend-private payloads.
 
 For an SDXL workflow that generates multiple images from the same prompt, the
 desired behavior is:

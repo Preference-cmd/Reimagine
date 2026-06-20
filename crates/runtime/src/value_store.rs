@@ -4,7 +4,7 @@ use std::collections::HashMap;
 use std::sync::Arc;
 
 use reimagine_core::model::{NodeId, SlotId};
-use reimagine_inference_core::ExecutionValueRetention;
+use reimagine_inference::ExecutionValueRetention;
 
 use crate::value::ExecutionValue;
 
@@ -69,7 +69,7 @@ impl RunValueStore {
     }
 
     /// Insert a value with an explicit retention policy declared by the
-    /// producer (an [`ExecutionOutput`](reimagine_inference_core::ExecutionOutput)).
+    /// producer (an [`ExecutionOutput`](reimagine_inference::ExecutionOutput)).
     pub fn insert_with_retention(
         &mut self,
         key: OutputKey,

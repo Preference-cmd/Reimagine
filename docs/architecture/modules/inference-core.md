@@ -362,8 +362,21 @@ decide bridge policy.
 ## Resource And Device Policy Handoff
 
 `inference-core` routes typed capability calls, but it is not a memory manager.
-It should carry enough public context for routing and diagnostics while leaving
-real resource policy to the selected backend.
+It should carry enough public context for routing, diagnostics, and resource
+coordination while leaving concrete resource mechanisms to the selected backend.
+
+Resource policy and resource mechanism are separate:
+
+- Runtime or a future resource coordinator owns global policy: active runs,
+  execution plan shape, target selection, value retention, run priority, and
+  cross-backend scheduling context.
+- Backends own concrete mechanisms: payload lookup, allocation, release,
+  pinning, offload, transfer, cache eviction, and device placement.
+
+`inference-core` is the contract layer between those two sides. It should define
+backend mechanism traits that runtime/coordinator/inference can call without
+depending on concrete backend crates, but those traits must not expose Candle,
+ONNX, CUDA, Metal, or backend-private store types.
 
 ```text
 InferenceRuntime
@@ -378,6 +391,27 @@ InferenceBackend
   decides CPU/GPU placement, offload, transfer, and eviction
   returns public ExecutionValue handles or typed responses
 ```
+
+The V1 `RunResourceBackend` hook is a coarse run-lifecycle mechanism. It is not
+enough for long-term multi-backend resource coordination, and
+`release_runtime_value(value)` must not become the normal per-value resource
+control protocol. Future mechanism contracts should be capability-shaped and
+host-neutral, for example:
+
+```text
+BackendResourceMechanism
+  describe_resources() -> ResourceSnapshot
+  prepare_run(run_context)
+  cleanup_run(run_id)
+  prepare_value(handle, desired_residency)
+  release_run_values(run_id)
+  apply_budget(resource_budget)
+```
+
+The exact API is a follow-up design issue. The important boundary is that
+runtime/coordinator may request outcomes such as "prepare these handles",
+"clean up run-scoped payloads", or "fit this backend within a budget"; only the
+backend decides how to allocate, move, evict, or retain concrete payloads.
 
 For multi-image generation, the router may repeatedly route `diffusion_sample`
 to the same backend because the `Model` and `Conditioning` handles have the

@@ -1,9 +1,9 @@
 //! Runtime values passed between node executors during a single run.
 //!
-//! The canonical type now lives in
-//! [`reimagine_inference_core::execution_value`](reimagine_inference_core::execution_value)
-//! under the name [`ExecutionValue`](reimagine_inference_core::ExecutionValue).
-//! This module exists for two reasons:
+//! The canonical type is owned by `reimagine-inference-core` and
+//! re-exported by the `reimagine-inference` facade as
+//! [`ExecutionValue`](reimagine_inference::ExecutionValue). This module
+//! exists for two reasons:
 //!
 //! 1. Path stability: callers can continue to use
 //!    `use reimagine_runtime::value::RuntimeValue;` without churn.
@@ -19,7 +19,7 @@
 //! they are part of the public backend contract and have always been
 //! defined next to the runtime value envelope.
 
-pub use reimagine_inference_core::{
+pub use reimagine_inference::{
     BackendKind, BackendPayloadKey, BackendTensorHandle, BackendTensorMetadata,
     ConditioningMetadata, ExecutionConditioning, ExecutionOutput, ExecutionValue,
     ExecutionValueKind, ExecutionValueRetention, RuntimeClipHandle, RuntimeImage, RuntimeLatent,
@@ -28,7 +28,7 @@ pub use reimagine_inference_core::{
 
 /// Compatibility alias for [`ExecutionValue`].
 ///
-/// Prefer [`ExecutionValue`](reimagine_inference_core::ExecutionValue)
+/// Prefer [`ExecutionValue`](reimagine_inference::ExecutionValue)
 /// for new code; the alias exists so existing call sites that import
 /// `RuntimeValue` from `reimagine_runtime` continue to compile.
 pub type RuntimeValue = ExecutionValue;
@@ -36,6 +36,6 @@ pub type RuntimeValue = ExecutionValue;
 /// Compatibility alias for [`ExecutionConditioning`].
 ///
 /// Prefer
-/// [`ExecutionConditioning`](reimagine_inference_core::ExecutionConditioning)
+/// [`ExecutionConditioning`](reimagine_inference::ExecutionConditioning)
 /// for new code.
 pub type RuntimeConditioning = ExecutionConditioning;

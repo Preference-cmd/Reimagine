@@ -476,7 +476,7 @@ impl Runner {
         node: &reimagine_core::readiness::ExecutionNode,
         session: &RunSession,
         artifact_store: Arc<Mutex<ArtifactStore>>,
-    ) -> Result<Vec<reimagine_inference_core::ExecutionOutput>, NodeFailure> {
+    ) -> Result<Vec<crate::value::ExecutionOutput>, NodeFailure> {
         self.emit_node_event(node, RunEventKind::NodeStarted, &[]);
         self.publish_node_running_snapshot(node, session, &artifact_store)
             .await;
