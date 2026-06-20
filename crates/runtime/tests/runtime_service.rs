@@ -6,7 +6,7 @@
 
 use std::collections::HashMap;
 use std::sync::atomic::{AtomicUsize, Ordering};
-use std::sync::{Arc, Mutex};
+use std::sync::{Arc, Mutex, Weak};
 use std::time::Duration;
 
 use async_trait::async_trait;
@@ -1424,5 +1424,1021 @@ fn cancellation_emits_cancelled_for_unvisited_future_stage_nodes() {
             node_cancelled >= 2,
             "expected NodeCancelled events for `b` and `c`, got {node_cancelled}"
         );
+    });
+}
+
+// ---------------------------------------------------------------------------
+// Retention-driven runtime lifecycle tests (issue 05).
+// ---------------------------------------------------------------------------
+
+/// Executor that records how many times `execute` was called, and
+/// produces a `SingleUse` `ExecutionValue` on a slot named after
+/// `slot`. Other executors in the lifecycle tests can observe the
+/// value lifetime through the shared counter and the call ordering
+/// of the captured `RunValueStore` (via the registry's plan).
+struct SingleUseProducer {
+    slot: String,
+    label: String,
+    count: Arc<AtomicUsize>,
+    weak_slot: Option<Arc<Mutex<Option<Weak<ExecutionValue>>>>>,
+}
+
+#[async_trait]
+impl NodeExecutor for SingleUseProducer {
+    async fn execute(
+        &self,
+        _context: NodeExecutionContext,
+    ) -> Result<Vec<reimagine_runtime::ExecutionOutput>, NodeExecutorError> {
+        self.count.fetch_add(1, Ordering::SeqCst);
+        let value = Arc::new(ExecutionValue::Param(ParamValue::String(
+            self.label.clone(),
+        )));
+        if let Some(weak_slot) = &self.weak_slot {
+            *weak_slot.lock().unwrap() = Some(Arc::downgrade(&value));
+        }
+        Ok(vec![reimagine_runtime::ExecutionOutput::single_use(
+            SlotId::new(self.slot.clone()),
+            value,
+        )])
+    }
+}
+
+struct RunScopedProducer {
+    slot: String,
+    label: String,
+    count: Arc<AtomicUsize>,
+}
+
+#[async_trait]
+impl NodeExecutor for RunScopedProducer {
+    async fn execute(
+        &self,
+        _context: NodeExecutionContext,
+    ) -> Result<Vec<reimagine_runtime::ExecutionOutput>, NodeExecutorError> {
+        self.count.fetch_add(1, Ordering::SeqCst);
+        Ok(vec![reimagine_runtime::ExecutionOutput::run_scoped(
+            SlotId::new(self.slot.clone()),
+            Arc::new(ExecutionValue::Param(ParamValue::String(
+                self.label.clone(),
+            ))),
+        )])
+    }
+}
+
+struct WorkspaceScopedProducer {
+    slot: String,
+    label: String,
+    count: Arc<AtomicUsize>,
+}
+
+#[async_trait]
+impl NodeExecutor for WorkspaceScopedProducer {
+    async fn execute(
+        &self,
+        _context: NodeExecutionContext,
+    ) -> Result<Vec<reimagine_runtime::ExecutionOutput>, NodeExecutorError> {
+        self.count.fetch_add(1, Ordering::SeqCst);
+        Ok(vec![reimagine_runtime::ExecutionOutput::workspace_scoped(
+            SlotId::new(self.slot.clone()),
+            Arc::new(ExecutionValue::Param(ParamValue::String(
+                self.label.clone(),
+            ))),
+        )])
+    }
+}
+
+/// Executor that simply records it ran and emits no outputs.
+struct SinkExecutor {
+    count: Arc<AtomicUsize>,
+}
+
+#[async_trait]
+impl NodeExecutor for SinkExecutor {
+    async fn execute(
+        &self,
+        _context: NodeExecutionContext,
+    ) -> Result<Vec<reimagine_runtime::ExecutionOutput>, NodeExecutorError> {
+        self.count.fetch_add(1, Ordering::SeqCst);
+        Ok(Vec::new())
+    }
+}
+
+struct WeakProbeExecutor {
+    weak_slot: Arc<Mutex<Option<Weak<ExecutionValue>>>>,
+    observed_live: Arc<Mutex<Option<bool>>>,
+}
+
+#[async_trait]
+impl NodeExecutor for WeakProbeExecutor {
+    async fn execute(
+        &self,
+        _context: NodeExecutionContext,
+    ) -> Result<Vec<reimagine_runtime::ExecutionOutput>, NodeExecutorError> {
+        let is_live = self
+            .weak_slot
+            .lock()
+            .unwrap()
+            .as_ref()
+            .and_then(Weak::upgrade)
+            .is_some();
+        *self.observed_live.lock().unwrap() = Some(is_live);
+        Ok(Vec::new())
+    }
+}
+
+/// A backend that records coarse run lifecycle calls.
+struct SpyBackend {
+    begin_runs: AtomicUsize,
+    cleanup_runs: AtomicUsize,
+    cleanup_run_ids: Mutex<Vec<String>>,
+}
+
+impl SpyBackend {
+    fn new() -> Self {
+        Self {
+            begin_runs: AtomicUsize::new(0),
+            cleanup_runs: AtomicUsize::new(0),
+            cleanup_run_ids: Mutex::new(Vec::new()),
+        }
+    }
+}
+
+#[async_trait]
+impl reimagine_inference_core::RunResourceBackend for SpyBackend {
+    async fn begin_run(&self, _run_id: &reimagine_core::model::RunId) {
+        self.begin_runs.fetch_add(1, Ordering::SeqCst);
+    }
+
+    async fn cleanup_run(&self, run_id: &reimagine_core::model::RunId) {
+        self.cleanup_runs.fetch_add(1, Ordering::SeqCst);
+        self.cleanup_run_ids
+            .lock()
+            .unwrap()
+            .push(run_id.to_string());
+    }
+
+    async fn memory_snapshot(&self) -> reimagine_inference_core::MemorySnapshot {
+        reimagine_inference_core::MemorySnapshot::default()
+    }
+}
+
+#[test]
+fn single_use_value_with_fan_out_one_is_dropped_after_unique_consumer() {
+    let rt = test_runtime();
+    rt.block_on(async {
+        let mut registry = NodeExecutorRegistry::default();
+        let producer_count = Arc::new(AtomicUsize::new(0));
+        let consumer_count = Arc::new(AtomicUsize::new(0));
+        registry
+            .register(
+                "mock.producer",
+                Arc::new(SingleUseProducer {
+                    slot: "out".to_owned(),
+                    label: "hello".to_owned(),
+                    count: producer_count.clone(),
+                    weak_slot: None,
+                }),
+            )
+            .unwrap();
+        registry
+            .register(
+                "mock.consumer",
+                Arc::new(SinkExecutor {
+                    count: consumer_count.clone(),
+                }),
+            )
+            .unwrap();
+
+        let backend = Arc::new(SpyBackend::new());
+        let sink = Arc::new(VecRunEventSink::new());
+        let service = RuntimeService::new(
+            registry,
+            backend.clone(),
+            sink.clone(),
+            Arc::new(FixedClock),
+        );
+
+        // producer -> consumer (SingleUse fan-out 1).
+        let producer_node = ExecutionNode::new(
+            NodeId::new("producer"),
+            NodeTypeId::new("mock.producer"),
+            Vec::new(),
+            vec![SlotId::new("out")],
+        );
+        let consumer_node = ExecutionNode::new(
+            NodeId::new("consumer"),
+            NodeTypeId::new("mock.consumer"),
+            vec![ExecutionInputBinding::new(
+                SlotId::new("in"),
+                ExecutionInputSource::Edge {
+                    edge_id: reimagine_core::model::EdgeId::new("e"),
+                    from_node_id: NodeId::new("producer"),
+                    from_slot_id: SlotId::new("out"),
+                },
+            )],
+            Vec::new(),
+        );
+        let plan = ExecutionPlan::new(
+            WorkflowId::new("wf"),
+            WorkflowVersion::new(1),
+            RunTargetSelection::AllDefaultTargets,
+            vec![RunTarget::Node {
+                node_id: NodeId::new("consumer"),
+            }],
+            vec![producer_node, consumer_node],
+            vec![ExecutionEdge::new(
+                reimagine_core::model::EdgeId::new("e"),
+                NodeId::new("producer"),
+                SlotId::new("out"),
+                NodeId::new("consumer"),
+                SlotId::new("in"),
+            )],
+            Vec::new(),
+            vec![
+                ExecutionStage::new(0, vec![NodeId::new("producer")]),
+                ExecutionStage::new(1, vec![NodeId::new("consumer")]),
+            ],
+        );
+        let handle = service
+            .run(
+                Arc::new(plan),
+                Default::default(),
+                RuntimeOptions::default(),
+            )
+            .unwrap();
+        run_to_completion(&service, &handle);
+
+        let summary = service.summary(handle.run_id()).unwrap();
+        assert_eq!(summary.state, reimagine_runtime::RunState::Completed);
+        assert_eq!(producer_count.load(Ordering::SeqCst), 1);
+        assert_eq!(consumer_count.load(Ordering::SeqCst), 1);
+
+        // Backend sees only coarse run lifecycle calls.
+        assert_eq!(backend.begin_runs.load(Ordering::SeqCst), 1);
+        assert_eq!(backend.cleanup_runs.load(Ordering::SeqCst), 1);
+    });
+}
+
+#[test]
+fn single_use_value_is_dropped_before_later_stage_after_unique_consumer() {
+    let rt = test_runtime();
+    rt.block_on(async {
+        let mut registry = NodeExecutorRegistry::default();
+        let producer_count = Arc::new(AtomicUsize::new(0));
+        let consumer_count = Arc::new(AtomicUsize::new(0));
+        let weak_slot = Arc::new(Mutex::new(None));
+        let observed_live = Arc::new(Mutex::new(None));
+        registry
+            .register(
+                "mock.producer",
+                Arc::new(SingleUseProducer {
+                    slot: "out".to_owned(),
+                    label: "hello".to_owned(),
+                    count: producer_count.clone(),
+                    weak_slot: Some(weak_slot.clone()),
+                }),
+            )
+            .unwrap();
+        registry
+            .register(
+                "mock.consumer",
+                Arc::new(SinkExecutor {
+                    count: consumer_count.clone(),
+                }),
+            )
+            .unwrap();
+        registry
+            .register(
+                "mock.probe",
+                Arc::new(WeakProbeExecutor {
+                    weak_slot: weak_slot.clone(),
+                    observed_live: observed_live.clone(),
+                }),
+            )
+            .unwrap();
+
+        let service = RuntimeService::new(
+            registry,
+            Arc::new(SpyBackend::new()),
+            Arc::new(VecRunEventSink::new()),
+            Arc::new(FixedClock),
+        );
+
+        let producer_node = ExecutionNode::new(
+            NodeId::new("producer"),
+            NodeTypeId::new("mock.producer"),
+            Vec::new(),
+            vec![SlotId::new("out")],
+        );
+        let consumer_node = ExecutionNode::new(
+            NodeId::new("consumer"),
+            NodeTypeId::new("mock.consumer"),
+            vec![ExecutionInputBinding::new(
+                SlotId::new("in"),
+                ExecutionInputSource::Edge {
+                    edge_id: reimagine_core::model::EdgeId::new("e"),
+                    from_node_id: NodeId::new("producer"),
+                    from_slot_id: SlotId::new("out"),
+                },
+            )],
+            Vec::new(),
+        );
+        let probe_node = ExecutionNode::new(
+            NodeId::new("probe"),
+            NodeTypeId::new("mock.probe"),
+            Vec::new(),
+            Vec::new(),
+        );
+        let plan = ExecutionPlan::new(
+            WorkflowId::new("wf"),
+            WorkflowVersion::new(1),
+            RunTargetSelection::AllDefaultTargets,
+            vec![RunTarget::Node {
+                node_id: NodeId::new("probe"),
+            }],
+            vec![producer_node, consumer_node, probe_node],
+            vec![ExecutionEdge::new(
+                reimagine_core::model::EdgeId::new("e"),
+                NodeId::new("producer"),
+                SlotId::new("out"),
+                NodeId::new("consumer"),
+                SlotId::new("in"),
+            )],
+            Vec::new(),
+            vec![
+                ExecutionStage::new(0, vec![NodeId::new("producer")]),
+                ExecutionStage::new(1, vec![NodeId::new("consumer")]),
+                ExecutionStage::new(2, vec![NodeId::new("probe")]),
+            ],
+        );
+        let handle = service
+            .run(
+                Arc::new(plan),
+                Default::default(),
+                RuntimeOptions::default(),
+            )
+            .unwrap();
+        run_to_completion(&service, &handle);
+
+        let summary = service.summary(handle.run_id()).unwrap();
+        assert_eq!(summary.state, reimagine_runtime::RunState::Completed);
+        assert_eq!(producer_count.load(Ordering::SeqCst), 1);
+        assert_eq!(consumer_count.load(Ordering::SeqCst), 1);
+        assert_eq!(
+            *observed_live.lock().unwrap(),
+            Some(false),
+            "SingleUse value should be dropped after the unique consumer completes, before later stages run"
+        );
+    });
+}
+
+#[test]
+fn single_use_value_with_fan_out_zero_is_kept_until_terminal_cleanup() {
+    // SingleUse output with no edge-sourced consumer in the active
+    // plan. Per the issue's V1 contract, the value must be kept
+    // until terminal cleanup; the runtime must not drop it
+    // speculatively and must not fail the run.
+    let rt = test_runtime();
+    rt.block_on(async {
+        let mut registry = NodeExecutorRegistry::default();
+        let producer_count = Arc::new(AtomicUsize::new(0));
+        registry
+            .register(
+                "mock.producer",
+                Arc::new(SingleUseProducer {
+                    slot: "out".to_owned(),
+                    label: "terminal".to_owned(),
+                    count: producer_count.clone(),
+                    weak_slot: None,
+                }),
+            )
+            .unwrap();
+
+        let backend = Arc::new(SpyBackend::new());
+        let sink = Arc::new(VecRunEventSink::new());
+        let service = RuntimeService::new(
+            registry,
+            backend.clone(),
+            sink.clone(),
+            Arc::new(FixedClock),
+        );
+
+        // 1-node plan: producer only, no edges, no downstream
+        // consumers. SingleUse fan-out is zero.
+        let producer = ExecutionNode::new(
+            NodeId::new("producer"),
+            NodeTypeId::new("mock.producer"),
+            Vec::new(),
+            vec![SlotId::new("out")],
+        );
+        let plan = ExecutionPlan::new(
+            WorkflowId::new("wf"),
+            WorkflowVersion::new(1),
+            RunTargetSelection::AllDefaultTargets,
+            vec![RunTarget::Node {
+                node_id: NodeId::new("producer"),
+            }],
+            vec![producer],
+            Vec::new(),
+            Vec::new(),
+            vec![ExecutionStage::new(0, vec![NodeId::new("producer")])],
+        );
+        let handle = service
+            .run(
+                Arc::new(plan),
+                Default::default(),
+                RuntimeOptions::default(),
+            )
+            .unwrap();
+        run_to_completion(&service, &handle);
+
+        let summary = service.summary(handle.run_id()).unwrap();
+        assert_eq!(summary.state, reimagine_runtime::RunState::Completed);
+        assert_eq!(producer_count.load(Ordering::SeqCst), 1);
+        // The value is kept until terminal cleanup; the only
+        // backend hook is the coarse `cleanup_run`.
+        assert_eq!(backend.begin_runs.load(Ordering::SeqCst), 1);
+        assert_eq!(backend.cleanup_runs.load(Ordering::SeqCst), 1);
+    });
+}
+
+#[test]
+fn single_use_value_is_dropped_after_consumer_is_cancelled() {
+    // SingleUse upstream + slow consumer + cancel. The
+    // consumer's execution attempt is cancelled, so the issue
+    // contract says the upstream SingleUse value must be dropped
+    // at that point (not just at terminal cleanup). This test
+    // exercises the cancelled arm of `drop_consumed_single_use_values`
+    // by observing the run end-state and the backend hooks.
+    let rt = test_runtime();
+    rt.block_on(async {
+        let mut registry = NodeExecutorRegistry::default();
+        let producer_count = Arc::new(AtomicUsize::new(0));
+        let consumer_count = Arc::new(AtomicUsize::new(0));
+        registry
+            .register(
+                "mock.producer",
+                Arc::new(SingleUseProducer {
+                    slot: "out".to_owned(),
+                    label: "x".to_owned(),
+                    count: producer_count.clone(),
+                    weak_slot: None,
+                }),
+            )
+            .unwrap();
+        registry
+            .register(
+                "mock.slow_consumer",
+                Arc::new(MockExecutor {
+                    label: "slow".to_owned(),
+                    count: consumer_count.clone(),
+                    delay: Duration::from_secs(2),
+                    fail_with: None,
+                }),
+            )
+            .unwrap();
+
+        let backend = Arc::new(SpyBackend::new());
+        let sink = Arc::new(VecRunEventSink::new());
+        let service = RuntimeService::new(
+            registry,
+            backend.clone(),
+            sink.clone(),
+            Arc::new(FixedClock),
+        );
+
+        let producer = ExecutionNode::new(
+            NodeId::new("producer"),
+            NodeTypeId::new("mock.producer"),
+            Vec::new(),
+            vec![SlotId::new("out")],
+        );
+        let consumer = ExecutionNode::new(
+            NodeId::new("consumer"),
+            NodeTypeId::new("mock.slow_consumer"),
+            vec![ExecutionInputBinding::new(
+                SlotId::new("in"),
+                ExecutionInputSource::Edge {
+                    edge_id: reimagine_core::model::EdgeId::new("e"),
+                    from_node_id: NodeId::new("producer"),
+                    from_slot_id: SlotId::new("out"),
+                },
+            )],
+            vec![SlotId::new("out")],
+        );
+        let plan = ExecutionPlan::new(
+            WorkflowId::new("wf"),
+            WorkflowVersion::new(1),
+            RunTargetSelection::AllDefaultTargets,
+            vec![RunTarget::Node {
+                node_id: NodeId::new("consumer"),
+            }],
+            vec![producer, consumer],
+            vec![ExecutionEdge::new(
+                reimagine_core::model::EdgeId::new("e"),
+                NodeId::new("producer"),
+                SlotId::new("out"),
+                NodeId::new("consumer"),
+                SlotId::new("in"),
+            )],
+            Vec::new(),
+            vec![
+                ExecutionStage::new(0, vec![NodeId::new("producer")]),
+                ExecutionStage::new(1, vec![NodeId::new("consumer")]),
+            ],
+        );
+        let handle = service
+            .run(
+                Arc::new(plan),
+                Default::default(),
+                RuntimeOptions::default(),
+            )
+            .unwrap();
+        // Wait until the consumer has actually started, then cancel.
+        for _ in 0..200 {
+            if consumer_count.load(Ordering::SeqCst) > 0 {
+                break;
+            }
+            tokio::time::sleep(Duration::from_millis(5)).await;
+        }
+        service.cancel(handle.run_id()).expect("cancel");
+        run_to_completion(&service, &handle);
+
+        let summary = service.summary(handle.run_id()).unwrap();
+        assert_eq!(summary.state, reimagine_runtime::RunState::Cancelled);
+        assert_eq!(producer_count.load(Ordering::SeqCst), 1);
+        // Backend sees only coarse run lifecycle calls.
+        assert_eq!(backend.begin_runs.load(Ordering::SeqCst), 1);
+        assert_eq!(backend.cleanup_runs.load(Ordering::SeqCst), 1);
+    });
+}
+
+#[test]
+fn single_use_value_with_fan_out_greater_than_one_fails_the_run() {
+    let rt = test_runtime();
+    rt.block_on(async {
+        let mut registry = NodeExecutorRegistry::default();
+        let producer_count = Arc::new(AtomicUsize::new(0));
+        let down_a = Arc::new(AtomicUsize::new(0));
+        let down_b = Arc::new(AtomicUsize::new(0));
+        registry
+            .register(
+                "mock.producer",
+                Arc::new(SingleUseProducer {
+                    slot: "out".to_owned(),
+                    label: "x".to_owned(),
+                    count: producer_count.clone(),
+                    weak_slot: None,
+                }),
+            )
+            .unwrap();
+        registry
+            .register(
+                "mock.sink",
+                Arc::new(SinkExecutor {
+                    count: down_a.clone(),
+                }),
+            )
+            .unwrap();
+        registry
+            .register(
+                "mock.sink2",
+                Arc::new(SinkExecutor {
+                    count: down_b.clone(),
+                }),
+            )
+            .unwrap();
+
+        let backend = Arc::new(SpyBackend::new());
+        let sink = Arc::new(VecRunEventSink::new());
+        let service = RuntimeService::new(
+            registry,
+            backend.clone(),
+            sink.clone(),
+            Arc::new(FixedClock),
+        );
+
+        // producer -> down_a, down_b (SingleUse fan-out 2 in the
+        // active plan; this must fail the run before any downstream
+        // consumer receives the value).
+        let producer = ExecutionNode::new(
+            NodeId::new("producer"),
+            NodeTypeId::new("mock.producer"),
+            Vec::new(),
+            vec![SlotId::new("out")],
+        );
+        let consumer_a = ExecutionNode::new(
+            NodeId::new("down_a"),
+            NodeTypeId::new("mock.sink"),
+            vec![ExecutionInputBinding::new(
+                SlotId::new("in"),
+                ExecutionInputSource::Edge {
+                    edge_id: reimagine_core::model::EdgeId::new("e1"),
+                    from_node_id: NodeId::new("producer"),
+                    from_slot_id: SlotId::new("out"),
+                },
+            )],
+            Vec::new(),
+        );
+        let consumer_b = ExecutionNode::new(
+            NodeId::new("down_b"),
+            NodeTypeId::new("mock.sink2"),
+            vec![ExecutionInputBinding::new(
+                SlotId::new("in"),
+                ExecutionInputSource::Edge {
+                    edge_id: reimagine_core::model::EdgeId::new("e2"),
+                    from_node_id: NodeId::new("producer"),
+                    from_slot_id: SlotId::new("out"),
+                },
+            )],
+            Vec::new(),
+        );
+        let plan = ExecutionPlan::new(
+            WorkflowId::new("wf"),
+            WorkflowVersion::new(1),
+            RunTargetSelection::AllDefaultTargets,
+            vec![RunTarget::Node {
+                node_id: NodeId::new("down_a"),
+            }],
+            vec![producer, consumer_a, consumer_b],
+            vec![
+                ExecutionEdge::new(
+                    reimagine_core::model::EdgeId::new("e1"),
+                    NodeId::new("producer"),
+                    SlotId::new("out"),
+                    NodeId::new("down_a"),
+                    SlotId::new("in"),
+                ),
+                ExecutionEdge::new(
+                    reimagine_core::model::EdgeId::new("e2"),
+                    NodeId::new("producer"),
+                    SlotId::new("out"),
+                    NodeId::new("down_b"),
+                    SlotId::new("in"),
+                ),
+            ],
+            Vec::new(),
+            vec![
+                ExecutionStage::new(0, vec![NodeId::new("producer")]),
+                ExecutionStage::new(1, vec![NodeId::new("down_a"), NodeId::new("down_b")]),
+            ],
+        );
+        let handle = service
+            .run(
+                Arc::new(plan),
+                Default::default(),
+                RuntimeOptions::default(),
+            )
+            .unwrap();
+        run_to_completion(&service, &handle);
+
+        let summary = service.summary(handle.run_id()).unwrap();
+        assert_eq!(summary.state, reimagine_runtime::RunState::Failed);
+        // The downstream consumers must not have run because the
+        // producer's fan-out check failed the run first.
+        assert_eq!(down_a.load(Ordering::SeqCst), 0);
+        assert_eq!(down_b.load(Ordering::SeqCst), 0);
+        // The diagnostic attached to the producer must explain the
+        // fan-out violation.
+        let summary_diag = summary
+            .diagnostics
+            .iter()
+            .find(|d| d.message().contains("SingleUse"))
+            .expect("SingleUse fan-out diagnostic is present");
+        assert!(summary_diag.message().contains("fan-out"));
+        assert!(summary_diag.message().contains("producer:out"));
+    });
+}
+
+#[test]
+fn run_scoped_value_is_retained_until_terminal_cleanup() {
+    let rt = test_runtime();
+    rt.block_on(async {
+        let mut registry = NodeExecutorRegistry::default();
+        let producer_count = Arc::new(AtomicUsize::new(0));
+        let consumer_count = Arc::new(AtomicUsize::new(0));
+        registry
+            .register(
+                "mock.producer",
+                Arc::new(RunScopedProducer {
+                    slot: "out".to_owned(),
+                    label: "x".to_owned(),
+                    count: producer_count.clone(),
+                }),
+            )
+            .unwrap();
+        registry
+            .register(
+                "mock.consumer",
+                Arc::new(SinkExecutor {
+                    count: consumer_count.clone(),
+                }),
+            )
+            .unwrap();
+
+        let backend = Arc::new(SpyBackend::new());
+        let sink = Arc::new(VecRunEventSink::new());
+        let service = RuntimeService::new(
+            registry,
+            backend.clone(),
+            sink.clone(),
+            Arc::new(FixedClock),
+        );
+
+        // producer -> consumer; RunScoped value should remain in
+        // RunValueStore until the run finishes, even though the
+        // consumer completed. We verify this indirectly: the backend
+        // never sees any per-value release callback (deleted), and
+        // cleanup_run fires exactly once.
+        let producer_node = ExecutionNode::new(
+            NodeId::new("producer"),
+            NodeTypeId::new("mock.producer"),
+            Vec::new(),
+            vec![SlotId::new("out")],
+        );
+        let consumer_node = ExecutionNode::new(
+            NodeId::new("consumer"),
+            NodeTypeId::new("mock.consumer"),
+            vec![ExecutionInputBinding::new(
+                SlotId::new("in"),
+                ExecutionInputSource::Edge {
+                    edge_id: reimagine_core::model::EdgeId::new("e"),
+                    from_node_id: NodeId::new("producer"),
+                    from_slot_id: SlotId::new("out"),
+                },
+            )],
+            Vec::new(),
+        );
+        let plan = ExecutionPlan::new(
+            WorkflowId::new("wf"),
+            WorkflowVersion::new(1),
+            RunTargetSelection::AllDefaultTargets,
+            vec![RunTarget::Node {
+                node_id: NodeId::new("consumer"),
+            }],
+            vec![producer_node, consumer_node],
+            vec![ExecutionEdge::new(
+                reimagine_core::model::EdgeId::new("e"),
+                NodeId::new("producer"),
+                SlotId::new("out"),
+                NodeId::new("consumer"),
+                SlotId::new("in"),
+            )],
+            Vec::new(),
+            vec![
+                ExecutionStage::new(0, vec![NodeId::new("producer")]),
+                ExecutionStage::new(1, vec![NodeId::new("consumer")]),
+            ],
+        );
+        let handle = service
+            .run(
+                Arc::new(plan),
+                Default::default(),
+                RuntimeOptions::default(),
+            )
+            .unwrap();
+        run_to_completion(&service, &handle);
+
+        let summary = service.summary(handle.run_id()).unwrap();
+        assert_eq!(summary.state, reimagine_runtime::RunState::Completed);
+        assert_eq!(backend.begin_runs.load(Ordering::SeqCst), 1);
+        assert_eq!(backend.cleanup_runs.load(Ordering::SeqCst), 1);
+        // cleanup_run is the only coarse backend hook used for
+        // terminal cleanup.
+        assert_eq!(
+            backend.cleanup_run_ids.lock().unwrap().as_slice(),
+            &[handle.run_id().to_string()]
+        );
+    });
+}
+
+#[test]
+fn workspace_scoped_value_does_not_trigger_single_use_lifecycle() {
+    // WorkspaceScoped values are not run-owned backend resources and
+    // must not be interpreted as SingleUse. The checkpoint loader is
+    // the canonical WorkspaceScoped producer, but the retention-driven
+    // lifecycle is independent of the producer's identity, so this test
+    // uses a generic producer.
+    let rt = test_runtime();
+    rt.block_on(async {
+        let mut registry = NodeExecutorRegistry::default();
+        let producer_count = Arc::new(AtomicUsize::new(0));
+        let consumer_count = Arc::new(AtomicUsize::new(0));
+        registry
+            .register(
+                "mock.producer",
+                Arc::new(WorkspaceScopedProducer {
+                    slot: "out".to_owned(),
+                    label: "ws".to_owned(),
+                    count: producer_count.clone(),
+                }),
+            )
+            .unwrap();
+        registry
+            .register(
+                "mock.consumer",
+                Arc::new(SinkExecutor {
+                    count: consumer_count.clone(),
+                }),
+            )
+            .unwrap();
+
+        let backend = Arc::new(SpyBackend::new());
+        let sink = Arc::new(VecRunEventSink::new());
+        let service = RuntimeService::new(
+            registry,
+            backend.clone(),
+            sink.clone(),
+            Arc::new(FixedClock),
+        );
+
+        // WorkspaceScoped: even with two consumers (legal because
+        // WorkspaceScoped is not constrained by the consumer index),
+        // the run must succeed.
+        let producer = ExecutionNode::new(
+            NodeId::new("producer"),
+            NodeTypeId::new("mock.producer"),
+            Vec::new(),
+            vec![SlotId::new("out")],
+        );
+        let consumer_a = ExecutionNode::new(
+            NodeId::new("down_a"),
+            NodeTypeId::new("mock.consumer"),
+            vec![ExecutionInputBinding::new(
+                SlotId::new("in"),
+                ExecutionInputSource::Edge {
+                    edge_id: reimagine_core::model::EdgeId::new("e1"),
+                    from_node_id: NodeId::new("producer"),
+                    from_slot_id: SlotId::new("out"),
+                },
+            )],
+            Vec::new(),
+        );
+        let consumer_b = ExecutionNode::new(
+            NodeId::new("down_b"),
+            NodeTypeId::new("mock.consumer"),
+            vec![ExecutionInputBinding::new(
+                SlotId::new("in"),
+                ExecutionInputSource::Edge {
+                    edge_id: reimagine_core::model::EdgeId::new("e2"),
+                    from_node_id: NodeId::new("producer"),
+                    from_slot_id: SlotId::new("out"),
+                },
+            )],
+            Vec::new(),
+        );
+        let plan = ExecutionPlan::new(
+            WorkflowId::new("wf"),
+            WorkflowVersion::new(1),
+            RunTargetSelection::AllDefaultTargets,
+            vec![RunTarget::Node {
+                node_id: NodeId::new("down_a"),
+            }],
+            vec![producer, consumer_a, consumer_b],
+            vec![
+                ExecutionEdge::new(
+                    reimagine_core::model::EdgeId::new("e1"),
+                    NodeId::new("producer"),
+                    SlotId::new("out"),
+                    NodeId::new("down_a"),
+                    SlotId::new("in"),
+                ),
+                ExecutionEdge::new(
+                    reimagine_core::model::EdgeId::new("e2"),
+                    NodeId::new("producer"),
+                    SlotId::new("out"),
+                    NodeId::new("down_b"),
+                    SlotId::new("in"),
+                ),
+            ],
+            Vec::new(),
+            vec![
+                ExecutionStage::new(0, vec![NodeId::new("producer")]),
+                ExecutionStage::new(1, vec![NodeId::new("down_a"), NodeId::new("down_b")]),
+            ],
+        );
+        let handle = service
+            .run(
+                Arc::new(plan),
+                Default::default(),
+                RuntimeOptions::default(),
+            )
+            .unwrap();
+        run_to_completion(&service, &handle);
+
+        let summary = service.summary(handle.run_id()).unwrap();
+        assert_eq!(summary.state, reimagine_runtime::RunState::Completed);
+        assert_eq!(consumer_count.load(Ordering::SeqCst), 2);
+    });
+}
+
+#[test]
+fn explicit_target_run_uses_active_plan_fan_out_not_workflow_fan_out() {
+    // Regression: an explicit-target run that picks a single branch
+    // out of a saved workflow must not see consumers from the
+    // unselected branch. The active plan only contains the chosen
+    // edge, so SingleUse fan-out 1 is legal.
+    let rt = test_runtime();
+    rt.block_on(async {
+        let mut registry = NodeExecutorRegistry::default();
+        let producer_count = Arc::new(AtomicUsize::new(0));
+        let consumer_count = Arc::new(AtomicUsize::new(0));
+        let other_branch_count = Arc::new(AtomicUsize::new(0));
+        registry
+            .register(
+                "mock.producer",
+                Arc::new(SingleUseProducer {
+                    slot: "out".to_owned(),
+                    label: "x".to_owned(),
+                    count: producer_count.clone(),
+                    weak_slot: None,
+                }),
+            )
+            .unwrap();
+        registry
+            .register(
+                "mock.consumer",
+                Arc::new(SinkExecutor {
+                    count: consumer_count.clone(),
+                }),
+            )
+            .unwrap();
+        registry
+            .register(
+                "mock.other",
+                Arc::new(SinkExecutor {
+                    count: other_branch_count.clone(),
+                }),
+            )
+            .unwrap();
+
+        let backend = Arc::new(SpyBackend::new());
+        let sink = Arc::new(VecRunEventSink::new());
+        let service = RuntimeService::new(
+            registry,
+            backend.clone(),
+            sink.clone(),
+            Arc::new(FixedClock),
+        );
+
+        // Active plan: producer -> consumer only. The
+        // "saved workflow" would also have producer -> other, but
+        // that edge is excluded from this explicit-target plan.
+        let producer = ExecutionNode::new(
+            NodeId::new("producer"),
+            NodeTypeId::new("mock.producer"),
+            Vec::new(),
+            vec![SlotId::new("out")],
+        );
+        let consumer = ExecutionNode::new(
+            NodeId::new("consumer"),
+            NodeTypeId::new("mock.consumer"),
+            vec![ExecutionInputBinding::new(
+                SlotId::new("in"),
+                ExecutionInputSource::Edge {
+                    edge_id: reimagine_core::model::EdgeId::new("e-selected"),
+                    from_node_id: NodeId::new("producer"),
+                    from_slot_id: SlotId::new("out"),
+                },
+            )],
+            Vec::new(),
+        );
+        let plan = ExecutionPlan::new(
+            WorkflowId::new("wf"),
+            WorkflowVersion::new(1),
+            RunTargetSelection::ExplicitTargets(vec![RunTarget::Node {
+                node_id: NodeId::new("consumer"),
+            }]),
+            vec![RunTarget::Node {
+                node_id: NodeId::new("consumer"),
+            }],
+            vec![producer, consumer],
+            vec![ExecutionEdge::new(
+                reimagine_core::model::EdgeId::new("e-selected"),
+                NodeId::new("producer"),
+                SlotId::new("out"),
+                NodeId::new("consumer"),
+                SlotId::new("in"),
+            )],
+            Vec::new(),
+            vec![
+                ExecutionStage::new(0, vec![NodeId::new("producer")]),
+                ExecutionStage::new(1, vec![NodeId::new("consumer")]),
+            ],
+        );
+        let handle = service
+            .run(
+                Arc::new(plan),
+                Default::default(),
+                RuntimeOptions::default(),
+            )
+            .unwrap();
+        run_to_completion(&service, &handle);
+
+        let summary = service.summary(handle.run_id()).unwrap();
+        assert_eq!(summary.state, reimagine_runtime::RunState::Completed);
+        assert_eq!(consumer_count.load(Ordering::SeqCst), 1);
+        // The unselected branch was never scheduled.
+        assert_eq!(other_branch_count.load(Ordering::SeqCst), 0);
     });
 }

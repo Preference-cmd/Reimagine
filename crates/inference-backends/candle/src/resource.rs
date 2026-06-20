@@ -1,7 +1,7 @@
 use std::sync::Arc;
 
 use reimagine_core::model::RunId;
-use reimagine_inference_core::{ExecutionValue, MemorySnapshot, RunResourceBackend};
+use reimagine_inference_core::{MemorySnapshot, RunResourceBackend};
 
 use crate::store::{CandleModelCache, CandleStore};
 
@@ -20,21 +20,6 @@ impl CandleRunResourceBackend {
 #[async_trait::async_trait]
 impl RunResourceBackend for CandleRunResourceBackend {
     async fn begin_run(&self, _run_id: &RunId) {}
-
-    async fn release_runtime_value(&self, _run_id: &RunId, value: Arc<ExecutionValue>) {
-        let key = match value.as_ref() {
-            ExecutionValue::Latent(l) => Some(l.payload().payload_key()),
-            ExecutionValue::Model(m) => Some(m.payload_key()),
-            ExecutionValue::Clip(c) => Some(c.payload_key()),
-            ExecutionValue::Vae(v) => Some(v.payload_key()),
-            ExecutionValue::Image(i) => Some(i.payload().payload_key()),
-            ExecutionValue::Conditioning(c) => Some(c.text_embedding().payload_key()),
-            _ => None,
-        };
-        if let Some(key) = key {
-            self.store.release_payload(key);
-        }
-    }
 
     async fn cleanup_run(&self, run_id: &RunId) {
         self.store.cleanup_run(run_id);

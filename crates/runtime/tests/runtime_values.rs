@@ -172,3 +172,48 @@ fn runtime_api_surfaces_accept_execution_value_directly() {
         Some(&ParamValue::String("hello".to_owned()))
     );
 }
+
+#[test]
+fn run_value_store_collapse_keeps_value_and_retention_in_one_record() {
+    use reimagine_runtime::ExecutionValueRetention;
+
+    let mut store = RunValueStore::new();
+    let key = OutputKey::new(NodeId::new("node-a"), SlotId::new("latent"));
+    let value = Arc::new(ExecutionValue::Param(ParamValue::String("x".to_owned())));
+
+    // The default `insert` keeps the V1 RunScoped contract.
+    store.insert(key.clone(), value.clone());
+    assert_eq!(
+        store.retention(&key),
+        Some(ExecutionValueRetention::RunScoped)
+    );
+    assert_eq!(store.len(), 1);
+    assert!(!store.is_empty());
+
+    // Re-inserting with an explicit retention replaces the record.
+    store.insert_with_retention(
+        key.clone(),
+        value.clone(),
+        ExecutionValueRetention::SingleUse,
+    );
+    assert_eq!(
+        store.retention(&key),
+        Some(ExecutionValueRetention::SingleUse)
+    );
+    assert_eq!(store.len(), 1);
+
+    // Removing drops the value AND the retention in one step.
+    let removed = store.remove(&key);
+    assert!(removed.is_some());
+    assert!(store.retention(&key).is_none());
+    assert!(store.get(&key).is_none());
+    assert!(store.is_empty());
+
+    // `clear` drops every record and releases the runtime's references.
+    let key_b = OutputKey::new(NodeId::new("node-b"), SlotId::new("text"));
+    store.insert(key_b.clone(), value.clone());
+    assert_eq!(store.len(), 1);
+    store.clear();
+    assert!(store.is_empty());
+    assert!(!store.contains(&key_b));
+}

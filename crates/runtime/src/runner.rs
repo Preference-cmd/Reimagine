@@ -16,6 +16,7 @@ use tokio::sync::Mutex;
 use crate::artifacts::{ArtifactStore, RuntimeNodeArtifactCapability};
 use crate::cancellation::CancellationToken;
 use crate::clock::{Clock, SystemClock};
+use crate::consumer_index::PlanConsumerIndex;
 use crate::error::RuntimeError;
 use crate::events::RunEventSink;
 use crate::handle::{RunHandle, RunState};
@@ -28,8 +29,8 @@ use crate::store::RunStore;
 use crate::value_store::OutputKey;
 
 use reimagine_inference::{
-    ArtifactPublisher, NodeCancellation, NodeExecutionContext, NodeExecutorError,
-    NodeExecutorRegistry, NodeInputs, NodeParams,
+    ArtifactPublisher, ExecutionValueRetention, NodeCancellation, NodeExecutionContext,
+    NodeExecutorError, NodeExecutorRegistry, NodeInputs, NodeParams,
 };
 use reimagine_inference_core::RunResourceBackend;
 
@@ -340,18 +341,18 @@ impl Runner {
             self.cancellation.clone(),
         );
         let artifact_store = Arc::new(Mutex::new(ArtifactStore::new()));
+        let consumer_index = PlanConsumerIndex::from_plan(&self.plan);
 
         self.backend.begin_run(&self.run_id).await;
-        let session = self.run_to_completion(session, artifact_store).await;
-        // V1: release all intermediate values once at run cleanup. The
-        // runtime type shape still allows future last-use analysis to call
-        // `release_runtime_value` per value at the point of last downstream
-        // consumption.
-        for (_, value) in session.values().iter() {
-            self.backend
-                .release_runtime_value(&self.run_id, value.clone())
-                .await;
-        }
+        let mut session = self
+            .run_to_completion(session, artifact_store, &consumer_index)
+            .await;
+        // Drop the runtime's run-scoped `Arc<ExecutionValue>` references.
+        // Per-value release callbacks were removed from the
+        // `RunResourceBackend` trait; backend-owned payloads remain
+        // alive as long as the backend itself keeps a handle or
+        // workspace cache entry.
+        session.values_mut().clear();
         self.backend.cleanup_run(&self.run_id).await;
     }
 
@@ -359,6 +360,7 @@ impl Runner {
         &self,
         mut session: RunSession,
         artifact_store: Arc<Mutex<ArtifactStore>>,
+        consumer_index: &PlanConsumerIndex,
     ) -> RunSession {
         let started_at = self.clock.now();
         let mut policy = StageExecutionPolicy::new();
@@ -403,20 +405,54 @@ impl Runner {
                 self.publish_snapshot(&session, &started_at, &artifact_store)
                     .await;
 
-                match self
+                let result = self
                     .execute_node(&node, &session, artifact_store.clone())
-                    .await
-                {
+                    .await;
+
+                match result {
                     Ok(outputs) => {
                         session.record_outcome(node_id.clone(), NodeOutcome::Completed);
                         for output in outputs {
                             let key = OutputKey::new(node_id.clone(), output.slot_id().clone());
                             let retention = output.retention();
+                            // Enforce producer-declared retention fan-out
+                            // for the active plan. A `SingleUse` output
+                            // with more than one edge-sourced consumer in
+                            // the active plan must fail the run before any
+                            // downstream consumer sees the value.
+                            if let Some(diag) =
+                                self.check_single_use_fan_out(consumer_index, &key, retention)
+                            {
+                                let message = diag.message().to_string();
+                                self.emit_node_event(
+                                    &node,
+                                    RunEventKind::NodeFailed,
+                                    std::slice::from_ref(&diag),
+                                );
+                                session.record_outcome(
+                                    node_id.clone(),
+                                    NodeOutcome::Failed {
+                                        message: message.clone(),
+                                    },
+                                );
+                                policy.record_failure(node_id.clone(), message);
+                                self.publish_snapshot(&session, &started_at, &artifact_store)
+                                    .await;
+                                break;
+                            }
                             session.values_mut().insert_with_retention(
                                 key,
                                 output.into_value(),
                                 retention,
                             );
+                        }
+                        if matches!(
+                            session.node_outcome(node_id),
+                            Some(NodeOutcome::Failed { .. })
+                        ) {
+                            // Skip the NodeCompleted event; the failure
+                            // path has already emitted it.
+                            continue;
                         }
                         self.emit_node_event(&node, RunEventKind::NodeCompleted, &[]);
                     }
@@ -437,12 +473,38 @@ impl Runner {
                     }
                     Err(NodeFailure::Cancelled) => {
                         session.record_outcome(node_id.clone(), NodeOutcome::Cancelled);
+                        // Issue 05 contract: drop upstream `SingleUse`
+                        // values whose unique consumer was this node,
+                        // even when the attempt was cancelled. The
+                        // terminal `clear()` in `Runner::run` would
+                        // also drop them, but we apply the drop here
+                        // so the lifetime matches the issue's "after
+                        // the unique consumer completes its execution
+                        // attempt (success/failure/cancel)" rule.
+                        self.drop_consumed_single_use_values(&node, consumer_index, &mut session);
                         self.emit_node_event(&node, RunEventKind::NodeCancelled, &[]);
                         self.handle_cancellation(&mut session, &started_at, &artifact_store)
                             .await;
                         return session;
                     }
                 }
+
+                // Retention-driven drop: after the node's execution
+                // attempt completes (success/failure), walk its
+                // edge-sourced input bindings and drop any upstream
+                // `SingleUse` value whose unique consumer is this node.
+                // Do not run drop logic for nodes that were skipped —
+                // skipped nodes did not consume their inputs. The
+                // `Cancelled` case is handled inside the arm above so
+                // it runs before `handle_cancellation` returns the
+                // session early.
+                if matches!(
+                    session.node_outcome(node_id),
+                    Some(NodeOutcome::Completed) | Some(NodeOutcome::Failed { .. })
+                ) {
+                    self.drop_consumed_single_use_values(&node, consumer_index, &mut session);
+                }
+
                 self.publish_snapshot(&session, &started_at, &artifact_store)
                     .await;
             }
@@ -469,6 +531,76 @@ impl Runner {
             .await;
         self.store.finalize(&self.run_id);
         session
+    }
+
+    /// Check the active-plan fan-out for a `SingleUse` output. Returns a
+    /// `Diagnostic` when the value's fan-out is greater than one, so the
+    /// caller can fail the run before any downstream consumer sees the
+    /// value. `RunScoped` and `WorkspaceScoped` values are not
+    /// constrained by the consumer index.
+    fn check_single_use_fan_out(
+        &self,
+        consumer_index: &PlanConsumerIndex,
+        key: &OutputKey,
+        retention: ExecutionValueRetention,
+    ) -> Option<Diagnostic> {
+        if retention != ExecutionValueRetention::SingleUse {
+            return None;
+        }
+        let fan_out = consumer_index.fan_out(key);
+        if fan_out > 1 {
+            let node_id = key.node_id().clone();
+            let slot_id = key.slot_id().clone();
+            let message = format!(
+                "SingleUse output {node_id}:{slot_id} has {fan_out} edge-sourced consumers in the active execution plan; SingleUse fan-out must be exactly one"
+            );
+            Some(make_diagnostic(&self.run_id, &node_id, &message))
+        } else {
+            None
+        }
+    }
+
+    /// Retention-driven drop: for every edge-sourced input binding of
+    /// `node`, look up the upstream `OutputKey` and, if the upstream
+    /// value is `SingleUse` and `node` is its unique edge-sourced
+    /// consumer, drop the value from `RunValueStore`.
+    fn drop_consumed_single_use_values(
+        &self,
+        node: &reimagine_core::readiness::ExecutionNode,
+        consumer_index: &PlanConsumerIndex,
+        session: &mut RunSession,
+    ) {
+        let upstream_keys: Vec<OutputKey> = node
+            .input_bindings()
+            .iter()
+            .filter_map(|binding| match binding.source() {
+                reimagine_core::readiness::ExecutionInputSource::Edge {
+                    from_node_id,
+                    from_slot_id,
+                    ..
+                } => Some(OutputKey::new(from_node_id.clone(), from_slot_id.clone())),
+                _ => None,
+            })
+            .collect();
+        let mut to_drop: Vec<OutputKey> = Vec::new();
+        for upstream in upstream_keys {
+            let retention = match session.values().retention(&upstream) {
+                Some(retention) => retention,
+                None => continue,
+            };
+            if retention != ExecutionValueRetention::SingleUse {
+                continue;
+            }
+            match consumer_index.unique_consumer(&upstream) {
+                Some(unique) if unique.to_node_id == *node.node_id() => {
+                    to_drop.push(upstream);
+                }
+                _ => {}
+            }
+        }
+        for key in to_drop {
+            session.values_mut().remove(&key);
+        }
     }
 
     async fn execute_node(
