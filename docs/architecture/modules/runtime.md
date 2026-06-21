@@ -41,7 +41,7 @@ It must not depend on Tauri or Axum.
 
 ```text
 runtime -> core
-runtime -> inference -> inference-core
+runtime -> inference
 runtime must not -> tauri
 runtime must not -> axum
 runtime must not -> model-manager
@@ -50,10 +50,10 @@ runtime must not -> inference-backends/*
 
 Concrete node executors and backend capabilities are assembled by `app-host`.
 Runtime should consume executor contracts, execution values, execution outputs,
-and backend handle types through the `inference` facade. The canonical low-level
-definitions live in `inference-core`; runtime's direct `inference-core` edge is
-limited to resource lifecycle traits and execution value storage internals while
-the node executor contract lives in `inference`.
+and backend handle types through the `inference` facade. While the physical
+`crates/inference-core` crate exists during migration, it is an implementation
+detail behind the `inference` architecture module rather than a separate future
+design target.
 
 Runtime must not depend on concrete backend crates.
 
@@ -263,7 +263,7 @@ provided by `inference` and assembled by `app-host`:
 runtime scheduler
   -> inference::NodeExecutor::execute(NodeExecutionContext)
   -> inference-backed executor
-  -> typed inference-core capability call
+  -> typed inference capability call
   -> selected backend typed capability method
   -> inference::ExecutionOutput values
 ```
@@ -271,7 +271,7 @@ runtime scheduler
 This prevents `inference` from becoming a second runtime. `runtime` owns run
 state, scheduling, cancellation, value storage, snapshots, summaries, and run
 events. `inference` owns only built-in node orchestration over abstract
-handles. The typed backend capability boundary lives in `inference-core`, not
+handles. The typed backend capability boundary lives in `inference`, not
 in `runtime`.
 
 Runtime's execution unit is a workflow node invocation:
@@ -301,6 +301,27 @@ resource compatibility, and explicit transfer/bridge policy belong to the
 inference runtime/router assembled by app-host. Runtime executes the registry
 it was given, passes opaque execution handles into `NodeExecutionContext`, and
 does not perform implicit cross-backend tensor conversion.
+
+Runtime may own high-level policy inputs such as run priority, cancellation,
+budget hints, target selection, and scheduling pressure. Those inputs may be
+projected by app-host into inference router configuration, but runtime still
+does not call concrete backends. Backend selection is applied by the
+`InferenceRuntime` router:
+
+```text
+runtime
+  -> executes workflow node
+  -> dyn inference::NodeExecutor
+  -> InferenceRuntime typed capability call
+  -> router applies BackendSelectionPolicy / BackendBridgePolicy
+  -> selected backend
+```
+
+Model loading follows the same rule. Runtime executes the checkpoint-loader
+node; the inference executor constructs `LoadBundleRequest`; the router chooses
+the backend when no backend-bound handles exist; returned `Model`, `Clip`, and
+`Vae` handles carry the selected `BackendKind`. Later nodes are constrained by
+those handle affinities unless explicit bridge policy permits transfer.
 
 Runtime lifecycle is driven by `Arc<ExecutionValue>` ownership and
 producer-declared retention policies. Runtime should not introduce a separate
@@ -473,14 +494,14 @@ Runtime owns:
   producer-declared retention enforcement
   run cancellation and cleanup timing
 
-Backend owns:
+Backend implements concrete mechanisms for:
   loaded model payloads
   tensor payloads
   device allocations
-  model cache policy
-  tensor cache policy
-  device transfer/offload policy
-  memory budget and eviction
+  model cache ownership
+  tensor cache ownership
+  device transfer/offload execution
+  memory observation and local eviction mechanics
 ```
 
 Runtime should not directly unload a specific model, move a tensor to a device,
@@ -512,10 +533,10 @@ internals.
 Runtime scheduling and backend resource scheduling are separate concerns. A
 workflow node invocation remains the runtime execution unit, while model
 pinning, tensor residency, CPU/GPU placement, offload, and eviction remain
-backend-owned mechanisms. Runtime or a future resource coordinator may own
-global resource policy because it has the active-run and execution-plan view
-that individual backends do not have. That coordinator should communicate
-through backend mechanism traits defined in `inference-core`, not through
+backend-owned mechanisms. Runtime or a future resource coordinator owns global
+resource policy because it has the active-run, execution-plan, and multi-backend
+view that individual backends do not have. That coordinator should communicate
+through backend mechanism traits defined in `inference`, not through
 concrete backend types and not by interpreting backend-private payloads.
 
 For an SDXL workflow that generates multiple images from the same prompt, the
@@ -538,7 +559,7 @@ ksampler x N
   -> consumes the same Model and Conditioning handles
   -> consumes one Latent per sample
   -> diffusion model should stay pinned for the generation group
-  -> concurrency is controlled by scheduler/backend resource policy
+  -> concurrency is controlled by scheduler policy and backend mechanisms
 
 vae_decode x N
   -> may start as soon as each sampled latent is ready
@@ -551,7 +572,7 @@ save_image / preview_image x N
 ```
 
 This requires the scheduler to honor retention and progressive completion
-without taking ownership of backend memory policy:
+without taking ownership of backend memory mechanisms:
 
 ```text
 Scheduler / RunSession
@@ -563,8 +584,8 @@ Scheduler / RunSession
 
 inference backend / workspace cache
   keeps any workspace-scoped resources it owns
-  decides model pinning, pooling, eviction, and device placement
-  decides whether VAE decode can run on CPU while diffusion sampling continues
+  implements model pinning, pooling, eviction, and device placement mechanics
+  reports whether VAE decode can run on CPU while diffusion sampling continues
 ```
 
 The scheduler may drop a run-owned `Clip` handle while `Conditioning` remains
@@ -576,7 +597,7 @@ Model loading remains inference/backend adapter work:
 
 ```text
 checkpoint_loader executor
-  -> inference-core typed capability call
+  -> typed inference capability call
   -> backend load_bundle(...)
   -> inference::ExecutionValue::Model(handle)
 ```
@@ -586,11 +607,11 @@ manifests, inspect the resolved model descriptor, or own the loaded payload.
 Only the inference backend knows what concrete model object, graph, tokenizer,
 weights, or device allocations sit behind that handle.
 
-Device placement and transfer are inference runtime/backend policy decisions
-surfaced through handles, run events, diagnostics, or memory snapshots. Runtime
-may pass cancellation and context to executors, but the inference
-runtime/router and backend capabilities decide whether CPU/GPU transfer,
-offload, or eviction is allowed.
+Device placement and transfer are coordinated through inference router policy
+and backend mechanism contracts, then surfaced through handles, run events,
+diagnostics, or memory snapshots. Runtime may pass cancellation and context to
+executors, but it must not directly command concrete CPU/GPU transfer, offload,
+or eviction.
 
 Run cleanup:
 
@@ -615,7 +636,7 @@ Execution flow:
 Workflow ModelRef
   -> model-manager readiness resolver reports availability diagnostics
   -> app-host builds execution plan and node executor adapters
-  -> checkpoint node executor calls inference-core typed capability
+  -> checkpoint node executor calls typed inference capability
   -> inference backend resolves concrete loaded model object
   -> inference::ExecutionValue::Model / Clip / Vae
 ```

@@ -5,35 +5,40 @@
 
 ## Role
 
-`inference` is the backend-neutral node orchestration layer for built-in
-generation nodes. It defines the runtime-facing executor contract/facade and
-implements built-in executors that map a workflow node invocation to typed
-backend capability calls.
+`inference` is the unified backend-neutral inference abstraction/facade. It
+owns built-in node orchestration, the runtime-facing executor contract,
+execution values, typed backend capability DTOs, the executor-facing router,
+backend adapter contracts, bridge policy, and inference errors.
 
-It does not define the backend contract itself. Shared backend traits, typed
-capability request/response DTOs, backend registry, router, bridge policy, and
-inference errors belong to [`inference-core`](inference-core.md).
+The earlier `inference-core` contract layer is now considered folded into this
+module for architecture and issue planning. The physical `crates/inference-core`
+crate may remain temporarily as an implementation detail while code migration is
+split into smaller issues, but new design work should be tracked under the
+`inference` module.
 
 ## Responsibilities
 
 - Provide built-in inference-backed node executors.
 - Define runtime-facing node executor contracts, node execution context, output
   contracts, and executor registration helpers.
-- Convert node execution context inputs and params into typed `inference-core`
+- Own and re-export execution values and backend-affine handles consumed by
+  runtime.
+- Define typed backend capability request/response DTOs.
+- Define `InferenceRuntime`, the executor-facing router trait.
+- Define `InferenceBackend`, the concrete backend adapter trait.
+- Define backend registry, capability reports, bridge policy, model resolver
+  handoff DTOs, inference errors, and diagnostic projection helpers.
+- Convert node execution context inputs and params into typed inference
   requests.
-- Call the injected `inference-core::InferenceRuntime` router.
+- Call the injected `InferenceRuntime` router.
 - Validate typed responses against the node's output slots.
 - Record save/preview artifacts through injected artifact capabilities.
 - Provide executor registration helpers for app-host bootstrap.
-- Re-export `inference-core` execution values and handles as the facade runtime
-  consumes.
 
 ## Non-Responsibilities
 
 - Runtime scheduling, cancellation, run state, snapshots, or value-store
   ownership.
-- Backend trait definitions, backend registry, bridge policy, or capability
-  DTO ownership.
 - Concrete Candle, ONNX, remote, or Comfy implementations.
 - Model manifest scanning or persistence.
 - Tauri IPC, Axum routes, or UI state.
@@ -43,7 +48,6 @@ inference errors belong to [`inference-core`](inference-core.md).
 
 ```text
 inference -> core
-inference -> inference-core
 
 inference must not -> inference-backends/*
 inference must not -> runtime
@@ -54,9 +58,14 @@ inference must not -> axum
 ```
 
 `runtime` depends on `inference` as its executor/value facade. `app-host`
-composes the pieces by constructing an `inference-core` router and asking
-`inference` to register node executors into the executor registry consumed by
-runtime.
+composes the pieces by constructing the inference router/backend registry and
+asking `inference` to register node executors into the executor registry
+consumed by runtime.
+
+Implementation migration note: while `crates/inference-core` exists, concrete
+code may still import contract types from `reimagine_inference_core` and
+re-export them through `reimagine_inference`. That crate is not a separate
+architecture module for new issue planning.
 
 ## Node Executor Contract
 
@@ -86,17 +95,17 @@ the inversion. New code should import the executor contract from
 
 ## Boundary
 
-`runtime` owns the execution loop. `inference` owns node orchestration.
-`inference-core` owns the backend contract. Concrete backends own payloads,
-model graphs, tensors, and device policy.
+`runtime` owns the execution loop. `inference` owns node orchestration and the
+backend contract. Concrete backends own payloads, model graphs, tensors, and
+device mechanisms.
 
 ```text
 runtime scheduler
   -> inference::NodeExecutor::execute(NodeExecutionContext)
   -> inference executor
-  -> inference-core typed request
-  -> inference-core InferenceRuntime/router
-  -> selected inference-core InferenceBackend method
+  -> typed inference request
+  -> inference::InferenceRuntime/router
+  -> selected inference::InferenceBackend method
   -> backend-private model graph / payload store
   -> inference::ExecutionValue outputs
 ```
@@ -111,10 +120,32 @@ policy, and emits routing diagnostics; the backend trait is the concrete
 adapter seam for one backend implementation. Inference executors should depend
 on the router trait even if a workspace currently registers only Candle.
 
+The router must be configurable and must support safe fallback, but inference
+executors do not own that policy. Executors construct typed requests from node
+inputs and params, then call `InferenceRuntime`. App-host/runtime policy inputs
+configure the router; the router applies those inputs to capability support,
+handle affinity, and bridge policy.
+
+```text
+inference executor
+  -> typed request
+  -> InferenceRuntime router
+    -> BackendSelectionPolicy
+    -> BackendBridgePolicy
+    -> selected backend
+```
+
+Fallback is valid only before a request has backend-bound handles or before a
+failed attempt produces visible execution handles. Once a `Model`, `Clip`,
+`Vae`, `Latent`, `Conditioning`, or `Image` handle exists, the handle's
+`BackendKind` constrains later routing. Cross-backend execution after that
+point requires an explicit bridge/transfer policy rather than silent fallback.
+
 ## Execution Value Usage
 
-`inference` consumes and returns execution values owned by `inference-core` and
-re-exported by `inference`.
+`inference` consumes and returns execution values as its public runtime-facing
+facade. During migration those types may be physically defined in
+`crates/inference-core`, but the architecture owner is `inference`.
 
 ```text
 inference::ExecutionValue
@@ -143,7 +174,7 @@ Agent tool results.
 Each executor should be explicit and small:
 
 - read required inputs and params from `NodeExecutionContext`;
-- build a typed `inference-core` request;
+- build a typed inference request;
 - call the corresponding `InferenceRuntime` capability method;
 - validate response value kinds and required outputs;
 - map typed responses into `ExecutionOutput` / `NodeExecutionOutputs`;
@@ -167,8 +198,8 @@ Executor registration belongs in a narrow API such as:
 ```text
 register_builtin_inference_executors(
   registry,
-  Arc<dyn inference_core::InferenceRuntime>,
-  Arc<dyn inference_core::ModelResolver>,
+  Arc<dyn inference::InferenceRuntime>,
+  Arc<dyn inference::ModelResolver>,
 )
 ```
 
@@ -191,7 +222,7 @@ inference::KSamplerExecutor
   calls: InferenceRuntime::diffusion_sample(...)
   returns: ExecutionValue::Latent
 
-inference-core::InferenceRuntime
+inference::InferenceRuntime
   validates handle compatibility
   applies explicit bridge policy if available
   routes to selected backend
@@ -207,7 +238,7 @@ Rust-shaped sketch:
 
 ```rust
 pub struct KSamplerExecutor {
-    inference: Arc<dyn inference_core::InferenceRuntime>,
+    inference: Arc<dyn inference::InferenceRuntime>,
 }
 
 #[async_trait]
@@ -250,14 +281,30 @@ Model manifest semantics stay outside `inference`.
 ```text
 workflow ModelRef
   -> app-host ModelService / model-manager resolver
-  -> inference-core ModelResolver adapter
+  -> inference ModelResolver adapter
   -> LoadBundleRequest
   -> InferenceRuntime::load_bundle(...)
   -> ExecutionValue::Model / Clip / Vae handles
 ```
 
-`inference` depends on a resolver trait from `inference-core`, not directly on
-`model-manager`.
+`inference` depends on a resolver trait, not directly on `model-manager`.
+
+Model backend choice is applied by the router, not by runtime and not by the
+executor itself:
+
+```text
+checkpoint_loader executor
+  -> ModelResolver resolves ModelRef to ResolvedInferenceModel
+  -> LoadBundleRequest
+  -> InferenceRuntime::load_bundle
+  -> router selects backend from config/policy when no handle affinity exists
+  -> returned Model / Clip / Vae handles carry the selected BackendKind
+```
+
+Later executors route through those returned handles. For example,
+`clip_text_encode` is pinned by the `Clip` handle's backend affinity, and
+`ksampler` is constrained by the `Model`, `Conditioning`, and `Latent` handle
+affinities unless an explicit bridge policy permits transfer.
 
 ## Suggested Module Layout
 
@@ -289,7 +336,7 @@ Executor code architecture:
 
 ```text
 value.rs
-  re-export inference-core execution values and handles
+  define or facade execution values and handles
 
 executor.rs
   NodeExecutor
@@ -343,8 +390,7 @@ remain explicit. Do not replace them with a mandatory table-driven
 
 ## V1 Strategy
 
-The next correction is to make existing executors depend on
-`inference-core::InferenceRuntime` rather than a single
+The corrected executor path depends on `InferenceRuntime` rather than a single
 `Arc<dyn InferenceBackend>` or stringly `operation_id` dispatch.
 
 `operation_id` is not part of the target executor path. A concrete executor
@@ -362,7 +408,7 @@ operation_id = "diffusion.sample"
 
 If labels are needed for diagnostics, tracing, capability reports, or bridge
 policy, they should be derived from an `InferenceCapability`/capability label
-owned by `inference-core`, not used as the primary dispatch key.
+owned by `inference`, not used as the primary dispatch key.
 
 Real CLIP/UNet/VAE work should land behind the same typed backend capability
 protocol. Do not add model-family-specific executor infrastructure unless a

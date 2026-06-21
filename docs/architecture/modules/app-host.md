@@ -38,7 +38,6 @@ app-host -> core
 app-host -> config
 app-host -> model-manager
 app-host -> runtime
-app-host -> inference-core
 app-host -> inference
 app-host -> inference-backends/candle   # concrete backend crate selected by config in V1
 app-host -> agent
@@ -178,8 +177,8 @@ WorkspaceHost::new(config)
   -> match config.inference.backend
   -> construct backend adapters from config
   -> construct ModelResolver adapter
-  -> build inference-core::InferenceBackendRegistry
-  -> construct inference-core::InferenceRuntime / router
+  -> build inference::InferenceBackendRegistry
+  -> construct inference::InferenceRuntime / router
   -> register_builtin_inference_executors(...)
   -> construct RuntimeService
 ```
@@ -190,9 +189,9 @@ WorkspaceHost::new(config)
 BuiltinNodeCatalog
   -> NodeExecutorRegistry
     -> inference concrete NodeExecutor
-      -> Arc<dyn inference_core::InferenceRuntime>
+      -> Arc<dyn inference::InferenceRuntime>
         -> registry-backed backend selection
-        -> concrete inference_core::InferenceBackend
+        -> concrete inference::InferenceBackend
 ```
 
 It should not move node orchestration into itself; orchestration belongs to the
@@ -204,7 +203,7 @@ registry and optional resource backend; it does not know which concrete backend
 was selected.
 
 V1 may configure only one backend by default, but the app-host composition shape
-should still build a registry-backed `inference-core::InferenceRuntime`.
+should still build a registry-backed `inference::InferenceRuntime`.
 Backend selection is a router/resource concern based on handle affinity and
 capability support, not a runtime scheduler decision:
 
@@ -212,10 +211,31 @@ capability support, not a runtime scheduler decision:
 inference backend config
   -> app-host constructs backend adapters
   -> app-host registers adapters by BackendKind
-  -> app-host constructs inference-core InferenceRuntime/router
+  -> app-host constructs BackendSelectionPolicy from config/runtime policy inputs
+  -> app-host constructs inference InferenceRuntime/router
   -> app-host registers inference executors with the router
   -> runtime executes the prepared plan with that executor registry
 ```
+
+The router must be configurable. App-host is the composition point for that
+configuration: default backend, allowed backend set, fallback order, disabled
+backends, and future budget/priority hints all enter the inference router here.
+Runtime may own high-level run policy, but it should not call a concrete
+backend directly to load a model or run a capability.
+
+Model loading backend selection is applied through `InferenceRuntime`:
+
+```text
+checkpoint_loader
+  -> LoadBundleRequest
+  -> router chooses backend from BackendSelectionPolicy when no handle affinity exists
+  -> backend returns Model / Clip / Vae handles carrying BackendKind
+```
+
+After a backend-bound handle exists, app-host configuration must not cause
+silent fallback to a different backend. Cross-backend execution requires an
+explicit bridge/transfer policy so the router can emit precise diagnostics when
+transfer is unsupported.
 
 Implicit cross-backend tensor transfer is not allowed. If the router sees
 handles from incompatible backends or devices, it must use an explicit bridge or
