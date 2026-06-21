@@ -10,16 +10,11 @@
 //! result. Subsequent calls reuse the cached entry without
 //! re-reading the file.
 
-use reimagine_core::model::ModelRole;
-use reimagine_inference_core::{
-    InferenceBackend, LoadBundleRequest, LoadBundleResponse, RuntimeClipHandle, RuntimeModelHandle,
-    RuntimeVaeHandle,
-};
+use reimagine_inference_core::{InferenceBackend, LoadBundleRequest, LoadBundleResponse};
 
 use crate::backend::CandleBackend;
 use crate::error::CandleBackendError;
 use crate::models::LoadedModelBundle;
-use crate::models::LoadedSdxlBundle;
 
 pub fn execute_model_load_bundle(
     request: LoadBundleRequest,
@@ -50,36 +45,12 @@ pub fn execute_model_load_bundle(
         })?,
     };
 
-    Ok(bundle_response(&bundle, backend))
+    bundle_response(&bundle, backend)
 }
 
-fn bundle_response(bundle: &LoadedModelBundle, backend: &CandleBackend) -> LoadBundleResponse {
-    match bundle {
-        LoadedModelBundle::StableDiffusionSdxl(sdxl) => sdxl_response(sdxl, backend),
-    }
-}
-
-fn sdxl_response(bundle: &LoadedSdxlBundle, backend: &CandleBackend) -> LoadBundleResponse {
-    let backend_kind = backend.backend_kind().clone();
-    let device_label = backend.device_label();
-    let model = RuntimeModelHandle::new(
-        bundle.model_id.clone(),
-        ModelRole::CheckpointBundle,
-        backend_kind.clone(),
-        bundle.model_payload_key.clone(),
-    )
-    .with_device(device_label);
-    let clip = RuntimeClipHandle::new(
-        bundle.model_id.clone(),
-        backend_kind.clone(),
-        bundle.clip_payload_key.clone(),
-    )
-    .with_device(device_label);
-    let vae = RuntimeVaeHandle::new(
-        bundle.model_id.clone(),
-        backend_kind,
-        bundle.vae_payload_key.clone(),
-    )
-    .with_device(device_label);
-    LoadBundleResponse::new(model, clip, vae)
+fn bundle_response(
+    bundle: &LoadedModelBundle,
+    backend: &CandleBackend,
+) -> Result<LoadBundleResponse, CandleBackendError> {
+    bundle.load_bundle_response(backend.backend_kind().clone(), backend.device_label())
 }

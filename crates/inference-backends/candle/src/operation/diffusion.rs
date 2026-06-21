@@ -1,12 +1,12 @@
 //! `diffusion.sample` operation.
 //!
-//! Translates a [`DiffusionSampleRequest`] into a backend-local
-//! sampler pass and returns a [`DiffusionSampleResponse`] carrying a
-//! `RuntimeLatent` handle.
+//! Translates a [`DiffusionSampleRequest`] into a backend-local sampler
+//! call through the loaded-bundle graph facade and returns a
+//! [`DiffusionSampleResponse`] carrying a `RuntimeLatent` handle.
 //!
 //! The operation is model-family-neutral at the protocol level.
-//! SDXL-specific tokenization, sampling, and UNet work live in
-//! `models/stable_diffusion/sdxl/diffusion.rs`.
+//! SDXL-specific tokenization, sampling, and UNet work live behind the
+//! facade in `models/stable_diffusion/sdxl/diffusion.rs`.
 //!
 //! V1 uses a deterministic placeholder sampler so the backend
 //! contract is testable without real UNet weights. The
@@ -22,8 +22,7 @@ use reimagine_inference_core::{
 
 use crate::backend::CandleBackend;
 use crate::error::CandleBackendError;
-use crate::models::LoadedModelBundle;
-use crate::models::stable_diffusion::sdxl::diffusion::{SdxlSampleRequest, SdxlSampler};
+use crate::graph::{DiffusionSampleInput, DiffusionSampleResult};
 
 pub fn execute_diffusion_sample(
     request: DiffusionSampleRequest,
@@ -34,7 +33,14 @@ pub fn execute_diffusion_sample(
     let negative_handle = require_conditioning_handle(request.negative(), backend)?;
     let latent_handle = require_latent_handle(request.latent(), backend)?;
 
-    let sample_request = build_sdxl_sample_request(&request)?;
+    let sample_input = DiffusionSampleInput {
+        seed: request.seed(),
+        steps: request.steps(),
+        cfg: request.cfg(),
+        sampler_name: sampler_name_from(request.sampler()),
+        scheduler_name: scheduler_name_from(request.scheduler()),
+        denoise: request.denoise(),
+    };
 
     let bundle = backend
         .model_cache()
@@ -46,18 +52,11 @@ pub fn execute_diffusion_sample(
             ))
         })?;
 
-    let bundle = match bundle.as_ref() {
-        LoadedModelBundle::StableDiffusionSdxl(sdxl) => sdxl.clone(),
-    };
+    bundle.validate_model_handle(&model_handle)?;
 
-    if model_handle.payload_key() != &bundle.model_payload_key {
-        return Err(CandleBackendError::InvalidRequest(format!(
-            "diffusion.sample `model` payload `{}` does not match loaded SDXL model payload `{}` for model `{}`",
-            model_handle.payload_key().as_str(),
-            bundle.model_payload_key.as_str(),
-            bundle.model_id.as_str()
-        )));
-    }
+    // Validate model-family-specific sampler parameters before touching
+    // stored payloads so request-level errors are reported early.
+    bundle.validate_sample_input(&sample_input)?;
 
     // The cached conditioning payloads only need to exist; we do not
     // need to read them in V1 because the sampler is a placeholder.
@@ -75,8 +74,8 @@ pub fn execute_diffusion_sample(
         .store()
         .get_latent(latent_handle.payload().payload_key())?;
 
-    let sampler = SdxlSampler::new();
-    let result = sampler.sample(input_latent, &sample_request, backend.device().as_ref())?;
+    let DiffusionSampleResult { latent } =
+        bundle.sample_diffusion(sample_input, input_latent, backend.device().as_ref())?;
 
     let payload_key = BackendPayloadKey::new(format!(
         "latent:{}:{}",
@@ -84,12 +83,12 @@ pub fn execute_diffusion_sample(
         request.node_id().as_str()
     ));
 
-    let output_dims = result.latent.dims();
+    let output_dims = latent.dims();
 
     backend.store().insert_latent(
         request.run_id().clone(),
         payload_key.clone(),
-        result.latent.into_tensor(),
+        latent.into_tensor(),
     );
 
     let latent_width = latent_handle.width();
@@ -114,25 +113,18 @@ pub fn execute_diffusion_sample(
     Ok(DiffusionSampleResponse::new(latent))
 }
 
-fn build_sdxl_sample_request(
-    request: &DiffusionSampleRequest,
-) -> Result<SdxlSampleRequest, CandleBackendError> {
-    let sampler = match request.sampler() {
+fn sampler_name_from(name: &SamplerName) -> String {
+    match name {
         SamplerName::Euler => "euler".to_string(),
         SamplerName::Other(name) => name.clone(),
-    };
-    let scheduler = match request.scheduler() {
+    }
+}
+
+fn scheduler_name_from(name: &SchedulerName) -> String {
+    match name {
         SchedulerName::Normal => "normal".to_string(),
         SchedulerName::Other(name) => name.clone(),
-    };
-    SdxlSampleRequest::new(
-        request.seed(),
-        request.steps(),
-        request.cfg(),
-        sampler,
-        scheduler,
-        request.denoise(),
-    )
+    }
 }
 
 fn require_model_handle(

@@ -831,7 +831,7 @@ async fn text_encode_rejects_wrong_clip_payload_key() {
         other => panic!("expected BackendExecutionFailed, got {other:?}"),
     };
     assert!(
-        msg.contains("not-clip") && msg.contains("loaded SDXL CLIP payload"),
+        msg.contains("not-clip") && msg.contains("CLIP payload") && msg.contains("sdxl-base-1.0"),
         "msg: {msg}"
     );
 }

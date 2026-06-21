@@ -592,6 +592,8 @@ mod tests {
                 assert_eq!(a.clip_payload_key, b.clip_payload_key);
                 assert_eq!(a.vae_payload_key, b.vae_payload_key);
             }
+            #[cfg(test)]
+            _ => panic!("test placeholder bundle should not appear in cache round-trip"),
         }
         let _ = fs::remove_dir_all(&dir);
     }

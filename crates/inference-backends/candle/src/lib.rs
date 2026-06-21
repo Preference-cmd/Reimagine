@@ -4,6 +4,7 @@ mod backend;
 mod config;
 mod device;
 mod error;
+mod graph;
 mod models;
 mod operation;
 mod resource;
