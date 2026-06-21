@@ -7,8 +7,8 @@
 
 The Candle backend adapter is the local Candle implementation of the
 backend-neutral inference contract. It implements typed backend capabilities
-from `crates/inference-core` and owns Candle-specific model loading, tensor storage,
-device policy, and image encoding.
+owned by `inference` and owns Candle-specific model loading, tensor storage,
+device mechanism, and image encoding.
 
 Concrete inference backend crates are grouped under
 `crates/inference-backends/*`. The previous standalone Candle integration path
@@ -43,9 +43,8 @@ capabilities; it is not a public capability family.
 
 ```text
 app-host -> inference
-app-host -> inference-core
 app-host -> inference-backends/candle
-inference-backends/candle -> inference-core
+inference-backends/candle -> inference
 inference-backends/candle -> core
 inference-backends/candle must not -> runtime
 inference-backends/candle must not -> app-host
@@ -55,14 +54,14 @@ inference-backends/candle must not -> model-manager
 ```
 
 `app-host` resolves model descriptors through `model-manager`, registers the
-Candle adapter in the `inference-core` backend registry, constructs the
-`inference-core` runtime/router, then injects inference-backed node executors
+Candle adapter in the inference backend registry, constructs the inference
+runtime/router, then injects inference-backed node executors
 into runtime through the inference facade. The Candle adapter consumes resolved
 paths/metadata; it does not scan directories or read manifests.
 
 Backend construction is owned by app-host/config. Candle can be the default V1
 backend, but it should be registered behind `BackendKind` and reached through
-the `inference-core` runtime/router rather than being hard-coded into runtime,
+the inference runtime/router rather than being hard-coded into runtime,
 inference executors, Axum, or Tauri.
 
 ## Runtime Integration
@@ -77,7 +76,7 @@ RuntimeService
 ```
 
 `inference` provides backend-neutral `NodeExecutor` implementations or
-factories for the V1 built-ins. Those executors call the `inference-core`
+factories for the V1 built-ins. Those executors call the inference
 runtime/router. The Candle adapter implements typed backend capability methods
 selected by the router. Runtime remains backend-agnostic.
 
@@ -111,7 +110,7 @@ CandleBackend
 
 The backend owns:
 
-- Candle device and dtype policy;
+- Candle device and dtype mechanism;
 - loaded checkpoint/model component cache;
 - backend tensor payload store keyed by `BackendPayloadKey`;
 - conversion between backend tensors and `ExecutionValue` handles;
@@ -127,7 +126,7 @@ Payload lifetimes are split by intent:
 CandleModelCache
   cross-run model payloads
   loaded checkpoint / UNet / CLIP / VAE objects
-  backend cache policy controls eviction
+  backend cache owner implements local eviction mechanics
 
 CandleStore
   run-scoped payloads
@@ -144,7 +143,7 @@ allocations remain live by holding its own owners or cache entries.
 Candle implements:
 
 ```text
-inference-core::InferenceBackend
+inference::InferenceBackend
   load_bundle / text_encode / diffusion_sample / ...
 ```
 
@@ -281,7 +280,7 @@ operation/latent.rs
 The backend-private trait chain for sampling can be:
 
 ```text
-inference-core::InferenceBackend::diffusion_sample(DiffusionSampleRequest)
+inference::InferenceBackend::diffusion_sample(DiffusionSampleRequest)
   -> CandleBackend::diffusion_sample(...)
   -> LoadedModelGraph::diffusion_sampler(...)
   -> DiffusionSampler::sample(...)
@@ -339,7 +338,7 @@ Runtime value retention
   RunScoped
   WorkspaceScoped
 
-CandleBackend policy
+CandleBackend mechanisms
   pin or unpin loaded model bundles
   keep diffusion model hot across repeated KSampler calls
   release or pool run-scoped latent / conditioning / image tensors
@@ -356,9 +355,11 @@ runtime scheduler can emit value release and artifact completion events as
 nodes finish, but Candle decides whether a cache owner keeps a payload pinned,
 evicts it, pools it, or moves it between devices.
 
-This policy remains backend-local. Higher modules must not special-case CLIP,
-UNet, VAE, SDXL tensors, or Candle device handles. They observe public handles,
-diagnostics, artifact references, and memory snapshots only.
+Candle's concrete mechanisms remain backend-local. Global resource policy, if
+needed, belongs above individual backends because it needs the active-run,
+execution-plan, and multi-backend view. Higher modules must not special-case
+CLIP, UNet, VAE, SDXL tensors, or Candle device handles. They observe public
+handles, diagnostics, artifact references, and memory snapshots only.
 
 ## Artifact Boundary
 
@@ -386,9 +387,9 @@ The dependency direction is:
 ```text
 workflow ModelRef
   -> app-host ModelService::resolve_descriptor
-  -> inference-core model resolver capability
+  -> inference model resolver capability
   -> LoadBundleRequest
-  -> inference-core::InferenceBackend::load_bundle(...)
+  -> inference::InferenceBackend::load_bundle(...)
   -> ExecutionValue::Model / Clip / Vae handles
 ```
 
