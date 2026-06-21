@@ -12,15 +12,9 @@
 //! inference will be implemented when candle CLIP weights are integrated.
 
 use candle_core::{DType, Device, Tensor};
-use reimagine_core::model::{TensorDType, TensorShape};
-use reimagine_inference_core::{
-    BackendKind, BackendPayloadKey, BackendTensorHandle, ConditioningMetadata,
-    ExecutionConditioning, ExecutionValue,
-};
 
 use crate::error::CandleBackendError;
 use crate::models::stable_diffusion::sdxl::tokenizer::{MAX_SEQUENCE_LENGTH, SdxlTokenizer};
-use crate::store::{CandleConditioning, CandleStore};
 
 /// SDXL CLIP-L embedding dimension.
 const CLIP_L_DIM: usize = 768;
@@ -77,74 +71,6 @@ impl SdxlTextEncoder {
 
         Ok((text_embedding, pooled_embedding))
     }
-
-    /// Encode text and store conditioning payload in the backend store.
-    ///
-    /// Returns the payload key for the stored conditioning.
-    pub fn encode_and_store(
-        &self,
-        text: &str,
-        device: &Device,
-        store: &CandleStore,
-        run_id: &reimagine_core::model::RunId,
-        node_id: &reimagine_core::model::NodeId,
-        _backend_kind: &str,
-        _device_label: &str,
-    ) -> Result<(BackendPayloadKey, Tensor, Tensor), TextEncoderError> {
-        let (text_emb, pooled_emb) = self.encode(text, device)?;
-
-        let payload_key = BackendPayloadKey::new(format!(
-            "conditioning:{}:{}",
-            run_id.as_str(),
-            node_id.as_str()
-        ));
-
-        let conditioning = CandleConditioning::new(text_emb.clone(), Some(pooled_emb.clone()));
-        store.insert_conditioning(run_id.clone(), payload_key.clone(), conditioning);
-
-        Ok((payload_key, text_emb, pooled_emb))
-    }
-}
-
-impl Default for SdxlTextEncoder {
-    fn default() -> Self {
-        Self::new()
-    }
-}
-
-/// Build a `ExecutionValue::Conditioning` from stored tensors.
-///
-/// This helper constructs the lightweight `BackendTensorHandle` values
-/// that cross the backend boundary. The actual tensors remain in the
-/// store; only the handles are returned to runtime.
-pub fn build_conditioning_runtime_value(
-    payload_key: BackendPayloadKey,
-    text_embedding_shape: Vec<usize>,
-    pooled_embedding_shape: Vec<usize>,
-    backend_kind: &str,
-    device_label: &str,
-) -> ExecutionValue {
-    let text_handle = BackendTensorHandle::new(
-        BackendKind::from(backend_kind),
-        payload_key.clone(),
-        TensorDType::F32,
-        TensorShape::new(text_embedding_shape),
-        device_label,
-    );
-
-    let pooled_handle = BackendTensorHandle::new(
-        BackendKind::from(backend_kind),
-        payload_key,
-        TensorDType::F32,
-        TensorShape::new(pooled_embedding_shape),
-        device_label,
-    );
-
-    let metadata = ConditioningMetadata::new(0, 0);
-
-    ExecutionValue::Conditioning(
-        ExecutionConditioning::new(text_handle, metadata).with_pooled_embedding(pooled_handle),
-    )
 }
 
 #[derive(Debug, Clone)]
@@ -211,44 +137,5 @@ mod tests {
             &[1, MAX_SEQUENCE_LENGTH, COMBINED_DIM]
         );
         assert_eq!(pooled_emb.shape().dims(), &[1, CLIP_G_DIM]);
-    }
-
-    #[test]
-    fn text_encoder_encode_and_store_returns_payload_key() {
-        let encoder = SdxlTextEncoder::new();
-        let device = Device::Cpu;
-        let store = CandleStore::new();
-        let run_id = reimagine_core::model::RunId::new("run-test");
-        let node_id = reimagine_core::model::NodeId::new("node-test");
-
-        let (key, _, _) = encoder
-            .encode_and_store(
-                "test prompt",
-                &device,
-                &store,
-                &run_id,
-                &node_id,
-                "candle",
-                "cpu",
-            )
-            .unwrap();
-
-        assert!(key.as_str().contains("conditioning"));
-        assert!(key.as_str().contains("run-test"));
-        assert!(key.as_str().contains("node-test"));
-        assert_eq!(store.payload_count(), 1);
-    }
-
-    #[test]
-    fn build_conditioning_runtime_value_has_correct_kind() {
-        let key = BackendPayloadKey::new("test:conditioning");
-        let value = build_conditioning_runtime_value(
-            key,
-            vec![1, MAX_SEQUENCE_LENGTH, COMBINED_DIM],
-            vec![1, CLIP_G_DIM],
-            "candle",
-            "cpu",
-        );
-        assert!(matches!(value, ExecutionValue::Conditioning(_)));
     }
 }

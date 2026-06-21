@@ -23,6 +23,10 @@ use crate::models::stable_diffusion::sdxl::LoadedSdxlBundle;
 #[derive(Debug, Clone)]
 pub enum LoadedModelBundle {
     StableDiffusionSdxl(Arc<LoadedSdxlBundle>),
+    /// Test-only placeholder bundle used to verify that unsupported model
+    /// families produce precise backend diagnostics instead of panicking.
+    #[cfg(test)]
+    TestPlaceholder,
 }
 
 impl LoadedModelBundle {
@@ -31,6 +35,8 @@ impl LoadedModelBundle {
     pub fn family_label(&self) -> &'static str {
         match self {
             Self::StableDiffusionSdxl(_) => "stable_diffusion/sdxl",
+            #[cfg(test)]
+            Self::TestPlaceholder => "test/placeholder",
         }
     }
 

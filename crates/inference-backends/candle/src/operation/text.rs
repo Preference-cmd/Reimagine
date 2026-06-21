@@ -1,23 +1,24 @@
 //! `text.encode` operation.
 //!
-//! Translates a [`TextEncodeRequest`] into backend-local SDXL text
-//! encoding calls and returns a [`TextEncodeResponse`] carrying an
-//! [`ExecutionConditioning`] handle.
+//! Translates a [`TextEncodeRequest`] into a backend-local text encoding
+//! call through the loaded-bundle graph facade and returns a
+//! [`TextEncodeResponse`] carrying an [`ExecutionConditioning`] handle.
 //!
 //! The operation is model-family-neutral at the protocol level.
-//! SDXL-specific tokenization and dual CLIP encoding live in
-//! `models/stable_diffusion/sdxl/text.rs` and
+//! SDXL-specific tokenization and dual CLIP encoding live behind the
+//! facade in `models/stable_diffusion/sdxl/text.rs` and
 //! `models/stable_diffusion/sdxl/tokenizer.rs`.
 
-use reimagine_inference_core::ExecutionValue;
-use reimagine_inference_core::{InferenceBackend, TextEncodeRequest, TextEncodeResponse};
+use reimagine_core::model::{TensorDType, TensorShape};
+use reimagine_inference_core::{
+    BackendKind, BackendPayloadKey, BackendTensorHandle, ConditioningMetadata,
+    ExecutionConditioning, ExecutionValue, InferenceBackend, TextEncodeRequest, TextEncodeResponse,
+};
 
 use crate::backend::CandleBackend;
 use crate::error::CandleBackendError;
-use crate::models::LoadedModelBundle;
-use crate::models::stable_diffusion::sdxl::text::{
-    SdxlTextEncoder, build_conditioning_runtime_value,
-};
+use crate::graph::{TextEncodeInput, TextEncodeResult};
+use crate::store::CandleConditioning;
 
 pub fn execute_text_encode(
     request: TextEncodeRequest,
@@ -53,58 +54,72 @@ pub fn execute_text_encode(
             ))
         })?;
 
-    match bundle.as_ref() {
-        LoadedModelBundle::StableDiffusionSdxl(sdxl) => {
-            if clip.payload_key() != &sdxl.clip_payload_key {
-                return Err(CandleBackendError::InvalidRequest(format!(
-                    "text.encode `clip` payload `{}` does not match loaded SDXL CLIP payload `{}` for model `{}`",
-                    clip.payload_key().as_str(),
-                    sdxl.clip_payload_key.as_str(),
-                    sdxl.model_id.as_str()
-                )));
-            }
-            encode_sdxl(&prompt, backend, &run_id, &node_id)
-        }
-    }
-}
+    bundle.validate_clip_handle(&clip)?;
 
-fn encode_sdxl(
-    prompt: &str,
-    backend: &CandleBackend,
-    run_id: &reimagine_core::model::RunId,
-    node_id: &reimagine_core::model::NodeId,
-) -> Result<TextEncodeResponse, CandleBackendError> {
-    let encoder = SdxlTextEncoder::new();
-    let device = backend.device();
-    let backend_kind = backend.backend_kind().as_str();
-    let device_label = backend.device_label();
+    let TextEncodeResult {
+        text_embedding,
+        pooled_embedding,
+    } = bundle.encode_text(TextEncodeInput { prompt }, backend.device().as_ref())?;
 
-    let (payload_key, text_emb, pooled_emb) = encoder.encode_and_store(
-        prompt,
-        device,
-        backend.store(),
-        run_id,
-        node_id,
-        backend_kind,
-        device_label,
-    )?;
+    let text_shape = text_embedding.shape().dims().to_vec();
+    let pooled_shape = pooled_embedding.shape().dims().to_vec();
 
-    let text_shape = text_emb.shape().dims().to_vec();
-    let pooled_shape = pooled_emb.shape().dims().to_vec();
+    let payload_key = BackendPayloadKey::new(format!(
+        "conditioning:{}:{}",
+        run_id.as_str(),
+        node_id.as_str()
+    ));
 
-    let conditioning_value = build_conditioning_runtime_value(
+    backend.store().insert_conditioning(
+        run_id.clone(),
+        payload_key.clone(),
+        CandleConditioning::new(text_embedding, Some(pooled_embedding)),
+    );
+
+    let ExecutionValue::Conditioning(conditioning) = build_conditioning_runtime_value(
         payload_key,
         text_shape,
         pooled_shape,
-        backend_kind,
-        device_label,
-    );
-
-    let ExecutionValue::Conditioning(conditioning) = conditioning_value else {
-        return Err(CandleBackendError::InvalidRequest(
-            "text.encode conditioning builder returned a non-conditioning value".to_string(),
-        ));
+        backend.backend_kind().as_str(),
+        backend.device_label(),
+    ) else {
+        unreachable!("conditioning runtime builder always returns ExecutionValue::Conditioning")
     };
 
     Ok(TextEncodeResponse::new(conditioning))
+}
+
+/// Build a `ExecutionValue::Conditioning` from stored tensors.
+///
+/// This helper constructs the lightweight `BackendTensorHandle` values
+/// that cross the backend boundary. The actual tensors remain in the
+/// store; only the handles are returned to runtime.
+fn build_conditioning_runtime_value(
+    payload_key: BackendPayloadKey,
+    text_embedding_shape: Vec<usize>,
+    pooled_embedding_shape: Vec<usize>,
+    backend_kind: &str,
+    device_label: &str,
+) -> ExecutionValue {
+    let text_handle = BackendTensorHandle::new(
+        BackendKind::from(backend_kind),
+        payload_key.clone(),
+        TensorDType::F32,
+        TensorShape::new(text_embedding_shape),
+        device_label,
+    );
+
+    let pooled_handle = BackendTensorHandle::new(
+        BackendKind::from(backend_kind),
+        payload_key,
+        TensorDType::F32,
+        TensorShape::new(pooled_embedding_shape),
+        device_label,
+    );
+
+    let metadata = ConditioningMetadata::new(0, 0);
+
+    ExecutionValue::Conditioning(
+        ExecutionConditioning::new(text_handle, metadata).with_pooled_embedding(pooled_handle),
+    )
 }

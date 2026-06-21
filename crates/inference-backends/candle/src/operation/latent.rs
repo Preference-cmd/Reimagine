@@ -8,14 +8,14 @@
 //!
 //! ## `latent.decode`
 //!
-//! Consumes a VAE handle and a sampled latent, dispatches to the SDXL VAE
-//! placeholder decoder ([`SdxlVaeDecoder`]), stores the resulting image
-//! payload in the backend store, and returns a
+//! Consumes a VAE handle and a sampled latent, dispatches to the loaded
+//! model family's decoder through the graph facade, stores the resulting
+//! image payload in the backend store, and returns a
 //! [`LatentDecodeResponse`] carrying a lightweight `RuntimeImage`
 //! handle.
 //!
 //! The operation is model-family-neutral at the protocol level.
-//! SDXL-specific VAE decoding lives in
+//! SDXL-specific VAE decoding lives behind the facade in
 //! `models/stable_diffusion/sdxl/vae.rs`.
 
 use candle_core::{DType, Tensor};
@@ -28,8 +28,7 @@ use reimagine_inference_core::{
 
 use crate::backend::CandleBackend;
 use crate::error::CandleBackendError;
-use crate::models::stable_diffusion::sdxl::vae::SdxlVaeDecoder;
-use crate::models::{LoadedModelBundle, LoadedSdxlBundle};
+use crate::graph::{LatentDecodeInput, LatentDecodeResult};
 
 fn validate_latent_dimensions(
     width: u32,
@@ -139,23 +138,19 @@ pub fn execute_latent_decode(
         )));
     }
 
-    let sdxl_bundle = require_sdxl_bundle_for_vae(&vae_handle, backend)?;
-
-    if vae_handle.payload_key() != &sdxl_bundle.vae_payload_key {
-        return Err(CandleBackendError::InvalidRequest(format!(
-            "latent.decode `vae` payload `{}` does not match loaded SDXL VAE payload `{}` for model `{}`",
-            vae_handle.payload_key().as_str(),
-            sdxl_bundle.vae_payload_key.as_str(),
-            sdxl_bundle.model_id.as_str()
-        )));
-    }
+    let bundle = require_bundle_for_vae(&vae_handle, backend)?;
+    bundle.validate_vae_handle(&vae_handle)?;
 
     let input_latent = backend
         .store()
         .get_latent(latent_handle.payload().payload_key())?;
 
-    let decoder = SdxlVaeDecoder::new();
-    let image = decoder.decode(&input_latent, backend.device().as_ref())?;
+    let LatentDecodeResult { image } = bundle.decode_latent(
+        LatentDecodeInput {
+            latent: input_latent,
+        },
+        backend.device().as_ref(),
+    )?;
 
     let payload_key = BackendPayloadKey::new(format!(
         "image:{}:{}",
@@ -184,32 +179,14 @@ pub fn execute_latent_decode(
     Ok(LatentDecodeResponse::new(image_value))
 }
 
-fn require_sdxl_bundle_for_vae(
+fn require_bundle_for_vae(
     vae: &RuntimeVaeHandle,
     backend: &CandleBackend,
-) -> Result<std::sync::Arc<LoadedSdxlBundle>, CandleBackendError> {
-    let bundle = backend
-        .model_cache()
-        .get_bundle(vae.model_id())
-        .ok_or_else(|| {
-            CandleBackendError::InvalidRequest(format!(
-                "no loaded model bundle found for model `{}`; load the model first via `model.load_bundle`",
-                vae.model_id().as_str()
-            ))
-        })?;
-
-    extract_sdxl_bundle(&bundle, vae.model_id().as_str())
-}
-
-fn extract_sdxl_bundle(
-    bundle: &std::sync::Arc<LoadedModelBundle>,
-    model_id: &str,
-) -> Result<std::sync::Arc<LoadedSdxlBundle>, CandleBackendError> {
-    match bundle.as_ref() {
-        LoadedModelBundle::StableDiffusionSdxl(sdxl) => Ok(sdxl.clone()),
-        #[allow(unreachable_patterns)]
-        _ => Err(CandleBackendError::InvalidRequest(format!(
-            "latent.decode only supports stable_diffusion/sdxl bundles; model `{model_id}` is not SDXL"
-        ))),
-    }
+) -> Result<std::sync::Arc<crate::models::LoadedModelBundle>, CandleBackendError> {
+    backend.model_cache().get_bundle(vae.model_id()).ok_or_else(|| {
+        CandleBackendError::InvalidRequest(format!(
+            "no loaded model bundle found for model `{}`; load the model first via `model.load_bundle`",
+            vae.model_id().as_str()
+        ))
+    })
 }
