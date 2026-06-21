@@ -4210,7 +4210,6 @@ version = "0.1.0"
 dependencies = [
  "async-trait",
  "reimagine-core",
- "reimagine-inference-core",
  "serde",
  "tokio",
  "tracing",
@@ -4224,20 +4223,8 @@ dependencies = [
  "candle-core",
  "reimagine-core",
  "reimagine-inference",
- "reimagine-inference-core",
  "serde",
  "tokio",
-]
-
-[[package]]
-name = "reimagine-inference-core"
-version = "0.1.0"
-dependencies = [
- "async-trait",
- "reimagine-core",
- "serde",
- "tokio",
- "tracing",
 ]
 
 [[package]]
@@ -4268,7 +4255,6 @@ dependencies = [
  "async-trait",
  "reimagine-core",
  "reimagine-inference",
- "reimagine-inference-core",
  "serde",
  "tokio",
  "tracing",

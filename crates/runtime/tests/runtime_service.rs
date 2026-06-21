@@ -1564,7 +1564,7 @@ impl SpyBackend {
 }
 
 #[async_trait]
-impl reimagine_inference_core::RunResourceBackend for SpyBackend {
+impl reimagine_inference::RunResourceBackend for SpyBackend {
     async fn begin_run(&self, _run_id: &reimagine_core::model::RunId) {
         self.begin_runs.fetch_add(1, Ordering::SeqCst);
     }
@@ -1577,8 +1577,8 @@ impl reimagine_inference_core::RunResourceBackend for SpyBackend {
             .push(run_id.to_string());
     }
 
-    async fn memory_snapshot(&self) -> reimagine_inference_core::MemorySnapshot {
-        reimagine_inference_core::MemorySnapshot::default()
+    async fn memory_snapshot(&self) -> reimagine_inference::MemorySnapshot {
+        reimagine_inference::MemorySnapshot::default()
     }
 }
 

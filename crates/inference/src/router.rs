@@ -4,10 +4,10 @@ use std::sync::Arc;
 
 use crate::BackendKind;
 use crate::backend::InferenceBackend;
+use crate::backend_registry::InferenceBackendRegistry;
 use crate::bridge::{BackendBridgePolicy, BridgePlan};
 use crate::capability::{InferenceBackendCapabilities, InferenceCapability};
-use crate::error::InferenceError;
-use crate::registry::InferenceBackendRegistry;
+use crate::inference_error::InferenceError;
 use crate::request::diffusion::DiffusionSampleRequest;
 use crate::request::image::{ImagePreviewRequest, ImageSaveRequest};
 use crate::request::latent::{CreateEmptyLatentRequest, LatentDecodeRequest};
@@ -67,7 +67,7 @@ pub trait InferenceRuntime: Send + Sync + 'static {
 /// V1 picks the first registered backend when no handle affinity
 /// pins a backend. Per-request backend selection and explicit
 /// per-capability router methods remain future work tracked in
-/// `inference/02` and `inference-core/02` follow-ups.
+/// `inference/02` follow-ups.
 pub struct DefaultInferenceRuntime {
     registry: Arc<InferenceBackendRegistry>,
     bridge_policy: Arc<dyn BackendBridgePolicy>,
@@ -268,9 +268,9 @@ mod tests {
     use super::*;
     use crate::RuntimeLatent;
     use crate::backend::InferenceBackend;
+    use crate::backend_registry::InferenceBackendRegistry;
     use crate::capability::{InferenceBackendCapabilities, InferenceCapabilitySupport};
-    use crate::error::InferenceError;
-    use crate::registry::InferenceBackendRegistry;
+    use crate::inference_error::InferenceError;
     use crate::request::latent::CreateEmptyLatentRequest;
     use crate::response::latent::CreateEmptyLatentResponse;
     use reimagine_core::model::{NodeId, RunId, WorkflowId, WorkflowVersion};

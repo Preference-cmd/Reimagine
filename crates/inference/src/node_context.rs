@@ -11,12 +11,12 @@
 use std::collections::HashMap;
 use std::sync::Arc;
 
+use crate::ExecutionValue;
 use reimagine_core::diagnostic::CorrelationId;
 use reimagine_core::event::Timestamp;
 use reimagine_core::model::{
     NodeId, NodeTypeId, ParamValue, RunId, SlotId, WorkflowId, WorkflowVersion,
 };
-use reimagine_inference_core::ExecutionValue;
 
 use crate::artifact_publisher::ArtifactPublisher;
 use crate::cancellation::NodeCancellation;

@@ -28,11 +28,11 @@ use crate::snapshot::{RunArtifactRef, RunSnapshot, RunSummary};
 use crate::store::RunStore;
 use crate::value_store::OutputKey;
 
+use reimagine_inference::RunResourceBackend;
 use reimagine_inference::{
     ArtifactPublisher, ExecutionValueRetention, NodeCancellation, NodeExecutionContext,
     NodeExecutorError, NodeExecutorRegistry, NodeInputs, NodeParams,
 };
-use reimagine_inference_core::RunResourceBackend;
 
 /// Options passed to [`RuntimeService::run`].
 ///

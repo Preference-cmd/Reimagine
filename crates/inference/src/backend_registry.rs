@@ -35,8 +35,9 @@ impl InferenceBackendRegistry {
         self.backends.get(kind).cloned()
     }
 
-    /// First registered backend. V1 single-backend workspaces rely on
-    /// this; per-request backend selection is follow-up work.
+    /// An arbitrary registered backend. V1 single-backend workspaces
+    /// rely on this; deterministic per-request backend selection is
+    /// follow-up work.
     pub fn first(&self) -> Option<Arc<dyn InferenceBackend>> {
         self.backends.values().next().cloned()
     }
@@ -51,7 +52,9 @@ impl InferenceBackendRegistry {
         self.backends.is_empty()
     }
 
-    /// All registered backend kinds in insertion order.
+    /// All registered backend kinds in the registry's current hash-map
+    /// iteration order. Deterministic candidate ordering belongs to
+    /// the router selection policy follow-up.
     pub fn kinds(&self) -> Vec<BackendKind> {
         self.backends.keys().cloned().collect()
     }
@@ -105,7 +108,7 @@ mod tests {
     use super::*;
     use crate::BackendKind;
     use crate::capability::{InferenceCapability, InferenceCapabilitySupport};
-    use crate::error::InferenceError;
+    use crate::inference_error::InferenceError;
     use crate::request::diffusion::DiffusionSampleRequest;
     use crate::request::image::{ImagePreviewRequest, ImageSaveRequest};
     use crate::request::latent::{CreateEmptyLatentRequest, LatentDecodeRequest};

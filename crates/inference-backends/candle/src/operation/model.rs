@@ -10,7 +10,7 @@
 //! result. Subsequent calls reuse the cached entry without
 //! re-reading the file.
 
-use reimagine_inference_core::{InferenceBackend, LoadBundleRequest, LoadBundleResponse};
+use reimagine_inference::{InferenceBackend, LoadBundleRequest, LoadBundleResponse};
 
 use crate::backend::CandleBackend;
 use crate::error::CandleBackendError;

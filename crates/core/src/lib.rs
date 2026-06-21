@@ -7,7 +7,7 @@
 //!
 //! Internal execution values, backend-affine tensor / model / image
 //! handles, and `ExecutionConditioning` live in
-//! `reimagine-inference-core` and are re-exported by
+//! `reimagine-inference` and are re-exported by
 //! `reimagine-inference` for runtime-facing code. `core` deliberately
 //! does not own runtime execution handles or any value that wraps
 //! backend-owned payload stores.

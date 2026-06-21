@@ -10,7 +10,7 @@
 //! Retention: the empty latent is declared `RunScoped`. Runtime owns
 //! retention enforcement and value lifetime.
 
-use reimagine_inference_core::{
+use crate::{
     CreateEmptyLatentRequest, CreateEmptyLatentResponse, ExecutionOutput, InferenceRuntime,
 };
 

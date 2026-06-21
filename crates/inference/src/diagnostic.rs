@@ -1,7 +1,7 @@
-//! Inference-core diagnostic helpers.
+//! Inference diagnostic helpers.
 //!
 //! Each helper returns a structured [`Diagnostic`] for the matching
-//! [`InferenceError`](crate::error::InferenceError) variant so the
+//! [`InferenceError`](crate::inference_error::InferenceError) variant so the
 //! router, app-host, and host adapters can surface the same shape
 //! without a manual `format!` per call site.
 //!
@@ -9,6 +9,11 @@
 //! `inference-core-bridge-required-diffusion.sample-candle-remote`)
 //! so existing diagnostic consumers see the same ids they did before
 //! the typed-DTO refactor.
+//!
+//! The `inference-core` source/id/code prefix is intentionally retained
+//! as a diagnostic compatibility label even though the physical
+//! `reimagine-inference-core` crate has been folded into
+//! `reimagine-inference`.
 
 use reimagine_core::diagnostic::{
     Diagnostic, DiagnosticCode, DiagnosticSeverity, DiagnosticSourceName, DiagnosticTarget,
@@ -26,7 +31,7 @@ fn domain(domain: &str, path: impl Into<String>) -> DiagnosticTarget {
     DiagnosticTarget::new(DiagnosticTargetDomain::new(domain)).with_path(path.into())
 }
 
-/// [`InferenceError::BackendBridgeRequired`](crate::error::InferenceError::BackendBridgeRequired) diagnostic.
+/// [`InferenceError::BackendBridgeRequired`](crate::inference_error::InferenceError::BackendBridgeRequired) diagnostic.
 pub fn backend_bridge_required(
     source_backend: &str,
     target_backend: &str,
@@ -51,7 +56,7 @@ pub fn backend_bridge_required(
     )
 }
 
-/// [`InferenceError::BackendBridgeUnsupported`](crate::error::InferenceError::BackendBridgeUnsupported) diagnostic.
+/// [`InferenceError::BackendBridgeUnsupported`](crate::inference_error::InferenceError::BackendBridgeUnsupported) diagnostic.
 pub fn backend_bridge_unsupported(
     source_backend: &str,
     target_backend: &str,
@@ -77,7 +82,7 @@ pub fn backend_bridge_unsupported(
     )
 }
 
-/// [`InferenceError::BackendNotRegistered`](crate::error::InferenceError::BackendNotRegistered) diagnostic.
+/// [`InferenceError::BackendNotRegistered`](crate::inference_error::InferenceError::BackendNotRegistered) diagnostic.
 pub fn backend_not_registered(kind: &str) -> Diagnostic {
     let id = format!("inference-core-backend-not-registered-{kind}");
     let target = domain("inference.runtime", kind);
@@ -86,12 +91,12 @@ pub fn backend_not_registered(kind: &str) -> Diagnostic {
         DiagnosticCode::new("INFERENCE_CORE/BACKEND_NOT_REGISTERED"),
         DiagnosticSeverity::Error,
         source(),
-        format!("backend `{kind}` is not registered in the inference-core registry"),
+        format!("backend `{kind}` is not registered in the inference registry"),
         target,
     )
 }
 
-/// [`InferenceError::BackendCapabilityUnsupported`](crate::error::InferenceError::BackendCapabilityUnsupported) diagnostic.
+/// [`InferenceError::BackendCapabilityUnsupported`](crate::inference_error::InferenceError::BackendCapabilityUnsupported) diagnostic.
 pub fn backend_capability_unsupported(kind: &str, capability: InferenceCapability) -> Diagnostic {
     let label = capability.as_str();
     let id = format!("inference-core-capability-unsupported-{kind}-{label}");
@@ -106,7 +111,7 @@ pub fn backend_capability_unsupported(kind: &str, capability: InferenceCapabilit
     )
 }
 
-/// [`InferenceError::IncompatibleHandleAffinity`](crate::error::InferenceError::IncompatibleHandleAffinity) diagnostic.
+/// [`InferenceError::IncompatibleHandleAffinity`](crate::inference_error::InferenceError::IncompatibleHandleAffinity) diagnostic.
 pub fn incompatible_handle_affinity(expected: &str, actual: &str) -> Diagnostic {
     let id = format!("inference-core-incompatible-handle-affinity-{expected}-{actual}");
     let target = domain("inference.runtime", format!("{expected}->{actual}"));

@@ -2,7 +2,7 @@
 //!
 //! `LoadedModelBundle` acts as a small enum-dispatch facade for model-family
 //! specific computation. Standard capability methods in [`crate::operation`]
-//! translate [`reimagine_inference_core`] requests into the backend-local
+//! translate [`reimagine_inference`] requests into the backend-local
 //! input types defined here, then call the matching facade method. The facade
 //! dispatches to the concrete implementation for the loaded model family
 //! (currently only `stable_diffusion/sdxl`) without exposing family-specific
@@ -16,7 +16,7 @@
 
 use candle_core::Device;
 use reimagine_core::model::ModelRole;
-use reimagine_inference_core::{
+use reimagine_inference::{
     BackendKind, LoadBundleResponse, RuntimeClipHandle, RuntimeModelHandle, RuntimeVaeHandle,
 };
 
@@ -44,7 +44,7 @@ pub struct TextEncodeResult {
 }
 
 /// Backend-local sampler parameters extracted from a generic
-/// [`reimagine_inference_core::DiffusionSampleRequest`].
+/// [`reimagine_inference::DiffusionSampleRequest`].
 pub struct DiffusionSampleInput {
     pub seed: u64,
     pub steps: u32,
@@ -292,7 +292,7 @@ mod tests {
     use super::*;
     use candle_core::{DType, Device, Tensor};
     use reimagine_core::model::ModelId;
-    use reimagine_inference_core::ModelFormat;
+    use reimagine_inference::ModelFormat;
     use std::sync::Arc;
 
     fn cpu_device() -> Arc<Device> {

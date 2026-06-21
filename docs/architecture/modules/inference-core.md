@@ -1,7 +1,7 @@
 # Inference Core Migration Note
 
 > Status: folded into [`inference`](inference.md)
-> Crate: `crates/inference-core` (temporary implementation detail)
+> Crate: removed; historical note only
 
 ## Role
 
@@ -24,16 +24,15 @@ treat `inference` as the owner of:
 - backend resource mechanism contracts;
 - inference diagnostics and errors.
 
-## Migration Rule
+## Migration Result
 
-The physical `crates/inference-core` crate may remain while code migration is
-split into small issues. During that migration, concrete code can still import
-from `reimagine_inference_core` and re-export through `reimagine_inference`.
+The physical `crates/inference-core` crate has been removed. Concrete code
+imports backend contracts, router contracts, execution values, typed
+capability DTOs, resource contracts, diagnostics, and inference errors from
+`reimagine_inference`.
 
-That crate is no longer a separate architecture module for new design work.
-New issues should be filed under `inference/issues`, not
-`inference-core/issues`, unless the task is explicitly about deleting or
-mechanically migrating the remaining physical crate.
+This file is no longer a separate architecture module for new design work. New
+issues should be filed under `inference/issues`, not `inference-core/issues`.
 
 ## Dependency Intent
 

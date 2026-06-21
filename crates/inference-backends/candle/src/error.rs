@@ -1,4 +1,4 @@
-use reimagine_inference_core::InferenceCapability;
+use reimagine_inference::InferenceCapability;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct BackendNotImplementedError {

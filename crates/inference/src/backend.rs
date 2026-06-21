@@ -12,7 +12,7 @@
 
 use crate::BackendKind;
 use crate::capability::InferenceBackendCapabilities;
-use crate::error::InferenceError;
+use crate::inference_error::InferenceError;
 use crate::request::diffusion::DiffusionSampleRequest;
 use crate::request::image::{ImagePreviewRequest, ImageSaveRequest};
 use crate::request::latent::{CreateEmptyLatentRequest, LatentDecodeRequest};

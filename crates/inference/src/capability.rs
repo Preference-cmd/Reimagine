@@ -19,7 +19,7 @@ use reimagine_core::model::{ModelRole, ModelSeries, ModelVariant};
 ///
 /// V1 capabilities map 1:1 to the typed method surface of
 /// [`crate::backend::InferenceBackend`] and
-/// [`crate::runtime::InferenceRuntime`]. The router dispatches by
+/// [`crate::router::InferenceRuntime`]. The router dispatches by
 /// calling the typed method — never by matching on
 /// [`InferenceCapability`].
 ///

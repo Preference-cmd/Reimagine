@@ -1,7 +1,7 @@
 //! Backend identifier and payload key types used on execution values.
 //!
 //! These are the stable cross-crate identifiers that runtime,
-//! inference, inference-core, and concrete backends use to address a
+//! inference, runtime, and concrete backends use to address a
 //! backend's stored payload. They do not own backend-local data and
 //! are not the same as a backend's `InferenceBackend` impl.
 

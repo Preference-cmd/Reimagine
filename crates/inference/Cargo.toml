@@ -9,7 +9,6 @@ rust-version.workspace = true
 [dependencies]
 async-trait = { workspace = true }
 reimagine-core = { path = "../core" }
-reimagine-inference-core = { path = "../inference-core" }
 serde = { workspace = true }
 tokio = { workspace = true, features = ["time"] }
 tracing = "0.1"

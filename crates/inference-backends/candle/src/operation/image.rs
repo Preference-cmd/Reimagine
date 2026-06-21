@@ -17,7 +17,7 @@
 
 use candle_core::Device;
 use reimagine_core::model::ArtifactRef;
-use reimagine_inference_core::{
+use reimagine_inference::{
     FilenamePrefix, ImagePreviewRequest, ImagePreviewResponse, ImageSaveRequest, ImageSaveResponse,
     InferenceBackend, RuntimeImage,
 };

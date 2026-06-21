@@ -5,7 +5,7 @@
 //! built-in executor must preserve when mapping a typed response back
 //! into runtime-facing execution outputs.
 
-use reimagine_inference_core::{
+use crate::{
     CreateEmptyLatentResponse, DiffusionSampleResponse, ExecutionOutput, ExecutionValue,
     LatentDecodeResponse, LoadBundleResponse, TextEncodeResponse,
 };
@@ -41,19 +41,19 @@ pub fn image_output(response: &LatentDecodeResponse) -> ExecutionOutput {
 
 #[cfg(test)]
 mod tests {
-    use reimagine_core::model::{ModelId, ModelRole, SlotId};
-    use reimagine_inference_core::{
+    use crate::{
         BackendKind, CreateEmptyLatentResponse, DiffusionSampleResponse, ExecutionValueRetention,
         LoadBundleResponse, RuntimeClipHandle, RuntimeLatent, RuntimeModelHandle, RuntimeVaeHandle,
     };
+    use reimagine_core::model::{ModelId, ModelRole, SlotId};
 
     use super::{latent_output, load_bundle_outputs, sampled_latent_output};
 
     fn latent() -> RuntimeLatent {
-        reimagine_inference_core::RuntimeLatent::new(
-            reimagine_inference_core::BackendTensorHandle::new(
+        crate::RuntimeLatent::new(
+            crate::BackendTensorHandle::new(
                 BackendKind::new("fake"),
-                reimagine_inference_core::BackendPayloadKey::new("latent-1"),
+                crate::BackendPayloadKey::new("latent-1"),
                 reimagine_core::model::TensorDType::F32,
                 reimagine_core::model::TensorShape::new(vec![1, 4, 8, 8]),
                 "cpu",

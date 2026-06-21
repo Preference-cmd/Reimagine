@@ -14,7 +14,7 @@
 
 use std::sync::Arc;
 
-use reimagine_inference_core::{
+use crate::{
     DiffusionSampleRequest, DiffusionSampleResponse, ExecutionOutput, InferenceRuntime,
     SamplerName, SchedulerName,
 };

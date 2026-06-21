@@ -7,7 +7,7 @@
 //! to pass typed values between inference executors and backends.
 //!
 //! The submodules stay private; downstream code should use the
-//! top-level re-exports from `reimagine_inference_core::*` (or the
+//! top-level re-exports from `crate::*` (or the
 //! runtime-facing facade in `reimagine_inference::*`) and must not
 //! depend on paths such as
 //! `inference_core::execution_value::handles::RuntimeLatent`.

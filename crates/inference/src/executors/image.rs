@@ -20,11 +20,11 @@
 
 use std::sync::Arc;
 
-use reimagine_core::model::{ArtifactRef, SlotId};
-use reimagine_inference_core::{
+use crate::{
     ExecutionOutput, ImagePreviewRequest, ImagePreviewResponse, ImageSaveRequest,
     ImageSaveResponse, InferenceRuntime, LatentDecodeRequest, LatentDecodeResponse,
 };
+use reimagine_core::model::{ArtifactRef, SlotId};
 
 use crate::artifact_publisher::ArtifactEventKind;
 use crate::error::into_executor_error;

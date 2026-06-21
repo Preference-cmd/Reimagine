@@ -10,7 +10,7 @@
 //! `models/stable_diffusion/sdxl/tokenizer.rs`.
 
 use reimagine_core::model::{TensorDType, TensorShape};
-use reimagine_inference_core::{
+use reimagine_inference::{
     BackendKind, BackendPayloadKey, BackendTensorHandle, ConditioningMetadata,
     ExecutionConditioning, ExecutionValue, InferenceBackend, TextEncodeRequest, TextEncodeResponse,
 };

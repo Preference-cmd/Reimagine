@@ -7,8 +7,8 @@
 
 use std::sync::Arc;
 
+use crate::{InferenceRuntime, ModelResolver};
 use reimagine_core::model::NodeTypeId;
-use reimagine_inference_core::{InferenceRuntime, ModelResolver};
 
 use crate::executor::{NodeExecutorRegistry, NodeExecutorRegistryError};
 use crate::executors::{

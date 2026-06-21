@@ -151,8 +151,8 @@ Artifacts:
 `core::model` does not own agent tools, provider config, ComfyUI schema,
 Candle tensors, host DTOs, or the runtime execution value implementation.
 Execution values are internal runtime/inference data and live in the inference
-execution stack, with `inference-core` owning the canonical low-level shape and
-`inference` re-exporting the runtime-facing facade.
+execution stack, with `inference` owning the canonical low-level shape and
+runtime-facing facade.
 
 Recommended public imports:
 
@@ -176,8 +176,7 @@ other inference runtime internals.
 - `core` owns the node-definition schema language: `NodeDef`, `InputSlotDef`, `OutputSlotDef`, `SlotKind`, `NodeEffect`, and the read-only `NodeCatalog` interface.
 - `core` does not own the built-in node catalog data. Built-in definitions live in `crates/nodes` and consume the core schema.
 - `core` does not own `ExecutionValue`; canonical execution values and
-  backend-affine handles live in `inference-core` and are re-exported by
-  `inference` for runtime-facing code.
+  backend-affine handles live in `inference` for runtime-facing code.
 - Node inputs are slot-based. `WorkflowNode.params` stores fallback values for `dynamic=false` input slots.
 - Edges always connect slots. If an edge and param both provide a value for an input slot, the edge wins.
 - `dynamic=true` input slots are edge-only and cannot appear in `WorkflowNode.params`.
