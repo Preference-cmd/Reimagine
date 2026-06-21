@@ -1,6 +1,6 @@
 //! Runtime values passed between node executors during a single run.
 //!
-//! The canonical type is owned by `reimagine-inference-core` and
+//! The canonical type is owned by `reimagine-inference` and
 //! re-exported by the `reimagine-inference` facade as
 //! [`ExecutionValue`](reimagine_inference::ExecutionValue). This module
 //! exists for two reasons:

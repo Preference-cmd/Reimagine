@@ -9,8 +9,8 @@
 
 use std::collections::HashMap;
 
+use crate::ExecutionOutput;
 use reimagine_core::model::NodeTypeId;
-use reimagine_inference_core::ExecutionOutput;
 
 // Re-export the context type so executor modules can import it
 // through `crate::executor::NodeExecutionContext` alongside the trait.
@@ -24,7 +24,7 @@ pub use crate::node_context::NodeExecutionContext;
 /// V1 returns a `Vec<ExecutionOutput>` of declared outputs. Each output
 /// bundles the produced value with the slot id it should be stored
 /// under and the
-/// [`ExecutionValueRetention`](reimagine_inference_core::ExecutionValueRetention)
+/// [`ExecutionValueRetention`](crate::ExecutionValueRetention)
 /// policy the executor intends. The runner task is responsible for
 /// inserting these into the `RunValueStore` using the node's declared
 /// `output_slots` and recording the retention alongside the value.

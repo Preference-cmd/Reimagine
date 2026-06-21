@@ -8,7 +8,7 @@ use std::path::PathBuf;
 
 use reimagine_core::model::{ModelId, ModelRef, ModelRole, ModelSeries, ModelVariant};
 
-use crate::error::InferenceError;
+use crate::inference_error::InferenceError;
 
 /// Resolved, backend-neutral model metadata.
 ///

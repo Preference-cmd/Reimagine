@@ -1,5 +1,5 @@
 //! Internal execution value envelope used by runtime, inference,
-//! inference-core, and concrete backend crates.
+//! inference, runtime, and concrete backend crates.
 //!
 //! The canonical name is `ExecutionValue`. V1 contains the variants
 //! that the workflow executor, the inference executors, and the

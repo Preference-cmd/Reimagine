@@ -1,7 +1,7 @@
 //! Backend lifecycle capability the runtime calls to communicate resource
 //! intent without owning the underlying memory strategy.
 //!
-//! This module lives in `reimagine-inference-core` because concrete
+//! This module lives in `reimagine-inference` because concrete
 //! backends implement [`RunResourceBackend`] and must do so without
 //! depending on `reimagine-runtime`. The runtime composes a concrete
 //! implementation (e.g. `candle::CandleRunResourceBackend`) at startup

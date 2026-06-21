@@ -1,10 +1,8 @@
 //! Inference-to-executor error bridge.
 //!
-//! The canonical [`InferenceError`](reimagine_inference_core::InferenceError)
-//! lives in `reimagine-inference-core`, which cannot depend on
-//! `reimagine-inference` (the architecture forbids that edge). This
-//! module owns the explicit, call-site-visible conversion from the
-//! inference-core error to the executor
+//! The canonical [`InferenceError`](crate::InferenceError)
+//! lives in this crate. This module owns the explicit,
+//! call-site-visible conversion from the inference error to the executor
 //! [`NodeExecutorError`](crate::executor::NodeExecutorError).
 //!
 //! Two equivalent forms are provided:
@@ -15,11 +13,11 @@
 //!   call sites; it stays explicit even if the trait method is
 //!   shadowed by another implementation.
 
+use crate::InferenceError;
 use crate::executor::NodeExecutorError;
-use reimagine_inference_core::InferenceError;
 
-/// Trait that maps `inference_core::InferenceError` to the executor
-/// `NodeExecutorError` at the inference boundary.
+/// Trait that maps [`InferenceError`] to the executor
+/// [`NodeExecutorError`] at the inference boundary.
 pub trait IntoNodeExecutorError {
     fn into_executor_error(self) -> NodeExecutorError;
 }
@@ -55,9 +53,7 @@ impl IntoNodeExecutorError for InferenceError {
                 message: format!("model resolution failed: {message}"),
             },
             InferenceError::BackendNotRegistered { kind } => NodeExecutorError::Failed {
-                message: format!(
-                    "backend `{kind}` is not registered in the inference-core registry"
-                ),
+                message: format!("backend `{kind}` is not registered in the inference registry"),
             },
             InferenceError::BackendCapabilityUnsupported { kind, capability } => {
                 NodeExecutorError::Failed {
@@ -104,8 +100,8 @@ pub fn into_executor_error(err: InferenceError) -> NodeExecutorError {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::InferenceCapability;
     use reimagine_core::model::SlotId;
-    use reimagine_inference_core::InferenceCapability;
 
     #[test]
     fn backend_not_implemented_converts_to_failed() {

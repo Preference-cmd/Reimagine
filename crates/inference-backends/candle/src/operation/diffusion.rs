@@ -14,7 +14,7 @@
 //! flows through the existing typed `CandleStore` accessors.
 
 use reimagine_core::model::{TensorDType, TensorShape};
-use reimagine_inference_core::{
+use reimagine_inference::{
     BackendPayloadKey, BackendTensorHandle, DiffusionSampleRequest, DiffusionSampleResponse,
     ExecutionConditioning, InferenceBackend, RuntimeLatent, RuntimeModelHandle, SamplerName,
     SchedulerName,

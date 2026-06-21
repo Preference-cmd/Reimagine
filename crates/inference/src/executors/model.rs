@@ -15,10 +15,10 @@
 //! because they back the rest of the workflow and should outlive any
 //! single run. Runtime owns retention enforcement and value lifetime.
 
-use reimagine_core::model::{ModelRef, ParamValue, SlotId};
-use reimagine_inference_core::{
+use crate::{
     ExecutionOutput, InferenceRuntime, LoadBundleRequest, LoadBundleResponse, ModelResolver,
 };
+use reimagine_core::model::{ModelRef, ParamValue, SlotId};
 
 use crate::error::into_executor_error;
 use crate::executor::{NodeExecutionContext, NodeExecutor, NodeExecutorError};

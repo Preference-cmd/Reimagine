@@ -14,9 +14,7 @@
 
 use std::sync::Arc;
 
-use reimagine_inference_core::{
-    ExecutionOutput, InferenceRuntime, TextEncodeRequest, TextEncodeResponse,
-};
+use crate::{ExecutionOutput, InferenceRuntime, TextEncodeRequest, TextEncodeResponse};
 
 use crate::error::into_executor_error;
 use crate::executor::{NodeExecutionContext, NodeExecutor, NodeExecutorError};

@@ -1,8 +1,8 @@
-//! Default no-op [`RunResourceBackend`](reimagine_inference_core::RunResourceBackend)
+//! Default no-op [`RunResourceBackend`](reimagine_inference::RunResourceBackend)
 //! used by the runtime in tests and when no concrete backend is wired.
 
 use reimagine_core::model::RunId;
-use reimagine_inference_core::{MemorySnapshot, RunResourceBackend};
+use reimagine_inference::{MemorySnapshot, RunResourceBackend};
 
 /// Default no-op backend used in tests and when no backend is wired.
 #[derive(Debug, Default, Clone, Copy)]

@@ -9,8 +9,8 @@
 
 use std::sync::Arc;
 
+use crate::ExecutionOutput;
 use reimagine_core::model::{ParamValue, SlotId};
-use reimagine_inference_core::ExecutionOutput;
 
 use crate::executor::{NodeExecutionContext, NodeExecutor, NodeExecutorError};
 
@@ -30,7 +30,7 @@ impl NodeExecutor for StringExecutor {
             .unwrap_or(ParamValue::String(String::new()));
         Ok(vec![ExecutionOutput::run_scoped(
             SlotId::new("value"),
-            Arc::new(reimagine_inference_core::ExecutionValue::Param(value)),
+            Arc::new(crate::ExecutionValue::Param(value)),
         )])
     }
 }

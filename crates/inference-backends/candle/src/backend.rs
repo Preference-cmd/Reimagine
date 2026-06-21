@@ -3,7 +3,7 @@ use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, Ordering};
 
 use candle_core::Device;
-use reimagine_inference_core::{
+use reimagine_inference::{
     BackendKind, CreateEmptyLatentRequest, CreateEmptyLatentResponse, DiffusionSampleRequest,
     DiffusionSampleResponse, ImagePreviewRequest, ImagePreviewResponse, ImageSaveRequest,
     ImageSaveResponse, InferenceBackend, InferenceBackendCapabilities, InferenceCapability,
@@ -197,7 +197,7 @@ fn map_err<T>(result: Result<T, CandleBackendError>) -> Result<T, InferenceError
 mod tests {
     use super::*;
     use reimagine_core::model::{NodeId, RunId, WorkflowId, WorkflowVersion};
-    use reimagine_inference_core::TextEncodeRequest;
+    use reimagine_inference::TextEncodeRequest;
 
     fn backend() -> CandleBackend {
         CandleBackend::new(CandleBackendConfig::new(
@@ -235,12 +235,12 @@ mod tests {
     #[tokio::test]
     async fn text_encode_without_loaded_bundle_returns_error() {
         let backend = backend();
-        let clip = reimagine_inference_core::RuntimeClipHandle::new(
+        let clip = reimagine_inference::RuntimeClipHandle::new(
             reimagine_core::model::ModelId::new("missing"),
             BackendKind::new("candle"),
-            reimagine_inference_core::BackendPayloadKey::new("k"),
+            reimagine_inference::BackendPayloadKey::new("k"),
         );
-        let text = std::sync::Arc::new(reimagine_inference_core::ExecutionValue::Param(
+        let text = std::sync::Arc::new(reimagine_inference::ExecutionValue::Param(
             reimagine_core::model::ParamValue::String("hi".to_string()),
         ));
         let req = TextEncodeRequest::new(

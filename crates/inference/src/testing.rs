@@ -19,15 +19,15 @@ use std::sync::Mutex;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::time::Duration;
 
-use async_trait::async_trait;
-use reimagine_core::model::{ArtifactId, ArtifactRef, SlotId};
-use reimagine_inference_core::{
+use crate::{
     BackendKind, CreateEmptyLatentRequest, CreateEmptyLatentResponse, DiffusionSampleRequest,
     DiffusionSampleResponse, ImagePreviewRequest, ImagePreviewResponse, ImageSaveRequest,
     ImageSaveResponse, InferenceBackend, InferenceBackendCapabilities, InferenceCapability,
     InferenceCapabilitySupport, InferenceError, LatentDecodeRequest, LatentDecodeResponse,
     LoadBundleRequest, LoadBundleResponse, TextEncodeRequest, TextEncodeResponse,
 };
+use async_trait::async_trait;
+use reimagine_core::model::{ArtifactId, ArtifactRef, SlotId};
 
 use crate::artifact_publisher::{ArtifactEventKind, ArtifactPublisher};
 use crate::cancellation::NodeCancellation;
@@ -85,7 +85,7 @@ impl<Req, Resp> CannedCapabilityResponse<Req, Resp> {
 ///     BackendKind, BackendPayloadKey, BackendTensorHandle, RuntimeLatent,
 /// };
 /// use reimagine_core::model::{TensorDType, TensorShape};
-/// use reimagine_inference_core::CreateEmptyLatentResponse;
+/// use reimagine_inference::CreateEmptyLatentResponse;
 ///
 /// let backend = FakeBackend::new("fake")
 ///     .create_empty_latent(CannedCapabilityResponse::always(

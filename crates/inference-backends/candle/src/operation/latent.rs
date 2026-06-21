@@ -20,7 +20,7 @@
 
 use candle_core::{DType, Tensor};
 use reimagine_core::model::{TensorDType, TensorShape};
-use reimagine_inference_core::{
+use reimagine_inference::{
     BackendPayloadKey, BackendTensorHandle, CreateEmptyLatentRequest, CreateEmptyLatentResponse,
     InferenceBackend, LatentDecodeRequest, LatentDecodeResponse, RuntimeImage, RuntimeLatent,
     RuntimeVaeHandle,

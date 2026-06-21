@@ -3,7 +3,7 @@ use std::sync::Arc;
 
 use candle_core::Device;
 use reimagine_core::model::ModelId;
-use reimagine_inference_core::{BackendPayloadKey, ModelFormat};
+use reimagine_inference::{BackendPayloadKey, ModelFormat};
 
 use crate::error::CandleBackendError;
 

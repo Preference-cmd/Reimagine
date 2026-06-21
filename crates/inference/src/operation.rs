@@ -4,6 +4,6 @@
 //! for diagnostics, capability reports, tracing, and bridge policy
 //! context. The primary execution dispatch is the typed method call,
 //! not the capability identifier — see
-//! `reimagine_inference_core::request` and `reimagine_inference_core::response`.
+//! `crate::request` and `crate::response`.
 
-pub use reimagine_inference_core::InferenceCapability;
+pub use crate::InferenceCapability;

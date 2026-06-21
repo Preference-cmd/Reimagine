@@ -2,12 +2,12 @@
 
 use std::sync::Arc;
 
-use reimagine_core::diagnostic::CorrelationId;
-use reimagine_core::model::{ParamValue, SlotId};
-use reimagine_inference_core::{
+use crate::{
     ExecutionConditioning, ExecutionOutput, ExecutionValue, RuntimeClipHandle, RuntimeImage,
     RuntimeLatent, RuntimeModelHandle, RuntimeVaeHandle,
 };
+use reimagine_core::diagnostic::CorrelationId;
+use reimagine_core::model::{ParamValue, SlotId};
 
 use crate::executor::{NodeExecutionContext, NodeExecutorError};
 
@@ -214,12 +214,12 @@ pub fn param_kind_name(value: &ParamValue) -> &'static str {
 mod tests {
     use std::sync::Arc;
 
+    use crate::{
+        BackendKind, BackendPayloadKey, BackendTensorHandle, ExecutionValue, RuntimeClipHandle,
+    };
     use reimagine_core::event::Timestamp;
     use reimagine_core::model::{
         ModelId, ParamValue, RunId, SlotId, TensorDType, TensorShape, WorkflowId, WorkflowVersion,
-    };
-    use reimagine_inference_core::{
-        BackendKind, BackendPayloadKey, BackendTensorHandle, ExecutionValue, RuntimeClipHandle,
     };
 
     use super::{required_clip_input, required_u32_param, run_output};
@@ -255,9 +255,9 @@ mod tests {
         );
         inputs.insert(
             SlotId::new("clip"),
-            Arc::new(ExecutionValue::Latent(
-                reimagine_inference_core::RuntimeLatent::new(tensor, 64, 64, 1, 4),
-            )),
+            Arc::new(ExecutionValue::Latent(crate::RuntimeLatent::new(
+                tensor, 64, 64, 1, 4,
+            ))),
         );
 
         let err = required_clip_input(
@@ -304,7 +304,7 @@ mod tests {
         assert_eq!(output.slot_id(), &SlotId::new("conditioning"));
         assert_eq!(
             output.retention(),
-            reimagine_inference_core::ExecutionValueRetention::RunScoped
+            crate::ExecutionValueRetention::RunScoped
         );
     }
 }

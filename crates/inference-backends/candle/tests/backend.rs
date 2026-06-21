@@ -18,19 +18,19 @@ use reimagine_core::model::{
     WorkflowVersion,
 };
 use reimagine_core::model::{TensorDType, TensorShape};
-use reimagine_inference_candle::{CandleBackend, CandleBackendConfig, LoadedModelBundle};
-use reimagine_inference_core::{
+use reimagine_inference::{
     BackendKind, BackendPayloadKey, BackendTensorHandle, ConditioningMetadata,
     ExecutionConditioning, ExecutionValue, RuntimeClipHandle, RuntimeImage, RuntimeLatent,
     RuntimeModelHandle, RuntimeVaeHandle,
 };
-use reimagine_inference_core::{
+use reimagine_inference::{
     CreateEmptyLatentRequest, CreateEmptyLatentResponse, DiffusionSampleRequest,
     DiffusionSampleResponse, ImagePreviewRequest, ImagePreviewResponse, ImageSaveRequest,
     ImageSaveResponse, InferenceBackend, InferenceCapability, InferenceError, LatentDecodeRequest,
     LatentDecodeResponse, LoadBundleRequest, ModelFormat, ResolvedInferenceModel,
     RunResourceBackend, SamplerName, SchedulerName, TextEncodeRequest, TextEncodeResponse,
 };
+use reimagine_inference_candle::{CandleBackend, CandleBackendConfig, LoadedModelBundle};
 
 fn backend() -> CandleBackend {
     CandleBackend::new(CandleBackendConfig::new(

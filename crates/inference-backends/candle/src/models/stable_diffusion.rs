@@ -10,7 +10,7 @@ use std::sync::Arc;
 
 use candle_core::Device;
 use reimagine_core::model::{ModelId, ModelSeries, ModelVariant};
-use reimagine_inference_core::ModelFormat;
+use reimagine_inference::ModelFormat;
 
 use crate::error::CandleBackendError;
 use crate::models::stable_diffusion::sdxl::LoadedSdxlBundle;

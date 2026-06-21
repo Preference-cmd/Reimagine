@@ -50,10 +50,8 @@ runtime must not -> inference-backends/*
 
 Concrete node executors and backend capabilities are assembled by `app-host`.
 Runtime should consume executor contracts, execution values, execution outputs,
-and backend handle types through the `inference` facade. While the physical
-`crates/inference-core` crate exists during migration, it is an implementation
-detail behind the `inference` architecture module rather than a separate future
-design target.
+and backend handle types through the `inference` facade. The former physical
+`crates/inference-core` crate has been folded into `crates/inference`.
 
 Runtime must not depend on concrete backend crates.
 

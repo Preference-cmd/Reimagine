@@ -88,9 +88,9 @@ redefining node slots or params.
 truth for what inputs, outputs, params, effects, aliases, or target semantics a
 node has.
 
-`inference-core` owns the internal execution value/handle model, typed backend
-capability contract, and router. `inference` owns the runtime-facing executor
-facade and built-in node orchestration. Concrete backends implement the backend
+`inference` owns the internal execution value/handle model, typed backend
+capability contract, router, runtime-facing executor facade, and built-in node
+orchestration. Concrete backends implement the inference-owned backend
 contract.
 
 ## Crate and Host Map
@@ -104,12 +104,13 @@ crates/core
   - execution plan and RunEvent schema
   - host-safe ids, params, model refs, artifact refs, and observation schemas
 
-crates/inference-core
-  Inference execution contract kernel:
+crates/inference
+  Inference execution facade:
   - internal ExecutionValue and backend-affine handles
   - typed backend capability protocol
   - inference router / registry / bridge policy
   - model resolver handoff and inference diagnostics
+  - node executor contract and built-in V1 inference executors
 
 crates/nodes
   Built-in node package:

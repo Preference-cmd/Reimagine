@@ -10,11 +10,10 @@ owns built-in node orchestration, the runtime-facing executor contract,
 execution values, typed backend capability DTOs, the executor-facing router,
 backend adapter contracts, bridge policy, and inference errors.
 
-The earlier `inference-core` contract layer is now considered folded into this
-module for architecture and issue planning. The physical `crates/inference-core`
-crate may remain temporarily as an implementation detail while code migration is
-split into smaller issues, but new design work should be tracked under the
-`inference` module.
+The earlier `inference-core` contract layer is folded into this module for
+architecture, issue planning, and code ownership. The physical
+`crates/inference-core` crate has been removed, and new design work should be
+tracked under the `inference` module.
 
 ## Responsibilities
 
@@ -62,10 +61,9 @@ composes the pieces by constructing the inference router/backend registry and
 asking `inference` to register node executors into the executor registry
 consumed by runtime.
 
-Implementation migration note: while `crates/inference-core` exists, concrete
-code may still import contract types from `reimagine_inference_core` and
-re-export them through `reimagine_inference`. That crate is not a separate
-architecture module for new issue planning.
+Implementation note: backend contracts, router contracts, execution values,
+typed capability DTOs, resource contracts, and node executor contracts are all
+imported from `reimagine_inference`.
 
 ## Node Executor Contract
 
@@ -144,8 +142,7 @@ point requires an explicit bridge/transfer policy rather than silent fallback.
 ## Execution Value Usage
 
 `inference` consumes and returns execution values as its public runtime-facing
-facade. During migration those types may be physically defined in
-`crates/inference-core`, but the architecture owner is `inference`.
+facade. These types are physically defined in `crates/inference`.
 
 ```text
 inference::ExecutionValue

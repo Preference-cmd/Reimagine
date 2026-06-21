@@ -1,15 +1,15 @@
-//! Backend-neutral node orchestration layer for built-in V1
-//! inference-backed node executors.
+//! Backend-neutral inference facade for built-in V1
+//! inference-backed node executors and concrete inference backends.
 //!
-//! The backend contract (trait, typed request/response DTOs,
-//! capability report, model resolver, runtime/router, bridge policy,
-//! registry, resource lifecycle) lives in
-//! `reimagine-inference-core`. This crate owns the **node executor
+//! This crate owns the backend contract (trait, typed
+//! request/response DTOs, capability report, model resolver,
+//! runtime/router, bridge policy, backend registry, resource
+//! lifecycle), canonical execution values, the **node executor
 //! contract** (`NodeExecutor` trait, `NodeExecutionContext`,
 //! `NodeInputs`/`NodeParams`, `NodeExecutorRegistry`,
 //! `ArtifactPublisher`, `NodeCancellation`, `ArtifactEventKind`,
-//! `NodeExecutorError`) plus the built-in V1 executors and the
-//! executor registration helper.
+//! `NodeExecutorError`), built-in V1 executors, and the executor
+//! registration helper.
 //!
 //! This crate deliberately does **not** depend on `reimagine-runtime`.
 //! The runtime depends on this crate as its executor/value facade.
@@ -17,17 +17,9 @@
 //! are wrapped in trait objects at context construction time, so the
 //! executor contract stays backend- and runtime-neutral.
 //!
-//! The canonical execution value envelope and backend-affine handle
-//! types (`ExecutionValue`, `ExecutionValueKind`, `BackendKind`,
-//! `BackendPayloadKey`, `BackendTensorHandle`,
-//! `BackendTensorMetadata`, `RuntimeModelHandle`, `RuntimeClipHandle`,
-//! `RuntimeVaeHandle`, `RuntimeLatent`, `RuntimeImage`,
-//! `ExecutionConditioning`, `ConditioningMetadata`) plus the
-//! producer-declared output contract (`ExecutionOutput`,
-//! `ExecutionValueRetention`) are owned by
-//! `reimagine-inference-core` and re-exported here as the
-//! runtime-facing facade. New runtime-facing code should import
-//! execution values from `reimagine_inference::*`.
+//! Runtime-facing and backend-facing code should import execution
+//! values, backend contracts, router contracts, resource contracts,
+//! and executor contracts from `reimagine_inference::*`.
 //!
 //! See `docs/architecture/modules/inference.md` for the
 //! architecture source of truth.
@@ -35,13 +27,25 @@
 #![deny(unsafe_code)]
 
 mod artifact_publisher;
+mod backend;
+mod backend_registry;
+mod bridge;
 mod cancellation;
+mod capability;
+mod diagnostic;
 mod error;
+mod execution_value;
 mod executor;
 mod executors;
+mod inference_error;
 pub mod node_context;
 pub mod operation;
 pub mod registry;
+mod request;
+mod resolver;
+mod resources;
+mod response;
+mod router;
 /// Test-only fake backend and canned-response helpers.
 ///
 /// Compiled for both unit tests and integration tests so downstream
@@ -51,24 +55,39 @@ pub mod registry;
 #[doc(hidden)]
 pub mod testing;
 
-pub use reimagine_inference_core::{
+pub use execution_value::{
     BackendKind, BackendPayloadKey, BackendTensorHandle, BackendTensorMetadata,
     ConditioningMetadata, ExecutionConditioning, ExecutionOutput, ExecutionValue,
     ExecutionValueKind, ExecutionValueRetention, RuntimeClipHandle, RuntimeImage, RuntimeLatent,
     RuntimeModelHandle, RuntimeVaeHandle,
 };
 
-pub use reimagine_inference_core::{
-    BackendBridge, BackendBridgePolicy, BridgePlan, BridgeSupport, CreateEmptyLatentRequest,
-    CreateEmptyLatentResponse, DefaultInferenceRuntime, DiffusionSampleRequest,
-    DiffusionSampleResponse, FilenamePrefix, ImagePreviewRequest, ImagePreviewResponse,
-    ImageSaveRequest, ImageSaveResponse, InferenceBackend, InferenceBackendCapabilities,
-    InferenceBackendRegistry, InferenceCapability, InferenceCapabilitySupport, InferenceError,
-    InferenceRuntime, LatentDecodeRequest, LatentDecodeResponse, LoadBundleRequest,
-    LoadBundleResponse, MergedInferenceBackendCapabilities, ModelFormat, ModelResolver,
-    RejectAllBridgePolicy, ResolvedInferenceModel, SamplerName, SchedulerName, TextEncodeRequest,
-    TextEncodeResponse,
+pub use backend::InferenceBackend;
+pub use backend_registry::{InferenceBackendRegistry, MergedInferenceBackendCapabilities};
+pub use bridge::{
+    BackendBridge, BackendBridgePolicy, BridgePlan, BridgeSupport, RejectAllBridgePolicy,
 };
+pub use capability::{
+    InferenceBackendCapabilities, InferenceCapability, InferenceCapabilitySupport,
+};
+pub use diagnostic::{
+    backend_bridge_required, backend_bridge_unsupported, backend_capability_unsupported,
+    backend_not_registered, incompatible_handle_affinity,
+};
+pub use inference_error::InferenceError;
+pub use request::diffusion::{DiffusionSampleRequest, SamplerName, SchedulerName};
+pub use request::image::{FilenamePrefix, ImagePreviewRequest, ImageSaveRequest};
+pub use request::latent::{CreateEmptyLatentRequest, LatentDecodeRequest};
+pub use request::model::LoadBundleRequest;
+pub use request::text::TextEncodeRequest;
+pub use resolver::{ModelFormat, ModelResolver, ResolvedInferenceModel};
+pub use resources::{MemorySnapshot, RunResourceBackend};
+pub use response::diffusion::DiffusionSampleResponse;
+pub use response::image::{ImagePreviewResponse, ImageSaveResponse};
+pub use response::latent::{CreateEmptyLatentResponse, LatentDecodeResponse};
+pub use response::model::LoadBundleResponse;
+pub use response::text::TextEncodeResponse;
+pub use router::{DefaultInferenceRuntime, InferenceRuntime};
 
 pub use artifact_publisher::{ArtifactEventKind, ArtifactPublisher};
 pub use cancellation::NodeCancellation;

@@ -3,14 +3,12 @@
 //! [`InferenceError`] is the canonical error type returned by the
 //! typed capability methods on
 //! [`crate::backend::InferenceBackend`] and
-//! [`crate::runtime::InferenceRuntime`].
+//! [`crate::router::InferenceRuntime`].
 //!
 //! The mapping from [`InferenceError`] to
-//! `reimagine_runtime::NodeExecutorError` is intentionally NOT
-//! defined here: doing so would force `inference-core` to depend on
-//! `reimagine-runtime`, which would create a `runtime -> inference-core`
-//! dependency cycle. The mapping lives in `reimagine-inference` as
-//! the `IntoNodeExecutorError` trait + `into_executor_error` function.
+//! [`crate::executor::NodeExecutorError`] is intentionally kept in
+//! [`crate::error`], next to the node executor contract. This module
+//! stays focused on the backend/router error domain.
 //!
 //! Error variants that previously carried `operation_id: String` now
 //! carry the structured [`crate::capability::InferenceCapability`]
