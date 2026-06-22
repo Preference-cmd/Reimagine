@@ -9,11 +9,10 @@ use std::process::ExitCode;
 use std::sync::Arc;
 
 use clap::Parser;
-use reimagine_axum_host::bootstrap::{
-    bootstrap_workspace, default_workspace_path, ensure_workspace_dirs,
+use reimagine_axum_host::{
+    AxumHostState, Cli, RunEventRecorder, bootstrap_workspace, default_workspace_path,
+    ensure_workspace_dirs, init_tracing, run_server,
 };
-use reimagine_axum_host::cli::{Cli, init_tracing};
-use reimagine_axum_host::{AxumHostState, RunEventRecorder, run_server};
 
 #[tokio::main]
 async fn main() -> ExitCode {
