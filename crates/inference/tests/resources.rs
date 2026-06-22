@@ -138,3 +138,29 @@ async fn composite_backend_instance_runtime_hooks_collects_snapshots_per_instanc
         Some(&"fake:first".to_owned())
     );
 }
+
+#[tokio::test]
+async fn composite_snapshots_are_recursive_for_nested_composites() {
+    let inner = CompositeBackendInstanceRuntimeHooks::new(vec![
+        Arc::new(RecordingHooks::new("fake:a")) as Arc<dyn BackendInstanceRuntimeHooks>,
+        Arc::new(RecordingHooks::new("fake:b")) as Arc<dyn BackendInstanceRuntimeHooks>,
+    ]);
+    let outer = CompositeBackendInstanceRuntimeHooks::new(vec![
+        Arc::new(inner) as Arc<dyn BackendInstanceRuntimeHooks>
+    ]);
+
+    let snapshots = outer.snapshots().await;
+    let instances: Vec<String> = snapshots
+        .iter()
+        .map(|snapshot| snapshot.backend_instance.to_string())
+        .collect();
+
+    assert_eq!(instances, vec!["fake:a", "fake:b"]);
+}
+
+#[tokio::test]
+async fn empty_composite_returns_no_snapshots() {
+    let composite = CompositeBackendInstanceRuntimeHooks::new(vec![]);
+    let snapshots = composite.snapshots().await;
+    assert!(snapshots.is_empty());
+}
