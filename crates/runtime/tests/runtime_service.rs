@@ -10,10 +10,13 @@ use std::sync::{Arc, Mutex, Weak};
 use std::time::Duration;
 
 use async_trait::async_trait;
-use reimagine_core::diagnostic::DiagnosticCode;
+use reimagine_core::diagnostic::{
+    Diagnostic, DiagnosticCode, DiagnosticSeverity, DiagnosticSourceName, DiagnosticTarget,
+    DiagnosticTargetDomain,
+};
 use reimagine_core::event::{RunEvent, RunEventKind, Timestamp};
 use reimagine_core::model::{
-    ArtifactRef, NodeId, NodeTypeId, ParamValue, SlotId, WorkflowId, WorkflowInputId,
+    ArtifactRef, DiagnosticId, NodeId, NodeTypeId, ParamValue, SlotId, WorkflowId, WorkflowInputId,
     WorkflowVersion,
 };
 use reimagine_core::readiness::{
@@ -206,6 +209,17 @@ fn test_runtime() -> tokio::runtime::Runtime {
         .unwrap()
 }
 
+fn backend_lifecycle_diagnostic(label: &str) -> Diagnostic {
+    Diagnostic::new(
+        DiagnosticId::new(format!("backend-lifecycle-{label}")),
+        DiagnosticCode::new("INFERENCE/BACKEND_INSTANCE_LIFECYCLE"),
+        DiagnosticSeverity::Warning,
+        DiagnosticSourceName::new("inference"),
+        format!("backend lifecycle {label} diagnostic"),
+        DiagnosticTarget::new(DiagnosticTargetDomain::new("backend.instance")).with_id("spy"),
+    )
+}
+
 #[test]
 fn runtime_run_starts_and_completes_a_mock_plan() {
     let rt = test_runtime();
@@ -316,6 +330,65 @@ async fn runtime_service_reports_backend_instance_snapshots() {
 
     assert_eq!(snapshots.len(), 1);
     assert_eq!(snapshots[0].backend_instance.to_string(), "noop");
+}
+
+#[test]
+fn runtime_preserves_backend_lifecycle_report_diagnostics() {
+    let rt = test_runtime();
+    rt.block_on(async {
+        let mut registry = NodeExecutorRegistry::default();
+        registry
+            .register(
+                "mock.echo",
+                Arc::new(MockExecutor {
+                    label: "hello".to_owned(),
+                    count: Arc::new(AtomicUsize::new(0)),
+                    delay: Duration::ZERO,
+                    fail_with: None,
+                }),
+            )
+            .expect("register executor");
+
+        let backend = Arc::new(
+            SpyBackend::new()
+                .with_begin_diagnostic(backend_lifecycle_diagnostic("begin"))
+                .with_cleanup_diagnostic(backend_lifecycle_diagnostic("cleanup")),
+        );
+        let service = RuntimeService::new(
+            registry,
+            backend,
+            Arc::new(VecRunEventSink::new()),
+            Arc::new(FixedClock),
+        );
+
+        let plan = Arc::new(one_node_plan("mock.echo", "node_a"));
+        let handle = service
+            .run(plan, Default::default(), RuntimeOptions::default())
+            .expect("start run");
+        run_to_completion(&service, &handle);
+
+        let summary = service.summary(handle.run_id()).expect("summary");
+        assert_eq!(summary.state, reimagine_runtime::RunState::Completed);
+        assert_eq!(
+            summary
+                .diagnostics
+                .iter()
+                .map(|d| d.id().as_str())
+                .collect::<Vec<_>>(),
+            vec!["backend-lifecycle-begin", "backend-lifecycle-cleanup"]
+        );
+
+        let snapshot = service.snapshot(handle.run_id()).expect("snapshot");
+        assert_eq!(snapshot.state, reimagine_runtime::RunState::Completed);
+        assert_eq!(
+            snapshot
+                .diagnostics
+                .iter()
+                .map(|d| d.id().as_str())
+                .collect::<Vec<_>>(),
+            vec!["backend-lifecycle-begin", "backend-lifecycle-cleanup"]
+        );
+    });
 }
 
 #[test]
@@ -2026,6 +2099,8 @@ struct SpyBackend {
     begin_runs: AtomicUsize,
     cleanup_runs: AtomicUsize,
     cleanup_run_ids: Mutex<Vec<String>>,
+    begin_diagnostics: Vec<Diagnostic>,
+    cleanup_diagnostics: Vec<Diagnostic>,
     backend_instance: reimagine_inference::BackendInstance,
     backend: reimagine_inference::Backend,
 }
@@ -2036,9 +2111,21 @@ impl SpyBackend {
             begin_runs: AtomicUsize::new(0),
             cleanup_runs: AtomicUsize::new(0),
             cleanup_run_ids: Mutex::new(Vec::new()),
+            begin_diagnostics: Vec::new(),
+            cleanup_diagnostics: Vec::new(),
             backend_instance: reimagine_inference::BackendInstance::new("spy"),
             backend: reimagine_inference::Backend::new("spy"),
         }
+    }
+
+    fn with_begin_diagnostic(mut self, diagnostic: Diagnostic) -> Self {
+        self.begin_diagnostics.push(diagnostic);
+        self
+    }
+
+    fn with_cleanup_diagnostic(mut self, diagnostic: Diagnostic) -> Self {
+        self.cleanup_diagnostics.push(diagnostic);
+        self
     }
 }
 
@@ -2056,7 +2143,7 @@ impl reimagine_inference::BackendRunLifecycle for SpyBackend {
         self.begin_runs.fetch_add(1, Ordering::SeqCst);
         Ok(reimagine_inference::BackendRunLifecycleReport {
             backend_instance: self.backend_instance.clone(),
-            diagnostics: Vec::new(),
+            diagnostics: self.begin_diagnostics.clone(),
         })
     }
 
@@ -2072,7 +2159,7 @@ impl reimagine_inference::BackendRunLifecycle for SpyBackend {
             .push(request.run_id.to_string());
         Ok(reimagine_inference::BackendRunLifecycleReport {
             backend_instance: self.backend_instance.clone(),
-            diagnostics: Vec::new(),
+            diagnostics: self.cleanup_diagnostics.clone(),
         })
     }
 }

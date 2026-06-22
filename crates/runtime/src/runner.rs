@@ -352,8 +352,12 @@ impl Runner {
         let request = BackendRunLifecycleRequest {
             run_id: self.run_id.clone(),
         };
-        if let Err(err) = self.backend.begin_run(request.clone()).await {
-            tracing::warn!(%err, run_id = %self.run_id, "begin_run failed");
+        let mut lifecycle_diagnostics = Vec::new();
+        match self.backend.begin_run(request.clone()).await {
+            Ok(report) => lifecycle_diagnostics.extend(report.diagnostics),
+            Err(err) => {
+                tracing::warn!(%err, run_id = %self.run_id, "begin_run failed");
+            }
         }
         let mut session = self
             .run_to_completion(session, artifact_store, &consumer_index)
@@ -364,8 +368,15 @@ impl Runner {
         // alive as long as the backend itself keeps a handle or
         // workspace cache entry.
         session.values_mut().clear();
-        if let Err(err) = self.backend.cleanup_run(request).await {
-            tracing::warn!(%err, run_id = %self.run_id, "cleanup_run failed");
+        match self.backend.cleanup_run(request).await {
+            Ok(report) => lifecycle_diagnostics.extend(report.diagnostics),
+            Err(err) => {
+                tracing::warn!(%err, run_id = %self.run_id, "cleanup_run failed");
+            }
+        }
+        if !lifecycle_diagnostics.is_empty() {
+            self.store
+                .append_diagnostics(&self.run_id, &lifecycle_diagnostics);
         }
     }
 
