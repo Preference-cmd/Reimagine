@@ -3,6 +3,7 @@
 use std::collections::HashMap;
 use std::sync::{Arc, RwLock};
 
+use reimagine_core::diagnostic::Diagnostic;
 use reimagine_core::model::RunId;
 
 use crate::handle::RunHandle;
@@ -53,6 +54,24 @@ impl RunStore {
     pub(crate) fn put_summary(&self, summary: RunSummary) {
         let mut guard = self.inner.write().expect("run store poisoned");
         guard.summaries.insert(summary.run_id.clone(), summary);
+    }
+
+    /// Append diagnostics to the latest snapshot and terminal summary for
+    /// a run. Used after backend lifecycle hooks finish, because cleanup
+    /// diagnostics are only available after the runner has published its
+    /// terminal state.
+    pub(crate) fn append_diagnostics(&self, run_id: &RunId, diagnostics: &[Diagnostic]) {
+        if diagnostics.is_empty() {
+            return;
+        }
+
+        let mut guard = self.inner.write().expect("run store poisoned");
+        if let Some(snapshot) = guard.snapshots.get_mut(run_id) {
+            snapshot.diagnostics.extend(diagnostics.iter().cloned());
+        }
+        if let Some(summary) = guard.summaries.get_mut(run_id) {
+            summary.diagnostics.extend(diagnostics.iter().cloned());
+        }
     }
 
     /// Borrow the inner store mutably; crate-internal only.
