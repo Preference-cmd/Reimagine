@@ -180,10 +180,19 @@ BackendRunLifecycle
 
 BackendInstanceObservation
   snapshot() -> BackendInstanceSnapshot
+  snapshots() -> Vec<BackendInstanceSnapshot>
 
 BackendInstanceRuntimeHooks
   BackendRunLifecycle + BackendInstanceObservation
 ```
+
+`snapshot()` returns the observation for the hook object itself. For a concrete
+backend instance this is the same as that instance's observation. For a
+composite hook object it may be a coarse aggregate. `snapshots()` is the
+uniform per-instance observation entry point: a single backend returns a
+one-item vector, and a composite returns one snapshot per concrete
+`BackendInstance`. Runtime must call the uniform trait method rather than
+downcasting to a composite type.
 
 The existing `RunResourceBackend` and `BackendResourceMechanism` names should
 be treated as historical. The replacement name should communicate that this is

@@ -666,6 +666,15 @@ runtime/05c resource observation integration
   diagnostics and future policy without direct backend memory commands
 ```
 
+V1 resource observation should be explicit-request driven. Runtime should
+expose a host-neutral query that delegates to the injected
+`BackendInstanceRuntimeHooks::snapshots()` method and returns
+backend-instance snapshots. It should not put backend observations into every
+`RunSnapshot`, poll periodically, or couple observation cadence to scheduler
+concurrency. Cleanup diagnostics from `begin_run` / `cleanup_run` may be
+projected into run diagnostics; ordinary backend-instance observations remain a
+debug/diagnostic query surface.
+
 Resource coordination policy comes after these slices. It should be based on
 backend-neutral observations, run priorities, active plans, and configured
 budgets. It should not start by adding per-value release or pin/offload
