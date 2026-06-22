@@ -5,7 +5,7 @@
 
 ## Role
 
-`app-host` is the application service and composition layer. It assembles the reusable domain crates into one host-neutral surface for Tauri, future Axum, and Agent workflows.
+`app-host` is the application service and composition layer. It assembles the reusable domain crates into one host-neutral surface for Tauri, Axum, and Agent workflows.
 
 It is not a concrete host adapter. It must not contain Tauri command attributes, Axum routes, React/UI state, or backend inference kernels.
 
@@ -20,7 +20,7 @@ It is not a concrete host adapter. It must not contain Tauri command attributes,
 - Load built-in plugin metadata and wire plugin extensions into domain
   registries.
 - Provide concrete Agent tools over workflow/model/diagnostic operations.
-- Offer a shared API surface for Tauri, future Axum, and Agent tool execution.
+- Offer a shared API surface for Tauri, Axum, and Agent tool execution.
 
 ## Non-Responsibilities
 
@@ -47,7 +47,7 @@ app-host -> agent-provider
 app-host -> agent-macros
 
 src-tauri -> app-host
-future axum-host -> app-host
+axum-host -> app-host
 ```
 
 Reusable domain crates must not depend on `app-host`.
@@ -75,7 +75,7 @@ WorkspaceServices
   node_catalog
 ```
 
-`WorkspaceHost` is the shared application state center. Tauri and future Axum hold it through their own host state mechanisms. Agent sessions are bound to one workspace, not to global `AppHost` state.
+`WorkspaceHost` is the shared application state center. Tauri and Axum hold it through their own host state mechanisms. Agent sessions are bound to one workspace, not to global `AppHost` state.
 
 `WorkspaceServices` is the app-host service container captured by concrete Agent tools. Tools capture `Arc<WorkspaceServices>`, not `Arc<WorkspaceHost>`, so they cannot recurse back through `AgentService` or mutate the registry while handling a tool call.
 
@@ -89,6 +89,50 @@ AppHost
 The type shape should still make the workspace boundary explicit so future multi-workspace support can route Agent sessions and host requests to the correct `WorkspaceHost`.
 
 `app-host` owns the unified bootstrap entry that assembles `WorkspaceHost`. Tauri and Axum adapters should receive an already-built workspace handle rather than duplicating service composition.
+
+## Host API DTOs
+
+Tauri and Axum are equal host adapters over the same app-host semantics. Shared
+request/response DTOs and projection helpers should live in `app-host`, not in
+one host adapter and then be copied into the other.
+
+Suggested module shape:
+
+```text
+src/
+  api.rs
+  api/
+    health.rs
+    nodes.rs
+    workflows.rs
+    runs.rs
+    artifacts.rs
+```
+
+The API modules should expose host-neutral request/response shapes for common
+operations:
+
+```text
+open workflow
+run workflow
+get run snapshot or summary
+list run events or event records
+list node definitions
+resolve/download artifact references
+```
+
+Host adapters remain responsible for transport details:
+
+```text
+HTTP extractors/status codes/headers -> axum-host
+Tauri command attributes/window events -> src-tauri
+shared DTOs/projections/facade calls -> app-host::api
+```
+
+V1 does not require Tauri to call Axum over localhost. Tauri may reuse the same
+DTO shapes and `WorkspaceHost` facade directly. A future embedded Axum server
+inside the desktop app is possible, but it is a host decision rather than a
+domain dependency.
 
 `node_catalog` is the workspace handle to the built-in node catalog from
 `crates/nodes`. It is the catalog exposed to host adapters, UI DTOs, Agent
