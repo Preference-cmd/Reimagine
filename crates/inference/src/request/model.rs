@@ -3,6 +3,7 @@
 use reimagine_core::diagnostic::CorrelationId;
 use reimagine_core::model::{NodeId, RunId, WorkflowId, WorkflowVersion};
 
+use crate::BackendSelectionOverlay;
 use crate::resolver::ResolvedInferenceModel;
 
 /// `model.load_bundle` request.
@@ -17,6 +18,7 @@ pub struct LoadBundleRequest {
     workflow_version: WorkflowVersion,
     correlation_id: Option<CorrelationId>,
     node_id: NodeId,
+    backend_selection: BackendSelectionOverlay,
 }
 
 impl LoadBundleRequest {
@@ -34,6 +36,7 @@ impl LoadBundleRequest {
             workflow_version,
             correlation_id: None,
             node_id,
+            backend_selection: BackendSelectionOverlay::new(),
         }
     }
 
@@ -72,7 +75,18 @@ impl LoadBundleRequest {
     /// affinity derives solely from the resolved model. Today the
     /// resolved model carries no backend affinity; V2 may grow that
     /// constraint.
-    pub fn backend_affinities(&self) -> Vec<crate::BackendKind> {
+    pub fn backend_affinities(&self) -> Vec<crate::BackendInstance> {
         Vec::new()
+    }
+
+    /// Per-request selection overlay supplied by the runtime.
+    pub fn backend_selection_overlay(&self) -> &BackendSelectionOverlay {
+        &self.backend_selection
+    }
+
+    /// Replace the request's selection overlay (for tests or
+    /// runtime-pre-dispatch mutation).
+    pub fn set_backend_selection_overlay(&mut self, overlay: BackendSelectionOverlay) {
+        self.backend_selection = overlay;
     }
 }

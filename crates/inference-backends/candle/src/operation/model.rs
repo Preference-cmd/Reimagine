@@ -52,5 +52,9 @@ fn bundle_response(
     bundle: &LoadedModelBundle,
     backend: &CandleBackend,
 ) -> Result<LoadBundleResponse, CandleBackendError> {
-    bundle.load_bundle_response(backend.backend_kind().clone(), backend.device_label())
+    bundle.load_bundle_response(
+        backend.backend_kind().clone(),
+        backend.backend_instance(),
+        backend.device_label(),
+    )
 }

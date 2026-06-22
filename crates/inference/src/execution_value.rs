@@ -27,7 +27,7 @@ mod output;
 mod tensor;
 mod value;
 
-pub use backend::{BackendKind, BackendPayloadKey};
+pub use backend::BackendPayloadKey;
 pub use conditioning::{ConditioningMetadata, ExecutionConditioning};
 pub use handles::{
     BackendTensorHandle, RuntimeClipHandle, RuntimeImage, RuntimeLatent, RuntimeModelHandle,

@@ -59,9 +59,17 @@ fn compose_inference_backends(
     let resource_backend = match backend_config.backend {
         InferenceBackendKind::Candle => {
             let backend = build_candle_backend(config, backend_config)?;
+            let device_label = backend.device_label().to_string();
             let resource_backend = backend.resource_backend();
             let backend: Arc<dyn InferenceBackend> = backend;
-            registry.register(backend);
+            let instance =
+                reimagine_inference::BackendInstance::new(format!("candle:{device_label}"));
+            let descriptor = reimagine_inference::BackendInstanceDescriptor::new(
+                instance,
+                backend.backend_kind().clone(),
+            )
+            .with_device(reimagine_inference::DeviceProfile::new(device_label));
+            registry.register(descriptor, backend);
             resource_backend
         }
     };

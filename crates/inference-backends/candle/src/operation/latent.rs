@@ -101,8 +101,9 @@ pub fn execute_latent_create_empty(
         .insert_latent(request.run_id().clone(), payload_key.clone(), tensor);
 
     let latent = RuntimeLatent::new(
-        BackendTensorHandle::new(
+        BackendTensorHandle::with_instance(
             backend.backend_kind().clone(),
+            backend.backend_instance(),
             payload_key,
             TensorDType::F32,
             TensorShape::new(shape),
@@ -163,8 +164,9 @@ pub fn execute_latent_decode(
         .insert_image(request.run_id().clone(), payload_key.clone(), image.clone());
 
     let image_value = RuntimeImage::new(
-        BackendTensorHandle::new(
+        BackendTensorHandle::with_instance(
             backend.backend_kind().clone(),
+            backend.backend_instance(),
             payload_key,
             TensorDType::F32,
             TensorShape::new(image.dims()),

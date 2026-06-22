@@ -1,6 +1,6 @@
 //! Bridge policy and bridge trait shapes for cross-backend value transfer.
 
-use crate::BackendKind;
+use crate::Backend;
 
 use crate::capability::InferenceCapability;
 
@@ -39,8 +39,8 @@ pub enum BridgePlan {
 pub trait BackendBridgePolicy: Send + Sync + 'static {
     fn plan_transfer(
         &self,
-        source_backend: &BackendKind,
-        target_backend: &BackendKind,
+        source_backend: &Backend,
+        target_backend: &Backend,
         capability: InferenceCapability,
     ) -> BridgePlan;
 }
@@ -55,8 +55,8 @@ pub trait BackendBridge: Send + Sync + 'static {
 
     fn can_transfer(
         &self,
-        source: &BackendKind,
-        target: &BackendKind,
+        source: &Backend,
+        target: &Backend,
         capability: InferenceCapability,
     ) -> BridgeSupport;
 }
@@ -75,8 +75,8 @@ pub struct RejectAllBridgePolicy;
 impl BackendBridgePolicy for RejectAllBridgePolicy {
     fn plan_transfer(
         &self,
-        source_backend: &BackendKind,
-        target_backend: &BackendKind,
+        source_backend: &Backend,
+        target_backend: &Backend,
         capability: InferenceCapability,
     ) -> BridgePlan {
         if source_backend == target_backend {
@@ -99,8 +99,8 @@ mod tests {
     fn same_backend_returns_direct() {
         let p = RejectAllBridgePolicy;
         let plan = p.plan_transfer(
-            &BackendKind::new("candle"),
-            &BackendKind::new("candle"),
+            &Backend::new("candle"),
+            &Backend::new("candle"),
             InferenceCapability::CreateEmptyLatent,
         );
         assert!(matches!(plan, BridgePlan::Direct));
@@ -110,8 +110,8 @@ mod tests {
     fn cross_backend_returns_unsupported_with_reason() {
         let p = RejectAllBridgePolicy;
         let plan = p.plan_transfer(
-            &BackendKind::new("candle"),
-            &BackendKind::new("remote"),
+            &Backend::new("candle"),
+            &Backend::new("remote"),
             InferenceCapability::DiffusionSample,
         );
         match plan {

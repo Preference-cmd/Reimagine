@@ -10,7 +10,7 @@
 //! `Vec<SlotId, ExecutionValue>` envelope and does not require
 //! callers to construct an `InferenceOperationId`.
 
-use crate::BackendKind;
+use crate::Backend;
 use crate::capability::InferenceBackendCapabilities;
 use crate::inference_error::InferenceError;
 use crate::request::diffusion::DiffusionSampleRequest;
@@ -33,7 +33,7 @@ use crate::response::text::TextEncodeResponse;
 pub trait InferenceBackend: Send + Sync + 'static {
     /// The stable kind identifier for this backend (e.g. `"candle"`,
     /// `"fake"`, `"remote"`).
-    fn backend_kind(&self) -> &BackendKind;
+    fn backend_kind(&self) -> &Backend;
 
     /// The capabilities this backend advertises.
     fn capabilities(&self) -> InferenceBackendCapabilities;

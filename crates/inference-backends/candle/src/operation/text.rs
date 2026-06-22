@@ -11,8 +11,8 @@
 
 use reimagine_core::model::{TensorDType, TensorShape};
 use reimagine_inference::{
-    BackendKind, BackendPayloadKey, BackendTensorHandle, ConditioningMetadata,
-    ExecutionConditioning, ExecutionValue, InferenceBackend, TextEncodeRequest, TextEncodeResponse,
+    Backend, BackendPayloadKey, BackendTensorHandle, ConditioningMetadata, ExecutionConditioning,
+    ExecutionValue, InferenceBackend, TextEncodeRequest, TextEncodeResponse,
 };
 
 use crate::backend::CandleBackend;
@@ -81,6 +81,7 @@ pub fn execute_text_encode(
         text_shape,
         pooled_shape,
         backend.backend_kind().as_str(),
+        backend.backend_instance(),
         backend.device_label(),
     ) else {
         unreachable!("conditioning runtime builder always returns ExecutionValue::Conditioning")
@@ -99,18 +100,21 @@ fn build_conditioning_runtime_value(
     text_embedding_shape: Vec<usize>,
     pooled_embedding_shape: Vec<usize>,
     backend_kind: &str,
+    backend_instance: reimagine_inference::BackendInstance,
     device_label: &str,
 ) -> ExecutionValue {
-    let text_handle = BackendTensorHandle::new(
-        BackendKind::from(backend_kind),
+    let text_handle = BackendTensorHandle::with_instance(
+        Backend::from(backend_kind),
+        backend_instance.clone(),
         payload_key.clone(),
         TensorDType::F32,
         TensorShape::new(text_embedding_shape),
         device_label,
     );
 
-    let pooled_handle = BackendTensorHandle::new(
-        BackendKind::from(backend_kind),
+    let pooled_handle = BackendTensorHandle::with_instance(
+        Backend::from(backend_kind),
+        backend_instance,
         payload_key,
         TensorDType::F32,
         TensorShape::new(pooled_embedding_shape),

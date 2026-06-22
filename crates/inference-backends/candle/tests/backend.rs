@@ -19,9 +19,9 @@ use reimagine_core::model::{
 };
 use reimagine_core::model::{TensorDType, TensorShape};
 use reimagine_inference::{
-    BackendKind, BackendPayloadKey, BackendTensorHandle, ConditioningMetadata,
-    ExecutionConditioning, ExecutionValue, RuntimeClipHandle, RuntimeImage, RuntimeLatent,
-    RuntimeModelHandle, RuntimeVaeHandle,
+    Backend, BackendPayloadKey, BackendTensorHandle, ConditioningMetadata, ExecutionConditioning,
+    ExecutionValue, RuntimeClipHandle, RuntimeImage, RuntimeLatent, RuntimeModelHandle,
+    RuntimeVaeHandle,
 };
 use reimagine_inference::{
     CreateEmptyLatentRequest, CreateEmptyLatentResponse, DiffusionSampleRequest,
@@ -163,7 +163,7 @@ fn base_image_preview_request(image: RuntimeImage, node: &str) -> ImagePreviewRe
 
 fn fake_tensor_handle(key: &str, dims: Vec<usize>) -> BackendTensorHandle {
     BackendTensorHandle::new(
-        BackendKind::new("candle"),
+        Backend::new("candle"),
         BackendPayloadKey::new(key),
         TensorDType::F32,
         TensorShape::new(dims),
@@ -175,7 +175,7 @@ fn fake_runtime_model_handle(key: &str) -> RuntimeModelHandle {
     RuntimeModelHandle::new(
         ModelId::new("sdxl-base-1.0"),
         ModelRole::CheckpointBundle,
-        BackendKind::new("candle"),
+        Backend::new("candle"),
         BackendPayloadKey::new(key),
     )
 }
@@ -183,7 +183,7 @@ fn fake_runtime_model_handle(key: &str) -> RuntimeModelHandle {
 fn fake_runtime_clip_handle(key: &str) -> RuntimeClipHandle {
     RuntimeClipHandle::new(
         ModelId::new("sdxl-base-1.0"),
-        BackendKind::new("candle"),
+        Backend::new("candle"),
         BackendPayloadKey::new(key),
     )
 }
@@ -191,7 +191,7 @@ fn fake_runtime_clip_handle(key: &str) -> RuntimeClipHandle {
 fn fake_runtime_vae_handle(key: &str) -> RuntimeVaeHandle {
     RuntimeVaeHandle::new(
         ModelId::new("sdxl-base-1.0"),
-        BackendKind::new("candle"),
+        Backend::new("candle"),
         BackendPayloadKey::new(key),
     )
 }
@@ -784,7 +784,7 @@ async fn text_encode_rejects_wrong_backend_clip_handle() {
         .unwrap();
     let clip_handle = RuntimeClipHandle::new(
         ModelId::new("sdxl-base-1.0"),
-        BackendKind::new("other-backend"),
+        Backend::new("other-backend"),
         BackendPayloadKey::new("bundle:sdxl-base-1.0:clip"),
     );
     let err = backend
@@ -815,7 +815,7 @@ async fn text_encode_rejects_wrong_clip_payload_key() {
         .unwrap();
     let clip_handle = RuntimeClipHandle::new(
         ModelId::new("sdxl-base-1.0"),
-        BackendKind::new("candle"),
+        Backend::new("candle"),
         BackendPayloadKey::new("bundle:sdxl-base-1.0:not-clip"),
     );
     let err = backend
@@ -1050,7 +1050,7 @@ async fn diffusion_sample_rejects_wrong_backend_latent() {
 
     let wrong_backend_latent = RuntimeLatent::new(
         BackendTensorHandle::new(
-            BackendKind::new("other-backend"),
+            Backend::new("other-backend"),
             BackendPayloadKey::new("latent:other"),
             TensorDType::F32,
             TensorShape::new(vec![1, 4, 8, 8]),
@@ -1098,14 +1098,14 @@ async fn diffusion_sample_rejects_wrong_backend_pooled_conditioning() {
     let model_handle = fake_runtime_model_handle(model_payload_key.as_str());
 
     let text_handle = BackendTensorHandle::new(
-        BackendKind::new("candle"),
+        Backend::new("candle"),
         BackendPayloadKey::new("conditioning:test"),
         TensorDType::F32,
         TensorShape::new(vec![1, 77, 2048]),
         "cpu",
     );
     let pooled_handle = BackendTensorHandle::new(
-        BackendKind::new("other-backend"),
+        Backend::new("other-backend"),
         BackendPayloadKey::new("conditioning:test"),
         TensorDType::F32,
         TensorShape::new(vec![1, 1280]),
@@ -1152,14 +1152,14 @@ async fn diffusion_sample_rejects_mismatched_pooled_conditioning_payload() {
     let model_handle = fake_runtime_model_handle(model_payload_key.as_str());
 
     let text_handle = BackendTensorHandle::new(
-        BackendKind::new("candle"),
+        Backend::new("candle"),
         BackendPayloadKey::new("conditioning:text"),
         TensorDType::F32,
         TensorShape::new(vec![1, 77, 2048]),
         "cpu",
     );
     let pooled_handle = BackendTensorHandle::new(
-        BackendKind::new("candle"),
+        Backend::new("candle"),
         BackendPayloadKey::new("conditioning:pooled"),
         TensorDType::F32,
         TensorShape::new(vec![1, 1280]),
@@ -1441,7 +1441,7 @@ async fn latent_decode_rejects_wrong_backend_vae_handle() {
         .unwrap();
     let vae_handle = RuntimeVaeHandle::new(
         ModelId::new("sdxl-base-1.0"),
-        BackendKind::new("other-backend"),
+        Backend::new("other-backend"),
         BackendPayloadKey::new("bundle:sdxl-base-1.0:vae"),
     );
     let latent = fake_runtime_latent("latent:placeholder", 64, 64);
@@ -1482,7 +1482,7 @@ async fn latent_decode_rejects_wrong_backend_latent_handle() {
     let vae_handle = fake_runtime_vae_handle(vae_payload_key.as_str());
     let wrong_backend_latent = RuntimeLatent::new(
         BackendTensorHandle::new(
-            BackendKind::new("other-backend"),
+            Backend::new("other-backend"),
             BackendPayloadKey::new("latent:other"),
             TensorDType::F32,
             TensorShape::new(vec![1, 4, 8, 8]),
@@ -1522,7 +1522,7 @@ async fn latent_decode_rejects_wrong_vae_payload_key() {
         .unwrap();
     let vae_handle = RuntimeVaeHandle::new(
         ModelId::new("sdxl-base-1.0"),
-        BackendKind::new("candle"),
+        Backend::new("candle"),
         BackendPayloadKey::new("bundle:sdxl-base-1.0:not-vae"),
     );
     let latent_response = backend
@@ -1565,7 +1565,7 @@ async fn latent_decode_rejects_missing_latent_payload() {
     let vae_handle = fake_runtime_vae_handle(vae_payload_key.as_str());
     let missing_latent = RuntimeLatent::new(
         BackendTensorHandle::new(
-            BackendKind::new("candle"),
+            Backend::new("candle"),
             BackendPayloadKey::new("latent:not-in-store"),
             TensorDType::F32,
             TensorShape::new(vec![1, 4, 8, 8]),
@@ -2014,7 +2014,7 @@ async fn image_save_rejects_wrong_backend_image_handle() {
     let backend = backend();
     let wrong_backend_image = RuntimeImage::new(
         BackendTensorHandle::new(
-            BackendKind::new("other-backend"),
+            Backend::new("other-backend"),
             BackendPayloadKey::new("image:fake"),
             TensorDType::F32,
             TensorShape::new(vec![1, 3, 64, 64]),
@@ -2043,7 +2043,7 @@ async fn image_save_rejects_missing_image_input() {
     let backend = backend();
     let ghost_image = RuntimeImage::new(
         BackendTensorHandle::new(
-            BackendKind::new("candle"),
+            Backend::new("candle"),
             BackendPayloadKey::new("image:not-in-store"),
             TensorDType::F32,
             TensorShape::new(vec![1, 3, 64, 64]),

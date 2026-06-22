@@ -215,7 +215,7 @@ mod tests {
     use std::sync::Arc;
 
     use crate::{
-        BackendKind, BackendPayloadKey, BackendTensorHandle, ExecutionValue, RuntimeClipHandle,
+        Backend, BackendPayloadKey, BackendTensorHandle, ExecutionValue, RuntimeClipHandle,
     };
     use reimagine_core::event::Timestamp;
     use reimagine_core::model::{
@@ -247,7 +247,7 @@ mod tests {
     fn required_clip_input_reports_expected_handle_kind() {
         let mut inputs = NodeInputs::new();
         let tensor = BackendTensorHandle::new(
-            BackendKind::new("fake"),
+            Backend::new("fake"),
             BackendPayloadKey::new("latent-1"),
             TensorDType::F32,
             TensorShape::new(vec![1, 4, 8, 8]),
@@ -295,7 +295,7 @@ mod tests {
     fn run_output_marks_value_run_scoped() {
         let value = ExecutionValue::Clip(RuntimeClipHandle::new(
             ModelId::new("sdxl-base-1.0"),
-            BackendKind::new("fake"),
+            Backend::new("fake"),
             "clip-1",
         ));
 
