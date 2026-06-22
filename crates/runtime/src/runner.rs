@@ -20,7 +20,7 @@ use crate::consumer_index::PlanConsumerIndex;
 use crate::error::RuntimeError;
 use crate::events::RunEventSink;
 use crate::handle::{RunHandle, RunState};
-use crate::resources::NoopRunResourceBackend;
+use crate::resources::NoopResourceMechanism;
 use crate::run_inputs::RunInputs;
 use crate::run_session::{NodeOutcome, RunSession};
 use crate::scheduler::{NodeState, StageExecutionPolicy, StageNodeDecision};
@@ -28,10 +28,10 @@ use crate::snapshot::{RunArtifactRef, RunSnapshot, RunSummary};
 use crate::store::RunStore;
 use crate::value_store::OutputKey;
 
-use reimagine_inference::RunResourceBackend;
+use reimagine_inference::BackendResourceMechanism;
 use reimagine_inference::{
-    ArtifactPublisher, ExecutionValueRetention, NodeCancellation, NodeExecutionContext,
-    NodeExecutorError, NodeExecutorRegistry, NodeInputs, NodeParams,
+    ArtifactPublisher, BackendRunLifecycleRequest, ExecutionValueRetention, NodeCancellation,
+    NodeExecutionContext, NodeExecutorError, NodeExecutorRegistry, NodeInputs, NodeParams,
 };
 
 /// Options passed to [`RuntimeService::run`].
@@ -97,7 +97,7 @@ impl From<RuntimeError> for RuntimeServiceError {
 pub struct RuntimeService {
     store: RunStore,
     registry: NodeExecutorRegistry,
-    backend: Arc<dyn RunResourceBackend>,
+    backend: Arc<dyn BackendResourceMechanism>,
     sink: Arc<dyn RunEventSink>,
     clock: Arc<dyn Clock>,
     next_run_seq: Arc<AtomicU64>,
@@ -118,7 +118,7 @@ impl RuntimeService {
     /// and event sink.
     pub fn new(
         registry: NodeExecutorRegistry,
-        backend: Arc<dyn RunResourceBackend>,
+        backend: Arc<dyn BackendResourceMechanism>,
         sink: Arc<dyn RunEventSink>,
         clock: Arc<dyn Clock>,
     ) -> Self {
@@ -138,7 +138,7 @@ impl RuntimeService {
     pub fn with_defaults(registry: NodeExecutorRegistry, sink: Arc<dyn RunEventSink>) -> Self {
         Self::new(
             registry,
-            Arc::new(NoopRunResourceBackend),
+            Arc::new(NoopResourceMechanism::default()),
             sink,
             Arc::new(SystemClock),
         )
@@ -325,7 +325,7 @@ struct Runner {
     cancellation: CancellationToken,
     store: RunStore,
     registry: Arc<NodeExecutorRegistry>,
-    backend: Arc<dyn RunResourceBackend>,
+    backend: Arc<dyn BackendResourceMechanism>,
     sink: Arc<dyn RunEventSink>,
     clock: Arc<dyn Clock>,
     next_event_seq: Arc<AtomicU64>,
@@ -343,17 +343,24 @@ impl Runner {
         let artifact_store = Arc::new(Mutex::new(ArtifactStore::new()));
         let consumer_index = PlanConsumerIndex::from_plan(&self.plan);
 
-        self.backend.begin_run(&self.run_id).await;
+        let request = BackendRunLifecycleRequest {
+            run_id: self.run_id.clone(),
+        };
+        if let Err(err) = self.backend.begin_run(request.clone()).await {
+            tracing::warn!(%err, run_id = %self.run_id, "begin_run failed");
+        }
         let mut session = self
             .run_to_completion(session, artifact_store, &consumer_index)
             .await;
         // Drop the runtime's run-scoped `Arc<ExecutionValue>` references.
         // Per-value release callbacks were removed from the
-        // `RunResourceBackend` trait; backend-owned payloads remain
+        // `BackendResourceMechanism` contract; backend-owned payloads remain
         // alive as long as the backend itself keeps a handle or
         // workspace cache entry.
         session.values_mut().clear();
-        self.backend.cleanup_run(&self.run_id).await;
+        if let Err(err) = self.backend.cleanup_run(request).await {
+            tracing::warn!(%err, run_id = %self.run_id, "cleanup_run failed");
+        }
     }
 
     async fn run_to_completion(

@@ -14,7 +14,7 @@ pub use backend::CandleBackend;
 pub use config::CandleBackendConfig;
 pub use device::CandleDevice;
 pub use error::{BackendNotImplementedError, CandleBackendError};
-pub use resource::CandleRunResourceBackend;
+pub use resource::CandleResourceMechanism;
 pub use store::{
     CandleConditioning, CandleImage, CandleLatent, CandleModelCache, CandlePayload, CandleStore,
     StoreError,

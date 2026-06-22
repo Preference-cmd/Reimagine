@@ -22,7 +22,7 @@ use reimagine_core::readiness::{
 };
 use reimagine_runtime::{
     CancellationToken, Clock, ExecutionValue, NodeExecutionContext, NodeExecutor,
-    NodeExecutorError, NodeExecutorRegistry, NoopRunResourceBackend, RunEventSink, RunHandle,
+    NodeExecutorError, NodeExecutorRegistry, NoopResourceMechanism, RunEventSink, RunHandle,
     RunInputs, RuntimeError, RuntimeOptions, RuntimeService, RuntimeServiceError, VecRunEventSink,
 };
 
@@ -225,7 +225,7 @@ fn runtime_run_starts_and_completes_a_mock_plan() {
         let sink = Arc::new(VecRunEventSink::new());
         let service = RuntimeService::new(
             registry,
-            Arc::new(NoopRunResourceBackend),
+            Arc::new(NoopResourceMechanism::default()),
             sink.clone(),
             Arc::new(FixedClock),
         );
@@ -276,7 +276,7 @@ fn runtime_observations_include_host_neutral_artifact_reference() {
         let sink = Arc::new(VecRunEventSink::new());
         let service = RuntimeService::new(
             registry,
-            Arc::new(NoopRunResourceBackend),
+            Arc::new(NoopResourceMechanism::default()),
             sink,
             Arc::new(FixedClock),
         );
@@ -360,7 +360,7 @@ fn runtime_stages_execute_in_order() {
         let sink = Arc::new(VecRunEventSink::new());
         let service = RuntimeService::new(
             registry,
-            Arc::new(NoopRunResourceBackend),
+            Arc::new(NoopResourceMechanism::default()),
             sink,
             Arc::new(FixedClock),
         );
@@ -432,7 +432,7 @@ fn shared_upstream_node_runs_only_once() {
         let sink = Arc::new(VecRunEventSink::new());
         let service = RuntimeService::new(
             registry,
-            Arc::new(NoopRunResourceBackend),
+            Arc::new(NoopResourceMechanism::default()),
             sink,
             Arc::new(FixedClock),
         );
@@ -557,7 +557,7 @@ fn executor_failure_marks_run_failed_and_skips_downstream() {
         let sink = Arc::new(VecRunEventSink::new());
         let service = RuntimeService::new(
             registry,
-            Arc::new(NoopRunResourceBackend),
+            Arc::new(NoopResourceMechanism::default()),
             sink.clone(),
             Arc::new(FixedClock),
         );
@@ -683,7 +683,7 @@ fn cancellation_stops_downstream_and_emits_cancelled_events() {
         let sink = Arc::new(VecRunEventSink::new());
         let service = RuntimeService::new(
             registry,
-            Arc::new(NoopRunResourceBackend),
+            Arc::new(NoopResourceMechanism::default()),
             sink.clone(),
             Arc::new(FixedClock),
         );
@@ -773,7 +773,7 @@ fn executor_cancelled_on_last_node_marks_run_cancelled_not_failed() {
         let sink = Arc::new(VecRunEventSink::new());
         let service = RuntimeService::new(
             registry,
-            Arc::new(NoopRunResourceBackend),
+            Arc::new(NoopResourceMechanism::default()),
             sink.clone(),
             Arc::new(FixedClock),
         );
@@ -816,7 +816,7 @@ fn workflow_input_bindings_read_from_workflow_input_run_inputs() {
             .unwrap();
         let service = RuntimeService::new(
             registry,
-            Arc::new(NoopRunResourceBackend),
+            Arc::new(NoopResourceMechanism::default()),
             Arc::new(VecRunEventSink::new()),
             Arc::new(FixedClock),
         );
@@ -876,7 +876,7 @@ fn static_param_bindings_read_from_node_param_run_inputs() {
             .unwrap();
         let service = RuntimeService::new(
             registry,
-            Arc::new(NoopRunResourceBackend),
+            Arc::new(NoopResourceMechanism::default()),
             Arc::new(VecRunEventSink::new()),
             Arc::new(FixedClock),
         );
@@ -937,7 +937,7 @@ fn sink_failure_does_not_fail_the_run() {
         let sink = Arc::new(FailingSink::default());
         let service = RuntimeService::new(
             registry,
-            Arc::new(NoopRunResourceBackend),
+            Arc::new(NoopResourceMechanism::default()),
             sink.clone(),
             Arc::new(FixedClock),
         );
@@ -996,7 +996,7 @@ fn sink_panic_is_logged_and_does_not_fail_the_run() {
             .unwrap();
         let service = RuntimeService::new(
             registry,
-            Arc::new(NoopRunResourceBackend),
+            Arc::new(NoopResourceMechanism::default()),
             Arc::new(PanickingSink),
             Arc::new(FixedClock),
         );
@@ -1034,7 +1034,7 @@ fn snapshot_reports_running_node_while_executor_is_in_flight() {
             .unwrap();
         let service = RuntimeService::new(
             registry,
-            Arc::new(NoopRunResourceBackend),
+            Arc::new(NoopResourceMechanism::default()),
             Arc::new(VecRunEventSink::new()),
             Arc::new(FixedClock),
         );
@@ -1081,7 +1081,7 @@ fn snapshot_records_terminal_node_states_and_summary_records_terminal_state() {
         let sink = Arc::new(VecRunEventSink::new());
         let service = RuntimeService::new(
             registry,
-            Arc::new(NoopRunResourceBackend),
+            Arc::new(NoopResourceMechanism::default()),
             sink,
             Arc::new(FixedClock),
         );
@@ -1271,7 +1271,7 @@ fn same_stage_siblings_are_skipped_after_a_sibling_fails() {
             .unwrap();
         let service = RuntimeService::new(
             registry,
-            Arc::new(NoopRunResourceBackend),
+            Arc::new(NoopResourceMechanism::default()),
             Arc::new(VecRunEventSink::new()),
             Arc::new(FixedClock),
         );
@@ -1358,7 +1358,7 @@ fn cancellation_emits_cancelled_for_unvisited_future_stage_nodes() {
         let sink = Arc::new(VecRunEventSink::new());
         let service = RuntimeService::new(
             registry,
-            Arc::new(NoopRunResourceBackend),
+            Arc::new(NoopResourceMechanism::default()),
             sink.clone(),
             Arc::new(FixedClock),
         );
@@ -1424,6 +1424,464 @@ fn cancellation_emits_cancelled_for_unvisited_future_stage_nodes() {
             node_cancelled >= 2,
             "expected NodeCancelled events for `b` and `c`, got {node_cancelled}"
         );
+    });
+}
+
+// ---------------------------------------------------------------------------
+// Progressive artifact visibility tests (issue 05a).
+// ---------------------------------------------------------------------------
+
+/// Helper: poll snapshot until a predicate is satisfied, or a timeout.
+/// Uses `std::thread::sleep` because tests run with a multi-thread
+/// tokio runtime; the runner task drives progress on a worker thread
+/// while this helper polls from the test thread.
+fn wait_for_snapshot<F>(
+    service: &RuntimeService,
+    run_id: &reimagine_core::model::RunId,
+    timeout: Duration,
+    predicate: F,
+) -> Option<reimagine_runtime::RunSnapshot>
+where
+    F: Fn(&reimagine_runtime::RunSnapshot) -> bool,
+{
+    let deadline = std::time::Instant::now() + timeout;
+    loop {
+        if let Some(snapshot) = service.snapshot(run_id) {
+            if predicate(&snapshot) {
+                return Some(snapshot);
+            }
+        }
+        if std::time::Instant::now() > deadline {
+            return None;
+        }
+        std::thread::sleep(Duration::from_millis(5));
+    }
+}
+
+#[test]
+fn artifact_visible_in_snapshot_before_run_completes() {
+    // Test A: A save/preview node produces an artifact. After that node
+    // completes, the snapshot must show the artifact, even though the
+    // whole run is still Running (a downstream node is still executing).
+    let rt = test_runtime();
+    rt.block_on(async {
+        let mut registry = NodeExecutorRegistry::default();
+        let slow_count = Arc::new(AtomicUsize::new(0));
+        registry
+            .register(
+                "mock.artifact",
+                Arc::new(ArtifactExecutor {
+                    reference: ArtifactRef::new("output/progressive.png"),
+                }),
+            )
+            .expect("register artifact executor");
+        registry
+            .register(
+                "mock.slow",
+                Arc::new(MockExecutor {
+                    label: "slow".to_owned(),
+                    count: slow_count.clone(),
+                    delay: Duration::from_secs(2),
+                    fail_with: None,
+                }),
+            )
+            .expect("register slow executor");
+
+        let sink = Arc::new(VecRunEventSink::new());
+        let service = RuntimeService::new(
+            registry,
+            Arc::new(NoopResourceMechanism::default()),
+            sink.clone(),
+            Arc::new(FixedClock),
+        );
+
+        let plan = ExecutionPlan::new(
+            WorkflowId::new("wf-progressive"),
+            WorkflowVersion::new(1),
+            RunTargetSelection::AllDefaultTargets,
+            vec![RunTarget::Node {
+                node_id: NodeId::new("slow"),
+            }],
+            vec![
+                ExecutionNode::new(
+                    NodeId::new("save"),
+                    NodeTypeId::new("mock.artifact"),
+                    Vec::new(),
+                    vec![SlotId::new("artifact")],
+                ),
+                ExecutionNode::new(
+                    NodeId::new("slow"),
+                    NodeTypeId::new("mock.slow"),
+                    Vec::new(),
+                    vec![SlotId::new("out")],
+                ),
+            ],
+            Vec::new(),
+            Vec::new(),
+            vec![
+                ExecutionStage::new(0, vec![NodeId::new("save")]),
+                ExecutionStage::new(1, vec![NodeId::new("slow")]),
+            ],
+        );
+
+        let handle = service
+            .run(
+                Arc::new(plan),
+                Default::default(),
+                RuntimeOptions::default(),
+            )
+            .expect("start run");
+
+        // Poll snapshot until the save node is Completed.
+        let mid_run_snapshot =
+            wait_for_snapshot(&service, handle.run_id(), Duration::from_secs(2), |snap| {
+                snap.node_states.get(&NodeId::new("save")).copied()
+                    == Some(reimagine_runtime::NodeState::Completed)
+            })
+            .expect("save node should complete within timeout");
+
+        // The artifact must be visible in the snapshot.
+        assert_eq!(mid_run_snapshot.artifacts.len(), 1);
+        assert_eq!(
+            mid_run_snapshot.artifacts[0].reference.as_str(),
+            "output/progressive.png"
+        );
+        assert_eq!(mid_run_snapshot.artifacts[0].node_id, NodeId::new("save"));
+
+        // The run must still be Running (slow node still going).
+        assert_eq!(mid_run_snapshot.state, reimagine_runtime::RunState::Running);
+
+        // The ArtifactCreated event must have been emitted.
+        let kinds: Vec<RunEventKind> = sink.events().iter().map(|e| e.kind()).collect();
+        assert!(
+            kinds.contains(&RunEventKind::ArtifactCreated),
+            "expected ArtifactCreated event before run completes"
+        );
+
+        // Let the run finish and verify summary still has the artifact.
+        run_to_completion(&service, &handle);
+        assert_eq!(
+            slow_count.load(Ordering::SeqCst),
+            1,
+            "slow node should have executed once"
+        );
+        let summary = service.summary(handle.run_id()).expect("summary");
+        assert_eq!(summary.artifacts.len(), 1);
+        assert_eq!(
+            summary.artifacts[0].reference.as_str(),
+            "output/progressive.png"
+        );
+    });
+}
+
+#[test]
+fn terminal_summary_includes_all_artifacts_from_multiple_nodes() {
+    // Test B: After the full run completes, the summary must contain
+    // all artifacts from all save/preview nodes.
+    let rt = test_runtime();
+    rt.block_on(async {
+        let mut registry = NodeExecutorRegistry::default();
+        registry
+            .register(
+                "mock.artifact_a",
+                Arc::new(ArtifactExecutor {
+                    reference: ArtifactRef::new("output/a.png"),
+                }),
+            )
+            .unwrap();
+        registry
+            .register(
+                "mock.artifact_b",
+                Arc::new(ArtifactExecutor {
+                    reference: ArtifactRef::new("output/b.png"),
+                }),
+            )
+            .unwrap();
+        registry
+            .register(
+                "mock.echo",
+                Arc::new(MockExecutor {
+                    label: "done".to_owned(),
+                    count: Arc::new(AtomicUsize::new(0)),
+                    delay: Duration::ZERO,
+                    fail_with: None,
+                }),
+            )
+            .unwrap();
+
+        let sink = Arc::new(VecRunEventSink::new());
+        let service = RuntimeService::new(
+            registry,
+            Arc::new(NoopResourceMechanism::default()),
+            sink.clone(),
+            Arc::new(FixedClock),
+        );
+
+        let plan = ExecutionPlan::new(
+            WorkflowId::new("wf-multi-artifact"),
+            WorkflowVersion::new(1),
+            RunTargetSelection::AllDefaultTargets,
+            vec![RunTarget::Node {
+                node_id: NodeId::new("echo"),
+            }],
+            vec![
+                ExecutionNode::new(
+                    NodeId::new("a"),
+                    NodeTypeId::new("mock.artifact_a"),
+                    Vec::new(),
+                    vec![SlotId::new("a_out")],
+                ),
+                ExecutionNode::new(
+                    NodeId::new("b"),
+                    NodeTypeId::new("mock.artifact_b"),
+                    Vec::new(),
+                    vec![SlotId::new("b_out")],
+                ),
+                ExecutionNode::new(
+                    NodeId::new("echo"),
+                    NodeTypeId::new("mock.echo"),
+                    Vec::new(),
+                    vec![SlotId::new("out")],
+                ),
+            ],
+            Vec::new(),
+            Vec::new(),
+            vec![
+                ExecutionStage::new(0, vec![NodeId::new("a"), NodeId::new("b")]),
+                ExecutionStage::new(1, vec![NodeId::new("echo")]),
+            ],
+        );
+
+        let handle = service
+            .run(
+                Arc::new(plan),
+                Default::default(),
+                RuntimeOptions::default(),
+            )
+            .unwrap();
+        run_to_completion(&service, &handle);
+
+        let summary = service.summary(handle.run_id()).expect("summary");
+        assert_eq!(summary.state, reimagine_runtime::RunState::Completed);
+        assert_eq!(summary.artifacts.len(), 2);
+
+        let refs: Vec<&str> = summary
+            .artifacts
+            .iter()
+            .map(|a| a.reference.as_str())
+            .collect();
+        assert!(
+            refs.contains(&"output/a.png"),
+            "summary must contain artifact from node a"
+        );
+        assert!(
+            refs.contains(&"output/b.png"),
+            "summary must contain artifact from node b"
+        );
+
+        // Verify artifact events were emitted for both.
+        let kinds: Vec<RunEventKind> = sink.events().iter().map(|e| e.kind()).collect();
+        let artifact_created_count = kinds
+            .iter()
+            .filter(|k| **k == RunEventKind::ArtifactCreated)
+            .count();
+        assert_eq!(artifact_created_count, 2);
+    });
+}
+
+#[test]
+fn failed_run_preserves_previously_recorded_artifacts() {
+    // Test C: A save node produces an artifact, then a later node fails.
+    // The snapshot and summary must still contain the artifact.
+    let rt = test_runtime();
+    rt.block_on(async {
+        let mut registry = NodeExecutorRegistry::default();
+        registry
+            .register(
+                "mock.artifact",
+                Arc::new(ArtifactExecutor {
+                    reference: ArtifactRef::new("output/pre-fail.png"),
+                }),
+            )
+            .unwrap();
+        let fail_count = Arc::new(AtomicUsize::new(0));
+        registry
+            .register(
+                "mock.failing",
+                Arc::new(MockExecutor {
+                    label: "failing".to_owned(),
+                    count: fail_count.clone(),
+                    delay: Duration::ZERO,
+                    fail_with: Some("kaboom".to_owned()),
+                }),
+            )
+            .unwrap();
+
+        let sink = Arc::new(VecRunEventSink::new());
+        let service = RuntimeService::new(
+            registry,
+            Arc::new(NoopResourceMechanism::default()),
+            sink.clone(),
+            Arc::new(FixedClock),
+        );
+
+        let plan = ExecutionPlan::new(
+            WorkflowId::new("wf-artifact-fail"),
+            WorkflowVersion::new(1),
+            RunTargetSelection::AllDefaultTargets,
+            vec![RunTarget::Node {
+                node_id: NodeId::new("fail"),
+            }],
+            vec![
+                ExecutionNode::new(
+                    NodeId::new("save"),
+                    NodeTypeId::new("mock.artifact"),
+                    Vec::new(),
+                    vec![SlotId::new("artifact")],
+                ),
+                ExecutionNode::new(
+                    NodeId::new("fail"),
+                    NodeTypeId::new("mock.failing"),
+                    Vec::new(),
+                    vec![SlotId::new("out")],
+                ),
+            ],
+            Vec::new(),
+            Vec::new(),
+            vec![
+                ExecutionStage::new(0, vec![NodeId::new("save")]),
+                ExecutionStage::new(1, vec![NodeId::new("fail")]),
+            ],
+        );
+
+        let handle = service
+            .run(
+                Arc::new(plan),
+                Default::default(),
+                RuntimeOptions::default(),
+            )
+            .unwrap();
+        run_to_completion(&service, &handle);
+
+        let summary = service.summary(handle.run_id()).expect("summary");
+        assert_eq!(summary.state, reimagine_runtime::RunState::Failed);
+        // The artifact from the save node must still be present.
+        assert_eq!(summary.artifacts.len(), 1);
+        assert_eq!(
+            summary.artifacts[0].reference.as_str(),
+            "output/pre-fail.png"
+        );
+        assert_eq!(summary.artifacts[0].node_id, NodeId::new("save"));
+
+        let snapshot = service.snapshot(handle.run_id()).expect("snapshot");
+        assert_eq!(snapshot.artifacts.len(), 1);
+        assert_eq!(
+            snapshot.artifacts[0].reference.as_str(),
+            "output/pre-fail.png"
+        );
+    });
+}
+
+#[test]
+fn cancelled_run_preserves_previously_recorded_artifacts() {
+    // Test D: A save node produces an artifact, then a later node is cancelled.
+    // The terminal cancellation summary and final snapshot must still contain
+    // the already-recorded artifact.
+    let rt = test_runtime();
+    rt.block_on(async {
+        let mut registry = NodeExecutorRegistry::default();
+        registry
+            .register(
+                "mock.artifact",
+                Arc::new(ArtifactExecutor {
+                    reference: ArtifactRef::new("output/pre-cancel.png"),
+                }),
+            )
+            .unwrap();
+        let slow_count = Arc::new(AtomicUsize::new(0));
+        registry
+            .register(
+                "mock.slow",
+                Arc::new(MockExecutor {
+                    label: "slow-cancel".to_owned(),
+                    count: slow_count.clone(),
+                    delay: Duration::from_secs(2),
+                    fail_with: None,
+                }),
+            )
+            .unwrap();
+
+        let sink = Arc::new(VecRunEventSink::new());
+        let service = RuntimeService::new(
+            registry,
+            Arc::new(NoopResourceMechanism::default()),
+            sink.clone(),
+            Arc::new(FixedClock),
+        );
+
+        let plan = ExecutionPlan::new(
+            WorkflowId::new("wf-artifact-cancel"),
+            WorkflowVersion::new(1),
+            RunTargetSelection::AllDefaultTargets,
+            vec![RunTarget::Node {
+                node_id: NodeId::new("slow"),
+            }],
+            vec![
+                ExecutionNode::new(
+                    NodeId::new("save"),
+                    NodeTypeId::new("mock.artifact"),
+                    Vec::new(),
+                    vec![SlotId::new("artifact")],
+                ),
+                ExecutionNode::new(
+                    NodeId::new("slow"),
+                    NodeTypeId::new("mock.slow"),
+                    Vec::new(),
+                    vec![SlotId::new("out")],
+                ),
+            ],
+            Vec::new(),
+            Vec::new(),
+            vec![
+                ExecutionStage::new(0, vec![NodeId::new("save")]),
+                ExecutionStage::new(1, vec![NodeId::new("slow")]),
+            ],
+        );
+
+        let handle = service
+            .run(
+                Arc::new(plan),
+                Default::default(),
+                RuntimeOptions::default(),
+            )
+            .unwrap();
+
+        wait_for_snapshot(&service, handle.run_id(), Duration::from_secs(2), |snap| {
+            snap.node_states.get(&NodeId::new("slow")).copied()
+                == Some(reimagine_runtime::NodeState::Running)
+        })
+        .expect("slow node should start before cancellation");
+
+        service.cancel(handle.run_id()).expect("cancel run");
+        run_to_completion(&service, &handle);
+
+        let summary = service.summary(handle.run_id()).expect("summary");
+        assert_eq!(summary.state, reimagine_runtime::RunState::Cancelled);
+        assert_eq!(summary.artifacts.len(), 1);
+        assert_eq!(
+            summary.artifacts[0].reference.as_str(),
+            "output/pre-cancel.png"
+        );
+        assert_eq!(summary.artifacts[0].node_id, NodeId::new("save"));
+
+        let snapshot = service.snapshot(handle.run_id()).expect("snapshot");
+        assert_eq!(snapshot.state, reimagine_runtime::RunState::Cancelled);
+        assert_eq!(snapshot.artifacts.len(), 1);
+        assert_eq!(
+            snapshot.artifacts[0].reference.as_str(),
+            "output/pre-cancel.png"
+        );
+        assert_eq!(slow_count.load(Ordering::SeqCst), 1);
     });
 }
 
@@ -1551,6 +2009,8 @@ struct SpyBackend {
     begin_runs: AtomicUsize,
     cleanup_runs: AtomicUsize,
     cleanup_run_ids: Mutex<Vec<String>>,
+    backend_instance: reimagine_inference::BackendInstance,
+    backend: reimagine_inference::Backend,
 }
 
 impl SpyBackend {
@@ -1559,26 +2019,63 @@ impl SpyBackend {
             begin_runs: AtomicUsize::new(0),
             cleanup_runs: AtomicUsize::new(0),
             cleanup_run_ids: Mutex::new(Vec::new()),
+            backend_instance: reimagine_inference::BackendInstance::new("spy"),
+            backend: reimagine_inference::Backend::new("spy"),
         }
     }
 }
 
 #[async_trait]
-impl reimagine_inference::RunResourceBackend for SpyBackend {
-    async fn begin_run(&self, _run_id: &reimagine_core::model::RunId) {
-        self.begin_runs.fetch_add(1, Ordering::SeqCst);
+impl reimagine_inference::BackendRunLifecycle for SpyBackend {
+    fn backend_instance(&self) -> &reimagine_inference::BackendInstance {
+        &self.backend_instance
     }
 
-    async fn cleanup_run(&self, run_id: &reimagine_core::model::RunId) {
+    async fn begin_run(
+        &self,
+        _request: reimagine_inference::BackendRunLifecycleRequest,
+    ) -> Result<reimagine_inference::BackendRunLifecycleReport, reimagine_inference::InferenceError>
+    {
+        self.begin_runs.fetch_add(1, Ordering::SeqCst);
+        Ok(reimagine_inference::BackendRunLifecycleReport {
+            backend_instance: self.backend_instance.clone(),
+            diagnostics: Vec::new(),
+        })
+    }
+
+    async fn cleanup_run(
+        &self,
+        request: reimagine_inference::BackendRunLifecycleRequest,
+    ) -> Result<reimagine_inference::BackendRunLifecycleReport, reimagine_inference::InferenceError>
+    {
         self.cleanup_runs.fetch_add(1, Ordering::SeqCst);
         self.cleanup_run_ids
             .lock()
             .unwrap()
-            .push(run_id.to_string());
+            .push(request.run_id.to_string());
+        Ok(reimagine_inference::BackendRunLifecycleReport {
+            backend_instance: self.backend_instance.clone(),
+            diagnostics: Vec::new(),
+        })
+    }
+}
+
+#[async_trait]
+impl reimagine_inference::BackendResourceObservation for SpyBackend {
+    fn backend_instance(&self) -> &reimagine_inference::BackendInstance {
+        &self.backend_instance
     }
 
-    async fn memory_snapshot(&self) -> reimagine_inference::MemorySnapshot {
-        reimagine_inference::MemorySnapshot::default()
+    async fn resource_snapshot(&self) -> reimagine_inference::BackendResourceSnapshot {
+        reimagine_inference::BackendResourceSnapshot {
+            backend_instance: self.backend_instance.clone(),
+            backend: self.backend.clone(),
+            plugin: None,
+            extension: None,
+            device: None,
+            observations: Default::default(),
+            diagnostics: Vec::new(),
+        }
     }
 }
 
