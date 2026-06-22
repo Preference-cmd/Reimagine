@@ -165,6 +165,9 @@ base_path/
     model_series.json
 ```
 
+For a copy-pasteable workspace setup and curl walkthrough, see
+[Axum E2E Workflow Guide](../e2e-workflow-axum.md).
+
 `config/inference_backend.json` selects the backend and device. V1 can keep
 the persisted shape simple:
 
