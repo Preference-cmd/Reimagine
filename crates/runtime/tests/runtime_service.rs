@@ -463,6 +463,100 @@ fn same_stage_nodes_can_overlap_when_concurrency_is_enabled() {
 }
 
 #[test]
+fn next_stage_waits_for_all_inflight_same_stage_nodes() {
+    let rt = test_runtime();
+    rt.block_on(async {
+        let mut registry = NodeExecutorRegistry::default();
+        let entered = Arc::new(AtomicUsize::new(0));
+        let max_seen = Arc::new(AtomicUsize::new(0));
+        let release = Arc::new(AtomicBool::new(false));
+        let next_stage_count = Arc::new(AtomicUsize::new(0));
+        registry
+            .register(
+                "mock.blocking",
+                Arc::new(BlockingConcurrencyExecutor {
+                    entered: entered.clone(),
+                    max_seen: max_seen.clone(),
+                    release: release.clone(),
+                }),
+            )
+            .expect("register blocking executor");
+        registry
+            .register(
+                "mock.next",
+                Arc::new(MockExecutor {
+                    label: "next".to_owned(),
+                    count: next_stage_count.clone(),
+                    delay: Duration::ZERO,
+                    fail_with: None,
+                }),
+            )
+            .expect("register next executor");
+
+        let service = RuntimeService::new(
+            registry,
+            Arc::new(NoopBackendInstanceRuntimeHooks::default()),
+            Arc::new(VecRunEventSink::new()),
+            Arc::new(FixedClock),
+        );
+
+        let plan = ExecutionPlan::new(
+            WorkflowId::new("workflow-stage-barrier"),
+            WorkflowVersion::new(1),
+            RunTargetSelection::AllDefaultTargets,
+            vec![RunTarget::Node {
+                node_id: NodeId::new("next"),
+            }],
+            vec![
+                ExecutionNode::new(
+                    NodeId::new("a"),
+                    NodeTypeId::new("mock.blocking"),
+                    Vec::new(),
+                    vec![SlotId::new("out")],
+                ),
+                ExecutionNode::new(
+                    NodeId::new("b"),
+                    NodeTypeId::new("mock.blocking"),
+                    Vec::new(),
+                    vec![SlotId::new("out")],
+                ),
+                ExecutionNode::new(
+                    NodeId::new("next"),
+                    NodeTypeId::new("mock.next"),
+                    Vec::new(),
+                    vec![SlotId::new("out")],
+                ),
+            ],
+            Vec::new(),
+            Vec::new(),
+            vec![
+                ExecutionStage::new(0, vec![NodeId::new("a"), NodeId::new("b")]),
+                ExecutionStage::new(1, vec![NodeId::new("next")]),
+            ],
+        );
+
+        let mut options = RuntimeOptions::default();
+        options.max_stage_concurrency = Some(2);
+        let handle = service
+            .run(Arc::new(plan), Default::default(), options)
+            .expect("start run");
+
+        wait_for_condition(Duration::from_secs(2), || {
+            max_seen.load(Ordering::SeqCst) >= 2
+        });
+        assert_eq!(
+            next_stage_count.load(Ordering::SeqCst),
+            0,
+            "next stage must not start while stage 0 still has in-flight nodes"
+        );
+
+        release.store(true, Ordering::SeqCst);
+        run_to_completion(&service, &handle);
+        assert_eq!(next_stage_count.load(Ordering::SeqCst), 1);
+    });
+}
+
+#[test]
 fn stage_failure_stops_further_same_stage_admission() {
     let rt = test_runtime();
     rt.block_on(async {
