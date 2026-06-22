@@ -148,6 +148,61 @@ open `Backend` label for the backend implementation and concrete
 provenance (`Plugin` / `Extension`) for diagnostics and registry
 introspection.
 
+## Backend Resource Mechanisms
+
+`inference` also owns the backend-neutral resource mechanism contracts used by
+runtime and app-host. These contracts are attached to configured backend
+instances; they are not a second plugin surface and they are not a concrete
+memory manager.
+
+Plugin alignment:
+
+```text
+PluginPackage
+  -> PluginExtension { extends: HostSurface::InferenceBackend }
+  -> app-host constructs one or more BackendInstance values
+  -> app-host registers:
+       InferenceBackend adapter for typed capabilities
+       BackendResourceMechanism adapter for lifecycle/observation
+```
+
+The plugin metadata tells the host which package and extension contributed the
+backend. The `BackendInstance` is the runtime selection and observation unit.
+A single plugin extension can later produce multiple instances such as
+`"candle:cpu"` and `"candle:metal"`, each with its own resource observations.
+
+V1 should keep the mechanism surface coarse:
+
+```text
+BackendRunLifecycle
+  begin_run(run_id)
+  cleanup_run(run_id)
+
+BackendResourceObservation
+  resource_snapshot() -> BackendResourceSnapshot
+
+BackendResourceMechanism
+  BackendRunLifecycle + BackendResourceObservation
+```
+
+The existing `RunResourceBackend` name should be treated as historical. The
+replacement name should communicate that this is a backend-instance mechanism,
+not a runtime-owned backend manager.
+
+Resource snapshots are host-neutral observations. They may include backend
+instance identity, open backend label, optional plugin provenance, device
+profile, cache counts, approximate bytes, and diagnostics. They must not expose
+backend-private tensors, loaded model structs, tokenizer state, graph objects,
+or file handles.
+
+V1 must not reintroduce ordinary per-value release, pin, unpin, offload, evict,
+or prepare-value commands. Runtime value lifetime is governed by
+`Arc<ExecutionValue>` ownership and producer-declared
+`ExecutionValueRetention`; backend caches and concrete payload stores retain
+their own internal owners. Future budget, transfer, preparation, or pinning
+interfaces should be separate mechanism traits added only when runtime has a
+concrete policy that needs them.
+
 ## Execution Value Usage
 
 `inference` consumes and returns execution values as its public runtime-facing

@@ -318,7 +318,7 @@ runtime
 Model loading follows the same rule. Runtime executes the checkpoint-loader
 node; the inference executor constructs `LoadBundleRequest`; the router chooses
 the backend when no backend-bound handles exist; returned `Model`, `Clip`, and
-`Vae` handles carry the selected `BackendKind`. Later nodes are constrained by
+`Vae` handles carry the selected `BackendInstance`. Later nodes are constrained by
 those handle affinities unless explicit bridge policy permits transfer.
 
 Runtime lifecycle is driven by `Arc<ExecutionValue>` ownership and
@@ -537,6 +537,25 @@ view that individual backends do not have. That coordinator should communicate
 through backend mechanism traits defined in `inference`, not through
 concrete backend types and not by interpreting backend-private payloads.
 
+The mechanism contract is plugin-aligned through backend instances:
+
+```text
+app-host
+  -> static PluginExtension { extends: HostSurface::InferenceBackend }
+  -> constructs BackendInstanceDescriptor { plugin, extension, backend, instance }
+  -> registers typed InferenceBackend adapter
+  -> registers resource mechanism adapter for the same BackendInstance
+
+runtime
+  -> calls coarse lifecycle/observation trait object supplied by app-host
+  -> never loads, unloads, moves, pins, or frees a concrete payload
+```
+
+There is no separate `HostSurface::ResourceBackend` in V1. Resource mechanisms
+are part of an inference backend instance's host wiring. This keeps plugin
+identity, backend selection, and resource observation aligned around the same
+`BackendInstance` unit.
+
 For an SDXL workflow that generates multiple images from the same prompt, the
 desired behavior is:
 
@@ -623,6 +642,28 @@ completed/failed/cancelled
 ```
 
 V1 does not persist run event logs or intermediate values. UI can recover with `RunSummary` and workflow snapshots.
+
+## Remaining Runtime Work
+
+The old `runtime/05` planning slice is split conceptually:
+
+```text
+runtime/05a progressive artifact output
+  save/preview artifacts become observable as each node completes
+
+runtime/05b scheduler concurrency foundation
+  same-stage independent node invocations may run concurrently while preserving
+  deterministic event/snapshot semantics and fail-fast cancellation
+
+runtime/05c resource observation integration
+  runtime/app-host can collect backend-instance resource snapshots for
+  diagnostics and future policy without direct backend memory commands
+```
+
+Resource coordination policy comes after these slices. It should be based on
+backend-neutral observations, run priorities, active plans, and configured
+budgets. It should not start by adding per-value release or pin/offload
+commands to the ordinary runtime lifecycle.
 
 ## Model Resolution and Loading
 
