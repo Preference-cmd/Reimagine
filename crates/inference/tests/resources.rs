@@ -87,6 +87,15 @@ impl BackendInstanceObservation for RecordingHooks {
 }
 
 #[tokio::test]
+async fn single_hook_snapshots_uses_trait_default() {
+    let hook = Arc::new(RecordingHooks::new("fake:single"));
+    let snapshots = BackendInstanceObservation::snapshots(hook.as_ref()).await;
+
+    assert_eq!(snapshots.len(), 1);
+    assert_eq!(snapshots[0].backend_instance.to_string(), "fake:single");
+}
+
+#[tokio::test]
 async fn composite_backend_instance_runtime_hooks_broadcast_lifecycle() {
     let first = Arc::new(RecordingHooks::new("fake:first"));
     let second = Arc::new(RecordingHooks::new("fake:second"));

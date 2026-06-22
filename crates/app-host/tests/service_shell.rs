@@ -247,6 +247,40 @@ fn add_string_node_batch(base_version: WorkflowVersion, value: &str) -> CommandB
     )
 }
 
+#[tokio::test]
+async fn workspace_host_exposes_candle_backend_instance_snapshot() {
+    let workspace =
+        WorkspaceHost::with_defaults(WorkspaceScope::new("ws-backend"), temp_dir("backend"));
+    let snapshots = workspace.backend_instance_snapshots().await;
+
+    assert_eq!(
+        snapshots.len(),
+        1,
+        "default composition should expose one backend instance"
+    );
+    let snapshot = &snapshots[0];
+    assert_eq!(
+        snapshot.backend_instance.to_string(),
+        "candle:cpu",
+        "instance should be candle:cpu"
+    );
+    assert_eq!(
+        snapshot.plugin.as_ref().map(|p| p.as_str()),
+        Some("builtin.candle"),
+        "plugin provenance should be preserved"
+    );
+    assert_eq!(
+        snapshot.extension.as_ref().map(|e| e.as_str()),
+        Some("backend.candle"),
+        "extension provenance should be preserved"
+    );
+    assert_eq!(
+        snapshot.device.as_ref().map(|d| d.label.as_str()),
+        Some("cpu"),
+        "device label should be cpu"
+    );
+}
+
 fn temp_dir(prefix: &str) -> std::path::PathBuf {
     let nonce = std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)

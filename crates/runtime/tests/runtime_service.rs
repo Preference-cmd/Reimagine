@@ -302,6 +302,22 @@ fn runtime_observations_include_host_neutral_artifact_reference() {
     });
 }
 
+#[tokio::test]
+async fn runtime_service_reports_backend_instance_snapshots() {
+    let registry = NodeExecutorRegistry::default();
+    let service = RuntimeService::new(
+        registry,
+        Arc::new(NoopBackendInstanceRuntimeHooks::default()),
+        Arc::new(VecRunEventSink::new()),
+        Arc::new(FixedClock),
+    );
+
+    let snapshots = service.backend_instance_snapshots().await;
+
+    assert_eq!(snapshots.len(), 1);
+    assert_eq!(snapshots[0].backend_instance.to_string(), "noop");
+}
+
 #[test]
 fn runtime_stages_execute_in_order() {
     let rt = test_runtime();
