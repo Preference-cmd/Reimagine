@@ -53,7 +53,7 @@ fn request_span(request: &axum::http::Request<axum::body::Body>) -> tracing::Spa
     tracing::info_span!(
         "request",
         method = %request.method(),
-        uri = %request.uri(),
+        path = %request.uri().path(),
         workflow_id = workflow_id.unwrap_or(""),
         run_id = run_id.unwrap_or(""),
     )
