@@ -17,8 +17,8 @@ It must not depend on Tauri or Axum.
 
 - Execute prepared `core::ExecutionPlan` values through `RuntimeService` / `ExecutionRunner`.
 - Own `RunSession` and run state.
-- Schedule DAG stages. The target architecture supports same-stage
-  parallelism, but the current runner remains sequential.
+- Schedule DAG stages. V1 preserves sequential execution by default and can
+  opt into bounded same-stage concurrency through `RuntimeOptions`.
 - Handle cancellation.
 - Coordinate node execution through a `NodeExecutorRegistry`.
 - Route preview and saved artifacts through injected artifact capabilities.
@@ -203,8 +203,8 @@ Cancellation is not a diagnostic error by default. Cleanup failures may produce 
 
 V1 uses fail-fast downstream scheduling.
 
-When a node in a stage fails, and especially once same-stage parallelism is
-introduced:
+When a node in a stage fails, including when bounded same-stage concurrency is
+enabled:
 
 ```text
 Stage: A, B, C
@@ -225,14 +225,13 @@ Runtime behavior:
 This avoids continuing expensive downstream work after the run is already unrecoverable, while still leaving room for in-flight tasks to shut down cleanly.
 
 Current implementation note: `scheduler.rs` owns the small
-`StageExecutionPolicy` used by the sequential runner to decide whether a
-workflow node invocation should execute or be skipped after the first failure.
-The policy is intentionally backend-neutral and does not touch value stores,
-artifact stores, or node executor internals. Future same-stage concurrency can
-deepen this module without changing the public `RuntimeService::run` seam.
+`StageExecutionPolicy` used by the runner to decide whether a workflow node
+invocation should execute or be skipped after the first failure. The policy is
+intentionally backend-neutral and does not touch value stores, artifact stores,
+or node executor internals.
 
-Same-stage concurrency should use a reducer-shaped design. Async node work may
-run concurrently, but `RunSession`, `RunValueStore`, `RunStore`,
+Same-stage concurrency uses a reducer-shaped design. Async node work may run
+concurrently, but `RunSession`, `RunValueStore`, `RunStore`,
 `StageExecutionPolicy`, node outcomes, retention drops, and node lifecycle
 publication stay single-writer:
 
@@ -261,10 +260,11 @@ session state directly. Runtime-provided artifact and cancellation
 capabilities remain valid inside node work because they are explicit injected
 capabilities rather than access to the session/value store.
 
-Default concurrency should preserve current sequential behavior. A future
-`RuntimeOptions::max_stage_concurrency` may opt into bounded same-stage
-parallelism; `Some(0)` should be rejected before run start rather than treated
-as unlimited.
+Default concurrency preserves sequential behavior.
+`RuntimeOptions::max_stage_concurrency` opts into bounded same-stage
+parallelism; `None` and `Some(1)` are sequential, `Some(n)` admits at most `n`
+same-stage node invocations concurrently, and `Some(0)` is rejected before run
+start rather than treated as unlimited.
 
 ## Runtime Store
 
@@ -365,21 +365,6 @@ Runtime lifecycle is driven by `Arc<ExecutionValue>` ownership and
 producer-declared retention policies. Runtime should not introduce a separate
 backend release-intent protocol for ordinary value lifecycle. Backend caches may
 remain live by holding their own handles or internal owners.
-
-## Review Notes
-
-As of 2026-06-15, the public runtime seam is still correct. The current runner
-implementation should be treated as a sequential scheduler with a small
-scheduler-owned fail-fast policy, not as the final DAG-parallel implementation
-described above.
-
-Follow-up candidates:
-
-- deepen the internal scheduler module further so stage concurrency, fail-fast
-  sibling cancellation, cancellation checks, and snapshot cadence live behind
-  one implementation;
-- keep `RuntimeService::run` plan-oriented even if the internal scheduler later
-  compiles plans into lower-level execution units.
 
 `RunStore` tracks active runs and summaries:
 
@@ -514,10 +499,12 @@ Node executors should not receive the whole `RunValueStore`. Runtime resolves gr
 
 V1 `NodeExecutor` may use `async-trait` for a readable async trait-object boundary. If profiling later shows this boundary matters, it can be replaced with boxed futures without changing the runtime's public run/plan API.
 
-Current V1 scheduling executes stages in order and runs nodes within a stage
-sequentially. The architecture should still preserve deterministic stage order
-and deterministic event/snapshot semantics when a follow-up scheduler deepening
-issue introduces same-stage concurrency.
+Current V1 scheduling executes stages in order. Nodes within a stage run
+sequentially by default, or with bounded same-stage concurrency when
+`RuntimeOptions::max_stage_concurrency` is greater than one. Stage order remains
+deterministic; node completion events may reflect actual async completion order,
+while reducer-owned snapshots and summaries must remain deterministic in
+content.
 
 ## Backend Resource Lifecycle
 
@@ -683,16 +670,16 @@ completed/failed/cancelled
 
 V1 does not persist run event logs or intermediate values. UI can recover with `RunSummary` and workflow snapshots.
 
-## Remaining Runtime Work
+## Runtime 05 Completion
 
-The old `runtime/05` planning slice is split conceptually:
+The old `runtime/05` planning slice was split conceptually:
 
 ```text
 runtime/05a progressive artifact output
   save/preview artifacts become observable as each node completes
 
 runtime/05b scheduler concurrency foundation
-  same-stage independent node invocations may run concurrently while preserving
+  same-stage independent node invocations can run concurrently while preserving
   deterministic event/snapshot semantics and fail-fast cancellation; scheduler
   must remain plugin/backend-instance agnostic
 
@@ -700,6 +687,9 @@ runtime/05c resource observation integration
   runtime/app-host can collect backend-instance snapshots for
   diagnostics and future policy without direct backend memory commands
 ```
+
+All three V1 slices are implemented. Further runtime work should be tracked as
+new issues rather than reopened under the broad `runtime/05` parent.
 
 V1 resource observation should be explicit-request driven. Runtime should
 expose a host-neutral query that delegates to the injected
