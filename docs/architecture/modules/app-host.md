@@ -17,6 +17,8 @@ It is not a concrete host adapter. It must not contain Tauri command attributes,
 - Build model readiness snapshots and pass them to core readiness.
 - Call `core` to validate workflows, apply workflow commands, and build execution plans.
 - Call `runtime` to run prepared execution plans.
+- Load built-in plugin metadata and wire plugin extensions into domain
+  registries.
 - Provide concrete Agent tools over workflow/model/diagnostic operations.
 - Offer a shared API surface for Tauri, future Axum, and Agent tool execution.
 
@@ -154,6 +156,36 @@ is the first dotted sub-domain style in app-host diagnostics; the
 dotted convention lets UI and Agent consumers route or de-duplicate
 by `app-host.<subsystem>` without parsing the message.
 
+## Plugin And Backend Composition
+
+`app-host` is the composition root for plugin-shaped registration. V1 uses
+static built-in plugins rather than runtime third-party loading:
+
+```text
+BuiltinPluginLoader
+  -> PluginDescriptor
+  -> Vec<PluginExtension>
+  -> group by HostSurface
+  -> construct concrete services/adapters
+  -> register into inference / agent / node catalog registries
+```
+
+For inference, Candle is treated as a built-in plugin extension:
+
+```text
+PluginDescriptor("builtin.candle")
+  -> PluginExtension {
+       extension: "backend.candle",
+       extends: HostSurface::InferenceBackend
+     }
+  -> app-host constructs Candle backend instance from config
+  -> app-host registers BackendInstance with inference router
+```
+
+The plugin metadata contract does not construct backends. App-host still owns
+factory/wiring decisions because it has config, workspace paths, model
+services, and host policy.
+
 ## Backend Selection
 
 `app-host` is the composition root for inference backends, but it should not
@@ -161,20 +193,20 @@ hard-code Candle inside the runtime path. V1 should model backend selection as
 configuration:
 
 ```text
-InferenceBackendKind
-  Candle
+backend extension: "backend.candle"
+backend instance:  "candle" or "candle:<device-profile>"
 ```
 
-The enum belongs at the app-host/config boundary, where user settings can select
-the desired backend and workspace bootstrap can instantiate the matching
-concrete backend crate.
+Backend selection belongs at the app-host/config boundary, where user settings
+can select a backend extension or backend instance and workspace bootstrap can
+instantiate the matching concrete backend crate.
 
 ```text
 AppConfig
-  inference.backend: InferenceBackendKind
+  inference backend config
 
 WorkspaceHost::new(config)
-  -> match config.inference.backend
+  -> resolve configured backend extension / backend instance
   -> construct backend adapters from config
   -> construct ModelResolver adapter
   -> build inference::InferenceBackendRegistry
@@ -210,7 +242,7 @@ capability support, not a runtime scheduler decision:
 ```text
 inference backend config
   -> app-host constructs backend adapters
-  -> app-host registers adapters by BackendKind
+  -> app-host registers adapters by BackendInstance
   -> app-host constructs BackendSelectionPolicy from config/runtime policy inputs
   -> app-host constructs inference InferenceRuntime/router
   -> app-host registers inference executors with the router
@@ -229,7 +261,7 @@ Model loading backend selection is applied through `InferenceRuntime`:
 checkpoint_loader
   -> LoadBundleRequest
   -> router chooses backend from BackendSelectionPolicy when no handle affinity exists
-  -> backend returns Model / Clip / Vae handles carrying BackendKind
+  -> backend returns Model / Clip / Vae handles carrying backend affinity
 ```
 
 After a backend-bound handle exists, app-host configuration must not cause

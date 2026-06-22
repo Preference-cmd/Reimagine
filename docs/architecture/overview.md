@@ -305,6 +305,7 @@ VAE and image:
 - [Model manager](./modules/model-manager.md)
 - [Runtime](./modules/runtime.md)
 - [Inference](./modules/inference.md)
+- [Plugin](./modules/plugin.md)
 - [Nodes](./modules/nodes.md)
 - [Agent](./modules/agent.md)
 - [Agent provider](./modules/agent-provider.md)
