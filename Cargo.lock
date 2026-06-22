@@ -4249,6 +4249,14 @@ dependencies = [
 ]
 
 [[package]]
+name = "reimagine-plugin"
+version = "0.1.0"
+dependencies = [
+ "serde",
+ "serde_json",
+]
+
+[[package]]
 name = "reimagine-runtime"
 version = "0.1.0"
 dependencies = [
