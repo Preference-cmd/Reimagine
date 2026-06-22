@@ -27,6 +27,7 @@ mod run_session;
 mod runner;
 mod scheduler;
 mod snapshot;
+mod stage_runner;
 mod store;
 mod value_store;
 

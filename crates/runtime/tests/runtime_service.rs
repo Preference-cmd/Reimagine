@@ -5,7 +5,7 @@
 //! snapshot/summary observation shapes.
 
 use std::collections::HashMap;
-use std::sync::atomic::{AtomicUsize, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex, Weak};
 use std::time::Duration;
 
@@ -185,6 +185,107 @@ impl NodeExecutor for InspectInputsExecutor {
     }
 }
 
+struct BlockingConcurrencyExecutor {
+    entered: Arc<AtomicUsize>,
+    max_seen: Arc<AtomicUsize>,
+    release: Arc<AtomicBool>,
+}
+
+#[async_trait]
+impl NodeExecutor for BlockingConcurrencyExecutor {
+    async fn execute(
+        &self,
+        context: NodeExecutionContext,
+    ) -> Result<Vec<reimagine_runtime::ExecutionOutput>, NodeExecutorError> {
+        let current = self.entered.fetch_add(1, Ordering::SeqCst) + 1;
+        loop {
+            let seen = self.max_seen.load(Ordering::SeqCst);
+            if current <= seen {
+                break;
+            }
+            if self
+                .max_seen
+                .compare_exchange(seen, current, Ordering::SeqCst, Ordering::SeqCst)
+                .is_ok()
+            {
+                break;
+            }
+        }
+
+        while !self.release.load(Ordering::SeqCst) {
+            if context.cancellation().is_cancelled() {
+                return Err(NodeExecutorError::Cancelled);
+            }
+            tokio::time::sleep(Duration::from_millis(5)).await;
+        }
+
+        self.entered.fetch_sub(1, Ordering::SeqCst);
+        Ok(vec![reimagine_runtime::ExecutionOutput::run_scoped(
+            SlotId::new("out"),
+            Arc::new(ExecutionValue::Param(ParamValue::String("done".to_owned()))),
+        )])
+    }
+}
+
+struct CoordinatedFailureExecutor {
+    started: Arc<AtomicUsize>,
+    release: Arc<AtomicBool>,
+    fail: bool,
+}
+
+#[async_trait]
+impl NodeExecutor for CoordinatedFailureExecutor {
+    async fn execute(
+        &self,
+        context: NodeExecutionContext,
+    ) -> Result<Vec<reimagine_runtime::ExecutionOutput>, NodeExecutorError> {
+        self.started.fetch_add(1, Ordering::SeqCst);
+        while !self.release.load(Ordering::SeqCst) {
+            if context.cancellation().is_cancelled() {
+                return Err(NodeExecutorError::Cancelled);
+            }
+            tokio::time::sleep(Duration::from_millis(5)).await;
+        }
+
+        if self.fail {
+            return Err(NodeExecutorError::Failed {
+                message: "coordinated failure".to_owned(),
+            });
+        }
+
+        Ok(vec![reimagine_runtime::ExecutionOutput::run_scoped(
+            SlotId::new("out"),
+            Arc::new(ExecutionValue::Param(ParamValue::String("ok".to_owned()))),
+        )])
+    }
+}
+
+struct LateSuccessExecutor {
+    started: Arc<AtomicUsize>,
+    finished: Arc<AtomicUsize>,
+    observed_cancelled: Arc<AtomicBool>,
+    delay: Duration,
+}
+
+#[async_trait]
+impl NodeExecutor for LateSuccessExecutor {
+    async fn execute(
+        &self,
+        context: NodeExecutionContext,
+    ) -> Result<Vec<reimagine_runtime::ExecutionOutput>, NodeExecutorError> {
+        self.started.fetch_add(1, Ordering::SeqCst);
+        tokio::time::sleep(self.delay).await;
+        if context.cancellation().is_cancelled() {
+            self.observed_cancelled.store(true, Ordering::SeqCst);
+        }
+        self.finished.fetch_add(1, Ordering::SeqCst);
+        Ok(vec![reimagine_runtime::ExecutionOutput::run_scoped(
+            SlotId::new("out"),
+            Arc::new(ExecutionValue::Param(ParamValue::String("late".to_owned()))),
+        )])
+    }
+}
+
 fn run_to_completion(service: &RuntimeService, handle: &RunHandle) {
     let run_id = handle.run_id().clone();
     // Spin until the run has reached a terminal state.
@@ -218,6 +319,376 @@ fn backend_lifecycle_diagnostic(label: &str) -> Diagnostic {
         format!("backend lifecycle {label} diagnostic"),
         DiagnosticTarget::new(DiagnosticTargetDomain::new("backend.instance")).with_id("spy"),
     )
+}
+
+fn two_node_same_stage_plan(type_id: &str, left: &str, right: &str) -> ExecutionPlan {
+    ExecutionPlan::new(
+        WorkflowId::new("workflow-concurrency"),
+        WorkflowVersion::new(1),
+        RunTargetSelection::AllDefaultTargets,
+        vec![
+            RunTarget::Node {
+                node_id: NodeId::new(left),
+            },
+            RunTarget::Node {
+                node_id: NodeId::new(right),
+            },
+        ],
+        vec![
+            ExecutionNode::new(
+                NodeId::new(left),
+                NodeTypeId::new(type_id),
+                Vec::new(),
+                vec![SlotId::new("out")],
+            ),
+            ExecutionNode::new(
+                NodeId::new(right),
+                NodeTypeId::new(type_id),
+                Vec::new(),
+                vec![SlotId::new("out")],
+            ),
+        ],
+        Vec::new(),
+        Vec::new(),
+        vec![ExecutionStage::new(
+            0,
+            vec![NodeId::new(left), NodeId::new(right)],
+        )],
+    )
+}
+
+fn wait_for_condition<F>(timeout: Duration, predicate: F)
+where
+    F: Fn() -> bool,
+{
+    let deadline = std::time::Instant::now() + timeout;
+    loop {
+        if predicate() {
+            return;
+        }
+        if std::time::Instant::now() > deadline {
+            panic!("condition not satisfied within {:?}", timeout);
+        }
+        std::thread::sleep(Duration::from_millis(5));
+    }
+}
+
+#[test]
+fn runtime_rejects_zero_stage_concurrency() {
+    let rt = test_runtime();
+    rt.block_on(async {
+        let mut registry = NodeExecutorRegistry::default();
+        registry
+            .register(
+                "mock.echo",
+                Arc::new(MockExecutor {
+                    label: "hello".to_owned(),
+                    count: Arc::new(AtomicUsize::new(0)),
+                    delay: Duration::ZERO,
+                    fail_with: None,
+                }),
+            )
+            .expect("register executor");
+        let sink = Arc::new(VecRunEventSink::new());
+        let service = RuntimeService::new(
+            registry,
+            Arc::new(NoopBackendInstanceRuntimeHooks::default()),
+            sink,
+            Arc::new(FixedClock),
+        );
+
+        let mut options = RuntimeOptions::default();
+        options.max_stage_concurrency = Some(0);
+        let result = service.run(
+            Arc::new(one_node_plan("mock.echo", "node_a")),
+            Default::default(),
+            options,
+        );
+
+        let error = result.expect_err("zero concurrency must be rejected");
+        assert!(
+            matches!(
+                error,
+                RuntimeServiceError::InvalidStageConcurrency { value: 0 }
+            ),
+            "unexpected error: {error:?}"
+        );
+        assert_eq!(service.store().active_count(), 0);
+    });
+}
+
+#[test]
+fn same_stage_nodes_can_overlap_when_concurrency_is_enabled() {
+    let rt = test_runtime();
+    rt.block_on(async {
+        let mut registry = NodeExecutorRegistry::default();
+        let entered = Arc::new(AtomicUsize::new(0));
+        let max_seen = Arc::new(AtomicUsize::new(0));
+        let release = Arc::new(AtomicBool::new(false));
+        registry
+            .register(
+                "mock.blocking",
+                Arc::new(BlockingConcurrencyExecutor {
+                    entered: entered.clone(),
+                    max_seen: max_seen.clone(),
+                    release: release.clone(),
+                }),
+            )
+            .expect("register executor");
+        let service = RuntimeService::new(
+            registry,
+            Arc::new(NoopBackendInstanceRuntimeHooks::default()),
+            Arc::new(VecRunEventSink::new()),
+            Arc::new(FixedClock),
+        );
+
+        let mut options = RuntimeOptions::default();
+        options.max_stage_concurrency = Some(2);
+        let handle = service
+            .run(
+                Arc::new(two_node_same_stage_plan("mock.blocking", "a", "b")),
+                Default::default(),
+                options,
+            )
+            .expect("start run");
+
+        wait_for_condition(Duration::from_secs(2), || {
+            max_seen.load(Ordering::SeqCst) >= 2
+        });
+        release.store(true, Ordering::SeqCst);
+        run_to_completion(&service, &handle);
+
+        assert_eq!(max_seen.load(Ordering::SeqCst), 2);
+    });
+}
+
+#[test]
+fn stage_failure_stops_further_same_stage_admission() {
+    let rt = test_runtime();
+    rt.block_on(async {
+        let mut registry = NodeExecutorRegistry::default();
+        let started = Arc::new(AtomicUsize::new(0));
+        let release = Arc::new(AtomicBool::new(false));
+        registry
+            .register(
+                "mock.coordinated_fail",
+                Arc::new(CoordinatedFailureExecutor {
+                    started: started.clone(),
+                    release: release.clone(),
+                    fail: true,
+                }),
+            )
+            .expect("register failing executor");
+        registry
+            .register(
+                "mock.coordinated_ok",
+                Arc::new(CoordinatedFailureExecutor {
+                    started: started.clone(),
+                    release: release.clone(),
+                    fail: false,
+                }),
+            )
+            .expect("register ok executor");
+
+        let service = RuntimeService::new(
+            registry,
+            Arc::new(NoopBackendInstanceRuntimeHooks::default()),
+            Arc::new(VecRunEventSink::new()),
+            Arc::new(FixedClock),
+        );
+
+        let plan = ExecutionPlan::new(
+            WorkflowId::new("workflow-fail-fast"),
+            WorkflowVersion::new(1),
+            RunTargetSelection::AllDefaultTargets,
+            vec![
+                RunTarget::Node {
+                    node_id: NodeId::new("fail"),
+                },
+                RunTarget::Node {
+                    node_id: NodeId::new("ok"),
+                },
+                RunTarget::Node {
+                    node_id: NodeId::new("never"),
+                },
+            ],
+            vec![
+                ExecutionNode::new(
+                    NodeId::new("fail"),
+                    NodeTypeId::new("mock.coordinated_fail"),
+                    Vec::new(),
+                    vec![SlotId::new("out")],
+                ),
+                ExecutionNode::new(
+                    NodeId::new("ok"),
+                    NodeTypeId::new("mock.coordinated_ok"),
+                    Vec::new(),
+                    vec![SlotId::new("out")],
+                ),
+                ExecutionNode::new(
+                    NodeId::new("never"),
+                    NodeTypeId::new("mock.coordinated_ok"),
+                    Vec::new(),
+                    vec![SlotId::new("out")],
+                ),
+            ],
+            Vec::new(),
+            Vec::new(),
+            vec![ExecutionStage::new(
+                0,
+                vec![NodeId::new("fail"), NodeId::new("ok"), NodeId::new("never")],
+            )],
+        );
+
+        let mut options = RuntimeOptions::default();
+        options.max_stage_concurrency = Some(2);
+        let handle = service
+            .run(Arc::new(plan), Default::default(), options)
+            .expect("start run");
+
+        wait_for_condition(Duration::from_secs(2), || {
+            started.load(Ordering::SeqCst) >= 2
+        });
+        release.store(true, Ordering::SeqCst);
+        run_to_completion(&service, &handle);
+
+        assert_eq!(started.load(Ordering::SeqCst), 2);
+        let snapshot = service.snapshot(handle.run_id()).expect("snapshot");
+        assert_eq!(
+            snapshot.node_states.get(&NodeId::new("never")).copied(),
+            Some(reimagine_runtime::NodeState::Skipped)
+        );
+    });
+}
+
+#[test]
+fn late_success_output_is_discarded_after_sibling_failure() {
+    let rt = test_runtime();
+    rt.block_on(async {
+        let mut registry = NodeExecutorRegistry::default();
+        let late_started = Arc::new(AtomicUsize::new(0));
+        let late_finished = Arc::new(AtomicUsize::new(0));
+        let observed_cancelled = Arc::new(AtomicBool::new(false));
+        registry
+            .register(
+                "mock.fail_fast",
+                Arc::new(MockExecutor {
+                    label: "boom".to_owned(),
+                    count: Arc::new(AtomicUsize::new(0)),
+                    delay: Duration::from_millis(10),
+                    fail_with: Some("boom".to_owned()),
+                }),
+            )
+            .expect("register failing executor");
+        registry
+            .register(
+                "mock.late_success",
+                Arc::new(LateSuccessExecutor {
+                    started: late_started.clone(),
+                    finished: late_finished.clone(),
+                    observed_cancelled: observed_cancelled.clone(),
+                    delay: Duration::from_millis(80),
+                }),
+            )
+            .expect("register late executor");
+        registry
+            .register(
+                "mock.inspect",
+                Arc::new(InspectInputsExecutor {
+                    expected_input: None,
+                    expected_param: None,
+                }),
+            )
+            .expect("register inspect executor");
+        let sink = Arc::new(VecRunEventSink::new());
+        let service = RuntimeService::new(
+            registry,
+            Arc::new(NoopBackendInstanceRuntimeHooks::default()),
+            sink.clone(),
+            Arc::new(FixedClock),
+        );
+
+        let plan = ExecutionPlan::new(
+            WorkflowId::new("workflow-late-success"),
+            WorkflowVersion::new(1),
+            RunTargetSelection::AllDefaultTargets,
+            vec![RunTarget::Node {
+                node_id: NodeId::new("consumer"),
+            }],
+            vec![
+                ExecutionNode::new(
+                    NodeId::new("fail"),
+                    NodeTypeId::new("mock.fail_fast"),
+                    Vec::new(),
+                    vec![SlotId::new("out")],
+                ),
+                ExecutionNode::new(
+                    NodeId::new("late"),
+                    NodeTypeId::new("mock.late_success"),
+                    Vec::new(),
+                    vec![SlotId::new("out")],
+                ),
+                ExecutionNode::new(
+                    NodeId::new("consumer"),
+                    NodeTypeId::new("mock.inspect"),
+                    vec![ExecutionInputBinding::new(
+                        SlotId::new("in"),
+                        ExecutionInputSource::Edge {
+                            edge_id: reimagine_core::model::EdgeId::new("edge-late-consumer"),
+                            from_node_id: NodeId::new("late"),
+                            from_slot_id: SlotId::new("out"),
+                        },
+                    )],
+                    vec![SlotId::new("out")],
+                ),
+            ],
+            vec![ExecutionEdge::new(
+                reimagine_core::model::EdgeId::new("edge-late-consumer"),
+                NodeId::new("late"),
+                SlotId::new("out"),
+                NodeId::new("consumer"),
+                SlotId::new("in"),
+            )],
+            Vec::new(),
+            vec![
+                ExecutionStage::new(0, vec![NodeId::new("fail"), NodeId::new("late")]),
+                ExecutionStage::new(1, vec![NodeId::new("consumer")]),
+            ],
+        );
+
+        let mut options = RuntimeOptions::default();
+        options.max_stage_concurrency = Some(2);
+        let handle = service
+            .run(Arc::new(plan), Default::default(), options)
+            .expect("start run");
+
+        run_to_completion(&service, &handle);
+
+        assert_eq!(late_started.load(Ordering::SeqCst), 1);
+        assert_eq!(late_finished.load(Ordering::SeqCst), 1);
+        assert!(observed_cancelled.load(Ordering::SeqCst));
+
+        let kinds: Vec<RunEventKind> = sink.events().iter().map(|e| e.kind()).collect();
+        let completed_for_late = sink.events().iter().any(|event| {
+            event.kind() == RunEventKind::NodeCompleted
+                && event.node_id() == Some(&NodeId::new("late"))
+        });
+        assert!(
+            !completed_for_late,
+            "late successful sibling must not publish NodeCompleted after run failure"
+        );
+        assert!(kinds.contains(&RunEventKind::NodeFailed));
+
+        let snapshot = service.snapshot(handle.run_id()).expect("snapshot");
+        assert_eq!(
+            snapshot.node_states.get(&NodeId::new("late")).copied(),
+            Some(reimagine_runtime::NodeState::Cancelled)
+        );
+        assert_eq!(
+            snapshot.node_states.get(&NodeId::new("consumer")).copied(),
+            Some(reimagine_runtime::NodeState::Skipped)
+        );
+    });
 }
 
 #[test]

@@ -10,10 +10,11 @@ use reimagine_core::diagnostic::{
 };
 use reimagine_core::event::{RunEvent, RunEventId, RunEventKind, Timestamp};
 use reimagine_core::model::{NodeId, RunId, WorkflowId, WorkflowVersion};
-use reimagine_core::readiness::ExecutionPlan;
+use reimagine_core::readiness::{ExecutionNode, ExecutionPlan};
 use tokio::sync::Mutex;
+use tokio::task::JoinSet;
 
-use crate::artifacts::{ArtifactStore, RuntimeNodeArtifactCapability};
+use crate::artifacts::ArtifactStore;
 use crate::cancellation::CancellationToken;
 use crate::clock::{Clock, SystemClock};
 use crate::consumer_index::PlanConsumerIndex;
@@ -25,38 +26,42 @@ use crate::run_inputs::RunInputs;
 use crate::run_session::{NodeOutcome, RunSession};
 use crate::scheduler::{NodeState, StageExecutionPolicy, StageNodeDecision};
 use crate::snapshot::{RunArtifactRef, RunSnapshot, RunSummary};
+use crate::stage_runner::{
+    PreparedNodeBindings, StageExecutionContext, StageNodePrepareError, StageNodeResult,
+    StageNodeWork, execute_stage_node, missing_upstream_value_message,
+    missing_workflow_input_message,
+};
 use crate::store::RunStore;
 use crate::value_store::OutputKey;
 
 use reimagine_inference::{
-    ArtifactPublisher, BackendInstanceObservation, BackendInstanceRuntimeHooks,
-    BackendInstanceSnapshot, BackendRunLifecycleRequest, ExecutionValueRetention, NodeCancellation,
-    NodeExecutionContext, NodeExecutorError, NodeExecutorRegistry, NodeInputs, NodeParams,
+    BackendInstanceObservation, BackendInstanceRuntimeHooks, BackendInstanceSnapshot,
+    BackendRunLifecycleRequest, ExecutionValueRetention, NodeExecutorRegistry, NodeInputs,
+    NodeParams,
 };
 
 /// Options passed to [`RuntimeService::run`].
-///
-/// Marked `#[non_exhaustive]` so future hosts (Tauri, Axum) can extend
-/// the option set without breaking existing call sites. New fields can be
-/// added with a default via `..RuntimeOptions::default()`.
 #[derive(Debug, Clone, Default)]
 #[non_exhaustive]
 pub struct RuntimeOptions {
     /// Optional correlation id propagated to events and node contexts.
     pub correlation_id: Option<CorrelationId>,
+    /// Maximum number of same-stage node invocations admitted concurrently.
+    ///
+    /// `None` preserves V1's sequential compatibility behavior. `Some(1)` is
+    /// also sequential. Values greater than one enable bounded same-stage
+    /// concurrency. `Some(0)` is rejected by [`RuntimeService::run`].
+    pub max_stage_concurrency: Option<usize>,
 }
 
 /// Public errors returned from `RuntimeService` operations.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum RuntimeServiceError {
-    /// The run id is not known to the underlying store.
     UnknownRun { run_id: String },
-    /// The plan is empty (no nodes).
     EmptyPlan { run_id: String },
-    /// A plan node references a `NodeTypeId` with no registered executor.
     MissingExecutor { run_id: String, type_id: String },
-    /// A host-provided event sink failed to emit an event.
     EventSink { message: String },
+    InvalidStageConcurrency { value: usize },
 }
 
 impl std::fmt::Display for RuntimeServiceError {
@@ -69,6 +74,12 @@ impl std::fmt::Display for RuntimeServiceError {
                 "no executor registered for node type {type_id} in run {run_id}"
             ),
             Self::EventSink { message } => write!(f, "run event sink failed: {message}"),
+            Self::InvalidStageConcurrency { value } => {
+                write!(
+                    f,
+                    "invalid max_stage_concurrency: {value}; expected at least 1"
+                )
+            }
         }
     }
 }
@@ -89,11 +100,6 @@ impl From<RuntimeError> for RuntimeServiceError {
     }
 }
 
-/// Long-lived, host-independent runtime service.
-///
-/// Held by `app-host` (or any other host) and shared across run requests.
-/// V1 uses a simple `Arc<RwLock<RunStoreInner>>` lock model inside the
-/// [`RunStore`].
 pub struct RuntimeService {
     store: RunStore,
     registry: NodeExecutorRegistry,
@@ -114,8 +120,6 @@ impl std::fmt::Debug for RuntimeService {
 }
 
 impl RuntimeService {
-    /// Construct a runtime service with a custom clock, backend-instance hooks,
-    /// and event sink.
     pub fn new(
         registry: NodeExecutorRegistry,
         backend: Arc<dyn BackendInstanceRuntimeHooks>,
@@ -133,8 +137,6 @@ impl RuntimeService {
         }
     }
 
-    /// Convenience constructor with the system clock and no-op backend-instance
-    /// hooks.
     pub fn with_defaults(registry: NodeExecutorRegistry, sink: Arc<dyn RunEventSink>) -> Self {
         Self::new(
             registry,
@@ -144,22 +146,14 @@ impl RuntimeService {
         )
     }
 
-    /// Borrow the underlying store (for tests / diagnostics).
     pub fn store(&self) -> &RunStore {
         &self.store
     }
 
-    /// Borrow the underlying executor registry.
     pub fn registry(&self) -> &NodeExecutorRegistry {
         &self.registry
     }
 
-    /// Start a run for a prepared `ExecutionPlan`.
-    ///
-    /// Returns a [`RunHandle`] immediately. The actual run executes on a
-    /// background `tokio` task and pushes events through the configured
-    /// [`RunEventSink`]. Hosts observe progress through [`Self::snapshot`]
-    /// and [`Self::summary`].
     pub fn run(
         &self,
         plan: Arc<ExecutionPlan>,
@@ -170,6 +164,9 @@ impl RuntimeService {
             return Err(RuntimeServiceError::EmptyPlan {
                 run_id: String::new(),
             });
+        }
+        if options.max_stage_concurrency == Some(0) {
+            return Err(RuntimeServiceError::InvalidStageConcurrency { value: 0 });
         }
         for node in plan.nodes() {
             if self.registry.get(node.type_id()).is_none() {
@@ -242,7 +239,6 @@ impl RuntimeService {
         Ok(handle)
     }
 
-    /// Request cancellation of an active run.
     pub fn cancel(&self, run_id: &RunId) -> Result<(), RuntimeServiceError> {
         match self.store.active_cancellation(run_id) {
             Some(token) => {
@@ -255,19 +251,14 @@ impl RuntimeService {
         }
     }
 
-    /// Read the latest snapshot for the given run id.
     pub fn snapshot(&self, run_id: &RunId) -> Option<RunSnapshot> {
         self.store.snapshot(run_id)
     }
 
-    /// Read the terminal summary for the given run id (only present once the
-    /// run has reached a terminal state).
     pub fn summary(&self, run_id: &RunId) -> Option<RunSummary> {
         self.store.summary(run_id)
     }
 
-    /// Query snapshots for every concrete backend instance known to the
-    /// runtime's configured hooks, without exposing backend internals.
     pub async fn backend_instance_snapshots(&self) -> Vec<BackendInstanceSnapshot> {
         BackendInstanceObservation::snapshots(self.backend.as_ref()).await
     }
@@ -300,8 +291,6 @@ impl RuntimeService {
         if let Some(cid) = correlation_id {
             event = event.with_correlation_id(cid);
         }
-        // Catch panics in the sink so a misbehaving implementation does
-        // not abort the host that called `RuntimeService::run`.
         match std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| self.sink.emit(event))) {
             Ok(Ok(())) => {}
             Ok(Err(error)) => {
@@ -321,8 +310,6 @@ impl RuntimeService {
     }
 }
 
-/// Background runner task. Owns the [`RunSession`] and drives the
-/// per-stage scheduler.
 struct Runner {
     run_id: RunId,
     plan: Arc<ExecutionPlan>,
@@ -362,11 +349,6 @@ impl Runner {
         let mut session = self
             .run_to_completion(session, artifact_store, &consumer_index)
             .await;
-        // Drop the runtime's run-scoped `Arc<ExecutionValue>` references.
-        // Per-value release callbacks were removed from the
-        // `BackendInstanceRuntimeHooks` contract; backend-owned payloads remain
-        // alive as long as the backend itself keeps a handle or
-        // workspace cache entry.
         session.values_mut().clear();
         match self.backend.cleanup_run(request).await {
             Ok(report) => lifecycle_diagnostics.extend(report.diagnostics),
@@ -395,142 +377,20 @@ impl Runner {
                     .await;
                 return session;
             }
-
-            for node_id in stage.node_ids() {
-                if self.cancellation.is_cancelled() {
-                    self.handle_cancellation(&mut session, &started_at, &artifact_store)
-                        .await;
-                    return session;
-                }
-
-                let node = match self.plan.nodes().iter().find(|n| n.node_id() == node_id) {
-                    Some(node) => node.clone(),
-                    None => continue,
-                };
-
-                match policy.decision_for(node_id) {
-                    StageNodeDecision::Skip { reason } => {
-                        self.emit_node_skipped(node_id, &node.type_id().clone(), &reason);
-                        session.record_outcome(
-                            node_id.clone(),
-                            NodeOutcome::Skipped {
-                                reason: reason.clone(),
-                            },
-                        );
-                        self.publish_snapshot(&session, &started_at, &artifact_store)
-                            .await;
-                        continue;
-                    }
-                    StageNodeDecision::Execute => {}
-                }
-
-                session.record_outcome(node_id.clone(), NodeOutcome::Queued);
-                self.emit_node_event(&node, RunEventKind::NodeQueued, &[]);
-                self.publish_snapshot(&session, &started_at, &artifact_store)
+            if self
+                .run_stage(
+                    stage.node_ids(),
+                    &mut session,
+                    &started_at,
+                    &artifact_store,
+                    consumer_index,
+                    &mut policy,
+                )
+                .await
+            {
+                self.handle_cancellation(&mut session, &started_at, &artifact_store)
                     .await;
-
-                let result = self
-                    .execute_node(&node, &session, artifact_store.clone())
-                    .await;
-
-                match result {
-                    Ok(outputs) => {
-                        session.record_outcome(node_id.clone(), NodeOutcome::Completed);
-                        for output in outputs {
-                            let key = OutputKey::new(node_id.clone(), output.slot_id().clone());
-                            let retention = output.retention();
-                            // Enforce producer-declared retention fan-out
-                            // for the active plan. A `SingleUse` output
-                            // with more than one edge-sourced consumer in
-                            // the active plan must fail the run before any
-                            // downstream consumer sees the value.
-                            if let Some(diag) =
-                                self.check_single_use_fan_out(consumer_index, &key, retention)
-                            {
-                                let message = diag.message().to_string();
-                                self.emit_node_event(
-                                    &node,
-                                    RunEventKind::NodeFailed,
-                                    std::slice::from_ref(&diag),
-                                );
-                                session.record_outcome(
-                                    node_id.clone(),
-                                    NodeOutcome::Failed {
-                                        message: message.clone(),
-                                    },
-                                );
-                                policy.record_failure(node_id.clone(), message);
-                                self.publish_snapshot(&session, &started_at, &artifact_store)
-                                    .await;
-                                break;
-                            }
-                            session.values_mut().insert_with_retention(
-                                key,
-                                output.into_value(),
-                                retention,
-                            );
-                        }
-                        if matches!(
-                            session.node_outcome(node_id),
-                            Some(NodeOutcome::Failed { .. })
-                        ) {
-                            // Skip the NodeCompleted event; the failure
-                            // path has already emitted it.
-                            continue;
-                        }
-                        self.emit_node_event(&node, RunEventKind::NodeCompleted, &[]);
-                    }
-                    Err(NodeFailure::Failed(message)) => {
-                        let diagnostic = make_diagnostic(&self.run_id, &node_id, &message);
-                        session.record_outcome(
-                            node_id.clone(),
-                            NodeOutcome::Failed {
-                                message: message.clone(),
-                            },
-                        );
-                        self.emit_node_event(
-                            &node,
-                            RunEventKind::NodeFailed,
-                            std::slice::from_ref(&diagnostic),
-                        );
-                        policy.record_failure(node_id.clone(), message);
-                    }
-                    Err(NodeFailure::Cancelled) => {
-                        session.record_outcome(node_id.clone(), NodeOutcome::Cancelled);
-                        // Issue 05 contract: drop upstream `SingleUse`
-                        // values whose unique consumer was this node,
-                        // even when the attempt was cancelled. The
-                        // terminal `clear()` in `Runner::run` would
-                        // also drop them, but we apply the drop here
-                        // so the lifetime matches the issue's "after
-                        // the unique consumer completes its execution
-                        // attempt (success/failure/cancel)" rule.
-                        self.drop_consumed_single_use_values(&node, consumer_index, &mut session);
-                        self.emit_node_event(&node, RunEventKind::NodeCancelled, &[]);
-                        self.handle_cancellation(&mut session, &started_at, &artifact_store)
-                            .await;
-                        return session;
-                    }
-                }
-
-                // Retention-driven drop: after the node's execution
-                // attempt completes (success/failure), walk its
-                // edge-sourced input bindings and drop any upstream
-                // `SingleUse` value whose unique consumer is this node.
-                // Do not run drop logic for nodes that were skipped —
-                // skipped nodes did not consume their inputs. The
-                // `Cancelled` case is handled inside the arm above so
-                // it runs before `handle_cancellation` returns the
-                // session early.
-                if matches!(
-                    session.node_outcome(node_id),
-                    Some(NodeOutcome::Completed) | Some(NodeOutcome::Failed { .. })
-                ) {
-                    self.drop_consumed_single_use_values(&node, consumer_index, &mut session);
-                }
-
-                self.publish_snapshot(&session, &started_at, &artifact_store)
-                    .await;
+                return session;
             }
         }
 
@@ -557,11 +417,372 @@ impl Runner {
         session
     }
 
-    /// Check the active-plan fan-out for a `SingleUse` output. Returns a
-    /// `Diagnostic` when the value's fan-out is greater than one, so the
-    /// caller can fail the run before any downstream consumer sees the
-    /// value. `RunScoped` and `WorkspaceScoped` values are not
-    /// constrained by the consumer index.
+    async fn run_stage(
+        &self,
+        node_ids: &[NodeId],
+        session: &mut RunSession,
+        started_at: &Timestamp,
+        artifact_store: &Arc<Mutex<ArtifactStore>>,
+        consumer_index: &PlanConsumerIndex,
+        policy: &mut StageExecutionPolicy,
+    ) -> bool {
+        let max_concurrency = self.options.max_stage_concurrency.unwrap_or(1).max(1);
+        let mut joins = JoinSet::new();
+        let mut next_index = 0usize;
+        let failure_cancellation = CancellationToken::new();
+
+        while next_index < node_ids.len() || !joins.is_empty() {
+            while next_index < node_ids.len()
+                && joins.len() < max_concurrency
+                && policy.failed_message().is_none()
+            {
+                if self.cancellation.is_cancelled() {
+                    failure_cancellation.cancel();
+                    return true;
+                }
+
+                let node_id = &node_ids[next_index];
+                next_index += 1;
+                let node = match self.plan.nodes().iter().find(|n| n.node_id() == node_id) {
+                    Some(node) => node.clone(),
+                    None => continue,
+                };
+
+                match policy.decision_for(node_id) {
+                    StageNodeDecision::Skip { reason } => {
+                        self.reduce_node_skipped(
+                            &node,
+                            reason,
+                            session,
+                            started_at,
+                            artifact_store,
+                        )
+                        .await;
+                        continue;
+                    }
+                    StageNodeDecision::Execute => {}
+                }
+
+                let work = match self.prepare_stage_node_work(&node, session) {
+                    Ok(work) => work,
+                    Err(StageNodePrepareError::Failed(message)) => {
+                        self.reduce_node_failed(
+                            &node,
+                            message,
+                            session,
+                            started_at,
+                            artifact_store,
+                            consumer_index,
+                            policy,
+                        )
+                        .await;
+                        failure_cancellation.cancel();
+                        continue;
+                    }
+                };
+
+                self.admit_stage_node(work.node(), session, started_at, artifact_store)
+                    .await;
+                let execution = StageExecutionContext {
+                    run_id: self.run_id.clone(),
+                    workflow_id: self.plan.workflow_id().clone(),
+                    workflow_version: self.plan.workflow_version(),
+                    correlation_id: self.options.correlation_id.clone(),
+                    sink: self.sink.clone(),
+                    clock: self.clock.clone(),
+                    registry: self.registry.clone(),
+                    cancellation: self.cancellation.clone(),
+                };
+                joins.spawn(execute_stage_node(
+                    execution,
+                    work,
+                    artifact_store.clone(),
+                    failure_cancellation.clone(),
+                ));
+            }
+
+            if joins.is_empty() {
+                break;
+            }
+
+            let result = match joins.join_next().await {
+                Some(Ok(result)) => result,
+                Some(Err(err)) => {
+                    tracing::warn!(
+                        target: "reimagine_runtime",
+                        run_id = %self.run_id.as_str(),
+                        error = %err,
+                        "stage node task failed to join"
+                    );
+                    continue;
+                }
+                None => break,
+            };
+
+            let was_failing = policy.failed_message().is_some();
+            let cancelled = self
+                .reduce_stage_node_result(
+                    result,
+                    was_failing,
+                    session,
+                    started_at,
+                    artifact_store,
+                    consumer_index,
+                    policy,
+                )
+                .await;
+
+            if cancelled {
+                failure_cancellation.cancel();
+                return true;
+            }
+
+            if !was_failing && policy.failed_message().is_some() {
+                failure_cancellation.cancel();
+            }
+        }
+
+        if policy.failed_message().is_some() {
+            while next_index < node_ids.len() {
+                let node_id = &node_ids[next_index];
+                next_index += 1;
+                let node = match self.plan.nodes().iter().find(|n| n.node_id() == node_id) {
+                    Some(node) => node.clone(),
+                    None => continue,
+                };
+                if matches!(session.node_outcome(node_id), Some(outcome) if outcome.is_terminal()) {
+                    continue;
+                }
+                let reason = match policy.decision_for(node_id) {
+                    StageNodeDecision::Skip { reason } => reason,
+                    StageNodeDecision::Execute => "run is already failing".to_owned(),
+                };
+                self.reduce_node_skipped(&node, reason, session, started_at, artifact_store)
+                    .await;
+            }
+        }
+
+        self.cancellation.is_cancelled() && policy.failed_message().is_none()
+    }
+
+    fn prepare_stage_node_work(
+        &self,
+        node: &ExecutionNode,
+        session: &RunSession,
+    ) -> Result<StageNodeWork, StageNodePrepareError> {
+        let bindings = self.prepare_node_bindings(node, session)?;
+        if self.registry.get(node.type_id()).is_none() {
+            return Err(StageNodePrepareError::Failed(format!(
+                "no executor for {}",
+                node.type_id().as_str()
+            )));
+        }
+        Ok(StageNodeWork::new(node.clone(), bindings))
+    }
+
+    fn prepare_node_bindings(
+        &self,
+        node: &ExecutionNode,
+        session: &RunSession,
+    ) -> Result<PreparedNodeBindings, StageNodePrepareError> {
+        let mut inputs = NodeInputs::new();
+        let mut params = NodeParams::new();
+        for binding in node.input_bindings() {
+            use reimagine_core::readiness::ExecutionInputSource;
+            match binding.source() {
+                ExecutionInputSource::Edge {
+                    from_node_id,
+                    from_slot_id,
+                    ..
+                } => {
+                    let key = OutputKey::new(from_node_id.clone(), from_slot_id.clone());
+                    match session.values().get(&key) {
+                        Some(value) => {
+                            inputs.insert(binding.slot_id().clone(), value);
+                        }
+                        None => {
+                            return Err(StageNodePrepareError::Failed(
+                                missing_upstream_value_message(
+                                    from_node_id.as_str(),
+                                    from_slot_id.as_str(),
+                                ),
+                            ));
+                        }
+                    }
+                }
+                ExecutionInputSource::WorkflowInput {
+                    workflow_input_id, ..
+                } => {
+                    if let Some(value) = self.run_inputs.workflow_input(workflow_input_id) {
+                        inputs.insert(binding.slot_id().clone(), value.clone());
+                    } else {
+                        return Err(StageNodePrepareError::Failed(
+                            missing_workflow_input_message(
+                                workflow_input_id.as_str(),
+                                binding.slot_id().as_str(),
+                            ),
+                        ));
+                    }
+                }
+                ExecutionInputSource::Param { .. } | ExecutionInputSource::Default { .. } => {
+                    if let Some(value) = self
+                        .run_inputs
+                        .node_param(node.node_id(), binding.slot_id())
+                    {
+                        params.insert(binding.slot_id().clone(), value.clone());
+                    }
+                }
+            }
+        }
+        Ok(PreparedNodeBindings::new(inputs, params))
+    }
+
+    async fn admit_stage_node(
+        &self,
+        node: &ExecutionNode,
+        session: &mut RunSession,
+        started_at: &Timestamp,
+        artifact_store: &Arc<Mutex<ArtifactStore>>,
+    ) {
+        session.record_outcome(node.node_id().clone(), NodeOutcome::Queued);
+        self.emit_node_event(node, RunEventKind::NodeQueued, &[]);
+        self.publish_snapshot(session, started_at, artifact_store)
+            .await;
+
+        session.record_outcome(node.node_id().clone(), NodeOutcome::Running);
+        self.emit_node_event(node, RunEventKind::NodeStarted, &[]);
+        self.publish_snapshot(session, started_at, artifact_store)
+            .await;
+    }
+
+    async fn reduce_stage_node_result(
+        &self,
+        result: StageNodeResult,
+        discard_success: bool,
+        session: &mut RunSession,
+        started_at: &Timestamp,
+        artifact_store: &Arc<Mutex<ArtifactStore>>,
+        consumer_index: &PlanConsumerIndex,
+        policy: &mut StageExecutionPolicy,
+    ) -> bool {
+        match result {
+            StageNodeResult::Completed { node, outputs } => {
+                let node_id = node.node_id().clone();
+                if discard_success {
+                    session.record_outcome(node_id, NodeOutcome::Cancelled);
+                    self.drop_consumed_single_use_values(&node, consumer_index, session);
+                    self.emit_node_event(&node, RunEventKind::NodeCancelled, &[]);
+                    self.publish_snapshot(session, started_at, artifact_store)
+                        .await;
+                    return false;
+                }
+
+                session.record_outcome(node_id.clone(), NodeOutcome::Completed);
+                for output in outputs {
+                    let key = OutputKey::new(node_id.clone(), output.slot_id().clone());
+                    let retention = output.retention();
+                    if let Some(diag) =
+                        self.check_single_use_fan_out(consumer_index, &key, retention)
+                    {
+                        let message = diag.message().to_string();
+                        self.emit_node_event(
+                            &node,
+                            RunEventKind::NodeFailed,
+                            std::slice::from_ref(&diag),
+                        );
+                        session.record_outcome(
+                            node_id.clone(),
+                            NodeOutcome::Failed {
+                                message: message.clone(),
+                            },
+                        );
+                        policy.record_failure(node_id, message);
+                        self.publish_snapshot(session, started_at, artifact_store)
+                            .await;
+                        return false;
+                    }
+                    session
+                        .values_mut()
+                        .insert_with_retention(key, output.into_value(), retention);
+                }
+                self.emit_node_event(&node, RunEventKind::NodeCompleted, &[]);
+                self.drop_consumed_single_use_values(&node, consumer_index, session);
+                self.publish_snapshot(session, started_at, artifact_store)
+                    .await;
+                false
+            }
+            StageNodeResult::Failed { node, message } => {
+                self.reduce_node_failed(
+                    &node,
+                    message,
+                    session,
+                    started_at,
+                    artifact_store,
+                    consumer_index,
+                    policy,
+                )
+                .await;
+                false
+            }
+            StageNodeResult::Cancelled { node } => {
+                let already_failing = policy.failed_message().is_some();
+                session.record_outcome(node.node_id().clone(), NodeOutcome::Cancelled);
+                self.drop_consumed_single_use_values(&node, consumer_index, session);
+                self.emit_node_event(&node, RunEventKind::NodeCancelled, &[]);
+                self.publish_snapshot(session, started_at, artifact_store)
+                    .await;
+                !already_failing
+            }
+        }
+    }
+
+    async fn reduce_node_failed(
+        &self,
+        node: &ExecutionNode,
+        message: String,
+        session: &mut RunSession,
+        started_at: &Timestamp,
+        artifact_store: &Arc<Mutex<ArtifactStore>>,
+        consumer_index: &PlanConsumerIndex,
+        policy: &mut StageExecutionPolicy,
+    ) {
+        let diagnostic = make_diagnostic(&self.run_id, node.node_id(), &message);
+        session.record_outcome(
+            node.node_id().clone(),
+            NodeOutcome::Failed {
+                message: message.clone(),
+            },
+        );
+        self.emit_node_event(
+            node,
+            RunEventKind::NodeFailed,
+            std::slice::from_ref(&diagnostic),
+        );
+        policy.record_failure(node.node_id().clone(), message);
+        self.drop_consumed_single_use_values(node, consumer_index, session);
+        self.publish_snapshot(session, started_at, artifact_store)
+            .await;
+    }
+
+    async fn reduce_node_skipped(
+        &self,
+        node: &ExecutionNode,
+        reason: String,
+        session: &mut RunSession,
+        started_at: &Timestamp,
+        artifact_store: &Arc<Mutex<ArtifactStore>>,
+    ) {
+        self.emit_node_skipped(node.node_id(), &node.type_id().clone(), &reason);
+        session.record_outcome(
+            node.node_id().clone(),
+            NodeOutcome::Skipped {
+                reason: reason.clone(),
+            },
+        );
+        self.publish_snapshot(session, started_at, artifact_store)
+            .await;
+    }
+
     fn check_single_use_fan_out(
         &self,
         consumer_index: &PlanConsumerIndex,
@@ -584,13 +805,9 @@ impl Runner {
         }
     }
 
-    /// Retention-driven drop: for every edge-sourced input binding of
-    /// `node`, look up the upstream `OutputKey` and, if the upstream
-    /// value is `SingleUse` and `node` is its unique edge-sourced
-    /// consumer, drop the value from `RunValueStore`.
     fn drop_consumed_single_use_values(
         &self,
-        node: &reimagine_core::readiness::ExecutionNode,
+        node: &ExecutionNode,
         consumer_index: &PlanConsumerIndex,
         session: &mut RunSession,
     ) {
@@ -606,7 +823,7 @@ impl Runner {
                 _ => None,
             })
             .collect();
-        let mut to_drop: Vec<OutputKey> = Vec::new();
+        let mut to_drop = Vec::new();
         for upstream in upstream_keys {
             let retention = match session.values().retention(&upstream) {
                 Some(retention) => retention,
@@ -616,113 +833,12 @@ impl Runner {
                 continue;
             }
             match consumer_index.unique_consumer(&upstream) {
-                Some(unique) if unique.to_node_id == *node.node_id() => {
-                    to_drop.push(upstream);
-                }
+                Some(unique) if unique.to_node_id == *node.node_id() => to_drop.push(upstream),
                 _ => {}
             }
         }
         for key in to_drop {
             session.values_mut().remove(&key);
-        }
-    }
-
-    async fn execute_node(
-        &self,
-        node: &reimagine_core::readiness::ExecutionNode,
-        session: &RunSession,
-        artifact_store: Arc<Mutex<ArtifactStore>>,
-    ) -> Result<Vec<crate::value::ExecutionOutput>, NodeFailure> {
-        self.emit_node_event(node, RunEventKind::NodeStarted, &[]);
-        self.publish_node_running_snapshot(node, session, &artifact_store)
-            .await;
-
-        let mut inputs = NodeInputs::new();
-        let mut params = NodeParams::new();
-        for binding in node.input_bindings() {
-            use reimagine_core::readiness::ExecutionInputSource;
-            match binding.source() {
-                ExecutionInputSource::Edge {
-                    from_node_id,
-                    from_slot_id,
-                    ..
-                } => {
-                    let key = OutputKey::new(from_node_id.clone(), from_slot_id.clone());
-                    match session.values().get(&key) {
-                        Some(value) => {
-                            inputs.insert(binding.slot_id().clone(), value);
-                        }
-                        None => {
-                            return Err(NodeFailure::Failed(format!(
-                                "missing upstream value for {}:{}",
-                                from_node_id.as_str(),
-                                from_slot_id.as_str()
-                            )));
-                        }
-                    }
-                }
-                ExecutionInputSource::WorkflowInput {
-                    workflow_input_id, ..
-                } => {
-                    if let Some(value) = self.run_inputs.workflow_input(workflow_input_id) {
-                        inputs.insert(binding.slot_id().clone(), value.clone());
-                    } else {
-                        return Err(NodeFailure::Failed(format!(
-                            "missing workflow input {} for slot {}",
-                            workflow_input_id.as_str(),
-                            binding.slot_id().as_str()
-                        )));
-                    }
-                }
-                ExecutionInputSource::Param { .. } | ExecutionInputSource::Default { .. } => {
-                    if let Some(value) = self
-                        .run_inputs
-                        .node_param(node.node_id(), binding.slot_id())
-                    {
-                        params.insert(binding.slot_id().clone(), value.clone());
-                    }
-                }
-            }
-        }
-
-        let publisher: Arc<dyn ArtifactPublisher> = Arc::new(RuntimeNodeArtifactCapability::new(
-            self.run_id.clone(),
-            self.plan.workflow_id().clone(),
-            self.plan.workflow_version(),
-            node.node_id().clone(),
-            artifact_store,
-            self.sink.clone(),
-            self.clock.clone(),
-            self.cancellation.clone(),
-        ));
-        let cancellation: Arc<dyn NodeCancellation> = Arc::new(self.cancellation.clone());
-
-        let ctx = NodeExecutionContext::new(
-            self.run_id.clone(),
-            self.plan.workflow_id().clone(),
-            self.plan.workflow_version(),
-            self.options.correlation_id.clone(),
-            node.node_id().clone(),
-            node.type_id().clone(),
-            inputs,
-            params,
-            publisher,
-            cancellation,
-            self.clock.now(),
-        );
-
-        let executor = self.registry.get(node.type_id()).ok_or_else(|| {
-            NodeFailure::Failed(format!("no executor for {}", node.type_id().as_str()))
-        })?;
-        let result = executor.execute(ctx).await;
-        match result {
-            Ok(outputs) => Ok(outputs),
-            Err(NodeExecutorError::Cancelled) => Err(NodeFailure::Cancelled),
-            Err(NodeExecutorError::MissingInput { slot_id }) => {
-                Err(NodeFailure::Failed(format!("missing input {slot_id}")))
-            }
-            Err(NodeExecutorError::Failed { message }) => Err(NodeFailure::Failed(message)),
-            Err(NodeExecutorError::Infra { message }) => Err(NodeFailure::Failed(message)),
         }
     }
 
@@ -732,20 +848,14 @@ impl Runner {
         started_at: &Timestamp,
         artifact_store: &Arc<Mutex<ArtifactStore>>,
     ) {
-        // Mark every visited-but-not-terminal node as cancelled and emit
-        // NodeCancelled events for them. This only covers nodes that were
-        // already touched by the runner.
         for (node_id, outcome) in session.node_outcomes_mut() {
-            if matches!(outcome, NodeOutcome::Queued) {
+            if matches!(outcome, NodeOutcome::Queued | NodeOutcome::Running) {
                 *outcome = NodeOutcome::Cancelled;
                 let event =
                     self.build_event(RunEventKind::NodeCancelled, Some(node_id.clone()), &[]);
                 self.safe_emit(event);
             }
         }
-        // Now walk the entire plan and emit NodeCancelled for any node that
-        // the runner never got to (no entry in the outcome map yet). This
-        // includes future-stage nodes that were never visited.
         let visited: std::collections::HashSet<NodeId> =
             session.node_outcomes().keys().cloned().collect();
         for plan_node in self.plan.nodes() {
@@ -772,43 +882,6 @@ impl Runner {
         self.publish_snapshot_with_state(session, RunState::Cancelled, started_at, artifact_store)
             .await;
         self.store.finalize(&self.run_id);
-    }
-
-    async fn publish_node_running_snapshot(
-        &self,
-        node: &reimagine_core::readiness::ExecutionNode,
-        session: &RunSession,
-        artifact_store: &Arc<Mutex<ArtifactStore>>,
-    ) {
-        let mut node_outcomes = session.node_outcomes().clone();
-        node_outcomes.insert(node.node_id().clone(), NodeOutcome::Running);
-        self.publish_snapshot_for_outcomes(
-            &node_outcomes,
-            RunState::Running,
-            &self.clock.now(),
-            artifact_store,
-        )
-        .await;
-    }
-
-    fn emit_node_skipped(
-        &self,
-        node_id: &NodeId,
-        type_id: &reimagine_core::model::NodeTypeId,
-        reason: &str,
-    ) {
-        let diagnostic = make_diagnostic(&self.run_id, node_id, reason);
-        let placeholder_node = reimagine_core::readiness::ExecutionNode::new(
-            node_id.clone(),
-            type_id.clone(),
-            Vec::new(),
-            Vec::new(),
-        );
-        self.emit_node_event(
-            &placeholder_node,
-            RunEventKind::NodeSkipped,
-            std::slice::from_ref(&diagnostic),
-        );
     }
 
     async fn publish_snapshot(
@@ -919,7 +992,7 @@ impl Runner {
 
     fn emit_node_event(
         &self,
-        node: &reimagine_core::readiness::ExecutionNode,
+        node: &ExecutionNode,
         kind: RunEventKind,
         diagnostics: &[Diagnostic],
     ) {
@@ -937,9 +1010,22 @@ impl Runner {
         self.safe_emit(event);
     }
 
-    /// Emit an event to the configured sink, catching any panic raised by
-    /// the sink implementation. Sink failure is recorded via `tracing` and
-    /// does not fail the run.
+    fn emit_node_skipped(
+        &self,
+        node_id: &NodeId,
+        type_id: &reimagine_core::model::NodeTypeId,
+        reason: &str,
+    ) {
+        let diagnostic = make_diagnostic(&self.run_id, node_id, reason);
+        let placeholder_node =
+            ExecutionNode::new(node_id.clone(), type_id.clone(), Vec::new(), Vec::new());
+        self.emit_node_event(
+            &placeholder_node,
+            RunEventKind::NodeSkipped,
+            std::slice::from_ref(&diagnostic),
+        );
+    }
+
     fn safe_emit(&self, event: RunEvent) {
         match std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| self.sink.emit(event))) {
             Ok(Ok(())) => {}
@@ -989,7 +1075,6 @@ impl Runner {
     }
 }
 
-/// Build a per-node `NodeFailed` style diagnostic.
 fn make_diagnostic(run_id: &RunId, node_id: &NodeId, message: &str) -> Diagnostic {
     let target = DiagnosticTarget::new(DiagnosticTargetDomain::new("workflow.node"))
         .with_id(node_id.as_str())
@@ -1008,9 +1093,6 @@ fn make_diagnostic(run_id: &RunId, node_id: &NodeId, message: &str) -> Diagnosti
     )
 }
 
-/// Build a run-level diagnostic (used for `RunFailed` and cancellation
-/// summaries). Uses a `workflow.run` domain target so it is distinguishable
-/// from per-node diagnostics.
 fn make_run_diagnostic(run_id: &RunId, message: &str) -> Diagnostic {
     let target =
         DiagnosticTarget::new(DiagnosticTargetDomain::new("workflow.run")).with_id(run_id.as_str());
@@ -1022,10 +1104,4 @@ fn make_run_diagnostic(run_id: &RunId, message: &str) -> Diagnostic {
         message,
         target,
     )
-}
-
-/// Distinguish failure from cancellation at the runner boundary.
-enum NodeFailure {
-    Failed(String),
-    Cancelled,
 }
