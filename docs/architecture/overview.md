@@ -15,7 +15,14 @@ This document is the architecture entry point. Module-level details live under `
 
 `src-tauri` is the V1 desktop host adapter. It owns Tauri IPC, desktop settings, window integration, and event bridging. It does not own workflow mutation, validation, Agent policy, execution scheduling, model inference, or ComfyUI mapping logic.
 
-`axum-host` is a peer host adapter for remote/headless operation and backend E2E testing. It reuses the same `app-host` facade as Tauri instead of copying desktop logic into server routes.
+`axum-host` is a peer host adapter for remote/headless operation, developer
+automation, and backend E2E testing. It reuses the same `app-host` facade as
+Tauri instead of copying desktop logic into server routes.
+
+Tauri and Axum should share app-host API DTOs and projection helpers where the
+operation semantics are the same. They should differ only at the transport
+edge: Tauri command/event binding versus HTTP routing/headers/status codes.
+V1 does not require Tauri to call Axum over localhost.
 
 ### UI draft, Rust canonical truth
 
@@ -149,6 +156,7 @@ crates/agent-macros
 crates/app-host
   Application service layer:
   - WorkspaceHost / AppHost facade
+  - shared host API DTO/projection shapes for Tauri and Axum
   - workflow session registry
   - model/runtime/config/agent composition
   - core readiness orchestration
@@ -201,7 +209,8 @@ crates/axum-host
   HTTP host adapter:
   - V1 REST API for health, workflow open/run, run snapshot, and run events
   - app-host state injection
-  - backend E2E workflow test harness
+  - runnable developer server for workflow E2E testing
+  - HTTP tracing and artifact access
 
 src-tauri
   V1 desktop host adapter:
