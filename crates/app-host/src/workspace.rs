@@ -88,6 +88,19 @@ impl WorkspaceHost {
         workspace_scope: WorkspaceScope,
         base_path: impl Into<std::path::PathBuf>,
     ) -> Result<Self, AppHostError> {
+        Self::try_with_defaults_and_event_sink(
+            workspace_scope,
+            base_path,
+            Arc::new(VecRunEventSink::new()),
+        )
+        .await
+    }
+
+    pub async fn try_with_defaults_and_event_sink(
+        workspace_scope: WorkspaceScope,
+        base_path: impl Into<std::path::PathBuf>,
+        event_sink: BoxedRunEventSink,
+    ) -> Result<Self, AppHostError> {
         let base_path = base_path.into();
         let config = AppConfig::new(AppPaths::new(&base_path));
         let backend_config = load_backend_config_result(&config).await?;
@@ -95,7 +108,7 @@ impl WorkspaceHost {
             workspace_scope,
             config,
             backend_config,
-            Arc::new(VecRunEventSink::new()),
+            event_sink,
         ))
     }
 

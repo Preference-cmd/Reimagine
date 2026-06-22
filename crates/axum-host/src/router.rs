@@ -6,6 +6,7 @@
 
 use axum::Router;
 use axum::routing::{get, post};
+use tower_http::trace::TraceLayer;
 
 use crate::routes::{health, nodes, runs, workflows};
 use crate::state::AxumHostState;
@@ -21,6 +22,41 @@ pub fn build_router() -> Router<AxumHostState> {
         .route("/workflows/{id}/run", post(workflows::run))
         .route("/runs/{id}", get(runs::get))
         .route("/runs/{id}/events", get(runs::events))
+        .layer(TraceLayer::new_for_http().make_span_with(request_span))
+}
+
+/// Create a request span that carries route-level identifiers so
+/// workflow/run logs can be correlated across requests.
+///
+/// The span intentionally omits request bodies, query strings, and
+/// headers to avoid leaking prompts, API keys, or backend-private
+/// payload keys.
+fn request_span(request: &axum::http::Request<axum::body::Body>) -> tracing::Span {
+    let path = request.uri().path();
+    let segments: Vec<&str> = path.split('/').filter(|s| !s.is_empty()).collect();
+
+    let mut workflow_id: Option<&str> = None;
+    let mut run_id: Option<&str> = None;
+
+    if let Some(first) = segments.first() {
+        match *first {
+            "workflows" if segments.len() >= 2 && segments[1] != "open" => {
+                workflow_id = Some(segments[1]);
+            }
+            "runs" if segments.len() >= 2 => {
+                run_id = Some(segments[1]);
+            }
+            _ => {}
+        }
+    }
+
+    tracing::info_span!(
+        "request",
+        method = %request.method(),
+        uri = %request.uri(),
+        workflow_id = workflow_id.unwrap_or(""),
+        run_id = run_id.unwrap_or(""),
+    )
 }
 
 #[cfg(test)]

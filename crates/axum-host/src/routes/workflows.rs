@@ -111,6 +111,8 @@ pub async fn run(
         .map(Into::into)
         .unwrap_or(RunTargetSelection::AllDefaultTargets);
 
+    let correlation_id_for_log = body.correlation_id.clone();
+
     let mut request = RunWorkflowRequest::new(workflow_id.clone(), target_selection);
     if let Some(correlation_id) = body.correlation_id {
         request = request.with_correlation_id(CorrelationId::new(correlation_id));
@@ -122,25 +124,41 @@ pub async fn run(
             handle,
             initial_snapshot,
             report,
-        } => RunWorkflowResponse::Started {
-            run_id: handle.run_id().clone(),
-            workflow_id: handle.workflow_id().clone(),
-            workflow_version: handle.workflow_version(),
-            initial_snapshot: initial_snapshot.into(),
-            diagnostics: report
-                .diagnostics()
-                .iter()
-                .map(|d| d.clone().into())
-                .collect(),
-        },
-        RunWorkflowResult::Blocked { report } => RunWorkflowResponse::Blocked {
-            workflow_id,
-            diagnostics: report
-                .diagnostics()
-                .iter()
-                .map(|d| d.clone().into())
-                .collect(),
-        },
+        } => {
+            let run_id = handle.run_id().clone();
+            tracing::info!(
+                run_id = %run_id,
+                workflow_id = %workflow_id,
+                correlation_id = ?correlation_id_for_log,
+                "workflow run started",
+            );
+            RunWorkflowResponse::Started {
+                run_id,
+                workflow_id: handle.workflow_id().clone(),
+                workflow_version: handle.workflow_version(),
+                initial_snapshot: initial_snapshot.into(),
+                diagnostics: report
+                    .diagnostics()
+                    .iter()
+                    .map(|d| d.clone().into())
+                    .collect(),
+            }
+        }
+        RunWorkflowResult::Blocked { report } => {
+            tracing::info!(
+                workflow_id = %workflow_id,
+                correlation_id = ?correlation_id_for_log,
+                "workflow run blocked",
+            );
+            RunWorkflowResponse::Blocked {
+                workflow_id,
+                diagnostics: report
+                    .diagnostics()
+                    .iter()
+                    .map(|d| d.clone().into())
+                    .collect(),
+            }
+        }
     };
     Ok(Json(response))
 }
