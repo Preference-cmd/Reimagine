@@ -78,6 +78,37 @@ impl NodeCancellation for CancellationToken {
     }
 }
 
+/// Cancellation view that trips when either underlying token is cancelled.
+#[derive(Debug, Clone)]
+pub struct CombinedCancellation {
+    primary: CancellationToken,
+    secondary: CancellationToken,
+}
+
+impl CombinedCancellation {
+    pub fn new(primary: CancellationToken, secondary: CancellationToken) -> Self {
+        Self { primary, secondary }
+    }
+}
+
+#[async_trait]
+impl NodeCancellation for CombinedCancellation {
+    fn is_cancelled(&self) -> bool {
+        self.primary.is_cancelled() || self.secondary.is_cancelled()
+    }
+
+    async fn cancelled(&self) {
+        if self.is_cancelled() {
+            return;
+        }
+
+        tokio::select! {
+            _ = self.primary.cancelled() => {}
+            _ = self.secondary.cancelled() => {}
+        }
+    }
+}
+
 fn noop_waker() -> std::task::Waker {
     use std::sync::Arc;
     use std::task::{Wake, Waker};
