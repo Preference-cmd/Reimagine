@@ -197,6 +197,7 @@ impl BackendInstanceObservation for CompositeBackendInstanceRuntimeHooks {
     }
 
     async fn snapshot(&self) -> BackendInstanceSnapshot {
+        // Aggregate the per-instance snapshots into a coarse composite view.
         let snapshots = self.snapshots().await;
         let mut observations = BTreeMap::new();
         observations.insert("backend_instances".to_owned(), snapshots.len().to_string());
@@ -216,9 +217,11 @@ impl BackendInstanceObservation for CompositeBackendInstanceRuntimeHooks {
     }
 
     async fn snapshots(&self) -> Vec<BackendInstanceSnapshot> {
-        let mut snapshots = Vec::with_capacity(self.hooks.len());
+        let mut snapshots = Vec::new();
         for hook in &self.hooks {
-            snapshots.push(hook.snapshot().await);
+            // Recursively fan out so a composite of composites still returns
+            // one snapshot per concrete backend instance.
+            snapshots.extend(hook.snapshots().await);
         }
         snapshots
     }
