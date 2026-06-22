@@ -8,7 +8,7 @@ use reimagine_inference::{
     StaticBackendSelectionPolicy,
 };
 use reimagine_inference_candle::{
-    CandleBackend, CandleBackendConfig, CandleBackendError, CandleDevice, CandleRunResourceBackend,
+    CandleBackend, CandleBackendConfig, CandleBackendError, CandleDevice, CandleResourceMechanism,
 };
 use reimagine_plugin::{Extension, Plugin};
 use reimagine_runtime::NodeExecutorRegistry;
@@ -19,14 +19,14 @@ use crate::inference::resolver::ModelResolverAdapter;
 #[derive(Debug)]
 pub(crate) struct ComposedBackends {
     registry: InferenceBackendRegistry,
-    resource_backend: CandleRunResourceBackend,
+    resource_backend: CandleResourceMechanism,
     selected_instance: BackendInstance,
 }
 
 #[derive(Debug)]
 pub(crate) struct ComposedInferenceRuntime {
     pub(crate) executor_registry: NodeExecutorRegistry,
-    pub(crate) resource_backend: CandleRunResourceBackend,
+    pub(crate) resource_backend: CandleResourceMechanism,
 }
 
 pub(crate) fn compose_inference_runtime(
@@ -66,16 +66,21 @@ fn compose_inference_backends(
         InferenceBackendKind::Candle => {
             let backend = build_candle_backend(config, backend_config)?;
             let device_label = backend.device_label().to_string();
-            let resource_backend = backend.resource_backend();
+            let plugin = Plugin::try_from("builtin.candle").expect("valid built-in plugin id");
+            let extension =
+                Extension::try_from("backend.candle").expect("valid built-in extension id");
+            let device = DeviceProfile::new(&device_label);
+            let resource_backend = backend.resource_mechanism(
+                Some(plugin.clone()),
+                Some(extension.clone()),
+                Some(device.clone()),
+            );
             let backend: Arc<dyn InferenceBackend> = backend;
             let instance = BackendInstance::new(format!("candle:{device_label}"));
             let descriptor =
                 BackendInstanceDescriptor::new(instance.clone(), backend.backend_kind().clone())
-                    .with_device(DeviceProfile::new(device_label))
-                    .with_plugin(
-                        Plugin::try_from("builtin.candle").expect("valid built-in plugin id"),
-                        Extension::try_from("backend.candle").expect("valid built-in extension id"),
-                    );
+                    .with_device(device)
+                    .with_plugin(plugin, extension);
             registry.register(descriptor, backend);
             (resource_backend, instance)
         }

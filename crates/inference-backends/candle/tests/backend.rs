@@ -19,16 +19,16 @@ use reimagine_core::model::{
 };
 use reimagine_core::model::{TensorDType, TensorShape};
 use reimagine_inference::{
-    Backend, BackendPayloadKey, BackendTensorHandle, ConditioningMetadata, ExecutionConditioning,
-    ExecutionValue, RuntimeClipHandle, RuntimeImage, RuntimeLatent, RuntimeModelHandle,
-    RuntimeVaeHandle,
+    Backend, BackendPayloadKey, BackendResourceObservation, BackendRunLifecycle,
+    BackendTensorHandle, ConditioningMetadata, ExecutionConditioning, ExecutionValue,
+    RuntimeClipHandle, RuntimeImage, RuntimeLatent, RuntimeModelHandle, RuntimeVaeHandle,
 };
 use reimagine_inference::{
     CreateEmptyLatentRequest, CreateEmptyLatentResponse, DiffusionSampleRequest,
     DiffusionSampleResponse, ImagePreviewRequest, ImagePreviewResponse, ImageSaveRequest,
     ImageSaveResponse, InferenceBackend, InferenceCapability, InferenceError, LatentDecodeRequest,
-    LatentDecodeResponse, LoadBundleRequest, ModelFormat, ResolvedInferenceModel,
-    RunResourceBackend, SamplerName, SchedulerName, TextEncodeRequest, TextEncodeResponse,
+    LatentDecodeResponse, LoadBundleRequest, ModelFormat, ResolvedInferenceModel, SamplerName,
+    SchedulerName, TextEncodeRequest, TextEncodeResponse,
 };
 use reimagine_inference_candle::{CandleBackend, CandleBackendConfig, LoadedModelBundle};
 
@@ -710,8 +710,12 @@ async fn text_encode_conditioning_is_run_scoped_and_cleaned() {
     );
     assert_eq!(backend.store().run_payload_count(&run_id), 1);
 
-    let resource = backend.resource_backend();
-    resource.cleanup_run(&run_id).await;
+    let resource = backend.resource_mechanism(None, None, None);
+    let _ = resource
+        .cleanup_run(reimagine_inference::BackendRunLifecycleRequest {
+            run_id: run_id.clone(),
+        })
+        .await;
 
     assert_eq!(backend.store().run_payload_count(&run_id), 0);
     assert_eq!(backend.store().payload_count(), 0);
@@ -1379,8 +1383,12 @@ async fn diffusion_sample_cleans_up_run_scoped_payload() {
         "two conditionings + input latent + sampled latent"
     );
 
-    let resource = backend.resource_backend();
-    resource.cleanup_run(&run_id).await;
+    let resource = backend.resource_mechanism(None, None, None);
+    let _ = resource
+        .cleanup_run(reimagine_inference::BackendRunLifecycleRequest {
+            run_id: run_id.clone(),
+        })
+        .await;
     assert_eq!(backend.store().run_payload_count(&run_id), 0);
 }
 
@@ -1763,8 +1771,12 @@ async fn latent_decode_runs_scoped_payload_cleanup() {
         "decode should produce exactly 1 run-scoped image payload"
     );
 
-    let resource = backend.resource_backend();
-    resource.cleanup_run(&run_id).await;
+    let resource = backend.resource_mechanism(None, None, None);
+    let _ = resource
+        .cleanup_run(reimagine_inference::BackendRunLifecycleRequest {
+            run_id: run_id.clone(),
+        })
+        .await;
     assert_eq!(backend.store().run_payload_count(&run_id), 0);
 }
 
@@ -2347,8 +2359,12 @@ async fn cleanup_run_removes_latent_payloads() {
     assert!(backend.store().contains_payload(&payload_key));
     assert_eq!(backend.store().payload_count(), 1);
 
-    let resource = backend.resource_backend();
-    resource.cleanup_run(&run_id).await;
+    let resource = backend.resource_mechanism(None, None, None);
+    let _ = resource
+        .cleanup_run(reimagine_inference::BackendRunLifecycleRequest {
+            run_id: run_id.clone(),
+        })
+        .await;
 
     assert!(!backend.store().contains_payload(&payload_key));
     assert_eq!(backend.store().payload_count(), 0);
@@ -2392,8 +2408,12 @@ async fn cleanup_run_does_not_affect_other_runs() {
     assert!(backend.store().contains_payload(&key_b));
     assert_eq!(backend.store().payload_count(), 2);
 
-    let resource = backend.resource_backend();
-    resource.cleanup_run(&run_a).await;
+    let resource = backend.resource_mechanism(None, None, None);
+    let _ = resource
+        .cleanup_run(reimagine_inference::BackendRunLifecycleRequest {
+            run_id: run_a.clone(),
+        })
+        .await;
 
     assert!(!backend.store().contains_payload(&key_a));
     assert!(backend.store().contains_payload(&key_b));
@@ -2411,8 +2431,12 @@ async fn cleanup_run_does_not_remove_cached_model() {
         .unwrap();
     assert_eq!(backend.model_cache().bundle_count(), 1);
 
-    let resource = backend.resource_backend();
-    resource.cleanup_run(&run_id).await;
+    let resource = backend.resource_mechanism(None, None, None);
+    let _ = resource
+        .cleanup_run(reimagine_inference::BackendRunLifecycleRequest {
+            run_id: run_id.clone(),
+        })
+        .await;
 
     assert_eq!(backend.model_cache().bundle_count(), 1);
 }
@@ -2439,8 +2463,8 @@ async fn memory_snapshot_reports_counts() {
         .await
         .unwrap();
 
-    let resource = backend.resource_backend();
-    let snapshot = resource.memory_snapshot().await;
+    let resource = backend.resource_mechanism(None, None, None);
+    let snapshot = resource.resource_snapshot().await;
 
     let run_payloads = snapshot
         .observations

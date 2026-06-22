@@ -6,12 +6,11 @@ use std::collections::HashMap;
 use reimagine_core::diagnostic::CorrelationId;
 use reimagine_core::model::{NodeId, RunId, WorkflowId, WorkflowVersion};
 
-use crate::artifacts::ArtifactStore;
 use crate::cancellation::CancellationToken;
 use crate::value_store::RunValueStore;
 
 /// Internal runner-task session. Tracks the intermediate value store, the
-/// artifact store, the cancellation token, and the per-node outcome map.
+/// cancellation token, and the per-node outcome map.
 ///
 /// Hosts never see this. The runner task owns the only session.
 pub struct RunSession {
@@ -20,7 +19,6 @@ pub struct RunSession {
     workflow_version: WorkflowVersion,
     correlation_id: Option<CorrelationId>,
     values: RunValueStore,
-    artifacts: ArtifactStore,
     cancellation: CancellationToken,
     node_outcomes: HashMap<NodeId, NodeOutcome>,
 }
@@ -39,7 +37,6 @@ impl RunSession {
             workflow_version,
             correlation_id,
             values: RunValueStore::new(),
-            artifacts: ArtifactStore::new(),
             cancellation,
             node_outcomes: HashMap::new(),
         }
@@ -67,10 +64,6 @@ impl RunSession {
 
     pub fn values_mut(&mut self) -> &mut RunValueStore {
         &mut self.values
-    }
-
-    pub fn artifacts(&self) -> &ArtifactStore {
-        &self.artifacts
     }
 
     pub fn cancellation(&self) -> &CancellationToken {

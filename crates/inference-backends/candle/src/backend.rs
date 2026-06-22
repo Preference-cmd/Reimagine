@@ -15,7 +15,7 @@ use reimagine_inference::{
 use crate::config::CandleBackendConfig;
 use crate::error::CandleBackendError;
 use crate::operation::*;
-use crate::resource::CandleRunResourceBackend;
+use crate::resource::CandleResourceMechanism;
 use crate::store::{CandleModelCache, CandleStore};
 
 #[derive(Debug)]
@@ -79,8 +79,23 @@ impl CandleBackend {
         self.config().output_dir()
     }
 
-    pub fn resource_backend(&self) -> CandleRunResourceBackend {
-        CandleRunResourceBackend::new(self.store.clone(), self.model_cache.clone())
+    pub fn resource_mechanism(
+        &self,
+        plugin: Option<reimagine_plugin::Plugin>,
+        extension: Option<reimagine_plugin::Extension>,
+        device: Option<reimagine_inference::DeviceProfile>,
+    ) -> CandleResourceMechanism {
+        let backend_instance = self.backend_instance();
+        let backend_label = self.backend_kind().clone();
+        CandleResourceMechanism::new(
+            backend_instance,
+            backend_label,
+            plugin,
+            extension,
+            device,
+            self.store.clone(),
+            self.model_cache.clone(),
+        )
     }
 
     pub fn next_image_seq(&self) -> u64 {

@@ -1,32 +1,84 @@
+use std::collections::BTreeMap;
 use std::sync::Arc;
 
-use reimagine_core::model::RunId;
-use reimagine_inference::{MemorySnapshot, RunResourceBackend};
+use reimagine_inference::{
+    Backend, BackendInstance, BackendResourceObservation, BackendResourceSnapshot,
+    BackendRunLifecycle, BackendRunLifecycleReport, BackendRunLifecycleRequest, DeviceProfile,
+    InferenceError,
+};
+use reimagine_plugin::{Extension, Plugin};
 
 use crate::store::{CandleModelCache, CandleStore};
 
 #[derive(Debug, Clone)]
-pub struct CandleRunResourceBackend {
+pub struct CandleResourceMechanism {
+    backend_instance: BackendInstance,
+    backend: Backend,
+    plugin: Option<Plugin>,
+    extension: Option<Extension>,
+    device: Option<DeviceProfile>,
     store: Arc<CandleStore>,
     model_cache: Arc<CandleModelCache>,
 }
 
-impl CandleRunResourceBackend {
-    pub fn new(store: Arc<CandleStore>, model_cache: Arc<CandleModelCache>) -> Self {
-        Self { store, model_cache }
+impl CandleResourceMechanism {
+    pub fn new(
+        backend_instance: BackendInstance,
+        backend: Backend,
+        plugin: Option<Plugin>,
+        extension: Option<Extension>,
+        device: Option<DeviceProfile>,
+        store: Arc<CandleStore>,
+        model_cache: Arc<CandleModelCache>,
+    ) -> Self {
+        Self {
+            backend_instance,
+            backend,
+            plugin,
+            extension,
+            device,
+            store,
+            model_cache,
+        }
     }
 }
 
 #[async_trait::async_trait]
-impl RunResourceBackend for CandleRunResourceBackend {
-    async fn begin_run(&self, _run_id: &RunId) {}
-
-    async fn cleanup_run(&self, run_id: &RunId) {
-        self.store.cleanup_run(run_id);
+impl BackendRunLifecycle for CandleResourceMechanism {
+    fn backend_instance(&self) -> &BackendInstance {
+        &self.backend_instance
     }
 
-    async fn memory_snapshot(&self) -> MemorySnapshot {
-        let mut observations = std::collections::HashMap::new();
+    async fn begin_run(
+        &self,
+        _request: BackendRunLifecycleRequest,
+    ) -> Result<BackendRunLifecycleReport, InferenceError> {
+        Ok(BackendRunLifecycleReport {
+            backend_instance: self.backend_instance.clone(),
+            diagnostics: Vec::new(),
+        })
+    }
+
+    async fn cleanup_run(
+        &self,
+        request: BackendRunLifecycleRequest,
+    ) -> Result<BackendRunLifecycleReport, InferenceError> {
+        self.store.cleanup_run(&request.run_id);
+        Ok(BackendRunLifecycleReport {
+            backend_instance: self.backend_instance.clone(),
+            diagnostics: Vec::new(),
+        })
+    }
+}
+
+#[async_trait::async_trait]
+impl BackendResourceObservation for CandleResourceMechanism {
+    fn backend_instance(&self) -> &BackendInstance {
+        &self.backend_instance
+    }
+
+    async fn resource_snapshot(&self) -> BackendResourceSnapshot {
+        let mut observations: BTreeMap<String, String> = BTreeMap::new();
         observations.insert(
             "run_payloads".to_string(),
             self.store.payload_count().to_string(),
@@ -39,6 +91,14 @@ impl RunResourceBackend for CandleRunResourceBackend {
             "bytes_approximate".to_string(),
             self.store.payload_byte_size().to_string(),
         );
-        MemorySnapshot { observations }
+        BackendResourceSnapshot {
+            backend_instance: self.backend_instance.clone(),
+            backend: self.backend.clone(),
+            plugin: self.plugin.clone(),
+            extension: self.extension.clone(),
+            device: self.device.clone(),
+            observations,
+            diagnostics: Vec::new(),
+        }
     }
 }

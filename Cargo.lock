@@ -4225,6 +4225,7 @@ dependencies = [
  "candle-core",
  "reimagine-core",
  "reimagine-inference",
+ "reimagine-plugin",
  "serde",
  "tokio",
 ]

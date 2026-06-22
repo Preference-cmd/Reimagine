@@ -87,7 +87,10 @@ pub use request::latent::{CreateEmptyLatentRequest, LatentDecodeRequest};
 pub use request::model::LoadBundleRequest;
 pub use request::text::TextEncodeRequest;
 pub use resolver::{ModelFormat, ModelResolver, ResolvedInferenceModel};
-pub use resources::{MemorySnapshot, RunResourceBackend};
+pub use resources::{
+    BackendResourceMechanism, BackendResourceObservation, BackendResourceSnapshot,
+    BackendRunLifecycle, BackendRunLifecycleReport, BackendRunLifecycleRequest,
+};
 pub use response::diffusion::DiffusionSampleResponse;
 pub use response::image::{ImagePreviewResponse, ImageSaveResponse};
 pub use response::latent::{CreateEmptyLatentResponse, LatentDecodeResponse};
