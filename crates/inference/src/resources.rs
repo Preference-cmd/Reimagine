@@ -88,6 +88,16 @@ pub trait BackendInstanceObservation: Send + Sync + 'static {
 
     /// Produce a backend-instance snapshot for diagnostics.
     async fn snapshot(&self) -> BackendInstanceSnapshot;
+
+    /// Produce one or more backend-instance snapshots.
+    ///
+    /// The default implementation returns a single snapshot from
+    /// [`Self::snapshot`], which is correct for concrete backend
+    /// instances. Composite implementations override this to fan out
+    /// one snapshot per contained concrete instance.
+    async fn snapshots(&self) -> Vec<BackendInstanceSnapshot> {
+        vec![self.snapshot().await]
+    }
 }
 
 /// Supertrait combining run lifecycle and backend-instance observation.
@@ -128,14 +138,6 @@ impl CompositeBackendInstanceRuntimeHooks {
 
     pub fn hooks(&self) -> &[Arc<dyn BackendInstanceRuntimeHooks>] {
         &self.hooks
-    }
-
-    pub async fn snapshots(&self) -> Vec<BackendInstanceSnapshot> {
-        let mut snapshots = Vec::with_capacity(self.hooks.len());
-        for hook in &self.hooks {
-            snapshots.push(hook.snapshot().await);
-        }
-        snapshots
     }
 }
 
@@ -211,6 +213,14 @@ impl BackendInstanceObservation for CompositeBackendInstanceRuntimeHooks {
             observations,
             diagnostics,
         }
+    }
+
+    async fn snapshots(&self) -> Vec<BackendInstanceSnapshot> {
+        let mut snapshots = Vec::with_capacity(self.hooks.len());
+        for hook in &self.hooks {
+            snapshots.push(hook.snapshot().await);
+        }
+        snapshots
     }
 }
 

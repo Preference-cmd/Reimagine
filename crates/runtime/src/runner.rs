@@ -28,9 +28,9 @@ use crate::snapshot::{RunArtifactRef, RunSnapshot, RunSummary};
 use crate::store::RunStore;
 use crate::value_store::OutputKey;
 
-use reimagine_inference::BackendInstanceRuntimeHooks;
 use reimagine_inference::{
-    ArtifactPublisher, BackendRunLifecycleRequest, ExecutionValueRetention, NodeCancellation,
+    ArtifactPublisher, BackendInstanceObservation, BackendInstanceRuntimeHooks,
+    BackendInstanceSnapshot, BackendRunLifecycleRequest, ExecutionValueRetention, NodeCancellation,
     NodeExecutionContext, NodeExecutorError, NodeExecutorRegistry, NodeInputs, NodeParams,
 };
 
@@ -264,6 +264,12 @@ impl RuntimeService {
     /// run has reached a terminal state).
     pub fn summary(&self, run_id: &RunId) -> Option<RunSummary> {
         self.store.summary(run_id)
+    }
+
+    /// Query snapshots for every concrete backend instance known to the
+    /// runtime's configured hooks, without exposing backend internals.
+    pub async fn backend_instance_snapshots(&self) -> Vec<BackendInstanceSnapshot> {
+        BackendInstanceObservation::snapshots(self.backend.as_ref()).await
     }
 
     fn emit_lifecycle(
