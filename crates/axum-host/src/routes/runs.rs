@@ -9,6 +9,7 @@
 use axum::Json;
 use axum::extract::{Path, State};
 use reimagine_core::model::RunId;
+use tracing::Span;
 
 use crate::dto::{RunDto, RunEventsResponse};
 use crate::error::{AxumHostError, AxumHostResult};
@@ -22,6 +23,7 @@ pub async fn get(
     Path(id): Path<String>,
 ) -> AxumHostResult<Json<RunDto>> {
     let run_id = RunId::new(id);
+    Span::current().record("run_id", run_id.as_str());
     if let Some(summary) = state.workspace().run_summary(&run_id) {
         return Ok(Json(RunDto::Summary(summary.into())));
     }
@@ -40,6 +42,7 @@ pub async fn events(
     Path(id): Path<String>,
 ) -> AxumHostResult<Json<RunEventsResponse>> {
     let run_id = RunId::new(id);
+    Span::current().record("run_id", run_id.as_str());
     let events = state.event_recorder().events_for(&run_id);
     Ok(Json(RunEventsResponse {
         run_id,
