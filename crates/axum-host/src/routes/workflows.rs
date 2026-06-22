@@ -12,6 +12,7 @@ use reimagine_core::diagnostic::CorrelationId;
 use reimagine_core::model::WorkflowId;
 use reimagine_core::readiness::RunTargetSelection;
 use reimagine_core::workflow::Workflow;
+use tracing::Span;
 
 use crate::dto::{
     OpenWorkflowRequest, OpenWorkflowResponse, RunWorkflowRequestDto, RunWorkflowResponse,
@@ -112,6 +113,9 @@ pub async fn run(
         .unwrap_or(RunTargetSelection::AllDefaultTargets);
 
     let correlation_id_for_log = body.correlation_id.clone();
+    if let Some(ref correlation_id) = correlation_id_for_log {
+        Span::current().record("correlation_id", correlation_id.as_str());
+    }
 
     let mut request = RunWorkflowRequest::new(workflow_id.clone(), target_selection);
     if let Some(correlation_id) = body.correlation_id {
@@ -126,6 +130,7 @@ pub async fn run(
             report,
         } => {
             let run_id = handle.run_id().clone();
+            Span::current().record("run_id", run_id.as_str());
             tracing::info!(
                 run_id = %run_id,
                 workflow_id = %workflow_id,
