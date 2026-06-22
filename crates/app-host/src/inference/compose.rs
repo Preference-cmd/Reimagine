@@ -3,12 +3,14 @@ use std::sync::Arc;
 use reimagine_config::{AppConfig, InferenceBackendConfig, InferenceBackendKind};
 use reimagine_inference::registry::register_builtin_inference_executors;
 use reimagine_inference::{
-    DefaultInferenceRuntime, InferenceBackend, InferenceBackendRegistry, InferenceRuntime,
-    RejectAllBridgePolicy,
+    BackendInstance, BackendInstanceDescriptor, BackendOverrides, DefaultInferenceRuntime,
+    DeviceProfile, InferenceBackend, InferenceBackendRegistry, RejectAllBridgePolicy,
+    StaticBackendSelectionPolicy,
 };
 use reimagine_inference_candle::{
     CandleBackend, CandleBackendConfig, CandleBackendError, CandleDevice, CandleRunResourceBackend,
 };
+use reimagine_plugin::{Extension, Plugin};
 use reimagine_runtime::NodeExecutorRegistry;
 
 use crate::ModelService;
@@ -18,6 +20,7 @@ use crate::inference::resolver::ModelResolverAdapter;
 pub(crate) struct ComposedBackends {
     registry: InferenceBackendRegistry,
     resource_backend: CandleRunResourceBackend,
+    selected_instance: BackendInstance,
 }
 
 #[derive(Debug)]
@@ -32,7 +35,10 @@ pub(crate) fn compose_inference_runtime(
     model_service: Arc<ModelService>,
 ) -> Result<ComposedInferenceRuntime, CandleBackendError> {
     let composed_backends = compose_inference_backends(config, backend_config)?;
-    let inference_runtime = compose_runtime_router(composed_backends.registry);
+    let inference_runtime = compose_runtime_router(
+        composed_backends.registry,
+        composed_backends.selected_instance,
+    );
 
     let mut executor_registry = NodeExecutorRegistry::default();
     register_builtin_inference_executors(
@@ -56,27 +62,29 @@ fn compose_inference_backends(
     backend_config: &InferenceBackendConfig,
 ) -> Result<ComposedBackends, CandleBackendError> {
     let mut registry = InferenceBackendRegistry::new();
-    let resource_backend = match backend_config.backend {
+    let (resource_backend, selected_instance) = match backend_config.backend {
         InferenceBackendKind::Candle => {
             let backend = build_candle_backend(config, backend_config)?;
             let device_label = backend.device_label().to_string();
             let resource_backend = backend.resource_backend();
             let backend: Arc<dyn InferenceBackend> = backend;
-            let instance =
-                reimagine_inference::BackendInstance::new(format!("candle:{device_label}"));
-            let descriptor = reimagine_inference::BackendInstanceDescriptor::new(
-                instance,
-                backend.backend_kind().clone(),
-            )
-            .with_device(reimagine_inference::DeviceProfile::new(device_label));
+            let instance = BackendInstance::new(format!("candle:{device_label}"));
+            let descriptor =
+                BackendInstanceDescriptor::new(instance.clone(), backend.backend_kind().clone())
+                    .with_device(DeviceProfile::new(device_label))
+                    .with_plugin(
+                        Plugin::try_from("builtin.candle").expect("valid built-in plugin id"),
+                        Extension::try_from("backend.candle").expect("valid built-in extension id"),
+                    );
             registry.register(descriptor, backend);
-            resource_backend
+            (resource_backend, instance)
         }
     };
 
     Ok(ComposedBackends {
         registry,
         resource_backend,
+        selected_instance,
     })
 }
 
@@ -93,9 +101,19 @@ fn build_candle_backend(
     Ok(Arc::new(CandleBackend::new(candle_config)?))
 }
 
-fn compose_runtime_router(registry: InferenceBackendRegistry) -> Arc<dyn InferenceRuntime> {
-    Arc::new(DefaultInferenceRuntime::new(
+fn compose_runtime_router(
+    registry: InferenceBackendRegistry,
+    selected_instance: BackendInstance,
+) -> Arc<DefaultInferenceRuntime> {
+    let policy = StaticBackendSelectionPolicy::with_overrides(
+        BackendOverrides::new(),
+        vec![selected_instance.clone()],
+        Some(vec![selected_instance]),
+        Vec::new(),
+    );
+    Arc::new(DefaultInferenceRuntime::with_policy(
         Arc::new(registry),
+        Arc::new(policy),
         Arc::new(RejectAllBridgePolicy),
     ))
 }
@@ -131,7 +149,69 @@ mod tests {
             1,
             "selected backend should register once"
         );
+        assert_eq!(
+            composed.selected_instance,
+            reimagine_inference::BackendInstance::new("candle:cpu")
+        );
         let _ = std::fs::remove_dir_all(&base);
+    }
+
+    #[test]
+    fn compose_backends_attaches_builtin_candle_plugin_provenance() {
+        let base = temp_dir("plugin-provenance");
+        let config = AppConfig::new(AppPaths::new(&base));
+        let backend_config = InferenceBackendConfig {
+            backend: InferenceBackendKind::Candle,
+            candle_device: "cpu".to_string(),
+            ..InferenceBackendConfig::default()
+        };
+
+        let composed = compose_inference_backends(&config, &backend_config).expect("backends");
+        let descriptors = composed.registry.descriptors();
+        let descriptor = descriptors.first().expect("registered descriptor");
+
+        assert_eq!(descriptor.instance, composed.selected_instance);
+        assert_eq!(
+            descriptor.plugin.as_ref().map(|p| p.as_str()),
+            Some("builtin.candle")
+        );
+        assert_eq!(
+            descriptor.extension.as_ref().map(|e| e.as_str()),
+            Some("backend.candle")
+        );
+        assert_eq!(
+            descriptor.device.as_ref().map(|d| d.label.as_str()),
+            Some("cpu")
+        );
+        let _ = std::fs::remove_dir_all(&base);
+    }
+
+    #[test]
+    fn compose_runtime_router_uses_config_projected_backend_policy() {
+        let instance = reimagine_inference::BackendInstance::new("candle:cpu");
+        let registry = InferenceBackendRegistry::new();
+        let runtime = compose_runtime_router(registry, instance.clone());
+        let request = reimagine_inference::BackendSelectionRequest {
+            capability: reimagine_inference::InferenceCapability::LoadBundle,
+            node_id: None,
+            affinities: Vec::new(),
+            registered: Vec::new(),
+            explicit_override: None,
+        };
+
+        assert_eq!(
+            runtime.selection_policy().candidates(&request),
+            vec![instance.clone()]
+        );
+        assert!(
+            runtime
+                .selection_policy()
+                .allows_explicit_override(&instance, &request)
+        );
+        assert!(!runtime.selection_policy().allows_explicit_override(
+            &reimagine_inference::BackendInstance::new("candle:metal"),
+            &request
+        ));
     }
 
     #[test]
