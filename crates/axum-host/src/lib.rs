@@ -13,6 +13,8 @@
 
 #![deny(unsafe_code)]
 
+pub mod bootstrap;
+pub mod cli;
 mod dto;
 mod error;
 mod recorder;
