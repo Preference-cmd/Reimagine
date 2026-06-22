@@ -132,7 +132,7 @@ async fn build_ready_host(
     let recorder = Arc::new(RunEventRecorder::new());
     let runtime = Arc::new(RuntimeService::new(
         registry,
-        Arc::new(reimagine_runtime::NoopResourceMechanism::default()),
+        Arc::new(reimagine_runtime::NoopBackendInstanceRuntimeHooks::default()),
         recorder.clone() as Arc<dyn RunEventSink>,
         Arc::new(reimagine_runtime::SystemClock),
     ));

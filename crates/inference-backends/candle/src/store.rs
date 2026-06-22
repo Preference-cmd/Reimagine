@@ -308,7 +308,7 @@ impl CandleStore {
     }
 
     /// Release a single payload by key, if present. Used by the
-    /// resource backend when a runtime value drops and the payload
+    /// backend-instance runtime hooks when a runtime value drops and the payload
     /// type is not statically known.
     pub fn release_payload(&self, key: &BackendPayloadKey) -> bool {
         let mut inner = self.inner.lock().expect("store poisoned");

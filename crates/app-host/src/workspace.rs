@@ -144,7 +144,7 @@ impl WorkspaceHost {
             .expect("backend");
         let runtime_service = Arc::new(RuntimeService::new(
             composed.executor_registry,
-            Arc::new(composed.resource_backend),
+            Arc::new(composed.runtime_hooks),
             event_sink,
             Arc::new(reimagine_runtime::SystemClock),
         ));

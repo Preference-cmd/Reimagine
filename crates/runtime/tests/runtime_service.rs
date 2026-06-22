@@ -22,8 +22,9 @@ use reimagine_core::readiness::{
 };
 use reimagine_runtime::{
     CancellationToken, Clock, ExecutionValue, NodeExecutionContext, NodeExecutor,
-    NodeExecutorError, NodeExecutorRegistry, NoopResourceMechanism, RunEventSink, RunHandle,
-    RunInputs, RuntimeError, RuntimeOptions, RuntimeService, RuntimeServiceError, VecRunEventSink,
+    NodeExecutorError, NodeExecutorRegistry, NoopBackendInstanceRuntimeHooks, RunEventSink,
+    RunHandle, RunInputs, RuntimeError, RuntimeOptions, RuntimeService, RuntimeServiceError,
+    VecRunEventSink,
 };
 
 /// A clock that always returns the same string timestamp.
@@ -225,7 +226,7 @@ fn runtime_run_starts_and_completes_a_mock_plan() {
         let sink = Arc::new(VecRunEventSink::new());
         let service = RuntimeService::new(
             registry,
-            Arc::new(NoopResourceMechanism::default()),
+            Arc::new(NoopBackendInstanceRuntimeHooks::default()),
             sink.clone(),
             Arc::new(FixedClock),
         );
@@ -276,7 +277,7 @@ fn runtime_observations_include_host_neutral_artifact_reference() {
         let sink = Arc::new(VecRunEventSink::new());
         let service = RuntimeService::new(
             registry,
-            Arc::new(NoopResourceMechanism::default()),
+            Arc::new(NoopBackendInstanceRuntimeHooks::default()),
             sink,
             Arc::new(FixedClock),
         );
@@ -360,7 +361,7 @@ fn runtime_stages_execute_in_order() {
         let sink = Arc::new(VecRunEventSink::new());
         let service = RuntimeService::new(
             registry,
-            Arc::new(NoopResourceMechanism::default()),
+            Arc::new(NoopBackendInstanceRuntimeHooks::default()),
             sink,
             Arc::new(FixedClock),
         );
@@ -432,7 +433,7 @@ fn shared_upstream_node_runs_only_once() {
         let sink = Arc::new(VecRunEventSink::new());
         let service = RuntimeService::new(
             registry,
-            Arc::new(NoopResourceMechanism::default()),
+            Arc::new(NoopBackendInstanceRuntimeHooks::default()),
             sink,
             Arc::new(FixedClock),
         );
@@ -557,7 +558,7 @@ fn executor_failure_marks_run_failed_and_skips_downstream() {
         let sink = Arc::new(VecRunEventSink::new());
         let service = RuntimeService::new(
             registry,
-            Arc::new(NoopResourceMechanism::default()),
+            Arc::new(NoopBackendInstanceRuntimeHooks::default()),
             sink.clone(),
             Arc::new(FixedClock),
         );
@@ -683,7 +684,7 @@ fn cancellation_stops_downstream_and_emits_cancelled_events() {
         let sink = Arc::new(VecRunEventSink::new());
         let service = RuntimeService::new(
             registry,
-            Arc::new(NoopResourceMechanism::default()),
+            Arc::new(NoopBackendInstanceRuntimeHooks::default()),
             sink.clone(),
             Arc::new(FixedClock),
         );
@@ -773,7 +774,7 @@ fn executor_cancelled_on_last_node_marks_run_cancelled_not_failed() {
         let sink = Arc::new(VecRunEventSink::new());
         let service = RuntimeService::new(
             registry,
-            Arc::new(NoopResourceMechanism::default()),
+            Arc::new(NoopBackendInstanceRuntimeHooks::default()),
             sink.clone(),
             Arc::new(FixedClock),
         );
@@ -816,7 +817,7 @@ fn workflow_input_bindings_read_from_workflow_input_run_inputs() {
             .unwrap();
         let service = RuntimeService::new(
             registry,
-            Arc::new(NoopResourceMechanism::default()),
+            Arc::new(NoopBackendInstanceRuntimeHooks::default()),
             Arc::new(VecRunEventSink::new()),
             Arc::new(FixedClock),
         );
@@ -876,7 +877,7 @@ fn static_param_bindings_read_from_node_param_run_inputs() {
             .unwrap();
         let service = RuntimeService::new(
             registry,
-            Arc::new(NoopResourceMechanism::default()),
+            Arc::new(NoopBackendInstanceRuntimeHooks::default()),
             Arc::new(VecRunEventSink::new()),
             Arc::new(FixedClock),
         );
@@ -937,7 +938,7 @@ fn sink_failure_does_not_fail_the_run() {
         let sink = Arc::new(FailingSink::default());
         let service = RuntimeService::new(
             registry,
-            Arc::new(NoopResourceMechanism::default()),
+            Arc::new(NoopBackendInstanceRuntimeHooks::default()),
             sink.clone(),
             Arc::new(FixedClock),
         );
@@ -996,7 +997,7 @@ fn sink_panic_is_logged_and_does_not_fail_the_run() {
             .unwrap();
         let service = RuntimeService::new(
             registry,
-            Arc::new(NoopResourceMechanism::default()),
+            Arc::new(NoopBackendInstanceRuntimeHooks::default()),
             Arc::new(PanickingSink),
             Arc::new(FixedClock),
         );
@@ -1034,7 +1035,7 @@ fn snapshot_reports_running_node_while_executor_is_in_flight() {
             .unwrap();
         let service = RuntimeService::new(
             registry,
-            Arc::new(NoopResourceMechanism::default()),
+            Arc::new(NoopBackendInstanceRuntimeHooks::default()),
             Arc::new(VecRunEventSink::new()),
             Arc::new(FixedClock),
         );
@@ -1081,7 +1082,7 @@ fn snapshot_records_terminal_node_states_and_summary_records_terminal_state() {
         let sink = Arc::new(VecRunEventSink::new());
         let service = RuntimeService::new(
             registry,
-            Arc::new(NoopResourceMechanism::default()),
+            Arc::new(NoopBackendInstanceRuntimeHooks::default()),
             sink,
             Arc::new(FixedClock),
         );
@@ -1271,7 +1272,7 @@ fn same_stage_siblings_are_skipped_after_a_sibling_fails() {
             .unwrap();
         let service = RuntimeService::new(
             registry,
-            Arc::new(NoopResourceMechanism::default()),
+            Arc::new(NoopBackendInstanceRuntimeHooks::default()),
             Arc::new(VecRunEventSink::new()),
             Arc::new(FixedClock),
         );
@@ -1358,7 +1359,7 @@ fn cancellation_emits_cancelled_for_unvisited_future_stage_nodes() {
         let sink = Arc::new(VecRunEventSink::new());
         let service = RuntimeService::new(
             registry,
-            Arc::new(NoopResourceMechanism::default()),
+            Arc::new(NoopBackendInstanceRuntimeHooks::default()),
             sink.clone(),
             Arc::new(FixedClock),
         );
@@ -1490,7 +1491,7 @@ fn artifact_visible_in_snapshot_before_run_completes() {
         let sink = Arc::new(VecRunEventSink::new());
         let service = RuntimeService::new(
             registry,
-            Arc::new(NoopResourceMechanism::default()),
+            Arc::new(NoopBackendInstanceRuntimeHooks::default()),
             sink.clone(),
             Arc::new(FixedClock),
         );
@@ -1612,7 +1613,7 @@ fn terminal_summary_includes_all_artifacts_from_multiple_nodes() {
         let sink = Arc::new(VecRunEventSink::new());
         let service = RuntimeService::new(
             registry,
-            Arc::new(NoopResourceMechanism::default()),
+            Arc::new(NoopBackendInstanceRuntimeHooks::default()),
             sink.clone(),
             Arc::new(FixedClock),
         );
@@ -1720,7 +1721,7 @@ fn failed_run_preserves_previously_recorded_artifacts() {
         let sink = Arc::new(VecRunEventSink::new());
         let service = RuntimeService::new(
             registry,
-            Arc::new(NoopResourceMechanism::default()),
+            Arc::new(NoopBackendInstanceRuntimeHooks::default()),
             sink.clone(),
             Arc::new(FixedClock),
         );
@@ -1814,7 +1815,7 @@ fn cancelled_run_preserves_previously_recorded_artifacts() {
         let sink = Arc::new(VecRunEventSink::new());
         let service = RuntimeService::new(
             registry,
-            Arc::new(NoopResourceMechanism::default()),
+            Arc::new(NoopBackendInstanceRuntimeHooks::default()),
             sink.clone(),
             Arc::new(FixedClock),
         );
@@ -2061,13 +2062,13 @@ impl reimagine_inference::BackendRunLifecycle for SpyBackend {
 }
 
 #[async_trait]
-impl reimagine_inference::BackendResourceObservation for SpyBackend {
+impl reimagine_inference::BackendInstanceObservation for SpyBackend {
     fn backend_instance(&self) -> &reimagine_inference::BackendInstance {
         &self.backend_instance
     }
 
-    async fn resource_snapshot(&self) -> reimagine_inference::BackendResourceSnapshot {
-        reimagine_inference::BackendResourceSnapshot {
+    async fn snapshot(&self) -> reimagine_inference::BackendInstanceSnapshot {
+        reimagine_inference::BackendInstanceSnapshot {
             backend_instance: self.backend_instance.clone(),
             backend: self.backend.clone(),
             plugin: None,

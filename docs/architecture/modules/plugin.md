@@ -167,17 +167,17 @@ BackendInstance -> concrete configured backend instance, possibly including
 A single plugin can provide multiple extensions. A single backend extension can
 produce multiple backend instances if configuration asks for that later.
 
-Backend resource mechanisms are not a separate V1 host surface. They are wired
-as part of an inference backend instance:
+Backend instance runtime hooks are not a separate V1 host surface. They are
+wired as part of an inference backend instance:
 
 ```text
 PluginExtension { extends: HostSurface::InferenceBackend }
   -> BackendInstanceDescriptor { plugin, extension, backend, instance }
   -> typed inference backend adapter
-  -> backend resource lifecycle/observation adapter
+  -> backend-instance lifecycle/observation hooks
 ```
 
-This keeps plugin identity, backend routing, and backend resource observations
+This keeps plugin identity, backend routing, and backend-instance observations
 attached to the same configured `BackendInstance`. If future plugin packages
 need to contribute standalone resource monitors or schedulers, that should be
 a new architecture decision rather than an implicit extension of the inference

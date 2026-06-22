@@ -3,8 +3,8 @@
 //!
 //! This crate owns the backend contract (trait, typed
 //! request/response DTOs, capability report, model resolver,
-//! runtime/router, bridge policy, backend registry, resource
-//! lifecycle), canonical execution values, the **node executor
+//! runtime/router, bridge policy, backend registry,
+//! backend-instance runtime hooks), canonical execution values, the **node executor
 //! contract** (`NodeExecutor` trait, `NodeExecutionContext`,
 //! `NodeInputs`/`NodeParams`, `NodeExecutorRegistry`,
 //! `ArtifactPublisher`, `NodeCancellation`, `ArtifactEventKind`,
@@ -18,8 +18,8 @@
 //! executor contract stays backend- and runtime-neutral.
 //!
 //! Runtime-facing and backend-facing code should import execution
-//! values, backend contracts, router contracts, resource contracts,
-//! and executor contracts from `reimagine_inference::*`.
+//! values, backend contracts, router contracts, backend-instance hook
+//! contracts, and executor contracts from `reimagine_inference::*`.
 //!
 //! See `docs/architecture/modules/inference.md` for the
 //! architecture source of truth.
@@ -88,8 +88,10 @@ pub use request::model::LoadBundleRequest;
 pub use request::text::TextEncodeRequest;
 pub use resolver::{ModelFormat, ModelResolver, ResolvedInferenceModel};
 pub use resources::{
+    BackendInstanceObservation, BackendInstanceRuntimeHooks, BackendInstanceSnapshot,
     BackendResourceMechanism, BackendResourceObservation, BackendResourceSnapshot,
     BackendRunLifecycle, BackendRunLifecycleReport, BackendRunLifecycleRequest,
+    CompositeBackendInstanceRuntimeHooks,
 };
 pub use response::diffusion::DiffusionSampleResponse;
 pub use response::image::{ImagePreviewResponse, ImageSaveResponse};

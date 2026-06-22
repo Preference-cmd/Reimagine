@@ -8,7 +8,8 @@ use reimagine_inference::{
     StaticBackendSelectionPolicy,
 };
 use reimagine_inference_candle::{
-    CandleBackend, CandleBackendConfig, CandleBackendError, CandleDevice, CandleResourceMechanism,
+    CandleBackend, CandleBackendConfig, CandleBackendError, CandleBackendInstanceRuntimeHooks,
+    CandleDevice,
 };
 use reimagine_plugin::{Extension, Plugin};
 use reimagine_runtime::NodeExecutorRegistry;
@@ -19,14 +20,14 @@ use crate::inference::resolver::ModelResolverAdapter;
 #[derive(Debug)]
 pub(crate) struct ComposedBackends {
     registry: InferenceBackendRegistry,
-    resource_backend: CandleResourceMechanism,
+    runtime_hooks: CandleBackendInstanceRuntimeHooks,
     selected_instance: BackendInstance,
 }
 
 #[derive(Debug)]
 pub(crate) struct ComposedInferenceRuntime {
     pub(crate) executor_registry: NodeExecutorRegistry,
-    pub(crate) resource_backend: CandleResourceMechanism,
+    pub(crate) runtime_hooks: CandleBackendInstanceRuntimeHooks,
 }
 
 pub(crate) fn compose_inference_runtime(
@@ -53,7 +54,7 @@ pub(crate) fn compose_inference_runtime(
 
     Ok(ComposedInferenceRuntime {
         executor_registry,
-        resource_backend: composed_backends.resource_backend,
+        runtime_hooks: composed_backends.runtime_hooks,
     })
 }
 
@@ -62,7 +63,7 @@ fn compose_inference_backends(
     backend_config: &InferenceBackendConfig,
 ) -> Result<ComposedBackends, CandleBackendError> {
     let mut registry = InferenceBackendRegistry::new();
-    let (resource_backend, selected_instance) = match backend_config.backend {
+    let (runtime_hooks, selected_instance) = match backend_config.backend {
         InferenceBackendKind::Candle => {
             let backend = build_candle_backend(config, backend_config)?;
             let device_label = backend.device_label().to_string();
@@ -70,7 +71,7 @@ fn compose_inference_backends(
             let extension =
                 Extension::try_from("backend.candle").expect("valid built-in extension id");
             let device = DeviceProfile::new(&device_label);
-            let resource_backend = backend.resource_mechanism(
+            let runtime_hooks = backend.runtime_hooks(
                 Some(plugin.clone()),
                 Some(extension.clone()),
                 Some(device.clone()),
@@ -82,13 +83,13 @@ fn compose_inference_backends(
                     .with_device(device)
                     .with_plugin(plugin, extension);
             registry.register(descriptor, backend);
-            (resource_backend, instance)
+            (runtime_hooks, instance)
         }
     };
 
     Ok(ComposedBackends {
         registry,
-        resource_backend,
+        runtime_hooks,
         selected_instance,
     })
 }

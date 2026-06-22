@@ -21,14 +21,14 @@ treat `inference` as the owner of:
 - `InferenceBackend` adapter contracts;
 - backend selection and bridge policy contracts;
 - model resolver handoff contracts;
-- backend resource mechanism contracts;
+- backend-instance lifecycle/observation hook contracts;
 - inference diagnostics and errors.
 
 ## Migration Result
 
 The physical `crates/inference-core` crate has been removed. Concrete code
 imports backend contracts, router contracts, execution values, typed
-capability DTOs, resource contracts, diagnostics, and inference errors from
+capability DTOs, backend-instance hook contracts, diagnostics, and inference errors from
 `reimagine_inference`.
 
 This file is no longer a separate architecture module for new design work. New
@@ -58,7 +58,8 @@ adapters, router configuration, and executor registration.
 
 Historical issues may still reference `inference-core/01` and
 `inference-core/02`; those are completed implementation steps and should not be
-retconned. Future router/resource contract work is tracked under:
+retconned. Future router and backend-instance hook work is tracked under:
 
-- `inference/issues/03-backend-resource-mechanism-contract.md`
+- `inference/issues/05-backend-instance-runtime-hooks-naming.md`
+- `inference/issues/06-composite-backend-instance-runtime-hooks.md`
 - `inference/issues/04-configurable-backend-selection-policy.md`

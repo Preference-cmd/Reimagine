@@ -130,7 +130,7 @@ fn build_runtime_with_sink(
 ) -> Arc<RuntimeService> {
     Arc::new(RuntimeService::new(
         registry,
-        Arc::new(reimagine_runtime::NoopResourceMechanism::default()),
+        Arc::new(reimagine_runtime::NoopBackendInstanceRuntimeHooks::default()),
         sink,
         Arc::new(reimagine_runtime::SystemClock),
     ))

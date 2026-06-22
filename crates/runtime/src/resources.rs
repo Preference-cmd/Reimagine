@@ -1,20 +1,20 @@
-//! Default no-op [`BackendResourceMechanism`](reimagine_inference::BackendResourceMechanism)
+//! Default no-op [`BackendInstanceRuntimeHooks`](reimagine_inference::BackendInstanceRuntimeHooks)
 //! used by the runtime in tests and when no concrete backend is wired.
 
 use reimagine_inference::{
-    Backend, BackendInstance, BackendResourceObservation, BackendResourceSnapshot,
+    Backend, BackendInstance, BackendInstanceObservation, BackendInstanceSnapshot,
     BackendRunLifecycle, BackendRunLifecycleReport, BackendRunLifecycleRequest, InferenceError,
 };
 
 /// Default no-op mechanism used in tests and when no backend is
 /// wired.
 #[derive(Debug, Clone)]
-pub struct NoopResourceMechanism {
+pub struct NoopBackendInstanceRuntimeHooks {
     backend_instance: BackendInstance,
     backend: Backend,
 }
 
-impl Default for NoopResourceMechanism {
+impl Default for NoopBackendInstanceRuntimeHooks {
     fn default() -> Self {
         Self {
             backend_instance: BackendInstance::new("noop"),
@@ -24,7 +24,7 @@ impl Default for NoopResourceMechanism {
 }
 
 #[async_trait::async_trait]
-impl BackendRunLifecycle for NoopResourceMechanism {
+impl BackendRunLifecycle for NoopBackendInstanceRuntimeHooks {
     fn backend_instance(&self) -> &BackendInstance {
         &self.backend_instance
     }
@@ -51,13 +51,13 @@ impl BackendRunLifecycle for NoopResourceMechanism {
 }
 
 #[async_trait::async_trait]
-impl BackendResourceObservation for NoopResourceMechanism {
+impl BackendInstanceObservation for NoopBackendInstanceRuntimeHooks {
     fn backend_instance(&self) -> &BackendInstance {
         &self.backend_instance
     }
 
-    async fn resource_snapshot(&self) -> BackendResourceSnapshot {
-        BackendResourceSnapshot {
+    async fn snapshot(&self) -> BackendInstanceSnapshot {
+        BackendInstanceSnapshot {
             backend_instance: self.backend_instance.clone(),
             backend: self.backend.clone(),
             plugin: None,

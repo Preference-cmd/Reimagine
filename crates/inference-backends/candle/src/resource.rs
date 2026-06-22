@@ -2,7 +2,7 @@ use std::collections::BTreeMap;
 use std::sync::Arc;
 
 use reimagine_inference::{
-    Backend, BackendInstance, BackendResourceObservation, BackendResourceSnapshot,
+    Backend, BackendInstance, BackendInstanceObservation, BackendInstanceSnapshot,
     BackendRunLifecycle, BackendRunLifecycleReport, BackendRunLifecycleRequest, DeviceProfile,
     InferenceError,
 };
@@ -11,7 +11,7 @@ use reimagine_plugin::{Extension, Plugin};
 use crate::store::{CandleModelCache, CandleStore};
 
 #[derive(Debug, Clone)]
-pub struct CandleResourceMechanism {
+pub struct CandleBackendInstanceRuntimeHooks {
     backend_instance: BackendInstance,
     backend: Backend,
     plugin: Option<Plugin>,
@@ -21,7 +21,7 @@ pub struct CandleResourceMechanism {
     model_cache: Arc<CandleModelCache>,
 }
 
-impl CandleResourceMechanism {
+impl CandleBackendInstanceRuntimeHooks {
     pub fn new(
         backend_instance: BackendInstance,
         backend: Backend,
@@ -44,7 +44,7 @@ impl CandleResourceMechanism {
 }
 
 #[async_trait::async_trait]
-impl BackendRunLifecycle for CandleResourceMechanism {
+impl BackendRunLifecycle for CandleBackendInstanceRuntimeHooks {
     fn backend_instance(&self) -> &BackendInstance {
         &self.backend_instance
     }
@@ -72,12 +72,12 @@ impl BackendRunLifecycle for CandleResourceMechanism {
 }
 
 #[async_trait::async_trait]
-impl BackendResourceObservation for CandleResourceMechanism {
+impl BackendInstanceObservation for CandleBackendInstanceRuntimeHooks {
     fn backend_instance(&self) -> &BackendInstance {
         &self.backend_instance
     }
 
-    async fn resource_snapshot(&self) -> BackendResourceSnapshot {
+    async fn snapshot(&self) -> BackendInstanceSnapshot {
         let mut observations: BTreeMap<String, String> = BTreeMap::new();
         observations.insert(
             "run_payloads".to_string(),
@@ -91,7 +91,7 @@ impl BackendResourceObservation for CandleResourceMechanism {
             "bytes_approximate".to_string(),
             self.store.payload_byte_size().to_string(),
         );
-        BackendResourceSnapshot {
+        BackendInstanceSnapshot {
             backend_instance: self.backend_instance.clone(),
             backend: self.backend.clone(),
             plugin: self.plugin.clone(),

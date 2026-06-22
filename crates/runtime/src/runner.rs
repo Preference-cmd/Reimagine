@@ -20,7 +20,7 @@ use crate::consumer_index::PlanConsumerIndex;
 use crate::error::RuntimeError;
 use crate::events::RunEventSink;
 use crate::handle::{RunHandle, RunState};
-use crate::resources::NoopResourceMechanism;
+use crate::resources::NoopBackendInstanceRuntimeHooks;
 use crate::run_inputs::RunInputs;
 use crate::run_session::{NodeOutcome, RunSession};
 use crate::scheduler::{NodeState, StageExecutionPolicy, StageNodeDecision};
@@ -28,7 +28,7 @@ use crate::snapshot::{RunArtifactRef, RunSnapshot, RunSummary};
 use crate::store::RunStore;
 use crate::value_store::OutputKey;
 
-use reimagine_inference::BackendResourceMechanism;
+use reimagine_inference::BackendInstanceRuntimeHooks;
 use reimagine_inference::{
     ArtifactPublisher, BackendRunLifecycleRequest, ExecutionValueRetention, NodeCancellation,
     NodeExecutionContext, NodeExecutorError, NodeExecutorRegistry, NodeInputs, NodeParams,
@@ -97,7 +97,7 @@ impl From<RuntimeError> for RuntimeServiceError {
 pub struct RuntimeService {
     store: RunStore,
     registry: NodeExecutorRegistry,
-    backend: Arc<dyn BackendResourceMechanism>,
+    backend: Arc<dyn BackendInstanceRuntimeHooks>,
     sink: Arc<dyn RunEventSink>,
     clock: Arc<dyn Clock>,
     next_run_seq: Arc<AtomicU64>,
@@ -114,11 +114,11 @@ impl std::fmt::Debug for RuntimeService {
 }
 
 impl RuntimeService {
-    /// Construct a runtime service with a custom clock, resource backend,
+    /// Construct a runtime service with a custom clock, backend-instance hooks,
     /// and event sink.
     pub fn new(
         registry: NodeExecutorRegistry,
-        backend: Arc<dyn BackendResourceMechanism>,
+        backend: Arc<dyn BackendInstanceRuntimeHooks>,
         sink: Arc<dyn RunEventSink>,
         clock: Arc<dyn Clock>,
     ) -> Self {
@@ -133,12 +133,12 @@ impl RuntimeService {
         }
     }
 
-    /// Convenience constructor with the system clock and a no-op resource
-    /// backend.
+    /// Convenience constructor with the system clock and no-op backend-instance
+    /// hooks.
     pub fn with_defaults(registry: NodeExecutorRegistry, sink: Arc<dyn RunEventSink>) -> Self {
         Self::new(
             registry,
-            Arc::new(NoopResourceMechanism::default()),
+            Arc::new(NoopBackendInstanceRuntimeHooks::default()),
             sink,
             Arc::new(SystemClock),
         )
@@ -325,7 +325,7 @@ struct Runner {
     cancellation: CancellationToken,
     store: RunStore,
     registry: Arc<NodeExecutorRegistry>,
-    backend: Arc<dyn BackendResourceMechanism>,
+    backend: Arc<dyn BackendInstanceRuntimeHooks>,
     sink: Arc<dyn RunEventSink>,
     clock: Arc<dyn Clock>,
     next_event_seq: Arc<AtomicU64>,
@@ -354,7 +354,7 @@ impl Runner {
             .await;
         // Drop the runtime's run-scoped `Arc<ExecutionValue>` references.
         // Per-value release callbacks were removed from the
-        // `BackendResourceMechanism` contract; backend-owned payloads remain
+        // `BackendInstanceRuntimeHooks` contract; backend-owned payloads remain
         // alive as long as the backend itself keeps a handle or
         // workspace cache entry.
         session.values_mut().clear();

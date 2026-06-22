@@ -15,7 +15,7 @@ use reimagine_inference::{
 use crate::config::CandleBackendConfig;
 use crate::error::CandleBackendError;
 use crate::operation::*;
-use crate::resource::CandleResourceMechanism;
+use crate::resource::CandleBackendInstanceRuntimeHooks;
 use crate::store::{CandleModelCache, CandleStore};
 
 #[derive(Debug)]
@@ -79,15 +79,15 @@ impl CandleBackend {
         self.config().output_dir()
     }
 
-    pub fn resource_mechanism(
+    pub fn runtime_hooks(
         &self,
         plugin: Option<reimagine_plugin::Plugin>,
         extension: Option<reimagine_plugin::Extension>,
         device: Option<reimagine_inference::DeviceProfile>,
-    ) -> CandleResourceMechanism {
+    ) -> CandleBackendInstanceRuntimeHooks {
         let backend_instance = self.backend_instance();
         let backend_label = self.backend_kind().clone();
-        CandleResourceMechanism::new(
+        CandleBackendInstanceRuntimeHooks::new(
             backend_instance,
             backend_label,
             plugin,
