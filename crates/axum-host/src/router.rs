@@ -56,6 +56,7 @@ fn request_span(request: &axum::http::Request<axum::body::Body>) -> tracing::Spa
         path = %request.uri().path(),
         workflow_id = workflow_id.unwrap_or(""),
         run_id = run_id.unwrap_or(""),
+        correlation_id = tracing::field::Empty,
     )
 }
 

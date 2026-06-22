@@ -16,11 +16,15 @@ use crate::recorder::RunEventRecorder;
 
 /// Default development workspace path used when `--base-path` is omitted.
 ///
-/// The path lives under the system temp directory so the server can start
-/// without requiring an explicit workspace, while still being easy to
-/// discover in logs.
+/// The path lives under the system temp directory and includes a per-invocation
+/// nonce so multiple dev-server instances do not collide. The printed path in
+/// `main.rs` makes the chosen workspace easy to discover in logs.
 pub fn default_workspace_path() -> PathBuf {
-    std::env::temp_dir().join("reimagine-axum-host-workspace")
+    let nonce = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .expect("system clock before unix epoch")
+        .as_nanos();
+    std::env::temp_dir().join(format!("reimagine-axum-host-workspace-{nonce}"))
 }
 
 /// Ensure the workspace directory layout exists on disk.
