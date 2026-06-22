@@ -37,7 +37,7 @@ pub use consumer_index::{ConsumerBinding, PlanConsumerIndex};
 pub use error::RuntimeError;
 pub use events::{BoxedRunEventSink, RunEventSink, VecRunEventSink};
 pub use handle::{RunHandle, RunState};
-pub use resources::NoopResourceMechanism;
+pub use resources::NoopBackendInstanceRuntimeHooks;
 pub use run_inputs::RunInputs;
 pub use run_session::RunSession;
 pub use runner::{RuntimeOptions, RuntimeService, RuntimeServiceError};

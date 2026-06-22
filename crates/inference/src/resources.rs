@@ -1,35 +1,26 @@
-//! Backend-instance resource mechanism contract.
+//! Backend-instance runtime hook contract.
 //!
 //! This module lives in `reimagine-inference` because concrete
-//! backends implement [`BackendResourceMechanism`] and must do so
+//! backends implement [`BackendInstanceRuntimeHooks`] and must do so
 //! without depending on `reimagine-runtime`. The runtime composes a
 //! concrete implementation (e.g.
-//! `candle::CandleResourceMechanism`) at startup and calls into it
-//! during run lifecycle; the backend decides what to load, offload,
-//! evict, or move between devices.
+//! `candle::CandleBackendInstanceRuntimeHooks`) at startup and calls
+//! into it during run lifecycle. The hook surface is lifecycle and
+//! observation only, not a resource manager.
 //!
-//! The mechanism idiom is deliberately split into two traits
-//! ([`BackendRunLifecycle`] and [`BackendResourceObservation`])
-//! unified under [`BackendResourceMechanism`] so that consumers can
+//! The hook idiom is deliberately split into two traits
+//! ([`BackendRunLifecycle`] and [`BackendInstanceObservation`])
+//! unified under [`BackendInstanceRuntimeHooks`] so that consumers can
 //! depend on the narrowest contract they need.
-//!
-//! ## V1 limitation
-//!
-//! Multi-instance composition (broadcasting lifecycle calls across
-//! multiple `BackendResourceMechanism` instances and merging
-//! snapshots) is **deferred**. The runtime currently receives a
-//! single `Arc<dyn BackendResourceMechanism>` trait object. A
-//! composite wrapper belongs in an inference helper or app-host
-//! fixture, not inside runtime or concrete backend crates.
-//!
-//! TODO(inference/05-composite-resource-mechanism): add a composite
-//! multi-instance resource mechanism that delegates to every registered
-//! backend and merges per-instance snapshots.
 
 use std::collections::BTreeMap;
+use std::sync::Arc;
 
-use reimagine_core::diagnostic::Diagnostic;
-use reimagine_core::model::RunId;
+use reimagine_core::diagnostic::{
+    Diagnostic, DiagnosticCode, DiagnosticSeverity, DiagnosticSourceName, DiagnosticTarget,
+    DiagnosticTargetDomain,
+};
+use reimagine_core::model::{DiagnosticId, RunId};
 use reimagine_plugin::{Extension, Plugin};
 
 use crate::backend_selection::{Backend, BackendInstance, DeviceProfile};
@@ -75,9 +66,9 @@ pub trait BackendRunLifecycle: Send + Sync + 'static {
     ) -> Result<BackendRunLifecycleReport, InferenceError>;
 }
 
-/// Snapshot of backend resource state, returned for diagnostics.
+/// Snapshot of one backend instance, returned for diagnostics.
 #[derive(Debug, Clone)]
-pub struct BackendResourceSnapshot {
+pub struct BackendInstanceSnapshot {
     pub backend_instance: BackendInstance,
     pub backend: Backend,
     pub plugin: Option<Plugin>,
@@ -88,22 +79,168 @@ pub struct BackendResourceSnapshot {
     pub diagnostics: Vec<Diagnostic>,
 }
 
-/// Observation contract for backend resource introspection.
+/// Observation contract for backend-instance introspection.
 #[async_trait::async_trait]
-pub trait BackendResourceObservation: Send + Sync + 'static {
+pub trait BackendInstanceObservation: Send + Sync + 'static {
     /// The concrete backend instance this observation source
     /// describes.
     fn backend_instance(&self) -> &BackendInstance;
 
-    /// Produce a resource snapshot for diagnostics.
-    async fn resource_snapshot(&self) -> BackendResourceSnapshot;
+    /// Produce a backend-instance snapshot for diagnostics.
+    async fn snapshot(&self) -> BackendInstanceSnapshot;
 }
 
-/// Supertrait combining run lifecycle and resource observation.
+/// Supertrait combining run lifecycle and backend-instance observation.
 ///
 /// Anything that implements both [`BackendRunLifecycle`] and
-/// [`BackendResourceObservation`] automatically satisfies
-/// [`BackendResourceMechanism`].
-pub trait BackendResourceMechanism: BackendRunLifecycle + BackendResourceObservation {}
+/// [`BackendInstanceObservation`] automatically satisfies
+/// [`BackendInstanceRuntimeHooks`].
+pub trait BackendInstanceRuntimeHooks: BackendRunLifecycle + BackendInstanceObservation {}
 
-impl<T: BackendRunLifecycle + BackendResourceObservation> BackendResourceMechanism for T {}
+impl<T: BackendRunLifecycle + BackendInstanceObservation> BackendInstanceRuntimeHooks for T {}
+
+/// Composite hooks that let runtime consume one hook object while app-host
+/// composes many backend instances.
+pub struct CompositeBackendInstanceRuntimeHooks {
+    backend_instance: BackendInstance,
+    backend: Backend,
+    hooks: Vec<Arc<dyn BackendInstanceRuntimeHooks>>,
+}
+
+impl std::fmt::Debug for CompositeBackendInstanceRuntimeHooks {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("CompositeBackendInstanceRuntimeHooks")
+            .field("backend_instance", &self.backend_instance)
+            .field("backend", &self.backend)
+            .field("hook_count", &self.hooks.len())
+            .finish()
+    }
+}
+
+impl CompositeBackendInstanceRuntimeHooks {
+    pub fn new(hooks: Vec<Arc<dyn BackendInstanceRuntimeHooks>>) -> Self {
+        Self {
+            backend_instance: BackendInstance::new("composite"),
+            backend: Backend::new("composite"),
+            hooks,
+        }
+    }
+
+    pub fn hooks(&self) -> &[Arc<dyn BackendInstanceRuntimeHooks>] {
+        &self.hooks
+    }
+
+    pub async fn snapshots(&self) -> Vec<BackendInstanceSnapshot> {
+        let mut snapshots = Vec::with_capacity(self.hooks.len());
+        for hook in &self.hooks {
+            snapshots.push(hook.snapshot().await);
+        }
+        snapshots
+    }
+}
+
+#[async_trait::async_trait]
+impl BackendRunLifecycle for CompositeBackendInstanceRuntimeHooks {
+    fn backend_instance(&self) -> &BackendInstance {
+        &self.backend_instance
+    }
+
+    async fn begin_run(
+        &self,
+        request: BackendRunLifecycleRequest,
+    ) -> Result<BackendRunLifecycleReport, InferenceError> {
+        let mut diagnostics = Vec::new();
+        for hook in &self.hooks {
+            match hook.begin_run(request.clone()).await {
+                Ok(report) => diagnostics.extend(report.diagnostics),
+                Err(error) => diagnostics.push(hook_error_diagnostic(
+                    "begin_run",
+                    BackendRunLifecycle::backend_instance(hook.as_ref()),
+                    error,
+                )),
+            }
+        }
+        Ok(BackendRunLifecycleReport {
+            backend_instance: self.backend_instance.clone(),
+            diagnostics,
+        })
+    }
+
+    async fn cleanup_run(
+        &self,
+        request: BackendRunLifecycleRequest,
+    ) -> Result<BackendRunLifecycleReport, InferenceError> {
+        let mut diagnostics = Vec::new();
+        for hook in &self.hooks {
+            match hook.cleanup_run(request.clone()).await {
+                Ok(report) => diagnostics.extend(report.diagnostics),
+                Err(error) => diagnostics.push(hook_error_diagnostic(
+                    "cleanup_run",
+                    BackendRunLifecycle::backend_instance(hook.as_ref()),
+                    error,
+                )),
+            }
+        }
+        Ok(BackendRunLifecycleReport {
+            backend_instance: self.backend_instance.clone(),
+            diagnostics,
+        })
+    }
+}
+
+#[async_trait::async_trait]
+impl BackendInstanceObservation for CompositeBackendInstanceRuntimeHooks {
+    fn backend_instance(&self) -> &BackendInstance {
+        &self.backend_instance
+    }
+
+    async fn snapshot(&self) -> BackendInstanceSnapshot {
+        let snapshots = self.snapshots().await;
+        let mut observations = BTreeMap::new();
+        observations.insert("backend_instances".to_owned(), snapshots.len().to_string());
+        let diagnostics = snapshots
+            .into_iter()
+            .flat_map(|snapshot| snapshot.diagnostics)
+            .collect();
+        BackendInstanceSnapshot {
+            backend_instance: self.backend_instance.clone(),
+            backend: self.backend.clone(),
+            plugin: None,
+            extension: None,
+            device: None,
+            observations,
+            diagnostics,
+        }
+    }
+}
+
+fn hook_error_diagnostic(
+    operation: &str,
+    backend_instance: &BackendInstance,
+    error: InferenceError,
+) -> Diagnostic {
+    Diagnostic::new(
+        DiagnosticId::new(format!(
+            "inference:backend_instance_hooks:{operation}:{backend_instance}"
+        )),
+        DiagnosticCode::new("INFERENCE/BACKEND_INSTANCE_HOOK_FAILED"),
+        DiagnosticSeverity::Warning,
+        DiagnosticSourceName::new("inference"),
+        format!("backend instance `{backend_instance}` {operation} hook failed: {error}"),
+        DiagnosticTarget::new(DiagnosticTargetDomain::new("inference.backend_instance"))
+            .with_id(backend_instance.to_string()),
+    )
+}
+
+/// Historical alias. New code should use [`BackendInstanceSnapshot`].
+pub type BackendResourceSnapshot = BackendInstanceSnapshot;
+
+/// Historical alias. New code should use [`BackendInstanceObservation`].
+pub trait BackendResourceObservation: BackendInstanceObservation {}
+
+impl<T: BackendInstanceObservation> BackendResourceObservation for T {}
+
+/// Historical alias. New code should use [`BackendInstanceRuntimeHooks`].
+pub trait BackendResourceMechanism: BackendInstanceRuntimeHooks {}
+
+impl<T: BackendInstanceRuntimeHooks> BackendResourceMechanism for T {}

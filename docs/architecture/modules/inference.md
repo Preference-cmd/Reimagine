@@ -148,12 +148,12 @@ open `Backend` label for the backend implementation and concrete
 provenance (`Plugin` / `Extension`) for diagnostics and registry
 introspection.
 
-## Backend Resource Mechanisms
+## Backend Instance Runtime Hooks
 
-`inference` also owns the backend-neutral resource mechanism contracts used by
+`inference` also owns the backend-neutral runtime hook contracts used by
 runtime and app-host. These contracts are attached to configured backend
 instances; they are not a second plugin surface and they are not a concrete
-memory manager.
+resource or memory manager.
 
 Plugin alignment:
 
@@ -163,7 +163,7 @@ PluginPackage
   -> app-host constructs one or more BackendInstance values
   -> app-host registers:
        InferenceBackend adapter for typed capabilities
-       BackendResourceMechanism adapter for lifecycle/observation
+       BackendInstanceRuntimeHooks adapter for lifecycle/observation
 ```
 
 The plugin metadata tells the host which package and extension contributed the
@@ -171,25 +171,26 @@ backend. The `BackendInstance` is the runtime selection and observation unit.
 A single plugin extension can later produce multiple instances such as
 `"candle:cpu"` and `"candle:metal"`, each with its own resource observations.
 
-V1 should keep the mechanism surface coarse:
+V1 should keep the hook surface coarse:
 
 ```text
 BackendRunLifecycle
   begin_run(run_id)
   cleanup_run(run_id)
 
-BackendResourceObservation
-  resource_snapshot() -> BackendResourceSnapshot
+BackendInstanceObservation
+  snapshot() -> BackendInstanceSnapshot
 
-BackendResourceMechanism
-  BackendRunLifecycle + BackendResourceObservation
+BackendInstanceRuntimeHooks
+  BackendRunLifecycle + BackendInstanceObservation
 ```
 
-The existing `RunResourceBackend` name should be treated as historical. The
-replacement name should communicate that this is a backend-instance mechanism,
-not a runtime-owned backend manager.
+The existing `RunResourceBackend` and `BackendResourceMechanism` names should
+be treated as historical. The replacement name should communicate that this is
+a backend-instance lifecycle/observation hook surface, not a runtime-owned
+backend manager and not a general resource manager.
 
-Resource snapshots are host-neutral observations. They may include backend
+Backend-instance snapshots are host-neutral observations. They may include backend
 instance identity, open backend label, optional plugin provenance, device
 profile, cache counts, approximate bytes, and diagnostics. They must not expose
 backend-private tensors, loaded model structs, tokenizer state, graph objects,

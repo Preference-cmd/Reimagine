@@ -231,7 +231,7 @@ concrete inference executors.
 
 Candle may be the V1 default, but the default is still a config value, not a
 runtime or executor constant. Runtime receives only the populated executor
-registry and optional resource backend; it does not know which concrete backend
+registry and optional backend-instance runtime hooks; it does not know which concrete backend
 was selected.
 
 V1 may configure only one backend by default, but the app-host composition shape

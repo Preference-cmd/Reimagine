@@ -300,6 +300,11 @@ inference runtime/router assembled by app-host. Runtime executes the registry
 it was given, passes opaque execution handles into `NodeExecutionContext`, and
 does not perform implicit cross-backend tensor conversion.
 
+The runtime scheduler also does not inspect plugin or backend identity
+metadata. `Plugin`, `Extension`, `Backend`, and `BackendInstance` affect a run
+through app-host composition, inference executor registration, and
+`InferenceRuntime` routing. They are not scheduler partition keys in V1.
+
 Runtime may own high-level policy inputs such as run priority, cancellation,
 budget hints, target selection, and scheduling pressure. Those inputs may be
 projected by app-host into inference router configuration, but runtime still
@@ -544,14 +549,14 @@ app-host
   -> static PluginExtension { extends: HostSurface::InferenceBackend }
   -> constructs BackendInstanceDescriptor { plugin, extension, backend, instance }
   -> registers typed InferenceBackend adapter
-  -> registers resource mechanism adapter for the same BackendInstance
+  -> registers backend-instance runtime hooks for the same BackendInstance
 
 runtime
-  -> calls coarse lifecycle/observation trait object supplied by app-host
+  -> calls coarse backend-instance lifecycle/observation hooks supplied by app-host
   -> never loads, unloads, moves, pins, or frees a concrete payload
 ```
 
-There is no separate `HostSurface::ResourceBackend` in V1. Resource mechanisms
+There is no separate `HostSurface::ResourceBackend` in V1. Runtime hooks
 are part of an inference backend instance's host wiring. This keeps plugin
 identity, backend selection, and resource observation aligned around the same
 `BackendInstance` unit.
@@ -653,10 +658,11 @@ runtime/05a progressive artifact output
 
 runtime/05b scheduler concurrency foundation
   same-stage independent node invocations may run concurrently while preserving
-  deterministic event/snapshot semantics and fail-fast cancellation
+  deterministic event/snapshot semantics and fail-fast cancellation; scheduler
+  must remain plugin/backend-instance agnostic
 
 runtime/05c resource observation integration
-  runtime/app-host can collect backend-instance resource snapshots for
+  runtime/app-host can collect backend-instance snapshots for
   diagnostics and future policy without direct backend memory commands
 ```
 
