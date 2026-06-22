@@ -1,5 +1,6 @@
 //! `latent.create_empty` and `latent.decode` request DTOs.
 
+use crate::BackendSelectionOverlay;
 use crate::RuntimeLatent;
 use crate::RuntimeVaeHandle;
 use reimagine_core::diagnostic::CorrelationId;
@@ -16,6 +17,7 @@ pub struct CreateEmptyLatentRequest {
     workflow_version: WorkflowVersion,
     correlation_id: Option<CorrelationId>,
     node_id: NodeId,
+    backend_selection: BackendSelectionOverlay,
 }
 
 impl CreateEmptyLatentRequest {
@@ -37,6 +39,7 @@ impl CreateEmptyLatentRequest {
             workflow_version,
             correlation_id: None,
             node_id,
+            backend_selection: BackendSelectionOverlay::new(),
         }
     }
 
@@ -82,7 +85,7 @@ impl CreateEmptyLatentRequest {
     pub fn into_latent(self) -> RuntimeLatent {
         RuntimeLatent::new(
             crate::BackendTensorHandle::new(
-                crate::BackendKind::from("request"),
+                crate::Backend::from("request"),
                 crate::BackendPayloadKey::new(format!(
                     "latent:{}:{}",
                     self.run_id.as_str(),
@@ -104,8 +107,19 @@ impl CreateEmptyLatentRequest {
         )
     }
 
-    pub fn backend_affinities(&self) -> Vec<crate::BackendKind> {
+    pub fn backend_affinities(&self) -> Vec<crate::BackendInstance> {
         Vec::new()
+    }
+
+    /// Per-request selection overlay supplied by the runtime.
+    pub fn backend_selection_overlay(&self) -> &BackendSelectionOverlay {
+        &self.backend_selection
+    }
+
+    /// Replace the request's selection overlay (for tests or
+    /// runtime-pre-dispatch mutation).
+    pub fn set_backend_selection_overlay(&mut self, overlay: BackendSelectionOverlay) {
+        self.backend_selection = overlay;
     }
 }
 
@@ -119,6 +133,7 @@ pub struct LatentDecodeRequest {
     workflow_version: WorkflowVersion,
     correlation_id: Option<CorrelationId>,
     node_id: NodeId,
+    backend_selection: BackendSelectionOverlay,
 }
 
 impl LatentDecodeRequest {
@@ -138,6 +153,7 @@ impl LatentDecodeRequest {
             workflow_version,
             correlation_id: None,
             node_id,
+            backend_selection: BackendSelectionOverlay::new(),
         }
     }
 
@@ -174,15 +190,26 @@ impl LatentDecodeRequest {
         &self.node_id
     }
 
-    pub fn backend_affinities(&self) -> Vec<crate::BackendKind> {
+    pub fn backend_affinities(&self) -> Vec<crate::BackendInstance> {
         let mut kinds = Vec::new();
-        push_unique(&mut kinds, self.vae.backend());
-        push_unique(&mut kinds, self.latent.payload().backend());
+        push_unique(&mut kinds, self.vae.backend_instance());
+        push_unique(&mut kinds, self.latent.payload().backend_instance());
         kinds
+    }
+
+    /// Per-request selection overlay supplied by the runtime.
+    pub fn backend_selection_overlay(&self) -> &BackendSelectionOverlay {
+        &self.backend_selection
+    }
+
+    /// Replace the request's selection overlay (for tests or
+    /// runtime-pre-dispatch mutation).
+    pub fn set_backend_selection_overlay(&mut self, overlay: BackendSelectionOverlay) {
+        self.backend_selection = overlay;
     }
 }
 
-fn push_unique(kinds: &mut Vec<crate::BackendKind>, kind: &crate::BackendKind) {
+fn push_unique(kinds: &mut Vec<crate::BackendInstance>, kind: &crate::BackendInstance) {
     if !kinds.iter().any(|existing| existing == kind) {
         kinds.push(kind.clone());
     }

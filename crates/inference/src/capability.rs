@@ -10,7 +10,7 @@
 //! describe which capabilities a backend advertises and which model
 //! series / variant / role constraints each capability carries.
 
-use crate::BackendKind;
+use crate::Backend;
 use reimagine_core::model::{ModelRole, ModelSeries, ModelVariant};
 
 // ── InferenceCapability ────────────────────────────────────────────
@@ -82,12 +82,12 @@ impl std::fmt::Display for InferenceCapability {
 /// families / variants / roles those capabilities apply to.
 #[derive(Debug, Clone)]
 pub struct InferenceBackendCapabilities {
-    backend_kind: BackendKind,
+    backend_kind: Backend,
     capabilities: Vec<InferenceCapabilitySupport>,
 }
 
 impl InferenceBackendCapabilities {
-    pub fn new(backend_kind: BackendKind) -> Self {
+    pub fn new(backend_kind: Backend) -> Self {
         Self {
             backend_kind,
             capabilities: Vec::new(),
@@ -99,7 +99,7 @@ impl InferenceBackendCapabilities {
         self
     }
 
-    pub fn backend_kind(&self) -> &BackendKind {
+    pub fn backend_kind(&self) -> &Backend {
         &self.backend_kind
     }
 
@@ -210,7 +210,7 @@ mod tests {
 
     #[test]
     fn capabilities_advertise_support() {
-        let caps = InferenceBackendCapabilities::new(BackendKind::new("candle"))
+        let caps = InferenceBackendCapabilities::new(Backend::new("candle"))
             .with_support(InferenceCapabilitySupport::new(
                 InferenceCapability::DiffusionSample,
             ))

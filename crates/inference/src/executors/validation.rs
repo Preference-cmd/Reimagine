@@ -42,7 +42,7 @@ pub fn image_output(response: &LatentDecodeResponse) -> ExecutionOutput {
 #[cfg(test)]
 mod tests {
     use crate::{
-        BackendKind, CreateEmptyLatentResponse, DiffusionSampleResponse, ExecutionValueRetention,
+        Backend, CreateEmptyLatentResponse, DiffusionSampleResponse, ExecutionValueRetention,
         LoadBundleResponse, RuntimeClipHandle, RuntimeLatent, RuntimeModelHandle, RuntimeVaeHandle,
     };
     use reimagine_core::model::{ModelId, ModelRole, SlotId};
@@ -52,7 +52,7 @@ mod tests {
     fn latent() -> RuntimeLatent {
         crate::RuntimeLatent::new(
             crate::BackendTensorHandle::new(
-                BackendKind::new("fake"),
+                Backend::new("fake"),
                 crate::BackendPayloadKey::new("latent-1"),
                 reimagine_core::model::TensorDType::F32,
                 reimagine_core::model::TensorShape::new(vec![1, 4, 8, 8]),
@@ -71,19 +71,15 @@ mod tests {
             RuntimeModelHandle::new(
                 ModelId::new("sdxl-base-1.0"),
                 ModelRole::DiffusionModel,
-                BackendKind::new("fake"),
+                Backend::new("fake"),
                 "model-1",
             ),
             RuntimeClipHandle::new(
                 ModelId::new("sdxl-base-1.0"),
-                BackendKind::new("fake"),
+                Backend::new("fake"),
                 "clip-1",
             ),
-            RuntimeVaeHandle::new(
-                ModelId::new("sdxl-base-1.0"),
-                BackendKind::new("fake"),
-                "vae-1",
-            ),
+            RuntimeVaeHandle::new(ModelId::new("sdxl-base-1.0"), Backend::new("fake"), "vae-1"),
         );
 
         let outputs = load_bundle_outputs(&response);

@@ -1,5 +1,6 @@
 //! `diffusion.sample` request DTO.
 
+use crate::BackendSelectionOverlay;
 use crate::ExecutionConditioning;
 use crate::RuntimeLatent;
 use crate::RuntimeModelHandle;
@@ -68,6 +69,7 @@ pub struct DiffusionSampleRequest {
     workflow_version: WorkflowVersion,
     correlation_id: Option<CorrelationId>,
     node_id: NodeId,
+    backend_selection: BackendSelectionOverlay,
 }
 
 impl DiffusionSampleRequest {
@@ -104,6 +106,7 @@ impl DiffusionSampleRequest {
             workflow_version,
             correlation_id: None,
             node_id,
+            backend_selection: BackendSelectionOverlay::new(),
         }
     }
 
@@ -174,23 +177,40 @@ impl DiffusionSampleRequest {
 
     /// Backend affinity derived from the model, conditioning, and
     /// latent handles.
-    pub fn backend_affinities(&self) -> Vec<crate::BackendKind> {
+    pub fn backend_affinities(&self) -> Vec<crate::BackendInstance> {
         let mut kinds = Vec::new();
-        push_unique(&mut kinds, self.model.backend());
-        push_unique(&mut kinds, self.positive.text_embedding().backend());
+        push_unique(&mut kinds, self.model.backend_instance());
+        push_unique(
+            &mut kinds,
+            self.positive.text_embedding().backend_instance(),
+        );
         if let Some(pooled) = self.positive.pooled_embedding() {
-            push_unique(&mut kinds, pooled.backend());
+            push_unique(&mut kinds, pooled.backend_instance());
         }
-        push_unique(&mut kinds, self.negative.text_embedding().backend());
+        push_unique(
+            &mut kinds,
+            self.negative.text_embedding().backend_instance(),
+        );
         if let Some(pooled) = self.negative.pooled_embedding() {
-            push_unique(&mut kinds, pooled.backend());
+            push_unique(&mut kinds, pooled.backend_instance());
         }
-        push_unique(&mut kinds, self.latent.payload().backend());
+        push_unique(&mut kinds, self.latent.payload().backend_instance());
         kinds
+    }
+
+    /// Per-request selection overlay supplied by the runtime.
+    pub fn backend_selection_overlay(&self) -> &BackendSelectionOverlay {
+        &self.backend_selection
+    }
+
+    /// Replace the request's selection overlay (for tests or
+    /// runtime-pre-dispatch mutation).
+    pub fn set_backend_selection_overlay(&mut self, overlay: BackendSelectionOverlay) {
+        self.backend_selection = overlay;
     }
 }
 
-fn push_unique(kinds: &mut Vec<crate::BackendKind>, kind: &crate::BackendKind) {
+fn push_unique(kinds: &mut Vec<crate::BackendInstance>, kind: &crate::BackendInstance) {
     if !kinds.iter().any(|existing| existing == kind) {
         kinds.push(kind.clone());
     }

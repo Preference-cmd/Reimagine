@@ -15,9 +15,8 @@ use reimagine_core::model::{
 use reimagine_core::model::{TensorDType, TensorShape};
 use reimagine_inference::operation::InferenceCapability;
 use reimagine_inference::{
-    BackendKind, BackendPayloadKey, BackendTensorHandle, ConditioningMetadata,
-    ExecutionConditioning, ExecutionValue, RuntimeClipHandle, RuntimeImage, RuntimeModelHandle,
-    RuntimeVaeHandle,
+    Backend, BackendPayloadKey, BackendTensorHandle, ConditioningMetadata, ExecutionConditioning,
+    ExecutionValue, RuntimeClipHandle, RuntimeImage, RuntimeModelHandle, RuntimeVaeHandle,
 };
 use reimagine_inference::{
     CannedCapabilityResponse, CreateEmptyLatentRequest, CreateEmptyLatentResponse, FakeBackend,
@@ -71,9 +70,14 @@ fn model_ref() -> ModelRef {
     )
 }
 
-fn fake_tensor_handle(backend: &BackendKind, key: &str, dims: Vec<usize>) -> BackendTensorHandle {
-    BackendTensorHandle::new(
+fn fake_backend_instance() -> reimagine_inference::BackendInstance {
+    reimagine_inference::BackendInstance::new("fake:main")
+}
+
+fn fake_tensor_handle(backend: &Backend, key: &str, dims: Vec<usize>) -> BackendTensorHandle {
+    BackendTensorHandle::with_instance(
         backend.clone(),
+        fake_backend_instance(),
         BackendPayloadKey::new(key),
         TensorDType::F32,
         TensorShape::new(dims),
@@ -81,7 +85,7 @@ fn fake_tensor_handle(backend: &BackendKind, key: &str, dims: Vec<usize>) -> Bac
     )
 }
 
-fn fake_image_value(backend: BackendKind, key: &str, width: u32, height: u32) -> RuntimeImage {
+fn fake_image_value(backend: Backend, key: &str, width: u32, height: u32) -> RuntimeImage {
     RuntimeImage::new(
         fake_tensor_handle(&backend, key, vec![1, 3, height as usize, width as usize]),
         width,
@@ -92,23 +96,40 @@ fn fake_image_value(backend: BackendKind, key: &str, width: u32, height: u32) ->
 }
 
 fn make_load_bundle_response() -> LoadBundleResponse {
-    let backend = BackendKind::new("fake");
+    let backend = Backend::new("fake");
+    let instance = fake_backend_instance();
     let model_id = ModelId::new("sdxl-base-1.0");
     LoadBundleResponse::new(
-        RuntimeModelHandle::new(
+        RuntimeModelHandle::with_instance(
             model_id.clone(),
             ModelRole::DiffusionModel,
             backend.clone(),
+            instance.clone(),
             "model-handle",
         ),
-        RuntimeClipHandle::new(model_id, backend.clone(), "clip-handle"),
-        RuntimeVaeHandle::new(ModelId::new("sdxl-base-1.0"), backend, "vae-handle"),
+        RuntimeClipHandle::with_instance(
+            model_id,
+            backend.clone(),
+            instance.clone(),
+            "clip-handle",
+        ),
+        RuntimeVaeHandle::with_instance(
+            ModelId::new("sdxl-base-1.0"),
+            backend,
+            instance,
+            "vae-handle",
+        ),
     )
 }
 
 fn runtime_for_backend(backend: Arc<dyn InferenceBackend>) -> Arc<dyn InferenceRuntime> {
     let mut registry = InferenceBackendRegistry::new();
-    registry.register(backend);
+    let backend_label = backend.backend_kind().clone();
+    let descriptor = reimagine_inference::BackendInstanceDescriptor::new(
+        reimagine_inference::BackendInstance::new("fake:main"),
+        backend_label,
+    );
+    registry.register(descriptor, backend);
     Arc::new(reimagine_inference::DefaultInferenceRuntime::new(
         Arc::new(registry),
         Arc::new(RejectAllBridgePolicy),
@@ -210,20 +231,23 @@ async fn checkpoint_loader_requires_all_three_outputs() {
     // mapping, so missing outputs become missing runtime outputs.
     // We assert the executor does NOT panic or invent missing values.
     let partial = LoadBundleResponse::new(
-        RuntimeModelHandle::new(
+        RuntimeModelHandle::with_instance(
             ModelId::new("sdxl-base-1.0"),
             ModelRole::DiffusionModel,
-            BackendKind::new("fake"),
+            Backend::new("fake"),
+            fake_backend_instance(),
             "model-handle",
         ),
-        RuntimeClipHandle::new(
+        RuntimeClipHandle::with_instance(
             ModelId::new("sdxl-base-1.0"),
-            BackendKind::new("fake"),
+            Backend::new("fake"),
+            fake_backend_instance(),
             "clip-handle",
         ),
-        RuntimeVaeHandle::new(
+        RuntimeVaeHandle::with_instance(
             ModelId::new("sdxl-base-1.0"),
-            BackendKind::new("fake"),
+            Backend::new("fake"),
+            fake_backend_instance(),
             "vae-handle",
         ),
     );
@@ -368,7 +392,7 @@ async fn save_image_records_backend_returned_artifact_reference() {
         ))
         .expect("executor registered");
 
-    let image = fake_image_value(BackendKind::new("fake"), "image:payload", 64, 64);
+    let image = fake_image_value(Backend::new("fake"), "image:payload", 64, 64);
     let mut inputs = NodeInputs::new();
     inputs.insert(SlotId::new("image"), Arc::new(ExecutionValue::Image(image)));
 
@@ -444,8 +468,9 @@ async fn text_encode_executor_calls_typed_text_encode() {
         *guard = Some(req.clone());
         let (clip, _text) = req.into_parts();
         Ok::<_, InferenceError>(TextEncodeResponse::new(ExecutionConditioning::new(
-            BackendTensorHandle::new(
+            BackendTensorHandle::with_instance(
                 clip.backend().clone(),
+                clip.backend_instance().clone(),
                 BackendPayloadKey::new("captured-text"),
                 reimagine_core::model::TensorDType::F32,
                 reimagine_core::model::TensorShape::new(vec![1, 77, 2048]),
@@ -471,9 +496,10 @@ async fn text_encode_executor_calls_typed_text_encode() {
         ))
         .expect("executor registered");
 
-    let clip_handle = RuntimeClipHandle::new(
+    let clip_handle = RuntimeClipHandle::with_instance(
         ModelId::new("clip-model"),
-        BackendKind::new("fake"),
+        Backend::new("fake"),
+        fake_backend_instance(),
         "clip-payload",
     );
     let mut inputs = NodeInputs::new();
@@ -564,8 +590,9 @@ async fn fake_backend_capabilities_advertise_registered_capabilities() {
             |req: TextEncodeRequest| -> Result<TextEncodeResponse, InferenceError> {
                 let (clip, _text) = req.into_parts();
                 Ok(TextEncodeResponse::new(ExecutionConditioning::new(
-                    BackendTensorHandle::new(
+                    BackendTensorHandle::with_instance(
                         clip.backend().clone(),
+                        clip.backend_instance().clone(),
                         BackendPayloadKey::new("text-encoded"),
                         reimagine_core::model::TensorDType::F32,
                         reimagine_core::model::TensorShape::new(vec![1, 77, 2048]),

@@ -97,8 +97,9 @@ pub fn execute_diffusion_sample(
     let latent_channels = latent_handle.channels();
 
     let latent = RuntimeLatent::new(
-        BackendTensorHandle::new(
+        BackendTensorHandle::with_instance(
             backend.backend_kind().clone(),
+            backend.backend_instance(),
             payload_key,
             TensorDType::F32,
             TensorShape::new(output_dims),

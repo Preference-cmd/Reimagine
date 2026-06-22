@@ -8,12 +8,14 @@
 
 use reimagine_core::model::{ModelId, ModelRole, TensorDType, TensorShape};
 
-use super::backend::{BackendKind, BackendPayloadKey};
-use super::tensor::BackendTensorMetadata;
+use crate::execution_value::backend::BackendPayloadKey;
+use crate::execution_value::tensor::BackendTensorMetadata;
+use crate::{Backend, BackendInstance};
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash, serde::Serialize, serde::Deserialize)]
 pub struct BackendTensorHandle {
-    backend: BackendKind,
+    backend: Backend,
+    backend_instance: BackendInstance,
     payload_key: BackendPayloadKey,
     dtype: TensorDType,
     shape: TensorShape,
@@ -22,23 +24,47 @@ pub struct BackendTensorHandle {
 
 impl BackendTensorHandle {
     pub fn new(
-        backend: BackendKind,
+        backend: Backend,
         payload_key: BackendPayloadKey,
+        dtype: TensorDType,
+        shape: TensorShape,
+        device_label: impl Into<String>,
+    ) -> Self {
+        let backend_instance = BackendInstance::new(backend.as_str());
+        Self::with_instance(
+            backend,
+            backend_instance,
+            payload_key,
+            dtype,
+            shape,
+            device_label,
+        )
+    }
+
+    pub fn with_instance(
+        backend: Backend,
+        backend_instance: BackendInstance,
+        payload_key: impl Into<BackendPayloadKey>,
         dtype: TensorDType,
         shape: TensorShape,
         device_label: impl Into<String>,
     ) -> Self {
         Self {
             backend,
-            payload_key,
+            backend_instance,
+            payload_key: payload_key.into(),
             dtype,
             shape,
             device_label: device_label.into(),
         }
     }
 
-    pub fn backend(&self) -> &BackendKind {
+    pub fn backend(&self) -> &Backend {
         &self.backend
+    }
+
+    pub fn backend_instance(&self) -> &BackendInstance {
+        &self.backend_instance
     }
 
     pub fn payload_key(&self) -> &BackendPayloadKey {
@@ -67,7 +93,8 @@ impl BackendTensorHandle {
 pub struct RuntimeModelHandle {
     model_id: ModelId,
     role: ModelRole,
-    backend: BackendKind,
+    backend: Backend,
+    backend_instance: BackendInstance,
     payload_key: BackendPayloadKey,
     device_label: Option<String>,
 }
@@ -76,13 +103,25 @@ impl RuntimeModelHandle {
     pub fn new(
         model_id: ModelId,
         role: ModelRole,
-        backend: BackendKind,
+        backend: Backend,
+        payload_key: impl Into<BackendPayloadKey>,
+    ) -> Self {
+        let backend_instance = BackendInstance::new(backend.as_str());
+        Self::with_instance(model_id, role, backend, backend_instance, payload_key)
+    }
+
+    pub fn with_instance(
+        model_id: ModelId,
+        role: ModelRole,
+        backend: Backend,
+        backend_instance: BackendInstance,
         payload_key: impl Into<BackendPayloadKey>,
     ) -> Self {
         Self {
             model_id,
             role,
             backend,
+            backend_instance,
             payload_key: payload_key.into(),
             device_label: None,
         }
@@ -101,8 +140,12 @@ impl RuntimeModelHandle {
         self.role
     }
 
-    pub fn backend(&self) -> &BackendKind {
+    pub fn backend(&self) -> &Backend {
         &self.backend
+    }
+
+    pub fn backend_instance(&self) -> &BackendInstance {
+        &self.backend_instance
     }
 
     pub fn payload_key(&self) -> &BackendPayloadKey {
@@ -120,13 +163,28 @@ pub struct RuntimeClipHandle(RuntimeModelHandle);
 impl RuntimeClipHandle {
     pub fn new(
         model_id: ModelId,
-        backend: BackendKind,
+        backend: Backend,
         payload_key: impl Into<BackendPayloadKey>,
     ) -> Self {
         Self(RuntimeModelHandle::new(
             model_id,
             ModelRole::TextEncoder,
             backend,
+            payload_key,
+        ))
+    }
+
+    pub fn with_instance(
+        model_id: ModelId,
+        backend: Backend,
+        backend_instance: BackendInstance,
+        payload_key: impl Into<BackendPayloadKey>,
+    ) -> Self {
+        Self(RuntimeModelHandle::with_instance(
+            model_id,
+            ModelRole::TextEncoder,
+            backend,
+            backend_instance,
             payload_key,
         ))
     }
@@ -140,8 +198,12 @@ impl RuntimeClipHandle {
         self.0.model_id()
     }
 
-    pub fn backend(&self) -> &BackendKind {
+    pub fn backend(&self) -> &Backend {
         self.0.backend()
+    }
+
+    pub fn backend_instance(&self) -> &BackendInstance {
+        self.0.backend_instance()
     }
 
     pub fn payload_key(&self) -> &BackendPayloadKey {
@@ -159,13 +221,28 @@ pub struct RuntimeVaeHandle(RuntimeModelHandle);
 impl RuntimeVaeHandle {
     pub fn new(
         model_id: ModelId,
-        backend: BackendKind,
+        backend: Backend,
         payload_key: impl Into<BackendPayloadKey>,
     ) -> Self {
         Self(RuntimeModelHandle::new(
             model_id,
             ModelRole::Vae,
             backend,
+            payload_key,
+        ))
+    }
+
+    pub fn with_instance(
+        model_id: ModelId,
+        backend: Backend,
+        backend_instance: BackendInstance,
+        payload_key: impl Into<BackendPayloadKey>,
+    ) -> Self {
+        Self(RuntimeModelHandle::with_instance(
+            model_id,
+            ModelRole::Vae,
+            backend,
+            backend_instance,
             payload_key,
         ))
     }
@@ -179,8 +256,12 @@ impl RuntimeVaeHandle {
         self.0.model_id()
     }
 
-    pub fn backend(&self) -> &BackendKind {
+    pub fn backend(&self) -> &Backend {
         self.0.backend()
+    }
+
+    pub fn backend_instance(&self) -> &BackendInstance {
+        self.0.backend_instance()
     }
 
     pub fn payload_key(&self) -> &BackendPayloadKey {

@@ -1,20 +1,44 @@
-//! Inference backend registry keyed by core-owned `BackendKind`.
+//! Inference backend registry keyed by [`BackendInstance`].
+//!
+//! The registry stores configured backend instances in registration
+//! order. The router's selection policy and affinity checks rely on
+//! the deterministic order. Instances are addressable by their
+//! `BackendInstance` identity and expose a [`BackendInstanceDescriptor`]
+//! for diagnostics and selection.
 
-use std::collections::HashMap;
 use std::sync::Arc;
 
-use crate::BackendKind;
 use crate::backend::InferenceBackend;
+use crate::backend_selection::{Backend, BackendInstance, BackendInstanceDescriptor};
 use crate::capability::InferenceBackendCapabilities;
 
-/// Registry that holds concrete backends and dispatches by `kind`.
+/// One registered backend instance.
+struct BackendRegistryEntry {
+    instance: BackendInstance,
+    backend: Arc<dyn InferenceBackend>,
+    descriptor: BackendInstanceDescriptor,
+}
+
+impl std::fmt::Debug for BackendRegistryEntry {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("BackendRegistryEntry")
+            .field("instance", &self.instance)
+            .field("backend", &"<dyn InferenceBackend>")
+            .field("descriptor", &self.descriptor)
+            .finish()
+    }
+}
+
+/// Registry that holds concrete backend instances in registration
+/// order.
 ///
-/// `kind` is the stable backend identifier (e.g. `"candle"`,
-/// `"remote"`). V1 keeps the registry in app-host and exposes it to
-/// the executor-facing router through `DefaultInferenceRuntime`.
+/// V1 keeps the registry in app-host and exposes it to the
+/// executor-facing router through `DefaultInferenceRuntime`. App-host
+/// chooses the order, the open backend label, and the descriptor
+/// metadata; the registry stores the result verbatim.
 #[derive(Default)]
 pub struct InferenceBackendRegistry {
-    backends: HashMap<BackendKind, Arc<dyn InferenceBackend>>,
+    entries: Vec<BackendRegistryEntry>,
 }
 
 impl InferenceBackendRegistry {
@@ -22,59 +46,108 @@ impl InferenceBackendRegistry {
         Self::default()
     }
 
-    /// Register a backend. The backend's `backend_kind()` becomes its
-    /// registry key. Re-registering under the same key replaces the
-    /// previous entry.
-    pub fn register(&mut self, backend: Arc<dyn InferenceBackend>) {
-        let kind = backend.backend_kind().clone();
-        self.backends.insert(kind, backend);
+    /// Register a backend instance.
+    ///
+    /// `descriptor` carries the open [`Backend`] label, optional
+    /// device metadata, and optional plugin provenance. The instance
+    /// identity is taken from the descriptor; `backend` is the
+    /// concrete `InferenceBackend` implementation.
+    pub fn register(
+        &mut self,
+        descriptor: BackendInstanceDescriptor,
+        backend: Arc<dyn InferenceBackend>,
+    ) {
+        let instance = descriptor.instance.clone();
+        self.entries.push(BackendRegistryEntry {
+            instance,
+            backend,
+            descriptor,
+        });
     }
 
-    /// Look up a backend by `kind`.
-    pub fn get(&self, kind: &BackendKind) -> Option<Arc<dyn InferenceBackend>> {
-        self.backends.get(kind).cloned()
+    /// Look up a registered instance by its [`BackendInstance`]
+    /// identity.
+    pub fn get(&self, instance: &BackendInstance) -> Option<RegisteredInstance> {
+        self.entries
+            .iter()
+            .find(|e| &e.instance == instance)
+            .map(|e| RegisteredInstance {
+                backend: Arc::clone(&e.backend),
+                descriptor: e.descriptor.clone(),
+            })
     }
 
-    /// An arbitrary registered backend. V1 single-backend workspaces
-    /// rely on this; deterministic per-request backend selection is
-    /// follow-up work.
-    pub fn first(&self) -> Option<Arc<dyn InferenceBackend>> {
-        self.backends.values().next().cloned()
+    /// First registered instance. The router does not call this; it
+    /// exists for diagnostic and test convenience.
+    pub fn first(&self) -> Option<RegisteredInstance> {
+        self.entries.first().map(|e| RegisteredInstance {
+            backend: Arc::clone(&e.backend),
+            descriptor: e.descriptor.clone(),
+        })
     }
 
-    /// Number of registered backends.
+    /// Number of registered instances.
     pub fn len(&self) -> usize {
-        self.backends.len()
+        self.entries.len()
     }
 
     /// Returns `true` when no backend is registered.
     pub fn is_empty(&self) -> bool {
-        self.backends.is_empty()
+        self.entries.is_empty()
     }
 
-    /// All registered backend kinds in the registry's current hash-map
-    /// iteration order. Deterministic candidate ordering belongs to
-    /// the router selection policy follow-up.
-    pub fn kinds(&self) -> Vec<BackendKind> {
-        self.backends.keys().cloned().collect()
+    /// Registered instance identities in registration order.
+    pub fn instances(&self) -> Vec<BackendInstance> {
+        self.entries.iter().map(|e| e.instance.clone()).collect()
+    }
+
+    /// Registered instance descriptors in registration order.
+    pub fn descriptors(&self) -> Vec<BackendInstanceDescriptor> {
+        self.entries.iter().map(|e| e.descriptor.clone()).collect()
+    }
+
+    /// Registered instance descriptors, filtered to those whose
+    /// open [`Backend`] label matches `backend`.
+    pub fn descriptors_for_backend(&self, backend: &Backend) -> Vec<BackendInstanceDescriptor> {
+        self.entries
+            .iter()
+            .filter(|e| &e.descriptor.backend == backend)
+            .map(|e| e.descriptor.clone())
+            .collect()
     }
 
     /// Merge every registered backend's capability report into a
     /// single combined report.
     pub fn merged_capabilities(&self) -> MergedInferenceBackendCapabilities {
         let mut merged = MergedInferenceBackendCapabilities::default();
-        for backend in self.backends.values() {
-            merged.add(backend.capabilities());
+        for entry in &self.entries {
+            merged.add(entry.backend.capabilities());
         }
         merged
+    }
+}
+
+/// A registered instance plus its descriptor.
+#[derive(Clone)]
+pub struct RegisteredInstance {
+    pub backend: Arc<dyn InferenceBackend>,
+    pub descriptor: BackendInstanceDescriptor,
+}
+
+impl std::fmt::Debug for RegisteredInstance {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("RegisteredInstance")
+            .field("backend", &"<dyn InferenceBackend>")
+            .field("descriptor", &self.descriptor)
+            .finish()
     }
 }
 
 impl std::fmt::Debug for InferenceBackendRegistry {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("InferenceBackendRegistry")
-            .field("kinds", &self.kinds())
-            .field("count", &self.backends.len())
+            .field("instances", &self.instances())
+            .field("count", &self.entries.len())
             .finish()
     }
 }
@@ -106,7 +179,6 @@ impl MergedInferenceBackendCapabilities {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::BackendKind;
     use crate::capability::{InferenceCapability, InferenceCapabilitySupport};
     use crate::inference_error::InferenceError;
     use crate::request::diffusion::DiffusionSampleRequest;
@@ -121,18 +193,27 @@ mod tests {
     use crate::response::text::TextEncodeResponse;
 
     fn echo_caps() -> InferenceBackendCapabilities {
-        InferenceBackendCapabilities::new(BackendKind::new("echo")).with_support(
+        InferenceBackendCapabilities::new(Backend::new("echo")).with_support(
             InferenceCapabilitySupport::new(InferenceCapability::CreateEmptyLatent),
         )
     }
 
-    struct EchoBackend;
+    struct EchoBackend {
+        kind: Backend,
+    }
+
+    impl EchoBackend {
+        fn new() -> Self {
+            Self {
+                kind: Backend::new("echo"),
+            }
+        }
+    }
 
     #[async_trait::async_trait]
     impl InferenceBackend for EchoBackend {
-        fn backend_kind(&self) -> &BackendKind {
-            static KIND: std::sync::OnceLock<BackendKind> = std::sync::OnceLock::new();
-            KIND.get_or_init(|| BackendKind::new("echo"))
+        fn backend_kind(&self) -> &Backend {
+            &self.kind
         }
         fn capabilities(&self) -> InferenceBackendCapabilities {
             echo_caps()
@@ -182,12 +263,14 @@ mod tests {
     }
 
     #[test]
-    fn register_and_lookup_by_kind() {
+    fn register_and_lookup_by_instance() {
         let mut reg = InferenceBackendRegistry::new();
-        reg.register(Arc::new(EchoBackend));
-        assert!(reg.get(&BackendKind::new("echo")).is_some());
+        let instance = BackendInstance::new("echo:main");
+        let descriptor = BackendInstanceDescriptor::new(instance.clone(), Backend::new("echo"));
+        reg.register(descriptor, Arc::new(EchoBackend::new()));
+        assert!(reg.get(&instance).is_some());
         assert_eq!(reg.len(), 1);
-        assert_eq!(reg.kinds(), vec![BackendKind::new("echo")]);
+        assert_eq!(reg.instances(), vec![instance]);
     }
 
     #[test]
@@ -195,15 +278,57 @@ mod tests {
         let mut reg = InferenceBackendRegistry::new();
         assert!(reg.first().is_none());
         assert!(reg.is_empty());
-        reg.register(Arc::new(EchoBackend));
+
+        let instance = BackendInstance::new("echo:main");
+        let descriptor = BackendInstanceDescriptor::new(instance, Backend::new("echo"));
+        reg.register(descriptor, Arc::new(EchoBackend::new()));
         assert!(reg.first().is_some());
         assert!(!reg.is_empty());
     }
 
     #[test]
+    fn descriptors_preserve_registration_order() {
+        let mut reg = InferenceBackendRegistry::new();
+        for label in ["a", "b", "c"] {
+            let instance = BackendInstance::new(label);
+            let descriptor = BackendInstanceDescriptor::new(instance, Backend::new(label));
+            reg.register(descriptor, Arc::new(EchoBackend::new()));
+        }
+        let instances: Vec<String> = reg
+            .instances()
+            .into_iter()
+            .map(|i| i.as_str().to_string())
+            .collect();
+        assert_eq!(instances, vec!["a", "b", "c"]);
+    }
+
+    #[test]
+    fn descriptors_for_backend_filters_by_label() {
+        let mut reg = InferenceBackendRegistry::new();
+        let a = BackendInstanceDescriptor::new(
+            BackendInstance::new("candle:metal"),
+            Backend::new("candle"),
+        );
+        let b =
+            BackendInstanceDescriptor::new(BackendInstance::new("burn:cuda"), Backend::new("burn"));
+        reg.register(a.clone(), Arc::new(EchoBackend::new()));
+        reg.register(b.clone(), Arc::new(EchoBackend::new()));
+
+        let candle = reg.descriptors_for_backend(&Backend::new("candle"));
+        assert_eq!(candle.len(), 1);
+        assert_eq!(candle[0].instance, a.instance);
+
+        let burn = reg.descriptors_for_backend(&Backend::new("burn"));
+        assert_eq!(burn.len(), 1);
+        assert_eq!(burn[0].instance, b.instance);
+    }
+
+    #[test]
     fn merged_capabilities_collects_one_entry_per_kind() {
         let mut reg = InferenceBackendRegistry::new();
-        reg.register(Arc::new(EchoBackend));
+        let descriptor =
+            BackendInstanceDescriptor::new(BackendInstance::new("echo:main"), Backend::new("echo"));
+        reg.register(descriptor, Arc::new(EchoBackend::new()));
         let merged = reg.merged_capabilities();
         assert_eq!(merged.kind_count(), 1);
         assert_eq!(merged.by_kind().len(), 1);

@@ -88,6 +88,37 @@ impl IntoNodeExecutorError for InferenceError {
                     "bridge policy forbids transfer from `{source}` to `{target}` for capability `{capability}`: {reason}"
                 ),
             },
+            InferenceError::BackendSelectionNoCandidate {
+                capability,
+                requested,
+                registered,
+            } => {
+                let base = format!(
+                    "router produced no candidate for capability `{capability}` ({registered} registered)"
+                );
+                let message = match requested {
+                    Some(instance) => format!("{base}; requested `{instance}`"),
+                    None => base,
+                };
+                NodeExecutorError::Failed { message }
+            }
+            InferenceError::CandidateBackendNotRegistered {
+                instance,
+                capability,
+            } => NodeExecutorError::Failed {
+                message: format!(
+                    "candidate backend instance `{instance}` for capability `{capability}` is not registered"
+                ),
+            },
+            InferenceError::CandidateBackendLacksCapability {
+                instance,
+                backend,
+                capability,
+            } => NodeExecutorError::Failed {
+                message: format!(
+                    "candidate backend instance `{instance}` (backend `{backend}`) does not advertise capability `{capability}`"
+                ),
+            },
         }
     }
 }

@@ -3,16 +3,16 @@ use reimagine_core::model::{
     WorkflowInputId,
 };
 use reimagine_inference::{
-    BackendKind, BackendPayloadKey, BackendTensorHandle, ConditioningMetadata,
-    ExecutionConditioning, ExecutionValue, RuntimeClipHandle, RuntimeImage, RuntimeLatent,
-    RuntimeModelHandle, RuntimeVaeHandle,
+    Backend, BackendPayloadKey, BackendTensorHandle, ConditioningMetadata, ExecutionConditioning,
+    ExecutionValue, RuntimeClipHandle, RuntimeImage, RuntimeLatent, RuntimeModelHandle,
+    RuntimeVaeHandle,
 };
 use reimagine_runtime::{NodeInputs, OutputKey, RunInputs, RunValueStore};
 use std::sync::Arc;
 
 #[test]
 fn runtime_values_can_express_the_minimal_sdxl_base_intermediates() {
-    let backend = BackendKind::new("candle");
+    let backend = Backend::new("candle");
     let device = "metal:0";
     let checkpoint = ModelId::new("sdxl-base");
 
@@ -118,7 +118,7 @@ fn runtime_values_do_not_require_candle_types() {
     );
 
     let tensor = BackendTensorHandle::new(
-        BackendKind::new("mock-backend"),
+        Backend::new("mock-backend"),
         BackendPayloadKey::new("tensor-1"),
         TensorDType::F32,
         TensorShape::new(vec![1, 4, 8, 8]),

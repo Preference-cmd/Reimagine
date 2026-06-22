@@ -2,6 +2,7 @@
 
 use std::sync::Arc;
 
+use crate::BackendSelectionOverlay;
 use crate::ExecutionValue;
 use crate::RuntimeClipHandle;
 use reimagine_core::diagnostic::CorrelationId;
@@ -23,6 +24,7 @@ pub struct TextEncodeRequest {
     workflow_version: WorkflowVersion,
     correlation_id: Option<CorrelationId>,
     node_id: NodeId,
+    backend_selection: BackendSelectionOverlay,
 }
 
 impl TextEncodeRequest {
@@ -42,6 +44,7 @@ impl TextEncodeRequest {
             workflow_version,
             correlation_id: None,
             node_id,
+            backend_selection: BackendSelectionOverlay::new(),
         }
     }
 
@@ -94,7 +97,18 @@ impl TextEncodeRequest {
     }
 
     /// Backend affinity observed from the clip handle.
-    pub fn backend_affinities(&self) -> Vec<crate::BackendKind> {
-        vec![self.clip.backend().clone()]
+    pub fn backend_affinities(&self) -> Vec<crate::BackendInstance> {
+        vec![self.clip.backend_instance().clone()]
+    }
+
+    /// Per-request selection overlay supplied by the runtime.
+    pub fn backend_selection_overlay(&self) -> &BackendSelectionOverlay {
+        &self.backend_selection
+    }
+
+    /// Replace the request's selection overlay (for tests or
+    /// runtime-pre-dispatch mutation).
+    pub fn set_backend_selection_overlay(&mut self, overlay: BackendSelectionOverlay) {
+        self.backend_selection = overlay;
     }
 }

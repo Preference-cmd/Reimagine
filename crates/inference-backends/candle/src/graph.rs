@@ -17,7 +17,8 @@
 use candle_core::Device;
 use reimagine_core::model::ModelRole;
 use reimagine_inference::{
-    BackendKind, LoadBundleResponse, RuntimeClipHandle, RuntimeModelHandle, RuntimeVaeHandle,
+    Backend, BackendInstance, LoadBundleResponse, RuntimeClipHandle, RuntimeModelHandle,
+    RuntimeVaeHandle,
 };
 
 use crate::error::CandleBackendError;
@@ -138,27 +139,31 @@ impl LoadedModelBundle {
     /// Build the standard `model.load_bundle` response for this loaded bundle.
     pub fn load_bundle_response(
         &self,
-        backend_kind: BackendKind,
+        backend_kind: Backend,
+        backend_instance: BackendInstance,
         device_label: &str,
     ) -> Result<LoadBundleResponse, CandleBackendError> {
         match self {
             LoadedModelBundle::StableDiffusionSdxl(sdxl) => {
-                let model = RuntimeModelHandle::new(
+                let model = RuntimeModelHandle::with_instance(
                     sdxl.model_id.clone(),
                     ModelRole::CheckpointBundle,
                     backend_kind.clone(),
+                    backend_instance.clone(),
                     sdxl.model_payload_key.clone(),
                 )
                 .with_device(device_label);
-                let clip = RuntimeClipHandle::new(
+                let clip = RuntimeClipHandle::with_instance(
                     sdxl.model_id.clone(),
                     backend_kind.clone(),
+                    backend_instance.clone(),
                     sdxl.clip_payload_key.clone(),
                 )
                 .with_device(device_label);
-                let vae = RuntimeVaeHandle::new(
+                let vae = RuntimeVaeHandle::with_instance(
                     sdxl.model_id.clone(),
                     backend_kind,
+                    backend_instance,
                     sdxl.vae_payload_key.clone(),
                 )
                 .with_device(device_label);

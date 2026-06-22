@@ -48,10 +48,10 @@ pub use value_store::{OutputKey, RunValueStore, RuntimeValueRecord};
 
 pub use value::RuntimeValue;
 pub use value::{
-    BackendKind, BackendPayloadKey, BackendTensorHandle, BackendTensorMetadata,
-    ConditioningMetadata, ExecutionConditioning, ExecutionOutput, ExecutionValue,
-    ExecutionValueKind, ExecutionValueRetention, RuntimeClipHandle, RuntimeConditioning,
-    RuntimeImage, RuntimeLatent, RuntimeModelHandle, RuntimeVaeHandle,
+    Backend, BackendPayloadKey, BackendTensorHandle, BackendTensorMetadata, ConditioningMetadata,
+    ExecutionConditioning, ExecutionOutput, ExecutionValue, ExecutionValueKind,
+    ExecutionValueRetention, RuntimeClipHandle, RuntimeConditioning, RuntimeImage, RuntimeLatent,
+    RuntimeModelHandle, RuntimeVaeHandle,
 };
 
 // Executor contract re-exports from `reimagine_inference`. Existing

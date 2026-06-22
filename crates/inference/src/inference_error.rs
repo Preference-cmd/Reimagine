@@ -17,6 +17,8 @@
 
 use reimagine_core::model::SlotId;
 
+use crate::Backend;
+use crate::BackendInstance;
 use crate::capability::InferenceCapability;
 
 /// Errors produced by the inference layer.
@@ -74,6 +76,28 @@ pub enum InferenceError {
         capability: InferenceCapability,
         reason: String,
     },
+    /// The router had no viable candidate for the request. The
+    /// policy produced no candidate, or every candidate was filtered
+    /// by registration, allowed/disabled, or capability checks.
+    BackendSelectionNoCandidate {
+        capability: InferenceCapability,
+        requested: Option<BackendInstance>,
+        registered: usize,
+    },
+    /// The explicit override or policy candidate selected a backend
+    /// instance that is not registered.
+    CandidateBackendNotRegistered {
+        instance: BackendInstance,
+        capability: InferenceCapability,
+    },
+    /// The explicit override pinned a backend instance whose
+    /// registered backend does not advertise the requested
+    /// capability.
+    CandidateBackendLacksCapability {
+        instance: BackendInstance,
+        backend: Backend,
+        capability: InferenceCapability,
+    },
 }
 
 impl std::fmt::Display for InferenceError {
@@ -124,6 +148,35 @@ impl std::fmt::Display for InferenceError {
             } => write!(
                 f,
                 "bridge policy forbids transfer from `{source}` to `{target}` for capability `{capability}`: {reason}"
+            ),
+            Self::BackendSelectionNoCandidate {
+                capability,
+                requested,
+                registered,
+            } => {
+                write!(
+                    f,
+                    "router produced no candidate for capability `{capability}` ({registered} registered)"
+                )?;
+                if let Some(instance) = requested {
+                    write!(f, "; requested `{instance}`")?;
+                }
+                Ok(())
+            }
+            Self::CandidateBackendNotRegistered {
+                instance,
+                capability,
+            } => write!(
+                f,
+                "candidate backend instance `{instance}` for capability `{capability}` is not registered"
+            ),
+            Self::CandidateBackendLacksCapability {
+                instance,
+                backend,
+                capability,
+            } => write!(
+                f,
+                "candidate backend instance `{instance}` (backend `{backend}`) does not advertise capability `{capability}`"
             ),
         }
     }
@@ -223,5 +276,42 @@ mod tests {
         assert!(msg.contains("remote"), "{msg}");
         assert!(msg.contains("diffusion.sample"), "{msg}");
         assert!(msg.contains("no bridge registered"), "{msg}");
+    }
+
+    #[test]
+    fn backend_selection_no_candidate_display() {
+        let err = InferenceError::BackendSelectionNoCandidate {
+            capability: InferenceCapability::TextEncode,
+            requested: Some(crate::BackendInstance::new("candle:metal")),
+            registered: 0,
+        };
+        let msg = err.to_string();
+        assert!(msg.contains("text.encode"), "{msg}");
+        assert!(msg.contains("candle:metal"), "{msg}");
+        assert!(msg.contains("0 registered"), "{msg}");
+    }
+
+    #[test]
+    fn candidate_backend_not_registered_display() {
+        let err = InferenceError::CandidateBackendNotRegistered {
+            instance: crate::BackendInstance::new("missing"),
+            capability: InferenceCapability::ImageSave,
+        };
+        let msg = err.to_string();
+        assert!(msg.contains("missing"), "{msg}");
+        assert!(msg.contains("image.save"), "{msg}");
+    }
+
+    #[test]
+    fn candidate_backend_lacks_capability_display() {
+        let err = InferenceError::CandidateBackendLacksCapability {
+            instance: crate::BackendInstance::new("candle:cpu"),
+            backend: crate::Backend::new("candle"),
+            capability: InferenceCapability::TextEncode,
+        };
+        let msg = err.to_string();
+        assert!(msg.contains("candle:cpu"), "{msg}");
+        assert!(msg.contains("candle"), "{msg}");
+        assert!(msg.contains("text.encode"), "{msg}");
     }
 }

@@ -9,6 +9,7 @@ rust-version.workspace = true
 [dependencies]
 async-trait = { workspace = true }
 reimagine-core = { path = "../core" }
+reimagine-plugin = { path = "../plugin" }
 serde = { workspace = true }
 tokio = { workspace = true, features = ["time"] }
 tracing = "0.1"

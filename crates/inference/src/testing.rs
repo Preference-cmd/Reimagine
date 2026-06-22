@@ -20,7 +20,7 @@ use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::time::Duration;
 
 use crate::{
-    BackendKind, CreateEmptyLatentRequest, CreateEmptyLatentResponse, DiffusionSampleRequest,
+    Backend, CreateEmptyLatentRequest, CreateEmptyLatentResponse, DiffusionSampleRequest,
     DiffusionSampleResponse, ImagePreviewRequest, ImagePreviewResponse, ImageSaveRequest,
     ImageSaveResponse, InferenceBackend, InferenceBackendCapabilities, InferenceCapability,
     InferenceCapabilitySupport, InferenceError, LatentDecodeRequest, LatentDecodeResponse,
@@ -82,7 +82,7 @@ impl<Req, Resp> CannedCapabilityResponse<Req, Resp> {
 /// use reimagine_inference::{FakeBackend, CannedCapabilityResponse};
 /// use reimagine_inference::operation::InferenceCapability;
 /// use reimagine_inference::{
-///     BackendKind, BackendPayloadKey, BackendTensorHandle, RuntimeLatent,
+///     Backend, BackendPayloadKey, BackendTensorHandle, RuntimeLatent,
 /// };
 /// use reimagine_core::model::{TensorDType, TensorShape};
 /// use reimagine_inference::CreateEmptyLatentResponse;
@@ -91,7 +91,7 @@ impl<Req, Resp> CannedCapabilityResponse<Req, Resp> {
 ///     .create_empty_latent(CannedCapabilityResponse::always(
 ///         CreateEmptyLatentResponse::new(RuntimeLatent::new(
 ///             BackendTensorHandle::new(
-///                 BackendKind::new("fake"),
+///                 Backend::new("fake"),
 ///                 BackendPayloadKey::new("k"),
 ///                 TensorDType::F32,
 ///                 TensorShape::new(vec![1, 4, 8, 8]),
@@ -105,7 +105,7 @@ impl<Req, Resp> CannedCapabilityResponse<Req, Resp> {
 ///     ));
 /// ```
 pub struct FakeBackend {
-    kind: BackendKind,
+    kind: Backend,
     canned: Mutex<CannedCapabilities>,
 }
 
@@ -125,7 +125,7 @@ struct CannedCapabilities {
 impl FakeBackend {
     pub fn new(kind: impl Into<String>) -> Self {
         Self {
-            kind: BackendKind::new(kind),
+            kind: Backend::new(kind),
             canned: Mutex::new(CannedCapabilities::default()),
         }
     }
@@ -281,7 +281,7 @@ fn not_implemented(backend: &FakeBackend, capability: InferenceCapability) -> In
 
 #[async_trait::async_trait]
 impl InferenceBackend for FakeBackend {
-    fn backend_kind(&self) -> &BackendKind {
+    fn backend_kind(&self) -> &Backend {
         &self.kind
     }
 

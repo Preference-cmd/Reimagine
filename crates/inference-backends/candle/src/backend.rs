@@ -4,11 +4,12 @@ use std::sync::atomic::{AtomicU64, Ordering};
 
 use candle_core::Device;
 use reimagine_inference::{
-    BackendKind, CreateEmptyLatentRequest, CreateEmptyLatentResponse, DiffusionSampleRequest,
-    DiffusionSampleResponse, ImagePreviewRequest, ImagePreviewResponse, ImageSaveRequest,
-    ImageSaveResponse, InferenceBackend, InferenceBackendCapabilities, InferenceCapability,
-    InferenceCapabilitySupport, InferenceError, LatentDecodeRequest, LatentDecodeResponse,
-    LoadBundleRequest, LoadBundleResponse, TextEncodeRequest, TextEncodeResponse,
+    Backend, BackendInstance, CreateEmptyLatentRequest, CreateEmptyLatentResponse,
+    DiffusionSampleRequest, DiffusionSampleResponse, ImagePreviewRequest, ImagePreviewResponse,
+    ImageSaveRequest, ImageSaveResponse, InferenceBackend, InferenceBackendCapabilities,
+    InferenceCapability, InferenceCapabilitySupport, InferenceError, LatentDecodeRequest,
+    LatentDecodeResponse, LoadBundleRequest, LoadBundleResponse, TextEncodeRequest,
+    TextEncodeResponse,
 };
 
 use crate::config::CandleBackendConfig;
@@ -62,6 +63,10 @@ impl CandleBackend {
         self.config.device().label()
     }
 
+    pub fn backend_instance(&self) -> BackendInstance {
+        BackendInstance::new(format!("candle:{}", self.device_label()))
+    }
+
     pub fn store(&self) -> &Arc<CandleStore> {
         &self.store
     }
@@ -85,9 +90,9 @@ impl CandleBackend {
 
 #[async_trait::async_trait]
 impl InferenceBackend for CandleBackend {
-    fn backend_kind(&self) -> &BackendKind {
-        static KIND: std::sync::OnceLock<BackendKind> = std::sync::OnceLock::new();
-        KIND.get_or_init(|| BackendKind::new("candle"))
+    fn backend_kind(&self) -> &Backend {
+        static KIND: std::sync::OnceLock<Backend> = std::sync::OnceLock::new();
+        KIND.get_or_init(|| Backend::new("candle"))
     }
 
     fn capabilities(&self) -> InferenceBackendCapabilities {
@@ -237,7 +242,7 @@ mod tests {
         let backend = backend();
         let clip = reimagine_inference::RuntimeClipHandle::new(
             reimagine_core::model::ModelId::new("missing"),
-            BackendKind::new("candle"),
+            Backend::new("candle"),
             reimagine_inference::BackendPayloadKey::new("k"),
         );
         let text = std::sync::Arc::new(reimagine_inference::ExecutionValue::Param(

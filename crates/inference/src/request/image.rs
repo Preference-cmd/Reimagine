@@ -1,5 +1,6 @@
 //! `image.save` and `image.preview` request DTOs.
 
+use crate::BackendSelectionOverlay;
 use crate::RuntimeImage;
 use reimagine_core::diagnostic::CorrelationId;
 use reimagine_core::model::{NodeId, RunId, WorkflowId, WorkflowVersion};
@@ -37,6 +38,7 @@ pub struct ImageSaveRequest {
     workflow_version: WorkflowVersion,
     correlation_id: Option<CorrelationId>,
     node_id: NodeId,
+    backend_selection: BackendSelectionOverlay,
 }
 
 impl ImageSaveRequest {
@@ -55,6 +57,7 @@ impl ImageSaveRequest {
             workflow_version,
             correlation_id: None,
             node_id,
+            backend_selection: BackendSelectionOverlay::new(),
         }
     }
 
@@ -101,8 +104,19 @@ impl ImageSaveRequest {
         &self.node_id
     }
 
-    pub fn backend_affinities(&self) -> Vec<crate::BackendKind> {
-        vec![self.image.payload().backend().clone()]
+    pub fn backend_affinities(&self) -> Vec<crate::BackendInstance> {
+        vec![self.image.payload().backend_instance().clone()]
+    }
+
+    /// Per-request selection overlay supplied by the runtime.
+    pub fn backend_selection_overlay(&self) -> &BackendSelectionOverlay {
+        &self.backend_selection
+    }
+
+    /// Replace the request's selection overlay (for tests or
+    /// runtime-pre-dispatch mutation).
+    pub fn set_backend_selection_overlay(&mut self, overlay: BackendSelectionOverlay) {
+        self.backend_selection = overlay;
     }
 }
 
@@ -115,6 +129,7 @@ pub struct ImagePreviewRequest {
     workflow_version: WorkflowVersion,
     correlation_id: Option<CorrelationId>,
     node_id: NodeId,
+    backend_selection: BackendSelectionOverlay,
 }
 
 impl ImagePreviewRequest {
@@ -132,6 +147,7 @@ impl ImagePreviewRequest {
             workflow_version,
             correlation_id: None,
             node_id,
+            backend_selection: BackendSelectionOverlay::new(),
         }
     }
 
@@ -169,7 +185,18 @@ impl ImagePreviewRequest {
         &self.node_id
     }
 
-    pub fn backend_affinities(&self) -> Vec<crate::BackendKind> {
-        vec![self.image.payload().backend().clone()]
+    pub fn backend_affinities(&self) -> Vec<crate::BackendInstance> {
+        vec![self.image.payload().backend_instance().clone()]
+    }
+
+    /// Per-request selection overlay supplied by the runtime.
+    pub fn backend_selection_overlay(&self) -> &BackendSelectionOverlay {
+        &self.backend_selection
+    }
+
+    /// Replace the request's selection overlay (for tests or
+    /// runtime-pre-dispatch mutation).
+    pub fn set_backend_selection_overlay(&mut self, overlay: BackendSelectionOverlay) {
+        self.backend_selection = overlay;
     }
 }

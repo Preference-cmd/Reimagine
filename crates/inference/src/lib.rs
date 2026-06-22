@@ -29,6 +29,7 @@
 mod artifact_publisher;
 mod backend;
 mod backend_registry;
+mod backend_selection;
 mod bridge;
 mod cancellation;
 mod capability;
@@ -56,14 +57,19 @@ mod router;
 pub mod testing;
 
 pub use execution_value::{
-    BackendKind, BackendPayloadKey, BackendTensorHandle, BackendTensorMetadata,
-    ConditioningMetadata, ExecutionConditioning, ExecutionOutput, ExecutionValue,
-    ExecutionValueKind, ExecutionValueRetention, RuntimeClipHandle, RuntimeImage, RuntimeLatent,
-    RuntimeModelHandle, RuntimeVaeHandle,
+    BackendPayloadKey, BackendTensorHandle, BackendTensorMetadata, ConditioningMetadata,
+    ExecutionConditioning, ExecutionOutput, ExecutionValue, ExecutionValueKind,
+    ExecutionValueRetention, RuntimeClipHandle, RuntimeImage, RuntimeLatent, RuntimeModelHandle,
+    RuntimeVaeHandle,
 };
 
 pub use backend::InferenceBackend;
 pub use backend_registry::{InferenceBackendRegistry, MergedInferenceBackendCapabilities};
+pub use backend_selection::{
+    ArcBackendSelectionPolicy, Backend, BackendInstance, BackendInstanceDescriptor,
+    BackendOverrides, BackendSelectionOverlay, BackendSelectionPolicy, BackendSelectionRequest,
+    DeviceProfile, StaticBackendSelectionPolicy,
+};
 pub use bridge::{
     BackendBridge, BackendBridgePolicy, BridgePlan, BridgeSupport, RejectAllBridgePolicy,
 };
