@@ -32,30 +32,12 @@ pub fn build_router() -> Router<AxumHostState> {
 /// headers to avoid leaking prompts, API keys, or backend-private
 /// payload keys.
 fn request_span(request: &axum::http::Request<axum::body::Body>) -> tracing::Span {
-    let path = request.uri().path();
-    let segments: Vec<&str> = path.split('/').filter(|s| !s.is_empty()).collect();
-
-    let mut workflow_id: Option<&str> = None;
-    let mut run_id: Option<&str> = None;
-
-    if let Some(first) = segments.first() {
-        match *first {
-            "workflows" if segments.len() >= 2 && segments[1] != "open" => {
-                workflow_id = Some(segments[1]);
-            }
-            "runs" if segments.len() >= 2 => {
-                run_id = Some(segments[1]);
-            }
-            _ => {}
-        }
-    }
-
     tracing::info_span!(
         "request",
         method = %request.method(),
         path = %request.uri().path(),
-        workflow_id = workflow_id.unwrap_or(""),
-        run_id = run_id.unwrap_or(""),
+        workflow_id = tracing::field::Empty,
+        run_id = tracing::field::Empty,
         correlation_id = tracing::field::Empty,
     )
 }

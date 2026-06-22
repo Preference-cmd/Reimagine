@@ -100,6 +100,7 @@ pub async fn run(
     body: Option<Json<RunWorkflowRequestDto>>,
 ) -> AxumHostResult<Json<RunWorkflowResponse>> {
     let workflow_id = WorkflowId::new(id);
+    Span::current().record("workflow_id", workflow_id.as_str());
     if !state.workspace().workflow_service().contains(&workflow_id) {
         return Err(AxumHostError::UnknownWorkflow {
             workflow_id: workflow_id.clone(),
