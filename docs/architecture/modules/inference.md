@@ -40,6 +40,7 @@ tracked under the `inference` module.
   ownership.
 - Concrete Candle, ONNX, remote, or Comfy implementations.
 - Model manifest scanning or persistence.
+- Plugin loading or plugin package lifecycle.
 - Tauri IPC, Axum routes, or UI state.
 - Agent policy.
 
@@ -113,8 +114,8 @@ capability calls are not runtime scheduling units.
 
 `inference` calls the executor-facing `InferenceRuntime` router, not
 `InferenceBackend` directly. The two traits are deliberately not equivalent:
-the runtime/router trait validates handles, selects a backend, applies bridge
-policy, and emits routing diagnostics; the backend trait is the concrete
+the runtime/router trait validates handles, selects a backend instance, applies
+bridge policy, and emits routing diagnostics; the backend trait is the concrete
 adapter seam for one backend implementation. Inference executors should depend
 on the router trait even if a workspace currently registers only Candle.
 
@@ -135,9 +136,17 @@ inference executor
 
 Fallback is valid only before a request has backend-bound handles or before a
 failed attempt produces visible execution handles. Once a `Model`, `Clip`,
-`Vae`, `Latent`, `Conditioning`, or `Image` handle exists, the handle's
-`BackendKind` constrains later routing. Cross-backend execution after that
-point requires an explicit bridge/transfer policy rather than silent fallback.
+`Vae`, `Latent`, `Conditioning`, or `Image` handle exists, the handle's backend
+affinity constrains later routing. Cross-backend execution after that point
+requires an explicit bridge/transfer policy rather than silent fallback.
+
+Backend identity should not be modeled as a closed `BackendKind` enum. Built-in
+and future external backends are plugin extensions over the
+`HostSurface::InferenceBackend` surface. Inference routing should work with an
+open `Backend` label for the backend implementation and concrete
+`BackendInstance` descriptors provided by app-host, with optional plugin
+provenance (`Plugin` / `Extension`) for diagnostics and registry
+introspection.
 
 ## Execution Value Usage
 
@@ -157,10 +166,10 @@ inference::ExecutionValue
   Null
 ```
 
-`inference` may inspect the public handle shape, such as `BackendKind`,
-`BackendPayloadKey`, tensor shape, dtype, model role, and device label. It must
-not inspect backend-local tensors, loaded model objects, tokenizer state, or
-kernel graphs.
+`inference` may inspect the public handle shape, such as backend affinity,
+backend payload key, tensor shape, dtype, model role, and device label. It
+must not inspect backend-local tensors, loaded model objects, tokenizer state,
+or kernel graphs.
 
 `ExecutionValue` is internal execution data. It must not be exposed through
 workflow JSON, run snapshots, run summaries, run events, Axum/Tauri DTOs, or
@@ -295,7 +304,7 @@ checkpoint_loader executor
   -> LoadBundleRequest
   -> InferenceRuntime::load_bundle
   -> router selects backend from config/policy when no handle affinity exists
-  -> returned Model / Clip / Vae handles carry the selected BackendKind
+  -> returned Model / Clip / Vae handles carry selected backend affinity
 ```
 
 Later executors route through those returned handles. For example,
