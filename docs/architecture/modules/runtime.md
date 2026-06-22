@@ -231,6 +231,41 @@ The policy is intentionally backend-neutral and does not touch value stores,
 artifact stores, or node executor internals. Future same-stage concurrency can
 deepen this module without changing the public `RuntimeService::run` seam.
 
+Same-stage concurrency should use a reducer-shaped design. Async node work may
+run concurrently, but `RunSession`, `RunValueStore`, `RunStore`,
+`StageExecutionPolicy`, node outcomes, retention drops, and node lifecycle
+publication stay single-writer:
+
+```text
+reducer admits workflow node invocation
+  -> records queued/running state
+  -> emits NodeQueued / NodeStarted
+  -> publishes snapshot
+  -> spawns prepared node work
+
+prepared node work
+  -> owns cloned inputs/params and injected capabilities
+  -> awaits inference::NodeExecutor::execute
+  -> returns completion/failure/cancellation message
+
+reducer receives message
+  -> accepts or discards outputs
+  -> records terminal node outcome
+  -> applies SingleUse fan-out/drop rules
+  -> emits terminal node event
+  -> publishes snapshot
+```
+
+Node task bodies must not publish node lifecycle events or mutate runtime
+session state directly. Runtime-provided artifact and cancellation
+capabilities remain valid inside node work because they are explicit injected
+capabilities rather than access to the session/value store.
+
+Default concurrency should preserve current sequential behavior. A future
+`RuntimeOptions::max_stage_concurrency` may opt into bounded same-stage
+parallelism; `Some(0)` should be rejected before run start rather than treated
+as unlimited.
+
 ## Runtime Store
 
 Runtime state is layered:
