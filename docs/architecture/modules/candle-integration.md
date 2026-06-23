@@ -405,6 +405,9 @@ workspace output directory. The current backend math is still a V1 placeholder
 for the heavy model kernels; real weight-driven CLIP/UNet/VAE execution should
 land behind the same typed backend capability protocol.
 
+See [Real SDXL Roadmap](../real-sdxl-roadmap.md) for the tracked route from
+the current placeholder path to real SDXL base inference.
+
 Follow-up implementation should prioritize backend-internal model graph and
 kernel adapter boundaries before adding another model family. If supporting a
 new model would require copying SDXL text/sampling/decode operation modules,
