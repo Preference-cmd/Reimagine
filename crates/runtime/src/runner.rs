@@ -9,7 +9,7 @@ use reimagine_core::diagnostic::{
     DiagnosticTarget, DiagnosticTargetDomain,
 };
 use reimagine_core::event::{RunEvent, RunEventId, RunEventKind, Timestamp};
-use reimagine_core::model::{NodeId, RunId, WorkflowId, WorkflowVersion};
+use reimagine_core::model::{ArtifactId, NodeId, RunId, WorkflowId, WorkflowVersion};
 use reimagine_core::readiness::{ExecutionNode, ExecutionPlan};
 use tokio::sync::Mutex;
 use tokio::task::JoinSet;
@@ -257,6 +257,11 @@ impl RuntimeService {
 
     pub fn summary(&self, run_id: &RunId) -> Option<RunSummary> {
         self.store.summary(run_id)
+    }
+
+    /// Search all active snapshots and terminal summaries for an artifact by id.
+    pub fn find_artifact(&self, artifact_id: &ArtifactId) -> Option<RunArtifactRef> {
+        self.store.find_artifact(artifact_id)
     }
 
     pub async fn backend_instance_snapshots(&self) -> Vec<BackendInstanceSnapshot> {
