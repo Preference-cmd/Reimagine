@@ -34,14 +34,3 @@ pub use workflows::{
     OpenWorkflowRequest, OpenWorkflowResponse, RunTargetDto, RunWorkflowRequestDto,
     RunWorkflowResponse, TargetSelectionDto, WorkflowSource,
 };
-
-/// Marker that the type is host-safe: it never carries
-/// [`ExecutionValue`]-shaped payloads.
-#[allow(dead_code)]
-const fn _assert_no_runtime_values() {
-    // The DTOs above are JSON-only; if a future change accidentally
-    // re-introduces a runtime value handle, the API surface breaks.
-    // The constant below documents the invariant and gives the next
-    // reviewer a hint where to look.
-    let _ = std::mem::size_of::<reimagine_runtime::value::ExecutionValue>();
-}
