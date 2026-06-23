@@ -1,19 +1,38 @@
 # reimagine
 
-A Tauri + Candle + React desktop app for node-based image generation workflows — a ComfyUI alternative.
+Reimagine is an agentic workflow studio for AIGC.
+
+It combines node-based workflow editing, AI agent collaboration, local model
+management, and high-performance inference into a desktop-first creative
+environment.
 
 > Reimagine is in early development. The public repository currently focuses on
-> the application shell, workflow/runtime foundations, agent plumbing, and
-> inference backend scaffolding. Real model weights and local workspace data are
-> not included.
+> the workflow model, runtime scheduler, host layer, agent plumbing, local model
+> management, and inference backend scaffolding. The UI and real inference path
+> are still under active construction. Real model weights and local workspace
+> data are not included.
+
+## Features
+
+- Node-based workflow editing and execution.
+- AI agent collaboration for workflow construction and iteration.
+- Local model management with manifest-based model references.
+- Host-independent runtime shared by desktop and HTTP interfaces.
+- High-performance local inference foundation with Candle as the first backend.
+- Structured validation, diagnostics, run events, and artifact routing.
+
+Reimagine is still early. The current Candle SDXL path is a vertical-slice
+example for validating workflow execution and artifact output while real model
+execution is being completed.
 
 ## Stack
 
-- **Shell**: Tauri 2 (Rust)
+- **Domain/runtime**: Rust workspace
+- **Desktop host**: Tauri 2
 - **HTTP host**: Axum
-- **Compute**: Hugging Face Candle (Rust ML framework)
-- **UI**: React 19 + Vite 7 (TypeScript)
-- **Workspace**: cargo workspace + bun (frontend)
+- **Inference backend**: Candle first, behind backend adapter boundaries
+- **UI**: React 19 + Vite 7
+- **Frontend tooling**: Bun
 
 ## Requirements
 
