@@ -9,6 +9,7 @@
 mod agent_provider;
 mod agent_service;
 mod app_host;
+pub mod artifact_access;
 pub mod dto;
 mod error;
 mod inference;
@@ -28,6 +29,9 @@ mod workspace;
 pub use agent_provider::AgentProviderCatalog;
 pub use agent_service::{AgentService, AgentServiceTurnRequest};
 pub use app_host::AppHost;
+pub use artifact_access::{
+    ArtifactAccess, ArtifactAccessError, media_type_for_reference, resolve_artifact_path,
+};
 pub use error::{AppHostError, AppHostResult};
 pub use inference_backend::BackendSelection;
 pub use model_service::ModelService;

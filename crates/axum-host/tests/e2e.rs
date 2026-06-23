@@ -770,3 +770,130 @@ async fn candle_sdxl_workflow_run_completes_with_image_artifact() {
         "PNG file should have PNG signature"
     );
 }
+
+#[tokio::test]
+async fn artifact_route_serves_png_bytes() {
+    let model_id = ModelId::new(MODEL_ID);
+    let (host, recorder, base_path) = build_candle_ready_host(
+        manifest_with_model(&model_id, CHECKPOINT_FILENAME),
+        "candle-sdxl-artifact",
+    )
+    .await;
+    let app = build_router().with_state(build_state(host.clone(), recorder.clone()));
+
+    // Open the canonical SDXL workflow inline.
+    let workflow_json = load_sdxl_workflow_json();
+    let workflow_id = workflow_json["id"].as_str().expect("workflow id");
+    let open_body = serde_json::json!({ "workflow": workflow_json }).to_string();
+    let response = app
+        .clone()
+        .oneshot(json_request("POST", "/workflows/open", Some(&open_body)))
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+
+    // Run with an explicit target that forces the full pipeline up to save_image.
+    let run_body = serde_json::json!({
+        "target_selection": {
+            "kind": "explicit",
+            "targets": [
+                { "kind": "node", "node_id": "node_save_image" }
+            ]
+        },
+        "correlation_id": "corr-candle-sdxl-artifact"
+    })
+    .to_string();
+    let response = app
+        .clone()
+        .oneshot(json_request(
+            "POST",
+            &format!("/workflows/{workflow_id}/run"),
+            Some(&run_body),
+        ))
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+    let bytes = body_bytes(response.into_body()).await;
+    let json: Value = serde_json::from_slice(&bytes).unwrap();
+    assert_eq!(json["outcome"], "started");
+    let run_id_str = json["run_id"].as_str().expect("run_id");
+    let run_id = reimagine_core::model::RunId::new(run_id_str.to_string());
+
+    // Wait for run to complete
+    let deadline = std::time::Instant::now() + Duration::from_secs(3);
+    loop {
+        if let Some(summary) = host.runtime_service().summary(&run_id) {
+            assert!(
+                summary.state.is_terminal(),
+                "run {run_id} should be terminal"
+            );
+            assert_eq!(
+                summary.state,
+                reimagine_runtime::RunState::Completed,
+                "expected run to complete successfully"
+            );
+            break;
+        }
+        if std::time::Instant::now() > deadline {
+            panic!("run {run_id} did not finish in time");
+        }
+        tokio::time::sleep(Duration::from_millis(5)).await;
+    }
+
+    // GET /runs/:id to get the artifact id
+    let response = app
+        .clone()
+        .oneshot(json_request("GET", &format!("/runs/{run_id_str}"), None))
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+    let bytes = body_bytes(response.into_body()).await;
+    let json: Value = serde_json::from_slice(&bytes).unwrap();
+    let artifacts = json["artifacts"]
+        .as_array()
+        .expect("summary artifacts should be an array");
+    assert_eq!(artifacts.len(), 1, "summary should expose one artifact");
+    let artifact_id = artifacts[0]["id"]
+        .as_str()
+        .expect("artifact should have an id");
+
+    // GET /artifacts/:artifact_id should return the PNG bytes
+    let response = app
+        .clone()
+        .oneshot(json_request(
+            "GET",
+            &format!("/artifacts/{artifact_id}"),
+            None,
+        ))
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+    assert_eq!(response.headers().get("content-type").unwrap(), "image/png");
+
+    let bytes = body_bytes(response.into_body()).await;
+    assert!(
+        bytes.starts_with(&[0x89, b'P', b'N', b'G', 0x0d, 0x0a, 0x1a, 0x0a]),
+        "PNG response should have PNG signature"
+    );
+    assert!(bytes.len() > 100, "PNG response should be non-trivial size");
+}
+
+#[tokio::test]
+async fn artifact_route_returns_404_for_unknown_id() {
+    let (host, recorder, _base_path) = build_candle_ready_host(
+        manifest_with_model(&ModelId::new(MODEL_ID), CHECKPOINT_FILENAME),
+        "candle-sdxl-artifact-404",
+    )
+    .await;
+    let app = build_router().with_state(build_state(host.clone(), recorder.clone()));
+
+    let response = app
+        .oneshot(json_request(
+            "GET",
+            "/artifacts/nonexistent-artifact-id",
+            None,
+        ))
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::NOT_FOUND);
+}
