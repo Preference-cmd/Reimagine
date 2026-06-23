@@ -264,6 +264,50 @@ The plugin metadata contract does not construct backends. App-host still owns
 factory/wiring decisions because it has config, workspace paths, model
 services, and host policy.
 
+## Workspace Bootstrap And Capability Discovery
+
+`app-host` owns the workspace initialization order. Concrete services and
+backend crates own their own mechanisms, but Axum and Tauri should both enter
+through the same `WorkspaceHost` bootstrap path.
+
+```text
+host adapter
+  -> WorkspaceHost bootstrap
+  -> load config and workspace paths
+  -> initialize model/workflow services
+  -> discover backend providers and device profiles
+  -> validate saved backend/device selection
+  -> construct backend instances and router policy
+  -> construct inference runtime and RuntimeService
+  -> expose WorkspaceHost
+```
+
+Hardware discovery is part of this bootstrap, not a runtime concern. App-host
+aggregates host-neutral profiles from registered backend providers and exposes
+the latest workspace compute profile to host adapters:
+
+```text
+WorkspaceHost::compute_profile()
+  -> WorkspaceComputeProfile
+```
+
+The profile lets UI, Axum, Tauri, and Agent tools show available backend
+instances, devices, memory summaries, supported dtypes, capabilities, and
+diagnostics. It is a top-level observation surface; it must not contain Candle
+`Device` values, CUDA/Metal handles, tensors, or loaded model objects.
+
+Persisted config stores the user's backend/device selection and fallback
+preferences. It should not store the full discovery snapshot, because hardware
+availability can change between launches. On startup, app-host validates the
+saved selection against the fresh discovery result and emits diagnostics for
+missing or incompatible devices. If a configured fallback exists, app-host may
+select it; otherwise it should fall back to a conservative default.
+
+This shape also leaves room for future remote runtime or remote backend
+providers. A remote provider can report the same backend/device profile shape
+and app-host can register it as another backend instance candidate without
+changing workflow JSON or runtime scheduling.
+
 ## Backend Selection
 
 `app-host` is the composition root for inference backends, but it should not
@@ -284,6 +328,7 @@ AppConfig
   inference backend config
 
 WorkspaceHost::new(config)
+  -> discover backend/device profiles
   -> resolve configured backend extension / backend instance
   -> construct backend adapters from config
   -> construct ModelResolver adapter
