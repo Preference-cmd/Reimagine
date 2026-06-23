@@ -49,15 +49,10 @@ src-tauri/WixTools/
 .mimocode/
 .worktrees/
 CONTEXT.md
+AGENTS.local.md
 
-# Project docs: keep shared architecture/design/agent docs, ignore local ADR/dev drafts.
+# Project docs: ignore architecture/design/agent/local drafts.
 docs/*
-!docs/agents/
-!docs/agents/**
-!docs/architecture/
-!docs/architecture/**
-!docs/design/
-!docs/design/**
 docs/adr/
 docs/dev/
 
