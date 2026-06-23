@@ -26,7 +26,10 @@ mod workflows;
 pub use artifacts::ArtifactDto;
 pub use health::HealthResponse;
 pub use nodes::{NodeCatalogResponse, NodeDefDto, ParamSpecDto, SocketSpecDto};
-pub use runs::{DiagnosticDto, NodeStateDto, RunDto, RunEventDto, RunEventsResponse, RunSnapshotDto, RunSummaryDto};
+pub use runs::{
+    DiagnosticDto, NodeStateDto, RunDto, RunEventDto, RunEventsResponse, RunSnapshotDto,
+    RunSummaryDto,
+};
 pub use workflows::{
     OpenWorkflowRequest, OpenWorkflowResponse, RunTargetDto, RunWorkflowRequestDto,
     RunWorkflowResponse, TargetSelectionDto, WorkflowSource,
