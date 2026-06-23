@@ -284,6 +284,19 @@ impl WorkspaceHost {
         (*self.compute_profile).clone()
     }
 
+    /// Return the host-neutral
+    /// [`crate::dto::ComputeProfileDto`] projection of the workspace's
+    /// most recent compute profile.
+    ///
+    /// Use this from HTTP / IPC adapters so the wire shape does not
+    /// depend on inference-internal enums (`DeviceKind`,
+    /// `BackendInstanceStatus`, `InferenceCapability`, …) or on
+    /// backend-native handles. The returned DTO is the V1 wire contract
+    /// for `GET /compute-profile` and the equivalent Tauri command.
+    pub fn compute_profile_dto(&self) -> crate::dto::ComputeProfileDto {
+        self.compute_profile().into()
+    }
+
     /// Return the resolved Candle device label used to construct the
     /// runtime. After bootstrap fallback this is always `"cpu"` or
     /// `"metal"`. Useful for tests and host adapters that need to
