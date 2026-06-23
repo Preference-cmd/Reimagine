@@ -46,7 +46,7 @@ pub struct CandleProfileProvider;
 
 impl CandleProfileProvider {
     /// Construct a new profile provider.
-    pub fn new() -> Self {
+    pub const fn new() -> Self {
         Self
     }
 
@@ -75,9 +75,17 @@ impl CandleProfileProvider {
     }
 }
 
-#[async_trait::async_trait]
-impl BackendProfileProvider for CandleProfileProvider {
-    async fn backend_profile(&self) -> BackendProfile {
+impl CandleProfileProvider {
+    /// Build the backend profile synchronously.
+    ///
+    /// The probe itself is synchronous — [`Device::new_metal`] runs
+    /// in-process and returns its result without `await`. App-host's
+    /// sync bootstrap paths call this directly so they can build the
+    /// [`WorkspaceComputeProfile`](reimagine_inference::WorkspaceComputeProfile)
+    /// without spinning up a runtime. The async
+    /// [`BackendProfileProvider::backend_profile`] trait method
+    /// forwards to this implementation.
+    pub fn probe(&self) -> BackendProfile {
         let backend = Self::backend_kind();
         let (plugin, extension) = Self::plugin_provenance();
         let capabilities = Self::v1_capabilities();
@@ -97,6 +105,13 @@ impl BackendProfileProvider for CandleProfileProvider {
             .with_plugin(plugin, extension)
             .with_instance(cpu_instance)
             .with_instance(metal_instance)
+    }
+}
+
+#[async_trait::async_trait]
+impl BackendProfileProvider for CandleProfileProvider {
+    async fn backend_profile(&self) -> BackendProfile {
+        self.probe()
     }
 }
 

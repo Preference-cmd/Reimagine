@@ -1,6 +1,6 @@
 use std::sync::Arc;
 
-use reimagine_config::{AppConfig, InferenceBackendConfig, InferenceBackendKind};
+use reimagine_config::AppConfig;
 use reimagine_inference::registry::register_builtin_inference_executors;
 use reimagine_inference::{
     BackendInstance, BackendInstanceDescriptor, BackendOverrides, DefaultInferenceRuntime,
@@ -30,12 +30,22 @@ pub(crate) struct ComposedInferenceRuntime {
     pub(crate) runtime_hooks: CandleBackendInstanceRuntimeHooks,
 }
 
+/// Construct the inference runtime for a workspace.
+///
+/// `resolved_label` is the post-resolution Candle device label
+/// (e.g. `"cpu"` or `"metal"`) produced by the app-host
+/// [`resolve`](super::resolve) step. Validation against the live
+/// profile and any fallback decision happens upstream — by the time
+/// this function runs the label is guaranteed to map to a Candle
+/// [`Device`]. The label drives both the constructed
+/// [`CandleBackend`] and the registered [`BackendInstance`]
+/// identity.
 pub(crate) fn compose_inference_runtime(
     config: &AppConfig,
-    backend_config: &InferenceBackendConfig,
+    resolved_label: &str,
     model_service: Arc<ModelService>,
 ) -> Result<ComposedInferenceRuntime, CandleBackendError> {
-    let composed_backends = compose_inference_backends(config, backend_config)?;
+    let composed_backends = compose_inference_backends(config, resolved_label)?;
     let inference_runtime = compose_runtime_router(
         composed_backends.registry,
         composed_backends.selected_instance,
@@ -58,47 +68,48 @@ pub(crate) fn compose_inference_runtime(
     })
 }
 
+/// Construct the Candle backend registry using the resolved device label.
+///
+/// The label has already been normalized and matched against the live
+/// profile by app-host — `mps` was rewritten to `metal`, unknown or
+/// unavailable labels were rewritten to `cpu`. This function trusts
+/// the resolved label and only calls into the concrete Candle backend
+/// to construct the device.
 fn compose_inference_backends(
     config: &AppConfig,
-    backend_config: &InferenceBackendConfig,
+    resolved_label: &str,
 ) -> Result<ComposedBackends, CandleBackendError> {
     let mut registry = InferenceBackendRegistry::new();
-    let (runtime_hooks, selected_instance) = match backend_config.backend {
-        InferenceBackendKind::Candle => {
-            let backend = build_candle_backend(config, backend_config)?;
-            let device_label = backend.device_label().to_string();
-            let plugin = Plugin::try_from("builtin.candle").expect("valid built-in plugin id");
-            let extension =
-                Extension::try_from("backend.candle").expect("valid built-in extension id");
-            let device = DeviceProfile::new(&device_label);
-            let runtime_hooks = backend.runtime_hooks(
-                Some(plugin.clone()),
-                Some(extension.clone()),
-                Some(device.clone()),
-            );
-            let backend: Arc<dyn InferenceBackend> = backend;
-            let instance = BackendInstance::new(format!("candle:{device_label}"));
-            let descriptor =
-                BackendInstanceDescriptor::new(instance.clone(), backend.backend_kind().clone())
-                    .with_device(device)
-                    .with_plugin(plugin, extension);
-            registry.register(descriptor, backend);
-            (runtime_hooks, instance)
-        }
-    };
+    let backend = build_candle_backend(config, resolved_label)?;
+    let device_label = backend.device_label().to_string();
+    let plugin = Plugin::try_from("builtin.candle").expect("valid built-in plugin id");
+    let extension = Extension::try_from("backend.candle").expect("valid built-in extension id");
+    let device = DeviceProfile::new(&device_label);
+    let runtime_hooks = backend.runtime_hooks(
+        Some(plugin.clone()),
+        Some(extension.clone()),
+        Some(device.clone()),
+    );
+    let backend: Arc<dyn InferenceBackend> = backend;
+    let instance = BackendInstance::new(format!("candle:{device_label}"));
+    let descriptor =
+        BackendInstanceDescriptor::new(instance.clone(), backend.backend_kind().clone())
+            .with_device(device)
+            .with_plugin(plugin, extension);
+    registry.register(descriptor, backend);
 
     Ok(ComposedBackends {
         registry,
         runtime_hooks,
-        selected_instance,
+        selected_instance: instance,
     })
 }
 
 fn build_candle_backend(
     config: &AppConfig,
-    backend_config: &InferenceBackendConfig,
+    resolved_label: &str,
 ) -> Result<Arc<CandleBackend>, CandleBackendError> {
-    let device = CandleDevice::new(&backend_config.candle_device);
+    let device = CandleDevice::new(resolved_label);
     let candle_config = CandleBackendConfig::new(
         config.paths().models_dir().to_path_buf(),
         config.paths().output_dir().to_path_buf(),
@@ -127,8 +138,7 @@ fn compose_runtime_router(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use reimagine_config::{AppPaths, InferenceBackendKind};
-    use reimagine_inference_candle::CandleBackendError;
+    use reimagine_config::AppPaths;
 
     fn temp_dir(prefix: &str) -> std::path::PathBuf {
         let nonce = std::time::SystemTime::now()
@@ -139,16 +149,11 @@ mod tests {
     }
 
     #[test]
-    fn compose_backends_registers_selected_candle_backend() {
-        let base = temp_dir("selected-backend");
+    fn compose_backends_registers_cpu_instance_for_resolved_cpu_label() {
+        let base = temp_dir("resolved-cpu");
         let config = AppConfig::new(AppPaths::new(&base));
-        let backend_config = InferenceBackendConfig {
-            backend: InferenceBackendKind::Candle,
-            candle_device: "cpu".to_string(),
-            ..InferenceBackendConfig::default()
-        };
 
-        let composed = compose_inference_backends(&config, &backend_config).expect("backends");
+        let composed = compose_inference_backends(&config, "cpu").expect("backends");
 
         assert_eq!(
             composed.registry.len(),
@@ -157,7 +162,7 @@ mod tests {
         );
         assert_eq!(
             composed.selected_instance,
-            reimagine_inference::BackendInstance::new("candle:cpu")
+            BackendInstance::new("candle:cpu")
         );
         let _ = std::fs::remove_dir_all(&base);
     }
@@ -166,13 +171,8 @@ mod tests {
     fn compose_backends_attaches_builtin_candle_plugin_provenance() {
         let base = temp_dir("plugin-provenance");
         let config = AppConfig::new(AppPaths::new(&base));
-        let backend_config = InferenceBackendConfig {
-            backend: InferenceBackendKind::Candle,
-            candle_device: "cpu".to_string(),
-            ..InferenceBackendConfig::default()
-        };
 
-        let composed = compose_inference_backends(&config, &backend_config).expect("backends");
+        let composed = compose_inference_backends(&config, "cpu").expect("backends");
         let descriptors = composed.registry.descriptors();
         let descriptor = descriptors.first().expect("registered descriptor");
 
@@ -193,8 +193,21 @@ mod tests {
     }
 
     #[test]
+    fn compose_backends_normalizes_metal_label_to_metal_instance() {
+        let base = temp_dir("resolved-metal");
+        let config = AppConfig::new(AppPaths::new(&base));
+
+        let composed = compose_inference_backends(&config, "metal").expect("backends");
+        assert_eq!(
+            composed.selected_instance,
+            BackendInstance::new("candle:metal")
+        );
+        let _ = std::fs::remove_dir_all(&base);
+    }
+
+    #[test]
     fn compose_runtime_router_uses_config_projected_backend_policy() {
-        let instance = reimagine_inference::BackendInstance::new("candle:cpu");
+        let instance = BackendInstance::new("candle:cpu");
         let registry = InferenceBackendRegistry::new();
         let runtime = compose_runtime_router(registry, instance.clone());
         let request = reimagine_inference::BackendSelectionRequest {
@@ -214,31 +227,24 @@ mod tests {
                 .selection_policy()
                 .allows_explicit_override(&instance, &request)
         );
-        assert!(!runtime.selection_policy().allows_explicit_override(
-            &reimagine_inference::BackendInstance::new("candle:metal"),
-            &request
-        ));
+        assert!(
+            !runtime
+                .selection_policy()
+                .allows_explicit_override(&BackendInstance::new("candle:metal"), &request)
+        );
     }
 
     #[test]
-    fn compose_backends_applies_selected_candle_device() {
-        let base = temp_dir("selected-device");
+    fn compose_runtime_accepts_resolved_label_without_backend_config() {
+        // The new compose_inference_runtime signature accepts a
+        // resolved device label instead of an `InferenceBackendConfig`.
+        // Smoke-check that the new signature works end-to-end on the
+        // resolved-cpu path that every existing test exercises.
+        let base = temp_dir("resolved-label-smoke");
         let config = AppConfig::new(AppPaths::new(&base));
-        let backend_config = InferenceBackendConfig {
-            backend: InferenceBackendKind::Candle,
-            candle_device: "tpu".to_string(),
-            ..InferenceBackendConfig::default()
-        };
+        let model_service = Arc::new(ModelService::new(config.paths().clone()));
 
-        let err = compose_inference_backends(&config, &backend_config)
-            .expect_err("invalid selected Candle device should be rejected");
-
-        match err {
-            CandleBackendError::DeviceUnavailable { requested, .. } => {
-                assert_eq!(requested, "tpu");
-            }
-            other => panic!("expected DeviceUnavailable, got {other:?}"),
-        }
+        let _ = compose_inference_runtime(&config, "cpu", model_service).expect("runtime");
         let _ = std::fs::remove_dir_all(&base);
     }
 }

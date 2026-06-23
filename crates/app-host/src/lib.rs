@@ -39,6 +39,7 @@ pub use node_catalog::{NodeCatalogAlignment, NodeCatalogService};
 pub use policy::WorkflowCommandPolicy;
 pub use proposal::{ProposalReceipt, ProposalStatus, WorkflowProposal};
 pub use readiness::SnapshotExternalReadinessProvider;
+pub use reimagine_inference::{BackendInstance, WorkspaceComputeProfile};
 pub use run_workflow::{RunWorkflowRequest, RunWorkflowResult, run_id_of};
 pub use services::WorkspaceServices;
 pub use tools::register_app_tools;
