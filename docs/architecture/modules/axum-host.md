@@ -14,12 +14,12 @@ Axum is not a test-only backdoor. Tauri and Axum are equal interaction
 surfaces over the same workspace host:
 
 ```text
-Tauri command -> app-host API DTO -> WorkspaceHost
-HTTP request  -> app-host API DTO -> WorkspaceHost
+Tauri command -> app-host DTO -> WorkspaceHost
+HTTP request  -> app-host DTO -> WorkspaceHost
 ```
 
 They may share request/response DTOs and projection helpers through
-`app-host::api`, while keeping transport-specific details in their own host
+`app-host::dto`, while keeping transport-specific details in their own host
 adapters.
 
 ## Responsibilities
@@ -43,11 +43,12 @@ src/
   lib.rs
   state.rs
   error.rs
-  dto.rs
   router.rs
   server.rs
-  routes/
+  api.rs
+  api/
     health.rs
+    nodes.rs
     workflows.rs
     runs.rs
     artifacts.rs
@@ -58,6 +59,12 @@ src/
 only runs the listener; it must not build `WorkspaceHost`. `recorder.rs`
 provides the `RunEventSink` the runtime is wired with so run events
 become queryable over HTTP.
+
+`api.rs` and `api/` contain Axum route handlers. They own HTTP extractors such
+as `State`, `Path`, and `Json`, call the shared `WorkspaceHost` facade, and
+return shared `app-host::dto` shapes where possible. `router.rs` only mounts
+those handlers and installs middleware/tracing. Shared DTOs do not live in
+`axum-host`.
 
 ## Suggested V1 Surface
 
@@ -213,7 +220,7 @@ runtime, and inference continue to emit structured diagnostics and run events.
 
 - `axum-host` is a peer to `src-tauri`, not a replacement for it.
 - It does not duplicate app-host orchestration logic.
-- It should share host API DTO/projection shapes through `app-host::api` when
+- It should share host DTO/projection shapes through `app-host::dto` when
   those shapes are useful to both Tauri and Axum.
 - It reads run snapshots and summaries through `WorkspaceHost` facade
   methods rather than through `RuntimeService`.
