@@ -8,7 +8,7 @@
 use axum::Json;
 use axum::http::StatusCode;
 use axum::response::{IntoResponse, Response};
-use reimagine_app_host::AppHostError;
+use reimagine_app_host::{AppHostError, ArtifactAccessError};
 use reimagine_core::model::{RunId, WorkflowId};
 use serde::Serialize;
 use serde_json::json;
@@ -27,6 +27,14 @@ pub enum AxumHostError {
     UnknownWorkflow { workflow_id: WorkflowId },
     /// The requested run id is not known to the runtime store.
     UnknownRun { run_id: RunId },
+    /// The requested artifact id is not known to any run.
+    UnknownArtifact,
+    /// The artifact reference failed path safety validation.
+    UnsafeArtifactReference,
+    /// The artifact record exists but the backing file no longer exists.
+    ArtifactFileGone,
+    /// The artifact media type is not supported.
+    UnsupportedArtifactMedia,
     /// Request body could not be deserialized.
     BadRequest { message: String },
     /// App-host returned an error that does not map to a more specific
@@ -41,6 +49,10 @@ impl std::fmt::Display for AxumHostError {
                 write!(f, "unknown workflow `{workflow_id}`")
             }
             Self::UnknownRun { run_id } => write!(f, "unknown run `{run_id}`"),
+            Self::UnknownArtifact => write!(f, "unknown artifact"),
+            Self::UnsafeArtifactReference => write!(f, "unsafe artifact reference"),
+            Self::ArtifactFileGone => write!(f, "artifact file gone"),
+            Self::UnsupportedArtifactMedia => write!(f, "unsupported media type"),
             Self::BadRequest { message } => write!(f, "bad request: {message}"),
             Self::AppHost(error) => write!(f, "{error}"),
         }
@@ -62,6 +74,17 @@ impl From<AppHostError> for AxumHostError {
             AppHostError::UnknownWorkflow { workflow_id } => Self::UnknownWorkflow { workflow_id },
             AppHostError::UnknownRun { run_id } => Self::UnknownRun { run_id },
             other => Self::AppHost(other),
+        }
+    }
+}
+
+impl From<ArtifactAccessError> for AxumHostError {
+    fn from(value: ArtifactAccessError) -> Self {
+        match value {
+            ArtifactAccessError::UnknownArtifact => Self::UnknownArtifact,
+            ArtifactAccessError::UnsafeReference => Self::UnsafeArtifactReference,
+            ArtifactAccessError::FileGone => Self::ArtifactFileGone,
+            ArtifactAccessError::UnsupportedMedia => Self::UnsupportedArtifactMedia,
         }
     }
 }
@@ -92,6 +115,26 @@ impl IntoResponse for AxumHostError {
                 StatusCode::NOT_FOUND,
                 "unknown_run",
                 format!("unknown run `{run_id}`"),
+            ),
+            Self::UnknownArtifact => (
+                StatusCode::NOT_FOUND,
+                "unknown_artifact",
+                "unknown artifact".to_string(),
+            ),
+            Self::UnsafeArtifactReference => (
+                StatusCode::NOT_FOUND,
+                "unsafe_artifact_reference",
+                "unsafe artifact reference".to_string(),
+            ),
+            Self::ArtifactFileGone => (
+                StatusCode::GONE,
+                "artifact_file_gone",
+                "artifact file gone".to_string(),
+            ),
+            Self::UnsupportedArtifactMedia => (
+                StatusCode::UNSUPPORTED_MEDIA_TYPE,
+                "unsupported_media",
+                "unsupported media type".to_string(),
             ),
             Self::BadRequest { message } => {
                 (StatusCode::BAD_REQUEST, "bad_request", message.clone())

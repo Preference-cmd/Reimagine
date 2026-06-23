@@ -16,19 +16,22 @@ use axum::http::{Request, StatusCode};
 use reimagine_agent::WorkspaceScope;
 use reimagine_app_host::{BackendSelection, ModelService, WorkspaceHost};
 use reimagine_config::{AppConfig, AppPaths};
+use reimagine_core::model::{ArtifactRef, SlotId};
 use reimagine_core::model::{
-    ModelId, ModelRef, ModelRole, ModelSeries, ModelVariant, ParamValue, WorkflowId,
-    WorkflowVersion,
+    ModelId, ModelRef, ModelRole, ModelSeries, ModelVariant, NodeId, NodeTypeId, ParamValue,
+    WorkflowId, WorkflowVersion,
+};
+use reimagine_core::readiness::{
+    ExecutionNode, ExecutionPlan, ExecutionStage, RunTarget, RunTargetSelection,
 };
 use reimagine_core::workflow::{Workflow, WorkflowNode};
 use reimagine_model_manager::{
     ModelDescriptor, ModelFormat, ModelManifest, ModelRoot, ModelSource, ModelSourceStatus,
 };
 use reimagine_nodes::{BUILTIN_CHECKPOINT_LOADER, BUILTIN_KSAMPLER, BuiltinNodeCatalog};
-use reimagine_runtime::RunEventSink;
 use reimagine_runtime::{
-    BoxedNodeExecutor, ExecutionOutput, NodeExecutionContext, NodeExecutor, NodeExecutorRegistry,
-    RuntimeService,
+    ArtifactEventKind, BoxedNodeExecutor, ExecutionOutput, NodeExecutionContext, NodeExecutor,
+    NodeExecutorRegistry, RunEventSink, RuntimeService,
 };
 use serde_json::Value;
 use tower::ServiceExt;
@@ -67,6 +70,32 @@ impl NodeExecutor for MockLoaderExecutor {
     }
 }
 
+fn artifact_executor(reference: ArtifactRef) -> BoxedNodeExecutor {
+    Arc::new(MockArtifactExecutor { reference })
+}
+
+struct MockArtifactExecutor {
+    reference: ArtifactRef,
+}
+
+#[async_trait]
+impl NodeExecutor for MockArtifactExecutor {
+    async fn execute(
+        &self,
+        context: NodeExecutionContext,
+    ) -> Result<Vec<ExecutionOutput>, reimagine_runtime::NodeExecutorError> {
+        context
+            .artifacts()
+            .record(
+                SlotId::new("artifact"),
+                self.reference.clone(),
+                ArtifactEventKind::Saved,
+            )
+            .await;
+        Ok(Vec::new())
+    }
+}
+
 fn model_ref_for(model_id: &ModelId) -> ModelRef {
     ModelRef::new(
         model_id.clone(),
@@ -80,6 +109,26 @@ fn build_workflow(model_id: &ModelId) -> Workflow {
     Workflow::new(WORKFLOW_ID, WorkflowVersion::new(1)).with_node(
         WorkflowNode::new("loader", BUILTIN_CHECKPOINT_LOADER)
             .with_param("checkpoint", ParamValue::ModelRef(model_ref_for(model_id))),
+    )
+}
+
+fn one_node_plan(type_id: &str, node_id: &str) -> ExecutionPlan {
+    ExecutionPlan::new(
+        WorkflowId::new("workflow-artifact-test"),
+        WorkflowVersion::new(1),
+        RunTargetSelection::AllDefaultTargets,
+        vec![RunTarget::Node {
+            node_id: NodeId::new(node_id),
+        }],
+        vec![ExecutionNode::new(
+            NodeId::new(node_id),
+            NodeTypeId::new(type_id),
+            Vec::new(),
+            Vec::new(),
+        )],
+        Vec::new(),
+        Vec::new(),
+        vec![ExecutionStage::new(0, vec![NodeId::new(node_id)])],
     )
 }
 
@@ -128,6 +177,41 @@ async fn build_ready_host(
     registry
         .register(BUILTIN_CHECKPOINT_LOADER, mock_loader_executor())
         .expect("register mock loader");
+
+    let recorder = Arc::new(RunEventRecorder::new());
+    let runtime = Arc::new(RuntimeService::new(
+        registry,
+        Arc::new(reimagine_runtime::NoopBackendInstanceRuntimeHooks::default()),
+        recorder.clone() as Arc<dyn RunEventSink>,
+        Arc::new(reimagine_runtime::SystemClock),
+    ));
+
+    let host = Arc::new(WorkspaceHost::new(
+        WorkspaceScope::new(format!("ws-{base}")),
+        AppConfig::new(paths),
+        reimagine_config::InferenceBackendConfig::default(),
+        runtime.clone(),
+        builtin_catalog(),
+    ));
+    (host, runtime, recorder)
+}
+
+async fn build_artifact_host(
+    reference: ArtifactRef,
+    base: &str,
+) -> (
+    Arc<WorkspaceHost>,
+    Arc<RuntimeService>,
+    Arc<RunEventRecorder>,
+) {
+    let paths = AppPaths::new(unique_temp_dir(base));
+    tokio::fs::create_dir_all(paths.models_dir()).await.unwrap();
+    tokio::fs::create_dir_all(paths.output_dir()).await.unwrap();
+
+    let mut registry = NodeExecutorRegistry::default();
+    registry
+        .register("mock.artifact", artifact_executor(reference))
+        .expect("register artifact executor");
 
     let recorder = Arc::new(RunEventRecorder::new());
     let runtime = Arc::new(RuntimeService::new(
@@ -768,5 +852,229 @@ async fn candle_sdxl_workflow_run_completes_with_image_artifact() {
     assert!(
         bytes.starts_with(&[0x89, b'P', b'N', b'G', 0x0d, 0x0a, 0x1a, 0x0a]),
         "PNG file should have PNG signature"
+    );
+}
+
+#[tokio::test]
+async fn artifact_route_serves_png_bytes() {
+    let model_id = ModelId::new(MODEL_ID);
+    let (host, recorder, _base_path) = build_candle_ready_host(
+        manifest_with_model(&model_id, CHECKPOINT_FILENAME),
+        "candle-sdxl-artifact",
+    )
+    .await;
+    let app = build_router().with_state(build_state(host.clone(), recorder.clone()));
+
+    // Open the canonical SDXL workflow inline.
+    let workflow_json = load_sdxl_workflow_json();
+    let workflow_id = workflow_json["id"].as_str().expect("workflow id");
+    let open_body = serde_json::json!({ "workflow": workflow_json }).to_string();
+    let response = app
+        .clone()
+        .oneshot(json_request("POST", "/workflows/open", Some(&open_body)))
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+
+    // Run with an explicit target that forces the full pipeline up to save_image.
+    let run_body = serde_json::json!({
+        "target_selection": {
+            "kind": "explicit",
+            "targets": [
+                { "kind": "node", "node_id": "node_save_image" }
+            ]
+        },
+        "correlation_id": "corr-candle-sdxl-artifact"
+    })
+    .to_string();
+    let response = app
+        .clone()
+        .oneshot(json_request(
+            "POST",
+            &format!("/workflows/{workflow_id}/run"),
+            Some(&run_body),
+        ))
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+    let bytes = body_bytes(response.into_body()).await;
+    let json: Value = serde_json::from_slice(&bytes).unwrap();
+    assert_eq!(json["outcome"], "started");
+    let run_id_str = json["run_id"].as_str().expect("run_id");
+    let run_id = reimagine_core::model::RunId::new(run_id_str.to_string());
+
+    // Wait for run to complete
+    let deadline = std::time::Instant::now() + Duration::from_secs(3);
+    loop {
+        if let Some(summary) = host.runtime_service().summary(&run_id) {
+            assert!(
+                summary.state.is_terminal(),
+                "run {run_id} should be terminal"
+            );
+            assert_eq!(
+                summary.state,
+                reimagine_runtime::RunState::Completed,
+                "expected run to complete successfully"
+            );
+            break;
+        }
+        if std::time::Instant::now() > deadline {
+            panic!("run {run_id} did not finish in time");
+        }
+        tokio::time::sleep(Duration::from_millis(5)).await;
+    }
+
+    // GET /runs/:id to get the artifact id
+    let response = app
+        .clone()
+        .oneshot(json_request("GET", &format!("/runs/{run_id_str}"), None))
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+    let bytes = body_bytes(response.into_body()).await;
+    let json: Value = serde_json::from_slice(&bytes).unwrap();
+    let artifacts = json["artifacts"]
+        .as_array()
+        .expect("summary artifacts should be an array");
+    assert_eq!(artifacts.len(), 1, "summary should expose one artifact");
+    let artifact_id = artifacts[0]["id"]
+        .as_str()
+        .expect("artifact should have an id");
+
+    // GET /artifacts/:artifact_id should return the PNG bytes
+    let response = app
+        .clone()
+        .oneshot(json_request(
+            "GET",
+            &format!("/artifacts/{artifact_id}"),
+            None,
+        ))
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+    assert_eq!(response.headers().get("content-type").unwrap(), "image/png");
+
+    let bytes = body_bytes(response.into_body()).await;
+    assert!(
+        bytes.starts_with(&[0x89, b'P', b'N', b'G', 0x0d, 0x0a, 0x1a, 0x0a]),
+        "PNG response should have PNG signature"
+    );
+    assert!(bytes.len() > 100, "PNG response should be non-trivial size");
+}
+
+#[tokio::test]
+async fn artifact_route_returns_410_for_missing_file() {
+    let (host, runtime, recorder) =
+        build_artifact_host(ArtifactRef::new("output/missing.png"), "artifact-gone").await;
+    let app = build_router().with_state(build_state(host, recorder));
+
+    let handle = runtime
+        .run(
+            Arc::new(one_node_plan("mock.artifact", "save")),
+            Default::default(),
+            Default::default(),
+        )
+        .expect("start artifact run");
+    run_to_completion(&runtime, handle.run_id()).await;
+    let summary = runtime.summary(handle.run_id()).expect("summary");
+    let artifact_id = summary.artifacts[0].id.to_string();
+
+    let response = app
+        .oneshot(json_request(
+            "GET",
+            &format!("/artifacts/{artifact_id}"),
+            None,
+        ))
+        .await
+        .unwrap();
+
+    assert_eq!(response.status(), StatusCode::GONE);
+    let bytes = body_bytes(response.into_body()).await;
+    let json: Value = serde_json::from_slice(&bytes).unwrap();
+    assert_eq!(json["error"]["code"], "artifact_file_gone");
+}
+
+#[tokio::test]
+async fn artifact_route_returns_415_for_non_png_reference() {
+    let (host, runtime, recorder) = build_artifact_host(
+        ArtifactRef::new("output/not-png.txt"),
+        "artifact-unsupported",
+    )
+    .await;
+    let output_path = host.config().paths().output_dir().join("not-png.txt");
+    tokio::fs::write(&output_path, b"not a png")
+        .await
+        .expect("write non-png artifact file");
+    let app = build_router().with_state(build_state(host, recorder));
+
+    let handle = runtime
+        .run(
+            Arc::new(one_node_plan("mock.artifact", "save")),
+            Default::default(),
+            Default::default(),
+        )
+        .expect("start artifact run");
+    run_to_completion(&runtime, handle.run_id()).await;
+    let summary = runtime.summary(handle.run_id()).expect("summary");
+    let artifact_id = summary.artifacts[0].id.to_string();
+
+    let response = app
+        .oneshot(json_request(
+            "GET",
+            &format!("/artifacts/{artifact_id}"),
+            None,
+        ))
+        .await
+        .unwrap();
+
+    assert_eq!(response.status(), StatusCode::UNSUPPORTED_MEDIA_TYPE);
+    let bytes = body_bytes(response.into_body()).await;
+    let json: Value = serde_json::from_slice(&bytes).unwrap();
+    assert_eq!(json["error"]["code"], "unsupported_media");
+}
+
+#[tokio::test]
+async fn artifact_route_returns_404_for_unknown_id() {
+    let (host, _runtime, recorder) =
+        build_ready_host(manifest_with_missing_model(), "artifact-404").await;
+    let app = build_router().with_state(build_state(host, recorder));
+
+    let response = app
+        .oneshot(json_request(
+            "GET",
+            "/artifacts/nonexistent-artifact-id",
+            None,
+        ))
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::NOT_FOUND);
+    let bytes = body_bytes(response.into_body()).await;
+    let json: Value = serde_json::from_slice(&bytes).unwrap();
+    assert_eq!(json["error"]["code"], "unknown_artifact");
+}
+
+#[tokio::test]
+async fn artifact_route_returns_404_for_path_traversal_id() {
+    let (host, _runtime, recorder) =
+        build_ready_host(manifest_with_missing_model(), "artifact-traversal").await;
+    let app = build_router().with_state(build_state(host, recorder));
+
+    let response = app
+        .oneshot(json_request(
+            "GET",
+            "/artifacts/..%2F..%2F..%2Fetc%2Fpasswd",
+            None,
+        ))
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::NOT_FOUND);
+    let bytes = body_bytes(response.into_body()).await;
+    let json: Value = serde_json::from_slice(&bytes).unwrap();
+    // Should be either unknown_artifact (not found in store) or
+    // unsafe_artifact_reference (path safety rejected)
+    let code = json["error"]["code"].as_str().unwrap();
+    assert!(
+        code == "unknown_artifact" || code == "unsafe_artifact_reference",
+        "expected artifact error code, got {code}"
     );
 }
