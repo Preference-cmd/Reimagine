@@ -19,10 +19,10 @@ mod dto;
 
 pub use bootstrap::{bootstrap_workspace, default_workspace_path, ensure_workspace_dirs};
 pub use cli::{Cli, build_env_filter, init_tracing};
+mod api;
 mod error;
 mod recorder;
 mod router;
-mod routes;
 mod server;
 mod state;
 
