@@ -4,14 +4,25 @@ use std::sync::Arc;
 use reimagine_agent::{AgentToolRegistry, WorkspaceScope};
 use reimagine_config::{AppConfig, AppPaths, ConfigDocument, InferenceBackendConfig};
 use reimagine_core::model::NodeDef;
+use reimagine_inference::WorkspaceComputeProfile;
+use reimagine_inference_candle::CandleProfileProvider;
 use reimagine_nodes::BuiltinNodeCatalog;
 use reimagine_runtime::{BoxedRunEventSink, RuntimeService, VecRunEventSink};
 
 use crate::inference::compose::compose_inference_runtime;
+use crate::inference::resolve::{CANDLE_CPU_FALLBACK_LABEL, resolve_candle_instance};
 use crate::node_catalog::{NodeCatalogAlignment, NodeCatalogService};
 use crate::services::WorkspaceServices;
 use crate::tools::register_app_tools;
 use crate::{AgentService, AppHostError, BackendSelection, ModelService, WorkflowService};
+
+/// Compute profile source the workspace uses during bootstrap.
+///
+/// V1 only knows the Candle backend, so the workspace probes the
+/// [`CandleProfileProvider`] directly. A future multi-backend
+/// workspace will collect an `Arc<dyn BackendProfileProvider>` list
+/// here and aggregate their results.
+const BOOTSTRAP_PROFILE_PROVIDER: CandleProfileProvider = CandleProfileProvider::new();
 
 #[derive(Debug)]
 pub struct WorkspaceHost {
@@ -25,6 +36,8 @@ pub struct WorkspaceHost {
     node_catalog: Arc<NodeCatalogService>,
     builtin_catalog: Arc<BuiltinNodeCatalog>,
     services: Arc<WorkspaceServices>,
+    compute_profile: Arc<WorkspaceComputeProfile>,
+    resolved_backend_instance: reimagine_inference::BackendInstance,
 }
 
 impl WorkspaceHost {
@@ -34,6 +47,8 @@ impl WorkspaceHost {
         backend_config: InferenceBackendConfig,
         runtime_service: Arc<RuntimeService>,
         builtin_catalog: Arc<BuiltinNodeCatalog>,
+        compute_profile: Arc<WorkspaceComputeProfile>,
+        resolved_backend_instance: reimagine_inference::BackendInstance,
     ) -> Self {
         let config = Arc::new(config);
         let workflow_service = Arc::new(WorkflowService::new(config.paths().clone()));
@@ -69,6 +84,8 @@ impl WorkspaceHost {
             node_catalog,
             builtin_catalog,
             services,
+            compute_profile,
+            resolved_backend_instance,
         }
     }
 
@@ -153,8 +170,28 @@ impl WorkspaceHost {
         event_sink: BoxedRunEventSink,
     ) -> Self {
         let model_service = Arc::new(ModelService::new(config.paths().clone()));
-        let composed = compose_inference_runtime(&config, &backend_config, model_service.clone())
-            .expect("backend");
+
+        // Probe the live backend profile, resolve the configured label
+        // against it, and cache the resulting profile. The fallback
+        // diagnostics ride on the cached profile so
+        // `WorkspaceHost::compute_profile()` reports the bootstrap
+        // decision without needing to re-probe.
+        let mut workspace_profile =
+            WorkspaceComputeProfile::new().with_backend_profile(BOOTSTRAP_PROFILE_PROVIDER.probe());
+        let (resolved_instance, fallback_diagnostics) = resolve_candle_instance(
+            workspace_profile
+                .backend_profiles
+                .first()
+                .expect("candle backend profile populated by probe"),
+            &backend_config.candle_device,
+        );
+        for diagnostic in fallback_diagnostics {
+            workspace_profile = workspace_profile.with_diagnostic(diagnostic);
+        }
+
+        let resolved_label = instance_label(&resolved_instance);
+        let composed = compose_inference_runtime(&config, resolved_label, model_service.clone())
+            .expect("resolved Candle label is validated against profile before compose");
         let runtime_service = Arc::new(RuntimeService::new(
             composed.executor_registry,
             Arc::new(composed.runtime_hooks),
@@ -168,6 +205,8 @@ impl WorkspaceHost {
             backend_config,
             runtime_service,
             builtin_catalog,
+            Arc::new(workspace_profile),
+            resolved_instance,
         )
     }
 
@@ -229,6 +268,59 @@ impl WorkspaceHost {
     pub fn backend_config(&self) -> &InferenceBackendConfig {
         &self.backend_config
     }
+
+    /// Return the workspace's most recent compute profile.
+    ///
+    /// The profile aggregates one [`BackendProfile`] per registered
+    /// backend (V1: only `candle`) plus a top-level diagnostics
+    /// collection that records any fallback decisions made during
+    /// bootstrap (e.g. `mps` → `cpu` when Metal is unavailable, or any
+    /// unknown configured device label).
+    ///
+    /// The accessor returns a clone of the cached profile and does not
+    /// re-probe the host; the snapshot is computed once during
+    /// [`WorkspaceHost`] bootstrap.
+    pub fn compute_profile(&self) -> WorkspaceComputeProfile {
+        (*self.compute_profile).clone()
+    }
+
+    /// Return the host-neutral
+    /// [`crate::dto::ComputeProfileDto`] projection of the workspace's
+    /// most recent compute profile.
+    ///
+    /// Use this from HTTP / IPC adapters so the wire shape does not
+    /// depend on inference-internal enums (`DeviceKind`,
+    /// `BackendInstanceStatus`, `InferenceCapability`, …) or on
+    /// backend-native handles. The returned DTO is the V1 wire contract
+    /// for `GET /compute-profile` and the equivalent Tauri command.
+    pub fn compute_profile_dto(&self) -> crate::dto::ComputeProfileDto {
+        self.compute_profile().into()
+    }
+
+    /// Return the resolved Candle device label used to construct the
+    /// runtime. After bootstrap fallback this is always `"cpu"` or
+    /// `"metal"`. Useful for tests and host adapters that need to
+    /// know which [`reimagine_inference::BackendInstance`] the
+    /// workspace is actually running.
+    pub fn resolved_candle_device_label(&self) -> String {
+        instance_label(&self.resolved_backend_instance).to_string()
+    }
+
+    /// Return the resolved [`reimagine_inference::BackendInstance`]
+    /// the workspace bootstrap selected.
+    pub fn resolved_backend_instance(&self) -> &reimagine_inference::BackendInstance {
+        &self.resolved_backend_instance
+    }
+}
+
+/// Strip the `<backend>:` prefix from a resolved backend instance id
+/// and return the bare device label.
+fn instance_label(instance: &reimagine_inference::BackendInstance) -> &str {
+    instance
+        .as_str()
+        .split_once(':')
+        .map(|(_, label)| label)
+        .unwrap_or(CANDLE_CPU_FALLBACK_LABEL)
 }
 
 fn load_backend_config(config: &AppConfig) -> InferenceBackendConfig {
@@ -255,6 +347,7 @@ mod tests {
     use super::*;
     use reimagine_config::InferenceBackendKind;
     use reimagine_core::model::NodeTypeId;
+    use reimagine_inference::BackendInstance;
     use std::fs;
 
     fn temp_dir(prefix: &str) -> std::path::PathBuf {
@@ -320,12 +413,8 @@ mod tests {
         let config = AppConfig::new(reimagine_config::AppPaths::new(&base));
         let model_service = Arc::new(ModelService::new(config.paths().clone()));
 
-        let composed = super::compose_inference_runtime(
-            &config,
-            &InferenceBackendConfig::default(),
-            Arc::clone(&model_service),
-        )
-        .expect("compose inference runtime");
+        let composed = super::compose_inference_runtime(&config, "cpu", Arc::clone(&model_service))
+            .expect("compose inference runtime");
 
         assert!(
             composed
@@ -415,6 +504,7 @@ mod tests {
             workspace.backend_config().backend,
             InferenceBackendKind::Candle
         );
+        assert_eq!(workspace.backend_config().candle_device, "cpu");
         let _ = fs::remove_dir_all(&base);
     }
 
@@ -437,6 +527,205 @@ mod tests {
         assert!(
             msg.contains("inference_backend.json") || msg.contains("bootstrap"),
             "error should mention config file or bootstrap, got: {msg}"
+        );
+        let _ = fs::remove_dir_all(&base);
+    }
+
+    // ── Compute profile tests (Task 3) ─────────────────────────────
+
+    fn assert_cpu_available(profile: &WorkspaceComputeProfile) {
+        let cpu = profile
+            .backend_profiles
+            .iter()
+            .flat_map(|bp| bp.instances.iter())
+            .find(|inst| inst.instance == BackendInstance::new("candle:cpu"))
+            .expect("candle:cpu instance present in profile");
+        assert_eq!(
+            cpu.status,
+            reimagine_inference::BackendInstanceStatus::Available,
+            "candle:cpu should always be Available"
+        );
+    }
+
+    fn assert_metal_present(profile: &WorkspaceComputeProfile) {
+        let metal = profile
+            .backend_profiles
+            .iter()
+            .flat_map(|bp| bp.instances.iter())
+            .find(|inst| inst.instance == BackendInstance::new("candle:metal"))
+            .expect("candle:metal instance present in profile");
+        assert_eq!(
+            metal.status,
+            reimagine_inference::BackendInstanceStatus::Available,
+            "candle:metal should be Available on Apple hardware"
+        );
+    }
+
+    fn metal_is_available_on_this_host() -> bool {
+        reimagine_inference_candle::CandleDevice::new("metal")
+            .try_build_device()
+            .is_ok()
+    }
+
+    #[test]
+    fn compute_profile_contains_available_cpu_instance() {
+        let base = temp_dir("profile-cpu");
+        let workspace = WorkspaceHost::with_defaults(WorkspaceScope::new("profile-cpu"), &base);
+        let profile = workspace.compute_profile();
+        assert_cpu_available(&profile);
+        let _ = fs::remove_dir_all(&base);
+    }
+
+    #[test]
+    fn compute_profile_works_without_running_a_workflow() {
+        let base = temp_dir("profile-no-run");
+        let workspace = WorkspaceHost::with_defaults(WorkspaceScope::new("profile-no-run"), &base);
+        // compute_profile() must work immediately after construction,
+        // without any workflow run or runtime boot.
+        let profile = workspace.compute_profile();
+        assert!(!profile.backend_profiles.is_empty());
+        let _ = fs::remove_dir_all(&base);
+    }
+
+    #[test]
+    fn invalid_candle_device_falls_back_to_cpu_with_diagnostic() {
+        let base = temp_dir("profile-tpu");
+        let backend_config = InferenceBackendConfig {
+            backend: InferenceBackendKind::Candle,
+            candle_device: "tpu".to_string(),
+            ..InferenceBackendConfig::default()
+        };
+        let workspace = WorkspaceHost::with_backend_config(
+            WorkspaceScope::new("profile-tpu"),
+            &base,
+            backend_config,
+            Arc::new(VecRunEventSink::new()),
+        );
+
+        assert_eq!(
+            workspace.backend_config().backend,
+            InferenceBackendKind::Candle,
+            "configured backend stays Candle"
+        );
+        assert_eq!(
+            workspace.resolved_candle_device_label(),
+            "cpu",
+            "workspace must fall back to CPU when device label is invalid"
+        );
+
+        let profile = workspace.compute_profile();
+        assert_cpu_available(&profile);
+
+        let diagnostic = profile
+            .diagnostics
+            .iter()
+            .find(|d| d.message().contains("tpu"))
+            .unwrap_or_else(|| {
+                panic!(
+                    "expected a fallback diagnostic mentioning `tpu`, got: {:?}",
+                    profile.diagnostics
+                )
+            });
+        assert_eq!(
+            diagnostic.code().as_str(),
+            "INFERENCE_PROFILE/INVALID_DEVICE",
+            "fallback diagnostic should use the invalid-device code"
+        );
+        let _ = fs::remove_dir_all(&base);
+    }
+
+    #[test]
+    fn mps_label_picks_metal_when_available_cpu_otherwise() {
+        let base = temp_dir("profile-mps");
+        let backend_config = InferenceBackendConfig {
+            backend: InferenceBackendKind::Candle,
+            candle_device: "mps".to_string(),
+            ..InferenceBackendConfig::default()
+        };
+        let workspace = WorkspaceHost::with_backend_config(
+            WorkspaceScope::new("profile-mps"),
+            &base,
+            backend_config,
+            Arc::new(VecRunEventSink::new()),
+        );
+
+        let profile = workspace.compute_profile();
+        let resolved = workspace.resolved_candle_device_label();
+        assert_cpu_available(&profile);
+
+        if metal_is_available_on_this_host() {
+            assert_metal_present(&profile);
+            assert_eq!(
+                resolved, "metal",
+                "mps normalizes to metal when Metal is available"
+            );
+            assert!(
+                profile.diagnostics.is_empty(),
+                "no fallback diagnostic when Metal is available, got: {:?}",
+                profile.diagnostics
+            );
+        } else {
+            assert_eq!(
+                resolved, "cpu",
+                "mps falls back to cpu when Metal is unavailable"
+            );
+            let diagnostic = profile
+                .diagnostics
+                .iter()
+                .find(|d| d.code().as_str() == "INFERENCE_PROFILE/DEVICE_UNAVAILABLE")
+                .unwrap_or_else(|| {
+                    panic!(
+                        "expected a DEVICE_UNAVAILABLE fallback diagnostic, got: {:?}",
+                        profile.diagnostics
+                    )
+                });
+            assert!(
+                diagnostic.message().contains("mps") || diagnostic.message().contains("metal"),
+                "diagnostic should mention mps or metal, got: {}",
+                diagnostic.message()
+            );
+        }
+        let _ = fs::remove_dir_all(&base);
+    }
+
+    #[tokio::test]
+    async fn compute_profile_works_after_async_try_with_defaults() {
+        let base = temp_dir("profile-try-defaults");
+        let workspace =
+            WorkspaceHost::try_with_defaults(WorkspaceScope::new("profile-try-defaults"), &base)
+                .await
+                .expect("try_with_defaults should succeed with no config");
+
+        // The accessor must work after the async bootstrap path
+        // without any workflow run.
+        let profile = workspace.compute_profile();
+        assert_cpu_available(&profile);
+        let _ = fs::remove_dir_all(&base);
+    }
+
+    #[test]
+    fn fallback_cpu_keeps_same_registry_wiring() {
+        // The fallback path must register `candle:cpu` with the same
+        // descriptor shape the cpu path uses — same plugin / extension
+        // / device / runtime hooks.
+        let base = temp_dir("profile-fallback-wiring");
+        let backend_config = InferenceBackendConfig {
+            backend: InferenceBackendKind::Candle,
+            candle_device: "tpu".to_string(),
+            ..InferenceBackendConfig::default()
+        };
+        let workspace = WorkspaceHost::with_backend_config(
+            WorkspaceScope::new("profile-fallback-wiring"),
+            &base,
+            backend_config,
+            Arc::new(VecRunEventSink::new()),
+        );
+
+        let registry = workspace.runtime_service.registry();
+        let cpu_id = NodeTypeId::new("builtin.checkpoint_loader");
+        assert!(
+            registry.get(&cpu_id).is_some(),
+            "fallback to cpu must still register the built-in checkpoint loader executor"
         );
         let _ = fs::remove_dir_all(&base);
     }

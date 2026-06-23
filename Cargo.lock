@@ -4344,6 +4344,7 @@ dependencies = [
  "reimagine-core",
  "reimagine-plugin",
  "serde",
+ "serde_json",
  "tokio",
  "tracing",
 ]
