@@ -355,4 +355,98 @@ mod tests {
         assert!(msg.contains("missing"));
         assert!(msg.contains("/models/missing.safetensors"));
     }
+
+    fn make_test_bundle(source_set: ResolvedInferenceModelSourceSet) -> Arc<LoadedSdxlBundle> {
+        fs::create_dir_all(unique_temp_dir()).unwrap();
+        for source in source_set.sources() {
+            if let Some(parent) = source.path().parent() {
+                fs::create_dir_all(parent).unwrap();
+            }
+            fs::write(source.path(), b"dummy").unwrap();
+        }
+        let device = Arc::new(Device::Cpu);
+        LoadedSdxlBundle::from_resolved_with_source_set(
+            ModelId::new("test-model"),
+            source_set,
+            ModelFormat::SafeTensors,
+            device,
+        )
+        .unwrap()
+    }
+
+    #[test]
+    fn check_compatible_identical_sources() {
+        let dir = unique_temp_dir();
+        fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("test.safetensors");
+        fs::write(&path, b"dummy").unwrap();
+        let src = ResolvedInferenceModelSource::new(ModelSourceKind::CheckpointBundle, path);
+        let set = ResolvedInferenceModelSourceSet::new(src);
+        let bundle = make_test_bundle(set.clone());
+        assert!(bundle.check_compatible(&set).is_ok());
+    }
+
+    #[test]
+    fn check_compatible_path_mismatch() {
+        let dir = unique_temp_dir();
+        fs::create_dir_all(&dir).unwrap();
+        let path_a = dir.join("a.safetensors");
+        let path_b = dir.join("b.safetensors");
+        fs::write(&path_a, b"dummy").unwrap();
+        fs::write(&path_b, b"dummy").unwrap();
+        let set1 = ResolvedInferenceModelSourceSet::new(ResolvedInferenceModelSource::new(
+            ModelSourceKind::CheckpointBundle,
+            path_a,
+        ));
+        let set2 = ResolvedInferenceModelSourceSet::new(ResolvedInferenceModelSource::new(
+            ModelSourceKind::CheckpointBundle,
+            path_b,
+        ));
+        let bundle = make_test_bundle(set1);
+        assert!(bundle.check_compatible(&set2).is_err());
+    }
+
+    #[test]
+    fn check_compatible_kind_mismatch() {
+        let dir = unique_temp_dir();
+        fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("test.safetensors");
+        fs::write(&path, b"dummy").unwrap();
+        let set1 = ResolvedInferenceModelSourceSet::new(ResolvedInferenceModelSource::new(
+            ModelSourceKind::CheckpointBundle,
+            path.clone(),
+        ));
+        let set2 = ResolvedInferenceModelSourceSet::new(ResolvedInferenceModelSource::new(
+            ModelSourceKind::SplitComponent,
+            path,
+        ));
+        let bundle = make_test_bundle(set1);
+        assert!(bundle.check_compatible(&set2).is_err());
+    }
+
+    #[test]
+    fn check_compatible_count_mismatch() {
+        let dir = unique_temp_dir();
+        fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("test.safetensors");
+        let path_unet = dir.join("unet.safetensors");
+        let path_clip = dir.join("clip.safetensors");
+        fs::write(&path, b"dummy").unwrap();
+        fs::write(&path_unet, b"dummy").unwrap();
+        fs::write(&path_clip, b"dummy").unwrap();
+        let set1 = ResolvedInferenceModelSourceSet::new(ResolvedInferenceModelSource::new(
+            ModelSourceKind::CheckpointBundle,
+            path,
+        ));
+        let set2 = ResolvedInferenceModelSourceSet::new(ResolvedInferenceModelSource::new(
+            ModelSourceKind::SplitComponent,
+            path_unet,
+        ))
+        .with_source(ResolvedInferenceModelSource::new(
+            ModelSourceKind::SplitComponent,
+            path_clip,
+        ));
+        let bundle = make_test_bundle(set1);
+        assert!(bundle.check_compatible(&set2).is_err());
+    }
 }

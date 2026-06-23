@@ -210,14 +210,6 @@ fn map_err<T>(result: Result<T, CandleBackendError>) -> Result<T, InferenceError
                 "candle backend has no loader for model `{model_id}` (series `{series}`, variant `{variant}`)"
             ),
         },
-        CandleBackendError::IncompatibleCachedBundle { model_id, reason } => {
-            InferenceError::BackendExecutionFailed {
-                message: format!(
-                    "cached model bundle for '{}' is incompatible: {reason}",
-                    model_id.as_str()
-                ),
-            }
-        }
     })
 }
 
