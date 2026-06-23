@@ -4,6 +4,7 @@
 //! that knows how to translate between HTTP DTOs and app-host facade
 //! calls. See `dto.rs` for the request/response shapes.
 
+pub mod artifacts;
 pub mod health;
 pub mod nodes;
 pub mod runs;

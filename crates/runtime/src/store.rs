@@ -4,10 +4,10 @@ use std::collections::HashMap;
 use std::sync::{Arc, RwLock};
 
 use reimagine_core::diagnostic::Diagnostic;
-use reimagine_core::model::RunId;
+use reimagine_core::model::{ArtifactId, RunId};
 
 use crate::handle::RunHandle;
-use crate::snapshot::{RunSnapshot, RunSummary};
+use crate::snapshot::{RunArtifactRef, RunSnapshot, RunSummary};
 
 /// Inner state behind [`RunStore`].
 ///
@@ -90,6 +90,33 @@ impl RunStore {
     pub fn summary(&self, run_id: &RunId) -> Option<RunSummary> {
         let guard = self.inner.read().expect("run store poisoned");
         guard.summaries.get(run_id).cloned()
+    }
+
+    /// Search all active snapshots and terminal summaries for an artifact by id.
+    // TODO: Replace linear scan with a HashMap<ArtifactId, RunArtifactRef> index
+    // once artifact volume grows beyond a handful per session.
+    pub fn find_artifact(&self, artifact_id: &ArtifactId) -> Option<RunArtifactRef> {
+        let guard = self.inner.read().expect("run store poisoned");
+
+        // Search active snapshots
+        for snapshot in guard.snapshots.values() {
+            for artifact in &snapshot.artifacts {
+                if artifact.id == *artifact_id {
+                    return Some(artifact.clone());
+                }
+            }
+        }
+
+        // Search terminal summaries
+        for summary in guard.summaries.values() {
+            for artifact in &summary.artifacts {
+                if artifact.id == *artifact_id {
+                    return Some(artifact.clone());
+                }
+            }
+        }
+
+        None
     }
 
     /// Number of active runs.
