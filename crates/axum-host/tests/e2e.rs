@@ -16,19 +16,22 @@ use axum::http::{Request, StatusCode};
 use reimagine_agent::WorkspaceScope;
 use reimagine_app_host::{BackendSelection, ModelService, WorkspaceHost};
 use reimagine_config::{AppConfig, AppPaths};
+use reimagine_core::model::{ArtifactRef, SlotId};
 use reimagine_core::model::{
-    ModelId, ModelRef, ModelRole, ModelSeries, ModelVariant, ParamValue, WorkflowId,
-    WorkflowVersion,
+    ModelId, ModelRef, ModelRole, ModelSeries, ModelVariant, NodeId, NodeTypeId, ParamValue,
+    WorkflowId, WorkflowVersion,
+};
+use reimagine_core::readiness::{
+    ExecutionNode, ExecutionPlan, ExecutionStage, RunTarget, RunTargetSelection,
 };
 use reimagine_core::workflow::{Workflow, WorkflowNode};
 use reimagine_model_manager::{
     ModelDescriptor, ModelFormat, ModelManifest, ModelRoot, ModelSource, ModelSourceStatus,
 };
 use reimagine_nodes::{BUILTIN_CHECKPOINT_LOADER, BUILTIN_KSAMPLER, BuiltinNodeCatalog};
-use reimagine_runtime::RunEventSink;
 use reimagine_runtime::{
-    BoxedNodeExecutor, ExecutionOutput, NodeExecutionContext, NodeExecutor, NodeExecutorRegistry,
-    RuntimeService,
+    ArtifactEventKind, BoxedNodeExecutor, ExecutionOutput, NodeExecutionContext, NodeExecutor,
+    NodeExecutorRegistry, RunEventSink, RuntimeService,
 };
 use serde_json::Value;
 use tower::ServiceExt;
@@ -67,6 +70,32 @@ impl NodeExecutor for MockLoaderExecutor {
     }
 }
 
+fn artifact_executor(reference: ArtifactRef) -> BoxedNodeExecutor {
+    Arc::new(MockArtifactExecutor { reference })
+}
+
+struct MockArtifactExecutor {
+    reference: ArtifactRef,
+}
+
+#[async_trait]
+impl NodeExecutor for MockArtifactExecutor {
+    async fn execute(
+        &self,
+        context: NodeExecutionContext,
+    ) -> Result<Vec<ExecutionOutput>, reimagine_runtime::NodeExecutorError> {
+        context
+            .artifacts()
+            .record(
+                SlotId::new("artifact"),
+                self.reference.clone(),
+                ArtifactEventKind::Saved,
+            )
+            .await;
+        Ok(Vec::new())
+    }
+}
+
 fn model_ref_for(model_id: &ModelId) -> ModelRef {
     ModelRef::new(
         model_id.clone(),
@@ -80,6 +109,26 @@ fn build_workflow(model_id: &ModelId) -> Workflow {
     Workflow::new(WORKFLOW_ID, WorkflowVersion::new(1)).with_node(
         WorkflowNode::new("loader", BUILTIN_CHECKPOINT_LOADER)
             .with_param("checkpoint", ParamValue::ModelRef(model_ref_for(model_id))),
+    )
+}
+
+fn one_node_plan(type_id: &str, node_id: &str) -> ExecutionPlan {
+    ExecutionPlan::new(
+        WorkflowId::new("workflow-artifact-test"),
+        WorkflowVersion::new(1),
+        RunTargetSelection::AllDefaultTargets,
+        vec![RunTarget::Node {
+            node_id: NodeId::new(node_id),
+        }],
+        vec![ExecutionNode::new(
+            NodeId::new(node_id),
+            NodeTypeId::new(type_id),
+            Vec::new(),
+            Vec::new(),
+        )],
+        Vec::new(),
+        Vec::new(),
+        vec![ExecutionStage::new(0, vec![NodeId::new(node_id)])],
     )
 }
 
@@ -128,6 +177,41 @@ async fn build_ready_host(
     registry
         .register(BUILTIN_CHECKPOINT_LOADER, mock_loader_executor())
         .expect("register mock loader");
+
+    let recorder = Arc::new(RunEventRecorder::new());
+    let runtime = Arc::new(RuntimeService::new(
+        registry,
+        Arc::new(reimagine_runtime::NoopBackendInstanceRuntimeHooks::default()),
+        recorder.clone() as Arc<dyn RunEventSink>,
+        Arc::new(reimagine_runtime::SystemClock),
+    ));
+
+    let host = Arc::new(WorkspaceHost::new(
+        WorkspaceScope::new(format!("ws-{base}")),
+        AppConfig::new(paths),
+        reimagine_config::InferenceBackendConfig::default(),
+        runtime.clone(),
+        builtin_catalog(),
+    ));
+    (host, runtime, recorder)
+}
+
+async fn build_artifact_host(
+    reference: ArtifactRef,
+    base: &str,
+) -> (
+    Arc<WorkspaceHost>,
+    Arc<RuntimeService>,
+    Arc<RunEventRecorder>,
+) {
+    let paths = AppPaths::new(unique_temp_dir(base));
+    tokio::fs::create_dir_all(paths.models_dir()).await.unwrap();
+    tokio::fs::create_dir_all(paths.output_dir()).await.unwrap();
+
+    let mut registry = NodeExecutorRegistry::default();
+    registry
+        .register("mock.artifact", artifact_executor(reference))
+        .expect("register artifact executor");
 
     let recorder = Arc::new(RunEventRecorder::new());
     let runtime = Arc::new(RuntimeService::new(
@@ -774,7 +858,7 @@ async fn candle_sdxl_workflow_run_completes_with_image_artifact() {
 #[tokio::test]
 async fn artifact_route_serves_png_bytes() {
     let model_id = ModelId::new(MODEL_ID);
-    let (host, recorder, base_path) = build_candle_ready_host(
+    let (host, recorder, _base_path) = build_candle_ready_host(
         manifest_with_model(&model_id, CHECKPOINT_FILENAME),
         "candle-sdxl-artifact",
     )
@@ -876,6 +960,77 @@ async fn artifact_route_serves_png_bytes() {
         "PNG response should have PNG signature"
     );
     assert!(bytes.len() > 100, "PNG response should be non-trivial size");
+}
+
+#[tokio::test]
+async fn artifact_route_returns_410_for_missing_file() {
+    let (host, runtime, recorder) =
+        build_artifact_host(ArtifactRef::new("output/missing.png"), "artifact-gone").await;
+    let app = build_router().with_state(build_state(host, recorder));
+
+    let handle = runtime
+        .run(
+            Arc::new(one_node_plan("mock.artifact", "save")),
+            Default::default(),
+            Default::default(),
+        )
+        .expect("start artifact run");
+    run_to_completion(&runtime, handle.run_id()).await;
+    let summary = runtime.summary(handle.run_id()).expect("summary");
+    let artifact_id = summary.artifacts[0].id.to_string();
+
+    let response = app
+        .oneshot(json_request(
+            "GET",
+            &format!("/artifacts/{artifact_id}"),
+            None,
+        ))
+        .await
+        .unwrap();
+
+    assert_eq!(response.status(), StatusCode::GONE);
+    let bytes = body_bytes(response.into_body()).await;
+    let json: Value = serde_json::from_slice(&bytes).unwrap();
+    assert_eq!(json["error"]["code"], "artifact_file_gone");
+}
+
+#[tokio::test]
+async fn artifact_route_returns_415_for_non_png_reference() {
+    let (host, runtime, recorder) = build_artifact_host(
+        ArtifactRef::new("output/not-png.txt"),
+        "artifact-unsupported",
+    )
+    .await;
+    let output_path = host.config().paths().output_dir().join("not-png.txt");
+    tokio::fs::write(&output_path, b"not a png")
+        .await
+        .expect("write non-png artifact file");
+    let app = build_router().with_state(build_state(host, recorder));
+
+    let handle = runtime
+        .run(
+            Arc::new(one_node_plan("mock.artifact", "save")),
+            Default::default(),
+            Default::default(),
+        )
+        .expect("start artifact run");
+    run_to_completion(&runtime, handle.run_id()).await;
+    let summary = runtime.summary(handle.run_id()).expect("summary");
+    let artifact_id = summary.artifacts[0].id.to_string();
+
+    let response = app
+        .oneshot(json_request(
+            "GET",
+            &format!("/artifacts/{artifact_id}"),
+            None,
+        ))
+        .await
+        .unwrap();
+
+    assert_eq!(response.status(), StatusCode::UNSUPPORTED_MEDIA_TYPE);
+    let bytes = body_bytes(response.into_body()).await;
+    let json: Value = serde_json::from_slice(&bytes).unwrap();
+    assert_eq!(json["error"]["code"], "unsupported_media");
 }
 
 #[tokio::test]
