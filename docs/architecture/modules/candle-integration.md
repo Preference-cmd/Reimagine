@@ -15,11 +15,13 @@ Concrete inference backend crates are grouped under
 has been replaced by `crates/inference-backends/candle`; do not introduce a
 compatibility crate or a second backend path.
 
-## V1 Target
+## V1 Example Target
 
-V1 must support SDXL base-only text-to-image inference. SDXL refiner support is
-deferred. SDXL is the first backend implementation behind typed backend
-capabilities; it is not a public capability family.
+V1 uses SDXL base text-to-image as the first real local inference example.
+SDXL refiner support is deferred. SDXL is the first backend implementation
+behind typed backend capabilities; it is not a public capability family and
+must not shape runtime, inference, app-host, node catalog, or host DTO
+infrastructure.
 
 ## Responsibilities
 
@@ -405,8 +407,9 @@ workspace output directory. The current backend math is still a V1 placeholder
 for the heavy model kernels; real weight-driven CLIP/UNet/VAE execution should
 land behind the same typed backend capability protocol.
 
-See [Real SDXL Roadmap](../real-sdxl-roadmap.md) for the tracked route from
-the current placeholder path to real SDXL base inference.
+See [Real Inference Roadmap](../real-inference-roadmap.md) for the tracked
+route from the current placeholder path to real local inference, using SDXL as
+the first validation example rather than the architecture target.
 
 Follow-up implementation should prioritize backend-internal model graph and
 kernel adapter boundaries before adding another model family. If supporting a
