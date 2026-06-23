@@ -197,11 +197,22 @@ mod tests {
         let base = temp_dir("resolved-metal");
         let config = AppConfig::new(AppPaths::new(&base));
 
-        let composed = compose_inference_backends(&config, "metal").expect("backends");
-        assert_eq!(
-            composed.selected_instance,
-            BackendInstance::new("candle:metal")
-        );
+        let result = compose_inference_backends(&config, "metal");
+        match result {
+            Ok(composed) => {
+                assert_eq!(
+                    composed.selected_instance,
+                    BackendInstance::new("candle:metal")
+                );
+            }
+            Err(CandleBackendError::DeviceUnavailable { requested, .. }) => {
+                assert_eq!(
+                    requested, "metal",
+                    "non-Metal hosts may reject direct resolved-metal composition"
+                );
+            }
+            Err(other) => panic!("expected metal composition or DeviceUnavailable, got {other:?}"),
+        }
         let _ = std::fs::remove_dir_all(&base);
     }
 
