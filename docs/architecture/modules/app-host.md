@@ -90,7 +90,7 @@ The type shape should still make the workspace boundary explicit so future multi
 
 `app-host` owns the unified bootstrap entry that assembles `WorkspaceHost`. Tauri and Axum adapters should receive an already-built workspace handle rather than duplicating service composition.
 
-## Host API DTOs
+## Host DTOs
 
 Tauri and Axum are equal host adapters over the same app-host semantics. Shared
 request/response DTOs and projection helpers should live in `app-host`, not in
@@ -100,8 +100,8 @@ Suggested module shape:
 
 ```text
 src/
-  api.rs
-  api/
+  dto.rs
+  dto/
     health.rs
     nodes.rs
     workflows.rs
@@ -109,7 +109,7 @@ src/
     artifacts.rs
 ```
 
-The API modules should expose host-neutral request/response shapes for common
+The DTO modules should expose host-neutral request/response shapes for common
 operations:
 
 ```text
@@ -121,12 +121,18 @@ list node definitions
 resolve/download artifact references
 ```
 
+`app-host::dto` is a shared data-shape layer. It may contain serialization
+types and projection helpers from host-neutral domain/runtime types, but it
+must not call `WorkspaceHost`, own service/facade logic, or depend on Axum,
+Tauri, HTTP status codes, headers, or command attributes.
+
 Host adapters remain responsible for transport details:
 
 ```text
 HTTP extractors/status codes/headers -> axum-host
 Tauri command attributes/window events -> src-tauri
-shared DTOs/projections/facade calls -> app-host::api
+shared DTOs/projections -> app-host::dto
+semantic operations/facade calls -> WorkspaceHost
 ```
 
 V1 does not require Tauri to call Axum over localhost. Tauri may reuse the same

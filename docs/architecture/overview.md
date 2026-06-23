@@ -19,7 +19,7 @@ This document is the architecture entry point. Module-level details live under `
 automation, and backend E2E testing. It reuses the same `app-host` facade as
 Tauri instead of copying desktop logic into server routes.
 
-Tauri and Axum should share app-host API DTOs and projection helpers where the
+Tauri and Axum should share `app-host::dto` shapes and projection helpers where the
 operation semantics are the same. They should differ only at the transport
 edge: Tauri command/event binding versus HTTP routing/headers/status codes.
 V1 does not require Tauri to call Axum over localhost.
