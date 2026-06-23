@@ -93,6 +93,8 @@ impl RunStore {
     }
 
     /// Search all active snapshots and terminal summaries for an artifact by id.
+    // TODO: Replace linear scan with a HashMap<ArtifactId, RunArtifactRef> index
+    // once artifact volume grows beyond a handful per session.
     pub fn find_artifact(&self, artifact_id: &ArtifactId) -> Option<RunArtifactRef> {
         let guard = self.inner.read().expect("run store poisoned");
 

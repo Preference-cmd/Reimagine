@@ -880,12 +880,9 @@ async fn artifact_route_serves_png_bytes() {
 
 #[tokio::test]
 async fn artifact_route_returns_404_for_unknown_id() {
-    let (host, recorder, _base_path) = build_candle_ready_host(
-        manifest_with_model(&ModelId::new(MODEL_ID), CHECKPOINT_FILENAME),
-        "candle-sdxl-artifact-404",
-    )
-    .await;
-    let app = build_router().with_state(build_state(host.clone(), recorder.clone()));
+    let (host, _runtime, recorder) =
+        build_ready_host(manifest_with_missing_model(), "artifact-404").await;
+    let app = build_router().with_state(build_state(host, recorder));
 
     let response = app
         .oneshot(json_request(
@@ -896,4 +893,33 @@ async fn artifact_route_returns_404_for_unknown_id() {
         .await
         .unwrap();
     assert_eq!(response.status(), StatusCode::NOT_FOUND);
+    let bytes = body_bytes(response.into_body()).await;
+    let json: Value = serde_json::from_slice(&bytes).unwrap();
+    assert_eq!(json["error"]["code"], "unknown_artifact");
+}
+
+#[tokio::test]
+async fn artifact_route_returns_404_for_path_traversal_id() {
+    let (host, _runtime, recorder) =
+        build_ready_host(manifest_with_missing_model(), "artifact-traversal").await;
+    let app = build_router().with_state(build_state(host, recorder));
+
+    let response = app
+        .oneshot(json_request(
+            "GET",
+            "/artifacts/..%2F..%2F..%2Fetc%2Fpasswd",
+            None,
+        ))
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::NOT_FOUND);
+    let bytes = body_bytes(response.into_body()).await;
+    let json: Value = serde_json::from_slice(&bytes).unwrap();
+    // Should be either unknown_artifact (not found in store) or
+    // unsafe_artifact_reference (path safety rejected)
+    let code = json["error"]["code"].as_str().unwrap();
+    assert!(
+        code == "unknown_artifact" || code == "unsafe_artifact_reference",
+        "expected artifact error code, got {code}"
+    );
 }
