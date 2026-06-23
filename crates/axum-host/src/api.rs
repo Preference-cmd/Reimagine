@@ -1,4 +1,4 @@
-//! HTTP route handlers, grouped by resource.
+//! HTTP API handlers, grouped by resource.
 //!
 //! Each submodule owns a single resource family and is the only place
 //! that knows how to translate between HTTP DTOs and app-host facade

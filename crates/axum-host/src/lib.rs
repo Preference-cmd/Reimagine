@@ -22,7 +22,7 @@ pub use cli::{Cli, build_env_filter, init_tracing};
 mod error;
 mod recorder;
 mod router;
-mod routes;
+mod api;
 mod server;
 mod state;
 
