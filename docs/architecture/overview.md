@@ -203,7 +203,7 @@ crates/inference-backends/candle
   - model loader/cache
   - tensor payload store
   - backend-private model graph / kernel adapters
-  - SDXL base-only first implementation behind typed capabilities
+  - SDXL base as the first example implementation behind typed capabilities
 
 crates/axum-host
   HTTP host adapter:
@@ -320,7 +320,7 @@ VAE and image:
 - [Agent provider](./modules/agent-provider.md)
 - [Adapters](./modules/adapters.md)
 - [Candle backend adapter](./modules/candle-integration.md)
-- [Real SDXL roadmap](./real-sdxl-roadmap.md)
+- [Real inference roadmap](./real-inference-roadmap.md)
 - [Tauri host](./modules/tauri-host.md)
 - [UI](./modules/ui.md)
 - [Axum host](./modules/axum-host.md)

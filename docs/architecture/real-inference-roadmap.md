@@ -1,12 +1,18 @@
-# Real SDXL Roadmap
+# Real Inference Roadmap
 
 > Status: tracked roadmap; not yet an implementation spec
 
 The Axum E2E workflow can currently execute the SDXL-shaped graph and write a
 PNG artifact, but the Candle backend still uses placeholder math for the heavy
 model path. This document defines the route from that placeholder path to real
-SDXL base inference while preserving the runtime / inference / backend
-boundary.
+local inference while preserving the runtime / inference / backend boundary.
+
+SDXL base is the first concrete example used to validate the stack. It is not
+the architecture target. New infrastructure must be justified by model-neutral
+inference concepts such as model loading, text encoding, diffusion sampling,
+latent decoding, artifact writing, backend routing, and resource observation.
+Do not design runtime, inference, node catalog, app-host, or host DTOs as
+SDXL-specific systems.
 
 ## Current Placeholder Boundary
 
@@ -32,9 +38,10 @@ The current path does not yet prove real model math:
 - diffusion sampling is deterministic placeholder math;
 - VAE decode is deterministic placeholder upscaling / remapping.
 
-Real SDXL work must replace backend-private Candle internals behind the same
-typed capabilities. It must not introduce SDXL-specific runtime execution
-units, workflow schema fields, public inference operations, or node catalog
+Real inference work must replace backend-private Candle placeholder internals
+behind the same typed capabilities. The first replacement target happens to be
+SDXL base, but it must not introduce SDXL-specific runtime execution units,
+workflow schema fields, public inference operations, host DTOs, or node catalog
 special cases.
 
 ## Fixed Architecture Constraints
@@ -65,7 +72,9 @@ image.preview
 ```
 
 SDXL is the first concrete implementation behind these capabilities, not the
-shape of the capability layer.
+shape of the capability layer. If supporting another diffusion model would
+require copying large portions of public executor/runtime infrastructure, the
+abstraction is wrong and should be revisited before adding that model.
 
 The Candle backend may own SDXL-specific implementation below:
 
@@ -83,10 +92,10 @@ and artifact references. `candle_core::Tensor`, loaded model structs,
 tokenizer state, scheduler graphs, and file handles must not leak into
 runtime, app-host, Axum, Tauri, workflow JSON, or Agent tool outputs.
 
-## First Supported Model Shape
+## First Example Model Shape
 
-V1 real SDXL should start with **single-file SDXL base safetensors** referenced
-from the model manifest:
+The first real inference example should use **single-file SDXL base
+safetensors** referenced from the model manifest:
 
 ```text
 <base_path>/models/checkpoints/sdxl_base_1.0.safetensors
@@ -102,13 +111,13 @@ Reasons:
 
 Diffusers directory layouts are explicitly deferred. Supporting them later
 should be a model-manager + Candle loader extension, not a workflow JSON
-change.
+change and not a reason to fork runtime/inference abstractions.
 
 ## Dependency Direction And Candidate Crates
 
 The current workspace only depends on `candle-core` for the Candle backend.
-Real SDXL will likely need additional backend-local dependencies. Candidate
-crates include:
+The first real inference example will likely need additional backend-local
+dependencies. Candidate crates include:
 
 ```text
 candle-nn
@@ -149,8 +158,8 @@ workspace/model-manager semantics.
 
 The first real path should be **CPU-correct first**, with Metal treated as an
 optimization target after correctness. The workspace config already carries a
-`candle_device` label, so real SDXL should keep device selection behind Candle
-backend configuration:
+`candle_device` label, so device selection should stay behind Candle backend
+configuration:
 
 ```json
 {
@@ -198,7 +207,7 @@ The slice should:
 - keep tokenizer state inside the loaded bundle or backend-local graph;
 - preserve the `text.encode` request/response shape.
 
-### 3. Real CLIP text encode
+### 3. Real text encode for the example model
 
 Goal: implement `text.encode` using the loaded SDXL text encoder weights.
 
@@ -210,10 +219,12 @@ The slice should:
 - keep text encoder modules and tensors backend-private;
 - include deterministic tests for tensor shapes and non-placeholder behavior.
 
-### 4. Scheduler and UNet sampling
+### 4. Scheduler and diffusion sampling
 
-Goal: implement `diffusion.sample` using loaded UNet weights and scheduler
-configuration while keeping `builtin.ksampler` model-neutral.
+Goal: implement `diffusion.sample` using loaded diffusion weights and scheduler
+configuration while keeping `builtin.ksampler` model-neutral. For the first
+example this means SDXL UNet sampling, but the public capability remains
+`diffusion.sample`.
 
 The slice should:
 
@@ -224,9 +235,11 @@ The slice should:
 - maintain backend affinity constraints through existing execution handles;
 - avoid adding SDXL-specific executor code above the Candle backend.
 
-### 5. Real VAE decode
+### 5. Real latent decode for the example model
 
-Goal: implement `latent.decode` using the loaded SDXL VAE decoder weights.
+Goal: implement `latent.decode` using the loaded example model's decoder
+weights. For the first example this means SDXL VAE decode, but the public
+capability remains `latent.decode`.
 
 The slice should:
 
@@ -278,7 +291,7 @@ CI should continue to run without real model weights. Tests that require real
 weights must be opt-in, ignored by default, or gated behind an explicit local
 environment/config flag.
 
-## Acceptance For "Real SDXL Base"
+## Acceptance For "Real Local Inference, SDXL Example"
 
 The placeholder label can be removed only when:
 
