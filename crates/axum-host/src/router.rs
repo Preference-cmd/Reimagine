@@ -8,7 +8,7 @@ use axum::Router;
 use axum::routing::{get, post};
 use tower_http::trace::TraceLayer;
 
-use crate::routes::{health, nodes, runs, workflows};
+use crate::api::{health, nodes, runs, workflows};
 use crate::state::AxumHostState;
 
 /// Build the V1 HTTP router. The router is stateless — every

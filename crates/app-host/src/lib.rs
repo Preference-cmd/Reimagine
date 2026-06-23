@@ -9,6 +9,7 @@
 mod agent_provider;
 mod agent_service;
 mod app_host;
+pub mod dto;
 mod error;
 mod inference;
 mod inference_backend;
