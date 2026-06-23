@@ -3,7 +3,7 @@ use std::sync::Arc;
 
 use candle_core::Device;
 use reimagine_core::model::ModelId;
-use reimagine_inference::{BackendPayloadKey, ModelFormat};
+use reimagine_inference::{BackendPayloadKey, ModelFormat, ModelSourceKind, ResolvedInferenceModelSource, ResolvedInferenceModelSourceSet};
 
 use crate::error::CandleBackendError;
 
@@ -77,6 +77,7 @@ impl From<BundleLoadError> for CandleBackendError {
 pub struct LoadedSdxlBundle {
     pub model_id: ModelId,
     pub source_path: PathBuf,
+    source_set: ResolvedInferenceModelSourceSet,
     pub source_format: ModelFormat,
     pub device: Arc<Device>,
     pub model_payload_key: BackendPayloadKey,
@@ -85,25 +86,41 @@ pub struct LoadedSdxlBundle {
 }
 
 impl LoadedSdxlBundle {
-    /// Build a bundle entry after validating the resolved source path.
-    ///
-    /// Returns `Err(BundleLoadError)` if the file is missing,
-    /// unreadable, or its extension does not match the resolved format.
-    /// Bundle construction is cheap; tensor loading lives in later
-    /// operation milestones.
+    /// V1 constructor with single source_path — builds a CheckpointBundle source_set internally.
     pub fn from_resolved(
         model_id: ModelId,
         source_path: PathBuf,
         format: ModelFormat,
         device: Arc<Device>,
     ) -> Result<Arc<Self>, BundleLoadError> {
-        validate_source(&source_path, format)?;
-        let model_payload_key = bundle_payload_key_for_role(&model_id, "model");
-        let clip_payload_key = bundle_payload_key_for_role(&model_id, "clip");
-        let vae_payload_key = bundle_payload_key_for_role(&model_id, "vae");
+        let source = ResolvedInferenceModelSource::new(
+            ModelSourceKind::CheckpointBundle,
+            source_path.clone(),
+        );
+        let source_set = ResolvedInferenceModelSourceSet::new(source);
+        Self::from_resolved_with_source_set(model_id, source_set, format, device)
+    }
+
+    /// Constructor accepting a full source_set (supports split components).
+    pub fn from_resolved_with_source_set(
+        model_id: ModelId,
+        source_set: ResolvedInferenceModelSourceSet,
+        format: ModelFormat,
+        device: Arc<Device>,
+    ) -> Result<Arc<Self>, BundleLoadError> {
+        for source in source_set.sources() {
+            validate_source(source.path(), format)?;
+        }
+        let primary_path = source_set.sources().first()
+            .map(|s| s.path().clone())
+            .unwrap_or_default();
+        let model_payload_key = BackendPayloadKey::new(format!("bundle:{}:model", model_id.as_str()));
+        let clip_payload_key = BackendPayloadKey::new(format!("bundle:{}:clip", model_id.as_str()));
+        let vae_payload_key = BackendPayloadKey::new(format!("bundle:{}:vae", model_id.as_str()));
         Ok(Arc::new(Self {
             model_id,
-            source_path,
+            source_path: primary_path,
+            source_set,
             source_format: format,
             device,
             model_payload_key,
@@ -113,8 +130,43 @@ impl LoadedSdxlBundle {
     }
 }
 
-fn bundle_payload_key_for_role(model_id: &ModelId, role: &str) -> BackendPayloadKey {
-    BackendPayloadKey::new(format!("bundle:{}:{}", model_id.as_str(), role))
+use crate::graph::LoadedModelGraph;
+
+impl LoadedModelGraph for LoadedSdxlBundle {
+    fn source_set(&self) -> &ResolvedInferenceModelSourceSet {
+        &self.source_set
+    }
+
+    fn component_graph_metadata(&self) -> Option<&str> {
+        Some("stable_diffusion/sdxl")
+    }
+
+    fn check_compatible(&self, incoming: &ResolvedInferenceModelSourceSet) -> Result<(), String> {
+        if incoming.sources().len() != self.source_set.sources().len() {
+            return Err(format!(
+                "source count mismatch: cached {} vs requested {}",
+                self.source_set.sources().len(),
+                incoming.sources().len()
+            ));
+        }
+        for (i, (existing, incoming)) in self.source_set.sources().iter()
+            .zip(incoming.sources().iter()).enumerate()
+        {
+            if existing.path() != incoming.path() {
+                return Err(format!(
+                    "source path mismatch at index {}: cached {:?} vs requested {:?}",
+                    i, existing.path(), incoming.path()
+                ));
+            }
+            if existing.kind() != incoming.kind() {
+                return Err(format!(
+                    "source kind mismatch at index {}: cached {:?} vs requested {:?}",
+                    i, existing.kind(), incoming.kind()
+                ));
+            }
+        }
+        Ok(())
+    }
 }
 
 /// Validate the resolved model source path against the resolved format.

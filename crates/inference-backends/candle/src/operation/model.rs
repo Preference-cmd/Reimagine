@@ -7,8 +7,8 @@
 //!
 //! The first call for a given resolved model dispatches on
 //! `series` + `variant` to the right family loader and caches the
-//! result. Subsequent calls reuse the cached entry without
-//! re-reading the file.
+//! result. Subsequent calls reuse the cached entry if the source
+//! set is compatible; incompatible entries are evicted.
 
 use reimagine_inference::{InferenceBackend, LoadBundleRequest, LoadBundleResponse};
 
@@ -22,27 +22,30 @@ pub fn execute_model_load_bundle(
 ) -> Result<LoadBundleResponse, CandleBackendError> {
     let resolved = request.resolved_model();
 
-    // Concurrent first-time loads for the same model id may both miss
-    // the cache and validate the file. The race is benign: the second
-    // entry overwrites the first and every caller still receives a
-    // valid `Arc<LoadedModelBundle>`. Contention-bounded fixes live
-    // behind the cache lock.
-    let bundle = match backend.model_cache().get_bundle(resolved.model_id()) {
-        Some(bundle) => bundle,
-        None => LoadedModelBundle::load(
-            resolved.model_id().clone(),
-            resolved.series(),
-            resolved.variant(),
-            resolved.source_path(),
-            resolved.format(),
-            backend.device().clone(),
-        )
-        .map(|bundle| {
-            backend
-                .model_cache()
-                .insert_bundle(resolved.model_id().clone(), bundle.clone());
-            bundle
-        })?,
+    let bundle = {
+        let source_set = resolved.source_set()
+            .cloned()
+            .unwrap_or_else(|| resolved.to_checkpoint_bundle_source_set());
+
+        match backend.model_cache().get_compatible_bundle(
+            resolved.model_id(), &source_set
+        ) {
+            Some(bundle) => bundle,
+            None => {
+                LoadedModelBundle::load_from_source_set(
+                    resolved.model_id().clone(),
+                    resolved.series(),
+                    resolved.variant(),
+                    &source_set,
+                    resolved.format(),
+                    backend.device().clone(),
+                )
+                .map(|bundle| {
+                    backend.model_cache().insert_bundle(resolved.model_id().clone(), bundle.clone());
+                    bundle
+                })?
+            }
+        }
     };
 
     bundle_response(&bundle, backend)
