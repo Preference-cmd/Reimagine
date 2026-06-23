@@ -178,13 +178,18 @@ mod tests {
     use super::*;
     use std::fs;
     use std::sync::Arc;
+    use std::sync::atomic::{AtomicU64, Ordering};
+
+    static TEMP_DIR_COUNTER: AtomicU64 = AtomicU64::new(0);
 
     fn unique_temp_dir() -> PathBuf {
         let nonce = std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
             .unwrap()
             .as_nanos();
-        std::env::temp_dir().join(format!("reimagine-sdxl-bundle-{nonce}"))
+        let counter = TEMP_DIR_COUNTER.fetch_add(1, Ordering::Relaxed);
+        let process = std::process::id();
+        std::env::temp_dir().join(format!("reimagine-sdxl-bundle-{process}-{nonce}-{counter}"))
     }
 
     fn write_placeholder(dir: &Path, filename: &str) -> PathBuf {
