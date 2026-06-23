@@ -41,6 +41,7 @@ mod executors;
 mod inference_error;
 pub mod node_context;
 pub mod operation;
+mod profile;
 pub mod registry;
 mod request;
 mod resolver;
@@ -81,6 +82,10 @@ pub use diagnostic::{
     backend_not_registered, incompatible_handle_affinity,
 };
 pub use inference_error::InferenceError;
+pub use profile::{
+    BackendInstanceProfile, BackendInstanceStatus, BackendProfile, BackendProfileProvider,
+    DTypeProfile, DeviceKind, MemoryProfile, WorkspaceComputeProfile, diagnostics, kind_from_label,
+};
 pub use request::diffusion::{DiffusionSampleRequest, SamplerName, SchedulerName};
 pub use request::image::{FilenamePrefix, ImagePreviewRequest, ImageSaveRequest};
 pub use request::latent::{CreateEmptyLatentRequest, LatentDecodeRequest};

@@ -8,7 +8,7 @@ use axum::Router;
 use axum::routing::{get, post};
 use tower_http::trace::TraceLayer;
 
-use crate::api::{artifacts, health, nodes, runs, workflows};
+use crate::api::{artifacts, compute_profile, health, nodes, runs, workflows};
 use crate::state::AxumHostState;
 
 /// Build the V1 HTTP router. The router is stateless — every
@@ -17,6 +17,7 @@ use crate::state::AxumHostState;
 pub fn build_router() -> Router<AxumHostState> {
     Router::new()
         .route("/health", get(health::get))
+        .route("/compute-profile", get(compute_profile::get))
         .route("/nodes", get(nodes::list))
         .route("/workflows/open", post(workflows::open))
         .route("/workflows/{id}/run", post(workflows::run))
@@ -77,6 +78,60 @@ mod tests {
             .await
             .unwrap();
         assert_eq!(response.status(), StatusCode::OK);
+    }
+
+    #[tokio::test]
+    async fn compute_profile_route_returns_cpu_instance() {
+        use axum::body::to_bytes;
+
+        let app = build_router().with_state(test_state());
+        let response = app
+            .oneshot(
+                Request::builder()
+                    .method("GET")
+                    .uri("/compute-profile")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::OK);
+
+        let body = to_bytes(response.into_body(), usize::MAX)
+            .await
+            .expect("collect compute-profile body");
+        let json: serde_json::Value =
+            serde_json::from_slice(&body).expect("compute-profile body is JSON");
+
+        // V1 must always include a `candle:cpu` instance, regardless
+        // of host hardware. The wire shape mirrors the app-host
+        // DTO projection exactly.
+        let instances = json["backend_profiles"]
+            .as_array()
+            .expect("backend_profiles is an array")
+            .iter()
+            .flat_map(|bp| bp["instances"].as_array().cloned().unwrap_or_default())
+            .collect::<Vec<_>>();
+        assert!(
+            instances.iter().any(|inst| {
+                inst["instance"].as_str() == Some("candle:cpu")
+                    && inst["status"].as_str() == Some("Available")
+            }),
+            "expected a `candle:cpu` instance with status=Available, got: {json}"
+        );
+
+        // Nested shape: device.kind, device.supported_dtypes, etc.
+        let cpu = instances
+            .iter()
+            .find(|inst| inst["instance"].as_str() == Some("candle:cpu"))
+            .expect("candle:cpu present");
+        assert_eq!(cpu["device"]["kind"].as_str(), Some("Cpu"));
+        assert_eq!(cpu["device"]["label"].as_str(), Some("cpu"));
+        assert!(
+            cpu["device"]["supported_dtypes"].is_array(),
+            "supported_dtypes is a list, got: {}",
+            cpu["device"]["supported_dtypes"]
+        );
     }
 
     fn unique_temp_dir(prefix: &str) -> std::path::PathBuf {

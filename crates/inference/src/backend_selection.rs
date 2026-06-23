@@ -41,6 +41,7 @@ use std::sync::Arc;
 use serde::{Deserialize, Serialize};
 
 use crate::capability::InferenceCapability;
+use crate::profile::{DTypeProfile, DeviceKind, MemoryProfile};
 use reimagine_core::model::NodeId;
 use reimagine_plugin::{Extension, Plugin};
 
@@ -128,25 +129,110 @@ impl From<&str> for BackendInstance {
     }
 }
 
-/// Opaque descriptor of a backend's device, populated by app-host or
-/// the concrete backend. V1 router policy treats this as descriptive
-/// metadata only; future device-aware scheduling may match on it.
+/// Host-neutral descriptor of a backend's device, populated by
+/// app-host or the concrete backend. V1 router policy treats this as
+/// descriptive metadata only; future device-aware scheduling may match
+/// on it.
 ///
-/// `#[non_exhaustive]` allows adding structured fields (compute
-/// capability, memory class, …) without breaking downstream matches.
+/// V1 keeps the original `label` field for back-compat with existing
+/// callers and adds structured fields (kind, name, ordinal, memory
+/// summary, supported dtypes). All structured fields except `label`
+/// and `kind` are optional so existing `DeviceProfile::new(label)`
+/// callers continue to compile.
+///
+/// `#[non_exhaustive]` allows adding more structured fields without
+/// breaking downstream matches.
+///
+/// See `crate::profile::DeviceKind` for the device-kind vocabulary
+/// and the label → kind derivation rules used by [`DeviceProfile::new`].
 #[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[non_exhaustive]
 pub struct DeviceProfile {
-    /// Opaque label (e.g. `"cpu"`, `"cuda:0"`, `"metal"`).
+    /// Original opaque label (e.g. `"cpu"`, `"cuda:0"`, `"metal"`,
+    /// `"mps"`, `"remote:foo"`).
     pub label: String,
+    /// Device kind derived from the label. Defaults to
+    /// [`DeviceKind::Unknown`] when the label is not recognized;
+    /// callers that need a specific kind should use
+    /// [`DeviceProfile::with_kind`] to attach an authoritative value
+    /// from the concrete backend probe.
+    pub kind: DeviceKind,
+    /// Optional human-readable device name (e.g. `"Apple M2 Pro"`,
+    /// `"NVIDIA RTX 4090"`).
+    pub name: Option<String>,
+    /// Optional device ordinal for multi-device backends
+    /// (e.g. `0` for `"cuda:0"`).
+    pub ordinal: Option<u32>,
+    /// Optional memory summary for the device. None when the backend
+    /// did not probe memory or the device has no memory concept.
+    pub memory: Option<MemoryProfile>,
+    /// Dtype strings the backend reports as supported on this
+    /// device. Empty when the backend did not probe dtypes.
+    pub supported_dtypes: Vec<DTypeProfile>,
 }
 
 impl DeviceProfile {
     /// Construct a `DeviceProfile` from a label.
+    ///
+    /// `kind` is derived from the label using the rules in
+    /// [`crate::profile::kind_from_label`]:
+    ///
+    /// - `cpu` → `Cpu`
+    /// - `metal`, `mps`, `cuda`, `cuda:0`, … → `Gpu`
+    /// - `remote`, `remote:foo`, … → `Remote`
+    /// - anything else → `Unknown`
+    ///
+    /// All other structured fields default to `None` / `Vec::new()`.
+    /// Use the `with_*` builders to attach backend-probed metadata.
     pub fn new(label: impl Into<String>) -> Self {
+        let label = label.into();
+        let kind = crate::profile::kind_from_label(&label);
         Self {
-            label: label.into(),
+            label,
+            kind,
+            name: None,
+            ordinal: None,
+            memory: None,
+            supported_dtypes: Vec::new(),
         }
+    }
+
+    /// Override the device kind. Use this when the backend has probed
+    /// the device and can attest an authoritative kind that differs
+    /// from the label-derived default.
+    pub fn with_kind(mut self, kind: DeviceKind) -> Self {
+        self.kind = kind;
+        self
+    }
+
+    /// Attach a human-readable device name.
+    pub fn with_name(mut self, name: impl Into<String>) -> Self {
+        self.name = Some(name.into());
+        self
+    }
+
+    /// Attach a device ordinal.
+    pub fn with_ordinal(mut self, ordinal: u32) -> Self {
+        self.ordinal = Some(ordinal);
+        self
+    }
+
+    /// Attach a memory summary.
+    pub fn with_memory(mut self, memory: MemoryProfile) -> Self {
+        self.memory = Some(memory);
+        self
+    }
+
+    /// Add a single supported dtype.
+    pub fn with_supported_dtype(mut self, dtype: impl Into<String>) -> Self {
+        self.supported_dtypes.push(DTypeProfile::new(dtype));
+        self
+    }
+
+    /// Replace the supported-dtype list.
+    pub fn with_supported_dtypes(mut self, dtypes: Vec<DTypeProfile>) -> Self {
+        self.supported_dtypes = dtypes;
+        self
     }
 }
 

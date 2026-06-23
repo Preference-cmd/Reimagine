@@ -14,8 +14,8 @@ use std::time::Duration;
 use async_trait::async_trait;
 use reimagine_agent::WorkspaceScope;
 use reimagine_app_host::{
-    AppHostError, ModelService, RunWorkflowRequest, RunWorkflowResult,
-    SnapshotExternalReadinessProvider, WorkspaceHost,
+    AppHostError, BackendInstance, ModelService, RunWorkflowRequest, RunWorkflowResult,
+    SnapshotExternalReadinessProvider, WorkspaceComputeProfile, WorkspaceHost,
 };
 use reimagine_config::{AppConfig, AppPaths};
 use reimagine_core::diagnostic::DiagnosticSeverity;
@@ -37,6 +37,10 @@ use reimagine_runtime::{
     BoxedNodeExecutor, ExecutionOutput, NodeExecutionContext, NodeExecutor, NodeExecutorRegistry,
     RunInputs, RunState, RuntimeOptions, RuntimeService, VecRunEventSink,
 };
+
+fn empty_compute_profile() -> Arc<WorkspaceComputeProfile> {
+    Arc::new(WorkspaceComputeProfile::new())
+}
 
 const WORKFLOW_ID: &str = "wf-run-test";
 const MODEL_ID: &str = "sdxl-base-1.0";
@@ -169,6 +173,8 @@ async fn build_host(manifest: ModelManifest, base: &str) -> WorkspaceHost {
         reimagine_config::InferenceBackendConfig::default(),
         build_runtime(),
         builtin_catalog(),
+        empty_compute_profile(),
+        BackendInstance::new("candle:cpu"),
     )
 }
 
@@ -300,6 +306,8 @@ async fn run_workflow_handoff_completes_when_readiness_passes() {
         reimagine_config::InferenceBackendConfig::default(),
         runtime.clone(),
         builtin_catalog(),
+        empty_compute_profile(),
+        BackendInstance::new("candle:cpu"),
     );
     let _ = model_service;
 
@@ -379,6 +387,8 @@ async fn run_workflow_propagates_correlation_id_to_runtime_options() {
         reimagine_config::InferenceBackendConfig::default(),
         runtime.clone(),
         builtin_catalog(),
+        empty_compute_profile(),
+        BackendInstance::new("candle:cpu"),
     );
     let _ = model_service;
 

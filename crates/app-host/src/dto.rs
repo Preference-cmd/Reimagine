@@ -18,12 +18,17 @@
 //!    transformation belongs here, with a test.
 
 mod artifacts;
+mod compute_profile;
 mod health;
 mod nodes;
 mod runs;
 mod workflows;
 
 pub use artifacts::ArtifactDto;
+pub use compute_profile::{
+    BackendInstanceProfileDto, BackendProfileDto, ComputeProfileDto, DTypeProfileDto,
+    DeviceProfileDto, MemoryProfileDto,
+};
 pub use health::HealthResponse;
 pub use nodes::{NodeCatalogResponse, NodeDefDto, ParamSpecDto, SocketSpecDto};
 pub use runs::{

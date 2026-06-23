@@ -14,7 +14,7 @@ use axum::body::Body;
 use axum::http::header;
 use axum::http::{Request, StatusCode};
 use reimagine_agent::WorkspaceScope;
-use reimagine_app_host::{BackendSelection, ModelService, WorkspaceHost};
+use reimagine_app_host::{BackendInstance, BackendSelection, ModelService, WorkspaceHost};
 use reimagine_config::{AppConfig, AppPaths};
 use reimagine_core::model::{ArtifactRef, SlotId};
 use reimagine_core::model::{
@@ -52,6 +52,10 @@ fn unique_temp_dir(prefix: &str) -> std::path::PathBuf {
 
 fn builtin_catalog() -> Arc<BuiltinNodeCatalog> {
     Arc::new(BuiltinNodeCatalog::v1())
+}
+
+fn empty_compute_profile() -> Arc<reimagine_app_host::WorkspaceComputeProfile> {
+    Arc::new(reimagine_app_host::WorkspaceComputeProfile::new())
 }
 
 fn mock_loader_executor() -> BoxedNodeExecutor {
@@ -192,6 +196,8 @@ async fn build_ready_host(
         reimagine_config::InferenceBackendConfig::default(),
         runtime.clone(),
         builtin_catalog(),
+        empty_compute_profile(),
+        BackendInstance::new("candle:cpu"),
     ));
     (host, runtime, recorder)
 }
@@ -227,6 +233,8 @@ async fn build_artifact_host(
         reimagine_config::InferenceBackendConfig::default(),
         runtime.clone(),
         builtin_catalog(),
+        empty_compute_profile(),
+        BackendInstance::new("candle:cpu"),
     ));
     (host, runtime, recorder)
 }
