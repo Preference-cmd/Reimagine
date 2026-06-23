@@ -91,7 +91,10 @@ pub use request::image::{FilenamePrefix, ImagePreviewRequest, ImageSaveRequest};
 pub use request::latent::{CreateEmptyLatentRequest, LatentDecodeRequest};
 pub use request::model::LoadBundleRequest;
 pub use request::text::TextEncodeRequest;
-pub use resolver::{ModelFormat, ModelResolver, ResolvedInferenceModel};
+pub use resolver::{
+    ModelFormat, ModelResolver, ModelSourceKind, ResolvedInferenceModel,
+    ResolvedInferenceModelSource, ResolvedInferenceModelSourceSet,
+};
 pub use resources::{
     BackendInstanceObservation, BackendInstanceRuntimeHooks, BackendInstanceSnapshot,
     BackendResourceMechanism, BackendResourceObservation, BackendResourceSnapshot,
