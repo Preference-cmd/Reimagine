@@ -112,7 +112,7 @@ impl From<RunSummary> for RunSummaryDto {
 /// already implements `Serialize`/`Deserialize`, but we wrap it here
 /// so future fields can be added at the HTTP layer without changing
 /// the core schema.
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct DiagnosticDto {
     pub id: String,
     pub code: String,
