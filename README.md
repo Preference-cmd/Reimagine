@@ -24,3 +24,7 @@ cd src-tauri && cargo tauri dev
 - `assets/` — static resources.
 
 See [AGENTS.md](AGENTS.md) for the full workspace map and agent conventions.
+
+## License
+
+Reimagine is licensed under GPL-3.0-or-later. See [LICENSE](LICENSE).

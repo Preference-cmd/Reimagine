@@ -1,42 +1,28 @@
 # reimagine
 
-A Tauri + Candle + React desktop app for node-based image generation workflows — a ComfyUI alternative.
+A Tauri + Candle + React desktop app for node-based image generation workflows.
+
+If `AGENTS.local.md` exists, read it after this file.
 
 ## Workspace
 
-- `src-tauri/` — Tauri 2 binary crate (shell + IPC handlers).
-- `crates/core/` — `reimagine-core`: workflow DAG + executor. Pure Rust, no Tauri.
-- `ui/` — React 19 + Vite 7 frontend (bun-managed).
-- `assets/` — static resources (models, sample images).
-- `docs/agents/` — per-repo agent config (tracked).
-- `docs/architecture/` — architecture source of truth (tracked).
-- `docs/design/` — design source material (tracked).
+- `src-tauri/` - Tauri 2 binary crate. Keep it as a thin shell and IPC layer.
+- `crates/` - Rust domain crates. Domain logic belongs here, not in `src-tauri/`.
+- `ui/` - React 19 + Vite 7 frontend, managed with Bun.
+- `assets/` - static placeholders and non-secret assets.
 
 ## Commands
 
 - Type-check: `cargo check --workspace`
 - Test: `cargo test --workspace`
-- Dev (Vite HMR + Tauri window): `cd src-tauri && cargo tauri dev`
-- Frontend build only: `cd ui && bun install && bun run build`
+- Dev: `cd src-tauri && cargo tauri dev`
+- Frontend build: `cd ui && bun install && bun run build`
 - Release bundle: `cd src-tauri && cargo tauri build`
 
 ## Conventions
 
-- Tauri commands in `src-tauri/src/lib.rs` are thin wrappers; domain logic lives in `crates/*`.
-- Domain crates must not depend on `tauri` — keep them unit-testable without a Tauri runtime.
+- Domain crates must not depend on `tauri`.
 - Dependency versions are centralized in root `Cargo.toml` under `[workspace.dependencies]`.
-- AI/ML inference code belongs in `crates/inference-backends/candle/`, never in `src-tauri/`.
-
-## Agent skills
-
-### Issue tracker
-
-Local markdown — issues and PRDs live as files under `.scratch/<feature-slug>/`. See `docs/agents/issue-tracker.md`.
-
-### Triage labels
-
-Default five-role vocabulary: `needs-triage`, `needs-info`, `ready-for-agent`, `ready-for-human`, `wontfix`. See `docs/agents/triage-labels.md`.
-
-### Domain docs
-
-Single-context — one local `CONTEXT.md` plus tracked `docs/architecture/`. See `docs/agents/domain.md`.
+- AI/ML inference backend code belongs in `crates/inference-backends/`.
+- Do not commit generated build outputs, local runtime data, model weights, secrets, or machine-local planning files.
+- Prefer the existing crate and module boundaries over adding cross-cutting logic to host crates.
