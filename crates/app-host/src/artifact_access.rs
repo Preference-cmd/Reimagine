@@ -41,6 +41,23 @@ impl std::fmt::Display for ArtifactAccessError {
 
 impl std::error::Error for ArtifactAccessError {}
 
+/// Normalize a path by resolving `.` and `..` components without requiring
+/// the path to exist on disk. This is a pure lexical operation — it does
+/// not follow symlinks.
+fn normalize_path(path: &Path) -> PathBuf {
+    let mut components = Vec::new();
+    for component in path.components() {
+        match component {
+            std::path::Component::ParentDir => {
+                components.pop();
+            }
+            std::path::Component::CurDir => {}
+            other => components.push(other),
+        }
+    }
+    components.iter().collect()
+}
+
 /// Validate an artifact reference and resolve it to an absolute path
 /// under the output directory.
 ///
@@ -100,11 +117,13 @@ pub fn resolve_artifact_path(
         return Err(ArtifactAccessError::UnsafeReference);
     }
 
-    // Canonicalize the output directory
+    // Canonicalize the output directory. If it doesn't exist, no artifacts
+    // can exist either, so return an error rather than weakening the
+    // starts_with check with a raw path.
     let output_dir = paths
         .output_dir()
         .canonicalize()
-        .unwrap_or_else(|_| paths.output_dir().to_path_buf());
+        .map_err(|_| ArtifactAccessError::UnknownArtifact)?;
 
     // Join the suffix with output_dir
     let file_path = output_dir.join(suffix);
@@ -122,8 +141,14 @@ pub fn resolve_artifact_path(
         return Ok(canonical_file);
     }
 
-    // File doesn't exist yet - return the path as-is
-    // The caller will check existence and return FileGone if needed
+    // File doesn't exist yet — verify the joined path normalizes under
+    // output_dir. This prevents a crafted suffix like "foo/../../../etc/passwd"
+    // from escaping when the file is later created.
+    let normalized = normalize_path(&file_path);
+    if !normalized.starts_with(&output_dir) {
+        return Err(ArtifactAccessError::UnsafeReference);
+    }
+
     Ok(file_path)
 }
 
