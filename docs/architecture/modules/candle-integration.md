@@ -27,8 +27,10 @@ infrastructure.
 
 - Session management.
 - Device and dtype configuration.
+- CPU/GPU-capable Candle device discovery and host-neutral profile reporting.
 - Model loading and cache.
 - CLIP, UNet, VAE implementations.
+- Tokenizer/resource resolution as part of backend-local model graph loading.
 - Tensor conversion between inference execution handles and Candle tensors.
 - Typed backend capability implementations consumed by inference-layer executors.
 - Artifact encoding for image outputs produced by `builtin.save_image`.
@@ -122,6 +124,23 @@ The backend owns:
 and app-host must not hold Candle tensors or loaded Candle model objects
 directly.
 
+During workspace bootstrap, app-host may ask the Candle provider to report
+available device candidates. Candle owns the concrete probing mechanism for CPU
+and GPU-capable devices, but returns only inference-owned profile DTOs:
+
+```text
+Candle device probing
+  -> cpu / metal / cuda availability
+  -> approximate memory and dtype support when available
+  -> diagnostics for unavailable feature/platform combinations
+  -> inference::DeviceProfile / BackendProfile
+```
+
+The profile is suitable for UI/API display and user configuration. It is not a
+`candle_core::Device`, not a tensor owner, and not a guarantee that a later
+model will fit in memory. App-host validates saved backend/device selections
+against these fresh profiles before constructing backend instances.
+
 Payload lifetimes are split by intent:
 
 ```text
@@ -168,15 +187,17 @@ ExecutionValue::Artifact(ArtifactRef)
 No `candle_core::Tensor` should appear in `runtime`, `app-host`, `axum-host`,
 or workflow JSON.
 
-`load_bundle` should avoid duplicating loaded SDXL components. Internally,
-the backend may store one loaded bundle and expose separate typed handles for
-the workflow outputs:
+`load_bundle` should avoid duplicating loaded model components. Internally, the
+backend may load a checkpoint bundle or assemble split component sources into
+one compatible graph and expose separate typed handles for the workflow
+outputs:
 
 ```text
-LoadedSdxlBundle
-  diffusion model / UNet
-  CLIP
-  VAE
+LoadedModelGraph
+  diffusion model / UNet role
+  CLIP / text encoder role
+  VAE role
+  tokenizer resources
   metadata
 
 load_bundle outputs
@@ -190,6 +211,12 @@ Only the Candle backend knows whether those handles point into one shared
 bundle, separate backend payloads, placeholder V1 objects, or real loaded
 Candle modules. Higher modules must not infer model architecture from the
 handle shape.
+
+Tokenizer resources are part of this backend-local graph. They may come from a
+checkpoint-compatible metadata path, sidecar files, backend-bundled resources,
+or explicit manifest-resolved component sources. Runtime, workflow JSON, and
+inference node executors should not model tokenizer loading as a separate
+public node or execution unit unless the architecture is revisited.
 
 ## Code Organization
 

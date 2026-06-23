@@ -25,6 +25,8 @@ tracked under the `inference` module.
 - Define typed backend capability request/response DTOs.
 - Define `InferenceRuntime`, the executor-facing router trait.
 - Define `InferenceBackend`, the concrete backend adapter trait.
+- Define backend-neutral compute/backend/device profile contracts used by
+  app-host bootstrap and host surfaces.
 - Define backend registry, capability reports, bridge policy, model resolver
   handoff DTOs, inference errors, and diagnostic projection helpers.
 - Convert node execution context inputs and params into typed inference
@@ -147,6 +149,52 @@ open `Backend` label for the backend implementation and concrete
 `BackendInstance` descriptors provided by app-host, with optional plugin
 provenance (`Plugin` / `Extension`) for diagnostics and registry
 introspection.
+
+## Compute And Device Profiles
+
+`inference` owns the backend-neutral profile vocabulary used by app-host
+bootstrap to describe available compute targets. Concrete backend crates
+produce these profiles; app-host aggregates and exposes them. Runtime and node
+executors consume already-constructed routers and executors, so they do not
+probe hardware directly.
+
+The profile vocabulary should be explicit enough for UI/API configuration but
+not tied to Candle or local-only execution:
+
+```text
+WorkspaceComputeProfile
+  generated_at
+  backend_profiles
+  diagnostics
+
+BackendProfile
+  backend
+  backend instance candidates
+  plugin / extension provenance
+  supported capabilities
+  diagnostics
+
+DeviceProfile
+  id
+  name
+  accelerator     # cpu | metal | cuda | remote | unknown
+  location        # local | remote | unknown
+  available
+  memory summary
+  supported dtypes
+  diagnostics
+```
+
+These are observation/configuration DTOs. They must not carry backend-native
+device handles, tensors, loaded model structs, tokenizer state, graph objects,
+file handles, or OS-specific resource owners. A concrete `InferenceBackend`
+instance may be constructed from a selected profile, but the profile itself is
+not the execution mechanism.
+
+Persisted user configuration stores selected backend/device ids and fallback
+preferences. It does not store the full profile snapshot. App-host validates
+those ids against fresh discovery during workspace bootstrap, then constructs
+the `BackendInstance` values and selection policy used by `InferenceRuntime`.
 
 ## Backend Instance Runtime Hooks
 

@@ -92,25 +92,112 @@ and artifact references. `candle_core::Tensor`, loaded model structs,
 tokenizer state, scheduler graphs, and file handles must not leak into
 runtime, app-host, Axum, Tauri, workflow JSON, or Agent tool outputs.
 
-## First Example Model Shape
+## Workspace Capability Discovery
 
-The first real inference example should use **single-file SDXL base
-safetensors** referenced from the model manifest:
+Real inference needs a workspace-level initialization phase that reports
+hardware and backend capability information to top-level hosts before a user
+starts a run. This initialization is coordinated by `app-host` during
+`WorkspaceHost` bootstrap. Concrete backend crates participate by reporting
+host-neutral profiles; they do not own the workspace service graph.
+
+```text
+Axum / Tauri
+  -> app-host WorkspaceHost bootstrap
+  -> load workspace config
+  -> discover registered backend providers
+  -> collect backend/device/memory profiles
+  -> validate persisted user backend/device selection
+  -> construct backend instances and routing policy
+  -> construct inference runtime and runtime service
+```
+
+The discovery result must be returned to top-level host surfaces so the UI or
+HTTP clients can show available compute targets and let users save a preferred
+configuration:
+
+```text
+WorkspaceComputeProfile
+  generated_at
+  backend profiles
+  diagnostics
+
+BackendProfile
+  backend implementation label
+  backend instance candidates
+  plugin / extension provenance
+  capability support
+  diagnostics
+
+DeviceProfile
+  id                 # "cpu:0", "metal:0", "cuda:0", "remote:..."
+  name
+  accelerator        # cpu | metal | cuda | remote | unknown
+  location           # local | remote | unknown
+  available
+  memory summary     # optional / approximate
+  supported dtypes
+  diagnostics
+```
+
+These profiles are DTOs and observations, not backend handles. They must not
+contain Candle `Device`, CUDA/Metal handles, loaded tensors, model graph
+objects, or OS-specific resource owners.
+
+Persisted config stores the user's selection and fallback preferences, not the
+full discovery snapshot:
+
+```json
+{
+  "schema_version": "1",
+  "backend": "candle",
+  "device": "metal:0",
+  "fallback_devices": ["cpu:0"],
+  "precision": "fp16"
+}
+```
+
+On startup, app-host re-runs discovery and validates the saved selection. If it
+is unavailable, bootstrap should produce diagnostics and either use a configured
+fallback or a conservative default. Runtime and inference executors must not
+scan hardware, branch on CPU/GPU, or persist discovered system details.
+
+This shape is intentionally compatible with future remote runtime support. A
+remote provider can later report the same `BackendProfile` / `DeviceProfile`
+shape; app-host can import those as backend instance candidates without
+rewriting runtime scheduling or workflow JSON.
+
+## First Example Model Sources
+
+The first real inference example should support both checkpoint-bundle and
+split-component model sources through the model manifest:
 
 ```text
 <base_path>/models/checkpoints/sdxl_base_1.0.safetensors
+
+or
+
+<base_path>/models/diffusion/...
+<base_path>/models/clip/...
+<base_path>/models/vae/...
+<base_path>/models/tokenizers/...
 ```
 
-Reasons:
+Supported V1 source shapes:
 
-- it matches the current E2E guide and manifest examples;
-- it keeps model-manager resolution stable: `ModelRef` still maps to one
-  `ModelDescriptor`;
-- it avoids adding diffusers directory manifest semantics before real kernels
-  are proven.
+- checkpoint bundle: one model descriptor resolves the model roles needed by
+  the loaded graph, such as diffusion model, CLIP/text encoder, VAE, and
+  tokenizer resources;
+- split components: separate descriptors can resolve diffusion model, CLIP/text
+  encoder, VAE, and tokenizer resources independently, while the backend builds
+  one compatible loaded component graph for the run.
 
-Diffusers directory layouts are explicitly deferred. Supporting them later
-should be a model-manager + Candle loader extension, not a workflow JSON
+Workflow JSON still stores stable `ModelRef` values, not local file paths or
+Candle-specific model layout fields. Model-manager owns descriptor persistence
+and path resolution. The Candle backend owns interpretation of the resolved
+sources and compatibility checks for the loaded component graph.
+
+Diffusers directory layouts remain a possible loader extension. Supporting
+them should be a model-manager + backend loader change, not a workflow JSON
 change and not a reason to fork runtime/inference abstractions.
 
 ## Dependency Direction And Candidate Crates
@@ -149,59 +236,80 @@ workflow JSON -> candle concepts
 behind an explicit download/cache feature and must not make local manifest
 resolution depend on network access.
 
-The Candle project has official Stable Diffusion examples and safetensors
-loading entry points. Those examples may guide backend-private implementation,
-but Reimagine must still preserve its own typed capability boundary and
-workspace/model-manager semantics.
+The Candle project has official Stable Diffusion examples that support multiple
+Stable Diffusion variants, local file inputs, and GPU feature flags. Those
+examples may guide backend-private device construction, safetensors loading,
+tokenizer/model wiring, and scheduler defaults. Reimagine must still preserve
+its own typed capability boundary, workspace config, and model-manager
+semantics. Candle example CLI ownership, automatic download behavior, and
+direct output-file flow must not leak upward into app-host, runtime, or
+workflow JSON.
 
 ## Device Target
 
-The first real path should be **CPU-correct first**, with Metal treated as an
-optimization target after correctness. The workspace config already carries a
-`candle_device` label, so device selection should stay behind Candle backend
-configuration:
+The first real path should support CPU and GPU-capable Candle devices. Exact
+availability depends on the local build features and platform, but the
+architecture must not hard-code CPU-only behavior. Device selection stays
+behind app-host bootstrap, backend discovery, and inference routing
+configuration.
 
-```json
-{
-  "schema_version": "1",
-  "backend": "candle",
-  "candle_device": "cpu"
-}
-```
-
-Metal support can be wired through the same backend config once correctness and
-test coverage exist. The runtime and inference executors must not branch on
-CPU vs Metal.
+Runtime and inference executors must not branch on CPU, Metal, CUDA, or future
+remote devices. They call typed capabilities through `InferenceRuntime`; the
+selected backend instance owns concrete device construction and execution.
 
 ## Slice Order
 
-### 1. Real bundle metadata and weight loading
+### 0. Workspace hardware profile and backend discovery
 
-Goal: replace placeholder bundle construction with a backend-local loaded SDXL
-bundle that reads the configured single-file safetensors checkpoint.
+Goal: add a top-level discovery surface so app-host can report backend,
+device, memory, dtype, and capability profiles to Axum/Tauri/UI and validate
+user backend/device configuration during workspace bootstrap.
 
 The slice should:
 
-- validate the source file and format;
-- load or index required tensors without exposing them outside Candle;
-- populate `LoadedSdxlBundle` / model cache with role-specific handles for
-  diffusion model, CLIP, and VAE;
+- define host-neutral compute/backend/device profile DTOs in the shared
+  app-host/inference boundary;
+- let the Candle backend report CPU and GPU-capable device candidates without
+  exposing Candle `Device` handles;
+- expose the latest workspace compute profile through app-host and host
+  adapters;
+- validate saved backend/device selection against the discovery result and
+  produce diagnostics for unavailable selections;
+- keep runtime out of hardware probing and config persistence.
+
+It should not yet implement real SDXL kernels.
+
+### 1. Model source loading and component graph
+
+Goal: replace placeholder bundle construction with a backend-local loaded model
+component graph that can be built from either a checkpoint bundle or split
+component sources. SDXL base is the first graph implementation.
+
+The slice should:
+
+- validate source files, formats, and component compatibility;
+- load or index required tensors/resources without exposing them outside
+  Candle;
+- resolve tokenizer resources as part of backend model loading rather than as
+  runtime or workflow concepts;
+- populate the backend model cache with role-specific handles for diffusion
+  model, CLIP/text encoder, VAE, tokenizer state, and metadata;
 - preserve `load_bundle` outputs as three typed execution handles:
   `Model`, `Clip`, `Vae`;
-- fail clearly when required SDXL tensors are missing or unsupported.
+- fail clearly when required tensors/resources are missing or unsupported.
 
 It should not yet require full text encode, sampling, or VAE decode to be
 production quality.
 
 ### 2. Real tokenizer and text encoder inputs
 
-Goal: replace the simplified tokenizer with real CLIP BPE-compatible
+Goal: replace the simplified tokenizer path with real tokenizer execution for
+the loaded model graph. For the first example this means CLIP BPE-compatible
 tokenization for SDXL prompts.
 
 The slice should:
 
-- load tokenizer vocabulary/merge data from backend-local resources or model
-  sidecar data;
+- use tokenizer resources resolved by backend model loading;
 - produce token tensors and attention masks compatible with both SDXL text
   encoders;
 - keep tokenizer state inside the loaded bundle or backend-local graph;
@@ -283,6 +391,7 @@ Tiny/synthetic fixture tests
 
 Manual/local E2E tests
   use developer-provided SDXL weights under <base_path>/models
+  select CPU or GPU backend/device config from discovery
   run through Axum E2E guide
   verify non-placeholder PNG artifact and event/snapshot behavior
 ```
@@ -295,7 +404,10 @@ environment/config flag.
 
 The placeholder label can be removed only when:
 
-- a real SDXL base single-file safetensors checkpoint loads from the manifest;
+- app-host can report available backend/device profiles and validate the
+  selected CPU or GPU backend instance;
+- real SDXL base checkpoint-bundle and split-component sources can load through
+  the manifest/model resolver path;
 - real tokenizer + CLIP text encode produce conditioning;
 - real UNet/scheduler sampling produces latent output;
 - real VAE decode produces image output;
@@ -307,7 +419,6 @@ The placeholder label can be removed only when:
 ## Deferred
 
 - SDXL refiner.
-- Diffusers directory model layout.
 - Remote model download or `hf-hub` cache management.
 - Quantization and low-memory variants.
 - Multi-backend component placement policy.
