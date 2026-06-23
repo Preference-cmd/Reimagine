@@ -4,6 +4,7 @@ use std::sync::{Arc, Mutex};
 use candle_core::{DType, Tensor};
 use reimagine_core::model::{ModelId, RunId};
 use reimagine_inference::BackendPayloadKey;
+use reimagine_inference::ResolvedInferenceModelSourceSet;
 
 use crate::error::CandleBackendError;
 use crate::models::LoadedModelBundle;
@@ -511,6 +512,30 @@ impl CandleModelCache {
             .lock()
             .expect("model cache poisoned")
             .remove(model_id)
+    }
+
+    /// Get a cached bundle if it exists AND is compatible with the given source_set.
+    /// Incompatible entries are evicted automatically.
+    pub fn get_compatible_bundle(
+        &self,
+        model_id: &ModelId,
+        source_set: &ResolvedInferenceModelSourceSet,
+    ) -> Option<Arc<LoadedModelBundle>> {
+        let bundles = self.bundles.lock().expect("model cache poisoned");
+        let bundle = bundles.get(model_id)?;
+        match bundle.as_ref().as_graph().check_compatible(source_set) {
+            Ok(()) => Some(bundle.clone()),
+            Err(reason) => {
+                tracing::warn!(
+                    model_id = %model_id.as_str(),
+                    %reason,
+                    "cached model bundle is incompatible, evicting"
+                );
+                drop(bundles);
+                self.remove_bundle(model_id);
+                None
+            }
+        }
     }
 
     /// Number of cached bundles.

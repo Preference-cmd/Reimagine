@@ -20,6 +20,14 @@ use reimagine_inference::{
     Backend, BackendInstance, LoadBundleResponse, RuntimeClipHandle, RuntimeModelHandle,
     RuntimeVaeHandle,
 };
+use reimagine_inference::ResolvedInferenceModelSourceSet;
+
+/// Backend-local loaded model graph — one implementation per model family.
+pub trait LoadedModelGraph: Send + Sync {
+    fn source_set(&self) -> &ResolvedInferenceModelSourceSet;
+    fn component_graph_metadata(&self) -> Option<&str>;
+    fn check_compatible(&self, incoming: &ResolvedInferenceModelSourceSet) -> Result<(), String>;
+}
 
 use crate::error::CandleBackendError;
 use crate::models::LoadedModelBundle;
@@ -73,6 +81,15 @@ pub struct LatentDecodeResult {
 }
 
 impl LoadedModelBundle {
+    /// Expose the loaded model graph for compatibility checks.
+    pub fn as_graph(&self) -> &dyn LoadedModelGraph {
+        match self {
+            Self::StableDiffusionSdxl(bundle) => bundle.as_ref(),
+            #[cfg(test)]
+            Self::TestPlaceholder => panic!("TestPlaceholder has no graph"),
+        }
+    }
+
     /// Validate that `clip` points at the loaded bundle's text encoder payload.
     pub fn validate_clip_handle(&self, clip: &RuntimeClipHandle) -> Result<(), CandleBackendError> {
         match self {

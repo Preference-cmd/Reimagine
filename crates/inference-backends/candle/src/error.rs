@@ -1,3 +1,4 @@
+use reimagine_core::model::ModelId;
 use reimagine_inference::InferenceCapability;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -60,6 +61,11 @@ pub enum CandleBackendError {
         series: String,
         variant: String,
     },
+    /// Cached model bundle is incompatible with the requested source set.
+    IncompatibleCachedBundle {
+        model_id: ModelId,
+        reason: String,
+    },
 }
 
 impl std::fmt::Display for CandleBackendError {
@@ -83,6 +89,13 @@ impl std::fmt::Display for CandleBackendError {
                 f,
                 "candle backend has no loader for model `{model_id}` (series `{series}`, variant `{variant}`)"
             ),
+            Self::IncompatibleCachedBundle { model_id, reason } => {
+                write!(
+                    f,
+                    "cached model bundle for '{}' is incompatible: {reason}",
+                    model_id.as_str()
+                )
+            }
         }
     }
 }
