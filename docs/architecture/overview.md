@@ -320,6 +320,7 @@ VAE and image:
 - [Agent provider](./modules/agent-provider.md)
 - [Adapters](./modules/adapters.md)
 - [Candle backend adapter](./modules/candle-integration.md)
+- [Real SDXL roadmap](./real-sdxl-roadmap.md)
 - [Tauri host](./modules/tauri-host.md)
 - [UI](./modules/ui.md)
 - [Axum host](./modules/axum-host.md)
