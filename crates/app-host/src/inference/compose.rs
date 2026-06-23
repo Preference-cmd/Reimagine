@@ -193,7 +193,7 @@ mod tests {
     }
 
     #[test]
-    fn compose_backends_normalizes_metal_label_to_metal_instance() {
+    fn compose_uses_metal_label_for_metal_instance() {
         let base = temp_dir("resolved-metal");
         let config = AppConfig::new(AppPaths::new(&base));
 

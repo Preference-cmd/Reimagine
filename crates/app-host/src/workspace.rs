@@ -10,7 +10,7 @@ use reimagine_nodes::BuiltinNodeCatalog;
 use reimagine_runtime::{BoxedRunEventSink, RuntimeService, VecRunEventSink};
 
 use crate::inference::compose::compose_inference_runtime;
-use crate::inference::resolve::{CANDLE_CPU_FALLBACK, resolve_candle_instance};
+use crate::inference::resolve::{CANDLE_CPU_FALLBACK_LABEL, resolve_candle_instance};
 use crate::node_catalog::{NodeCatalogAlignment, NodeCatalogService};
 use crate::services::WorkspaceServices;
 use crate::tools::register_app_tools;
@@ -191,7 +191,7 @@ impl WorkspaceHost {
 
         let resolved_label = instance_label(&resolved_instance);
         let composed = compose_inference_runtime(&config, resolved_label, model_service.clone())
-            .expect("compose inference runtime after profile resolution");
+            .expect("resolved Candle label is validated against profile before compose");
         let runtime_service = Arc::new(RuntimeService::new(
             composed.executor_registry,
             Arc::new(composed.runtime_hooks),
@@ -307,7 +307,7 @@ fn instance_label(instance: &reimagine_inference::BackendInstance) -> &str {
         .as_str()
         .split_once(':')
         .map(|(_, label)| label)
-        .unwrap_or(CANDLE_CPU_FALLBACK)
+        .unwrap_or(CANDLE_CPU_FALLBACK_LABEL)
 }
 
 fn load_backend_config(config: &AppConfig) -> InferenceBackendConfig {
