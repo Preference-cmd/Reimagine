@@ -549,6 +549,7 @@ mod tests {
     use super::*;
     use crate::device::CandleDevice;
     use reimagine_inference::ModelFormat;
+    use reimagine_inference::{ModelSourceKind, ResolvedInferenceModelSource};
     use std::fs;
 
     fn unique_temp_dir() -> std::path::PathBuf {
@@ -922,5 +923,34 @@ mod tests {
         let image = CandleImage::new(image_tensor, 64, 64, 1, "rgb".to_string());
         store.insert_image(run_id, key_image, image);
         assert_eq!(store.payload_byte_size(), 1024 + 49152);
+    }
+
+    #[test]
+    fn cache_get_compatible_bundle_hit_and_eviction() {
+        let cache = CandleModelCache::new();
+        let dir1 = unique_temp_dir();
+        let dir2 = unique_temp_dir();
+        let model_id = ModelId::new("cache-eviction-test");
+
+        let bundle = build_bundle("cache-eviction-test", &dir1);
+        cache.insert_bundle(model_id.clone(), bundle);
+
+        let set1 = ResolvedInferenceModelSourceSet::new(ResolvedInferenceModelSource::new(
+            ModelSourceKind::CheckpointBundle,
+            dir1.join("cache-eviction-test.safetensors"),
+        ));
+
+        assert!(cache.get_compatible_bundle(&model_id, &set1).is_some());
+
+        let set2 = ResolvedInferenceModelSourceSet::new(ResolvedInferenceModelSource::new(
+            ModelSourceKind::CheckpointBundle,
+            dir2.join("different-path.safetensors"),
+        ));
+
+        assert!(cache.get_compatible_bundle(&model_id, &set2).is_none());
+        assert!(cache.get_bundle(&model_id).is_none());
+
+        let _ = fs::remove_dir_all(&dir1);
+        let _ = fs::remove_dir_all(&dir2);
     }
 }
