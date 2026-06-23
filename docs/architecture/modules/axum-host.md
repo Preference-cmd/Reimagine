@@ -99,8 +99,22 @@ The first slice supports workflow run testing against the existing
 - `GET /artifacts/:artifact_id` resolves a runtime artifact id from the
   current workspace's run snapshots/summaries and serves the corresponding
   workspace output file. V1 should prefer artifact ids over arbitrary file
-  paths. Any file-serving route must prove the resolved path stays under
-  `<base_path>/output`.
+  paths. V1 supports PNG artifact reads only and does not guarantee artifact
+  ids remain resolvable after process restart. Any file-serving route must
+  prove the resolved path stays under `<base_path>/output`.
+
+Artifact HTTP status mapping:
+
+```text
+unknown artifact id       -> 404 Not Found
+unsafe artifact reference -> 404 Not Found
+known record, file gone   -> 410 Gone
+non-PNG media             -> 415 Unsupported Media Type
+valid PNG                 -> 200 OK, content-type: image/png
+```
+
+Axum must not expose raw path traversal or filesystem validation details to
+clients. Unsafe references may be logged internally.
 
 ## Non-Responsibilities
 

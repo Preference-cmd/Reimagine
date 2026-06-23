@@ -135,6 +135,34 @@ shared DTOs/projections -> app-host::dto
 semantic operations/facade calls -> WorkspaceHost
 ```
 
+Artifact access is facade logic, not DTO logic. `WorkspaceHost` owns artifact
+id lookup and workspace output path validation so Axum, Tauri, and future host
+surfaces can reuse one safety boundary:
+
+```text
+WorkspaceHost::resolve_artifact(id) -> Result<ArtifactAccess, ArtifactAccessError>
+
+ArtifactAccess
+  artifact_id
+  node_id
+  reference
+  path        # validated absolute local path under <base_path>/output
+  media_type  # V1: image/png
+```
+
+V1 resolves artifact ids from current in-memory runtime observations: active
+`RunSnapshot.artifacts` and terminal `RunSummary.artifacts`. It does not create
+a persistent artifact index, so artifact ids are not guaranteed to resolve
+after process restart until run/artifact persistence is designed.
+
+The resolver treats `ArtifactRef` as untrusted text. It must require the
+logical `output/` prefix, reject absolute paths, empty paths, `..`, and
+non-normal path components, join the safe suffix to `AppPaths::output_dir()`,
+canonicalize the output directory, and canonicalize existing files before
+checking that the result stays under the canonical output directory. Existing
+artifact records whose files are gone become a "gone" result rather than a
+panic.
+
 V1 does not require Tauri to call Axum over localhost. Tauri may reuse the same
 DTO shapes and `WorkspaceHost` facade directly. A future embedded Axum server
 inside the desktop app is possible, but it is a host decision rather than a
