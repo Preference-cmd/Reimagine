@@ -29,6 +29,11 @@ use reimagine_inference::{
 /// configured device label cannot be honored.
 pub(crate) const CANDLE_CPU_FALLBACK: &str = "candle:cpu";
 
+/// Bare device label that matches [`CANDLE_CPU_FALLBACK`].
+/// Used by helpers that strip the `<backend>:` prefix from a
+/// resolved [`BackendInstance`].
+pub(crate) const CANDLE_CPU_FALLBACK_LABEL: &str = "cpu";
+
 /// Resolve the configured Candle device label to a concrete
 /// [`BackendInstance`] using the freshly probed [`BackendProfile`].
 ///
