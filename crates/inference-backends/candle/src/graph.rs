@@ -202,12 +202,12 @@ impl LoadedModelBundle {
     pub fn encode_text(
         &self,
         input: TextEncodeInput,
-        device: &Device,
+        _device: &Device,
     ) -> Result<TextEncodeResult, CandleBackendError> {
         match self {
-            LoadedModelBundle::StableDiffusionSdxl(_) => {
-                let encoder = SdxlTextEncoder::new();
-                let (text_embedding, pooled_embedding) = encoder.encode(&input.prompt, device)?;
+            LoadedModelBundle::StableDiffusionSdxl(bundle) => {
+                let (text_embedding, pooled_embedding) =
+                    SdxlTextEncoder::encode(bundle, &input.prompt)?;
                 Ok(TextEncodeResult {
                     text_embedding,
                     pooled_embedding,
