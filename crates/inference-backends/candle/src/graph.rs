@@ -332,9 +332,16 @@ mod tests {
         let source_path = dir.join("model.safetensors");
         // Create a dummy file so bundle construction succeeds.
         std::fs::write(&source_path, b"placeholder").expect("test placeholder file");
-        let bundle = crate::models::LoadedSdxlBundle::from_resolved(
-            model_id,
+        let source = reimagine_inference::ResolvedInferenceModelSource::new(
+            reimagine_inference::ModelSourceKind::CheckpointBundle,
+            ModelRole::CheckpointBundle,
             source_path,
+            ModelFormat::SafeTensors,
+        );
+        let source_set = ResolvedInferenceModelSourceSet::new(source);
+        let bundle = crate::models::LoadedSdxlBundle::from_resolved_with_test_text_projection(
+            model_id,
+            source_set,
             ModelFormat::SafeTensors,
             cpu_device(),
         )

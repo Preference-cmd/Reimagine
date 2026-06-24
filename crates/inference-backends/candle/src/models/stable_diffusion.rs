@@ -89,6 +89,27 @@ impl LoadedModelBundle {
             })
         }
     }
+
+    pub(crate) fn load_from_source_set_with_test_text_projection(
+        model_id: ModelId,
+        series: &ModelSeries,
+        variant: &ModelVariant,
+        source_set: &ResolvedInferenceModelSourceSet,
+        format: ModelFormat,
+        device: Arc<Device>,
+    ) -> Result<Arc<Self>, CandleBackendError> {
+        if series.as_str() == "stable_diffusion" && variant.as_str() == "sdxl" {
+            let sdxl = LoadedSdxlBundle::from_resolved_with_test_text_projection(
+                model_id,
+                source_set.clone(),
+                format,
+                device,
+            )?;
+            Ok(Arc::new(Self::StableDiffusionSdxl(sdxl)))
+        } else {
+            Self::load_from_source_set(model_id, series, variant, source_set, format, device)
+        }
+    }
 }
 
 pub mod sdxl;
