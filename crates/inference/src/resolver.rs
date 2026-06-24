@@ -10,6 +10,9 @@ use reimagine_core::model::{ModelId, ModelRef, ModelRole, ModelSeries, ModelVari
 
 use crate::inference_error::InferenceError;
 
+pub mod source;
+pub use source::{ModelSourceKind, ResolvedInferenceModelSource, ResolvedInferenceModelSourceSet};
+
 /// Resolved, backend-neutral model metadata.
 ///
 /// This shape reuses stable [`reimagine_core`] semantic types but
@@ -28,6 +31,7 @@ pub struct ResolvedInferenceModel {
     source_path: PathBuf,
     format: ModelFormat,
     metadata: Option<String>,
+    source_set: Option<ResolvedInferenceModelSourceSet>,
 }
 
 impl ResolvedInferenceModel {
@@ -47,12 +51,35 @@ impl ResolvedInferenceModel {
             source_path: source_path.into(),
             format,
             metadata: None,
+            source_set: None,
         }
     }
 
     pub fn with_metadata(mut self, metadata: impl Into<String>) -> Self {
         self.metadata = Some(metadata.into());
         self
+    }
+
+    pub fn source_set(&self) -> Option<&ResolvedInferenceModelSourceSet> {
+        self.source_set.as_ref()
+    }
+
+    pub fn with_source_set(mut self, source_set: ResolvedInferenceModelSourceSet) -> Self {
+        self.source_set = Some(source_set);
+        self
+    }
+
+    pub fn to_checkpoint_bundle_source_set(&self) -> ResolvedInferenceModelSourceSet {
+        let mut source = ResolvedInferenceModelSource::new(
+            ModelSourceKind::CheckpointBundle,
+            self.role,
+            self.source_path.clone(),
+            self.format,
+        );
+        if let Some(ref meta) = self.metadata {
+            source = source.with_metadata(meta.as_str());
+        }
+        ResolvedInferenceModelSourceSet::new(source)
     }
 
     pub fn model_id(&self) -> &ModelId {

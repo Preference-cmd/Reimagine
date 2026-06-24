@@ -4360,6 +4360,7 @@ dependencies = [
  "reimagine-plugin",
  "serde",
  "tokio",
+ "tracing",
 ]
 
 [[package]]

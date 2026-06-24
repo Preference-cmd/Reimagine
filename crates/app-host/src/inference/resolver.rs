@@ -2,7 +2,10 @@ use std::sync::Arc;
 
 use reimagine_config::AppPaths;
 use reimagine_core::model::ModelRef;
-use reimagine_inference::{InferenceError, ModelFormat, ModelResolver, ResolvedInferenceModel};
+use reimagine_inference::{
+    InferenceError, ModelFormat, ModelResolver, ModelSourceKind, ResolvedInferenceModel,
+    ResolvedInferenceModelSource, ResolvedInferenceModelSourceSet,
+};
 
 use crate::ModelService;
 
@@ -58,14 +61,23 @@ impl ModelResolver for ModelResolverAdapter {
             ),
         })?;
 
-        Ok(ResolvedInferenceModel::new(
+        let resolved = ResolvedInferenceModel::new(
             descriptor.id().clone(),
             descriptor.model_series().clone(),
             descriptor.variant().clone(),
             model_ref.role(),
+            source_path.clone(),
+            map_model_format(descriptor.format()),
+        );
+
+        let source_set = ResolvedInferenceModelSourceSet::new(ResolvedInferenceModelSource::new(
+            ModelSourceKind::CheckpointBundle,
+            model_ref.role(),
             source_path,
             map_model_format(descriptor.format()),
-        ))
+        ));
+
+        Ok(resolved.with_source_set(source_set))
     }
 }
 

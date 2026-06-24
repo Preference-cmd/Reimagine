@@ -9,8 +9,11 @@ use std::path::Path;
 use std::sync::Arc;
 
 use candle_core::Device;
-use reimagine_core::model::{ModelId, ModelSeries, ModelVariant};
+use reimagine_core::model::{ModelId, ModelRole, ModelSeries, ModelVariant};
 use reimagine_inference::ModelFormat;
+use reimagine_inference::{
+    ModelSourceKind, ResolvedInferenceModelSource, ResolvedInferenceModelSourceSet,
+};
 
 use crate::error::CandleBackendError;
 use crate::models::stable_diffusion::sdxl::LoadedSdxlBundle;
@@ -51,10 +54,29 @@ impl LoadedModelBundle {
         format: ModelFormat,
         device: Arc<Device>,
     ) -> Result<Arc<Self>, CandleBackendError> {
+        let source = ResolvedInferenceModelSource::new(
+            ModelSourceKind::CheckpointBundle,
+            ModelRole::CheckpointBundle,
+            source_path.to_path_buf(),
+            format,
+        );
+        let source_set = ResolvedInferenceModelSourceSet::new(source);
+        Self::load_from_source_set(model_id, series, variant, &source_set, format, device)
+    }
+
+    /// Load from a multi-source set (checkpoint bundle or split components).
+    pub fn load_from_source_set(
+        model_id: ModelId,
+        series: &ModelSeries,
+        variant: &ModelVariant,
+        source_set: &ResolvedInferenceModelSourceSet,
+        format: ModelFormat,
+        device: Arc<Device>,
+    ) -> Result<Arc<Self>, CandleBackendError> {
         if series.as_str() == "stable_diffusion" && variant.as_str() == "sdxl" {
-            let sdxl = LoadedSdxlBundle::from_resolved(
+            let sdxl = LoadedSdxlBundle::from_resolved_with_source_set(
                 model_id,
-                source_path.to_path_buf(),
+                source_set.clone(),
                 format,
                 device,
             )?;

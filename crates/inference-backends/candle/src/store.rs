@@ -4,6 +4,7 @@ use std::sync::{Arc, Mutex};
 use candle_core::{DType, Tensor};
 use reimagine_core::model::{ModelId, RunId};
 use reimagine_inference::BackendPayloadKey;
+use reimagine_inference::ResolvedInferenceModelSourceSet;
 
 use crate::error::CandleBackendError;
 use crate::models::LoadedModelBundle;
@@ -513,6 +514,30 @@ impl CandleModelCache {
             .remove(model_id)
     }
 
+    /// Get a cached bundle if it exists AND is compatible with the given source_set.
+    /// Incompatible entries are evicted automatically.
+    pub fn get_compatible_bundle(
+        &self,
+        model_id: &ModelId,
+        source_set: &ResolvedInferenceModelSourceSet,
+    ) -> Option<Arc<LoadedModelBundle>> {
+        let bundles = self.bundles.lock().expect("model cache poisoned");
+        let bundle = bundles.get(model_id)?;
+        match bundle.as_ref().as_graph().check_compatible(source_set) {
+            Ok(()) => Some(bundle.clone()),
+            Err(reason) => {
+                tracing::warn!(
+                    model_id = %model_id.as_str(),
+                    %reason,
+                    "cached model bundle is incompatible, evicting"
+                );
+                drop(bundles);
+                self.remove_bundle(model_id);
+                None
+            }
+        }
+    }
+
     /// Number of cached bundles.
     pub fn bundle_count(&self) -> usize {
         self.bundles.lock().expect("model cache poisoned").len()
@@ -523,7 +548,8 @@ impl CandleModelCache {
 mod tests {
     use super::*;
     use crate::device::CandleDevice;
-    use reimagine_inference::ModelFormat;
+    use reimagine_core::model::ModelRole;
+    use reimagine_inference::{ModelFormat, ModelSourceKind, ResolvedInferenceModelSource};
     use std::fs;
 
     fn unique_temp_dir() -> std::path::PathBuf {
@@ -897,5 +923,38 @@ mod tests {
         let image = CandleImage::new(image_tensor, 64, 64, 1, "rgb".to_string());
         store.insert_image(run_id, key_image, image);
         assert_eq!(store.payload_byte_size(), 1024 + 49152);
+    }
+
+    #[test]
+    fn cache_get_compatible_bundle_hit_and_eviction() {
+        let cache = CandleModelCache::new();
+        let dir1 = unique_temp_dir();
+        let dir2 = unique_temp_dir();
+        let model_id = ModelId::new("cache-eviction-test");
+
+        let bundle = build_bundle("cache-eviction-test", &dir1);
+        cache.insert_bundle(model_id.clone(), bundle);
+
+        let set1 = ResolvedInferenceModelSourceSet::new(ResolvedInferenceModelSource::new(
+            ModelSourceKind::CheckpointBundle,
+            ModelRole::CheckpointBundle,
+            dir1.join("cache-eviction-test.safetensors"),
+            ModelFormat::SafeTensors,
+        ));
+
+        assert!(cache.get_compatible_bundle(&model_id, &set1).is_some());
+
+        let set2 = ResolvedInferenceModelSourceSet::new(ResolvedInferenceModelSource::new(
+            ModelSourceKind::CheckpointBundle,
+            ModelRole::CheckpointBundle,
+            dir2.join("different-path.safetensors"),
+            ModelFormat::SafeTensors,
+        ));
+
+        assert!(cache.get_compatible_bundle(&model_id, &set2).is_none());
+        assert!(cache.get_bundle(&model_id).is_none());
+
+        let _ = fs::remove_dir_all(&dir1);
+        let _ = fs::remove_dir_all(&dir2);
     }
 }
