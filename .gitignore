@@ -42,6 +42,9 @@ src-tauri/WixTools/
 .env.local
 .env.*.local
 
+# ----- Local runtime workspace -----
+workspace/
+
 # ----- Local planning / agent scratch -----
 .scratch/
 .sc/
