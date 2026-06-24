@@ -4,9 +4,8 @@
 //! `sdxl-base-1.0` manifest entry, and runs the workflow through a
 //! real `WorkspaceHost` constructed with the Candle backend.
 //!
-//! The full pipeline (model.load_bundle → text.encode × 2 →
-//! empty_latent_image → diffusion.sample → latent.decode → image.save)
-//! completes end-to-end with an image artifact written to the output dir.
+//! This placeholder-model smoke path should fail precisely at real SDXL
+//! text encoder loading; committed tests do not carry CLIP weights.
 
 use std::path::PathBuf;
 use std::sync::Arc;
@@ -223,7 +222,7 @@ async fn run_to_completion(host: &WorkspaceHost, run_id: &reimagine_core::model:
 }
 
 #[tokio::test]
-async fn candle_backend_sdxl_workflow_completes_with_image_artifact() {
+async fn candle_backend_sdxl_placeholder_workflow_reports_missing_text_encoder_weights() {
     let base = unique_temp_dir("app-host");
     let paths = AppPaths::new(&base);
     tokio::fs::create_dir_all(paths.models_dir()).await.unwrap();
@@ -271,40 +270,19 @@ async fn candle_backend_sdxl_workflow_completes_with_image_artifact() {
         .summary(handle.run_id())
         .expect("summary should exist after completion");
 
-    assert_eq!(
-        summary.state,
-        RunState::Completed,
-        "expected run to complete successfully"
+    assert_eq!(summary.state, RunState::Failed);
+    let diagnostics = summary
+        .diagnostics
+        .iter()
+        .map(|diagnostic| diagnostic.message().to_string())
+        .collect::<Vec<_>>()
+        .join("\n");
+    assert!(
+        diagnostics.contains("text encoder weights"),
+        "expected missing text encoder weights diagnostic, got: {diagnostics}"
     );
     assert!(
-        !summary.artifacts.is_empty(),
-        "expected at least one artifact in run summary"
-    );
-
-    let output_dir = paths.output_dir();
-    let mut entries = tokio::fs::read_dir(output_dir)
-        .await
-        .expect("output dir should exist");
-    let png_path = loop {
-        let entry = entries
-            .next_entry()
-            .await
-            .expect("output dir entry read")
-            .expect("output dir should contain a PNG file");
-        let path = entry.path();
-        if path.extension().and_then(|s| s.to_str()) == Some("png") {
-            break path;
-        }
-    };
-
-    let metadata = tokio::fs::metadata(&png_path)
-        .await
-        .expect("png file metadata");
-    assert!(metadata.len() > 0, "PNG file should be non-empty");
-
-    let bytes = tokio::fs::read(&png_path).await.expect("png file read");
-    assert!(
-        bytes.starts_with(&[0x89, b'P', b'N', b'G', 0x0d, 0x0a, 0x1a, 0x0a]),
-        "PNG file should have PNG signature"
+        summary.artifacts.is_empty(),
+        "placeholder model should not produce image artifacts"
     );
 }

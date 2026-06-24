@@ -8,6 +8,7 @@ use reimagine_inference::{
     ResolvedInferenceModelSourceSet,
 };
 
+use super::text::{SdxlTextEncoderGraph, TextEncoderError};
 use super::tokenizer::SdxlTokenizer;
 use crate::error::CandleBackendError;
 
@@ -35,6 +36,9 @@ pub enum BundleLoadError {
     },
     EmptySourceSet,
     TokenizerLoadFailed {
+        reason: String,
+    },
+    TextEncoderLoadFailed {
         reason: String,
     },
 }
@@ -67,6 +71,9 @@ impl std::fmt::Display for BundleLoadError {
             Self::TokenizerLoadFailed { reason } => {
                 write!(f, "SDXL tokenizer load failed: {reason}")
             }
+            Self::TextEncoderLoadFailed { reason } => {
+                write!(f, "SDXL text encoder load failed: {reason}")
+            }
         }
     }
 }
@@ -93,6 +100,7 @@ pub struct LoadedSdxlBundle {
     pub source_format: ModelFormat,
     pub device: Arc<Device>,
     pub tokenizer: SdxlTokenizer,
+    pub text_encoder: SdxlTextEncoderGraph,
     pub model_payload_key: BackendPayloadKey,
     pub clip_payload_key: BackendPayloadKey,
     pub vae_payload_key: BackendPayloadKey,
@@ -143,6 +151,10 @@ impl LoadedSdxlBundle {
                 reason: e.to_string(),
             }
         })?;
+        let text_encoder = SdxlTextEncoderGraph::load(&source_set, &primary_path, device.clone())
+            .map_err(|e| BundleLoadError::TextEncoderLoadFailed {
+            reason: e.to_string(),
+        })?;
         Ok(Arc::new(Self {
             model_id,
             source_path: primary_path,
@@ -150,10 +162,64 @@ impl LoadedSdxlBundle {
             source_format: format,
             device,
             tokenizer,
+            text_encoder,
             model_payload_key,
             clip_payload_key,
             vae_payload_key,
         }))
+    }
+
+    #[doc(hidden)]
+    pub(crate) fn from_resolved_with_test_text_projection(
+        model_id: ModelId,
+        source_set: ResolvedInferenceModelSourceSet,
+        format: ModelFormat,
+        device: Arc<Device>,
+    ) -> Result<Arc<Self>, BundleLoadError> {
+        if source_set.sources().is_empty() {
+            return Err(BundleLoadError::EmptySourceSet);
+        }
+        for source in source_set.sources() {
+            validate_source(source.path(), source.format())?;
+        }
+        let primary_path = source_set
+            .sources()
+            .first()
+            .map(|s| s.path().clone())
+            .unwrap_or_default();
+        let model_payload_key =
+            BackendPayloadKey::new(format!("bundle:{}:model", model_id.as_str()));
+        let clip_payload_key = BackendPayloadKey::new(format!("bundle:{}:clip", model_id.as_str()));
+        let vae_payload_key = BackendPayloadKey::new(format!("bundle:{}:vae", model_id.as_str()));
+        let tokenizer = SdxlTokenizer::from_source(&source_set, &primary_path).map_err(|e| {
+            BundleLoadError::TokenizerLoadFailed {
+                reason: e.to_string(),
+            }
+        })?;
+        let text_encoder = SdxlTextEncoderGraph::load_test_projection(&source_set, device.clone())
+            .map_err(|e| BundleLoadError::TextEncoderLoadFailed {
+                reason: e.to_string(),
+            })?;
+        Ok(Arc::new(Self {
+            model_id,
+            source_path: primary_path,
+            source_set,
+            source_format: format,
+            device,
+            tokenizer,
+            text_encoder,
+            model_payload_key,
+            clip_payload_key,
+            vae_payload_key,
+        }))
+    }
+}
+
+impl From<TextEncoderError> for BundleLoadError {
+    fn from(err: TextEncoderError) -> Self {
+        Self::TextEncoderLoadFailed {
+            reason: err.to_string(),
+        }
     }
 }
 
@@ -279,6 +345,7 @@ fn expected_extension_for(format: ModelFormat) -> Option<&'static str> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use candle_core::{DType, Tensor};
     use std::fs;
     use std::sync::Arc;
     use std::sync::atomic::{AtomicU64, Ordering};
@@ -299,6 +366,16 @@ mod tests {
         fs::create_dir_all(dir).unwrap();
         let path = dir.join(filename);
         fs::write(&path, b"placeholder").unwrap();
+        path
+    }
+
+    fn write_unrelated_safetensors(dir: &Path, filename: &str) -> PathBuf {
+        fs::create_dir_all(dir).unwrap();
+        let path = dir.join(filename);
+        let tensor = Tensor::zeros((1,), DType::F32, &Device::Cpu).unwrap();
+        let mut tensors = std::collections::HashMap::new();
+        tensors.insert("unet.unrelated.weight", tensor);
+        candle_core::safetensors::save(&tensors, &path).unwrap();
         path
     }
 
@@ -361,9 +438,15 @@ mod tests {
         let path = write_placeholder(&dir, "sdxl.safetensors");
         let model_id = ModelId::new("sdxl-base-1.0");
         let device = Arc::new(Device::Cpu);
-        let bundle = LoadedSdxlBundle::from_resolved(
-            model_id.clone(),
+        let source = ResolvedInferenceModelSource::new(
+            ModelSourceKind::CheckpointBundle,
+            ModelRole::CheckpointBundle,
             path,
+            ModelFormat::SafeTensors,
+        );
+        let bundle = LoadedSdxlBundle::from_resolved_with_test_text_projection(
+            model_id.clone(),
+            ResolvedInferenceModelSourceSet::new(source),
             ModelFormat::SafeTensors,
             device,
         )
@@ -379,6 +462,53 @@ mod tests {
             "bundle:sdxl-base-1.0:clip"
         );
         assert_eq!(bundle.vae_payload_key.as_str(), "bundle:sdxl-base-1.0:vae");
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn from_resolved_rejects_placeholder_checkpoint_without_text_encoder_weights() {
+        let dir = unique_temp_dir();
+        let path = write_placeholder(&dir, "sdxl.safetensors");
+        let err = LoadedSdxlBundle::from_resolved(
+            ModelId::new("sdxl-placeholder"),
+            path,
+            ModelFormat::SafeTensors,
+            Arc::new(Device::Cpu),
+        )
+        .unwrap_err();
+
+        match err {
+            BundleLoadError::TextEncoderLoadFailed { reason } => {
+                assert!(reason.contains("text encoder weights"), "reason: {reason}");
+            }
+            other => panic!("expected TextEncoderLoadFailed, got {other:?}"),
+        }
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn from_resolved_reports_missing_text_encoder_prefix_for_valid_safetensors() {
+        let dir = unique_temp_dir();
+        let path = write_unrelated_safetensors(&dir, "sdxl.safetensors");
+        let err = LoadedSdxlBundle::from_resolved(
+            ModelId::new("sdxl-no-text-prefix"),
+            path,
+            ModelFormat::SafeTensors,
+            Arc::new(Device::Cpu),
+        )
+        .unwrap_err();
+
+        match err {
+            BundleLoadError::TextEncoderLoadFailed { reason } => {
+                assert!(
+                    reason.contains(
+                        "missing clip_l text encoder weights; no supported key prefix found"
+                    ),
+                    "reason: {reason}"
+                );
+            }
+            other => panic!("expected TextEncoderLoadFailed, got {other:?}"),
+        }
         let _ = fs::remove_dir_all(&dir);
     }
 
@@ -470,6 +600,87 @@ mod tests {
     }
 
     #[test]
+    fn from_resolved_accepts_split_text_encoder_component_metadata() {
+        let dir = unique_temp_dir();
+        fs::create_dir_all(&dir).unwrap();
+        let checkpoint_path = write_placeholder(&dir, "sdxl.safetensors");
+        let clip_l_path = write_placeholder(&dir, "clip_l.safetensors");
+        let clip_g_path = write_placeholder(&dir, "clip_g.safetensors");
+        let source_set = ResolvedInferenceModelSourceSet::new(ResolvedInferenceModelSource::new(
+            ModelSourceKind::CheckpointBundle,
+            ModelRole::CheckpointBundle,
+            checkpoint_path,
+            ModelFormat::SafeTensors,
+        ))
+        .with_source(
+            ResolvedInferenceModelSource::new(
+                ModelSourceKind::SplitComponent,
+                ModelRole::TextEncoder,
+                clip_l_path,
+                ModelFormat::SafeTensors,
+            )
+            .with_metadata("component=clip_l"),
+        )
+        .with_source(
+            ResolvedInferenceModelSource::new(
+                ModelSourceKind::SplitComponent,
+                ModelRole::TextEncoder,
+                clip_g_path,
+                ModelFormat::SafeTensors,
+            )
+            .with_metadata("component=clip_g"),
+        );
+
+        LoadedSdxlBundle::from_resolved_with_test_text_projection(
+            ModelId::new("sdxl-split-text-encoder"),
+            source_set,
+            ModelFormat::SafeTensors,
+            Arc::new(Device::Cpu),
+        )
+        .expect("split text encoder component metadata should not be treated as tokenizer paths");
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn from_resolved_reports_incomplete_split_text_encoder_sources() {
+        let dir = unique_temp_dir();
+        fs::create_dir_all(&dir).unwrap();
+        let checkpoint_path = write_placeholder(&dir, "sdxl.safetensors");
+        let clip_l_path = write_placeholder(&dir, "clip_l.safetensors");
+        let source_set = ResolvedInferenceModelSourceSet::new(ResolvedInferenceModelSource::new(
+            ModelSourceKind::CheckpointBundle,
+            ModelRole::CheckpointBundle,
+            checkpoint_path,
+            ModelFormat::SafeTensors,
+        ))
+        .with_source(
+            ResolvedInferenceModelSource::new(
+                ModelSourceKind::SplitComponent,
+                ModelRole::TextEncoder,
+                clip_l_path,
+                ModelFormat::SafeTensors,
+            )
+            .with_metadata("component=clip_l"),
+        );
+
+        let err = LoadedSdxlBundle::from_resolved_with_source_set(
+            ModelId::new("sdxl-incomplete-text-encoder"),
+            source_set,
+            ModelFormat::SafeTensors,
+            Arc::new(Device::Cpu),
+        )
+        .unwrap_err();
+
+        match err {
+            BundleLoadError::TextEncoderLoadFailed { reason } => {
+                assert!(reason.contains("missing clip_g"), "reason: {reason}");
+            }
+            other => panic!("expected TextEncoderLoadFailed, got {other:?}"),
+        }
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
     fn bundle_load_error_display_contains_useful_path() {
         let err = BundleLoadError::MissingArtifact {
             path: PathBuf::from("/models/missing.safetensors"),
@@ -488,7 +699,7 @@ mod tests {
             fs::write(source.path(), b"dummy").unwrap();
         }
         let device = Arc::new(Device::Cpu);
-        LoadedSdxlBundle::from_resolved_with_source_set(
+        LoadedSdxlBundle::from_resolved_with_test_text_projection(
             ModelId::new("test-model"),
             source_set,
             ModelFormat::SafeTensors,

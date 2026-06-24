@@ -9,6 +9,7 @@
 mod bundle;
 pub mod diffusion;
 pub mod text;
+pub(crate) mod text_sources;
 pub mod tokenizer;
 pub mod vae;
 

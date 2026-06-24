@@ -33,15 +33,7 @@ pub fn execute_model_load_bundle(
             .get_compatible_bundle(resolved.model_id(), &source_set)
         {
             Some(bundle) => bundle,
-            None => LoadedModelBundle::load_from_source_set(
-                resolved.model_id().clone(),
-                resolved.series(),
-                resolved.variant(),
-                &source_set,
-                resolved.format(),
-                backend.device().clone(),
-            )
-            .map(|bundle| {
+            None => load_model_bundle(resolved, &source_set, backend).map(|bundle| {
                 backend
                     .model_cache()
                     .insert_bundle(resolved.model_id().clone(), bundle.clone());
@@ -51,6 +43,32 @@ pub fn execute_model_load_bundle(
     };
 
     bundle_response(&bundle, backend)
+}
+
+fn load_model_bundle(
+    resolved: &reimagine_inference::ResolvedInferenceModel,
+    source_set: &reimagine_inference::ResolvedInferenceModelSourceSet,
+    backend: &CandleBackend,
+) -> Result<std::sync::Arc<LoadedModelBundle>, CandleBackendError> {
+    if backend.allow_test_text_projection() {
+        return LoadedModelBundle::load_from_source_set_with_test_text_projection(
+            resolved.model_id().clone(),
+            resolved.series(),
+            resolved.variant(),
+            source_set,
+            resolved.format(),
+            backend.device().clone(),
+        );
+    }
+
+    LoadedModelBundle::load_from_source_set(
+        resolved.model_id().clone(),
+        resolved.series(),
+        resolved.variant(),
+        source_set,
+        resolved.format(),
+        backend.device().clone(),
+    )
 }
 
 fn bundle_response(
