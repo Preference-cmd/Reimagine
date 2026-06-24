@@ -58,10 +58,14 @@ cd ui && bun install && bun run build
 Run the Axum host for API-oriented workflow testing:
 
 ```bash
-cargo run -p reimagine-axum-host -- --addr 127.0.0.1:7878
+cargo run -p reimagine-axum-host -- \
+  --addr 127.0.0.1:7878 \
+  --base-path ./workspace
 ```
 
-Pass `--base-path <path>` to use a specific workspace directory.
+The `--base-path` argument selects the workspace directory used for models,
+inputs, outputs, workflows, and local config. If omitted, the Axum host uses
+`workspace` next to the running executable.
 
 ## Layout
 
@@ -81,6 +85,7 @@ Pass `--base-path <path>` to use a specific workspace directory.
 Generated build outputs, model weights, runtime workspaces, local configuration,
 and private planning notes are intentionally ignored by git. Put local runtime
 files under a workspace base path rather than committing them to the repository.
+For repository-local API testing, use `--base-path ./workspace`.
 
 See [AGENTS.md](AGENTS.md) for the full workspace map and agent conventions.
 

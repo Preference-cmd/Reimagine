@@ -22,7 +22,7 @@ async fn main() -> ExitCode {
     let base_path = cli.base_path.unwrap_or_else(|| {
         let path = default_workspace_path();
         eprintln!(
-            "No --base-path provided; using default development workspace: {}",
+            "No --base-path provided; using executable-adjacent workspace: {}",
             path.display()
         );
         path

@@ -14,8 +14,8 @@ use tracing_subscriber::EnvFilter;
 #[command(name = "reimagine-axum-host")]
 #[command(about = "Reimagine peer host adapter over HTTP")]
 pub struct Cli {
-    /// Workspace base path. If omitted, a temporary development path is
-    /// chosen and printed at startup.
+    /// Workspace base path. If omitted, `workspace` next to the running
+    /// executable is used and printed at startup.
     #[arg(long, value_name = "PATH")]
     pub base_path: Option<PathBuf>,
 

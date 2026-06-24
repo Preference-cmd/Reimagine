@@ -16,15 +16,20 @@ use crate::recorder::RunEventRecorder;
 
 /// Default development workspace path used when `--base-path` is omitted.
 ///
-/// The path lives under the system temp directory and includes a per-invocation
-/// nonce so multiple dev-server instances do not collide. The printed path in
-/// `main.rs` makes the chosen workspace easy to discover in logs.
+/// The path lives next to the running executable so built binaries can carry a
+/// local workspace without relying on platform-specific application data
+/// directories. If the executable path cannot be discovered, the process
+/// current directory is used as a last-resort base.
 pub fn default_workspace_path() -> PathBuf {
-    let nonce = std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .expect("system clock before unix epoch")
-        .as_nanos();
-    std::env::temp_dir().join(format!("reimagine-axum-host-workspace-{nonce}"))
+    default_workspace_base_path().join("workspace")
+}
+
+fn default_workspace_base_path() -> PathBuf {
+    std::env::current_exe()
+        .ok()
+        .and_then(|path| path.parent().map(PathBuf::from))
+        .or_else(|| std::env::current_dir().ok())
+        .unwrap_or_else(|| PathBuf::from("."))
 }
 
 /// Ensure the workspace directory layout exists on disk.
@@ -81,6 +86,21 @@ mod tests {
         assert!(paths.config_dir().exists());
 
         let _ = tokio::fs::remove_dir_all(&base).await;
+    }
+
+    #[test]
+    fn default_workspace_path_lives_next_to_current_exe() {
+        let path = default_workspace_path();
+        assert_eq!(
+            path.file_name().and_then(|name| name.to_str()),
+            Some("workspace")
+        );
+        let exe_parent = std::env::current_exe()
+            .expect("current exe should be available in tests")
+            .parent()
+            .map(PathBuf::from)
+            .expect("test binary should have a parent dir");
+        assert_eq!(path, exe_parent.join("workspace"));
     }
 
     #[tokio::test]
