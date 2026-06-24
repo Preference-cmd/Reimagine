@@ -21,13 +21,14 @@
 //!
 //! V1 omits `generated_at` so profile tests remain deterministic.
 
-use serde::{Deserialize, Serialize};
+use serde::{Deserialize, Deserializer, Serialize, Serializer};
 
 use reimagine_core::diagnostic::Diagnostic;
 use reimagine_plugin::{Extension, Plugin};
 
 use crate::backend_selection::{Backend, BackendInstance, DeviceProfile};
 use crate::capability::InferenceCapability;
+use crate::request::diffusion::{SamplerName, SchedulerName};
 
 // ── DeviceKind ─────────────────────────────────────────────────────
 
@@ -290,6 +291,10 @@ pub struct BackendInstanceProfile {
     /// Capabilities this backend instance advertises as supported on
     /// its device.
     pub capabilities: Vec<InferenceCapability>,
+    /// Backend-neutral operation-specific option support reported by
+    /// this active backend instance.
+    #[serde(default)]
+    pub operation_options: Vec<OperationOptionsProfile>,
     /// Whether this instance is currently usable on the host.
     pub status: BackendInstanceStatus,
     /// Diagnostics emitted while probing this instance. Unavailable
@@ -311,6 +316,7 @@ impl BackendInstanceProfile {
             backend,
             device,
             capabilities: Vec::new(),
+            operation_options: Vec::new(),
             status,
             diagnostics: Vec::new(),
         }
@@ -322,10 +328,117 @@ impl BackendInstanceProfile {
         self
     }
 
+    /// Append operation-specific options.
+    pub fn with_operation_options(mut self, options: OperationOptionsProfile) -> Self {
+        self.operation_options.push(options);
+        self
+    }
+
     /// Append a diagnostic.
     pub fn with_diagnostic(mut self, diagnostic: Diagnostic) -> Self {
         self.diagnostics.push(diagnostic);
         self
+    }
+}
+
+// ── Operation Options Profile ─────────────────────────────────────
+
+/// Operation-specific backend option support for one capability.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct OperationOptionsProfile {
+    /// Capability these options describe.
+    #[serde(
+        serialize_with = "serialize_capability_label",
+        deserialize_with = "deserialize_capability_label"
+    )]
+    pub capability: InferenceCapability,
+    /// Capability-specific options.
+    pub options: OperationOptionsProfileKind,
+}
+
+fn serialize_capability_label<S>(
+    capability: &InferenceCapability,
+    serializer: S,
+) -> Result<S::Ok, S::Error>
+where
+    S: Serializer,
+{
+    serializer.serialize_str(capability.as_str())
+}
+
+fn deserialize_capability_label<'de, D>(deserializer: D) -> Result<InferenceCapability, D::Error>
+where
+    D: Deserializer<'de>,
+{
+    let value = String::deserialize(deserializer)?;
+    InferenceCapability::from_label(&value)
+        .ok_or_else(|| serde::de::Error::custom(format!("unknown capability `{value}`")))
+}
+
+impl OperationOptionsProfile {
+    /// Construct supported `diffusion.sample` sampler/scheduler options.
+    pub fn diffusion_sample(
+        samplers: Vec<SamplerOptionProfile>,
+        schedulers: Vec<SchedulerOptionProfile>,
+        supported_pairs: Vec<SamplerSchedulerPairProfile>,
+    ) -> Self {
+        Self {
+            capability: InferenceCapability::DiffusionSample,
+            options: OperationOptionsProfileKind::DiffusionSample {
+                samplers,
+                schedulers,
+                supported_pairs,
+            },
+        }
+    }
+}
+
+/// Capability-specific operation options.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(tag = "kind", rename_all = "snake_case")]
+pub enum OperationOptionsProfileKind {
+    /// Supported sampler/scheduler options for `diffusion.sample`.
+    DiffusionSample {
+        samplers: Vec<SamplerOptionProfile>,
+        schedulers: Vec<SchedulerOptionProfile>,
+        supported_pairs: Vec<SamplerSchedulerPairProfile>,
+    },
+}
+
+/// Supported sampler option for `diffusion.sample`.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct SamplerOptionProfile {
+    pub name: SamplerName,
+}
+
+impl SamplerOptionProfile {
+    pub fn new(name: SamplerName) -> Self {
+        Self { name }
+    }
+}
+
+/// Supported scheduler option for `diffusion.sample`.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct SchedulerOptionProfile {
+    pub name: SchedulerName,
+}
+
+impl SchedulerOptionProfile {
+    pub fn new(name: SchedulerName) -> Self {
+        Self { name }
+    }
+}
+
+/// Supported sampler/scheduler pair for `diffusion.sample`.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct SamplerSchedulerPairProfile {
+    pub sampler: SamplerName,
+    pub scheduler: SchedulerName,
+}
+
+impl SamplerSchedulerPairProfile {
+    pub fn new(sampler: SamplerName, scheduler: SchedulerName) -> Self {
+        Self { sampler, scheduler }
     }
 }
 

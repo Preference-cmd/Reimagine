@@ -8,11 +8,7 @@
 //! SDXL-specific tokenization, sampling, and UNet work live behind the
 //! facade in `models/stable_diffusion/sdxl/diffusion.rs`.
 //!
-//! V1 uses a deterministic placeholder sampler so the backend
-//! contract is testable without real UNet weights. The
-//! `diffusion.sample` call still produces a real latent tensor that
-//! flows through the existing typed `CandleStore` accessors.
-
+use candle_core::DType;
 use reimagine_core::model::{TensorDType, TensorShape};
 use reimagine_inference::{
     BackendPayloadKey, BackendTensorHandle, DiffusionSampleRequest, DiffusionSampleResponse,
@@ -23,6 +19,8 @@ use reimagine_inference::{
 use crate::backend::CandleBackend;
 use crate::error::CandleBackendError;
 use crate::graph::{DiffusionSampleInput, DiffusionSampleResult};
+use crate::models::stable_diffusion::sdxl::diffusion_graph::SdxlDiffusionConditioning;
+use crate::store::CandleConditioning;
 
 pub fn execute_diffusion_sample(
     request: DiffusionSampleRequest,
@@ -32,15 +30,7 @@ pub fn execute_diffusion_sample(
     let positive_handle = require_conditioning_handle(request.positive(), backend)?;
     let negative_handle = require_conditioning_handle(request.negative(), backend)?;
     let latent_handle = require_latent_handle(request.latent(), backend)?;
-
-    let sample_input = DiffusionSampleInput {
-        seed: request.seed(),
-        steps: request.steps(),
-        cfg: request.cfg(),
-        sampler_name: sampler_name_from(request.sampler()),
-        scheduler_name: scheduler_name_from(request.scheduler()),
-        denoise: request.denoise(),
-    };
+    require_backend_instance_affinity(&request, backend)?;
 
     let bundle = backend
         .model_cache()
@@ -54,25 +44,45 @@ pub fn execute_diffusion_sample(
 
     bundle.validate_model_handle(&model_handle)?;
 
-    // Validate model-family-specific sampler parameters before touching
-    // stored payloads so request-level errors are reported early.
-    bundle.validate_sample_input(&sample_input)?;
+    let sampler_name = sampler_name_from(request.sampler());
+    let scheduler_name = scheduler_name_from(request.scheduler());
+    bundle.validate_sample_params(
+        request.seed(),
+        request.steps(),
+        request.cfg(),
+        &sampler_name,
+        &scheduler_name,
+        request.denoise(),
+    )?;
 
-    // The cached conditioning payloads only need to exist; we do not
-    // need to read them in V1 because the sampler is a placeholder.
-    // We still validate they resolve through the typed accessor so
-    // the backend emits a useful error for stale or wrong-backend
-    // handles instead of silently succeeding.
-    backend
+    let positive = backend
         .store()
         .get_conditioning(positive_handle.text_embedding().payload_key())?;
-    backend
+    let negative = backend
         .store()
         .get_conditioning(negative_handle.text_embedding().payload_key())?;
 
     let input_latent = backend
         .store()
         .get_latent(latent_handle.payload().payload_key())?;
+
+    validate_sdxl_conditioning_payload("positive", &positive, latent_handle.batch())?;
+    validate_sdxl_conditioning_payload("negative", &negative, latent_handle.batch())?;
+
+    let sample_input = DiffusionSampleInput {
+        seed: request.seed(),
+        steps: request.steps(),
+        cfg: request.cfg(),
+        sampler_name,
+        scheduler_name,
+        denoise: request.denoise(),
+        positive: diffusion_conditioning_from_payload("positive", &positive)?,
+        negative: diffusion_conditioning_from_payload("negative", &negative)?,
+    };
+
+    // Validate model-family-specific sampler parameters before sampling so
+    // request-level errors are reported before graph materialization.
+    bundle.validate_sample_input(&sample_input)?;
 
     let DiffusionSampleResult { latent } =
         bundle.sample_diffusion(sample_input, input_latent, backend.device().as_ref())?;
@@ -114,18 +124,88 @@ pub fn execute_diffusion_sample(
     Ok(DiffusionSampleResponse::new(latent))
 }
 
-fn sampler_name_from(name: &SamplerName) -> String {
-    match name {
-        SamplerName::Euler => "euler".to_string(),
-        SamplerName::Other(name) => name.clone(),
+fn diffusion_conditioning_from_payload(
+    label: &str,
+    conditioning: &CandleConditioning,
+) -> Result<SdxlDiffusionConditioning, CandleBackendError> {
+    let pooled_embedding = conditioning.pooled_embedding().ok_or_else(|| {
+        CandleBackendError::InvalidRequest(format!(
+            "diffusion.sample {label} pooled_embedding is required for SDXL"
+        ))
+    })?;
+    Ok(SdxlDiffusionConditioning {
+        text_embedding: conditioning.text_embedding().clone(),
+        pooled_embedding: pooled_embedding.clone(),
+    })
+}
+
+fn validate_sdxl_conditioning_payload(
+    label: &str,
+    conditioning: &CandleConditioning,
+    expected_batch: u32,
+) -> Result<(), CandleBackendError> {
+    let expected_text = [expected_batch as usize, 77, 2048];
+    let text = conditioning.text_embedding();
+    if text.dtype() != DType::F32 {
+        return Err(CandleBackendError::InvalidRequest(format!(
+            "diffusion.sample {label} text_embedding must be f32, got {:?}",
+            text.dtype()
+        )));
     }
+    if text.shape().dims() != expected_text {
+        return Err(CandleBackendError::InvalidRequest(format!(
+            "diffusion.sample {label} text_embedding must have shape {:?}, got {:?}",
+            expected_text,
+            text.shape().dims()
+        )));
+    }
+
+    let expected_pooled = [expected_batch as usize, 1280];
+    let pooled = conditioning.pooled_embedding().ok_or_else(|| {
+        CandleBackendError::InvalidRequest(format!(
+            "diffusion.sample {label} pooled_embedding is required for SDXL and must have shape {:?}",
+            expected_pooled
+        ))
+    })?;
+    if pooled.dtype() != DType::F32 {
+        return Err(CandleBackendError::InvalidRequest(format!(
+            "diffusion.sample {label} pooled_embedding must be f32, got {:?}",
+            pooled.dtype()
+        )));
+    }
+    if pooled.shape().dims() != expected_pooled {
+        return Err(CandleBackendError::InvalidRequest(format!(
+            "diffusion.sample {label} pooled_embedding must have shape {:?}, got {:?}",
+            expected_pooled,
+            pooled.shape().dims()
+        )));
+    }
+    Ok(())
+}
+
+fn require_backend_instance_affinity(
+    request: &DiffusionSampleRequest,
+    backend: &CandleBackend,
+) -> Result<(), CandleBackendError> {
+    let expected = backend.backend_instance();
+    for instance in request.backend_affinities() {
+        if instance != expected {
+            return Err(CandleBackendError::InvalidRequest(format!(
+                "diffusion.sample handle backend instance `{}` does not match executing backend instance `{}`",
+                instance.as_str(),
+                expected.as_str()
+            )));
+        }
+    }
+    Ok(())
+}
+
+fn sampler_name_from(name: &SamplerName) -> String {
+    name.as_str().to_string()
 }
 
 fn scheduler_name_from(name: &SchedulerName) -> String {
-    match name {
-        SchedulerName::Normal => "normal".to_string(),
-        SchedulerName::Other(name) => name.clone(),
-    }
+    name.as_str().to_string()
 }
 
 fn require_model_handle(

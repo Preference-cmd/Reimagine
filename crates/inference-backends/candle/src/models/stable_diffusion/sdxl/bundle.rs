@@ -1,5 +1,5 @@
 use std::path::{Path, PathBuf};
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
 
 use candle_core::Device;
 use reimagine_core::model::{ModelId, ModelRole};
@@ -8,6 +8,10 @@ use reimagine_inference::{
     ResolvedInferenceModelSourceSet,
 };
 
+use super::diffusion_graph::{SdxlDiffusionGraph, load_diffusion_graph};
+use super::diffusion_sources::{
+    SdxlDiffusionSourceError, SdxlDiffusionSources, resolve_diffusion_sources,
+};
 use super::text::{SdxlTextEncoderGraph, TextEncoderError};
 use super::tokenizer::SdxlTokenizer;
 use crate::error::CandleBackendError;
@@ -39,6 +43,9 @@ pub enum BundleLoadError {
         reason: String,
     },
     TextEncoderLoadFailed {
+        reason: String,
+    },
+    DiffusionSourceLoadFailed {
         reason: String,
     },
 }
@@ -74,6 +81,9 @@ impl std::fmt::Display for BundleLoadError {
             Self::TextEncoderLoadFailed { reason } => {
                 write!(f, "SDXL text encoder load failed: {reason}")
             }
+            Self::DiffusionSourceLoadFailed { reason } => {
+                write!(f, "SDXL diffusion source load failed: {reason}")
+            }
         }
     }
 }
@@ -99,6 +109,8 @@ pub struct LoadedSdxlBundle {
     source_set: ResolvedInferenceModelSourceSet,
     pub source_format: ModelFormat,
     pub device: Arc<Device>,
+    pub(crate) diffusion_sources: SdxlDiffusionSources,
+    pub(crate) diffusion_graph: Mutex<Option<Arc<dyn SdxlDiffusionGraph>>>,
     pub tokenizer: SdxlTokenizer,
     pub text_encoder: SdxlTextEncoderGraph,
     pub model_payload_key: BackendPayloadKey,
@@ -142,6 +154,11 @@ impl LoadedSdxlBundle {
             .first()
             .map(|s| s.path().clone())
             .unwrap_or_default();
+        let diffusion_sources = resolve_diffusion_sources(&source_set).map_err(|e| {
+            BundleLoadError::DiffusionSourceLoadFailed {
+                reason: e.to_string(),
+            }
+        })?;
         let model_payload_key =
             BackendPayloadKey::new(format!("bundle:{}:model", model_id.as_str()));
         let clip_payload_key = BackendPayloadKey::new(format!("bundle:{}:clip", model_id.as_str()));
@@ -161,6 +178,8 @@ impl LoadedSdxlBundle {
             source_set,
             source_format: format,
             device,
+            diffusion_sources,
+            diffusion_graph: Mutex::new(None),
             tokenizer,
             text_encoder,
             model_payload_key,
@@ -187,6 +206,11 @@ impl LoadedSdxlBundle {
             .first()
             .map(|s| s.path().clone())
             .unwrap_or_default();
+        let diffusion_sources = resolve_diffusion_sources(&source_set).map_err(|e| {
+            BundleLoadError::DiffusionSourceLoadFailed {
+                reason: e.to_string(),
+            }
+        })?;
         let model_payload_key =
             BackendPayloadKey::new(format!("bundle:{}:model", model_id.as_str()));
         let clip_payload_key = BackendPayloadKey::new(format!("bundle:{}:clip", model_id.as_str()));
@@ -206,6 +230,8 @@ impl LoadedSdxlBundle {
             source_set,
             source_format: format,
             device,
+            diffusion_sources,
+            diffusion_graph: Mutex::new(None),
             tokenizer,
             text_encoder,
             model_payload_key,
@@ -213,11 +239,41 @@ impl LoadedSdxlBundle {
             vae_payload_key,
         }))
     }
+
+    pub(crate) fn materialize_diffusion_graph(
+        &self,
+    ) -> Result<Arc<dyn SdxlDiffusionGraph>, CandleBackendError> {
+        let mut guard = self.diffusion_graph.lock().map_err(|_| {
+            CandleBackendError::InvalidRequest(
+                "diffusion.sample SDXL diffusion graph cache lock is poisoned".to_string(),
+            )
+        })?;
+        if let Some(graph) = guard.as_ref() {
+            return Ok(graph.clone());
+        }
+        let graph = load_diffusion_graph(&self.diffusion_sources, self.device.as_ref())?;
+        *guard = Some(graph.clone());
+        Ok(graph)
+    }
+
+    #[cfg(test)]
+    pub(crate) fn install_test_diffusion_graph(&self, graph: Arc<dyn SdxlDiffusionGraph>) {
+        let mut guard = self.diffusion_graph.lock().unwrap();
+        *guard = Some(graph);
+    }
 }
 
 impl From<TextEncoderError> for BundleLoadError {
     fn from(err: TextEncoderError) -> Self {
         Self::TextEncoderLoadFailed {
+            reason: err.to_string(),
+        }
+    }
+}
+
+impl From<SdxlDiffusionSourceError> for BundleLoadError {
+    fn from(err: SdxlDiffusionSourceError) -> Self {
+        Self::DiffusionSourceLoadFailed {
             reason: err.to_string(),
         }
     }
@@ -801,5 +857,47 @@ mod tests {
         ));
         let bundle = make_test_bundle(set1);
         assert!(bundle.check_compatible(&set2).is_err());
+    }
+
+    #[test]
+    fn materialize_diffusion_graph_reports_original_checkpoint_adapter_gap() {
+        let weights = std::env::var_os("REIMAGINE_SDXL_REAL_WEIGHTS")
+            .map(PathBuf::from)
+            .unwrap_or_else(|| {
+                PathBuf::from(
+                    "/Users/pref2rence/project/Reimagine/workspace/models/checkpoints/sd_xl_base_1.0.safetensors",
+                )
+            });
+        if !weights.exists() {
+            eprintln!(
+                "skipping original checkpoint materialization diagnostic; missing {}",
+                weights.display()
+            );
+            return;
+        }
+
+        let source = ResolvedInferenceModelSource::new(
+            ModelSourceKind::CheckpointBundle,
+            ModelRole::CheckpointBundle,
+            weights,
+            ModelFormat::SafeTensors,
+        );
+        let source_set = ResolvedInferenceModelSourceSet::new(source);
+        let bundle = LoadedSdxlBundle::from_resolved_with_test_text_projection(
+            ModelId::new("sdxl-original-checkpoint"),
+            source_set,
+            ModelFormat::SafeTensors,
+            Arc::new(Device::Cpu),
+        )
+        .unwrap();
+
+        let err = bundle.materialize_diffusion_graph().unwrap_err();
+        let msg = err.to_string();
+        assert!(
+            msg.contains("original checkpoint diffusion layout"),
+            "msg: {msg}"
+        );
+        assert!(msg.contains("model.diffusion_model"), "msg: {msg}");
+        assert!(msg.contains("key adapter is not implemented"), "msg: {msg}");
     }
 }

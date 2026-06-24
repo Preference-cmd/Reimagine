@@ -1,6 +1,6 @@
 use reimagine_inference::{
     BackendInstanceProfile, BackendInstanceStatus, BackendProfile, BackendProfileProvider,
-    DeviceKind, InferenceCapability,
+    DeviceKind, InferenceCapability, OperationOptionsProfileKind,
 };
 
 #[tokio::test]
@@ -37,6 +37,15 @@ async fn cpu_instance_advertises_all_v1_capabilities() {
 }
 
 #[tokio::test]
+async fn cpu_instance_advertises_euler_normal_diffusion_options() {
+    let provider = super::CandleProfileProvider::new();
+    let profile = provider.backend_profile().await;
+
+    let cpu = find_instance(&profile, "candle:cpu");
+    assert_euler_normal_diffusion_options(cpu);
+}
+
+#[tokio::test]
 async fn metal_instance_is_present_with_metal_label_and_gpu_kind() {
     let provider = super::CandleProfileProvider::new();
     let profile = provider.backend_profile().await;
@@ -58,6 +67,15 @@ async fn metal_instance_advertises_all_v1_capabilities() {
             "metal instance should advertise {cap}"
         );
     }
+}
+
+#[tokio::test]
+async fn metal_instance_advertises_euler_normal_diffusion_options() {
+    let provider = super::CandleProfileProvider::new();
+    let profile = provider.backend_profile().await;
+
+    let metal = find_instance(&profile, "candle:metal");
+    assert_euler_normal_diffusion_options(metal);
 }
 
 #[tokio::test]
@@ -117,4 +135,31 @@ fn find_instance<'a>(profile: &'a BackendProfile, identity: &str) -> &'a Backend
         .iter()
         .find(|inst| inst.instance.as_str() == identity)
         .unwrap_or_else(|| panic!("profile missing `{identity}` instance"))
+}
+
+fn assert_euler_normal_diffusion_options(instance: &BackendInstanceProfile) {
+    let options = instance
+        .operation_options
+        .iter()
+        .find(|options| options.capability == InferenceCapability::DiffusionSample)
+        .expect("diffusion.sample operation options");
+    let OperationOptionsProfileKind::DiffusionSample {
+        samplers,
+        schedulers,
+        supported_pairs,
+    } = &options.options;
+    assert_eq!(
+        samplers.iter().map(|s| s.name.as_str()).collect::<Vec<_>>(),
+        vec!["euler"]
+    );
+    assert_eq!(
+        schedulers
+            .iter()
+            .map(|s| s.name.as_str())
+            .collect::<Vec<_>>(),
+        vec!["normal"]
+    );
+    assert_eq!(supported_pairs.len(), 1);
+    assert_eq!(supported_pairs[0].sampler.as_str(), "euler");
+    assert_eq!(supported_pairs[0].scheduler.as_str(), "normal");
 }

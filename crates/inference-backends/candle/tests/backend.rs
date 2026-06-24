@@ -12,24 +12,25 @@ use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::{SystemTime, UNIX_EPOCH};
 
-use candle_core::DType;
+use candle_core::{DType, Tensor};
 use reimagine_core::model::{
     ModelId, ModelRole, ModelSeries, ModelVariant, NodeId, ParamValue, RunId, WorkflowId,
     WorkflowVersion,
 };
 use reimagine_core::model::{TensorDType, TensorShape};
 use reimagine_inference::{
-    Backend, BackendInstanceObservation, BackendPayloadKey, BackendRunLifecycle,
+    Backend, BackendInstance, BackendInstanceObservation, BackendPayloadKey, BackendRunLifecycle,
     BackendTensorHandle, ConditioningMetadata, ExecutionConditioning, ExecutionValue,
     RuntimeClipHandle, RuntimeImage, RuntimeLatent, RuntimeModelHandle, RuntimeVaeHandle,
 };
 use reimagine_inference::{
     CreateEmptyLatentRequest, CreateEmptyLatentResponse, DiffusionSampleRequest,
-    DiffusionSampleResponse, ImagePreviewRequest, ImagePreviewResponse, ImageSaveRequest,
-    ImageSaveResponse, InferenceBackend, InferenceCapability, InferenceError, LatentDecodeRequest,
+    ImagePreviewRequest, ImagePreviewResponse, ImageSaveRequest, ImageSaveResponse,
+    InferenceBackend, InferenceCapability, InferenceError, LatentDecodeRequest,
     LatentDecodeResponse, LoadBundleRequest, ModelFormat, ResolvedInferenceModel, SamplerName,
     SchedulerName, TextEncodeRequest, TextEncodeResponse,
 };
+use reimagine_inference_candle::CandleConditioning;
 use reimagine_inference_candle::{CandleBackend, CandleBackendConfig, LoadedModelBundle};
 
 fn backend() -> CandleBackend {
@@ -192,8 +193,9 @@ fn base_image_preview_request(image: RuntimeImage, node: &str) -> ImagePreviewRe
 }
 
 fn fake_tensor_handle(key: &str, dims: Vec<usize>) -> BackendTensorHandle {
-    BackendTensorHandle::new(
+    BackendTensorHandle::with_instance(
         Backend::new("candle"),
+        BackendInstance::new("candle:cpu"),
         BackendPayloadKey::new(key),
         TensorDType::F32,
         TensorShape::new(dims),
@@ -202,26 +204,39 @@ fn fake_tensor_handle(key: &str, dims: Vec<usize>) -> BackendTensorHandle {
 }
 
 fn fake_runtime_model_handle(key: &str) -> RuntimeModelHandle {
-    RuntimeModelHandle::new(
+    RuntimeModelHandle::with_instance(
         ModelId::new("sdxl-base-1.0"),
         ModelRole::CheckpointBundle,
         Backend::new("candle"),
+        BackendInstance::new("candle:cpu"),
+        BackendPayloadKey::new(key),
+    )
+}
+
+fn fake_runtime_model_handle_with_instance(key: &str, instance: &str) -> RuntimeModelHandle {
+    RuntimeModelHandle::with_instance(
+        ModelId::new("sdxl-base-1.0"),
+        ModelRole::CheckpointBundle,
+        Backend::new("candle"),
+        reimagine_inference::BackendInstance::new(instance),
         BackendPayloadKey::new(key),
     )
 }
 
 fn fake_runtime_clip_handle(key: &str) -> RuntimeClipHandle {
-    RuntimeClipHandle::new(
+    RuntimeClipHandle::with_instance(
         ModelId::new("sdxl-base-1.0"),
         Backend::new("candle"),
+        BackendInstance::new("candle:cpu"),
         BackendPayloadKey::new(key),
     )
 }
 
 fn fake_runtime_vae_handle(key: &str) -> RuntimeVaeHandle {
-    RuntimeVaeHandle::new(
+    RuntimeVaeHandle::with_instance(
         ModelId::new("sdxl-base-1.0"),
         Backend::new("candle"),
+        BackendInstance::new("candle:cpu"),
         BackendPayloadKey::new(key),
     )
 }
@@ -229,6 +244,40 @@ fn fake_runtime_vae_handle(key: &str) -> RuntimeVaeHandle {
 fn fake_runtime_latent(key: &str, width: u32, height: u32) -> RuntimeLatent {
     RuntimeLatent::new(
         fake_tensor_handle(key, vec![1, 4, (height / 8) as usize, (width / 8) as usize]),
+        width,
+        height,
+        1,
+        4,
+    )
+}
+
+fn fake_tensor_handle_with_instance(
+    key: &str,
+    dims: Vec<usize>,
+    instance: &str,
+) -> BackendTensorHandle {
+    BackendTensorHandle::with_instance(
+        Backend::new("candle"),
+        reimagine_inference::BackendInstance::new(instance),
+        BackendPayloadKey::new(key),
+        TensorDType::F32,
+        TensorShape::new(dims),
+        "cpu",
+    )
+}
+
+fn fake_runtime_latent_with_instance(
+    key: &str,
+    width: u32,
+    height: u32,
+    instance: &str,
+) -> RuntimeLatent {
+    RuntimeLatent::new(
+        fake_tensor_handle_with_instance(
+            key,
+            vec![1, 4, (height / 8) as usize, (width / 8) as usize],
+            instance,
+        ),
         width,
         height,
         1,
@@ -256,7 +305,21 @@ fn fake_conditioning(text_key: &str, pooled_key: Option<&str>) -> ExecutionCondi
     c
 }
 
-fn assert_backend_execution_failed_with(err: InferenceError, needle: &str) {
+fn fake_conditioning_with_instance(
+    text_key: &str,
+    pooled_key: Option<&str>,
+    instance: &str,
+) -> ExecutionConditioning {
+    let text = fake_tensor_handle_with_instance(text_key, vec![1, 77, 2048], instance);
+    let mut c = ExecutionConditioning::new(text, ConditioningMetadata::new(64, 64));
+    if let Some(key) = pooled_key {
+        let pooled = fake_tensor_handle_with_instance(key, vec![1, 1280], instance);
+        c = c.with_pooled_embedding(pooled);
+    }
+    c
+}
+
+fn assert_backend_execution_failed_with(err: &InferenceError, needle: &str) {
     match err {
         InferenceError::BackendExecutionFailed { message } => {
             assert!(
@@ -919,7 +982,7 @@ async fn text_encode_missing_clip_input_returns_error() {
         ))
         .await
         .unwrap_err();
-    assert_backend_execution_failed_with(err, "no loaded model bundle");
+    assert_backend_execution_failed_with(&err, "no loaded model bundle");
 }
 
 #[tokio::test]
@@ -942,7 +1005,7 @@ async fn text_encode_missing_text_input_returns_error() {
         ))
         .await
         .unwrap_err();
-    assert_backend_execution_failed_with(err, "text");
+    assert_backend_execution_failed_with(&err, "text");
 }
 
 #[tokio::test]
@@ -957,7 +1020,7 @@ async fn text_encode_without_loaded_bundle_returns_error() {
         ))
         .await
         .unwrap_err();
-    assert_backend_execution_failed_with(err, "no loaded model bundle");
+    assert_backend_execution_failed_with(&err, "no loaded model bundle");
 }
 
 #[tokio::test]
@@ -1023,7 +1086,7 @@ async fn text_encode_rejects_wrong_clip_payload_key() {
 }
 
 #[tokio::test]
-async fn diffusion_sample_succeeds_after_text_encode_and_latent_create_empty() {
+async fn diffusion_sample_validates_inputs_then_rejects_unmaterialized_diffusion_graph() {
     let backend = backend();
     let (model, _root) = sdxl_model();
     let bundle_response = backend
@@ -1067,7 +1130,7 @@ async fn diffusion_sample_succeeds_after_text_encode_and_latent_create_empty() {
         .await
         .unwrap();
 
-    let sample_response: DiffusionSampleResponse = backend
+    let err = backend
         .diffusion_sample(base_diffusion_sample_request(
             model_handle_factory(),
             positive.into_conditioning(),
@@ -1076,34 +1139,194 @@ async fn diffusion_sample_succeeds_after_text_encode_and_latent_create_empty() {
             "node-sample",
         ))
         .await
-        .unwrap();
+        .unwrap_err();
 
-    let sampled = sample_response.latent();
-    assert_eq!(sampled.width(), 64);
-    assert_eq!(sampled.height(), 64);
-    assert_eq!(sampled.batch(), 1);
-    assert_eq!(sampled.channels(), 4);
-    assert_eq!(sampled.payload().dtype(), TensorDType::F32);
-    assert_eq!(sampled.payload().backend().as_str(), "candle");
-    assert_eq!(sampled.payload().device_label(), "cpu");
-    // SDXL latent shape: [batch, 4, height/8, width/8].
-    assert_eq!(sampled.payload().shape().dims(), &[1, 4, 8, 8]);
-
-    let sampled_payload = backend
-        .store()
-        .get_latent(sampled.payload().payload_key())
-        .expect("sampled latent present");
-    assert_eq!(sampled_payload.dims(), vec![1, 4, 8, 8]);
-    assert_eq!(sampled_payload.dtype(), DType::F32);
+    assert_backend_execution_failed_with(&err, "invalid SDXL diffusion safetensors header");
     assert_eq!(
         backend.store().run_payload_count(&RunId::new("run-test")),
-        4,
-        "two conditioning payloads + input latent + sampled latent"
+        3,
+        "two conditioning payloads + input latent; no placeholder sampled latent"
     );
 }
 
 #[tokio::test]
-async fn diffusion_sample_is_deterministic_for_same_seed_and_inputs() {
+async fn diffusion_sample_rejects_unmaterialized_real_diffusion_graph_instead_of_placeholder_sampling()
+ {
+    let backend = backend();
+    let (model, _root) = sdxl_model();
+    let _ = backend
+        .load_bundle(base_load_bundle_request(model, "node-test"))
+        .await
+        .unwrap();
+    let bundle = backend
+        .model_cache()
+        .get_bundle(&ModelId::new("sdxl-base-1.0"))
+        .expect("cached bundle");
+    let (model_payload_key, clip_payload_key) = match bundle.as_ref() {
+        LoadedModelBundle::StableDiffusionSdxl(sdxl) => (
+            sdxl.model_payload_key.clone(),
+            sdxl.clip_payload_key.clone(),
+        ),
+    };
+
+    let positive = backend
+        .text_encode(base_text_encode_request(
+            fake_runtime_clip_handle(clip_payload_key.as_str()),
+            "cinematic lake at sunrise".to_string(),
+            "node-positive-encode",
+        ))
+        .await
+        .unwrap()
+        .into_conditioning();
+    let negative = backend
+        .text_encode(base_text_encode_request(
+            fake_runtime_clip_handle(clip_payload_key.as_str()),
+            "low quality, blurry".to_string(),
+            "node-negative-encode",
+        ))
+        .await
+        .unwrap()
+        .into_conditioning();
+    let latent = backend
+        .create_empty_latent(base_create_empty_latent_request(64, 64, 1, "node-latent"))
+        .await
+        .unwrap()
+        .into_latent();
+
+    let err = backend
+        .diffusion_sample(base_diffusion_sample_request(
+            fake_runtime_model_handle(model_payload_key.as_str()),
+            positive,
+            negative,
+            latent,
+            "node-sample",
+        ))
+        .await
+        .unwrap_err();
+
+    assert_backend_execution_failed_with(&err, "invalid SDXL diffusion safetensors header");
+}
+
+#[tokio::test]
+async fn diffusion_sample_reads_conditioning_payload_and_rejects_bad_text_shape() {
+    let backend = backend();
+    let (model, _root) = sdxl_model();
+    let _ = backend
+        .load_bundle(base_load_bundle_request(model, "node-test"))
+        .await
+        .unwrap();
+    let bundle = backend
+        .model_cache()
+        .get_bundle(&ModelId::new("sdxl-base-1.0"))
+        .expect("cached bundle");
+    let (model_payload_key, clip_payload_key) = match bundle.as_ref() {
+        LoadedModelBundle::StableDiffusionSdxl(sdxl) => (
+            sdxl.model_payload_key.clone(),
+            sdxl.clip_payload_key.clone(),
+        ),
+    };
+
+    let bad_key = BackendPayloadKey::new("conditioning:bad-shape");
+    backend.store().insert_conditioning(
+        RunId::new("run-test"),
+        bad_key.clone(),
+        CandleConditioning::new(
+            Tensor::zeros((1, 76, 2048), DType::F32, backend.device().as_ref()).unwrap(),
+            Some(Tensor::zeros((1, 1280), DType::F32, backend.device().as_ref()).unwrap()),
+        ),
+    );
+    let positive = fake_conditioning(bad_key.as_str(), Some(bad_key.as_str()));
+    let negative = backend
+        .text_encode(base_text_encode_request(
+            fake_runtime_clip_handle(clip_payload_key.as_str()),
+            "negative".to_string(),
+            "node-negative-encode",
+        ))
+        .await
+        .unwrap()
+        .into_conditioning();
+    let latent = backend
+        .create_empty_latent(base_create_empty_latent_request(64, 64, 1, "node-latent"))
+        .await
+        .unwrap()
+        .into_latent();
+
+    let err = backend
+        .diffusion_sample(base_diffusion_sample_request(
+            fake_runtime_model_handle(model_payload_key.as_str()),
+            positive,
+            negative,
+            latent,
+            "node-sample",
+        ))
+        .await
+        .unwrap_err();
+
+    assert_backend_execution_failed_with(&err, "text_embedding");
+    assert_backend_execution_failed_with(&err, "[1, 77, 2048]");
+}
+
+#[tokio::test]
+async fn diffusion_sample_reads_conditioning_payload_and_requires_pooled_embedding() {
+    let backend = backend();
+    let (model, _root) = sdxl_model();
+    let _ = backend
+        .load_bundle(base_load_bundle_request(model, "node-test"))
+        .await
+        .unwrap();
+    let bundle = backend
+        .model_cache()
+        .get_bundle(&ModelId::new("sdxl-base-1.0"))
+        .expect("cached bundle");
+    let (model_payload_key, clip_payload_key) = match bundle.as_ref() {
+        LoadedModelBundle::StableDiffusionSdxl(sdxl) => (
+            sdxl.model_payload_key.clone(),
+            sdxl.clip_payload_key.clone(),
+        ),
+    };
+
+    let no_pooled_key = BackendPayloadKey::new("conditioning:no-pooled");
+    backend.store().insert_conditioning(
+        RunId::new("run-test"),
+        no_pooled_key.clone(),
+        CandleConditioning::new(
+            Tensor::zeros((1, 77, 2048), DType::F32, backend.device().as_ref()).unwrap(),
+            None,
+        ),
+    );
+    let positive = fake_conditioning(no_pooled_key.as_str(), None);
+    let negative = backend
+        .text_encode(base_text_encode_request(
+            fake_runtime_clip_handle(clip_payload_key.as_str()),
+            "negative".to_string(),
+            "node-negative-encode",
+        ))
+        .await
+        .unwrap()
+        .into_conditioning();
+    let latent = backend
+        .create_empty_latent(base_create_empty_latent_request(64, 64, 1, "node-latent"))
+        .await
+        .unwrap()
+        .into_latent();
+
+    let err = backend
+        .diffusion_sample(base_diffusion_sample_request(
+            fake_runtime_model_handle(model_payload_key.as_str()),
+            positive,
+            negative,
+            latent,
+            "node-sample",
+        ))
+        .await
+        .unwrap_err();
+
+    assert_backend_execution_failed_with(&err, "pooled_embedding");
+    assert_backend_execution_failed_with(&err, "[1, 1280]");
+}
+
+#[tokio::test]
+async fn diffusion_sample_rejects_partial_denoise_until_real_img2img_semantics_exist() {
     let backend = backend();
     let (model, _root) = sdxl_model();
     let _ = backend
@@ -1147,18 +1370,12 @@ async fn diffusion_sample_is_deterministic_for_same_seed_and_inputs() {
         .await
         .unwrap()
         .into_latent();
-    let latent_b: RuntimeLatent = backend
-        .create_empty_latent(base_create_empty_latent_request(32, 32, 1, "node-latent-b"))
-        .await
-        .unwrap()
-        .into_latent();
-
-    let sample_request = |latent: RuntimeLatent, node: &str| {
-        DiffusionSampleRequest::new(
+    let err = backend
+        .diffusion_sample(DiffusionSampleRequest::new(
             model_handle_factory(),
-            positive.clone(),
-            negative.clone(),
-            latent,
+            positive,
+            negative,
+            latent_a,
             42,
             15,
             6.5,
@@ -1168,29 +1385,13 @@ async fn diffusion_sample_is_deterministic_for_same_seed_and_inputs() {
             RunId::new("run-test"),
             WorkflowId::new("wf-test"),
             WorkflowVersion::new(1),
-            NodeId::new(node),
-        )
-    };
-
-    let resp_a: DiffusionSampleResponse = backend
-        .diffusion_sample(sample_request(latent_a, "node-sample-a"))
+            NodeId::new("node-sample"),
+        ))
         .await
-        .unwrap();
-    let resp_b: DiffusionSampleResponse = backend
-        .diffusion_sample(sample_request(latent_b, "node-sample-b"))
-        .await
-        .unwrap();
+        .unwrap_err();
 
-    let key_a = resp_a.latent().payload().payload_key().clone();
-    let key_b = resp_b.latent().payload().payload_key().clone();
-    let tensor_a = backend.store().get_latent(&key_a).unwrap().into_tensor();
-    let tensor_b = backend.store().get_latent(&key_b).unwrap().into_tensor();
-    let data_a = tensor_a.flatten_all().unwrap().to_vec1::<f32>().unwrap();
-    let data_b = tensor_b.flatten_all().unwrap().to_vec1::<f32>().unwrap();
-    assert_eq!(
-        data_a, data_b,
-        "sampling must be deterministic for the same seed"
-    );
+    assert_backend_execution_failed_with(&err, "denoise");
+    assert_backend_execution_failed_with(&err, "partial");
 }
 
 #[tokio::test]
@@ -1318,6 +1519,52 @@ async fn diffusion_sample_rejects_wrong_backend_pooled_conditioning() {
     };
     assert!(msg.contains("pooled conditioning"), "msg: {msg}");
     assert!(msg.contains("other-backend"), "msg: {msg}");
+}
+
+#[tokio::test]
+async fn diffusion_sample_rejects_mismatched_backend_instance_affinity() {
+    let backend = backend();
+    let (model, _root) = sdxl_model();
+    let _ = backend
+        .load_bundle(base_load_bundle_request(model.clone(), "node-test"))
+        .await
+        .unwrap();
+    let bundle = backend
+        .model_cache()
+        .get_bundle(&ModelId::new("sdxl-base-1.0"))
+        .expect("cached bundle");
+    let (model_payload_key, clip_payload_key) = match bundle.as_ref() {
+        LoadedModelBundle::StableDiffusionSdxl(sdxl) => (
+            sdxl.model_payload_key.clone(),
+            sdxl.clip_payload_key.clone(),
+        ),
+    };
+
+    let request = DiffusionSampleRequest::new(
+        fake_runtime_model_handle_with_instance(model_payload_key.as_str(), "candle:cpu"),
+        fake_conditioning_with_instance(clip_payload_key.as_str(), None, "candle:other"),
+        fake_conditioning_with_instance(clip_payload_key.as_str(), None, "candle:cpu"),
+        fake_runtime_latent_with_instance("latent:nope", 64, 64, "candle:cpu"),
+        1,
+        10,
+        7.0,
+        SamplerName::Euler,
+        SchedulerName::Normal,
+        1.0,
+        RunId::new("run-test"),
+        WorkflowId::new("wf-test"),
+        WorkflowVersion::new(1),
+        NodeId::new("node-test"),
+    );
+
+    let err = backend.diffusion_sample(request).await.unwrap_err();
+    let msg = match err {
+        InferenceError::BackendExecutionFailed { message } => message,
+        other => panic!("expected BackendExecutionFailed, got {other:?}"),
+    };
+    assert!(msg.contains("backend instance"), "msg: {msg}");
+    assert!(msg.contains("candle:cpu"), "msg: {msg}");
+    assert!(msg.contains("candle:other"), "msg: {msg}");
 }
 
 #[tokio::test]
@@ -1539,7 +1786,7 @@ async fn diffusion_sample_cleans_up_run_scoped_payload() {
         .await
         .unwrap();
 
-    backend
+    let err = backend
         .diffusion_sample(DiffusionSampleRequest::new(
             model_handle_factory(),
             positive.into_conditioning(),
@@ -1557,12 +1804,14 @@ async fn diffusion_sample_cleans_up_run_scoped_payload() {
             NodeId::new("node-sampler"),
         ))
         .await
-        .unwrap();
+        .unwrap_err();
+
+    assert_backend_execution_failed_with(&err, "invalid SDXL diffusion safetensors header");
 
     assert_eq!(
         backend.store().run_payload_count(&run_id),
-        4,
-        "two conditionings + input latent + sampled latent"
+        3,
+        "two conditionings + input latent; failed sampling stores no output latent"
     );
 
     let resource = backend.runtime_hooks(None, None, None);

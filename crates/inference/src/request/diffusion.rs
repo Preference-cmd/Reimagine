@@ -6,11 +6,18 @@ use crate::RuntimeLatent;
 use crate::RuntimeModelHandle;
 use reimagine_core::diagnostic::CorrelationId;
 use reimagine_core::model::{NodeId, RunId, WorkflowId, WorkflowVersion};
+use serde::{Deserialize, Deserializer, Serialize, Serializer};
 
 /// Sampling algorithm selection.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum SamplerName {
     Euler,
+    EulerAncestral,
+    Heun,
+    Lms,
+    Dpmpp2m,
+    Dpmpp2mSde,
+    Dpmpp3mSde,
     Other(String),
 }
 
@@ -18,7 +25,26 @@ impl SamplerName {
     pub fn as_str(&self) -> &str {
         match self {
             Self::Euler => "euler",
+            Self::EulerAncestral => "euler_ancestral",
+            Self::Heun => "heun",
+            Self::Lms => "lms",
+            Self::Dpmpp2m => "dpmpp_2m",
+            Self::Dpmpp2mSde => "dpmpp_2m_sde",
+            Self::Dpmpp3mSde => "dpmpp_3m_sde",
             Self::Other(s) => s.as_str(),
+        }
+    }
+
+    pub fn from_standard_name(name: impl AsRef<str>) -> Self {
+        match name.as_ref() {
+            "euler" => Self::Euler,
+            "euler_ancestral" => Self::EulerAncestral,
+            "heun" => Self::Heun,
+            "lms" => Self::Lms,
+            "dpmpp_2m" => Self::Dpmpp2m,
+            "dpmpp_2m_sde" => Self::Dpmpp2mSde,
+            "dpmpp_3m_sde" => Self::Dpmpp3mSde,
+            other => Self::Other(other.to_string()),
         }
     }
 }
@@ -29,10 +55,34 @@ impl std::fmt::Display for SamplerName {
     }
 }
 
+impl Serialize for SamplerName {
+    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
+    where
+        S: Serializer,
+    {
+        serializer.serialize_str(self.as_str())
+    }
+}
+
+impl<'de> Deserialize<'de> for SamplerName {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: Deserializer<'de>,
+    {
+        let value = String::deserialize(deserializer)?;
+        Ok(Self::from_standard_name(value))
+    }
+}
+
 /// Scheduler selection.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum SchedulerName {
     Normal,
+    Karras,
+    Exponential,
+    SgmUniform,
+    Simple,
+    DdimUniform,
     Other(String),
 }
 
@@ -40,14 +90,116 @@ impl SchedulerName {
     pub fn as_str(&self) -> &str {
         match self {
             Self::Normal => "normal",
+            Self::Karras => "karras",
+            Self::Exponential => "exponential",
+            Self::SgmUniform => "sgm_uniform",
+            Self::Simple => "simple",
+            Self::DdimUniform => "ddim_uniform",
             Self::Other(s) => s.as_str(),
         }
+    }
+
+    pub fn from_standard_name(name: impl AsRef<str>) -> Self {
+        match name.as_ref() {
+            "normal" => Self::Normal,
+            "karras" => Self::Karras,
+            "exponential" => Self::Exponential,
+            "sgm_uniform" => Self::SgmUniform,
+            "simple" => Self::Simple,
+            "ddim_uniform" => Self::DdimUniform,
+            other => Self::Other(other.to_string()),
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn sampler_name_maps_standard_vocabulary_and_preserves_unknown_names() {
+        assert_eq!(SamplerName::from_standard_name("euler"), SamplerName::Euler);
+        assert_eq!(
+            SamplerName::from_standard_name("euler_ancestral"),
+            SamplerName::EulerAncestral
+        );
+        assert_eq!(SamplerName::from_standard_name("heun"), SamplerName::Heun);
+        assert_eq!(SamplerName::from_standard_name("lms"), SamplerName::Lms);
+        assert_eq!(
+            SamplerName::from_standard_name("dpmpp_2m"),
+            SamplerName::Dpmpp2m
+        );
+        assert_eq!(
+            SamplerName::from_standard_name("dpmpp_2m_sde"),
+            SamplerName::Dpmpp2mSde
+        );
+        assert_eq!(
+            SamplerName::from_standard_name("dpmpp_3m_sde"),
+            SamplerName::Dpmpp3mSde
+        );
+        assert_eq!(
+            SamplerName::from_standard_name("backend_only"),
+            SamplerName::Other("backend_only".to_string())
+        );
+        assert_eq!(SamplerName::Dpmpp2mSde.as_str(), "dpmpp_2m_sde");
+    }
+
+    #[test]
+    fn scheduler_name_maps_standard_vocabulary_and_preserves_unknown_names() {
+        assert_eq!(
+            SchedulerName::from_standard_name("normal"),
+            SchedulerName::Normal
+        );
+        assert_eq!(
+            SchedulerName::from_standard_name("karras"),
+            SchedulerName::Karras
+        );
+        assert_eq!(
+            SchedulerName::from_standard_name("exponential"),
+            SchedulerName::Exponential
+        );
+        assert_eq!(
+            SchedulerName::from_standard_name("sgm_uniform"),
+            SchedulerName::SgmUniform
+        );
+        assert_eq!(
+            SchedulerName::from_standard_name("simple"),
+            SchedulerName::Simple
+        );
+        assert_eq!(
+            SchedulerName::from_standard_name("ddim_uniform"),
+            SchedulerName::DdimUniform
+        );
+        assert_eq!(
+            SchedulerName::from_standard_name("backend_only"),
+            SchedulerName::Other("backend_only".to_string())
+        );
+        assert_eq!(SchedulerName::SgmUniform.as_str(), "sgm_uniform");
     }
 }
 
 impl std::fmt::Display for SchedulerName {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.write_str(self.as_str())
+    }
+}
+
+impl Serialize for SchedulerName {
+    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
+    where
+        S: Serializer,
+    {
+        serializer.serialize_str(self.as_str())
+    }
+}
+
+impl<'de> Deserialize<'de> for SchedulerName {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: Deserializer<'de>,
+    {
+        let value = String::deserialize(deserializer)?;
+        Ok(Self::from_standard_name(value))
     }
 }
 

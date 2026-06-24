@@ -174,7 +174,12 @@ impl InferenceBackend for CandleBackend {
         &self,
         request: DiffusionSampleRequest,
     ) -> Result<DiffusionSampleResponse, InferenceError> {
-        map_err(execute_diffusion_sample(request, self))
+        let backend = self.clone();
+        tokio::task::spawn_blocking(move || map_err(execute_diffusion_sample(request, &backend)))
+            .await
+            .map_err(|err| InferenceError::BackendExecutionFailed {
+                message: format!("diffusion.sample blocking worker failed: {err}"),
+            })?
     }
 
     async fn latent_decode(

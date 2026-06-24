@@ -1,4 +1,5 @@
 use super::*;
+use crate::{SamplerName, SchedulerName};
 use std::sync::Arc;
 
 fn diag_in_target(message: &str) -> Diagnostic {
@@ -160,6 +161,47 @@ fn backend_instance_profile_serde_roundtrip() {
     .with_diagnostic(diag_in_target("ok"));
 
     let json = serde_json::to_string(&original).expect("serialize");
+    let parsed: BackendInstanceProfile = serde_json::from_str(&json).expect("deserialize");
+    assert_eq!(parsed, original);
+}
+
+#[test]
+fn backend_instance_profile_carries_diffusion_sample_operation_options() {
+    let original = BackendInstanceProfile::new(
+        BackendInstance::new("candle:cpu"),
+        Backend::new("candle"),
+        DeviceProfile::new("cpu"),
+        BackendInstanceStatus::Available,
+    )
+    .with_operation_options(OperationOptionsProfile::diffusion_sample(
+        vec![SamplerOptionProfile::new(SamplerName::Euler)],
+        vec![SchedulerOptionProfile::new(SchedulerName::Normal)],
+        vec![SamplerSchedulerPairProfile::new(
+            SamplerName::Euler,
+            SchedulerName::Normal,
+        )],
+    ));
+
+    let options = original
+        .operation_options
+        .iter()
+        .find(|options| options.capability == InferenceCapability::DiffusionSample)
+        .expect("diffusion options");
+    let OperationOptionsProfileKind::DiffusionSample {
+        samplers,
+        schedulers,
+        supported_pairs,
+    } = &options.options;
+    assert_eq!(samplers[0].name.as_str(), "euler");
+    assert_eq!(schedulers[0].name.as_str(), "normal");
+    assert_eq!(supported_pairs[0].sampler.as_str(), "euler");
+    assert_eq!(supported_pairs[0].scheduler.as_str(), "normal");
+
+    let json = serde_json::to_string(&original).expect("serialize");
+    assert!(json.contains("operation_options"));
+    assert!(json.contains("diffusion.sample"));
+    assert!(json.contains("euler"));
+    assert!(json.contains("normal"));
     let parsed: BackendInstanceProfile = serde_json::from_str(&json).expect("deserialize");
     assert_eq!(parsed, original);
 }

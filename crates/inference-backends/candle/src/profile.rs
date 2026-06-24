@@ -26,6 +26,8 @@ use reimagine_inference::diagnostics::candle_device_unavailable;
 use reimagine_inference::{
     Backend, BackendInstance, BackendInstanceProfile, BackendInstanceStatus, BackendProfile,
     BackendProfileProvider, DeviceKind, DeviceProfile, InferenceCapability,
+    OperationOptionsProfile, SamplerName, SamplerOptionProfile, SamplerSchedulerPairProfile,
+    SchedulerName, SchedulerOptionProfile,
 };
 use reimagine_plugin::{Extension, Plugin};
 
@@ -71,7 +73,18 @@ impl CandleProfileProvider {
         for cap in capabilities {
             instance = instance.with_capability(*cap);
         }
-        instance
+        instance.with_operation_options(Self::diffusion_sample_options())
+    }
+
+    fn diffusion_sample_options() -> OperationOptionsProfile {
+        OperationOptionsProfile::diffusion_sample(
+            vec![SamplerOptionProfile::new(SamplerName::Euler)],
+            vec![SchedulerOptionProfile::new(SchedulerName::Normal)],
+            vec![SamplerSchedulerPairProfile::new(
+                SamplerName::Euler,
+                SchedulerName::Normal,
+            )],
+        )
     }
 }
 

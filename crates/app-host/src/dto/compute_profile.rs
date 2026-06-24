@@ -9,7 +9,9 @@
 
 use reimagine_inference::{
     BackendInstanceProfile, BackendInstanceStatus, BackendProfile, DTypeProfile, DeviceKind,
-    DeviceProfile, MemoryProfile, WorkspaceComputeProfile,
+    DeviceProfile, MemoryProfile, OperationOptionsProfile, OperationOptionsProfileKind,
+    SamplerOptionProfile, SamplerSchedulerPairProfile, SchedulerOptionProfile,
+    WorkspaceComputeProfile,
 };
 use serde::{Deserialize, Serialize};
 
@@ -86,6 +88,8 @@ pub struct BackendInstanceProfileDto {
     /// supported on its device. Rendered as stable string forms; see
     /// [`reimagine_inference::InferenceCapability::as_str`].
     pub capabilities: Vec<String>,
+    /// Operation-specific backend-supported option lists.
+    pub operation_options: Vec<OperationOptionsProfileDto>,
     /// Whether this instance is currently usable on the host. Stable
     /// wire strings: `"Available"` / `"Unavailable"`.
     pub status: String,
@@ -104,8 +108,97 @@ impl From<BackendInstanceProfile> for BackendInstanceProfileDto {
                 .into_iter()
                 .map(|c| c.as_str().to_string())
                 .collect(),
+            operation_options: value
+                .operation_options
+                .into_iter()
+                .map(OperationOptionsProfileDto::from)
+                .collect(),
             status: status_label(value.status).to_string(),
             diagnostics: value.diagnostics.into_iter().map(Into::into).collect(),
+        }
+    }
+}
+
+/// Operation-specific options projected to wire-stable strings.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct OperationOptionsProfileDto {
+    pub capability: String,
+    pub options: OperationOptionsProfileKindDto,
+}
+
+impl From<OperationOptionsProfile> for OperationOptionsProfileDto {
+    fn from(value: OperationOptionsProfile) -> Self {
+        Self {
+            capability: value.capability.as_str().to_string(),
+            options: OperationOptionsProfileKindDto::from(value.options),
+        }
+    }
+}
+
+/// Capability-specific operation options.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(tag = "kind", rename_all = "snake_case")]
+pub enum OperationOptionsProfileKindDto {
+    DiffusionSample {
+        samplers: Vec<SamplerOptionProfileDto>,
+        schedulers: Vec<SchedulerOptionProfileDto>,
+        supported_pairs: Vec<SamplerSchedulerPairProfileDto>,
+    },
+}
+
+impl From<OperationOptionsProfileKind> for OperationOptionsProfileKindDto {
+    fn from(value: OperationOptionsProfileKind) -> Self {
+        match value {
+            OperationOptionsProfileKind::DiffusionSample {
+                samplers,
+                schedulers,
+                supported_pairs,
+            } => Self::DiffusionSample {
+                samplers: samplers.into_iter().map(Into::into).collect(),
+                schedulers: schedulers.into_iter().map(Into::into).collect(),
+                supported_pairs: supported_pairs.into_iter().map(Into::into).collect(),
+            },
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct SamplerOptionProfileDto {
+    pub name: String,
+}
+
+impl From<SamplerOptionProfile> for SamplerOptionProfileDto {
+    fn from(value: SamplerOptionProfile) -> Self {
+        Self {
+            name: value.name.as_str().to_string(),
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct SchedulerOptionProfileDto {
+    pub name: String,
+}
+
+impl From<SchedulerOptionProfile> for SchedulerOptionProfileDto {
+    fn from(value: SchedulerOptionProfile) -> Self {
+        Self {
+            name: value.name.as_str().to_string(),
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct SamplerSchedulerPairProfileDto {
+    pub sampler: String,
+    pub scheduler: String,
+}
+
+impl From<SamplerSchedulerPairProfile> for SamplerSchedulerPairProfileDto {
+    fn from(value: SamplerSchedulerPairProfile) -> Self {
+        Self {
+            sampler: value.sampler.as_str().to_string(),
+            scheduler: value.scheduler.as_str().to_string(),
         }
     }
 }
@@ -203,7 +296,9 @@ mod tests {
     use super::*;
     use reimagine_inference::{
         Backend, BackendInstance, BackendInstanceProfile, BackendInstanceStatus, BackendProfile,
-        DTypeProfile, DeviceKind, DeviceProfile, MemoryProfile, WorkspaceComputeProfile,
+        DTypeProfile, DeviceKind, DeviceProfile, MemoryProfile, OperationOptionsProfile,
+        SamplerName, SamplerOptionProfile, SamplerSchedulerPairProfile, SchedulerName,
+        SchedulerOptionProfile, WorkspaceComputeProfile,
     };
     use reimagine_plugin::{Extension, Plugin};
 
@@ -273,6 +368,40 @@ mod tests {
             .map(|d| d.dtype.as_str())
             .collect();
         assert_eq!(dtypes, vec!["f32", "f16"]);
+    }
+
+    #[test]
+    fn dto_projection_carries_diffusion_operation_options_as_strings() {
+        let instance = BackendInstanceProfile::new(
+            BackendInstance::new("candle:cpu"),
+            Backend::new("candle"),
+            DeviceProfile::new("cpu"),
+            BackendInstanceStatus::Available,
+        )
+        .with_operation_options(OperationOptionsProfile::diffusion_sample(
+            vec![SamplerOptionProfile::new(SamplerName::Euler)],
+            vec![SchedulerOptionProfile::new(SchedulerName::Normal)],
+            vec![SamplerSchedulerPairProfile::new(
+                SamplerName::Euler,
+                SchedulerName::Normal,
+            )],
+        ));
+        let profile = WorkspaceComputeProfile::new().with_backend_profile(
+            BackendProfile::new(Backend::new("candle")).with_instance(instance),
+        );
+
+        let dto: ComputeProfileDto = profile.into();
+        let options = &dto.backend_profiles[0].instances[0].operation_options[0];
+        assert_eq!(options.capability, "diffusion.sample");
+        let OperationOptionsProfileKindDto::DiffusionSample {
+            samplers,
+            schedulers,
+            supported_pairs,
+        } = &options.options;
+        assert_eq!(samplers[0].name, "euler");
+        assert_eq!(schedulers[0].name, "normal");
+        assert_eq!(supported_pairs[0].sampler, "euler");
+        assert_eq!(supported_pairs[0].scheduler, "normal");
     }
 
     #[test]

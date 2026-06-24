@@ -31,7 +31,8 @@ pub trait LoadedModelGraph: Send + Sync {
 
 use crate::error::CandleBackendError;
 use crate::models::LoadedModelBundle;
-use crate::models::stable_diffusion::sdxl::diffusion::{SdxlSampleRequest, SdxlSampler};
+use crate::models::stable_diffusion::sdxl::diffusion::SdxlSampleRequest;
+use crate::models::stable_diffusion::sdxl::diffusion_graph::SdxlDiffusionConditioning;
 use crate::models::stable_diffusion::sdxl::text::SdxlTextEncoder;
 use crate::models::stable_diffusion::sdxl::vae::SdxlVaeDecoder;
 use crate::store::{CandleImage, CandleLatent};
@@ -61,6 +62,8 @@ pub struct DiffusionSampleInput {
     pub sampler_name: String,
     pub scheduler_name: String,
     pub denoise: f32,
+    pub(crate) positive: SdxlDiffusionConditioning,
+    pub(crate) negative: SdxlDiffusionConditioning,
 }
 
 /// Backend-local result of diffusion sampling.
@@ -229,16 +232,36 @@ impl LoadedModelBundle {
         &self,
         input: &DiffusionSampleInput,
     ) -> Result<(), CandleBackendError> {
+        self.validate_sample_params(
+            input.seed,
+            input.steps,
+            input.cfg,
+            &input.sampler_name,
+            &input.scheduler_name,
+            input.denoise,
+        )
+    }
+
+    /// Validate sampler parameters without requiring backend tensor payloads.
+    pub fn validate_sample_params(
+        &self,
+        seed: u64,
+        steps: u32,
+        cfg: f32,
+        sampler_name: &str,
+        scheduler_name: &str,
+        denoise: f32,
+    ) -> Result<(), CandleBackendError> {
         match self {
             LoadedModelBundle::StableDiffusionSdxl(_) => {
                 // `SdxlSampleRequest::new` performs the V1 validation.
                 let _ = SdxlSampleRequest::new(
-                    input.seed,
-                    input.steps,
-                    input.cfg,
-                    &input.sampler_name,
-                    &input.scheduler_name,
-                    input.denoise,
+                    seed,
+                    steps,
+                    cfg,
+                    sampler_name,
+                    scheduler_name,
+                    denoise,
                 )?;
                 Ok(())
             }
@@ -264,7 +287,7 @@ impl LoadedModelBundle {
         device: &Device,
     ) -> Result<DiffusionSampleResult, CandleBackendError> {
         match self {
-            LoadedModelBundle::StableDiffusionSdxl(_) => {
+            LoadedModelBundle::StableDiffusionSdxl(bundle) => {
                 let request = SdxlSampleRequest::new(
                     input.seed,
                     input.steps,
@@ -273,11 +296,15 @@ impl LoadedModelBundle {
                     input.scheduler_name,
                     input.denoise,
                 )?;
-                let sampler = SdxlSampler::new();
-                let result = sampler.sample(input_latent, &request, device)?;
-                Ok(DiffusionSampleResult {
-                    latent: result.latent,
-                })
+                let graph = bundle.materialize_diffusion_graph()?;
+                let latent = graph.sample(
+                    input_latent,
+                    input.positive,
+                    input.negative,
+                    &request,
+                    device,
+                )?;
+                Ok(DiffusionSampleResult { latent })
             }
             #[cfg(test)]
             LoadedModelBundle::TestPlaceholder => Err(CandleBackendError::InvalidRequest(
@@ -312,6 +339,7 @@ impl LoadedModelBundle {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::models::stable_diffusion::sdxl::diffusion_graph::TestSdxlDiffusionGraph;
     use candle_core::{DType, Device, Tensor};
     use reimagine_core::model::ModelId;
     use reimagine_inference::ModelFormat;
@@ -349,6 +377,22 @@ mod tests {
         LoadedModelBundle::StableDiffusionSdxl(bundle)
     }
 
+    fn install_test_diffusion_graph(bundle: &LoadedModelBundle) {
+        match bundle {
+            LoadedModelBundle::StableDiffusionSdxl(sdxl) => {
+                sdxl.install_test_diffusion_graph(Arc::new(TestSdxlDiffusionGraph));
+            }
+            LoadedModelBundle::TestPlaceholder => {}
+        }
+    }
+
+    fn sdxl_conditioning() -> SdxlDiffusionConditioning {
+        SdxlDiffusionConditioning {
+            text_embedding: Tensor::zeros((1, 77, 2048), DType::F32, &Device::Cpu).unwrap(),
+            pooled_embedding: Tensor::zeros((1, 1280), DType::F32, &Device::Cpu).unwrap(),
+        }
+    }
+
     #[test]
     fn encode_text_sdxl_produces_correct_shapes() {
         let bundle = sdxl_bundle();
@@ -373,8 +417,9 @@ mod tests {
     }
 
     #[test]
-    fn sample_diffusion_sdxl_preserves_shape() {
+    fn sample_diffusion_sdxl_materializes_diffusion_graph_once_for_repeated_sampling() {
         let bundle = sdxl_bundle();
+        install_test_diffusion_graph(&bundle);
         let input_latent =
             CandleLatent::new(Tensor::zeros((1, 4, 8, 8), DType::F32, &Device::Cpu).unwrap());
         let result = bundle
@@ -386,12 +431,33 @@ mod tests {
                     sampler_name: "euler".to_string(),
                     scheduler_name: "normal".to_string(),
                     denoise: 1.0,
+                    positive: sdxl_conditioning(),
+                    negative: sdxl_conditioning(),
                 },
                 input_latent,
                 &Device::Cpu,
             )
-            .expect("sample_diffusion should succeed");
+            .expect("first sample should materialize the diffusion graph");
         assert_eq!(result.latent.dims(), vec![1, 4, 8, 8]);
+
+        let input_latent =
+            CandleLatent::new(Tensor::zeros((1, 4, 8, 8), DType::F32, &Device::Cpu).unwrap());
+        bundle
+            .sample_diffusion(
+                DiffusionSampleInput {
+                    seed: 42,
+                    steps: 10,
+                    cfg: 7.0,
+                    sampler_name: "euler".to_string(),
+                    scheduler_name: "normal".to_string(),
+                    denoise: 1.0,
+                    positive: sdxl_conditioning(),
+                    negative: sdxl_conditioning(),
+                },
+                input_latent,
+                &Device::Cpu,
+            )
+            .expect("second sample should reuse the materialized diffusion graph");
     }
 
     #[test]
@@ -444,6 +510,8 @@ mod tests {
                     sampler_name: "euler".to_string(),
                     scheduler_name: "normal".to_string(),
                     denoise: 1.0,
+                    positive: sdxl_conditioning(),
+                    negative: sdxl_conditioning(),
                 },
                 input_latent,
                 &Device::Cpu,

@@ -56,6 +56,19 @@ impl InferenceCapability {
         }
     }
 
+    pub fn from_label(label: &str) -> Option<Self> {
+        match label {
+            "model.load_bundle" => Some(Self::LoadBundle),
+            "text.encode" => Some(Self::TextEncode),
+            "latent.create_empty" => Some(Self::CreateEmptyLatent),
+            "diffusion.sample" => Some(Self::DiffusionSample),
+            "latent.decode" => Some(Self::LatentDecode),
+            "image.save" => Some(Self::ImageSave),
+            "image.preview" => Some(Self::ImagePreview),
+            _ => None,
+        }
+    }
+
     /// All V1 capabilities in a fixed order.
     pub fn all_v1() -> &'static [InferenceCapability] {
         &[
