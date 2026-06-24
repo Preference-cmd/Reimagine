@@ -8,6 +8,7 @@ use reimagine_inference::{
     ResolvedInferenceModelSourceSet,
 };
 
+use super::tokenizer::SdxlTokenizer;
 use crate::error::CandleBackendError;
 
 /// Source validation and bundle construction errors.
@@ -33,6 +34,9 @@ pub enum BundleLoadError {
         actual_extension: String,
     },
     EmptySourceSet,
+    TokenizerLoadFailed {
+        reason: String,
+    },
 }
 
 impl std::fmt::Display for BundleLoadError {
@@ -60,6 +64,9 @@ impl std::fmt::Display for BundleLoadError {
                 path.display()
             ),
             Self::EmptySourceSet => write!(f, "model source set cannot be empty"),
+            Self::TokenizerLoadFailed { reason } => {
+                write!(f, "SDXL tokenizer load failed: {reason}")
+            }
         }
     }
 }
@@ -85,6 +92,7 @@ pub struct LoadedSdxlBundle {
     source_set: ResolvedInferenceModelSourceSet,
     pub source_format: ModelFormat,
     pub device: Arc<Device>,
+    pub tokenizer: SdxlTokenizer,
     pub model_payload_key: BackendPayloadKey,
     pub clip_payload_key: BackendPayloadKey,
     pub vae_payload_key: BackendPayloadKey,
@@ -130,12 +138,18 @@ impl LoadedSdxlBundle {
             BackendPayloadKey::new(format!("bundle:{}:model", model_id.as_str()));
         let clip_payload_key = BackendPayloadKey::new(format!("bundle:{}:clip", model_id.as_str()));
         let vae_payload_key = BackendPayloadKey::new(format!("bundle:{}:vae", model_id.as_str()));
+        let tokenizer = SdxlTokenizer::from_source(&source_set, &primary_path).map_err(|e| {
+            BundleLoadError::TokenizerLoadFailed {
+                reason: e.to_string(),
+            }
+        })?;
         Ok(Arc::new(Self {
             model_id,
             source_path: primary_path,
             source_set,
             source_format: format,
             device,
+            tokenizer,
             model_payload_key,
             clip_payload_key,
             vae_payload_key,
@@ -381,6 +395,78 @@ mod tests {
             bundle,
             Err(BundleLoadError::MissingArtifact { .. })
         ));
+    }
+
+    #[test]
+    fn from_resolved_reports_missing_explicit_tokenizer_without_fallback() {
+        let dir = unique_temp_dir();
+        fs::create_dir_all(&dir).unwrap();
+        let checkpoint_path = write_placeholder(&dir, "sdxl.safetensors");
+        let text_encoder_path = write_placeholder(&dir, "clip.safetensors");
+        let missing_tokenizer = dir.join("missing-tokenizer");
+        let source_set = ResolvedInferenceModelSourceSet::new(ResolvedInferenceModelSource::new(
+            ModelSourceKind::CheckpointBundle,
+            ModelRole::CheckpointBundle,
+            checkpoint_path,
+            ModelFormat::SafeTensors,
+        ))
+        .with_source(
+            ResolvedInferenceModelSource::new(
+                ModelSourceKind::SplitComponent,
+                ModelRole::TextEncoder,
+                text_encoder_path,
+                ModelFormat::SafeTensors,
+            )
+            .with_metadata(missing_tokenizer.display().to_string()),
+        );
+
+        let err = LoadedSdxlBundle::from_resolved_with_source_set(
+            ModelId::new("sdxl-explicit-tokenizer"),
+            source_set,
+            ModelFormat::SafeTensors,
+            Arc::new(Device::Cpu),
+        )
+        .unwrap_err();
+
+        match err {
+            BundleLoadError::TokenizerLoadFailed { reason } => {
+                assert!(reason.contains("tokenizer resource not found"));
+                assert!(reason.contains("missing-tokenizer"));
+            }
+            other => panic!("expected TokenizerLoadFailed, got {other:?}"),
+        }
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn from_resolved_reports_malformed_sidecar_tokenizer_without_fallback() {
+        let dir = unique_temp_dir();
+        fs::create_dir_all(&dir).unwrap();
+        let checkpoint_path = write_placeholder(&dir, "sdxl.safetensors");
+        fs::write(dir.join("tokenizer.json"), b"not-json").unwrap();
+        let source_set = ResolvedInferenceModelSourceSet::new(ResolvedInferenceModelSource::new(
+            ModelSourceKind::CheckpointBundle,
+            ModelRole::CheckpointBundle,
+            checkpoint_path,
+            ModelFormat::SafeTensors,
+        ));
+
+        let err = LoadedSdxlBundle::from_resolved_with_source_set(
+            ModelId::new("sdxl-malformed-sidecar-tokenizer"),
+            source_set,
+            ModelFormat::SafeTensors,
+            Arc::new(Device::Cpu),
+        )
+        .unwrap_err();
+
+        match err {
+            BundleLoadError::TokenizerLoadFailed { reason } => {
+                assert!(reason.contains("failed to load tokenizer"));
+                assert!(reason.contains("tokenizer.json"));
+            }
+            other => panic!("expected TokenizerLoadFailed, got {other:?}"),
+        }
+        let _ = fs::remove_dir_all(&dir);
     }
 
     #[test]
