@@ -25,6 +25,7 @@ pub struct CandleBackend {
     store: Arc<CandleStore>,
     model_cache: Arc<CandleModelCache>,
     next_image_seq: AtomicU64,
+    allow_test_text_projection: bool,
 }
 
 impl Clone for CandleBackend {
@@ -35,6 +36,7 @@ impl Clone for CandleBackend {
             store: Arc::clone(&self.store),
             model_cache: Arc::clone(&self.model_cache),
             next_image_seq: AtomicU64::new(self.next_image_seq.load(Ordering::Relaxed)),
+            allow_test_text_projection: self.allow_test_text_projection,
         }
     }
 }
@@ -48,7 +50,18 @@ impl CandleBackend {
             store: Arc::new(CandleStore::new()),
             model_cache: Arc::new(CandleModelCache::new()),
             next_image_seq: AtomicU64::new(0),
+            allow_test_text_projection: false,
         })
+    }
+
+    #[doc(hidden)]
+    pub fn with_test_text_projection(mut self) -> Self {
+        self.allow_test_text_projection = true;
+        self
+    }
+
+    pub(crate) fn allow_test_text_projection(&self) -> bool {
+        self.allow_test_text_projection
     }
 
     pub fn config(&self) -> &CandleBackendConfig {

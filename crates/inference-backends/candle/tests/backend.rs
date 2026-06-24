@@ -33,6 +33,25 @@ use reimagine_inference::{
 use reimagine_inference_candle::{CandleBackend, CandleBackendConfig, LoadedModelBundle};
 
 fn backend() -> CandleBackend {
+    backend_with_dirs(
+        "/tmp/reimagine-candle-tests",
+        "/tmp/reimagine-candle-tests-output",
+    )
+}
+
+fn backend_with_dirs(
+    models_dir: impl AsRef<std::path::Path>,
+    output_dir: impl AsRef<std::path::Path>,
+) -> CandleBackend {
+    CandleBackend::new(CandleBackendConfig::new(
+        models_dir.as_ref().to_path_buf(),
+        output_dir.as_ref().to_path_buf(),
+    ))
+    .unwrap()
+    .with_test_text_projection()
+}
+
+fn production_like_backend() -> CandleBackend {
     CandleBackend::new(CandleBackendConfig::new(
         "/tmp/reimagine-candle-tests",
         "/tmp/reimagine-candle-tests-output",
@@ -72,6 +91,17 @@ fn sdxl_model() -> (ResolvedInferenceModel, PathBuf) {
         ModelFormat::SafeTensors,
     );
     (model, root)
+}
+
+fn sdxl_model_from_path(path: PathBuf) -> ResolvedInferenceModel {
+    ResolvedInferenceModel::new(
+        ModelId::new("sdxl-base-1.0"),
+        ModelSeries::new("stable_diffusion"),
+        ModelVariant::new("sdxl"),
+        ModelRole::CheckpointBundle,
+        &path,
+        ModelFormat::SafeTensors,
+    )
 }
 
 fn base_load_bundle_request(model: ResolvedInferenceModel, node: &str) -> LoadBundleRequest {
@@ -636,6 +666,22 @@ async fn text_encode_returns_conditioning_for_sdxl_bundle() {
 }
 
 #[tokio::test]
+async fn load_bundle_rejects_placeholder_checkpoint_without_test_projection() {
+    let backend = production_like_backend();
+    let (model, _root) = sdxl_model();
+    let err = backend
+        .load_bundle(base_load_bundle_request(model, "node-placeholder"))
+        .await
+        .unwrap_err();
+
+    let msg = match err {
+        InferenceError::BackendExecutionFailed { message } => message,
+        other => panic!("expected BackendExecutionFailed, got {other:?}"),
+    };
+    assert!(msg.contains("text encoder weights"), "msg: {msg}");
+}
+
+#[tokio::test]
 async fn text_encode_positive_and_negative_prompts_both_succeed() {
     let backend = backend();
     let (model, _root) = sdxl_model();
@@ -672,6 +718,142 @@ async fn text_encode_positive_and_negative_prompts_both_succeed() {
         "candle"
     );
     assert_eq!(backend.store().payload_count(), 2);
+}
+
+#[tokio::test]
+async fn text_encode_conditioning_is_prompt_dependent_and_nonzero() {
+    let backend = backend();
+    let (model, _root) = sdxl_model();
+    let bundle_response = backend
+        .load_bundle(base_load_bundle_request(model, "node-test"))
+        .await
+        .unwrap();
+    let clip_key = bundle_response.clip().payload_key().clone();
+    let clip_factory = || fake_runtime_clip_handle(clip_key.as_str());
+
+    let first = backend
+        .text_encode(base_text_encode_request(
+            clip_factory(),
+            "cinematic lake at sunrise".to_string(),
+            "node-first-encode",
+        ))
+        .await
+        .unwrap();
+    let second = backend
+        .text_encode(base_text_encode_request(
+            clip_factory(),
+            "industrial city at midnight".to_string(),
+            "node-second-encode",
+        ))
+        .await
+        .unwrap();
+
+    let first_payload = backend
+        .store()
+        .get_conditioning(first.conditioning().text_embedding().payload_key())
+        .unwrap();
+    let second_payload = backend
+        .store()
+        .get_conditioning(second.conditioning().text_embedding().payload_key())
+        .unwrap();
+    let first_values = first_payload
+        .text_embedding()
+        .flatten_all()
+        .unwrap()
+        .to_vec1::<f32>()
+        .unwrap();
+    let second_values = second_payload
+        .text_embedding()
+        .flatten_all()
+        .unwrap()
+        .to_vec1::<f32>()
+        .unwrap();
+
+    assert!(
+        first_values.iter().any(|value| *value != 0.0),
+        "text.encode must not store all-zero placeholder conditioning"
+    );
+    assert_ne!(
+        first_values, second_values,
+        "materially different prompts should produce different conditioning"
+    );
+}
+
+#[tokio::test]
+#[ignore = "requires local SDXL weights; set REIMAGINE_SDXL_REAL_WEIGHTS=/path/to/sdxl-base-1.0.safetensors"]
+async fn text_encode_real_weights_manual_checkpoint_path() {
+    let weights = std::env::var_os("REIMAGINE_SDXL_REAL_WEIGHTS")
+        .map(PathBuf::from)
+        .expect("set REIMAGINE_SDXL_REAL_WEIGHTS to a local SDXL checkpoint");
+    let backend = backend();
+    let model = sdxl_model_from_path(weights);
+    let bundle_response = backend
+        .load_bundle(base_load_bundle_request(model, "node-real-weights"))
+        .await
+        .unwrap();
+    let clip_key = bundle_response.clip().payload_key().clone();
+    let clip_factory = || fake_runtime_clip_handle(clip_key.as_str());
+
+    let first = backend
+        .text_encode(base_text_encode_request(
+            clip_factory(),
+            "cinematic lake at sunrise".to_string(),
+            "node-real-weights-first-encode",
+        ))
+        .await
+        .unwrap();
+    let second = backend
+        .text_encode(base_text_encode_request(
+            clip_factory(),
+            "industrial city at midnight".to_string(),
+            "node-real-weights-second-encode",
+        ))
+        .await
+        .unwrap();
+
+    assert_eq!(
+        first.conditioning().text_embedding().shape().dims(),
+        &[1, 77, 2048]
+    );
+    assert_eq!(
+        first
+            .conditioning()
+            .pooled_embedding()
+            .unwrap()
+            .shape()
+            .dims(),
+        &[1, 1280]
+    );
+
+    let first_payload = backend
+        .store()
+        .get_conditioning(first.conditioning().text_embedding().payload_key())
+        .unwrap();
+    let second_payload = backend
+        .store()
+        .get_conditioning(second.conditioning().text_embedding().payload_key())
+        .unwrap();
+    let first_values = first_payload
+        .text_embedding()
+        .flatten_all()
+        .unwrap()
+        .to_vec1::<f32>()
+        .unwrap();
+    let second_values = second_payload
+        .text_embedding()
+        .flatten_all()
+        .unwrap()
+        .to_vec1::<f32>()
+        .unwrap();
+
+    assert!(
+        first_values.iter().any(|value| *value != 0.0),
+        "real text.encode must not store all-zero conditioning"
+    );
+    assert_ne!(
+        first_values, second_values,
+        "real text.encode should produce prompt-dependent conditioning"
+    );
 }
 
 #[tokio::test]
@@ -1826,8 +2008,7 @@ async fn setup_decoded_image_for_save(
 async fn image_save_writes_png_to_output_dir_for_sdxl_pipeline() {
     let root = unique_sdxl_root();
     std::fs::create_dir_all(&root).unwrap();
-    let backend =
-        CandleBackend::new(CandleBackendConfig::new(&root, &root.join("output"))).unwrap();
+    let backend = backend_with_dirs(&root, &root.join("output"));
 
     let (image_value, output_dir) = setup_decoded_image_for_save(&backend, "node-save").await;
     let response: ImageSaveResponse = backend
@@ -1887,8 +2068,7 @@ async fn image_save_writes_png_to_output_dir_for_sdxl_pipeline() {
 async fn image_preview_writes_png_to_output_dir_for_sdxl_pipeline() {
     let root = unique_sdxl_root();
     std::fs::create_dir_all(&root).unwrap();
-    let backend =
-        CandleBackend::new(CandleBackendConfig::new(&root, &root.join("output"))).unwrap();
+    let backend = backend_with_dirs(&root, &root.join("output"));
 
     let (image_value, output_dir) = setup_decoded_image_for_save(&backend, "node-preview").await;
     let response: ImagePreviewResponse = backend
@@ -1923,8 +2103,7 @@ async fn image_preview_writes_png_to_output_dir_for_sdxl_pipeline() {
 async fn image_save_filename_includes_prefix_run_id_node_id() {
     let root = unique_sdxl_root();
     std::fs::create_dir_all(&root).unwrap();
-    let backend =
-        CandleBackend::new(CandleBackendConfig::new(&root, &root.join("output"))).unwrap();
+    let backend = backend_with_dirs(&root, &root.join("output"));
 
     let (image_value, output_dir) = setup_decoded_image_for_save(&backend, "node-save-test").await;
     let request = ImageSaveRequest::new(
@@ -1964,8 +2143,7 @@ async fn image_save_filename_includes_prefix_run_id_node_id() {
 async fn image_save_rejects_path_traversal_via_filename_prefix() {
     let root = unique_sdxl_root();
     std::fs::create_dir_all(&root).unwrap();
-    let backend =
-        CandleBackend::new(CandleBackendConfig::new(&root, &root.join("output"))).unwrap();
+    let backend = backend_with_dirs(&root, &root.join("output"));
 
     let (image_value, output_dir) = setup_decoded_image_for_save(&backend, "node-traversal").await;
     let request = ImageSaveRequest::new(
@@ -2081,8 +2259,7 @@ async fn image_save_rejects_missing_image_input() {
 async fn image_save_overwrites_existing_file() {
     let root = unique_sdxl_root();
     std::fs::create_dir_all(&root).unwrap();
-    let backend =
-        CandleBackend::new(CandleBackendConfig::new(&root, &root.join("output"))).unwrap();
+    let backend = backend_with_dirs(&root, &root.join("output"));
 
     let (image_value1, output_dir) =
         setup_decoded_image_for_save(&backend, "node-overwrite-1").await;
@@ -2131,8 +2308,7 @@ async fn image_save_overwrites_existing_file() {
 async fn image_save_returns_artifact_response() {
     let root = unique_sdxl_root();
     std::fs::create_dir_all(&root).unwrap();
-    let backend =
-        CandleBackend::new(CandleBackendConfig::new(&root, &root.join("output"))).unwrap();
+    let backend = backend_with_dirs(&root, &root.join("output"));
 
     let (image_value, _output_dir) = setup_decoded_image_for_save(&backend, "node-slotid").await;
     let response = backend
@@ -2151,8 +2327,7 @@ async fn image_save_returns_artifact_response() {
 async fn image_preview_uses_different_prefix() {
     let root = unique_sdxl_root();
     std::fs::create_dir_all(&root).unwrap();
-    let backend =
-        CandleBackend::new(CandleBackendConfig::new(&root, &root.join("output"))).unwrap();
+    let backend = backend_with_dirs(&root, &root.join("output"));
 
     let (image_value_save, output_dir) =
         setup_decoded_image_for_save(&backend, "node-save-img").await;
@@ -2221,8 +2396,7 @@ async fn image_preview_uses_different_prefix() {
 async fn image_save_png_bytes_have_valid_signature() {
     let root = unique_sdxl_root();
     std::fs::create_dir_all(&root).unwrap();
-    let backend =
-        CandleBackend::new(CandleBackendConfig::new(&root, &root.join("output"))).unwrap();
+    let backend = backend_with_dirs(&root, &root.join("output"));
 
     let (image_value, output_dir) = setup_decoded_image_for_save(&backend, "node-sig").await;
     backend
@@ -2256,8 +2430,7 @@ async fn image_save_png_bytes_have_valid_signature() {
 async fn image_save_png_ihdr_has_correct_dimensions() {
     let root = unique_sdxl_root();
     std::fs::create_dir_all(&root).unwrap();
-    let backend =
-        CandleBackend::new(CandleBackendConfig::new(&root, &root.join("output"))).unwrap();
+    let backend = backend_with_dirs(&root, &root.join("output"));
 
     let (image_value, output_dir) = setup_decoded_image_for_save(&backend, "node-ihdr").await;
     backend
@@ -2312,8 +2485,7 @@ async fn image_save_png_ihdr_has_correct_dimensions() {
 async fn image_save_cleans_up_image_payload_from_store() {
     let root = unique_sdxl_root();
     std::fs::create_dir_all(&root).unwrap();
-    let backend =
-        CandleBackend::new(CandleBackendConfig::new(&root, &root.join("output"))).unwrap();
+    let backend = backend_with_dirs(&root, &root.join("output"));
 
     let (image_value, _output_dir) = setup_decoded_image_for_save(&backend, "node-cleanup").await;
     let payload_key = image_value.payload().payload_key().clone();

@@ -89,7 +89,7 @@ impl SdxlTokenizerResources {
         // 1. Explicit source-set entry with TextEncoder role.
         for source in source_set.sources() {
             if source.role() == ModelRole::TextEncoder {
-                if let Some(meta) = source.metadata() {
+                if let Some(meta) = source.metadata().and_then(tokenizer_metadata_path) {
                     // Explicit entry exists — must resolve or error.
                     let p = Path::new(meta);
                     if p.is_file() {
@@ -132,7 +132,7 @@ impl SdxlTokenizerResources {
         //    metadata convention: "tokenizer_2" key).
         for source in source_set.sources() {
             if source.role() == ModelRole::TextEncoder {
-                if let Some(meta) = source.metadata() {
+                if let Some(meta) = source.metadata().and_then(tokenizer_metadata_path) {
                     // Explicit entry exists — must resolve or error.
                     let meta_path = Path::new(meta);
                     let candidate = if meta_path.is_dir() {
@@ -223,6 +223,13 @@ pub struct SdxlTokenizedPrompt {
     pub attention_mask: Vec<f32>,
 }
 
+/// Tokenization output for SDXL's two CLIP text encoders.
+#[derive(Debug, Clone)]
+pub struct SdxlTokenizedPromptPair {
+    pub clip_l: SdxlTokenizedPrompt,
+    pub clip_g: SdxlTokenizedPrompt,
+}
+
 // ---------------------------------------------------------------------------
 // Tokenizer
 // ---------------------------------------------------------------------------
@@ -303,28 +310,14 @@ impl SdxlTokenizer {
     /// [BOS] [token_1] ... [token_n] [EOS] [PAD] ... [PAD]
     /// ```
     pub fn tokenize(&self, text: &str) -> Result<SdxlTokenizedPrompt, TokenizerError> {
-        let encoding =
-            self.tokenizer
-                .encode(text, true)
-                .map_err(|e| TokenizerError::TokenizationFailed {
-                    reason: e.to_string(),
-                })?;
+        encode_one(&self.tokenizer, text)
+    }
 
-        let mut ids: Vec<u32> = encoding.get_ids().to_vec();
-        let mask_raw: Vec<u32> = encoding.get_attention_mask().to_vec();
-
-        // Safety net: ensure buffers are exactly MAX_SEQUENCE_LENGTH.
-        ids.resize(MAX_SEQUENCE_LENGTH, TOKEN_PAD);
-        let attention_mask: Vec<f32> = mask_raw
-            .iter()
-            .map(|&v| v as f32)
-            .chain(std::iter::repeat(0.0))
-            .take(MAX_SEQUENCE_LENGTH)
-            .collect();
-
-        Ok(SdxlTokenizedPrompt {
-            token_ids: ids,
-            attention_mask,
+    /// Tokenize text for both SDXL CLIP encoders.
+    pub fn tokenize_pair(&self, text: &str) -> Result<SdxlTokenizedPromptPair, TokenizerError> {
+        Ok(SdxlTokenizedPromptPair {
+            clip_l: encode_one(&self.tokenizer, text)?,
+            clip_g: encode_one(&self.tokenizer_2, text)?,
         })
     }
 
@@ -356,6 +349,53 @@ impl SdxlTokenizer {
 
         Ok(())
     }
+}
+
+fn encode_one(
+    tokenizer: &tokenizers::Tokenizer,
+    text: &str,
+) -> Result<SdxlTokenizedPrompt, TokenizerError> {
+    let encoding =
+        tokenizer
+            .encode(text, true)
+            .map_err(|e| TokenizerError::TokenizationFailed {
+                reason: e.to_string(),
+            })?;
+
+    let mut ids: Vec<u32> = encoding.get_ids().to_vec();
+    let mask_raw: Vec<u32> = encoding.get_attention_mask().to_vec();
+
+    // Safety net: ensure buffers are exactly MAX_SEQUENCE_LENGTH.
+    ids.resize(MAX_SEQUENCE_LENGTH, TOKEN_PAD);
+    let attention_mask: Vec<f32> = mask_raw
+        .iter()
+        .map(|&v| v as f32)
+        .chain(std::iter::repeat(0.0))
+        .take(MAX_SEQUENCE_LENGTH)
+        .collect();
+
+    Ok(SdxlTokenizedPrompt {
+        token_ids: ids,
+        attention_mask,
+    })
+}
+
+fn tokenizer_metadata_path(metadata: &str) -> Option<&str> {
+    let trimmed = metadata.trim();
+    if trimmed.is_empty() {
+        return None;
+    }
+    if !trimmed.contains('=') {
+        return Some(trimmed);
+    }
+    trimmed
+        .split(';')
+        .flat_map(|part| part.split(','))
+        .filter_map(|part| part.trim().split_once('='))
+        .find_map(|(key, value)| match key.trim() {
+            "tokenizer" | "tokenizer_path" | "tokenizer_dir" => Some(value.trim()),
+            _ => None,
+        })
 }
 
 // ---------------------------------------------------------------------------
