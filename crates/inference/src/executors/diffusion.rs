@@ -30,16 +30,14 @@ use crate::executors::validation::sampled_latent_output;
 
 fn select_sampler(name: Option<String>) -> SamplerName {
     match name.as_deref() {
-        Some("euler") => SamplerName::Euler,
-        Some(other) => SamplerName::Other(other.to_string()),
+        Some(name) => SamplerName::from_standard_name(name),
         None => SamplerName::Euler,
     }
 }
 
 fn select_scheduler(name: Option<String>) -> SchedulerName {
     match name.as_deref() {
-        Some("normal") => SchedulerName::Normal,
-        Some(other) => SchedulerName::Other(other.to_string()),
+        Some(name) => SchedulerName::from_standard_name(name),
         None => SchedulerName::Normal,
     }
 }

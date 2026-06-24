@@ -1,25 +1,14 @@
 //! SDXL diffusion sampler.
 //!
-//! V1 uses a deterministic, shape-correct placeholder sampler so that
-//! the backend operation contract stays testable without requiring real
-//! UNet weights or scheduler state. The sampler takes a seeded noise
-//! tensor, mixes it into the input latent with the requested
-//! classifier-free guidance / denoise ratio, and returns the resulting
-//! tensor. The same `(seed, steps, cfg, denoise)` triple always yields
-//! the same output bytes.
-//!
-//! Real UNet integration lives behind a later milestone. The
-//! placeholder still preserves the backend boundary:
-//!
-//! - it dispatches on the SDXL bundle the operation resolved;
-//! - it consumes backend-owned `candle_core::Tensor` inputs;
-//! - it returns a backend-owned tensor wrapped in
-//!   [`crate::store::CandleLatent`];
-//! - it never reaches into runtime / app-host / workflow JSON.
+//! The production path lives in `diffusion_graph.rs`; this module owns
+//! backend-neutral SDXL sample parameter validation plus test helpers.
 
-use candle_core::{DType, Device, Tensor};
+#[cfg(test)]
+use candle_core::DType;
+use candle_core::{Device, Tensor};
 
 use crate::error::CandleBackendError;
+#[cfg(test)]
 use crate::store::CandleLatent;
 
 /// User-controllable sampling parameters extracted from the
@@ -30,6 +19,7 @@ use crate::store::CandleLatent;
 /// backend to enumerate the scheduler matrix. The first supported
 /// sampler is `euler`; the first supported scheduler is `normal`.
 #[derive(Debug, Clone)]
+#[allow(dead_code)]
 pub struct SdxlSampleRequest {
     pub seed: u64,
     pub steps: u32,
@@ -70,6 +60,11 @@ impl SdxlSampleRequest {
         if !(0.0..=1.0).contains(&denoise) {
             return Err(CandleBackendError::InvalidRequest(format!(
                 "diffusion.sample denoise must be within [0, 1], got {denoise}"
+            )));
+        }
+        if denoise < 1.0 {
+            return Err(CandleBackendError::InvalidRequest(format!(
+                "diffusion.sample partial denoise/img2img is not supported in V1; expected denoise 1.0, got {denoise}"
             )));
         }
         if steps == 0 {
@@ -122,6 +117,11 @@ impl SdxlSampleRequest {
         if !(0.0..=1.0).contains(&denoise) {
             return Err(CandleBackendError::InvalidRequest(format!(
                 "diffusion.sample denoise must be within [0, 1], got {denoise}"
+            )));
+        }
+        if denoise < 1.0 {
+            return Err(CandleBackendError::InvalidRequest(format!(
+                "diffusion.sample partial denoise/img2img is not supported in V1; expected denoise 1.0, got {denoise}"
             )));
         }
         if steps == 0 {
@@ -250,6 +250,7 @@ fn extract_select<'a>(
 /// consume it once the operation layer exposes a sampling trace
 /// channel; V1 currently only validates it through unit tests.
 #[derive(Debug)]
+#[cfg(test)]
 pub struct SdxlSampleResult {
     pub latent: CandleLatent,
     #[allow(dead_code)]
@@ -258,6 +259,7 @@ pub struct SdxlSampleResult {
 
 /// Compact, human-readable summary of a sampling pass.
 #[derive(Debug, Clone, PartialEq, Eq)]
+#[cfg(test)]
 pub struct SampleSummary {
     pub seed: u64,
     pub steps: u32,
@@ -267,6 +269,7 @@ pub struct SampleSummary {
     pub denoise_milli: i64,
 }
 
+#[cfg(test)]
 impl SampleSummary {
     fn from_request(req: &SdxlSampleRequest) -> Self {
         Self {
@@ -287,8 +290,10 @@ impl SampleSummary {
 /// effective sampling weight (deterministic, monotone); the placeholder
 /// does not run an actual scheduler loop.
 #[derive(Debug, Default)]
+#[cfg(test)]
 pub struct SdxlSampler;
 
+#[cfg(test)]
 impl SdxlSampler {
     pub fn new() -> Self {
         Self
@@ -411,6 +416,20 @@ impl Xorshift64Star {
         }
         out
     }
+}
+
+pub(crate) fn seeded_noise_like(
+    seed: u64,
+    shape: &[usize],
+    device: &Device,
+) -> Result<Tensor, CandleBackendError> {
+    let elem_count: usize = shape.iter().product();
+    let mut rng = Xorshift64Star::new(seed);
+    Tensor::from_vec(rng.fill_vec(elem_count), shape, device).map_err(|err| {
+        CandleBackendError::InvalidRequest(format!(
+            "diffusion.sample failed to allocate seeded noise tensor for shape {shape:?}: {err}"
+        ))
+    })
 }
 
 #[cfg(test)]
@@ -569,12 +588,12 @@ mod tests {
 
     #[test]
     fn sample_summary_captures_request() {
-        let req = SdxlSampleRequest::from_params(&params(42, 30, 6.5, 0.8)).unwrap();
+        let req = SdxlSampleRequest::from_params(&params(42, 30, 6.5, 1.0)).unwrap();
         let summary = SampleSummary::from_request(&req);
         assert_eq!(summary.seed, 42);
         assert_eq!(summary.steps, 30);
         assert_eq!(summary.cfg_milli, 6500);
-        assert_eq!(summary.denoise_milli, 800);
+        assert_eq!(summary.denoise_milli, 1000);
         assert_eq!(summary.sampler, "euler");
         assert_eq!(summary.scheduler, "normal");
     }

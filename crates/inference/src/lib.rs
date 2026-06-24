@@ -84,7 +84,9 @@ pub use diagnostic::{
 pub use inference_error::InferenceError;
 pub use profile::{
     BackendInstanceProfile, BackendInstanceStatus, BackendProfile, BackendProfileProvider,
-    DTypeProfile, DeviceKind, MemoryProfile, WorkspaceComputeProfile, diagnostics, kind_from_label,
+    DTypeProfile, DeviceKind, MemoryProfile, OperationOptionsProfile, OperationOptionsProfileKind,
+    SamplerOptionProfile, SamplerSchedulerPairProfile, SchedulerOptionProfile,
+    WorkspaceComputeProfile, diagnostics, kind_from_label,
 };
 pub use request::diffusion::{DiffusionSampleRequest, SamplerName, SchedulerName};
 pub use request::image::{FilenamePrefix, ImagePreviewRequest, ImageSaveRequest};

@@ -8,6 +8,9 @@
 
 mod bundle;
 pub mod diffusion;
+pub(crate) mod diffusion_graph;
+pub(crate) mod diffusion_sources;
+pub(crate) mod diffusion_weights;
 pub mod text;
 pub(crate) mod text_sources;
 pub mod tokenizer;
