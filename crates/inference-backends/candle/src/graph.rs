@@ -16,11 +16,11 @@
 
 use candle_core::Device;
 use reimagine_core::model::ModelRole;
+use reimagine_inference::ResolvedInferenceModelSourceSet;
 use reimagine_inference::{
     Backend, BackendInstance, LoadBundleResponse, RuntimeClipHandle, RuntimeModelHandle,
     RuntimeVaeHandle,
 };
-use reimagine_inference::ResolvedInferenceModelSourceSet;
 
 /// Backend-local loaded model graph — one implementation per model family.
 pub trait LoadedModelGraph: Send + Sync {

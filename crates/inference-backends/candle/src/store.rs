@@ -548,8 +548,8 @@ impl CandleModelCache {
 mod tests {
     use super::*;
     use crate::device::CandleDevice;
-    use reimagine_inference::ModelFormat;
-    use reimagine_inference::{ModelSourceKind, ResolvedInferenceModelSource};
+    use reimagine_core::model::ModelRole;
+    use reimagine_inference::{ModelFormat, ModelSourceKind, ResolvedInferenceModelSource};
     use std::fs;
 
     fn unique_temp_dir() -> std::path::PathBuf {
@@ -937,14 +937,18 @@ mod tests {
 
         let set1 = ResolvedInferenceModelSourceSet::new(ResolvedInferenceModelSource::new(
             ModelSourceKind::CheckpointBundle,
+            ModelRole::CheckpointBundle,
             dir1.join("cache-eviction-test.safetensors"),
+            ModelFormat::SafeTensors,
         ));
 
         assert!(cache.get_compatible_bundle(&model_id, &set1).is_some());
 
         let set2 = ResolvedInferenceModelSourceSet::new(ResolvedInferenceModelSource::new(
             ModelSourceKind::CheckpointBundle,
+            ModelRole::CheckpointBundle,
             dir2.join("different-path.safetensors"),
+            ModelFormat::SafeTensors,
         ));
 
         assert!(cache.get_compatible_bundle(&model_id, &set2).is_none());

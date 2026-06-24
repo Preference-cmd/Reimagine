@@ -72,7 +72,9 @@ impl ResolvedInferenceModel {
     pub fn to_checkpoint_bundle_source_set(&self) -> ResolvedInferenceModelSourceSet {
         let mut source = ResolvedInferenceModelSource::new(
             ModelSourceKind::CheckpointBundle,
+            self.role,
             self.source_path.clone(),
+            self.format,
         );
         if let Some(ref meta) = self.metadata {
             source = source.with_metadata(meta.as_str());

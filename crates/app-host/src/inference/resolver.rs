@@ -70,12 +70,12 @@ impl ModelResolver for ModelResolverAdapter {
             map_model_format(descriptor.format()),
         );
 
-        let source_set = ResolvedInferenceModelSourceSet::new(
-            ResolvedInferenceModelSource::new(
-                ModelSourceKind::CheckpointBundle,
-                source_path,
-            ),
-        );
+        let source_set = ResolvedInferenceModelSourceSet::new(ResolvedInferenceModelSource::new(
+            ModelSourceKind::CheckpointBundle,
+            model_ref.role(),
+            source_path,
+            map_model_format(descriptor.format()),
+        ));
 
         Ok(resolved.with_source_set(source_set))
     }
