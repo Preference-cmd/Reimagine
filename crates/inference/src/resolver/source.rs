@@ -1,6 +1,10 @@
 use serde::{Deserialize, Serialize};
 use std::path::PathBuf;
 
+use reimagine_core::model::ModelRole;
+
+use super::ModelFormat;
+
 /// Kind of model source — checkpoint bundle or a split-component file.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[serde(rename_all = "PascalCase")]
@@ -13,23 +17,33 @@ pub enum ModelSourceKind {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ResolvedInferenceModelSource {
     kind: ModelSourceKind,
+    role: ModelRole,
     path: PathBuf,
+    format: ModelFormat,
     metadata: Option<String>,
 }
 
 impl ResolvedInferenceModelSource {
-    pub fn new(kind: ModelSourceKind, path: PathBuf) -> Self {
+    pub fn new(kind: ModelSourceKind, role: ModelRole, path: PathBuf, format: ModelFormat) -> Self {
         Self {
             kind,
+            role,
             path,
+            format,
             metadata: None,
         }
     }
     pub fn kind(&self) -> ModelSourceKind {
         self.kind
     }
+    pub fn role(&self) -> ModelRole {
+        self.role
+    }
     pub fn path(&self) -> &PathBuf {
         &self.path
+    }
+    pub fn format(&self) -> ModelFormat {
+        self.format
     }
     pub fn metadata(&self) -> Option<&str> {
         self.metadata.as_deref()
@@ -53,6 +67,10 @@ impl ResolvedInferenceModelSourceSet {
         }
     }
     pub fn from_sources(sources: Vec<ResolvedInferenceModelSource>) -> Self {
+        assert!(
+            !sources.is_empty(),
+            "ResolvedInferenceModelSourceSet cannot be empty"
+        );
         Self { sources }
     }
     pub fn sources(&self) -> &[ResolvedInferenceModelSource] {

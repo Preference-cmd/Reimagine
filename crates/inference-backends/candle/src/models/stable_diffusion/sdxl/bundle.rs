@@ -2,8 +2,11 @@ use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
 use candle_core::Device;
-use reimagine_core::model::ModelId;
-use reimagine_inference::{BackendPayloadKey, ModelFormat, ModelSourceKind, ResolvedInferenceModelSource, ResolvedInferenceModelSourceSet};
+use reimagine_core::model::{ModelId, ModelRole};
+use reimagine_inference::{
+    BackendPayloadKey, ModelFormat, ModelSourceKind, ResolvedInferenceModelSource,
+    ResolvedInferenceModelSourceSet,
+};
 
 use crate::error::CandleBackendError;
 
@@ -29,6 +32,7 @@ pub enum BundleLoadError {
         expected_extension: String,
         actual_extension: String,
     },
+    EmptySourceSet,
 }
 
 impl std::fmt::Display for BundleLoadError {
@@ -55,6 +59,7 @@ impl std::fmt::Display for BundleLoadError {
                 "model source format mismatch at {}: expected extension `.{expected_extension}`, got `.{actual_extension}`",
                 path.display()
             ),
+            Self::EmptySourceSet => write!(f, "model source set cannot be empty"),
         }
     }
 }
@@ -95,7 +100,9 @@ impl LoadedSdxlBundle {
     ) -> Result<Arc<Self>, BundleLoadError> {
         let source = ResolvedInferenceModelSource::new(
             ModelSourceKind::CheckpointBundle,
+            ModelRole::CheckpointBundle,
             source_path.clone(),
+            format,
         );
         let source_set = ResolvedInferenceModelSourceSet::new(source);
         Self::from_resolved_with_source_set(model_id, source_set, format, device)
@@ -108,13 +115,19 @@ impl LoadedSdxlBundle {
         format: ModelFormat,
         device: Arc<Device>,
     ) -> Result<Arc<Self>, BundleLoadError> {
-        for source in source_set.sources() {
-            validate_source(source.path(), format)?;
+        if source_set.sources().is_empty() {
+            return Err(BundleLoadError::EmptySourceSet);
         }
-        let primary_path = source_set.sources().first()
+        for source in source_set.sources() {
+            validate_source(source.path(), source.format())?;
+        }
+        let primary_path = source_set
+            .sources()
+            .first()
             .map(|s| s.path().clone())
             .unwrap_or_default();
-        let model_payload_key = BackendPayloadKey::new(format!("bundle:{}:model", model_id.as_str()));
+        let model_payload_key =
+            BackendPayloadKey::new(format!("bundle:{}:model", model_id.as_str()));
         let clip_payload_key = BackendPayloadKey::new(format!("bundle:{}:clip", model_id.as_str()));
         let vae_payload_key = BackendPayloadKey::new(format!("bundle:{}:vae", model_id.as_str()));
         Ok(Arc::new(Self {
@@ -149,19 +162,43 @@ impl LoadedModelGraph for LoadedSdxlBundle {
                 incoming.sources().len()
             ));
         }
-        for (i, (existing, incoming)) in self.source_set.sources().iter()
-            .zip(incoming.sources().iter()).enumerate()
+        for (i, (existing, incoming)) in self
+            .source_set
+            .sources()
+            .iter()
+            .zip(incoming.sources().iter())
+            .enumerate()
         {
             if existing.path() != incoming.path() {
                 return Err(format!(
                     "source path mismatch at index {}: cached {:?} vs requested {:?}",
-                    i, existing.path(), incoming.path()
+                    i,
+                    existing.path(),
+                    incoming.path()
                 ));
             }
             if existing.kind() != incoming.kind() {
                 return Err(format!(
                     "source kind mismatch at index {}: cached {:?} vs requested {:?}",
-                    i, existing.kind(), incoming.kind()
+                    i,
+                    existing.kind(),
+                    incoming.kind()
+                ));
+            }
+            if existing.role() != incoming.role() {
+                return Err(format!(
+                    "source role mismatch at index {}: cached {:?} vs requested {:?}",
+                    i,
+                    existing.role(),
+                    incoming.role()
+                ));
+            }
+            if existing.format() != incoming.format() {
+                return Err(format!(
+                    "source format mismatch at index {}: cached {:?} vs requested {:?}",
+                    i,
+                    existing.format(),
+                    incoming.format()
                 ));
             }
         }
@@ -380,7 +417,12 @@ mod tests {
         fs::create_dir_all(&dir).unwrap();
         let path = dir.join("test.safetensors");
         fs::write(&path, b"dummy").unwrap();
-        let src = ResolvedInferenceModelSource::new(ModelSourceKind::CheckpointBundle, path);
+        let src = ResolvedInferenceModelSource::new(
+            ModelSourceKind::CheckpointBundle,
+            ModelRole::CheckpointBundle,
+            path,
+            ModelFormat::SafeTensors,
+        );
         let set = ResolvedInferenceModelSourceSet::new(src);
         let bundle = make_test_bundle(set.clone());
         assert!(bundle.check_compatible(&set).is_ok());
@@ -396,11 +438,15 @@ mod tests {
         fs::write(&path_b, b"dummy").unwrap();
         let set1 = ResolvedInferenceModelSourceSet::new(ResolvedInferenceModelSource::new(
             ModelSourceKind::CheckpointBundle,
+            ModelRole::CheckpointBundle,
             path_a,
+            ModelFormat::SafeTensors,
         ));
         let set2 = ResolvedInferenceModelSourceSet::new(ResolvedInferenceModelSource::new(
             ModelSourceKind::CheckpointBundle,
+            ModelRole::CheckpointBundle,
             path_b,
+            ModelFormat::SafeTensors,
         ));
         let bundle = make_test_bundle(set1);
         assert!(bundle.check_compatible(&set2).is_err());
@@ -414,11 +460,15 @@ mod tests {
         fs::write(&path, b"dummy").unwrap();
         let set1 = ResolvedInferenceModelSourceSet::new(ResolvedInferenceModelSource::new(
             ModelSourceKind::CheckpointBundle,
+            ModelRole::CheckpointBundle,
             path.clone(),
+            ModelFormat::SafeTensors,
         ));
         let set2 = ResolvedInferenceModelSourceSet::new(ResolvedInferenceModelSource::new(
             ModelSourceKind::SplitComponent,
+            ModelRole::CheckpointBundle,
             path,
+            ModelFormat::SafeTensors,
         ));
         let bundle = make_test_bundle(set1);
         assert!(bundle.check_compatible(&set2).is_err());
@@ -436,15 +486,21 @@ mod tests {
         fs::write(&path_clip, b"dummy").unwrap();
         let set1 = ResolvedInferenceModelSourceSet::new(ResolvedInferenceModelSource::new(
             ModelSourceKind::CheckpointBundle,
+            ModelRole::CheckpointBundle,
             path,
+            ModelFormat::SafeTensors,
         ));
         let set2 = ResolvedInferenceModelSourceSet::new(ResolvedInferenceModelSource::new(
             ModelSourceKind::SplitComponent,
+            ModelRole::DiffusionModel,
             path_unet,
+            ModelFormat::SafeTensors,
         ))
         .with_source(ResolvedInferenceModelSource::new(
             ModelSourceKind::SplitComponent,
+            ModelRole::TextEncoder,
             path_clip,
+            ModelFormat::SafeTensors,
         ));
         let bundle = make_test_bundle(set1);
         assert!(bundle.check_compatible(&set2).is_err());

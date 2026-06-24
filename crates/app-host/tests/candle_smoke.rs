@@ -1,9 +1,8 @@
 //! App-host smoke test for the Candle-backed workspace.
 //!
-//! This test loads the canonical SDXL base workflow from
-//! `docs/architecture/examples/sdxl-base-workflow.json`, registers a
-//! matching `sdxl-base-1.0` manifest entry, and runs the workflow
-//! through a real `WorkspaceHost` constructed with the Candle backend.
+//! This test builds an SDXL-shaped workflow, registers a matching
+//! `sdxl-base-1.0` manifest entry, and runs the workflow through a
+//! real `WorkspaceHost` constructed with the Candle backend.
 //!
 //! The full pipeline (model.load_bundle → text.encode × 2 →
 //! empty_latent_image → diffusion.sample → latent.decode → image.save)
@@ -18,9 +17,11 @@ use reimagine_app_host::{
     BackendSelection, ModelService, RunWorkflowRequest, RunWorkflowResult, WorkspaceHost,
 };
 use reimagine_config::AppPaths;
-use reimagine_core::model::{ModelId, ModelRole, NodeId};
+use reimagine_core::model::{
+    ModelId, ModelRef, ModelRole, ModelSeries, ModelVariant, NodeId, ParamValue, WorkflowVersion,
+};
 use reimagine_core::readiness::{RunTarget, RunTargetSelection};
-use reimagine_core::workflow::Workflow;
+use reimagine_core::workflow::{Endpoint, Workflow, WorkflowEdge, WorkflowNode};
 use reimagine_model_manager::{
     ModelDescriptor, ModelFormat, ModelManifest, ModelRoot, ModelSource, ModelSourceStatus,
 };
@@ -52,13 +53,156 @@ fn manifest_with_model() -> ModelManifest {
         .with_model(descriptor)
 }
 
-fn load_sdxl_workflow() -> Workflow {
-    let path = PathBuf::from(concat!(
-        env!("CARGO_MANIFEST_DIR"),
-        "/../../docs/architecture/examples/sdxl-base-workflow.json"
-    ));
-    let bytes = std::fs::read(&path).unwrap_or_else(|e| panic!("failed to read {path:?}: {e}"));
-    serde_json::from_slice(&bytes).unwrap_or_else(|e| panic!("failed to parse SDXL workflow: {e}"))
+fn model_ref() -> ModelRef {
+    ModelRef::new(
+        ModelId::new(MODEL_ID),
+        ModelSeries::new("stable_diffusion"),
+        ModelVariant::new("sdxl"),
+        ModelRole::CheckpointBundle,
+    )
+}
+
+fn edge(id: &str, from_node: &str, from_slot: &str, to_node: &str, to_slot: &str) -> WorkflowEdge {
+    WorkflowEdge::new(
+        id,
+        Endpoint::node_slot(NodeId::new(from_node), from_slot.into()),
+        Endpoint::node_slot(NodeId::new(to_node), to_slot.into()),
+    )
+}
+
+fn build_sdxl_workflow() -> Workflow {
+    Workflow::new("workflow_sdxl_base_demo", WorkflowVersion::new(1))
+        .with_node(
+            WorkflowNode::new("node_checkpoint", "builtin.checkpoint_loader")
+                .with_label("Checkpoint")
+                .with_param("checkpoint", ParamValue::ModelRef(model_ref())),
+        )
+        .with_node(
+            WorkflowNode::new("node_positive_prompt", "builtin.string")
+                .with_label("Positive Prompt")
+                .with_param(
+                    "value",
+                    ParamValue::String("cinematic lake at sunrise, detailed, soft light".into()),
+                ),
+        )
+        .with_node(
+            WorkflowNode::new("node_negative_prompt", "builtin.string")
+                .with_label("Negative Prompt")
+                .with_param(
+                    "value",
+                    ParamValue::String("low quality, blurry, distorted".into()),
+                ),
+        )
+        .with_node(
+            WorkflowNode::new("node_positive_encode", "builtin.clip_text_encode")
+                .with_label("Positive CLIP Encode"),
+        )
+        .with_node(
+            WorkflowNode::new("node_negative_encode", "builtin.clip_text_encode")
+                .with_label("Negative CLIP Encode"),
+        )
+        .with_node(
+            WorkflowNode::new("node_latent", "builtin.empty_latent_image")
+                .with_label("Empty Latent")
+                .with_param("width", ParamValue::Integer(1024))
+                .with_param("height", ParamValue::Integer(1024))
+                .with_param("batch_size", ParamValue::Integer(1)),
+        )
+        .with_node(
+            WorkflowNode::new("node_sampler", "builtin.ksampler")
+                .with_label("KSampler")
+                .with_param("seed", ParamValue::Seed(123456789))
+                .with_param("steps", ParamValue::Integer(30))
+                .with_param("cfg", ParamValue::Float(7.0))
+                .with_param("sampler", ParamValue::Select("euler".into()))
+                .with_param("scheduler", ParamValue::Select("normal".into()))
+                .with_param("denoise", ParamValue::Float(1.0)),
+        )
+        .with_node(
+            WorkflowNode::new("node_vae_decode", "builtin.vae_decode").with_label("VAE Decode"),
+        )
+        .with_node(
+            WorkflowNode::new("node_save_image", "builtin.save_image")
+                .with_label("Save Image")
+                .with_param("filename_prefix", ParamValue::String("sdxl_demo".into())),
+        )
+        .with_edge(edge(
+            "edge_checkpoint_model_sampler",
+            "node_checkpoint",
+            "model",
+            "node_sampler",
+            "model",
+        ))
+        .with_edge(edge(
+            "edge_checkpoint_clip_positive",
+            "node_checkpoint",
+            "clip",
+            "node_positive_encode",
+            "clip",
+        ))
+        .with_edge(edge(
+            "edge_checkpoint_clip_negative",
+            "node_checkpoint",
+            "clip",
+            "node_negative_encode",
+            "clip",
+        ))
+        .with_edge(edge(
+            "edge_positive_prompt_encode",
+            "node_positive_prompt",
+            "value",
+            "node_positive_encode",
+            "text",
+        ))
+        .with_edge(edge(
+            "edge_negative_prompt_encode",
+            "node_negative_prompt",
+            "value",
+            "node_negative_encode",
+            "text",
+        ))
+        .with_edge(edge(
+            "edge_positive_conditioning_sampler",
+            "node_positive_encode",
+            "conditioning",
+            "node_sampler",
+            "positive",
+        ))
+        .with_edge(edge(
+            "edge_negative_conditioning_sampler",
+            "node_negative_encode",
+            "conditioning",
+            "node_sampler",
+            "negative",
+        ))
+        .with_edge(edge(
+            "edge_latent_sampler",
+            "node_latent",
+            "latent",
+            "node_sampler",
+            "latent",
+        ))
+        .with_edge(edge(
+            "edge_sampler_vae_decode",
+            "node_sampler",
+            "latent",
+            "node_vae_decode",
+            "latent",
+        ))
+        .with_edge(edge(
+            "edge_checkpoint_vae_decode",
+            "node_checkpoint",
+            "vae",
+            "node_vae_decode",
+            "vae",
+        ))
+        .with_edge(edge(
+            "edge_vae_decode_save",
+            "node_vae_decode",
+            "image",
+            "node_save_image",
+            "image",
+        ))
 }
 
 async fn run_to_completion(host: &WorkspaceHost, run_id: &reimagine_core::model::RunId) {
@@ -101,7 +245,7 @@ async fn candle_backend_sdxl_workflow_completes_with_image_artifact() {
         event_sink,
     );
 
-    let workflow: Workflow = load_sdxl_workflow();
+    let workflow: Workflow = build_sdxl_workflow();
     let workflow_id = host.workflow_service().register_workflow(workflow);
 
     let request = RunWorkflowRequest::new(
