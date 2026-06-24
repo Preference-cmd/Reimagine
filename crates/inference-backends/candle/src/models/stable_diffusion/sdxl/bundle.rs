@@ -861,13 +861,13 @@ mod tests {
 
     #[test]
     fn materialize_diffusion_graph_reports_original_checkpoint_adapter_gap() {
-        let weights = std::env::var_os("REIMAGINE_SDXL_REAL_WEIGHTS")
-            .map(PathBuf::from)
-            .unwrap_or_else(|| {
-                PathBuf::from(
-                    "/Users/pref2rence/project/Reimagine/workspace/models/checkpoints/sd_xl_base_1.0.safetensors",
-                )
-            });
+        let Some(weights) = std::env::var_os("REIMAGINE_SDXL_REAL_WEIGHTS").map(PathBuf::from)
+        else {
+            eprintln!(
+                "skipping original checkpoint materialization diagnostic; set REIMAGINE_SDXL_REAL_WEIGHTS to a local SDXL checkpoint"
+            );
+            return;
+        };
         if !weights.exists() {
             eprintln!(
                 "skipping original checkpoint materialization diagnostic; missing {}",
