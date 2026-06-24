@@ -566,9 +566,16 @@ mod tests {
         fs::write(&path, b"placeholder").unwrap();
         let device = Arc::new(CandleDevice::new("cpu").try_build_device().unwrap());
         let model_id_typed = ModelId::new(model_id);
-        let sdxl = crate::models::LoadedSdxlBundle::from_resolved(
-            model_id_typed.clone(),
+        let source = ResolvedInferenceModelSource::new(
+            ModelSourceKind::CheckpointBundle,
+            ModelRole::CheckpointBundle,
             path,
+            ModelFormat::SafeTensors,
+        );
+        let source_set = reimagine_inference::ResolvedInferenceModelSourceSet::new(source);
+        let sdxl = crate::models::LoadedSdxlBundle::from_resolved_with_test_text_projection(
+            model_id_typed.clone(),
+            source_set,
             ModelFormat::SafeTensors,
             device,
         )
