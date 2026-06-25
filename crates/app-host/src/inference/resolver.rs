@@ -39,6 +39,23 @@ impl ModelResolver for ModelResolverAdapter {
                 message: error.to_string(),
             })?;
 
+        let error_diagnostics = resolution
+            .report()
+            .diagnostics()
+            .iter()
+            .filter(|diagnostic| diagnostic.severity().is_error())
+            .map(|diagnostic| format!("{}: {}", diagnostic.code().as_str(), diagnostic.message()))
+            .collect::<Vec<_>>();
+        if !error_diagnostics.is_empty() {
+            return Err(InferenceError::ModelResolutionFailed {
+                message: format!(
+                    "model ref {} failed model resolution diagnostics: {}",
+                    model_ref.id(),
+                    error_diagnostics.join("; ")
+                ),
+            });
+        }
+
         let Some(view) = resolution.into_value() else {
             return Err(InferenceError::ModelResolutionFailed {
                 message: format!("model ref {} could not be resolved", model_ref.id()),
@@ -102,13 +119,13 @@ impl ModelResolver for ModelResolverAdapter {
 ///
 /// For a descriptor with no components (the legacy single-source /
 /// checkpoint-bundle shape) this falls through to the descriptor's
-/// primary `source()` path. For a split descriptor with at least one
-/// component, this returns the component whose role matches the
-/// requested [`ModelRef::role`]. If the split descriptor's component
-/// list does not include a matching role, this returns an error
-/// naming both the requested role and the available component roles
-/// — silently falling back to an arbitrary component would surface
-/// as a confusing missing-file error deep inside the Candle backend.
+/// primary `source()` path.
+///
+/// For a split descriptor, a `CheckpointBundle` request means "load the whole
+/// component graph" and may use any component as the legacy primary path
+/// because the complete source set carries the executable sources. Requests
+/// for a concrete component role still prefer a matching component so the
+/// resolved model's legacy path/format stays intuitive in diagnostics.
 fn primary_source_path_and_format(
     manifest: &reimagine_model_manager::ModelManifest,
     descriptor: &reimagine_model_manager::ModelDescriptor,
@@ -122,6 +139,12 @@ fn primary_source_path_and_format(
             .find(|component| component.role() == requested_role)
         {
             return Ok((matching.path().to_path_buf(), matching.format()));
+        }
+        if requested_role == ModelRole::CheckpointBundle {
+            let primary = components
+                .first()
+                .expect("non-empty component list has a first component");
+            return Ok((primary.path().to_path_buf(), primary.format()));
         }
         let available_roles: Vec<String> = components
             .iter()
@@ -401,8 +424,8 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn split_descriptor_without_matching_role_returns_precise_model_resolution_failed() {
-        let base = temp_dir("role-mismatch");
+    async fn checkpoint_bundle_ref_for_split_descriptor_loads_the_component_graph() {
+        let base = temp_dir("checkpoint-bundle-split");
         let paths = AppPaths::new(&base);
         tokio::fs::create_dir_all(paths.models_dir()).await.unwrap();
         for relative in [
@@ -430,22 +453,88 @@ mod tests {
 
         let adapter = ModelResolverAdapter::new(std::sync::Arc::new(service), paths.clone());
 
+        let resolved = adapter
+            .resolve(&model_ref_for(ModelRole::CheckpointBundle))
+            .await
+            .expect("checkpoint bundle model ref should resolve the split component graph");
+
+        assert_eq!(resolved.role(), ModelRole::CheckpointBundle);
+        assert!(
+            resolved
+                .source_path()
+                .ends_with("sdxl-base-1.0/unet/model.safetensors"),
+            "legacy primary source path should come from the first component, got {:?}",
+            resolved.source_path()
+        );
+        let source_set = resolved
+            .source_set()
+            .expect("split descriptor should carry source set");
+        assert_eq!(source_set.sources().len(), 4);
+        assert!(
+            source_set
+                .sources()
+                .iter()
+                .all(|source| source.kind() == ModelSourceKind::SplitComponent)
+        );
+        assert!(
+            source_set
+                .sources()
+                .iter()
+                .any(|source| source.metadata() == Some("component=clip_l"))
+        );
+        assert!(
+            source_set
+                .sources()
+                .iter()
+                .any(|source| source.metadata() == Some("component=clip_g"))
+        );
+
+        let _ = tokio::fs::remove_dir_all(&base).await;
+    }
+
+    #[tokio::test]
+    async fn split_descriptor_with_missing_component_reports_model_resolution_failed() {
+        let base = temp_dir("missing-component");
+        let paths = AppPaths::new(&base);
+        tokio::fs::create_dir_all(paths.models_dir()).await.unwrap();
+        for relative in [
+            "sdxl-base-1.0/manifest.safetensors",
+            "sdxl-base-1.0/unet/model.safetensors",
+            "sdxl-base-1.0/text_encoder/model.safetensors",
+            "sdxl-base-1.0/vae/model.safetensors",
+        ] {
+            let path = paths.models_dir().join(relative);
+            tokio::fs::create_dir_all(path.parent().unwrap())
+                .await
+                .unwrap();
+            tokio::fs::write(&path, b"weights").await.unwrap();
+        }
+
+        let manifest = ModelManifest::new()
+            .with_root(ModelRoot::base_models())
+            .with_model(split_sdxl_descriptor());
+        let service = ModelService::new(paths.clone());
+        service
+            .save_manifest(&manifest)
+            .await
+            .expect("save manifest");
+
+        let adapter = ModelResolverAdapter::new(std::sync::Arc::new(service), paths.clone());
+
         let err = adapter
             .resolve(&model_ref_for(ModelRole::CheckpointBundle))
             .await
-            .expect_err("checkpoint bundle role has no component in the split descriptor");
+            .expect_err("missing split component should block model resolution");
 
         match err {
             InferenceError::ModelResolutionFailed { message } => {
                 assert!(
-                    message.contains("CheckpointBundle"),
-                    "error message should name the requested role, got: {message}"
+                    message.contains("MODEL_MANAGER/COMPONENT_SOURCE_MISSING"),
+                    "error should preserve component diagnostic code, got: {message}"
                 );
                 assert!(
-                    message.contains("DiffusionModel")
-                        && message.contains("TextEncoder")
-                        && message.contains("Vae"),
-                    "error message should list available component roles, got: {message}"
+                    message.contains("TextEncoder:clip_g"),
+                    "error should identify the missing component, got: {message}"
                 );
             }
             other => panic!("expected ModelResolutionFailed, got {other:?}"),
