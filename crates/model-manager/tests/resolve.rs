@@ -637,6 +637,95 @@ async fn resolver_emits_component_format_unsupported_for_unknown_component_forma
     cleanup(base).await;
 }
 
+#[tokio::test]
+async fn resolver_emits_source_path_invalid_for_malformed_absolute_component_path() {
+    let base = test_base("split-resolver-source-path-invalid");
+    tokio::fs::create_dir_all(base.join("models"))
+        .await
+        .unwrap();
+
+    let descriptor = ModelDescriptor::new(
+        ModelId::new("sdxl-base-1.0"),
+        ModelSeries::new("stable_diffusion"),
+        ModelVariant::new("sdxl"),
+        vec![ModelRole::DiffusionModel, ModelRole::TextEncoder],
+        ModelSource::relative(
+            ModelRootId::new("base"),
+            "sdxl-base-1.0/manifest.safetensors",
+        ),
+        ModelFormat::Safetensors,
+    )
+    .with_source_status(ModelSourceStatus::Available)
+    .with_size_bytes(7)
+    .with_observed_size_bytes(7)
+    .with_fingerprint(Fingerprint::sha256("abc123"))
+    .with_component(
+        ModelComponentSource::new(
+            ModelRole::DiffusionModel,
+            ModelSource::absolute("relative/path".to_owned()),
+            ModelFormat::Safetensors,
+        )
+        .with_metadata("component", "unet"),
+    )
+    .with_component(
+        ModelComponentSource::new(
+            ModelRole::TextEncoder,
+            ModelSource::absolute(String::new()),
+            ModelFormat::Safetensors,
+        )
+        .with_metadata("component", "clip_l"),
+    );
+
+    let manifest = ModelManifest::new()
+        .with_root(ModelRoot::base_models())
+        .with_model(descriptor);
+
+    write_weights(&base, "sdxl-base-1.0/manifest.safetensors", b"weights").await;
+
+    let resolver = ManifestModelResolver::new(&manifest, base.join("models"));
+    let model_ref = ModelRef::new(
+        ModelId::new("sdxl-base-1.0"),
+        ModelSeries::new("stable_diffusion"),
+        ModelVariant::new("sdxl"),
+        ModelRole::DiffusionModel,
+    );
+
+    let view = resolver
+        .resolve_descriptor_with_components(&model_ref)
+        .await;
+
+    let source_path_invalid: Vec<_> = view
+        .report()
+        .diagnostics()
+        .iter()
+        .filter(|d| d.code().as_str() == "MODEL_MANAGER/SOURCE_PATH_INVALID")
+        .collect();
+    assert_eq!(
+        source_path_invalid.len(),
+        2,
+        "expected two SOURCE_PATH_INVALID diagnostics, got {} (codes: {:?})",
+        source_path_invalid.len(),
+        view.report()
+            .diagnostics()
+            .iter()
+            .map(|d| d.code().as_str())
+            .collect::<Vec<_>>()
+    );
+
+    let mut paths: Vec<&str> = source_path_invalid
+        .iter()
+        .map(|d| d.primary().path().expect("diagnostic target has path"))
+        .collect();
+    paths.sort();
+    assert_eq!(paths, vec!["", "relative/path"]);
+
+    for d in &source_path_invalid {
+        assert_eq!(d.primary().id(), Some("sdxl-base-1.0"));
+    }
+
+    cleanup(base).await;
+}
+
 fn sample_model_ref(id: &str) -> ModelRef {
     ModelRef::new(
         ModelId::new(id),
