@@ -7,13 +7,15 @@
 //! the real CLIP / UNet / VAE kernels.
 
 mod bundle;
+pub(crate) mod checkpoint_inventory;
+pub(crate) mod checkpoint_projection;
 pub mod diffusion;
 pub(crate) mod diffusion_graph;
 pub(crate) mod diffusion_sources;
-pub(crate) mod diffusion_weights;
 pub mod text;
 pub(crate) mod text_sources;
 pub mod tokenizer;
 pub mod vae;
+pub(crate) mod vae_sources;
 
 pub use bundle::LoadedSdxlBundle;

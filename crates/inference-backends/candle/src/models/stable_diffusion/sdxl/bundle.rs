@@ -14,6 +14,7 @@ use super::diffusion_sources::{
 };
 use super::text::{SdxlTextEncoderGraph, TextEncoderError};
 use super::tokenizer::SdxlTokenizer;
+use super::vae_sources::{SdxlVaeSourceError, SdxlVaeSources, resolve_vae_sources};
 use crate::error::CandleBackendError;
 
 /// Source validation and bundle construction errors.
@@ -46,6 +47,9 @@ pub enum BundleLoadError {
         reason: String,
     },
     DiffusionSourceLoadFailed {
+        reason: String,
+    },
+    VaeSourceLoadFailed {
         reason: String,
     },
 }
@@ -84,6 +88,9 @@ impl std::fmt::Display for BundleLoadError {
             Self::DiffusionSourceLoadFailed { reason } => {
                 write!(f, "SDXL diffusion source load failed: {reason}")
             }
+            Self::VaeSourceLoadFailed { reason } => {
+                write!(f, "SDXL VAE source load failed: {reason}")
+            }
         }
     }
 }
@@ -110,6 +117,7 @@ pub struct LoadedSdxlBundle {
     pub source_format: ModelFormat,
     pub device: Arc<Device>,
     pub(crate) diffusion_sources: SdxlDiffusionSources,
+    pub(crate) vae_sources: SdxlVaeSources,
     pub(crate) diffusion_graph: Mutex<Option<Arc<dyn SdxlDiffusionGraph>>>,
     pub tokenizer: SdxlTokenizer,
     pub text_encoder: SdxlTextEncoderGraph,
@@ -159,6 +167,10 @@ impl LoadedSdxlBundle {
                 reason: e.to_string(),
             }
         })?;
+        let vae_sources =
+            resolve_vae_sources(&source_set).map_err(|e| BundleLoadError::VaeSourceLoadFailed {
+                reason: e.to_string(),
+            })?;
         let model_payload_key =
             BackendPayloadKey::new(format!("bundle:{}:model", model_id.as_str()));
         let clip_payload_key = BackendPayloadKey::new(format!("bundle:{}:clip", model_id.as_str()));
@@ -179,6 +191,7 @@ impl LoadedSdxlBundle {
             source_format: format,
             device,
             diffusion_sources,
+            vae_sources,
             diffusion_graph: Mutex::new(None),
             tokenizer,
             text_encoder,
@@ -211,6 +224,10 @@ impl LoadedSdxlBundle {
                 reason: e.to_string(),
             }
         })?;
+        let vae_sources =
+            resolve_vae_sources(&source_set).map_err(|e| BundleLoadError::VaeSourceLoadFailed {
+                reason: e.to_string(),
+            })?;
         let model_payload_key =
             BackendPayloadKey::new(format!("bundle:{}:model", model_id.as_str()));
         let clip_payload_key = BackendPayloadKey::new(format!("bundle:{}:clip", model_id.as_str()));
@@ -231,6 +248,7 @@ impl LoadedSdxlBundle {
             source_format: format,
             device,
             diffusion_sources,
+            vae_sources,
             diffusion_graph: Mutex::new(None),
             tokenizer,
             text_encoder,
@@ -256,6 +274,10 @@ impl LoadedSdxlBundle {
         Ok(graph)
     }
 
+    pub(crate) fn vae_sources(&self) -> &SdxlVaeSources {
+        &self.vae_sources
+    }
+
     #[cfg(test)]
     pub(crate) fn install_test_diffusion_graph(&self, graph: Arc<dyn SdxlDiffusionGraph>) {
         let mut guard = self.diffusion_graph.lock().unwrap();
@@ -274,6 +296,14 @@ impl From<TextEncoderError> for BundleLoadError {
 impl From<SdxlDiffusionSourceError> for BundleLoadError {
     fn from(err: SdxlDiffusionSourceError) -> Self {
         Self::DiffusionSourceLoadFailed {
+            reason: err.to_string(),
+        }
+    }
+}
+
+impl From<SdxlVaeSourceError> for BundleLoadError {
+    fn from(err: SdxlVaeSourceError) -> Self {
+        Self::VaeSourceLoadFailed {
             reason: err.to_string(),
         }
     }
@@ -732,6 +762,76 @@ mod tests {
                 assert!(reason.contains("missing clip_g"), "reason: {reason}");
             }
             other => panic!("expected TextEncoderLoadFailed, got {other:?}"),
+        }
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn from_resolved_accepts_split_vae_component_metadata() {
+        let dir = unique_temp_dir();
+        fs::create_dir_all(&dir).unwrap();
+        let checkpoint_path = write_placeholder(&dir, "sdxl.safetensors");
+        let vae_path = write_placeholder(&dir, "vae.safetensors");
+        let source_set = ResolvedInferenceModelSourceSet::new(ResolvedInferenceModelSource::new(
+            ModelSourceKind::CheckpointBundle,
+            ModelRole::CheckpointBundle,
+            checkpoint_path,
+            ModelFormat::SafeTensors,
+        ))
+        .with_source(
+            ResolvedInferenceModelSource::new(
+                ModelSourceKind::SplitComponent,
+                ModelRole::Vae,
+                vae_path,
+                ModelFormat::SafeTensors,
+            )
+            .with_metadata("component=vae"),
+        );
+
+        let bundle = LoadedSdxlBundle::from_resolved_with_test_text_projection(
+            ModelId::new("sdxl-split-vae"),
+            source_set,
+            ModelFormat::SafeTensors,
+            Arc::new(Device::Cpu),
+        )
+        .expect("split VAE component metadata should resolve");
+
+        assert!(matches!(bundle.vae_sources, SdxlVaeSources::Split { .. }));
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn from_resolved_reports_missing_split_vae_metadata() {
+        let dir = unique_temp_dir();
+        fs::create_dir_all(&dir).unwrap();
+        let checkpoint_path = write_placeholder(&dir, "sdxl.safetensors");
+        let vae_path = write_placeholder(&dir, "vae.safetensors");
+        let source_set = ResolvedInferenceModelSourceSet::new(ResolvedInferenceModelSource::new(
+            ModelSourceKind::CheckpointBundle,
+            ModelRole::CheckpointBundle,
+            checkpoint_path,
+            ModelFormat::SafeTensors,
+        ))
+        .with_source(ResolvedInferenceModelSource::new(
+            ModelSourceKind::SplitComponent,
+            ModelRole::Vae,
+            vae_path,
+            ModelFormat::SafeTensors,
+        ));
+
+        let err = LoadedSdxlBundle::from_resolved_with_test_text_projection(
+            ModelId::new("sdxl-missing-vae-metadata"),
+            source_set,
+            ModelFormat::SafeTensors,
+            Arc::new(Device::Cpu),
+        )
+        .unwrap_err();
+
+        match err {
+            BundleLoadError::VaeSourceLoadFailed { reason } => {
+                assert!(reason.contains("component=vae"), "reason: {reason}");
+            }
+            other => panic!("expected VaeSourceLoadFailed, got {other:?}"),
         }
         let _ = fs::remove_dir_all(&dir);
     }

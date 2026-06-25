@@ -80,6 +80,28 @@ fn write_sdxl_placeholder(root: &std::path::Path) -> PathBuf {
     path
 }
 
+fn write_header_only_safetensors(
+    root: &std::path::Path,
+    filename: &str,
+    names: &[&str],
+) -> PathBuf {
+    std::fs::create_dir_all(root).unwrap();
+    let entries = names
+        .iter()
+        .map(|name| {
+            format!("\"{name}\":{{\"dtype\":\"F32\",\"shape\":[1],\"data_offsets\":[0,4]}}")
+        })
+        .collect::<Vec<_>>()
+        .join(",");
+    let header = format!("{{{entries}}}");
+    let path = root.join(filename);
+    let mut bytes = Vec::new();
+    bytes.extend_from_slice(&(header.len() as u64).to_le_bytes());
+    bytes.extend_from_slice(header.as_bytes());
+    std::fs::write(&path, bytes).unwrap();
+    path
+}
+
 fn sdxl_model() -> (ResolvedInferenceModel, PathBuf) {
     let root = unique_sdxl_root();
     let path = write_sdxl_placeholder(&root);
@@ -282,16 +304,6 @@ fn fake_runtime_latent_with_instance(
         height,
         1,
         4,
-    )
-}
-
-fn fake_runtime_image(key: &str, width: u32, height: u32) -> RuntimeImage {
-    RuntimeImage::new(
-        fake_tensor_handle(key, vec![1, 3, height as usize, width as usize]),
-        width,
-        height,
-        1,
-        "rgb",
     )
 }
 
@@ -1205,6 +1217,71 @@ async fn diffusion_sample_rejects_unmaterialized_real_diffusion_graph_instead_of
         .unwrap_err();
 
     assert_backend_execution_failed_with(&err, "invalid SDXL diffusion safetensors header");
+}
+
+#[tokio::test]
+async fn diffusion_sample_rejects_diffusers_unet_until_added_conditioning_forward_exists() {
+    let backend = backend();
+    let root = unique_sdxl_root();
+    let path = write_header_only_safetensors(
+        &root,
+        "sdxl-unet.safetensors",
+        &["down_blocks.0.resnets.0.conv1.weight", "conv_in.weight"],
+    );
+    let model = sdxl_model_from_path(path);
+    let _ = backend
+        .load_bundle(base_load_bundle_request(model, "node-test"))
+        .await
+        .unwrap();
+    let bundle = backend
+        .model_cache()
+        .get_bundle(&ModelId::new("sdxl-base-1.0"))
+        .expect("cached bundle");
+    let (model_payload_key, clip_payload_key) = match bundle.as_ref() {
+        LoadedModelBundle::StableDiffusionSdxl(sdxl) => (
+            sdxl.model_payload_key.clone(),
+            sdxl.clip_payload_key.clone(),
+        ),
+    };
+
+    let positive = backend
+        .text_encode(base_text_encode_request(
+            fake_runtime_clip_handle(clip_payload_key.as_str()),
+            "cinematic lake at sunrise".to_string(),
+            "node-positive-encode",
+        ))
+        .await
+        .unwrap()
+        .into_conditioning();
+    let negative = backend
+        .text_encode(base_text_encode_request(
+            fake_runtime_clip_handle(clip_payload_key.as_str()),
+            "low quality, blurry".to_string(),
+            "node-negative-encode",
+        ))
+        .await
+        .unwrap()
+        .into_conditioning();
+    let latent = backend
+        .create_empty_latent(base_create_empty_latent_request(64, 64, 1, "node-latent"))
+        .await
+        .unwrap()
+        .into_latent();
+
+    let err = backend
+        .diffusion_sample(base_diffusion_sample_request(
+            fake_runtime_model_handle(model_payload_key.as_str()),
+            positive,
+            negative,
+            latent,
+            "node-sample",
+        ))
+        .await
+        .unwrap_err();
+
+    assert_backend_execution_failed_with(&err, "SDXL added conditioning");
+    assert_backend_execution_failed_with(&err, "pooled text embeddings");
+    assert_backend_execution_failed_with(&err, "time ids");
 }
 
 #[tokio::test]

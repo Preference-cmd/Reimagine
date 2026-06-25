@@ -323,7 +323,8 @@ impl LoadedModelBundle {
         device: &Device,
     ) -> Result<LatentDecodeResult, CandleBackendError> {
         match self {
-            LoadedModelBundle::StableDiffusionSdxl(_) => {
+            LoadedModelBundle::StableDiffusionSdxl(bundle) => {
+                let _source_fingerprint = bundle.vae_sources().fingerprint();
                 let decoder = SdxlVaeDecoder::new();
                 let image = decoder.decode(&input.latent, device)?;
                 Ok(LatentDecodeResult { image })
