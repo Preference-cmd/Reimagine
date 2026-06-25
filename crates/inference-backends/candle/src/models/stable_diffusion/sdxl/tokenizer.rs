@@ -89,7 +89,7 @@ impl SdxlTokenizerResources {
         // 1. Explicit source-set entry with TextEncoder role.
         for source in source_set.sources() {
             if source.role() == ModelRole::TextEncoder {
-                if let Some(meta) = source.metadata().and_then(tokenizer_metadata_path) {
+                if let Some(meta) = source.metadata().and_then(primary_tokenizer_metadata_path) {
                     // Explicit entry exists — must resolve or error.
                     let p = Path::new(meta);
                     if p.is_file() {
@@ -132,7 +132,11 @@ impl SdxlTokenizerResources {
         //    metadata convention: "tokenizer_2" key).
         for source in source_set.sources() {
             if source.role() == ModelRole::TextEncoder {
-                if let Some(meta) = source.metadata().and_then(tokenizer_metadata_path) {
+                if let Some(meta) = source
+                    .metadata()
+                    .and_then(secondary_tokenizer_metadata_path)
+                    .or_else(|| source.metadata().and_then(primary_tokenizer_metadata_path))
+                {
                     // Explicit entry exists — must resolve or error.
                     let meta_path = Path::new(meta);
                     let candidate = if meta_path.is_dir() {
@@ -174,6 +178,7 @@ impl SdxlTokenizerResources {
     }
 
     /// Returns the path to the bundled tokenizer_2 asset.
+    #[cfg(test)]
     pub fn bundled_tokenizer_2_path() -> PathBuf {
         Self::bundled_tokenizer_dir().join("tokenizer_2/tokenizer.json")
     }
@@ -364,6 +369,21 @@ fn encode_one(
 
     let mut ids: Vec<u32> = encoding.get_ids().to_vec();
     let mask_raw: Vec<u32> = encoding.get_attention_mask().to_vec();
+    if ids.first().copied() != Some(TOKEN_BOS) {
+        return Err(TokenizerError::TokenizationFailed {
+            reason: format!("encoded SDXL prompt did not start with BOS token {TOKEN_BOS}"),
+        });
+    }
+    let attended_len = mask_raw.iter().take_while(|&&v| v != 0).count();
+    if !ids
+        .iter()
+        .take(attended_len)
+        .any(|&token_id| token_id == TOKEN_EOS)
+    {
+        return Err(TokenizerError::TokenizationFailed {
+            reason: format!("encoded SDXL prompt did not contain EOS token {TOKEN_EOS}"),
+        });
+    }
 
     // Safety net: ensure buffers are exactly MAX_SEQUENCE_LENGTH.
     ids.resize(MAX_SEQUENCE_LENGTH, TOKEN_PAD);
@@ -380,22 +400,30 @@ fn encode_one(
     })
 }
 
-fn tokenizer_metadata_path(metadata: &str) -> Option<&str> {
+fn primary_tokenizer_metadata_path(metadata: &str) -> Option<&str> {
+    tokenizer_metadata_path(metadata, &["tokenizer", "tokenizer_path", "tokenizer_dir"])
+}
+
+fn secondary_tokenizer_metadata_path(metadata: &str) -> Option<&str> {
+    tokenizer_metadata_path(
+        metadata,
+        &["tokenizer_2", "tokenizer_2_path", "tokenizer_2_dir"],
+    )
+}
+
+fn tokenizer_metadata_path<'a>(metadata: &'a str, accepted_keys: &[&str]) -> Option<&'a str> {
     let trimmed = metadata.trim();
     if trimmed.is_empty() {
         return None;
     }
     if !trimmed.contains('=') {
-        return Some(trimmed);
+        return accepted_keys.contains(&"tokenizer").then_some(trimmed);
     }
     trimmed
         .split(';')
         .flat_map(|part| part.split(','))
         .filter_map(|part| part.trim().split_once('='))
-        .find_map(|(key, value)| match key.trim() {
-            "tokenizer" | "tokenizer_path" | "tokenizer_dir" => Some(value.trim()),
-            _ => None,
-        })
+        .find_map(|(key, value)| accepted_keys.contains(&key.trim()).then_some(value.trim()))
 }
 
 // ---------------------------------------------------------------------------
@@ -648,5 +676,44 @@ mod tests {
             "unexpected bundled path: {}",
             p.display()
         );
+    }
+
+    #[test]
+    fn explicit_metadata_resolves_primary_and_secondary_tokenizer_paths_separately() {
+        let dir = unique_temp_dir();
+        let checkpoint = dir.join("model.safetensors");
+        fs::create_dir_all(&dir).unwrap();
+        fs::write(&checkpoint, b"placeholder").unwrap();
+        let (tokenizer_path, tokenizer_2_path) = copy_bundled_tokenizer_fixture(&dir);
+        let source_set = ResolvedInferenceModelSourceSet::new(
+            reimagine_inference::ResolvedInferenceModelSource::new(
+                reimagine_inference::ModelSourceKind::CheckpointBundle,
+                ModelRole::CheckpointBundle,
+                checkpoint.clone(),
+                reimagine_inference::ModelFormat::SafeTensors,
+            ),
+        )
+        .with_source(
+            reimagine_inference::ResolvedInferenceModelSource::new(
+                reimagine_inference::ModelSourceKind::SplitComponent,
+                ModelRole::TextEncoder,
+                dir.join("clip.safetensors"),
+                reimagine_inference::ModelFormat::SafeTensors,
+            )
+            .with_metadata(format!(
+                "tokenizer_path={};tokenizer_2_path={}",
+                tokenizer_path.display(),
+                tokenizer_2_path.display()
+            )),
+        );
+
+        let primary =
+            SdxlTokenizerResources::resolve_tokenizer_path(&source_set, &checkpoint).unwrap();
+        let secondary =
+            SdxlTokenizerResources::resolve_tokenizer_2_path(&source_set, &checkpoint).unwrap();
+
+        assert_eq!(primary, tokenizer_path);
+        assert_eq!(secondary, tokenizer_2_path);
+        let _ = fs::remove_dir_all(&dir);
     }
 }
