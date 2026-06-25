@@ -344,4 +344,35 @@ mod tests {
             }
         );
     }
+
+    #[test]
+    fn parses_multi_key_metadata_produced_by_app_host_projection() {
+        // Pins the contract between the app-host metadata serializer
+        // (which joins sorted `key=value` pairs with `;`) and the
+        // Candle text-encoder parser (which splits on `;` then `=`).
+        // A multi-key BTreeMap must still resolve to the expected
+        // split text-encoder components even when the trailing
+        // `component=clip_*` pair is preceded by arbitrary metadata
+        // keys.
+        let source_set =
+            ResolvedInferenceModelSourceSet::new(checkpoint("/models/sdxl.safetensors"))
+                .with_source(text_encoder(
+                    "/models/text_encoder/model.safetensors",
+                    "component=clip_l;extra=value",
+                ))
+                .with_source(text_encoder(
+                    "/models/text_encoder_2/model.safetensors",
+                    "component=clip_g;role=second",
+                ));
+
+        let resolved = resolve_text_encoder_sources(&source_set).unwrap();
+
+        assert_eq!(
+            resolved,
+            SdxlTextEncoderSources::Split {
+                clip_l: PathBuf::from("/models/text_encoder/model.safetensors"),
+                clip_g: PathBuf::from("/models/text_encoder_2/model.safetensors"),
+            }
+        );
+    }
 }

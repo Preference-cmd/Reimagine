@@ -299,4 +299,29 @@ mod tests {
             SdxlDiffusionSourceError::AmbiguousDuplicate { component: "unet" }
         );
     }
+
+    #[test]
+    fn parses_multi_key_metadata_produced_by_app_host_projection() {
+        // Pins the contract between the app-host metadata serializer
+        // (which joins sorted `key=value` pairs with `;`) and the
+        // Candle parser (which splits on `;` then `=`). A multi-key
+        // BTreeMap must still resolve to the expected component even
+        // when the trailing `component=unet` pair is preceded by
+        // arbitrary metadata keys.
+        let source_set =
+            ResolvedInferenceModelSourceSet::new(checkpoint("/models/sdxl.safetensors"))
+                .with_source(diffusion(
+                    "/models/unet/model.safetensors",
+                    Some("component=unet;extra=value"),
+                ));
+
+        let resolved = resolve_diffusion_sources(&source_set).unwrap();
+
+        assert_eq!(
+            resolved,
+            SdxlDiffusionSources::Split {
+                path: PathBuf::from("/models/unet/model.safetensors"),
+            }
+        );
+    }
 }

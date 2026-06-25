@@ -4,7 +4,8 @@ use reimagine_config::AppPaths;
 use reimagine_core::model::{ModelId, ModelRef};
 use reimagine_model_manager::{
     ManifestModelResolver, ManifestValidationReport, ModelDescriptor, ModelDescriptorResolver,
-    ModelManifest, ModelManifestStore, ModelReadinessResolver, ModelResolution, ResolvedModelInfo,
+    ModelManifest, ModelManifestStore, ModelReadinessResolver, ModelResolution,
+    ResolvedDescriptorView, ResolvedModelInfo,
 };
 
 use crate::AppHostResult;
@@ -84,6 +85,15 @@ impl ModelService {
         let (manifest, _) = self.load_manifest().await?;
         let resolver = ManifestModelResolver::new(&manifest, self.app_paths.models_dir());
         Ok(resolver.resolve_descriptor(model_ref).await)
+    }
+
+    pub async fn resolve_descriptor_with_components(
+        &self,
+        model_ref: &ModelRef,
+    ) -> AppHostResult<ModelResolution<ResolvedDescriptorView>> {
+        let (manifest, _) = self.load_manifest().await?;
+        let resolver = ManifestModelResolver::new(&manifest, self.app_paths.models_dir());
+        Ok(resolver.resolve_descriptor_with_components(model_ref).await)
     }
 
     pub async fn build_readiness_snapshot(

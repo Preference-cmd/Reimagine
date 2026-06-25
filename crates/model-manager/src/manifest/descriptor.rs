@@ -3,7 +3,7 @@ use std::collections::BTreeMap;
 use reimagine_core::model::{ModelId, ModelRole, ModelSeries, ModelVariant};
 use serde::{Deserialize, Serialize};
 
-use super::{Fingerprint, ModelFormat, ModelSource, ModelSourceStatus};
+use super::{Fingerprint, ModelComponentSource, ModelFormat, ModelSource, ModelSourceStatus};
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ModelDescriptor {
@@ -30,6 +30,8 @@ pub struct ModelDescriptor {
     updated_at: Option<String>,
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
     metadata: BTreeMap<String, String>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    components: Vec<ModelComponentSource>,
 }
 
 impl ModelDescriptor {
@@ -57,6 +59,7 @@ impl ModelDescriptor {
             discovered_at: None,
             updated_at: None,
             metadata: BTreeMap::new(),
+            components: Vec::new(),
         }
     }
 
@@ -100,8 +103,22 @@ impl ModelDescriptor {
         self
     }
 
+    /// Attach a single descriptor-level metadata `key=value` entry.
+    ///
+    /// Subsequent calls with the same `key` overwrite the previous
+    /// value (the underlying map is a [`BTreeMap`]). The serialised
+    /// output renders entries in sorted key order.
     pub fn with_metadata(mut self, key: impl Into<String>, value: impl Into<String>) -> Self {
         self.metadata.insert(key.into(), value.into());
+        self
+    }
+
+    /// Attach a role-keyed component source entry. A descriptor with at
+    /// least one component declares a split/converted model; the
+    /// app-host projection will surface the components to the
+    /// inference DTOs as `SplitComponent` sources.
+    pub fn with_component(mut self, component: ModelComponentSource) -> Self {
+        self.components.push(component);
         self
     }
 
@@ -193,5 +210,14 @@ impl ModelDescriptor {
                 self.source_status,
                 ModelSourceStatus::Available | ModelSourceStatus::Unverified
             )
+    }
+
+    /// Role-keyed component sources for a split/converted model.
+    ///
+    /// An empty slice means the descriptor is a single-source
+    /// checkpoint-bundle model. A non-empty slice means the descriptor
+    /// projects to one `ResolvedInferenceModelSource` per component.
+    pub fn components(&self) -> &[ModelComponentSource] {
+        &self.components
     }
 }

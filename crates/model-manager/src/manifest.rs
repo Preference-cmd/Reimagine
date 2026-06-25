@@ -1,5 +1,6 @@
 //! Serializable model manifest schema.
 
+mod component;
 mod descriptor;
 mod fingerprint;
 mod format;
@@ -11,6 +12,7 @@ mod validation;
 
 use serde::{Deserialize, Serialize};
 
+pub use component::ModelComponentSource;
 pub use descriptor::ModelDescriptor;
 pub use fingerprint::Fingerprint;
 pub use format::ModelFormat;

@@ -1,3 +1,4 @@
+use std::collections::{BTreeMap, HashSet};
 use std::path::PathBuf;
 use std::time::UNIX_EPOCH;
 
@@ -11,7 +12,10 @@ use reimagine_core::model::{
 };
 
 use crate::manifest::resolve_source_path;
-use crate::{ModelDescriptor, ModelFormat, ModelManifest, ModelSourceStatus};
+use crate::{
+    ModelComponentSource, ModelDescriptor, ModelFormat, ModelManifest, ModelSource,
+    ModelSourceStatus,
+};
 
 use super::readiness::ModelReadinessResolver;
 
@@ -111,6 +115,67 @@ pub trait ModelDescriptorResolver {
     async fn resolve_descriptor(&self, model_ref: &ModelRef) -> ModelResolution<ModelDescriptor>;
 }
 
+/// One role-keyed component resolved to an absolute path with per-component metadata.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ResolvedComponent {
+    role: ModelRole,
+    format: ModelFormat,
+    metadata: BTreeMap<String, String>,
+    path: PathBuf,
+    exists: bool,
+}
+
+impl ResolvedComponent {
+    fn from_component(component: &ModelComponentSource, path: PathBuf, exists: bool) -> Self {
+        Self {
+            role: component.role(),
+            format: component.format(),
+            metadata: component.metadata().clone(),
+            path,
+            exists,
+        }
+    }
+
+    pub fn role(&self) -> ModelRole {
+        self.role
+    }
+
+    pub fn format(&self) -> ModelFormat {
+        self.format
+    }
+
+    pub fn metadata(&self) -> &BTreeMap<String, String> {
+        &self.metadata
+    }
+
+    pub fn path(&self) -> &std::path::Path {
+        &self.path
+    }
+
+    pub fn is_missing(&self) -> bool {
+        !self.exists
+    }
+}
+
+/// A resolved descriptor view that exposes the role-keyed components
+/// alongside the descriptor itself. Returned from
+/// [`ManifestModelResolver::resolve_descriptor_with_components`].
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ResolvedDescriptorView {
+    descriptor: ModelDescriptor,
+    components: Vec<ResolvedComponent>,
+}
+
+impl ResolvedDescriptorView {
+    pub fn descriptor(&self) -> &ModelDescriptor {
+        &self.descriptor
+    }
+
+    pub fn components(&self) -> &[ResolvedComponent] {
+        &self.components
+    }
+}
+
 pub struct ManifestModelResolver<'a> {
     manifest: &'a ModelManifest,
     models_dir: PathBuf,
@@ -122,6 +187,136 @@ impl<'a> ManifestModelResolver<'a> {
             manifest,
             models_dir: models_dir.into(),
         }
+    }
+
+    /// Resolve a [`ModelRef`] together with the role-keyed component
+    /// sources declared on the matching descriptor.
+    ///
+    /// Behaves like [`ModelDescriptorResolver::resolve_descriptor`] for
+    /// the primary descriptor identity (series/variant/role/primary
+    /// source availability) and additionally resolves every
+    /// [`crate::ModelComponentSource`] entry to an absolute path,
+    /// reporting per-component diagnostics (missing files, duplicate
+    /// role+component pairs) on the returned
+    /// [`ModelResolution::report`].
+    pub async fn resolve_descriptor_with_components(
+        &self,
+        model_ref: &ModelRef,
+    ) -> ModelResolution<ResolvedDescriptorView> {
+        let base = self.resolve_internal(model_ref).await;
+        let report = base.report().clone();
+        match base.into_value() {
+            Some(descriptor) => {
+                let (components, component_report) = self.resolve_components(&descriptor).await;
+                let mut merged = report;
+                merged.extend(component_report);
+                ModelResolution::resolved(
+                    ResolvedDescriptorView {
+                        descriptor,
+                        components,
+                    },
+                    merged,
+                )
+            }
+            None => ModelResolution::blocked(report),
+        }
+    }
+
+    async fn resolve_components(
+        &self,
+        descriptor: &ModelDescriptor,
+    ) -> (Vec<ResolvedComponent>, OperationReport) {
+        if descriptor.components().is_empty() {
+            return (Vec::new(), OperationReport::new());
+        }
+
+        let mut report = OperationReport::new();
+        let mut components = Vec::with_capacity(descriptor.components().len());
+        let mut seen_keys: HashSet<(ModelRole, String)> = HashSet::new();
+
+        for component in descriptor.components() {
+            let model_id = descriptor.id().as_str();
+            let component_label = component.label();
+
+            if !component.format().is_supported() {
+                report.push_diagnostic(model_diagnostic(
+                    "component_format_unsupported",
+                    model_id,
+                    Some(component.source().path().to_owned()),
+                    "MODEL_MANAGER/COMPONENT_FORMAT_UNSUPPORTED",
+                    "component source format is unsupported",
+                    DiagnosticSeverity::Error,
+                ));
+            }
+
+            if let ModelSource::LocalFileAbsolute { path } = component.source()
+                && (path.trim().is_empty() || !std::path::Path::new(path).is_absolute())
+            {
+                report.push_diagnostic(model_diagnostic(
+                    "component_source_invalid",
+                    model_id,
+                    Some(path.clone()),
+                    "MODEL_MANAGER/SOURCE_PATH_INVALID",
+                    "component absolute source path is invalid",
+                    DiagnosticSeverity::Error,
+                ));
+                continue;
+            }
+
+            let resolved_path =
+                resolve_source_path(self.manifest, component.source(), &self.models_dir);
+            let (path, path_known) = match resolved_path.as_ref() {
+                Some(path) => (path.clone(), true),
+                None => {
+                    report.push_diagnostic(model_diagnostic(
+                        "component_source_invalid",
+                        model_id,
+                        Some(component.source().path().to_owned()),
+                        "MODEL_MANAGER/SOURCE_PATH_INVALID",
+                        "component source path is invalid",
+                        DiagnosticSeverity::Error,
+                    ));
+                    (PathBuf::from(component.source().path()), false)
+                }
+            };
+
+            let exists = if path_known {
+                tokio::fs::try_exists(&path).await.unwrap_or(false)
+            } else {
+                false
+            };
+
+            if !exists {
+                report.push_diagnostic(model_diagnostic(
+                    "component_source_missing",
+                    model_id,
+                    Some(path.display().to_string()),
+                    "MODEL_MANAGER/COMPONENT_SOURCE_MISSING",
+                    &format!(
+                        "model component `{}` source file is missing",
+                        component_label
+                    ),
+                    DiagnosticSeverity::Error,
+                ));
+            }
+
+            if !seen_keys.insert((component.role(), component_label.clone())) {
+                report.push_diagnostic(model_diagnostic(
+                    "component_duplicate",
+                    model_id,
+                    Some(path.display().to_string()),
+                    "MODEL_MANAGER/COMPONENT_DUPLICATE",
+                    &format!(
+                        "duplicate model component entry for role+component pair `{component_label}`"
+                    ),
+                    DiagnosticSeverity::Error,
+                ));
+            }
+
+            components.push(ResolvedComponent::from_component(component, path, exists));
+        }
+
+        (components, report)
     }
 
     async fn resolve_internal(&self, model_ref: &ModelRef) -> ModelResolution<ModelDescriptor> {
@@ -290,6 +485,12 @@ fn modified_at_string(metadata: &std::fs::Metadata) -> Option<String> {
     Some(duration.as_secs().to_string())
 }
 
+// TODO: consolidate duplicated `model_diagnostic` helpers
+// (`manifest::validation::model_diagnostic` and
+// `resolve::descriptor::model_diagnostic` both build a model-manager
+// diagnostic with similar field shapes; the resolver variant takes
+// a severity, the validator variant hard-codes `Error`). Move to a
+// single shared helper in a small private `diagnostic` module.
 fn model_diagnostic(
     suffix: &str,
     model_id: &str,
