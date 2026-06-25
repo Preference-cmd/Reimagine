@@ -18,13 +18,13 @@ pub use classify::{
 pub use error::{ModelManagerError, ModelManagerResult};
 pub use identity::{AutoIdResult, IdPolicy, IdResolution};
 pub use manifest::{
-    Fingerprint, ManifestValidationReport, ModelDescriptor, ModelFormat, ModelManifest, ModelRoot,
-    ModelRootId, ModelRootKind, ModelSource, ModelSourceStatus, resolve_source_path,
-    validate_manifest, validate_manifest_with_series_config,
+    Fingerprint, ManifestValidationReport, ModelComponentSource, ModelDescriptor, ModelFormat,
+    ModelManifest, ModelRoot, ModelRootId, ModelRootKind, ModelSource, ModelSourceStatus,
+    resolve_source_path, validate_manifest, validate_manifest_with_series_config,
 };
 pub use resolve::{
     ManifestModelResolver, ModelDescriptorResolver, ModelReadinessResolver, ModelResolution,
-    ResolvedModelInfo,
+    ResolvedComponent, ResolvedDescriptorView, ResolvedModelInfo,
 };
 pub use scan::{ManifestUpdate, ManifestUpdatePolicy, ModelScanner, ScanConfig, ScanObservation};
 pub use store::{ModelManifestStore, load_model_manifest};

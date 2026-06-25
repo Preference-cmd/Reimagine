@@ -6,14 +6,14 @@ use reimagine_core::diagnostic::{
     DiagnosticTargetDomain,
 };
 use reimagine_core::event::OperationReport;
-use reimagine_core::model::DiagnosticId;
+use reimagine_core::model::{DiagnosticId, ModelRole};
 
 use crate::classify::ModelSeriesConfig;
 
 use super::{
-    Fingerprint, MODEL_MANIFEST_SCHEMA_VERSION, ModelDescriptor, ModelManifest, ModelRoot,
-    ModelRootId, ModelRootKind, ModelSource, ModelSourceStatus, resolve_root_path,
-    resolve_source_path,
+    Fingerprint, MODEL_MANIFEST_SCHEMA_VERSION, ModelComponentSource, ModelDescriptor,
+    ModelManifest, ModelRoot, ModelRootId, ModelRootKind, ModelSource, ModelSourceStatus,
+    resolve_root_path, resolve_source_path,
 };
 
 pub type ManifestValidationReport = OperationReport;
@@ -136,6 +136,7 @@ pub async fn validate_manifest_with_series_config(
 
         validate_source_shape(&mut report, descriptor, manifest, &models_dir).await;
         validate_source_status(&mut report, descriptor, manifest, &models_dir).await;
+        validate_components(&mut report, descriptor, manifest, &models_dir).await;
         validate_size_and_fingerprint(&mut report, descriptor);
     }
 
@@ -272,6 +273,95 @@ fn validate_size_and_fingerprint(
     }
 }
 
+async fn validate_components(
+    report: &mut ManifestValidationReport,
+    descriptor: &ModelDescriptor,
+    manifest: &ModelManifest,
+    models_dir: &Path,
+) {
+    if descriptor.components().is_empty() {
+        return;
+    }
+
+    let mut seen_keys: HashSet<(ModelRole, String)> = HashSet::new();
+
+    for component in descriptor.components() {
+        let model_id = descriptor.id().as_str().to_owned();
+        let component_label = component.label();
+
+        if !component.format().is_supported() {
+            report.push_diagnostic(model_diagnostic(
+                "component_format_unsupported",
+                Some(model_id.clone()),
+                Some(component.source().path().to_owned()),
+                "MODEL_MANAGER/COMPONENT_FORMAT_UNSUPPORTED",
+                "component source format is unsupported",
+            ));
+        }
+
+        if let ModelSource::LocalFileAbsolute { path } = component.source()
+            && (path.trim().is_empty() || !Path::new(path).is_absolute())
+        {
+            report.push_diagnostic(model_diagnostic(
+                "component_source_invalid",
+                Some(model_id.clone()),
+                Some(path.clone()),
+                "MODEL_MANAGER/SOURCE_PATH_INVALID",
+                "component absolute source path is invalid",
+            ));
+            continue;
+        }
+
+        let resolved_path = match resolve_component_source_path(manifest, component, models_dir) {
+            Some(path) => path,
+            None => {
+                report.push_diagnostic(model_diagnostic(
+                    "component_source_invalid",
+                    Some(model_id.clone()),
+                    Some(component.source().path().to_owned()),
+                    "MODEL_MANAGER/SOURCE_PATH_INVALID",
+                    "component source path is invalid",
+                ));
+                continue;
+            }
+        };
+
+        let exists = tokio::fs::try_exists(&resolved_path).await.unwrap_or(false);
+        if !exists {
+            report.push_diagnostic(model_diagnostic(
+                "component_source_missing",
+                Some(model_id.clone()),
+                Some(resolved_path.display().to_string()),
+                "MODEL_MANAGER/COMPONENT_SOURCE_MISSING",
+                &format!(
+                    "model component `{}` source file is missing",
+                    component_label
+                ),
+            ));
+        }
+
+        if !seen_keys.insert((component.role(), component_label.clone())) {
+            report.push_diagnostic(model_diagnostic(
+                "component_duplicate",
+                Some(model_id.clone()),
+                Some(resolved_path.display().to_string()),
+                "MODEL_MANAGER/COMPONENT_DUPLICATE",
+                &format!(
+                    "duplicate model component entry for role+component pair `{component_label}`"
+                ),
+            ));
+        }
+    }
+}
+
+fn resolve_component_source_path(
+    manifest: &ModelManifest,
+    component: &ModelComponentSource,
+    models_dir: &Path,
+) -> Option<PathBuf> {
+    resolve_source_path(manifest, component.source(), models_dir)
+}
+
 fn find_root<'a>(manifest: &'a ModelManifest, root_id: &ModelRootId) -> Option<&'a ModelRoot> {
     manifest
         .model_roots()
@@ -349,6 +439,12 @@ fn is_valid_fingerprint(fingerprint: &Fingerprint) -> bool {
         && matches!(fingerprint.kind(), "sha256")
 }
 
+// TODO: consolidate duplicated `model_diagnostic` helpers
+// (`manifest::validation::model_diagnostic` and
+// `resolve::descriptor::model_diagnostic` both build a model-manager
+// diagnostic with similar field shapes; the resolver variant takes
+// a severity, the validator variant hard-codes `Error`). Move to a
+// single shared helper in a small private `diagnostic` module.
 fn model_diagnostic(
     suffix: &str,
     id: Option<String>,

@@ -131,3 +131,58 @@ fn to_checkpoint_bundle_source_set() {
 fn source_set_rejects_empty_source_list() {
     let _ = ResolvedInferenceModelSourceSet::from_sources(Vec::new());
 }
+
+#[test]
+fn split_component_source_set_serde_roundtrip_preserves_every_role() {
+    let unet = ResolvedInferenceModelSource::new(
+        ModelSourceKind::SplitComponent,
+        ModelRole::DiffusionModel,
+        std::path::PathBuf::from("/models/sdxl-base-1.0/unet/model.safetensors"),
+        ModelFormat::SafeTensors,
+    )
+    .with_metadata("component=unet");
+    let clip_l = ResolvedInferenceModelSource::new(
+        ModelSourceKind::SplitComponent,
+        ModelRole::TextEncoder,
+        std::path::PathBuf::from("/models/sdxl-base-1.0/text_encoder/model.safetensors"),
+        ModelFormat::SafeTensors,
+    )
+    .with_metadata("component=clip_l");
+    let clip_g = ResolvedInferenceModelSource::new(
+        ModelSourceKind::SplitComponent,
+        ModelRole::TextEncoder,
+        std::path::PathBuf::from("/models/sdxl-base-1.0/text_encoder_2/model.safetensors"),
+        ModelFormat::SafeTensors,
+    )
+    .with_metadata("component=clip_g");
+    let vae = ResolvedInferenceModelSource::new(
+        ModelSourceKind::SplitComponent,
+        ModelRole::Vae,
+        std::path::PathBuf::from("/models/sdxl-base-1.0/vae/model.safetensors"),
+        ModelFormat::SafeTensors,
+    )
+    .with_metadata("component=vae");
+
+    let set = ResolvedInferenceModelSourceSet::from_sources(vec![unet, clip_l, clip_g, vae]);
+
+    let json = serde_json::to_string(&set).unwrap();
+    let back: ResolvedInferenceModelSourceSet = serde_json::from_str(&json).unwrap();
+
+    assert_eq!(set, back);
+    assert_eq!(back.sources().len(), 4);
+
+    let roles: Vec<_> = back.sources().iter().map(|s| s.role()).collect();
+    assert!(roles.contains(&ModelRole::DiffusionModel));
+    assert!(roles.contains(&ModelRole::TextEncoder));
+    assert!(roles.contains(&ModelRole::Vae));
+
+    let component_values: Vec<_> = back
+        .sources()
+        .iter()
+        .filter_map(|s| s.metadata().map(|m| m.to_string()))
+        .collect();
+    assert!(component_values.iter().any(|m| m == "component=unet"));
+    assert!(component_values.iter().any(|m| m == "component=clip_l"));
+    assert!(component_values.iter().any(|m| m == "component=clip_g"));
+    assert!(component_values.iter().any(|m| m == "component=vae"));
+}

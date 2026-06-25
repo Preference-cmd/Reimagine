@@ -3,8 +3,9 @@ use std::path::PathBuf;
 use reimagine_core::diagnostic::DiagnosticSeverity;
 use reimagine_core::model::{ModelId, ModelRef, ModelRole, ModelSeries, ModelVariant};
 use reimagine_model_manager::{
-    Fingerprint, ManifestModelResolver, ModelDescriptor, ModelDescriptorResolver, ModelFormat,
-    ModelManifest, ModelReadinessResolver, ModelRoot, ModelRootId, ModelSource, ModelSourceStatus,
+    Fingerprint, ManifestModelResolver, ModelComponentSource, ModelDescriptor,
+    ModelDescriptorResolver, ModelFormat, ModelManifest, ModelReadinessResolver, ModelRoot,
+    ModelRootId, ModelSource, ModelSourceStatus,
 };
 
 #[tokio::test]
@@ -259,6 +260,381 @@ fn sample_descriptor(id: &str) -> ModelDescriptor {
         ),
         ModelFormat::Safetensors,
     )
+}
+
+fn split_sdxl_descriptor(id: &str) -> ModelDescriptor {
+    ModelDescriptor::new(
+        ModelId::new(id),
+        ModelSeries::new("stable_diffusion"),
+        ModelVariant::new("sdxl"),
+        vec![
+            ModelRole::CheckpointBundle,
+            ModelRole::DiffusionModel,
+            ModelRole::TextEncoder,
+            ModelRole::Vae,
+        ],
+        ModelSource::relative(
+            ModelRootId::new("base"),
+            "sdxl-base-1.0/manifest.safetensors",
+        ),
+        ModelFormat::Safetensors,
+    )
+    .with_source_status(ModelSourceStatus::Available)
+    .with_size_bytes(7)
+    .with_observed_size_bytes(7)
+    .with_fingerprint(Fingerprint::sha256("abc123"))
+    .with_component(
+        ModelComponentSource::new(
+            ModelRole::DiffusionModel,
+            ModelSource::relative(
+                ModelRootId::new("base"),
+                "sdxl-base-1.0/unet/model.safetensors",
+            ),
+            ModelFormat::Safetensors,
+        )
+        .with_metadata("component", "unet"),
+    )
+    .with_component(
+        ModelComponentSource::new(
+            ModelRole::TextEncoder,
+            ModelSource::relative(
+                ModelRootId::new("base"),
+                "sdxl-base-1.0/text_encoder/model.safetensors",
+            ),
+            ModelFormat::Safetensors,
+        )
+        .with_metadata("component", "clip_l"),
+    )
+    .with_component(
+        ModelComponentSource::new(
+            ModelRole::TextEncoder,
+            ModelSource::relative(
+                ModelRootId::new("base"),
+                "sdxl-base-1.0/text_encoder_2/model.safetensors",
+            ),
+            ModelFormat::Safetensors,
+        )
+        .with_metadata("component", "clip_g"),
+    )
+    .with_component(
+        ModelComponentSource::new(
+            ModelRole::Vae,
+            ModelSource::relative(
+                ModelRootId::new("base"),
+                "sdxl-base-1.0/vae/model.safetensors",
+            ),
+            ModelFormat::Safetensors,
+        )
+        .with_metadata("component", "vae"),
+    )
+}
+
+async fn write_split_sdxl_files(base: &std::path::Path) {
+    for relative in [
+        "sdxl-base-1.0/manifest.safetensors",
+        "sdxl-base-1.0/unet/model.safetensors",
+        "sdxl-base-1.0/text_encoder/model.safetensors",
+        "sdxl-base-1.0/text_encoder_2/model.safetensors",
+        "sdxl-base-1.0/vae/model.safetensors",
+    ] {
+        write_weights(base, relative, b"weights").await;
+    }
+}
+
+#[tokio::test]
+async fn split_descriptor_resolves_components_with_absolute_paths() {
+    let base = test_base("split-success");
+    let manifest = ModelManifest::new()
+        .with_root(ModelRoot::base_models())
+        .with_model(split_sdxl_descriptor("sdxl-base-1.0"));
+    write_split_sdxl_files(&base).await;
+    let resolver = ManifestModelResolver::new(&manifest, base.join("models"));
+    let model_ref = ModelRef::new(
+        ModelId::new("sdxl-base-1.0"),
+        ModelSeries::new("stable_diffusion"),
+        ModelVariant::new("sdxl"),
+        ModelRole::TextEncoder,
+    );
+
+    let view = resolver
+        .resolve_descriptor_with_components(&model_ref)
+        .await;
+
+    assert!(view.is_resolved());
+    assert!(view.report().diagnostics().is_empty());
+
+    let resolved = view.value().expect("resolved view");
+    let components = resolved.components();
+    assert_eq!(components.len(), 4);
+
+    let unet = components
+        .iter()
+        .find(|c| c.role() == ModelRole::DiffusionModel)
+        .expect("diffusion component");
+    assert!(!unet.is_missing());
+    assert!(
+        unet.path()
+            .ends_with("sdxl-base-1.0/unet/model.safetensors")
+    );
+    assert_eq!(
+        unet.metadata().get("component").map(String::as_str),
+        Some("unet")
+    );
+
+    let clip_l = components
+        .iter()
+        .filter(|c| c.role() == ModelRole::TextEncoder)
+        .find(|c| c.metadata().get("component").map(String::as_str) == Some("clip_l"))
+        .expect("clip_l component");
+    assert!(!clip_l.is_missing());
+
+    let vae = components
+        .iter()
+        .find(|c| c.role() == ModelRole::Vae)
+        .expect("vae component");
+    assert!(!vae.is_missing());
+
+    cleanup(base).await;
+}
+
+#[tokio::test]
+async fn split_descriptor_marks_missing_components_with_specific_codes() {
+    let base = test_base("split-missing-clip-l");
+    let manifest = ModelManifest::new()
+        .with_root(ModelRoot::base_models())
+        .with_model(split_sdxl_descriptor("sdxl-base-1.0"));
+    // Only write the unet, vae, and clip_g files. CLIP-L is missing.
+    for relative in [
+        "sdxl-base-1.0/manifest.safetensors",
+        "sdxl-base-1.0/unet/model.safetensors",
+        "sdxl-base-1.0/text_encoder_2/model.safetensors",
+        "sdxl-base-1.0/vae/model.safetensors",
+    ] {
+        write_weights(&base, relative, b"weights").await;
+    }
+    let resolver = ManifestModelResolver::new(&manifest, base.join("models"));
+    let model_ref = ModelRef::new(
+        ModelId::new("sdxl-base-1.0"),
+        ModelSeries::new("stable_diffusion"),
+        ModelVariant::new("sdxl"),
+        ModelRole::TextEncoder,
+    );
+
+    let view = resolver
+        .resolve_descriptor_with_components(&model_ref)
+        .await;
+
+    let clip_l_missing = view
+        .value()
+        .expect("view resolved")
+        .components()
+        .iter()
+        .find(|c| {
+            c.role() == ModelRole::TextEncoder
+                && c.metadata().get("component").map(String::as_str) == Some("clip_l")
+        })
+        .expect("clip_l component entry");
+    assert!(clip_l_missing.is_missing());
+    assert!(view.report().diagnostics().iter().any(|d| d.code().as_str()
+        == "MODEL_MANAGER/COMPONENT_SOURCE_MISSING"
+        && d.message().contains("clip_l")));
+
+    cleanup(base).await;
+}
+
+#[tokio::test]
+async fn split_descriptor_reports_duplicate_component_metadata() {
+    let base = test_base("split-duplicate-metadata");
+    let manifest = ModelManifest::new()
+        .with_root(ModelRoot::base_models())
+        .with_model(
+            split_sdxl_descriptor("sdxl-base-1.0").with_component(
+                ModelComponentSource::new(
+                    ModelRole::TextEncoder,
+                    ModelSource::relative(
+                        ModelRootId::new("base"),
+                        "sdxl-base-1.0/text_encoder_dup/model.safetensors",
+                    ),
+                    ModelFormat::Safetensors,
+                )
+                .with_metadata("component", "clip_l"),
+            ),
+        );
+    write_split_sdxl_files(&base).await;
+    let resolver = ManifestModelResolver::new(&manifest, base.join("models"));
+    let model_ref = ModelRef::new(
+        ModelId::new("sdxl-base-1.0"),
+        ModelSeries::new("stable_diffusion"),
+        ModelVariant::new("sdxl"),
+        ModelRole::TextEncoder,
+    );
+
+    let view = resolver
+        .resolve_descriptor_with_components(&model_ref)
+        .await;
+
+    let components = view.value().expect("resolved view").components();
+    assert_eq!(components.len(), 5);
+    let clip_l_count = components
+        .iter()
+        .filter(|c| {
+            c.role() == ModelRole::TextEncoder
+                && c.metadata().get("component").map(String::as_str) == Some("clip_l")
+        })
+        .count();
+    assert_eq!(clip_l_count, 2);
+
+    assert!(
+        view.report()
+            .diagnostics()
+            .iter()
+            .any(|d| d.code().as_str() == "MODEL_MANAGER/COMPONENT_DUPLICATE")
+    );
+
+    cleanup(base).await;
+}
+
+async fn assert_single_missing_component_reports_specific_code(
+    name: &str,
+    written: &[&str],
+    target: ModelRole,
+    expected_component_metadata: &str,
+    expected_label: &str,
+) {
+    let base = test_base(name);
+    let manifest = ModelManifest::new()
+        .with_root(ModelRoot::base_models())
+        .with_model(split_sdxl_descriptor("sdxl-base-1.0"));
+    for relative in written {
+        write_weights(&base, relative, b"weights").await;
+    }
+    let resolver = ManifestModelResolver::new(&manifest, base.join("models"));
+    let model_ref = ModelRef::new(
+        ModelId::new("sdxl-base-1.0"),
+        ModelSeries::new("stable_diffusion"),
+        ModelVariant::new("sdxl"),
+        target,
+    );
+
+    let view = resolver
+        .resolve_descriptor_with_components(&model_ref)
+        .await;
+
+    let missing = view
+        .value()
+        .expect("view resolved")
+        .components()
+        .iter()
+        .find(|c| {
+            c.role() == target
+                && c.metadata().get("component").map(String::as_str)
+                    == Some(expected_component_metadata)
+        })
+        .expect("missing component entry");
+    assert!(missing.is_missing(), "{expected_label} should be missing");
+    assert!(view.report().diagnostics().iter().any(|d| d.code().as_str()
+        == "MODEL_MANAGER/COMPONENT_SOURCE_MISSING"
+        && d.message().contains(expected_label)));
+
+    cleanup(base).await;
+}
+
+#[tokio::test]
+async fn missing_clip_g_component_is_reported_with_specific_code() {
+    assert_single_missing_component_reports_specific_code(
+        "split-missing-clip-g",
+        &[
+            "sdxl-base-1.0/manifest.safetensors",
+            "sdxl-base-1.0/unet/model.safetensors",
+            "sdxl-base-1.0/text_encoder/model.safetensors",
+            "sdxl-base-1.0/vae/model.safetensors",
+        ],
+        ModelRole::TextEncoder,
+        "clip_g",
+        "clip_g",
+    )
+    .await;
+}
+
+#[tokio::test]
+async fn missing_unet_component_is_reported_with_specific_code() {
+    assert_single_missing_component_reports_specific_code(
+        "split-missing-unet",
+        &[
+            "sdxl-base-1.0/manifest.safetensors",
+            "sdxl-base-1.0/text_encoder/model.safetensors",
+            "sdxl-base-1.0/text_encoder_2/model.safetensors",
+            "sdxl-base-1.0/vae/model.safetensors",
+        ],
+        ModelRole::DiffusionModel,
+        "unet",
+        "unet",
+    )
+    .await;
+}
+
+#[tokio::test]
+async fn missing_vae_component_is_reported_with_specific_code() {
+    assert_single_missing_component_reports_specific_code(
+        "split-missing-vae",
+        &[
+            "sdxl-base-1.0/manifest.safetensors",
+            "sdxl-base-1.0/unet/model.safetensors",
+            "sdxl-base-1.0/text_encoder/model.safetensors",
+            "sdxl-base-1.0/text_encoder_2/model.safetensors",
+        ],
+        ModelRole::Vae,
+        "vae",
+        "vae",
+    )
+    .await;
+}
+
+#[tokio::test]
+async fn resolver_emits_component_format_unsupported_for_unknown_component_format() {
+    let base = test_base("split-resolver-format-unsupported");
+    let manifest = ModelManifest::new()
+        .with_root(ModelRoot::base_models())
+        .with_model(
+            split_sdxl_descriptor("sdxl-base-1.0").with_component(
+                ModelComponentSource::new(
+                    ModelRole::DiffusionModel,
+                    ModelSource::relative(
+                        ModelRootId::new("base"),
+                        "sdxl-base-1.0/unet/model.safetensors",
+                    ),
+                    ModelFormat::Unknown,
+                )
+                .with_metadata("component", "unet"),
+            ),
+        );
+    write_split_sdxl_files(&base).await;
+    let resolver = ManifestModelResolver::new(&manifest, base.join("models"));
+    let model_ref = ModelRef::new(
+        ModelId::new("sdxl-base-1.0"),
+        ModelSeries::new("stable_diffusion"),
+        ModelVariant::new("sdxl"),
+        ModelRole::DiffusionModel,
+    );
+
+    let view = resolver
+        .resolve_descriptor_with_components(&model_ref)
+        .await;
+
+    assert!(
+        view.report()
+            .diagnostics()
+            .iter()
+            .any(|d| d.code().as_str() == "MODEL_MANAGER/COMPONENT_FORMAT_UNSUPPORTED"),
+        "expected COMPONENT_FORMAT_UNSUPPORTED diagnostic, got {:?}",
+        view.report()
+            .diagnostics()
+            .iter()
+            .map(|d| d.code().as_str())
+            .collect::<Vec<_>>()
+    );
+
+    cleanup(base).await;
 }
 
 fn sample_model_ref(id: &str) -> ModelRef {

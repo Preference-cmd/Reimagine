@@ -1,7 +1,8 @@
 use reimagine_core::model::{ModelId, ModelRole, ModelSeries, ModelVariant};
 use reimagine_model_manager::{
-    Fingerprint, ModelDescriptor, ModelFormat, ModelManifest, ModelRoot, ModelRootId,
-    ModelRootKind, ModelSeriesConfig, ModelSeriesRule, ModelSource, ModelSourceStatus, ScanConfig,
+    Fingerprint, ModelComponentSource, ModelDescriptor, ModelFormat, ModelManifest, ModelRoot,
+    ModelRootId, ModelRootKind, ModelSeriesConfig, ModelSeriesRule, ModelSource, ModelSourceStatus,
+    ScanConfig,
 };
 
 #[test]
@@ -143,4 +144,156 @@ fn source_status_and_root_kinds_cover_v1_manifest_cases() {
         serde_json::to_string(&statuses).unwrap(),
         r#"["Available","Missing","Stale","Unverified"]"#
     );
+}
+
+#[test]
+fn split_sdxl_descriptor_with_components_roundtrips_through_documented_json_shape() {
+    let descriptor = ModelDescriptor::new(
+        ModelId::new("sdxl-base-1.0"),
+        ModelSeries::new("stable_diffusion"),
+        ModelVariant::new("sdxl"),
+        vec![
+            ModelRole::CheckpointBundle,
+            ModelRole::DiffusionModel,
+            ModelRole::TextEncoder,
+            ModelRole::Vae,
+        ],
+        ModelSource::relative(
+            ModelRootId::new("base"),
+            "sdxl-base-1.0/manifest.safetensors",
+        ),
+        ModelFormat::Safetensors,
+    )
+    .with_source_status(ModelSourceStatus::Available)
+    .with_component(
+        ModelComponentSource::new(
+            ModelRole::DiffusionModel,
+            ModelSource::relative(
+                ModelRootId::new("base"),
+                "sdxl-base-1.0/unet/model.safetensors",
+            ),
+            ModelFormat::Safetensors,
+        )
+        .with_metadata("component", "unet"),
+    )
+    .with_component(
+        ModelComponentSource::new(
+            ModelRole::TextEncoder,
+            ModelSource::relative(
+                ModelRootId::new("base"),
+                "sdxl-base-1.0/text_encoder/model.safetensors",
+            ),
+            ModelFormat::Safetensors,
+        )
+        .with_metadata("component", "clip_l"),
+    )
+    .with_component(
+        ModelComponentSource::new(
+            ModelRole::TextEncoder,
+            ModelSource::relative(
+                ModelRootId::new("base"),
+                "sdxl-base-1.0/text_encoder_2/model.safetensors",
+            ),
+            ModelFormat::Safetensors,
+        )
+        .with_metadata("component", "clip_g"),
+    )
+    .with_component(
+        ModelComponentSource::new(
+            ModelRole::Vae,
+            ModelSource::relative(
+                ModelRootId::new("base"),
+                "sdxl-base-1.0/vae/model.safetensors",
+            ),
+            ModelFormat::Safetensors,
+        )
+        .with_metadata("component", "vae"),
+    );
+
+    let manifest = ModelManifest::new()
+        .with_root(ModelRoot::base_models())
+        .with_model(descriptor.clone());
+
+    let json = serde_json::to_value(&manifest).unwrap();
+
+    assert_eq!(json["models"][0]["components"][0]["role"], "DiffusionModel");
+    assert_eq!(
+        json["models"][0]["components"][0]["source"]["type"],
+        "local_file_relative"
+    );
+    assert_eq!(
+        json["models"][0]["components"][0]["source"]["root_id"],
+        "base"
+    );
+    assert_eq!(
+        json["models"][0]["components"][0]["source"]["path"],
+        "sdxl-base-1.0/unet/model.safetensors"
+    );
+    assert_eq!(json["models"][0]["components"][0]["format"], "safetensors");
+    assert_eq!(
+        json["models"][0]["components"][0]["metadata"]["component"],
+        "unet"
+    );
+    assert_eq!(json["models"][0]["components"].as_array().unwrap().len(), 4);
+
+    let decoded: ModelManifest = serde_json::from_value(json).unwrap();
+    assert_eq!(decoded, manifest);
+    let decoded_descriptor = &decoded.models()[0];
+    assert_eq!(decoded_descriptor.components().len(), 4);
+    assert_eq!(
+        decoded_descriptor.components()[0].role(),
+        ModelRole::DiffusionModel
+    );
+    assert_eq!(
+        decoded_descriptor.components()[0].format(),
+        ModelFormat::Safetensors
+    );
+    assert_eq!(
+        decoded_descriptor.components()[0]
+            .metadata()
+            .get("component")
+            .map(String::as_str),
+        Some("unet")
+    );
+}
+
+#[test]
+fn model_component_source_serde_shape() {
+    let component = ModelComponentSource::new(
+        ModelRole::TextEncoder,
+        ModelSource::relative(ModelRootId::new("base"), "clip_l.safetensors"),
+        ModelFormat::Safetensors,
+    )
+    .with_metadata("component", "clip_l");
+
+    let json = serde_json::to_value(&component).unwrap();
+    assert_eq!(json["role"], "TextEncoder");
+    assert_eq!(json["source"]["type"], "local_file_relative");
+    assert_eq!(json["source"]["root_id"], "base");
+    assert_eq!(json["source"]["path"], "clip_l.safetensors");
+    assert_eq!(json["format"], "safetensors");
+    assert_eq!(json["metadata"]["component"], "clip_l");
+
+    let back: ModelComponentSource = serde_json::from_value(json).unwrap();
+    assert_eq!(back, component);
+}
+
+#[test]
+fn descriptor_without_components_keeps_legacy_json_shape() {
+    let descriptor = ModelDescriptor::new(
+        ModelId::new("legacy"),
+        ModelSeries::new("stable_diffusion"),
+        ModelVariant::new("sd15"),
+        vec![ModelRole::CheckpointBundle],
+        ModelSource::relative(ModelRootId::new("base"), "sd15.safetensors"),
+        ModelFormat::Safetensors,
+    )
+    .with_source_status(ModelSourceStatus::Available);
+
+    let json = serde_json::to_value(&descriptor).unwrap();
+    assert!(json.get("components").is_none());
+
+    let back: ModelDescriptor = serde_json::from_value(json).unwrap();
+    assert_eq!(back.components().len(), 0);
+    assert_eq!(back, descriptor);
 }

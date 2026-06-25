@@ -3,9 +3,9 @@ use std::path::PathBuf;
 use reimagine_config::AppPaths;
 use reimagine_core::model::{ModelId, ModelRole, ModelSeries, ModelVariant};
 use reimagine_model_manager::{
-    Fingerprint, ManifestValidationReport, ModelDescriptor, ModelFormat, ModelManifest, ModelRoot,
-    ModelRootId, ModelRootKind, ModelSeriesConfig, ModelSeriesRule, ModelSource, ModelSourceStatus,
-    validate_manifest, validate_manifest_with_series_config,
+    Fingerprint, ManifestValidationReport, ModelComponentSource, ModelDescriptor, ModelFormat,
+    ModelManifest, ModelRoot, ModelRootId, ModelRootKind, ModelSeriesConfig, ModelSeriesRule,
+    ModelSource, ModelSourceStatus, validate_manifest, validate_manifest_with_series_config,
 };
 
 #[tokio::test]
@@ -317,6 +317,324 @@ fn descriptor(id: &str) -> ModelDescriptor {
         ModelSource::relative(ModelRootId::new("base"), "checkpoints/demo.safetensors"),
         ModelFormat::Safetensors,
     )
+}
+
+fn split_sdxl_descriptor(source_status: ModelSourceStatus) -> ModelDescriptor {
+    ModelDescriptor::new(
+        ModelId::new("sdxl-base-1.0"),
+        ModelSeries::new("stable_diffusion"),
+        ModelVariant::new("sdxl"),
+        vec![
+            ModelRole::CheckpointBundle,
+            ModelRole::DiffusionModel,
+            ModelRole::TextEncoder,
+            ModelRole::Vae,
+        ],
+        ModelSource::relative(
+            ModelRootId::new("base"),
+            "sdxl-base-1.0/manifest.safetensors",
+        ),
+        ModelFormat::Safetensors,
+    )
+    .with_source_status(source_status)
+    .with_component(
+        ModelComponentSource::new(
+            ModelRole::DiffusionModel,
+            ModelSource::relative(
+                ModelRootId::new("base"),
+                "sdxl-base-1.0/unet/model.safetensors",
+            ),
+            ModelFormat::Safetensors,
+        )
+        .with_metadata("component", "unet"),
+    )
+    .with_component(
+        ModelComponentSource::new(
+            ModelRole::TextEncoder,
+            ModelSource::relative(
+                ModelRootId::new("base"),
+                "sdxl-base-1.0/text_encoder/model.safetensors",
+            ),
+            ModelFormat::Safetensors,
+        )
+        .with_metadata("component", "clip_l"),
+    )
+    .with_component(
+        ModelComponentSource::new(
+            ModelRole::TextEncoder,
+            ModelSource::relative(
+                ModelRootId::new("base"),
+                "sdxl-base-1.0/text_encoder_2/model.safetensors",
+            ),
+            ModelFormat::Safetensors,
+        )
+        .with_metadata("component", "clip_g"),
+    )
+    .with_component(
+        ModelComponentSource::new(
+            ModelRole::Vae,
+            ModelSource::relative(
+                ModelRootId::new("base"),
+                "sdxl-base-1.0/vae/model.safetensors",
+            ),
+            ModelFormat::Safetensors,
+        )
+        .with_metadata("component", "vae"),
+    )
+}
+
+#[tokio::test]
+async fn missing_component_source_file_emits_component_source_missing_diagnostic() {
+    let base = test_base("split-component-missing");
+    tokio::fs::create_dir_all(base.join("models"))
+        .await
+        .unwrap();
+
+    let unet_path = base
+        .join("models")
+        .join("sdxl-base-1.0")
+        .join("unet")
+        .join("model.safetensors");
+    let clip_l_path = base
+        .join("models")
+        .join("sdxl-base-1.0")
+        .join("text_encoder")
+        .join("model.safetensors");
+    let vae_path = base
+        .join("models")
+        .join("sdxl-base-1.0")
+        .join("vae")
+        .join("model.safetensors");
+
+    tokio::fs::create_dir_all(unet_path.parent().unwrap())
+        .await
+        .unwrap();
+    tokio::fs::create_dir_all(clip_l_path.parent().unwrap())
+        .await
+        .unwrap();
+    tokio::fs::create_dir_all(vae_path.parent().unwrap())
+        .await
+        .unwrap();
+    tokio::fs::write(&unet_path, b"unet-weights").await.unwrap();
+    tokio::fs::write(&clip_l_path, b"clip_l-weights")
+        .await
+        .unwrap();
+    tokio::fs::write(&vae_path, b"vae-weights").await.unwrap();
+    // Intentionally do NOT create clip_g_path to test missing-component diagnostics.
+
+    let descriptor = split_sdxl_descriptor(ModelSourceStatus::Available);
+
+    let manifest = ModelManifest::new()
+        .with_root(ModelRoot::base_models())
+        .with_model(descriptor);
+
+    let report = validate_manifest(&manifest, base.join("models")).await;
+
+    assert_codes(
+        &report,
+        &[
+            "MODEL_MANAGER/COMPONENT_SOURCE_MISSING",
+            "MODEL_MANAGER/SOURCE_FILE_MISSING",
+        ],
+    );
+
+    cleanup(base).await;
+}
+
+#[tokio::test]
+async fn component_with_invalid_absolute_source_path_emits_source_path_invalid() {
+    let base = test_base("split-component-absolute-invalid");
+    tokio::fs::create_dir_all(base.join("models"))
+        .await
+        .unwrap();
+
+    let descriptor = ModelDescriptor::new(
+        ModelId::new("sdxl-base-1.0"),
+        ModelSeries::new("stable_diffusion"),
+        ModelVariant::new("sdxl"),
+        vec![
+            ModelRole::DiffusionModel,
+            ModelRole::TextEncoder,
+            ModelRole::Vae,
+        ],
+        ModelSource::relative(
+            ModelRootId::new("base"),
+            "sdxl-base-1.0/manifest.safetensors",
+        ),
+        ModelFormat::Safetensors,
+    )
+    .with_source_status(ModelSourceStatus::Available)
+    .with_component(
+        ModelComponentSource::new(
+            ModelRole::DiffusionModel,
+            ModelSource::absolute("relative/path/model.safetensors".to_owned()),
+            ModelFormat::Safetensors,
+        )
+        .with_metadata("component", "unet"),
+    )
+    .with_component(
+        ModelComponentSource::new(
+            ModelRole::TextEncoder,
+            ModelSource::absolute(String::new()),
+            ModelFormat::Safetensors,
+        )
+        .with_metadata("component", "clip_l"),
+    );
+
+    let manifest = ModelManifest::new()
+        .with_root(ModelRoot::base_models())
+        .with_model(descriptor);
+
+    let report = validate_manifest(&manifest, base.join("models")).await;
+
+    let count = report
+        .diagnostics()
+        .iter()
+        .filter(|d| d.code().as_str() == "MODEL_MANAGER/SOURCE_PATH_INVALID")
+        .count();
+    assert_eq!(
+        count, 2,
+        "expected one SOURCE_PATH_INVALID diagnostic per offending component, got {count}"
+    );
+
+    cleanup(base).await;
+}
+
+#[tokio::test]
+async fn component_with_unsupported_format_emits_component_format_unsupported() {
+    let base = test_base("split-component-format-unsupported");
+    tokio::fs::create_dir_all(base.join("models"))
+        .await
+        .unwrap();
+
+    let descriptor = ModelDescriptor::new(
+        ModelId::new("sdxl-base-1.0"),
+        ModelSeries::new("stable_diffusion"),
+        ModelVariant::new("sdxl"),
+        vec![
+            ModelRole::DiffusionModel,
+            ModelRole::TextEncoder,
+            ModelRole::Vae,
+        ],
+        ModelSource::relative(
+            ModelRootId::new("base"),
+            "sdxl-base-1.0/manifest.safetensors",
+        ),
+        ModelFormat::Safetensors,
+    )
+    .with_source_status(ModelSourceStatus::Available)
+    .with_component(
+        ModelComponentSource::new(
+            ModelRole::DiffusionModel,
+            ModelSource::relative(
+                ModelRootId::new("base"),
+                "sdxl-base-1.0/unet/model.safetensors",
+            ),
+            ModelFormat::Unknown,
+        )
+        .with_metadata("component", "unet"),
+    );
+
+    let manifest = ModelManifest::new()
+        .with_root(ModelRoot::base_models())
+        .with_model(descriptor);
+
+    let report = validate_manifest(&manifest, base.join("models")).await;
+
+    assert_codes(&report, &["MODEL_MANAGER/COMPONENT_FORMAT_UNSUPPORTED"]);
+
+    cleanup(base).await;
+}
+
+#[tokio::test]
+async fn duplicate_component_role_metadata_pair_emits_component_duplicate_diagnostic() {
+    let base = test_base("split-component-duplicate");
+    tokio::fs::create_dir_all(base.join("models"))
+        .await
+        .unwrap();
+
+    let descriptor = ModelDescriptor::new(
+        ModelId::new("sdxl-base-1.0"),
+        ModelSeries::new("stable_diffusion"),
+        ModelVariant::new("sdxl"),
+        vec![
+            ModelRole::CheckpointBundle,
+            ModelRole::DiffusionModel,
+            ModelRole::TextEncoder,
+        ],
+        ModelSource::relative(
+            ModelRootId::new("base"),
+            "sdxl-base-1.0/manifest.safetensors",
+        ),
+        ModelFormat::Safetensors,
+    )
+    .with_source_status(ModelSourceStatus::Unverified)
+    .with_component(
+        ModelComponentSource::new(
+            ModelRole::TextEncoder,
+            ModelSource::relative(
+                ModelRootId::new("base"),
+                "sdxl-base-1.0/text_encoder/model.safetensors",
+            ),
+            ModelFormat::Safetensors,
+        )
+        .with_metadata("component", "clip_l"),
+    )
+    .with_component(
+        ModelComponentSource::new(
+            ModelRole::TextEncoder,
+            ModelSource::relative(
+                ModelRootId::new("base"),
+                "sdxl-base-1.0/text_encoder_dup/model.safetensors",
+            ),
+            ModelFormat::Safetensors,
+        )
+        .with_metadata("component", "clip_l"),
+    );
+
+    let manifest = ModelManifest::new()
+        .with_root(ModelRoot::base_models())
+        .with_model(descriptor);
+
+    let report = validate_manifest(&manifest, base.join("models")).await;
+
+    assert_codes(&report, &["MODEL_MANAGER/COMPONENT_DUPLICATE"]);
+
+    cleanup(base).await;
+}
+
+#[tokio::test]
+async fn happy_path_split_descriptor_has_no_component_diagnostics() {
+    let base = test_base("split-component-happy");
+    tokio::fs::create_dir_all(base.join("models"))
+        .await
+        .unwrap();
+
+    for relative in [
+        "sdxl-base-1.0/unet/model.safetensors",
+        "sdxl-base-1.0/text_encoder/model.safetensors",
+        "sdxl-base-1.0/text_encoder_2/model.safetensors",
+        "sdxl-base-1.0/vae/model.safetensors",
+    ] {
+        let p = base.join("models").join(relative);
+        tokio::fs::create_dir_all(p.parent().unwrap())
+            .await
+            .unwrap();
+        tokio::fs::write(&p, b"weights").await.unwrap();
+    }
+
+    let descriptor = split_sdxl_descriptor(ModelSourceStatus::Unverified);
+
+    let manifest = ModelManifest::new()
+        .with_root(ModelRoot::base_models())
+        .with_model(descriptor);
+
+    let report = validate_manifest(&manifest, base.join("models")).await;
+
+    assert_lacks_code(&report, "MODEL_MANAGER/COMPONENT_DUPLICATE");
+    assert_lacks_code(&report, "MODEL_MANAGER/COMPONENT_SOURCE_MISSING");
+
+    cleanup(base).await;
 }
 
 fn assert_codes(report: &ManifestValidationReport, expected: &[&str]) {
