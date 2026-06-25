@@ -289,6 +289,26 @@ async fn body_bytes(body: Body) -> Vec<u8> {
     body.collect().await.unwrap().to_bytes().to_vec()
 }
 
+async fn wait_for_terminal_summary(
+    runtime: &RuntimeService,
+    run_id: &reimagine_core::model::RunId,
+) {
+    let deadline = std::time::Instant::now() + Duration::from_secs(3);
+    loop {
+        if let Some(summary) = runtime.summary(run_id) {
+            assert!(
+                summary.state.is_terminal(),
+                "run {run_id} should be terminal"
+            );
+            return;
+        }
+        if std::time::Instant::now() > deadline {
+            panic!("run {run_id} did not finish in time");
+        }
+        tokio::time::sleep(Duration::from_millis(5)).await;
+    }
+}
+
 async fn run_to_completion(runtime: &RuntimeService, run_id: &reimagine_core::model::RunId) {
     let deadline = std::time::Instant::now() + Duration::from_secs(2);
     loop {
@@ -703,9 +723,9 @@ async fn run_handoff_uses_explicit_target_selection() {
 }
 
 #[tokio::test]
-async fn candle_sdxl_workflow_run_completes_with_image_artifact() {
+async fn candle_sdxl_placeholder_workflow_reports_missing_text_encoder_weights() {
     let model_id = ModelId::new(MODEL_ID);
-    let (host, recorder, base_path) = build_candle_ready_host(
+    let (host, recorder, _base_path) = build_candle_ready_host(
         manifest_with_model(&model_id, CHECKPOINT_FILENAME),
         "candle-sdxl",
     )
@@ -724,8 +744,8 @@ async fn candle_sdxl_workflow_run_completes_with_image_artifact() {
     assert_eq!(response.status(), StatusCode::OK);
 
     // Run with an explicit target that forces the full pipeline up to
-    // save_image. After diffusion.sample lands, the next heavy
-    // unimplemented kernel is latent.decode.
+    // save_image. Placeholder model files must fail at real SDXL text
+    // encoder loading; committed tests do not carry CLIP weights.
     let run_body = serde_json::json!({
         "target_selection": {
             "kind": "explicit",
@@ -752,27 +772,9 @@ async fn candle_sdxl_workflow_run_completes_with_image_artifact() {
     let run_id_str = json["run_id"].as_str().expect("run_id");
     let run_id = reimagine_core::model::RunId::new(run_id_str.to_string());
 
-    let deadline = std::time::Instant::now() + Duration::from_secs(3);
-    loop {
-        if let Some(summary) = host.runtime_service().summary(&run_id) {
-            assert!(
-                summary.state.is_terminal(),
-                "run {run_id} should be terminal"
-            );
-            assert_eq!(
-                summary.state,
-                reimagine_runtime::RunState::Completed,
-                "expected run to complete successfully"
-            );
-            break;
-        }
-        if std::time::Instant::now() > deadline {
-            panic!("run {run_id} did not finish in time");
-        }
-        tokio::time::sleep(Duration::from_millis(5)).await;
-    }
+    wait_for_terminal_summary(host.runtime_service().as_ref(), &run_id).await;
 
-    // GET /runs/:id should return a summary with Completed state.
+    // GET /runs/:id should return a failed summary with precise diagnostics.
     let response = app
         .clone()
         .oneshot(json_request("GET", &format!("/runs/{run_id_str}"), None))
@@ -782,20 +784,26 @@ async fn candle_sdxl_workflow_run_completes_with_image_artifact() {
     let bytes = body_bytes(response.into_body()).await;
     let json: Value = serde_json::from_slice(&bytes).unwrap();
     assert_eq!(json["kind"], "summary");
-    assert_eq!(json["state"], "Completed");
+    assert_eq!(json["state"], "Failed");
+    let diagnostics = json["diagnostics"]
+        .as_array()
+        .expect("summary diagnostics should be an array");
+    assert!(
+        diagnostics.iter().any(|diagnostic| diagnostic["message"]
+            .as_str()
+            .unwrap_or("")
+            .contains("text encoder weights")),
+        "expected missing text encoder weights diagnostic, got {diagnostics:?}"
+    );
     let artifacts = json["artifacts"]
         .as_array()
         .expect("summary artifacts should be an array");
-    assert_eq!(artifacts.len(), 1, "summary should expose one artifact");
-    let reference = artifacts[0]["reference"]
-        .as_str()
-        .expect("artifact should expose host-neutral reference");
     assert!(
-        reference.ends_with(".png"),
-        "artifact reference should point at the generated PNG, got {reference}"
+        artifacts.is_empty(),
+        "placeholder run should not emit artifacts"
     );
 
-    // GET /runs/:id/events should include lifecycle events and no RunFailed.
+    // GET /runs/:id/events should include lifecycle events and RunFailed.
     let response = app
         .oneshot(json_request(
             "GET",
@@ -817,13 +825,10 @@ async fn candle_sdxl_workflow_run_completes_with_image_artifact() {
         kinds.iter().any(|k| *k == "RunStarted"),
         "kinds = {kinds:?}"
     );
+    assert!(kinds.iter().any(|k| *k == "RunFailed"), "kinds = {kinds:?}");
     assert!(
-        kinds.iter().any(|k| *k == "RunCompleted"),
-        "kinds = {kinds:?}"
-    );
-    assert!(
-        !kinds.iter().any(|k| *k == "RunFailed"),
-        "expected no RunFailed event, got {kinds:?}"
+        !kinds.iter().any(|k| *k == "RunCompleted"),
+        "expected no RunCompleted event, got {kinds:?}"
     );
     assert!(
         events.iter().any(|e| e["correlation_id"]
@@ -832,126 +837,38 @@ async fn candle_sdxl_workflow_run_completes_with_image_artifact() {
             .contains("corr-candle-sdxl")),
         "expected an event to carry the correlation id, got {events:?}"
     );
-
-    // Verify a PNG file was written to the workspace output dir.
-    let paths = AppPaths::new(&base_path);
-    let output_dir = paths.output_dir();
-    let mut entries = tokio::fs::read_dir(output_dir)
-        .await
-        .expect("output dir should exist");
-    let png_path = loop {
-        let entry = entries
-            .next_entry()
-            .await
-            .expect("output dir entry read")
-            .expect("output dir should contain a PNG file");
-        let path = entry.path();
-        if path.extension().and_then(|s| s.to_str()) == Some("png") {
-            break path;
-        }
-    };
-
-    let metadata = tokio::fs::metadata(&png_path)
-        .await
-        .expect("png file metadata");
-    assert!(metadata.len() > 0, "PNG file should be non-empty");
-
-    let bytes = tokio::fs::read(&png_path).await.expect("png file read");
-    assert!(
-        bytes.starts_with(&[0x89, b'P', b'N', b'G', 0x0d, 0x0a, 0x1a, 0x0a]),
-        "PNG file should have PNG signature"
-    );
 }
 
 #[tokio::test]
 async fn artifact_route_serves_png_bytes() {
-    let model_id = ModelId::new(MODEL_ID);
-    let (host, recorder, _base_path) = build_candle_ready_host(
-        manifest_with_model(&model_id, CHECKPOINT_FILENAME),
-        "candle-sdxl-artifact",
+    let (host, runtime, recorder) = build_artifact_host(
+        ArtifactRef::new("output/generated.png"),
+        "artifact-serves-png",
     )
     .await;
-    let app = build_router().with_state(build_state(host.clone(), recorder.clone()));
+    tokio::fs::write(
+        host.config().paths().output_dir().join("generated.png"),
+        [
+            0x89, b'P', b'N', b'G', 0x0d, 0x0a, 0x1a, 0x0a, b't', b'e', b's', b't',
+        ],
+    )
+    .await
+    .expect("write png artifact file");
+    let app = build_router().with_state(build_state(host, recorder));
 
-    // Open the canonical SDXL workflow inline.
-    let workflow_json = load_sdxl_workflow_json();
-    let workflow_id = workflow_json["id"].as_str().expect("workflow id");
-    let open_body = serde_json::json!({ "workflow": workflow_json }).to_string();
-    let response = app
-        .clone()
-        .oneshot(json_request("POST", "/workflows/open", Some(&open_body)))
-        .await
-        .unwrap();
-    assert_eq!(response.status(), StatusCode::OK);
-
-    // Run with an explicit target that forces the full pipeline up to save_image.
-    let run_body = serde_json::json!({
-        "target_selection": {
-            "kind": "explicit",
-            "targets": [
-                { "kind": "node", "node_id": "node_save_image" }
-            ]
-        },
-        "correlation_id": "corr-candle-sdxl-artifact"
-    })
-    .to_string();
-    let response = app
-        .clone()
-        .oneshot(json_request(
-            "POST",
-            &format!("/workflows/{workflow_id}/run"),
-            Some(&run_body),
-        ))
-        .await
-        .unwrap();
-    assert_eq!(response.status(), StatusCode::OK);
-    let bytes = body_bytes(response.into_body()).await;
-    let json: Value = serde_json::from_slice(&bytes).unwrap();
-    assert_eq!(json["outcome"], "started");
-    let run_id_str = json["run_id"].as_str().expect("run_id");
-    let run_id = reimagine_core::model::RunId::new(run_id_str.to_string());
-
-    // Wait for run to complete
-    let deadline = std::time::Instant::now() + Duration::from_secs(3);
-    loop {
-        if let Some(summary) = host.runtime_service().summary(&run_id) {
-            assert!(
-                summary.state.is_terminal(),
-                "run {run_id} should be terminal"
-            );
-            assert_eq!(
-                summary.state,
-                reimagine_runtime::RunState::Completed,
-                "expected run to complete successfully"
-            );
-            break;
-        }
-        if std::time::Instant::now() > deadline {
-            panic!("run {run_id} did not finish in time");
-        }
-        tokio::time::sleep(Duration::from_millis(5)).await;
-    }
-
-    // GET /runs/:id to get the artifact id
-    let response = app
-        .clone()
-        .oneshot(json_request("GET", &format!("/runs/{run_id_str}"), None))
-        .await
-        .unwrap();
-    assert_eq!(response.status(), StatusCode::OK);
-    let bytes = body_bytes(response.into_body()).await;
-    let json: Value = serde_json::from_slice(&bytes).unwrap();
-    let artifacts = json["artifacts"]
-        .as_array()
-        .expect("summary artifacts should be an array");
-    assert_eq!(artifacts.len(), 1, "summary should expose one artifact");
-    let artifact_id = artifacts[0]["id"]
-        .as_str()
-        .expect("artifact should have an id");
+    let handle = runtime
+        .run(
+            Arc::new(one_node_plan("mock.artifact", "save")),
+            Default::default(),
+            Default::default(),
+        )
+        .expect("start artifact run");
+    run_to_completion(&runtime, handle.run_id()).await;
+    let summary = runtime.summary(handle.run_id()).expect("summary");
+    let artifact_id = summary.artifacts[0].id.to_string();
 
     // GET /artifacts/:artifact_id should return the PNG bytes
     let response = app
-        .clone()
         .oneshot(json_request(
             "GET",
             &format!("/artifacts/{artifact_id}"),
@@ -967,7 +884,7 @@ async fn artifact_route_serves_png_bytes() {
         bytes.starts_with(&[0x89, b'P', b'N', b'G', 0x0d, 0x0a, 0x1a, 0x0a]),
         "PNG response should have PNG signature"
     );
-    assert!(bytes.len() > 100, "PNG response should be non-trivial size");
+    assert!(bytes.len() > 8, "PNG response should include payload bytes");
 }
 
 #[tokio::test]

@@ -6,11 +6,12 @@ use candle_transformers::models::stable_diffusion::unet_2d::{
     BlockConfig, UNet2DConditionModel, UNet2DConditionModelConfig,
 };
 
+use super::checkpoint_inventory::{SdxlCheckpointInventory, SdxlCheckpointInventoryError};
+use super::checkpoint_projection::{
+    SdxlCheckpointRole, SdxlCheckpointRoleProjection, project_checkpoint_role,
+};
 use super::diffusion::{SdxlSampleRequest, seeded_noise_like};
 use super::diffusion_sources::SdxlDiffusionSources;
-use super::diffusion_weights::{
-    SdxlDiffusionWeightLayout, detect_diffusion_weight_layout_from_file,
-};
 use crate::error::CandleBackendError;
 use crate::store::CandleLatent;
 
@@ -33,29 +34,60 @@ pub(crate) trait SdxlDiffusionGraph: std::fmt::Debug + Send + Sync {
 
 pub(crate) fn load_diffusion_graph(
     sources: &SdxlDiffusionSources,
-    device: &Device,
+    _device: &Device,
 ) -> Result<Arc<dyn SdxlDiffusionGraph>, CandleBackendError> {
-    let layout = detect_diffusion_weight_layout_from_file(sources.path())?;
-    match layout {
-        SdxlDiffusionWeightLayout::OriginalCheckpoint => {
+    let inventory = SdxlCheckpointInventory::from_path(sources.path()).map_err(|err| {
+        let path = sources.path().display();
+        let fingerprint = sources.fingerprint();
+        let message = match err {
+            SdxlCheckpointInventoryError::InvalidHeader { reason, .. } => format!(
+                "diffusion.sample invalid SDXL diffusion safetensors header at `{path}` ({fingerprint}): {reason}"
+            ),
+            other => format!(
+                "diffusion.sample failed to inspect SDXL checkpoint inventory at `{path}` ({fingerprint}): {other}"
+            ),
+        };
+        CandleBackendError::InvalidRequest(message)
+    })?;
+    let projection =
+        project_checkpoint_role(sources.path(), SdxlCheckpointRole::Diffusion, &inventory)
+            .map_err(|err| {
+                CandleBackendError::InvalidRequest(format!(
+                    "diffusion.sample {} ({})",
+                    err,
+                    sources.fingerprint()
+                ))
+            })?;
+    match projection {
+        SdxlCheckpointRoleProjection::OriginalCheckpoint {
+            recognized_families,
+        } => Err(CandleBackendError::InvalidRequest(format!(
+            "diffusion.sample SDXL original checkpoint diffusion layout is detected at `{}` ({}); recognized families: {}; `model.diffusion_model.*` to Candle UNet key mapping is not implemented yet",
+            sources.path().display(),
+            sources.fingerprint(),
+            recognized_families
+                .iter()
+                .map(|family| family.prefix())
+                .collect::<Vec<_>>()
+                .join(", ")
+        ))),
+        SdxlCheckpointRoleProjection::DiffusersUnet => {
             Err(CandleBackendError::InvalidRequest(format!(
-                "diffusion.sample SDXL original checkpoint diffusion layout is detected at `{}` ({}), but the original `model.diffusion_model.*` to Candle UNet key adapter is not implemented yet",
+                "diffusion.sample SDXL added conditioning is required but unsupported by the current Candle UNet forward path at `{}` ({}); pooled text embeddings and generated time ids cannot be passed to candle_transformers::UNet2DConditionModel::forward yet",
                 sources.path().display(),
                 sources.fingerprint()
             )))
         }
-        SdxlDiffusionWeightLayout::DiffusersUnet => {
-            let graph = DiffusersSdxlUnetGraph::load(sources.path(), device)?;
-            Ok(Arc::new(graph))
-        }
     }
 }
 
+#[allow(dead_code)]
 #[derive(Debug)]
 struct DiffusersSdxlUnetGraph {
     unet: UNet2DConditionModel,
 }
 
+#[allow(dead_code)]
 impl DiffusersSdxlUnetGraph {
     fn load(path: &Path, device: &Device) -> Result<Self, CandleBackendError> {
         let data = std::fs::read(path).map_err(|err| {
@@ -87,6 +119,7 @@ impl DiffusersSdxlUnetGraph {
     }
 }
 
+#[allow(dead_code)]
 trait SdxlDenoiser {
     fn predict_noise(
         &self,
@@ -96,6 +129,7 @@ trait SdxlDenoiser {
     ) -> candle_core::Result<Tensor>;
 }
 
+#[allow(dead_code)]
 impl SdxlDenoiser for UNet2DConditionModel {
     fn predict_noise(
         &self,
@@ -107,30 +141,25 @@ impl SdxlDenoiser for UNet2DConditionModel {
     }
 }
 
+#[allow(dead_code)]
 impl SdxlDiffusionGraph for DiffusersSdxlUnetGraph {
     fn sample(
         &self,
-        input_latent: CandleLatent,
+        _input_latent: CandleLatent,
         positive: SdxlDiffusionConditioning,
         negative: SdxlDiffusionConditioning,
-        request: &SdxlSampleRequest,
-        device: &Device,
+        _request: &SdxlSampleRequest,
+        _device: &Device,
     ) -> Result<CandleLatent, CandleBackendError> {
-        let _pooled_dims = (
-            positive.pooled_embedding.shape().dims(),
-            negative.pooled_embedding.shape().dims(),
-        );
-        run_euler_normal_denoise_loop(
-            &self.unet,
-            input_latent,
-            positive,
-            negative,
-            request,
-            device,
-        )
+        let positive_pooled = positive.pooled_embedding.shape().dims().to_vec();
+        let negative_pooled = negative.pooled_embedding.shape().dims().to_vec();
+        Err(CandleBackendError::InvalidRequest(format!(
+            "diffusion.sample SDXL added conditioning is required but unsupported by the current Candle UNet forward path; pooled embeddings have shapes positive={positive_pooled:?}, negative={negative_pooled:?}, and generated time ids cannot be passed to candle_transformers::UNet2DConditionModel::forward"
+        )))
     }
 }
 
+#[allow(dead_code)]
 fn run_euler_normal_denoise_loop(
     denoiser: &dyn SdxlDenoiser,
     input_latent: CandleLatent,
@@ -190,6 +219,7 @@ fn run_euler_normal_denoise_loop(
     Ok(CandleLatent::new(sample))
 }
 
+#[allow(dead_code)]
 #[derive(Debug)]
 struct EulerNormalScheduler {
     timesteps: Vec<f64>,
@@ -197,6 +227,7 @@ struct EulerNormalScheduler {
     init_noise_sigma: f64,
 }
 
+#[allow(dead_code)]
 #[derive(Debug, Clone, Copy)]
 struct EulerNormalStep {
     index: usize,
@@ -204,11 +235,16 @@ struct EulerNormalStep {
 }
 
 impl EulerNormalScheduler {
+    #[allow(dead_code)]
     const BETA_START: f64 = 0.00085;
+    #[allow(dead_code)]
     const BETA_END: f64 = 0.012;
+    #[allow(dead_code)]
     const TRAIN_TIMESTEPS: usize = 1000;
+    #[allow(dead_code)]
     const STEPS_OFFSET: usize = 1;
 
+    #[allow(dead_code)]
     fn new(inference_steps: usize) -> Result<Self, CandleBackendError> {
         if inference_steps == 0 {
             return Err(CandleBackendError::InvalidRequest(
@@ -247,6 +283,7 @@ impl EulerNormalScheduler {
         })
     }
 
+    #[allow(dead_code)]
     fn training_sigmas() -> Vec<f64> {
         let mut alpha_cumprod = 1.0f64;
         (0..Self::TRAIN_TIMESTEPS)
@@ -265,10 +302,12 @@ impl EulerNormalScheduler {
             .collect()
     }
 
+    #[allow(dead_code)]
     fn init_noise_sigma(&self) -> f64 {
         self.init_noise_sigma
     }
 
+    #[allow(dead_code)]
     fn steps(&self) -> impl Iterator<Item = EulerNormalStep> + '_ {
         self.timesteps
             .iter()
@@ -277,6 +316,7 @@ impl EulerNormalScheduler {
             .map(|(index, timestep)| EulerNormalStep { index, timestep })
     }
 
+    #[allow(dead_code)]
     fn scale_model_input(
         &self,
         sample: Tensor,
@@ -294,6 +334,7 @@ impl EulerNormalScheduler {
         })
     }
 
+    #[allow(dead_code)]
     fn step(
         &self,
         model_output: &Tensor,
@@ -339,6 +380,7 @@ impl EulerNormalScheduler {
     }
 }
 
+#[allow(dead_code)]
 fn interpolate(x: &[f64], xp: &[f64], fp: &[f64]) -> Result<Vec<f64>, CandleBackendError> {
     if xp.len() != fp.len() || xp.len() < 2 {
         return Err(CandleBackendError::InvalidRequest(
