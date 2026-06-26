@@ -1,5 +1,5 @@
 use super::checkpoint_import::SdxlConvertedComponent;
-use super::unet_key_mapping::map_original_sdxl_unet_key;
+use super::unet_key_mapping::{SdxlOriginalUnetMappingDecision, map_original_sdxl_unet_key};
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct SdxlMappedTensor {
@@ -9,25 +9,22 @@ pub(crate) struct SdxlMappedTensor {
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) enum SdxlTensorMappingError {
-    OriginalUnetUnsupported { name: String },
+    Ignored { name: String, reason: String },
     UnknownRequiredFamily { name: String },
-    Ignored,
 }
 
 impl std::fmt::Display for SdxlTensorMappingError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
-            Self::OriginalUnetUnsupported { name } => write!(
-                f,
-                "original SDXL UNet tensor `{name}` requires model.diffusion_model.* to Candle example UNet key mapping"
-            ),
+            Self::Ignored { name, reason } => {
+                write!(f, "ignored checkpoint tensor `{name}`: {reason}")
+            }
             Self::UnknownRequiredFamily { name } => {
                 write!(
                     f,
                     "checkpoint tensor `{name}` is not mapped to any Candle example split component"
                 )
             }
-            Self::Ignored => f.write_str("ignored checkpoint tensor"),
         }
     }
 }
@@ -38,7 +35,10 @@ pub(crate) fn map_sdxl_checkpoint_tensor(
     name: &str,
 ) -> Result<SdxlMappedTensor, SdxlTensorMappingError> {
     if name.starts_with("model_ema.") {
-        return Err(SdxlTensorMappingError::Ignored);
+        return Err(SdxlTensorMappingError::Ignored {
+            name: name.to_owned(),
+            reason: "EMA weights are not part of Candle example split execution".to_owned(),
+        });
     }
 
     if let Some(target_name) = map_diffusers_unet_name(name) {
@@ -49,10 +49,25 @@ pub(crate) fn map_sdxl_checkpoint_tensor(
     }
 
     if name.starts_with("model.diffusion_model.") {
-        let _ = map_original_sdxl_unet_key(name);
-        return Err(SdxlTensorMappingError::OriginalUnetUnsupported {
-            name: name.to_owned(),
-        });
+        match map_original_sdxl_unet_key(name) {
+            Ok(SdxlOriginalUnetMappingDecision::Map(mapped)) => {
+                return Ok(SdxlMappedTensor {
+                    component: SdxlConvertedComponent::Unet,
+                    target_name: mapped.target_name,
+                });
+            }
+            Ok(SdxlOriginalUnetMappingDecision::Ignore { reason }) => {
+                return Err(SdxlTensorMappingError::Ignored {
+                    name: name.to_owned(),
+                    reason,
+                });
+            }
+            Err(err) => {
+                return Err(SdxlTensorMappingError::UnknownRequiredFamily {
+                    name: format!("{name}: {err}"),
+                });
+            }
+        }
     }
 
     if let Some(target_name) = name.strip_prefix("first_stage_model.") {
@@ -140,13 +155,22 @@ mod tests {
     }
 
     #[test]
-    fn rejects_original_unet_until_full_mapping_exists() {
-        let err = map_sdxl_checkpoint_tensor("model.diffusion_model.input_blocks.0.0.weight")
-            .unwrap_err();
+    fn maps_original_unet_keys_to_candle_example_targets() {
+        // Original UNet keys now map successfully via the mapping plan.
+        let mapped =
+            map_sdxl_checkpoint_tensor("model.diffusion_model.input_blocks.0.0.weight").unwrap();
+        assert_eq!(mapped.component, SdxlConvertedComponent::Unet);
+        assert_eq!(mapped.target_name, "conv_in.weight");
+    }
 
-        assert!(matches!(
-            err,
-            SdxlTensorMappingError::OriginalUnetUnsupported { .. }
-        ));
+    #[test]
+    fn ignores_label_emb_as_added_conditioning_evidence() {
+        let err =
+            map_sdxl_checkpoint_tensor("model.diffusion_model.label_emb.0.0.weight").unwrap_err();
+
+        assert!(matches!(err, SdxlTensorMappingError::Ignored { .. }));
+        let msg = err.to_string();
+        assert!(msg.contains("Candle SDXL example path"), "{msg}");
+        assert!(msg.contains("added-conditioning"), "{msg}");
     }
 }

@@ -5,12 +5,14 @@ use std::path::{Path, PathBuf};
 use safetensors::tensor::TensorView;
 use safetensors::{Dtype, SafeTensors};
 
-use super::checkpoint_import::SdxlConvertedComponent;
+use super::checkpoint_import::{SdxlConvertedComponent, SdxlIgnoredFamily};
 use super::checkpoint_mapping::{SdxlTensorMappingError, map_sdxl_checkpoint_tensor};
+use super::unet_target_keys::{SdxlUnetTargetFamily, classify_sdxl_unet_target_key};
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct SdxlComponentWritePlan {
     tensors: BTreeMap<SdxlConvertedComponent, Vec<(String, String)>>,
+    ignored_families: Vec<SdxlIgnoredFamily>,
 }
 
 impl SdxlComponentWritePlan {
@@ -18,6 +20,7 @@ impl SdxlComponentWritePlan {
         safetensors: &SafeTensors<'_>,
     ) -> Result<Self, SdxlCheckpointWriterError> {
         let mut tensors: BTreeMap<SdxlConvertedComponent, Vec<(String, String)>> = BTreeMap::new();
+        let mut ignored_families: Vec<SdxlIgnoredFamily> = Vec::new();
 
         for name in safetensors.names() {
             match map_sdxl_checkpoint_tensor(name) {
@@ -27,7 +30,18 @@ impl SdxlComponentWritePlan {
                         .or_default()
                         .push((mapped.target_name, name.to_owned()));
                 }
-                Err(SdxlTensorMappingError::Ignored) => {}
+                Err(SdxlTensorMappingError::Ignored { name: _, reason }) => {
+                    // Collect unique ignored family reasons. Multiple
+                    // tensors from the same family share the same
+                    // reason string; deduplicate by reason.
+                    if !ignored_families.iter().any(|entry| entry.reason == reason) {
+                        let family = name.split('.').take(3).collect::<Vec<_>>().join(".");
+                        ignored_families.push(SdxlIgnoredFamily {
+                            family: format!("{family}.*"),
+                            reason,
+                        });
+                    }
+                }
                 Err(error) => {
                     return Err(SdxlCheckpointWriterError::UnsupportedMapping {
                         source_name: name.to_owned(),
@@ -37,7 +51,14 @@ impl SdxlComponentWritePlan {
             }
         }
 
-        Ok(Self { tensors })
+        Ok(Self {
+            tensors,
+            ignored_families,
+        })
+    }
+
+    pub(crate) fn ignored_families(&self) -> &[SdxlIgnoredFamily] {
+        &self.ignored_families
     }
 
     pub(crate) fn tensor_count(&self, component: SdxlConvertedComponent) -> usize {
@@ -58,6 +79,7 @@ impl SdxlComponentWritePlan {
                     component: component.manifest_key(),
                 });
             }
+            validate_required_targets(component, self.entries(component).unwrap_or_default())?;
         }
         Ok(())
     }
@@ -65,14 +87,41 @@ impl SdxlComponentWritePlan {
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) enum SdxlCheckpointWriterError {
-    ReadSource { path: PathBuf, reason: String },
-    ParseSource { path: PathBuf, reason: String },
-    UnsupportedMapping { source_name: String, reason: String },
-    MissingComponent { component: &'static str },
-    TensorRead { source_name: String, reason: String },
-    TensorView { target_name: String, reason: String },
-    CreateDirectory { path: PathBuf, reason: String },
-    WriteComponent { path: PathBuf, reason: String },
+    ReadSource {
+        path: PathBuf,
+        reason: String,
+    },
+    ParseSource {
+        path: PathBuf,
+        reason: String,
+    },
+    UnsupportedMapping {
+        source_name: String,
+        reason: String,
+    },
+    MissingComponent {
+        component: &'static str,
+    },
+    MissingRequiredTarget {
+        component: &'static str,
+        target: &'static str,
+    },
+    TensorRead {
+        source_name: String,
+        reason: String,
+    },
+    TensorView {
+        target_name: String,
+        reason: String,
+    },
+    CreateDirectory {
+        path: PathBuf,
+        reason: String,
+    },
+    WriteComponent {
+        path: PathBuf,
+        reason: String,
+    },
 }
 
 impl std::fmt::Display for SdxlCheckpointWriterError {
@@ -101,6 +150,12 @@ impl std::fmt::Display for SdxlCheckpointWriterError {
                     "SDXL checkpoint import produced no tensors for component `{component}`"
                 )
             }
+            Self::MissingRequiredTarget { component, target } => {
+                write!(
+                    f,
+                    "SDXL checkpoint import component `{component}` is missing required Candle example target `{target}`"
+                )
+            }
             Self::TensorRead {
                 source_name,
                 reason,
@@ -127,6 +182,109 @@ impl std::fmt::Display for SdxlCheckpointWriterError {
 }
 
 impl std::error::Error for SdxlCheckpointWriterError {}
+
+fn validate_required_targets(
+    component: SdxlConvertedComponent,
+    entries: &[(String, String)],
+) -> Result<(), SdxlCheckpointWriterError> {
+    match component {
+        SdxlConvertedComponent::Unet => validate_required_unet_targets(entries),
+        SdxlConvertedComponent::ClipL | SdxlConvertedComponent::ClipG => {
+            validate_required_named_targets(component, entries, REQUIRED_CLIP_TARGETS)
+        }
+        SdxlConvertedComponent::Vae => {
+            validate_required_named_targets(component, entries, REQUIRED_VAE_TARGETS)
+        }
+    }
+}
+
+fn validate_required_unet_targets(
+    entries: &[(String, String)],
+) -> Result<(), SdxlCheckpointWriterError> {
+    for family in REQUIRED_UNET_FAMILIES {
+        if entries
+            .iter()
+            .any(|(target, _)| classify_sdxl_unet_target_key(target) == Some(*family))
+        {
+            continue;
+        }
+        return Err(SdxlCheckpointWriterError::MissingRequiredTarget {
+            component: SdxlConvertedComponent::Unet.manifest_key(),
+            target: family.required_label(),
+        });
+    }
+    Ok(())
+}
+
+fn validate_required_named_targets(
+    component: SdxlConvertedComponent,
+    entries: &[(String, String)],
+    required: &[&'static str],
+) -> Result<(), SdxlCheckpointWriterError> {
+    for target in required {
+        if entries.iter().any(|(candidate, _)| candidate == target) {
+            continue;
+        }
+        return Err(SdxlCheckpointWriterError::MissingRequiredTarget {
+            component: component.manifest_key(),
+            target,
+        });
+    }
+    Ok(())
+}
+
+const REQUIRED_UNET_FAMILIES: &[SdxlUnetTargetFamily] = &[
+    SdxlUnetTargetFamily::ConvIn,
+    SdxlUnetTargetFamily::TimeEmbedding,
+    SdxlUnetTargetFamily::DownBlockResnet,
+    SdxlUnetTargetFamily::DownBlockAttention,
+    SdxlUnetTargetFamily::DownBlockDownsample,
+    SdxlUnetTargetFamily::MidBlockResnet,
+    SdxlUnetTargetFamily::MidBlockAttention,
+    SdxlUnetTargetFamily::UpBlockResnet,
+    SdxlUnetTargetFamily::UpBlockAttention,
+    SdxlUnetTargetFamily::UpBlockUpsample,
+    SdxlUnetTargetFamily::ConvNormOut,
+    SdxlUnetTargetFamily::ConvOut,
+];
+
+const REQUIRED_CLIP_TARGETS: &[&str] = &[
+    "transformer.text_model.embeddings.token_embedding.weight",
+    "transformer.text_model.embeddings.position_embedding.weight",
+    "transformer.text_model.encoder.layers.0.self_attn.q_proj.weight",
+    "transformer.text_model.encoder.layers.0.self_attn.k_proj.weight",
+    "transformer.text_model.encoder.layers.0.self_attn.v_proj.weight",
+    "transformer.text_model.encoder.layers.0.self_attn.out_proj.weight",
+    "transformer.text_model.encoder.layers.0.layer_norm1.weight",
+    "transformer.text_model.final_layer_norm.weight",
+];
+
+const REQUIRED_VAE_TARGETS: &[&str] = &[
+    "encoder.conv_in.weight",
+    "decoder.conv_in.weight",
+    "decoder.conv_out.weight",
+    "quant_conv.weight",
+    "post_quant_conv.weight",
+];
+
+impl SdxlUnetTargetFamily {
+    fn required_label(self) -> &'static str {
+        match self {
+            Self::ConvIn => "conv_in.*",
+            Self::TimeEmbedding => "time_embedding.*",
+            Self::DownBlockResnet => "down_blocks.*.resnets.*",
+            Self::DownBlockAttention => "down_blocks.*.attentions.*",
+            Self::DownBlockDownsample => "down_blocks.*.downsamplers.0.conv.*",
+            Self::MidBlockResnet => "mid_block.resnets.*",
+            Self::MidBlockAttention => "mid_block.attentions.*",
+            Self::UpBlockResnet => "up_blocks.*.resnets.*",
+            Self::UpBlockAttention => "up_blocks.*.attentions.*",
+            Self::UpBlockUpsample => "up_blocks.*.upsamplers.0.conv.*",
+            Self::ConvNormOut => "conv_norm_out.*",
+            Self::ConvOut => "conv_out.*",
+        }
+    }
+}
 
 pub(crate) fn write_sdxl_checkpoint_components(
     source_path: &Path,
@@ -271,30 +429,81 @@ mod tests {
         candle_core::safetensors::save(&tensors, path).unwrap();
     }
 
+    fn complete_diffusers_split_names() -> Vec<&'static str> {
+        let mut names = vec![
+            "conv_in.weight",
+            "time_embedding.linear_1.weight",
+            "down_blocks.0.resnets.0.norm1.weight",
+            "down_blocks.1.attentions.0.proj_in.weight",
+            "down_blocks.0.downsamplers.0.conv.weight",
+            "mid_block.resnets.0.norm1.weight",
+            "mid_block.attentions.0.proj_in.weight",
+            "up_blocks.0.resnets.0.conv_shortcut.weight",
+            "up_blocks.0.attentions.0.proj_in.weight",
+            "up_blocks.0.upsamplers.0.conv.weight",
+            "conv_norm_out.weight",
+            "conv_out.weight",
+        ];
+        names.extend(required_clip_source_names("conditioner.embedders.0."));
+        names.extend(required_clip_source_names("conditioner.embedders.1.model."));
+        names.extend(required_vae_source_names());
+        names
+    }
+
+    fn complete_original_checkpoint_names() -> Vec<&'static str> {
+        let mut names = vec![
+            "model.diffusion_model.input_blocks.0.0.weight",
+            "model.diffusion_model.time_embed.0.weight",
+            "model.diffusion_model.input_blocks.1.0.in_layers.0.weight",
+            "model.diffusion_model.input_blocks.4.1.proj_in.weight",
+            "model.diffusion_model.input_blocks.3.0.op.weight",
+            "model.diffusion_model.middle_block.0.in_layers.0.weight",
+            "model.diffusion_model.middle_block.1.proj_in.weight",
+            "model.diffusion_model.output_blocks.0.0.skip_connection.weight",
+            "model.diffusion_model.output_blocks.0.1.proj_in.weight",
+            "model.diffusion_model.output_blocks.2.2.conv.weight",
+            "model.diffusion_model.out.0.weight",
+            "model.diffusion_model.out.2.weight",
+            "model.diffusion_model.label_emb.0.0.weight",
+        ];
+        names.extend(required_clip_source_names("conditioner.embedders.0."));
+        names.extend(required_clip_source_names("conditioner.embedders.1.model."));
+        names.extend(required_vae_source_names());
+        names
+    }
+
+    fn required_clip_source_names(prefix: &'static str) -> Vec<&'static str> {
+        REQUIRED_CLIP_TARGETS
+            .iter()
+            .map(|target| Box::leak(format!("{prefix}{target}").into_boxed_str()) as &'static str)
+            .collect()
+    }
+
+    fn required_vae_source_names() -> Vec<&'static str> {
+        REQUIRED_VAE_TARGETS
+            .iter()
+            .map(|target| {
+                Box::leak(format!("first_stage_model.{target}").into_boxed_str()) as &'static str
+            })
+            .collect()
+    }
+
     #[test]
     fn write_components_splits_supported_tensor_families() {
         let dir = temp_dir("split");
         let source = dir.join("source.safetensors");
         let output = dir.join("converted");
-        write_safetensors(
-            &source,
-            &[
-                "conv_in.weight",
-                "conditioner.embedders.0.transformer.text_model.embeddings.token_embedding.weight",
-                "conditioner.embedders.1.model.transformer.text_model.embeddings.token_embedding.weight",
-                "first_stage_model.decoder.conv_in.weight",
-            ],
-        );
+        write_safetensors(&source, &complete_diffusers_split_names());
 
         let plan = write_sdxl_checkpoint_components(&source, &output, |component| {
             component.relative_path().to_owned()
         })
         .unwrap();
 
-        assert_eq!(plan.tensor_count(SdxlConvertedComponent::Unet), 1);
-        assert_eq!(plan.tensor_count(SdxlConvertedComponent::ClipL), 1);
-        assert_eq!(plan.tensor_count(SdxlConvertedComponent::ClipG), 1);
-        assert_eq!(plan.tensor_count(SdxlConvertedComponent::Vae), 1);
+        assert_eq!(plan.tensor_count(SdxlConvertedComponent::Unet), 12);
+        assert_eq!(plan.tensor_count(SdxlConvertedComponent::ClipL), 8);
+        assert_eq!(plan.tensor_count(SdxlConvertedComponent::ClipG), 8);
+        assert_eq!(plan.tensor_count(SdxlConvertedComponent::Vae), 5);
         assert!(output.join("unet/model.safetensors").is_file());
         assert!(output.join("text_encoder/model.safetensors").is_file());
         assert!(output.join("text_encoder_2/model.safetensors").is_file());
@@ -316,14 +525,60 @@ mod tests {
     }
 
     #[test]
-    fn original_unet_mapping_fails_before_writing_components() {
-        let dir = temp_dir("unsupported-unet");
+    fn original_unet_keys_are_mapped_and_written_successfully() {
+        let dir = temp_dir("original-unet-mapped");
+        let source = dir.join("source.safetensors");
+        let output = dir.join("converted");
+        write_safetensors(&source, &complete_original_checkpoint_names());
+
+        let plan = write_sdxl_checkpoint_components(&source, &output, |component| {
+            component.relative_path().to_owned()
+        })
+        .expect("original UNet keys should now map successfully");
+
+        assert_eq!(plan.tensor_count(SdxlConvertedComponent::Unet), 12);
+        assert!(output.join("unet/model.safetensors").is_file());
+        assert!(output.join("text_encoder/model.safetensors").is_file());
+        assert!(output.join("text_encoder_2/model.safetensors").is_file());
+        assert!(output.join("vae/model.safetensors").is_file());
+
+        // Verify the mapped target key names in the written UNet file.
+        let unet =
+            candle_core::safetensors::load(output.join("unet/model.safetensors"), &Device::Cpu)
+                .unwrap();
+        assert!(
+            unet.contains_key("conv_in.weight"),
+            "input_blocks.0.0.weight should map to conv_in.weight"
+        );
+        assert!(
+            unet.contains_key("mid_block.attentions.0.proj_in.weight"),
+            "middle_block.1.proj_in.weight should map"
+        );
+        assert!(
+            unet.contains_key("up_blocks.0.resnets.0.conv_shortcut.weight"),
+            "output_blocks.0.0.skip_connection.weight should map"
+        );
+        assert!(
+            unet.contains_key("time_embedding.linear_1.weight"),
+            "time_embed.0.weight should map"
+        );
+        assert!(
+            unet.contains_key("conv_out.weight"),
+            "out.2.weight should map"
+        );
+
+        let _ = fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn unsupported_original_unet_block_index_fails_before_writing() {
+        let dir = temp_dir("unsupported-block-idx");
         let source = dir.join("source.safetensors");
         let output = dir.join("converted");
         write_safetensors(
             &source,
             &[
-                "model.diffusion_model.input_blocks.0.0.weight",
+                "model.diffusion_model.input_blocks.99.0.weight",
                 "conditioner.embedders.0.transformer.text_model.embeddings.token_embedding.weight",
                 "conditioner.embedders.1.model.transformer.text_model.embeddings.token_embedding.weight",
                 "first_stage_model.decoder.conv_in.weight",
@@ -349,7 +604,9 @@ mod tests {
         let dir = temp_dir("missing-component");
         let source = dir.join("source.safetensors");
         let output = dir.join("converted");
-        write_safetensors(&source, &["conv_in.weight"]);
+        let mut names = complete_diffusers_split_names();
+        names.retain(|name| !name.starts_with("first_stage_model."));
+        write_safetensors(&source, &names);
 
         let err = write_sdxl_checkpoint_components(&source, &output, |component| {
             component.relative_path().to_owned()
@@ -359,12 +616,32 @@ mod tests {
         assert!(matches!(
             err,
             SdxlCheckpointWriterError::MissingComponent { component: "vae" }
-                | SdxlCheckpointWriterError::MissingComponent {
-                    component: "text_encoder"
-                }
-                | SdxlCheckpointWriterError::MissingComponent {
-                    component: "text_encoder_2"
-                }
+        ));
+        assert!(!output.exists());
+
+        let _ = fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn incomplete_unet_target_surface_fails_before_writing_components() {
+        let dir = temp_dir("incomplete-unet");
+        let source = dir.join("source.safetensors");
+        let output = dir.join("converted");
+        let mut names = complete_diffusers_split_names();
+        names.retain(|name| *name != "down_blocks.1.attentions.0.proj_in.weight");
+        write_safetensors(&source, &names);
+
+        let err = write_sdxl_checkpoint_components(&source, &output, |component| {
+            component.relative_path().to_owned()
+        })
+        .unwrap_err();
+
+        assert!(matches!(
+            err,
+            SdxlCheckpointWriterError::MissingRequiredTarget {
+                component: "unet",
+                target: "down_blocks.*.attentions.*"
+            }
         ));
         assert!(!output.exists());
 

@@ -136,6 +136,9 @@ fn classify_name(name: &str) -> Option<SdxlCheckpointFamily> {
         || name.starts_with("down_blocks.")
         || name.starts_with("up_blocks.")
         || name.starts_with("mid_block.")
+        || name.starts_with("conv_norm_out.")
+        || name.starts_with("conv_out.")
+        || name.starts_with("class_embedding.")
     {
         return Some(SdxlCheckpointFamily::DiffusersUnet);
     }
