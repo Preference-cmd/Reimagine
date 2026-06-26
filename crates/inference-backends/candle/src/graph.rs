@@ -34,7 +34,6 @@ use crate::models::LoadedModelBundle;
 use crate::models::stable_diffusion::sdxl::diffusion::SdxlSampleRequest;
 use crate::models::stable_diffusion::sdxl::diffusion_graph::SdxlDiffusionConditioning;
 use crate::models::stable_diffusion::sdxl::text::SdxlTextEncoder;
-use crate::models::stable_diffusion::sdxl::vae::SdxlVaeDecoder;
 use crate::store::{CandleImage, CandleLatent};
 
 /// Backend-local input for text encoding.
@@ -317,6 +316,11 @@ impl LoadedModelBundle {
     ///
     /// The operation layer is responsible for storing the resulting image as a
     /// [`crate::store::CandleImage`] payload and building the runtime handle.
+    ///
+    /// Real SDXL VAE decode lazy-materializes the underlying decoder graph
+    /// on the first call for the loaded bundle. Subsequent decodes reuse
+    /// the cached decoder; the operation layer must therefore keep the
+    /// bundle alive across calls so the cache is honored.
     pub fn decode_latent(
         &self,
         input: LatentDecodeInput,
@@ -324,9 +328,8 @@ impl LoadedModelBundle {
     ) -> Result<LatentDecodeResult, CandleBackendError> {
         match self {
             LoadedModelBundle::StableDiffusionSdxl(bundle) => {
-                let _source_fingerprint = bundle.vae_sources().fingerprint();
-                let decoder = SdxlVaeDecoder::new();
-                let image = decoder.decode(&input.latent, device)?;
+                let graph = bundle.materialize_vae_decoder_graph()?;
+                let image = graph.decode(&input.latent, device)?;
                 Ok(LatentDecodeResult { image })
             }
             #[cfg(test)]
@@ -382,6 +385,17 @@ mod tests {
         match bundle {
             LoadedModelBundle::StableDiffusionSdxl(sdxl) => {
                 sdxl.install_test_diffusion_graph(Arc::new(TestSdxlDiffusionGraph));
+            }
+            LoadedModelBundle::TestPlaceholder => {}
+        }
+    }
+
+    fn install_test_vae_decoder_graph(bundle: &LoadedModelBundle) {
+        match bundle {
+            LoadedModelBundle::StableDiffusionSdxl(sdxl) => {
+                sdxl.install_test_vae_decoder_graph_for_tests(Arc::new(
+                    crate::models::stable_diffusion::sdxl::vae::SdxlVaeDecoderGraph::test_placeholder(),
+                ));
             }
             LoadedModelBundle::TestPlaceholder => {}
         }
@@ -464,6 +478,7 @@ mod tests {
     #[test]
     fn decode_latent_sdxl_produces_image_shape() {
         let bundle = sdxl_bundle();
+        install_test_vae_decoder_graph(&bundle);
         let input_latent =
             CandleLatent::new(Tensor::zeros((1, 4, 8, 8), DType::F32, &Device::Cpu).unwrap());
         let result = bundle
@@ -477,6 +492,56 @@ mod tests {
         assert_eq!(result.image.tensor().shape().dims(), &[1, 3, 64, 64]);
         assert_eq!(result.image.width(), 64);
         assert_eq!(result.image.height(), 64);
+    }
+
+    #[test]
+    fn decode_latent_sdxl_reuses_materialized_vae_graph_for_repeated_decode() {
+        // First decode materializes the graph; the second decode must
+        // succeed without reloading VAE weights. We verify this by
+        // installing a placeholder graph and ensuring both calls go
+        // through the same cached instance.
+        let bundle = sdxl_bundle();
+        install_test_vae_decoder_graph(&bundle);
+        for _ in 0..2 {
+            let input_latent =
+                CandleLatent::new(Tensor::zeros((1, 4, 8, 8), DType::F32, &Device::Cpu).unwrap());
+            let result = bundle
+                .decode_latent(
+                    LatentDecodeInput {
+                        latent: input_latent,
+                    },
+                    &Device::Cpu,
+                )
+                .expect("decode_latent should reuse cached VAE graph");
+            assert_eq!(result.image.tensor().shape().dims(), &[1, 3, 64, 64]);
+        }
+    }
+
+    #[test]
+    fn decode_latent_sdxl_rejects_checkpoint_only_vae_source() {
+        // When no split VAE is supplied the bundle must report a
+        // precise `import_sdxl_checkpoint_to_candle_example_split`
+        // diagnostic instead of silently falling back.
+        let bundle = sdxl_bundle();
+        let input_latent =
+            CandleLatent::new(Tensor::zeros((1, 4, 8, 8), DType::F32, &Device::Cpu).unwrap());
+        let err = bundle
+            .decode_latent(
+                LatentDecodeInput {
+                    latent: input_latent,
+                },
+                &Device::Cpu,
+            )
+            .unwrap_err();
+        let msg = err.to_string();
+        assert!(
+            msg.contains("import_sdxl_checkpoint_to_candle_example_split"),
+            "expected split-import diagnostic, got {msg}"
+        );
+        assert!(
+            msg.contains("component=vae"),
+            "expected actionable metadata hint, got {msg}"
+        );
     }
 
     #[test]

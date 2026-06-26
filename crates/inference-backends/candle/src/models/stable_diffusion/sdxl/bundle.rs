@@ -14,6 +14,7 @@ use super::diffusion_sources::{
 };
 use super::text::{SdxlTextEncoderGraph, TextEncoderError};
 use super::tokenizer::SdxlTokenizer;
+use super::vae::{SdxlVaeDecoderGraph, SdxlVaeError};
 use super::vae_sources::{SdxlVaeSourceError, SdxlVaeSources, resolve_vae_sources};
 use crate::error::CandleBackendError;
 
@@ -119,6 +120,7 @@ pub struct LoadedSdxlBundle {
     pub(crate) diffusion_sources: SdxlDiffusionSources,
     pub(crate) vae_sources: SdxlVaeSources,
     pub(crate) diffusion_graph: Mutex<Option<Arc<dyn SdxlDiffusionGraph>>>,
+    pub(crate) vae_decoder_graph: Mutex<Option<Arc<SdxlVaeDecoderGraph>>>,
     pub tokenizer: SdxlTokenizer,
     pub text_encoder: SdxlTextEncoderGraph,
     pub model_payload_key: BackendPayloadKey,
@@ -193,6 +195,7 @@ impl LoadedSdxlBundle {
             diffusion_sources,
             vae_sources,
             diffusion_graph: Mutex::new(None),
+            vae_decoder_graph: Mutex::new(None),
             tokenizer,
             text_encoder,
             model_payload_key,
@@ -250,6 +253,7 @@ impl LoadedSdxlBundle {
             diffusion_sources,
             vae_sources,
             diffusion_graph: Mutex::new(None),
+            vae_decoder_graph: Mutex::new(None),
             tokenizer,
             text_encoder,
             model_payload_key,
@@ -274,13 +278,64 @@ impl LoadedSdxlBundle {
         Ok(graph)
     }
 
-    pub(crate) fn vae_sources(&self) -> &SdxlVaeSources {
+    /// Lazily materialize the SDXL VAE decoder graph for the loaded
+    /// bundle. The first call constructs the real decoder weights
+    /// from the resolved split VAE source; subsequent calls reuse
+    /// the cached decoder instance.
+    ///
+    /// Returns a precise error if the resolved VAE source points at
+    /// a checkpoint bundle (callers must run
+    /// `import_sdxl_checkpoint_to_candle_example_split` first) or
+    /// if weight loading fails.
+    pub(crate) fn materialize_vae_decoder_graph(
+        &self,
+    ) -> Result<Arc<SdxlVaeDecoderGraph>, CandleBackendError> {
+        let mut guard = self.vae_decoder_graph.lock().map_err(|_| {
+            CandleBackendError::InvalidRequest(
+                "latent.decode SDXL VAE decoder graph cache lock is poisoned".to_string(),
+            )
+        })?;
+        if let Some(graph) = guard.as_ref() {
+            return Ok(graph.clone());
+        }
+        let graph = match &self.vae_sources {
+            SdxlVaeSources::Split { path } => SdxlVaeDecoderGraph::load(path, self.device.as_ref())
+                .map_err(CandleBackendError::from)?,
+            SdxlVaeSources::Checkpoint { path } => {
+                return Err(CandleBackendError::InvalidRequest(format!(
+                    "{}",
+                    SdxlVaeError::RequiresSplitImport { path: path.clone() }
+                )));
+            }
+        };
+        let graph = Arc::new(graph);
+        *guard = Some(graph.clone());
+        Ok(graph)
+    }
+
+    #[cfg(test)]
+    pub(crate) fn vae_sources_for_test(&self) -> &SdxlVaeSources {
         &self.vae_sources
     }
 
     #[cfg(test)]
     pub(crate) fn install_test_diffusion_graph(&self, graph: Arc<dyn SdxlDiffusionGraph>) {
         let mut guard = self.diffusion_graph.lock().unwrap();
+        *guard = Some(graph);
+    }
+
+    /// Test-only VAE decoder graph installer. Production code must
+    /// rely on [`Self::materialize_vae_decoder_graph`] instead. This
+    /// helper exists so backend integration tests can wire the
+    /// graph facade through a deterministic shape-only decoder
+    /// without loading real VAE weights.
+    #[doc(hidden)]
+    #[allow(dead_code)]
+    pub fn install_test_vae_decoder_graph_for_tests(&self, graph: Arc<SdxlVaeDecoderGraph>) {
+        let mut guard = self
+            .vae_decoder_graph
+            .lock()
+            .expect("test-only VAE decoder graph lock");
         *guard = Some(graph);
     }
 }
@@ -832,6 +887,44 @@ mod tests {
                 assert!(reason.contains("component=vae"), "reason: {reason}");
             }
             other => panic!("expected VaeSourceLoadFailed, got {other:?}"),
+        }
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn vae_sources_for_test_returns_resolved_split_source() {
+        let dir = unique_temp_dir();
+        fs::create_dir_all(&dir).unwrap();
+        let checkpoint_path = write_placeholder(&dir, "sdxl.safetensors");
+        let vae_path = write_placeholder(&dir, "vae.safetensors");
+        let source_set = ResolvedInferenceModelSourceSet::new(ResolvedInferenceModelSource::new(
+            ModelSourceKind::CheckpointBundle,
+            ModelRole::CheckpointBundle,
+            checkpoint_path,
+            ModelFormat::SafeTensors,
+        ))
+        .with_source(
+            ResolvedInferenceModelSource::new(
+                ModelSourceKind::SplitComponent,
+                ModelRole::Vae,
+                vae_path.clone(),
+                ModelFormat::SafeTensors,
+            )
+            .with_metadata("component=vae"),
+        );
+
+        let bundle = LoadedSdxlBundle::from_resolved_with_test_text_projection(
+            ModelId::new("sdxl-vae-sources-for-test"),
+            source_set,
+            ModelFormat::SafeTensors,
+            Arc::new(Device::Cpu),
+        )
+        .expect("split VAE component metadata should resolve");
+        match bundle.vae_sources_for_test() {
+            SdxlVaeSources::Split { path } => {
+                assert_eq!(path, &vae_path);
+            }
+            other => panic!("expected Split VAE source, got {other:?}"),
         }
         let _ = fs::remove_dir_all(&dir);
     }

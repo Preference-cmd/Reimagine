@@ -78,7 +78,11 @@ fn persist_image(
         )));
     }
 
-    let candle_image = backend.store().take_image(payload_key)?;
+    // Fan-out friendly read: a single decoded image must remain
+    // available for downstream artifact nodes (e.g. image.save and
+    // image.preview sharing the same source). The store retains the
+    // payload; run-scoped cleanup drops it when the run finishes.
+    let candle_image = backend.store().get_image(payload_key)?;
 
     let filename = build_safe_filename(
         prefix,
