@@ -186,12 +186,32 @@ impl SdxlCheckpointConversionManifest {
                 .into_iter()
                 .all(|component| self.components.contains_key(component.manifest_key()))
     }
+
+    /// Merge additional ignored families into the manifest.
+    ///
+    /// New entries whose `family` is not already present are appended;
+    /// existing entries are preserved so caller-provided defaults keep
+    /// priority.
+    pub(crate) fn merge_ignored_families(
+        &mut self,
+        additional: impl IntoIterator<Item = SdxlIgnoredFamily>,
+    ) {
+        for family in additional {
+            if !self
+                .ignored_families
+                .iter()
+                .any(|f| f.family == family.family)
+            {
+                self.ignored_families.push(family);
+            }
+        }
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct SdxlIgnoredFamily {
-    family: String,
-    reason: String,
+    pub family: String,
+    pub reason: String,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
@@ -344,15 +364,16 @@ async fn write_conversion(
             })?;
     }
 
-    let manifest = SdxlCheckpointConversionManifest::for_request(request);
+    let base_manifest = SdxlCheckpointConversionManifest::for_request(request);
     let write_result = {
         let staging_dir = staging_dir.clone();
         let source_path = request.source_path().to_path_buf();
-        let manifest = manifest.clone();
+        let manifest = base_manifest.clone();
         tokio::task::spawn_blocking(move || {
-            write_sdxl_checkpoint_components(&source_path, &staging_dir, |component| {
+            let plan = write_sdxl_checkpoint_components(&source_path, &staging_dir, |component| {
                 manifest.component_path(component).to_owned()
-            })
+            })?;
+            Ok::<_, SdxlCheckpointWriterError>(plan)
         })
         .await
         .map_err(|error| SdxlCheckpointImportError::WriteComponents {
@@ -361,10 +382,18 @@ async fn write_conversion(
         })?
     };
 
-    if let Err(error) = write_result {
-        let _ = tokio::fs::remove_dir_all(&staging_dir).await;
-        return Err(map_writer_error(error, request.source_path(), &staging_dir));
-    }
+    let plan = match write_result {
+        Ok(plan) => plan,
+        Err(error) => {
+            let _ = tokio::fs::remove_dir_all(&staging_dir).await;
+            return Err(map_writer_error(error, request.source_path(), &staging_dir));
+        }
+    };
+
+    // Build the final manifest, merging in any ignored families
+    // discovered during the write pass (e.g. label_emb.*).
+    let mut manifest = base_manifest;
+    manifest.merge_ignored_families(plan.ignored_families().iter().cloned());
 
     let manifest_path = staging_dir.join("conversion.json");
     tokio::fs::write(
@@ -553,6 +582,8 @@ mod tests {
     use std::fs;
 
     use super::*;
+    #[cfg(test)]
+    use candle_core::Device;
 
     fn temp_dir(name: &str) -> PathBuf {
         let nonce = std::time::SystemTime::now()
@@ -592,6 +623,82 @@ mod tests {
             tensors.insert((*name).to_owned(), tensor);
         }
         candle_core::safetensors::save(&tensors, path).unwrap();
+    }
+
+    fn complete_diffusers_split_names() -> Vec<&'static str> {
+        let mut names = vec![
+            "conv_in.weight",
+            "time_embedding.linear_1.weight",
+            "down_blocks.0.resnets.0.norm1.weight",
+            "down_blocks.1.attentions.0.proj_in.weight",
+            "down_blocks.0.downsamplers.0.conv.weight",
+            "mid_block.resnets.0.norm1.weight",
+            "mid_block.attentions.0.proj_in.weight",
+            "up_blocks.0.resnets.0.conv_shortcut.weight",
+            "up_blocks.0.attentions.0.proj_in.weight",
+            "up_blocks.0.upsamplers.0.conv.weight",
+            "conv_norm_out.weight",
+            "conv_out.weight",
+        ];
+        names.extend(required_clip_source_names("conditioner.embedders.0."));
+        names.extend(required_clip_source_names("conditioner.embedders.1.model."));
+        names.extend(required_vae_source_names());
+        names
+    }
+
+    fn complete_original_checkpoint_names() -> Vec<&'static str> {
+        let mut names = vec![
+            "model.diffusion_model.input_blocks.0.0.weight",
+            "model.diffusion_model.time_embed.0.weight",
+            "model.diffusion_model.input_blocks.1.0.in_layers.0.weight",
+            "model.diffusion_model.input_blocks.4.1.proj_in.weight",
+            "model.diffusion_model.input_blocks.3.0.op.weight",
+            "model.diffusion_model.middle_block.0.in_layers.0.weight",
+            "model.diffusion_model.middle_block.1.proj_in.weight",
+            "model.diffusion_model.output_blocks.0.0.skip_connection.weight",
+            "model.diffusion_model.output_blocks.0.1.proj_in.weight",
+            "model.diffusion_model.output_blocks.2.2.conv.weight",
+            "model.diffusion_model.out.0.weight",
+            "model.diffusion_model.out.2.weight",
+            "model.diffusion_model.label_emb.0.0.weight",
+        ];
+        names.extend(required_clip_source_names("conditioner.embedders.0."));
+        names.extend(required_clip_source_names("conditioner.embedders.1.model."));
+        names.extend(required_vae_source_names());
+        names
+    }
+
+    fn required_clip_source_names(prefix: &'static str) -> Vec<&'static str> {
+        let targets = [
+            "transformer.text_model.embeddings.token_embedding.weight",
+            "transformer.text_model.embeddings.position_embedding.weight",
+            "transformer.text_model.encoder.layers.0.self_attn.q_proj.weight",
+            "transformer.text_model.encoder.layers.0.self_attn.k_proj.weight",
+            "transformer.text_model.encoder.layers.0.self_attn.v_proj.weight",
+            "transformer.text_model.encoder.layers.0.self_attn.out_proj.weight",
+            "transformer.text_model.encoder.layers.0.layer_norm1.weight",
+            "transformer.text_model.final_layer_norm.weight",
+        ];
+        targets
+            .into_iter()
+            .map(|target| Box::leak(format!("{prefix}{target}").into_boxed_str()) as &'static str)
+            .collect()
+    }
+
+    fn required_vae_source_names() -> Vec<&'static str> {
+        let targets = [
+            "encoder.conv_in.weight",
+            "decoder.conv_in.weight",
+            "decoder.conv_out.weight",
+            "quant_conv.weight",
+            "post_quant_conv.weight",
+        ];
+        targets
+            .into_iter()
+            .map(|target| {
+                Box::leak(format!("first_stage_model.{target}").into_boxed_str()) as &'static str
+            })
+            .collect()
     }
 
     fn request(base: &Path, source: &Path) -> SdxlCheckpointImportRequest {
@@ -686,18 +793,76 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn unsupported_original_mapping_fails_before_creating_conversion_manifest() {
-        let base = temp_dir("unsupported");
+    async fn original_checkpoint_converts_split_components_with_details() {
+        let base = temp_dir("original-convert");
         let source = base.join("models/checkpoints/sdxl.safetensors");
         tokio::fs::create_dir_all(source.parent().unwrap())
             .await
             .unwrap();
+        write_real_safetensors(&source, &complete_original_checkpoint_names());
+        let request = request(&base, &source);
+
+        let result = import_sdxl_checkpoint_to_candle_example_split(request)
+            .await
+            .unwrap();
+
+        assert!(!result.reused_existing());
+        assert!(result.conversion_manifest_path().is_file());
+        assert!(
+            result
+                .component_path(SdxlConvertedComponent::Unet)
+                .is_file()
+        );
+        assert!(
+            result
+                .component_path(SdxlConvertedComponent::ClipL)
+                .is_file()
+        );
+        assert!(
+            result
+                .component_path(SdxlConvertedComponent::ClipG)
+                .is_file()
+        );
+        assert!(result.component_path(SdxlConvertedComponent::Vae).is_file());
+
+        // Verify the conversion manifest records label_emb.* as an ignored family.
+        let manifest = result.conversion_manifest();
+        assert!(
+            manifest
+                .ignored_families
+                .iter()
+                .any(|f| f.family.starts_with("model.diffusion_model.label_emb")),
+            "ignored_families should contain label_emb.*: {manifest:#?}"
+        );
+
+        // Verify the mapped UNet content.
+        let unet = candle_core::safetensors::load(
+            result.component_path(SdxlConvertedComponent::Unet),
+            &Device::Cpu,
+        )
+        .unwrap();
+        assert!(unet.contains_key("conv_in.weight"));
+        assert!(unet.contains_key("time_embedding.linear_1.weight"));
+
+        let _ = tokio::fs::remove_dir_all(base).await;
+    }
+
+    #[tokio::test]
+    async fn unsupported_original_block_index_still_fails() {
+        let base = temp_dir("unsupported-block-idx");
+        let source = base.join("models/checkpoints/sdxl.safetensors");
+        tokio::fs::create_dir_all(source.parent().unwrap())
+            .await
+            .unwrap();
+        // Provide all 6 required original checkpoint families so
+        // projection passes, then use an unsupported block index
+        // to trigger a mapping error.
         write_real_safetensors(
             &source,
             &[
-                "model.diffusion_model.input_blocks.0.0.weight",
-                "model.diffusion_model.middle_block.1.weight",
-                "model.diffusion_model.output_blocks.0.0.weight",
+                "model.diffusion_model.input_blocks.99.0.weight",
+                "model.diffusion_model.middle_block.0.in_layers.0.weight",
+                "model.diffusion_model.output_blocks.0.0.skip_connection.weight",
                 "model.diffusion_model.time_embed.0.weight",
                 "model.diffusion_model.out.2.weight",
                 "model.diffusion_model.label_emb.0.0.weight",
@@ -729,15 +894,7 @@ mod tests {
     async fn supported_checkpoint_writes_split_components_and_conversion_manifest() {
         let base = temp_dir("supported");
         let source = base.join("models/checkpoints/sdxl.safetensors");
-        write_real_safetensors(
-            &source,
-            &[
-                "conv_in.weight",
-                "conditioner.embedders.0.transformer.text_model.embeddings.token_embedding.weight",
-                "conditioner.embedders.1.model.transformer.text_model.embeddings.token_embedding.weight",
-                "first_stage_model.decoder.conv_in.weight",
-            ],
-        );
+        write_real_safetensors(&source, &complete_diffusers_split_names());
         let first_request = request(&base, &source);
 
         let result = import_sdxl_checkpoint_to_candle_example_split(first_request)

@@ -218,25 +218,16 @@ async fn model_service_import_reuses_existing_candle_split_conversion_and_update
 
 #[tokio::test]
 async fn model_service_import_failure_does_not_mutate_manifest() {
+    // Use an unsupported block index that passes projection but fails
+    // at the writer/mapping stage.
     let paths = AppPaths::new(temp_dir("model-import-failure"));
     let checkpoint_path = paths.models_dir().join("checkpoints/sdxl-base.safetensors");
     tokio::fs::create_dir_all(checkpoint_path.parent().unwrap())
         .await
         .unwrap();
-    write_tiny_safetensors(
-        &checkpoint_path,
-        &[
-            "model.diffusion_model.input_blocks.0.0.weight",
-            "model.diffusion_model.middle_block.1.weight",
-            "model.diffusion_model.output_blocks.0.0.weight",
-            "model.diffusion_model.time_embed.0.weight",
-            "model.diffusion_model.out.2.weight",
-            "model.diffusion_model.label_emb.0.0.weight",
-            "conditioner.embedders.0.transformer.text_model.embeddings.token_embedding.weight",
-            "conditioner.embedders.1.model.transformer.text_model.embeddings.token_embedding.weight",
-            "first_stage_model.decoder.conv_in.weight",
-        ],
-    );
+    let mut names = complete_original_checkpoint_names();
+    names[0] = "model.diffusion_model.input_blocks.99.0.weight";
+    write_tiny_safetensors(&checkpoint_path, &names);
 
     let model_id = ModelId::new("sdxl-base-1.0");
     let descriptor = ModelDescriptor::new(
@@ -268,12 +259,57 @@ async fn model_service_import_failure_does_not_mutate_manifest() {
         .unwrap_err();
 
     assert!(
-        error
-            .to_string()
-            .contains("requires model.diffusion_model.* to Candle example UNet key mapping")
+        error.to_string().contains("unsupported block index"),
+        "expected unsupported block index error, got: {error}"
     );
+
+    // Verify that the manifest was not mutated on failure.
     let models = service.list_models().await.unwrap();
     assert!(models[0].components().is_empty());
+}
+
+#[tokio::test]
+async fn model_service_import_original_checkpoint_adds_split_components() {
+    // Verify that a complete original checkpoint with valid mapping
+    // succeeds and produces manifest components.
+    let paths = AppPaths::new(temp_dir("model-import-success"));
+    let checkpoint_path = paths.models_dir().join("checkpoints/sdxl-base.safetensors");
+    tokio::fs::create_dir_all(checkpoint_path.parent().unwrap())
+        .await
+        .unwrap();
+    write_tiny_safetensors(&checkpoint_path, &complete_original_checkpoint_names());
+
+    let model_id = ModelId::new("sdxl-base-1.0");
+    let descriptor = ModelDescriptor::new(
+        model_id.clone(),
+        ModelSeries::new("stable_diffusion"),
+        ModelVariant::new("sdxl"),
+        vec![ModelRole::CheckpointBundle],
+        ModelSource::relative(
+            ModelRoot::base_models().id().clone(),
+            "checkpoints/sdxl-base.safetensors",
+        ),
+        ModelFormat::Safetensors,
+    )
+    .with_source_status(ModelSourceStatus::Available)
+    .with_fingerprint(Fingerprint::sha256("abc123"));
+    let service = ModelService::new(paths);
+    service
+        .save_manifest(
+            &ModelManifest::new()
+                .with_root(ModelRoot::base_models())
+                .with_model(descriptor),
+        )
+        .await
+        .unwrap();
+
+    service
+        .import_sdxl_checkpoint_to_candle_split(&model_id)
+        .await
+        .expect("original checkpoint import should now succeed");
+
+    let models = service.list_models().await.unwrap();
+    assert_eq!(models[0].components().len(), 4);
 }
 
 #[test]
@@ -419,6 +455,61 @@ fn write_tiny_safetensors(path: &std::path::Path, names: &[&str]) {
         bytes.extend_from_slice(&(idx as f32).to_le_bytes());
     }
     std::fs::write(path, bytes).unwrap();
+}
+
+fn complete_original_checkpoint_names() -> Vec<&'static str> {
+    let mut names = vec![
+        "model.diffusion_model.input_blocks.0.0.weight",
+        "model.diffusion_model.time_embed.0.weight",
+        "model.diffusion_model.input_blocks.1.0.in_layers.0.weight",
+        "model.diffusion_model.input_blocks.4.1.proj_in.weight",
+        "model.diffusion_model.input_blocks.3.0.op.weight",
+        "model.diffusion_model.middle_block.0.in_layers.0.weight",
+        "model.diffusion_model.middle_block.1.proj_in.weight",
+        "model.diffusion_model.output_blocks.0.0.skip_connection.weight",
+        "model.diffusion_model.output_blocks.0.1.proj_in.weight",
+        "model.diffusion_model.output_blocks.2.2.conv.weight",
+        "model.diffusion_model.out.0.weight",
+        "model.diffusion_model.out.2.weight",
+        "model.diffusion_model.label_emb.0.0.weight",
+    ];
+    names.extend(required_clip_source_names("conditioner.embedders.0."));
+    names.extend(required_clip_source_names("conditioner.embedders.1.model."));
+    names.extend(required_vae_source_names());
+    names
+}
+
+fn required_clip_source_names(prefix: &'static str) -> Vec<&'static str> {
+    let targets = [
+        "transformer.text_model.embeddings.token_embedding.weight",
+        "transformer.text_model.embeddings.position_embedding.weight",
+        "transformer.text_model.encoder.layers.0.self_attn.q_proj.weight",
+        "transformer.text_model.encoder.layers.0.self_attn.k_proj.weight",
+        "transformer.text_model.encoder.layers.0.self_attn.v_proj.weight",
+        "transformer.text_model.encoder.layers.0.self_attn.out_proj.weight",
+        "transformer.text_model.encoder.layers.0.layer_norm1.weight",
+        "transformer.text_model.final_layer_norm.weight",
+    ];
+    targets
+        .into_iter()
+        .map(|target| Box::leak(format!("{prefix}{target}").into_boxed_str()) as &'static str)
+        .collect()
+}
+
+fn required_vae_source_names() -> Vec<&'static str> {
+    let targets = [
+        "encoder.conv_in.weight",
+        "decoder.conv_in.weight",
+        "decoder.conv_out.weight",
+        "quant_conv.weight",
+        "post_quant_conv.weight",
+    ];
+    targets
+        .into_iter()
+        .map(|target| {
+            Box::leak(format!("first_stage_model.{target}").into_boxed_str()) as &'static str
+        })
+        .collect()
 }
 
 #[tokio::test]
