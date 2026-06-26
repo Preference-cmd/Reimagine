@@ -10,6 +10,7 @@ use super::checkpoint_projection::{
     SdxlCheckpointProjectionError, SdxlCheckpointRole, SdxlCheckpointRoleProjection,
     project_checkpoint_role,
 };
+use super::checkpoint_writer::{SdxlCheckpointWriterError, write_sdxl_checkpoint_components};
 
 pub const CANDLE_EXAMPLE_SPLIT_LAYOUT: &str = "candle_example_split";
 pub const SDXL_CHECKPOINT_IMPORT_CONVERTER_VERSION: &str =
@@ -239,6 +240,7 @@ pub enum SdxlCheckpointImportError {
     Inventory { path: PathBuf, reason: String },
     Projection { path: PathBuf, reason: String },
     UnsupportedMapping { path: PathBuf, reason: String },
+    WriteComponents { path: PathBuf, reason: String },
     Io { path: PathBuf, reason: String },
     ConversionManifestInvalid { path: PathBuf, reason: String },
 }
@@ -259,6 +261,11 @@ impl std::fmt::Display for SdxlCheckpointImportError {
             Self::UnsupportedMapping { path, reason } => write!(
                 f,
                 "unsupported SDXL checkpoint import mapping for {}: {reason}",
+                path.display()
+            ),
+            Self::WriteComponents { path, reason } => write!(
+                f,
+                "failed to write SDXL checkpoint import components under {}: {reason}",
                 path.display()
             ),
             Self::Io { path, reason } => {
@@ -314,10 +321,121 @@ pub async fn import_sdxl_checkpoint_to_candle_example_split(
     let inventory = SdxlCheckpointInventory::from_path(request.source_path())?;
     validate_supported_projection(request.source_path(), &inventory)?;
 
-    Err(SdxlCheckpointImportError::UnsupportedMapping {
-        path: request.source_path().to_path_buf(),
-        reason: "original SDXL checkpoint tensor remapping to Candle example split component keys is not implemented yet".to_owned(),
+    write_conversion(&request).await
+}
+
+async fn write_conversion(
+    request: &SdxlCheckpointImportRequest,
+) -> Result<SdxlCheckpointImportResult, SdxlCheckpointImportError> {
+    let conversion_dir = request.conversion_dir();
+    let staging_dir = staging_conversion_dir(&conversion_dir);
+    if tokio::fs::try_exists(&staging_dir)
+        .await
+        .map_err(|error| SdxlCheckpointImportError::Io {
+            path: staging_dir.clone(),
+            reason: error.to_string(),
+        })?
+    {
+        tokio::fs::remove_dir_all(&staging_dir)
+            .await
+            .map_err(|error| SdxlCheckpointImportError::Io {
+                path: staging_dir.clone(),
+                reason: error.to_string(),
+            })?;
+    }
+
+    let manifest = SdxlCheckpointConversionManifest::for_request(request);
+    let write_result = {
+        let staging_dir = staging_dir.clone();
+        let source_path = request.source_path().to_path_buf();
+        let manifest = manifest.clone();
+        tokio::task::spawn_blocking(move || {
+            write_sdxl_checkpoint_components(&source_path, &staging_dir, |component| {
+                manifest.component_path(component).to_owned()
+            })
+        })
+        .await
+        .map_err(|error| SdxlCheckpointImportError::WriteComponents {
+            path: request.source_path().to_path_buf(),
+            reason: error.to_string(),
+        })?
+    };
+
+    if let Err(error) = write_result {
+        let _ = tokio::fs::remove_dir_all(&staging_dir).await;
+        return Err(map_writer_error(error, request.source_path(), &staging_dir));
+    }
+
+    let manifest_path = staging_dir.join("conversion.json");
+    tokio::fs::write(
+        &manifest_path,
+        serde_json::to_vec_pretty(&manifest).map_err(|error| {
+            SdxlCheckpointImportError::ConversionManifestInvalid {
+                path: manifest_path.clone(),
+                reason: error.to_string(),
+            }
+        })?,
+    )
+    .await
+    .map_err(|error| SdxlCheckpointImportError::Io {
+        path: manifest_path.clone(),
+        reason: error.to_string(),
+    })?;
+
+    if let Some(parent) = conversion_dir.parent() {
+        tokio::fs::create_dir_all(parent)
+            .await
+            .map_err(|error| SdxlCheckpointImportError::Io {
+                path: parent.to_path_buf(),
+                reason: error.to_string(),
+            })?;
+    }
+    if tokio::fs::try_exists(&conversion_dir)
+        .await
+        .map_err(|error| SdxlCheckpointImportError::Io {
+            path: conversion_dir.clone(),
+            reason: error.to_string(),
+        })?
+    {
+        tokio::fs::remove_dir_all(&conversion_dir)
+            .await
+            .map_err(|error| SdxlCheckpointImportError::Io {
+                path: conversion_dir.clone(),
+                reason: error.to_string(),
+            })?;
+    }
+    tokio::fs::rename(&staging_dir, &conversion_dir)
+        .await
+        .map_err(|error| SdxlCheckpointImportError::Io {
+            path: conversion_dir.clone(),
+            reason: error.to_string(),
+        })?;
+
+    Ok(SdxlCheckpointImportResult {
+        conversion_manifest_path: conversion_dir.join("conversion.json"),
+        conversion_dir,
+        conversion_manifest: manifest,
+        reused_existing: false,
     })
+}
+
+fn map_writer_error(
+    error: SdxlCheckpointWriterError,
+    source_path: &Path,
+    staging_dir: &Path,
+) -> SdxlCheckpointImportError {
+    match error {
+        SdxlCheckpointWriterError::UnsupportedMapping { reason, .. } => {
+            SdxlCheckpointImportError::UnsupportedMapping {
+                path: source_path.to_path_buf(),
+                reason,
+            }
+        }
+        other => SdxlCheckpointImportError::WriteComponents {
+            path: staging_dir.to_path_buf(),
+            reason: other.to_string(),
+        },
+    }
 }
 
 async fn load_existing_conversion(
@@ -399,10 +517,13 @@ fn validate_supported_projection(
         match project_checkpoint_role(path, role, inventory)? {
             SdxlCheckpointRoleProjection::OriginalCheckpoint { .. } => {}
             SdxlCheckpointRoleProjection::DiffusersUnet => {
-                return Err(SdxlCheckpointImportError::UnsupportedMapping {
-                    path: path.to_path_buf(),
-                    reason: "diffusers-style UNet-only source is already a split component candidate and is not an original checkpoint bundle import input".to_owned(),
-                });
+                if role != SdxlCheckpointRole::Diffusion {
+                    return Err(SdxlCheckpointImportError::UnsupportedMapping {
+                        path: path.to_path_buf(),
+                        reason: "diffusers-style projection is only valid for the UNet component"
+                            .to_owned(),
+                    });
+                }
             }
         }
     }
@@ -417,6 +538,14 @@ fn safe_path_segment(value: &str) -> String {
             _ => '_',
         })
         .collect()
+}
+
+fn staging_conversion_dir(conversion_dir: &Path) -> PathBuf {
+    let nonce = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|duration| duration.as_nanos())
+        .unwrap_or_default();
+    conversion_dir.with_extension(format!("tmp-{}-{nonce}", std::process::id()))
 }
 
 #[cfg(test)]
@@ -449,6 +578,20 @@ mod tests {
         bytes.extend_from_slice(&(header.len() as u64).to_le_bytes());
         bytes.extend_from_slice(header.as_bytes());
         fs::write(path, bytes).unwrap();
+    }
+
+    fn write_real_safetensors(path: &Path, names: &[&str]) {
+        use candle_core::{DType, Device, Tensor};
+        use std::collections::HashMap;
+
+        fs::create_dir_all(path.parent().unwrap()).unwrap();
+        let mut tensors = HashMap::new();
+        for (idx, name) in names.iter().enumerate() {
+            let tensor = Tensor::from_vec(vec![idx as f32], (1,), &Device::Cpu).unwrap();
+            assert_eq!(tensor.dtype(), DType::F32);
+            tensors.insert((*name).to_owned(), tensor);
+        }
+        candle_core::safetensors::save(&tensors, path).unwrap();
     }
 
     fn request(base: &Path, source: &Path) -> SdxlCheckpointImportRequest {
@@ -484,6 +627,29 @@ mod tests {
         assert_eq!(
             manifest.component_path(SdxlConvertedComponent::ClipG),
             "text_encoder_2/model.safetensors"
+        );
+    }
+
+    #[test]
+    fn staging_conversion_paths_are_siblings_and_unique() {
+        let base = temp_dir("staging-path");
+        let conversion_dir = base.join("models/converted/sdxl_base/sha256_abcd");
+
+        let first = staging_conversion_dir(&conversion_dir);
+        std::thread::sleep(std::time::Duration::from_nanos(1));
+        let second = staging_conversion_dir(&conversion_dir);
+
+        assert_eq!(first.parent(), conversion_dir.parent());
+        assert_eq!(second.parent(), conversion_dir.parent());
+        assert_ne!(first, conversion_dir);
+        assert_ne!(second, conversion_dir);
+        assert_ne!(first, second);
+        assert!(
+            first
+                .file_name()
+                .unwrap()
+                .to_string_lossy()
+                .starts_with("sha256_abcd.tmp-")
         );
     }
 
@@ -526,7 +692,7 @@ mod tests {
         tokio::fs::create_dir_all(source.parent().unwrap())
             .await
             .unwrap();
-        write_header_only_safetensors(
+        write_real_safetensors(
             &source,
             &[
                 "model.diffusion_model.input_blocks.0.0.weight",
@@ -555,6 +721,52 @@ mod tests {
                 .await
                 .unwrap()
         );
+
+        let _ = tokio::fs::remove_dir_all(base).await;
+    }
+
+    #[tokio::test]
+    async fn supported_checkpoint_writes_split_components_and_conversion_manifest() {
+        let base = temp_dir("supported");
+        let source = base.join("models/checkpoints/sdxl.safetensors");
+        write_real_safetensors(
+            &source,
+            &[
+                "conv_in.weight",
+                "conditioner.embedders.0.transformer.text_model.embeddings.token_embedding.weight",
+                "conditioner.embedders.1.model.transformer.text_model.embeddings.token_embedding.weight",
+                "first_stage_model.decoder.conv_in.weight",
+            ],
+        );
+        let first_request = request(&base, &source);
+
+        let result = import_sdxl_checkpoint_to_candle_example_split(first_request)
+            .await
+            .unwrap();
+
+        assert!(!result.reused_existing());
+        assert!(result.conversion_manifest_path().is_file());
+        assert!(
+            result
+                .component_path(SdxlConvertedComponent::Unet)
+                .is_file()
+        );
+        assert!(
+            result
+                .component_path(SdxlConvertedComponent::ClipL)
+                .is_file()
+        );
+        assert!(
+            result
+                .component_path(SdxlConvertedComponent::ClipG)
+                .is_file()
+        );
+        assert!(result.component_path(SdxlConvertedComponent::Vae).is_file());
+
+        let second = import_sdxl_checkpoint_to_candle_example_split(request(&base, &source))
+            .await
+            .unwrap();
+        assert!(second.reused_existing());
 
         let _ = tokio::fs::remove_dir_all(base).await;
     }

@@ -9,7 +9,9 @@
 mod bundle;
 pub mod checkpoint_import;
 pub(crate) mod checkpoint_inventory;
+pub(crate) mod checkpoint_mapping;
 pub(crate) mod checkpoint_projection;
+pub(crate) mod checkpoint_writer;
 pub mod diffusion;
 pub(crate) mod diffusion_graph;
 pub(crate) mod diffusion_sources;
