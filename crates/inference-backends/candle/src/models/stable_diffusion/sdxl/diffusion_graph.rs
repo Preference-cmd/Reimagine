@@ -18,6 +18,10 @@ use crate::store::CandleLatent;
 #[derive(Debug, Clone)]
 pub(crate) struct SdxlDiffusionConditioning {
     pub text_embedding: Tensor,
+    /// Pooled embedding is stored for future added-conditioning deepening.
+    /// V1 aligns with Candle's official SDXL example, which does not pass
+    /// pooled embeddings or time ids through the UNet forward path.
+    #[allow(dead_code)]
     pub pooled_embedding: Tensor,
 }
 
@@ -34,7 +38,7 @@ pub(crate) trait SdxlDiffusionGraph: std::fmt::Debug + Send + Sync {
 
 pub(crate) fn load_diffusion_graph(
     sources: &SdxlDiffusionSources,
-    _device: &Device,
+    device: &Device,
 ) -> Result<Arc<dyn SdxlDiffusionGraph>, CandleBackendError> {
     let inventory = SdxlCheckpointInventory::from_path(sources.path()).map_err(|err| {
         let path = sources.path().display();
@@ -72,22 +76,17 @@ pub(crate) fn load_diffusion_graph(
                 .join(", ")
         ))),
         SdxlCheckpointRoleProjection::DiffusersUnet => {
-            Err(CandleBackendError::InvalidRequest(format!(
-                "diffusion.sample SDXL added conditioning is required but unsupported by the current Candle UNet forward path at `{}` ({}); pooled text embeddings and generated time ids cannot be passed to candle_transformers::UNet2DConditionModel::forward yet",
-                sources.path().display(),
-                sources.fingerprint()
-            )))
+            let graph = DiffusersSdxlUnetGraph::load(sources.path(), device)?;
+            Ok(Arc::new(graph))
         }
     }
 }
 
-#[allow(dead_code)]
 #[derive(Debug)]
 struct DiffusersSdxlUnetGraph {
     unet: UNet2DConditionModel,
 }
 
-#[allow(dead_code)]
 impl DiffusersSdxlUnetGraph {
     fn load(path: &Path, device: &Device) -> Result<Self, CandleBackendError> {
         let data = std::fs::read(path).map_err(|err| {
@@ -119,7 +118,6 @@ impl DiffusersSdxlUnetGraph {
     }
 }
 
-#[allow(dead_code)]
 trait SdxlDenoiser {
     fn predict_noise(
         &self,
@@ -129,7 +127,6 @@ trait SdxlDenoiser {
     ) -> candle_core::Result<Tensor>;
 }
 
-#[allow(dead_code)]
 impl SdxlDenoiser for UNet2DConditionModel {
     fn predict_noise(
         &self,
@@ -141,25 +138,19 @@ impl SdxlDenoiser for UNet2DConditionModel {
     }
 }
 
-#[allow(dead_code)]
 impl SdxlDiffusionGraph for DiffusersSdxlUnetGraph {
     fn sample(
         &self,
-        _input_latent: CandleLatent,
+        input_latent: CandleLatent,
         positive: SdxlDiffusionConditioning,
         negative: SdxlDiffusionConditioning,
-        _request: &SdxlSampleRequest,
-        _device: &Device,
+        request: &SdxlSampleRequest,
+        device: &Device,
     ) -> Result<CandleLatent, CandleBackendError> {
-        let positive_pooled = positive.pooled_embedding.shape().dims().to_vec();
-        let negative_pooled = negative.pooled_embedding.shape().dims().to_vec();
-        Err(CandleBackendError::InvalidRequest(format!(
-            "diffusion.sample SDXL added conditioning is required but unsupported by the current Candle UNet forward path; pooled embeddings have shapes positive={positive_pooled:?}, negative={negative_pooled:?}, and generated time ids cannot be passed to candle_transformers::UNet2DConditionModel::forward"
-        )))
+        run_euler_normal_denoise_loop(&self.unet, input_latent, positive, negative, request, device)
     }
 }
 
-#[allow(dead_code)]
 fn run_euler_normal_denoise_loop(
     denoiser: &dyn SdxlDenoiser,
     input_latent: CandleLatent,
@@ -219,7 +210,6 @@ fn run_euler_normal_denoise_loop(
     Ok(CandleLatent::new(sample))
 }
 
-#[allow(dead_code)]
 #[derive(Debug)]
 struct EulerNormalScheduler {
     timesteps: Vec<f64>,
@@ -227,7 +217,6 @@ struct EulerNormalScheduler {
     init_noise_sigma: f64,
 }
 
-#[allow(dead_code)]
 #[derive(Debug, Clone, Copy)]
 struct EulerNormalStep {
     index: usize,
@@ -235,16 +224,11 @@ struct EulerNormalStep {
 }
 
 impl EulerNormalScheduler {
-    #[allow(dead_code)]
     const BETA_START: f64 = 0.00085;
-    #[allow(dead_code)]
     const BETA_END: f64 = 0.012;
-    #[allow(dead_code)]
     const TRAIN_TIMESTEPS: usize = 1000;
-    #[allow(dead_code)]
     const STEPS_OFFSET: usize = 1;
 
-    #[allow(dead_code)]
     fn new(inference_steps: usize) -> Result<Self, CandleBackendError> {
         if inference_steps == 0 {
             return Err(CandleBackendError::InvalidRequest(
@@ -283,7 +267,6 @@ impl EulerNormalScheduler {
         })
     }
 
-    #[allow(dead_code)]
     fn training_sigmas() -> Vec<f64> {
         let mut alpha_cumprod = 1.0f64;
         (0..Self::TRAIN_TIMESTEPS)
@@ -302,12 +285,10 @@ impl EulerNormalScheduler {
             .collect()
     }
 
-    #[allow(dead_code)]
     fn init_noise_sigma(&self) -> f64 {
         self.init_noise_sigma
     }
 
-    #[allow(dead_code)]
     fn steps(&self) -> impl Iterator<Item = EulerNormalStep> + '_ {
         self.timesteps
             .iter()
@@ -316,7 +297,6 @@ impl EulerNormalScheduler {
             .map(|(index, timestep)| EulerNormalStep { index, timestep })
     }
 
-    #[allow(dead_code)]
     fn scale_model_input(
         &self,
         sample: Tensor,
@@ -334,7 +314,6 @@ impl EulerNormalScheduler {
         })
     }
 
-    #[allow(dead_code)]
     fn step(
         &self,
         model_output: &Tensor,
@@ -380,7 +359,6 @@ impl EulerNormalScheduler {
     }
 }
 
-#[allow(dead_code)]
 fn interpolate(x: &[f64], xp: &[f64], fp: &[f64]) -> Result<Vec<f64>, CandleBackendError> {
     if xp.len() != fp.len() || xp.len() < 2 {
         return Err(CandleBackendError::InvalidRequest(
