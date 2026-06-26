@@ -77,6 +77,18 @@ impl ModelManifest {
     pub fn remove_model(&mut self, model_id: &reimagine_core::model::ModelId) {
         self.models.retain(|model| model.id() != model_id);
     }
+
+    pub fn upsert_model(&mut self, model: ModelDescriptor) {
+        if let Some(existing) = self
+            .models
+            .iter_mut()
+            .find(|existing| existing.id() == model.id())
+        {
+            *existing = model;
+        } else {
+            self.models.push(model);
+        }
+    }
 }
 
 impl Default for ModelManifest {

@@ -103,6 +103,11 @@ impl ModelDescriptor {
         self
     }
 
+    pub fn with_roles(mut self, roles: Vec<ModelRole>) -> Self {
+        self.roles = roles;
+        self
+    }
+
     /// Attach a single descriptor-level metadata `key=value` entry.
     ///
     /// Subsequent calls with the same `key` overwrite the previous
@@ -119,6 +124,11 @@ impl ModelDescriptor {
     /// inference DTOs as `SplitComponent` sources.
     pub fn with_component(mut self, component: ModelComponentSource) -> Self {
         self.components.push(component);
+        self
+    }
+
+    pub fn with_components(mut self, components: Vec<ModelComponentSource>) -> Self {
+        self.components = components;
         self
     }
 

@@ -40,6 +40,7 @@ pub enum AppHostError {
     BootstrapConfig(ConfigError),
     Runtime(RuntimeServiceError),
     ModelManager(reimagine_model_manager::ModelManagerError),
+    CandleCheckpointImport(reimagine_inference_candle::SdxlCheckpointImportError),
 }
 
 impl std::fmt::Display for AppHostError {
@@ -80,6 +81,7 @@ impl std::fmt::Display for AppHostError {
             Self::BootstrapConfig(error) => write!(f, "config bootstrap failed: {error}"),
             Self::Runtime(error) => write!(f, "{error}"),
             Self::ModelManager(error) => write!(f, "{error}"),
+            Self::CandleCheckpointImport(error) => write!(f, "{error}"),
         }
     }
 }
@@ -101,5 +103,11 @@ impl From<ConfigError> for AppHostError {
 impl From<RuntimeServiceError> for AppHostError {
     fn from(value: RuntimeServiceError) -> Self {
         Self::Runtime(value)
+    }
+}
+
+impl From<reimagine_inference_candle::SdxlCheckpointImportError> for AppHostError {
+    fn from(value: reimagine_inference_candle::SdxlCheckpointImportError) -> Self {
+        Self::CandleCheckpointImport(value)
     }
 }

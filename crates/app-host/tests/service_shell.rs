@@ -11,8 +11,12 @@ use reimagine_core::model::{
     NodeTypeId, ParamValue, SlotId, WorkflowVersion,
 };
 use reimagine_core::workflow::Workflow;
+use reimagine_inference_candle::{
+    SdxlCheckpointConversionManifest, SdxlCheckpointImportRequest, SdxlConvertedComponent,
+};
 use reimagine_model_manager::{
-    ModelDescriptor, ModelFormat, ModelManifest, ModelRoot, ModelSource, ModelSourceStatus,
+    Fingerprint, ModelDescriptor, ModelFormat, ModelManifest, ModelRoot, ModelSource,
+    ModelSourceStatus,
 };
 use reimagine_nodes::{BUILTIN_CHECKPOINT_LOADER, BUILTIN_STRING, BuiltinNodeCatalog};
 
@@ -123,6 +127,150 @@ async fn model_service_wraps_manifest_store_and_resolver() {
         .expect("resolution should run");
     assert!(resolution.is_resolved());
     assert_eq!(resolution.value().unwrap().id(), &model_id);
+}
+
+#[tokio::test]
+async fn model_service_import_reuses_existing_candle_split_conversion_and_updates_manifest() {
+    let paths = AppPaths::new(temp_dir("model-import-existing"));
+    let checkpoint_path = paths.models_dir().join("checkpoints/sdxl-base.safetensors");
+    tokio::fs::create_dir_all(checkpoint_path.parent().unwrap())
+        .await
+        .unwrap();
+    tokio::fs::write(&checkpoint_path, b"checkpoint")
+        .await
+        .unwrap();
+
+    let model_id = ModelId::new("sdxl-base-1.0");
+    let fingerprint = Fingerprint::sha256("abc123");
+    let request = SdxlCheckpointImportRequest::new(
+        model_id.as_str(),
+        &checkpoint_path,
+        "sha256-abc123",
+        "safetensors",
+        paths.models_dir().join("converted"),
+    )
+    .with_created_at("2026-06-26T00:00:00Z");
+    let conversion_dir = request.conversion_dir();
+    let conversion_manifest = SdxlCheckpointConversionManifest::for_request(&request);
+    for component in SdxlConvertedComponent::all() {
+        let path = conversion_dir.join(conversion_manifest.component_path(component));
+        tokio::fs::create_dir_all(path.parent().unwrap())
+            .await
+            .unwrap();
+        tokio::fs::write(path, b"component").await.unwrap();
+    }
+    tokio::fs::write(
+        conversion_dir.join("conversion.json"),
+        serde_json::to_vec_pretty(&conversion_manifest).unwrap(),
+    )
+    .await
+    .unwrap();
+
+    let descriptor = ModelDescriptor::new(
+        model_id.clone(),
+        ModelSeries::new("stable_diffusion"),
+        ModelVariant::new("sdxl"),
+        vec![ModelRole::CheckpointBundle],
+        ModelSource::relative(
+            ModelRoot::base_models().id().clone(),
+            "checkpoints/sdxl-base.safetensors",
+        ),
+        ModelFormat::Safetensors,
+    )
+    .with_source_status(ModelSourceStatus::Available)
+    .with_fingerprint(fingerprint);
+    let service = ModelService::new(paths.clone());
+    service
+        .save_manifest(
+            &ModelManifest::new()
+                .with_root(ModelRoot::base_models())
+                .with_model(descriptor),
+        )
+        .await
+        .unwrap();
+
+    let (manifest, report, import_result) = service
+        .import_sdxl_checkpoint_to_candle_split(&model_id)
+        .await
+        .unwrap();
+
+    assert!(report.diagnostics().is_empty());
+    assert!(import_result.reused_existing());
+    let converted = manifest.models().first().expect("converted descriptor");
+    assert_eq!(converted.components().len(), 4);
+    assert!(converted.components().iter().any(|component| {
+        component.metadata().get("component").map(String::as_str) == Some("unet")
+    }));
+
+    let model_ref = ModelRef::new(
+        model_id.clone(),
+        ModelSeries::new("stable_diffusion"),
+        ModelVariant::new("sdxl"),
+        ModelRole::CheckpointBundle,
+    );
+    let resolved = service
+        .resolve_descriptor_with_components(&model_ref)
+        .await
+        .unwrap();
+    assert!(resolved.report().diagnostics().is_empty());
+    assert_eq!(resolved.value().unwrap().components().len(), 4);
+}
+
+#[tokio::test]
+async fn model_service_import_failure_does_not_mutate_manifest() {
+    let paths = AppPaths::new(temp_dir("model-import-failure"));
+    let checkpoint_path = paths.models_dir().join("checkpoints/sdxl-base.safetensors");
+    tokio::fs::create_dir_all(checkpoint_path.parent().unwrap())
+        .await
+        .unwrap();
+    write_header_only_safetensors(
+        &checkpoint_path,
+        &[
+            "model.diffusion_model.input_blocks.0.0.weight",
+            "model.diffusion_model.middle_block.1.weight",
+            "model.diffusion_model.output_blocks.0.0.weight",
+            "model.diffusion_model.time_embed.0.weight",
+            "model.diffusion_model.out.2.weight",
+            "model.diffusion_model.label_emb.0.0.weight",
+            "conditioner.embedders.0.transformer.text_model.embeddings.token_embedding.weight",
+            "first_stage_model.decoder.conv_in.weight",
+        ],
+    );
+
+    let model_id = ModelId::new("sdxl-base-1.0");
+    let descriptor = ModelDescriptor::new(
+        model_id.clone(),
+        ModelSeries::new("stable_diffusion"),
+        ModelVariant::new("sdxl"),
+        vec![ModelRole::CheckpointBundle],
+        ModelSource::relative(
+            ModelRoot::base_models().id().clone(),
+            "checkpoints/sdxl-base.safetensors",
+        ),
+        ModelFormat::Safetensors,
+    )
+    .with_source_status(ModelSourceStatus::Available)
+    .with_fingerprint(Fingerprint::sha256("abc123"));
+    let service = ModelService::new(paths);
+    service
+        .save_manifest(
+            &ModelManifest::new()
+                .with_root(ModelRoot::base_models())
+                .with_model(descriptor),
+        )
+        .await
+        .unwrap();
+
+    let error = service
+        .import_sdxl_checkpoint_to_candle_split(&model_id)
+        .await
+        .unwrap_err();
+
+    assert!(error.to_string().contains(
+        "tensor remapping to Candle example split component keys is not implemented yet"
+    ));
+    let models = service.list_models().await.unwrap();
+    assert!(models[0].components().is_empty());
 }
 
 #[test]
@@ -245,6 +393,21 @@ fn add_string_node_batch(base_version: WorkflowVersion, value: &str) -> CommandB
             position: None,
         }],
     )
+}
+
+fn write_header_only_safetensors(path: &std::path::Path, names: &[&str]) {
+    let entries = names
+        .iter()
+        .map(|name| {
+            format!("\"{name}\":{{\"dtype\":\"F32\",\"shape\":[1],\"data_offsets\":[0,4]}}")
+        })
+        .collect::<Vec<_>>()
+        .join(",");
+    let header = format!("{{{entries}}}");
+    let mut bytes = Vec::new();
+    bytes.extend_from_slice(&(header.len() as u64).to_le_bytes());
+    bytes.extend_from_slice(header.as_bytes());
+    std::fs::write(path, bytes).unwrap();
 }
 
 #[tokio::test]
