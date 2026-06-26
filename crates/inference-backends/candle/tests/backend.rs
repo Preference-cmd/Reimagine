@@ -1221,7 +1221,7 @@ async fn diffusion_sample_rejects_unmaterialized_real_diffusion_graph_instead_of
 }
 
 #[tokio::test]
-async fn diffusion_sample_rejects_diffusers_unet_until_added_conditioning_forward_exists() {
+async fn diffusion_sample_rejects_incomplete_diffusers_unet_with_materialization_error() {
     let backend = backend();
     let root = unique_sdxl_root();
     let path = write_header_only_safetensors(
@@ -1280,9 +1280,8 @@ async fn diffusion_sample_rejects_diffusers_unet_until_added_conditioning_forwar
         .await
         .unwrap_err();
 
-    assert_backend_execution_failed_with(&err, "SDXL added conditioning");
-    assert_backend_execution_failed_with(&err, "pooled text embeddings");
-    assert_backend_execution_failed_with(&err, "time ids");
+    assert_backend_execution_failed_with(&err, "failed to parse SDXL diffusion safetensors");
+    assert_backend_execution_failed_with(&err, "invalid offset");
 }
 
 #[tokio::test]
