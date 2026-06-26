@@ -96,6 +96,21 @@ async fn remove_model_updates_manifest_only() {
     cleanup(base).await;
 }
 
+#[test]
+fn upsert_model_replaces_existing_descriptor_by_id() {
+    let initial = sample_descriptor();
+    let replacement = sample_descriptor()
+        .with_source_status(ModelSourceStatus::Available)
+        .with_fingerprint(Fingerprint::sha256("abc123"));
+    let mut manifest = ModelManifest::new()
+        .with_root(ModelRoot::base_models())
+        .with_model(initial);
+
+    manifest.upsert_model(replacement.clone());
+
+    assert_eq!(manifest.models(), &[replacement]);
+}
+
 #[tokio::test]
 async fn top_level_load_helper_matches_store_behavior() {
     let base = test_base("helper-load");

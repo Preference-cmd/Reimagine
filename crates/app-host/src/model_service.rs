@@ -1,11 +1,16 @@
 use std::sync::{Arc, RwLock};
 
 use reimagine_config::AppPaths;
-use reimagine_core::model::{ModelId, ModelRef};
+use reimagine_core::model::{ModelId, ModelRef, ModelRole};
+use reimagine_inference_candle::{
+    SdxlCheckpointImportRequest, SdxlCheckpointImportResult, SdxlConvertedComponent,
+    import_sdxl_checkpoint_to_candle_example_split,
+};
 use reimagine_model_manager::{
-    ManifestModelResolver, ManifestValidationReport, ModelDescriptor, ModelDescriptorResolver,
-    ModelManifest, ModelManifestStore, ModelReadinessResolver, ModelResolution,
-    ResolvedDescriptorView, ResolvedModelInfo,
+    Fingerprint, ManifestModelResolver, ManifestValidationReport, ModelComponentSource,
+    ModelDescriptor, ModelDescriptorResolver, ModelFormat, ModelManifest, ModelManifestStore,
+    ModelReadinessResolver, ModelResolution, ModelRootId, ModelSource, ModelSourceStatus,
+    ResolvedDescriptorView, ResolvedModelInfo, resolve_source_path,
 };
 
 use crate::AppHostResult;
@@ -67,6 +72,58 @@ impl ModelService {
         let (manifest, report) = self.store.remove_model(model_id).await?;
         self.replace_cached_manifest(manifest.clone(), report.clone());
         Ok((manifest, report))
+    }
+
+    pub async fn import_sdxl_checkpoint_to_candle_split(
+        &self,
+        model_id: &ModelId,
+    ) -> AppHostResult<(
+        ModelManifest,
+        ManifestValidationReport,
+        SdxlCheckpointImportResult,
+    )> {
+        let (mut manifest, _) = self.load_manifest().await?;
+        let descriptor = manifest
+            .models()
+            .iter()
+            .find(|descriptor| descriptor.id() == model_id)
+            .cloned()
+            .ok_or_else(|| crate::AppHostError::Io {
+                path: self.store.path().to_path_buf(),
+                message: format!("model `{model_id}` is not declared in manifest"),
+            })?;
+
+        let source_path =
+            resolve_source_path(&manifest, descriptor.source(), self.app_paths.models_dir())
+                .ok_or_else(|| crate::AppHostError::Io {
+                    path: self.store.path().to_path_buf(),
+                    message: format!("model `{model_id}` source path cannot be resolved"),
+                })?;
+        let fingerprint = descriptor
+            .fingerprint()
+            .ok_or_else(|| crate::AppHostError::Io {
+                path: source_path.clone(),
+                message: format!(
+                    "model `{model_id}` must have a fingerprint before checkpoint import"
+                ),
+            })?;
+        let request = SdxlCheckpointImportRequest::new(
+            model_id.as_str(),
+            source_path,
+            fingerprint_path_segment(fingerprint),
+            format!("{:?}", descriptor.format()).to_ascii_lowercase(),
+            self.app_paths.models_dir().join("converted"),
+        );
+
+        let import_result = import_sdxl_checkpoint_to_candle_example_split(request).await?;
+        let converted_descriptor = descriptor_with_converted_components(
+            descriptor,
+            &import_result,
+            self.app_paths.models_dir(),
+        );
+        manifest.upsert_model(converted_descriptor);
+        let report = self.save_manifest(&manifest).await?;
+        Ok((manifest, report, import_result))
     }
 
     pub async fn resolve_readiness(
@@ -144,6 +201,81 @@ impl ModelService {
             .write()
             .expect("model manifest report cache poisoned") = Some(report);
     }
+}
+
+fn descriptor_with_converted_components(
+    descriptor: ModelDescriptor,
+    import_result: &SdxlCheckpointImportResult,
+    models_dir: &std::path::Path,
+) -> ModelDescriptor {
+    let components = SdxlConvertedComponent::all()
+        .into_iter()
+        .map(|component| component_source(component, import_result, models_dir))
+        .collect();
+
+    descriptor
+        .with_roles(vec![
+            ModelRole::CheckpointBundle,
+            ModelRole::DiffusionModel,
+            ModelRole::TextEncoder,
+            ModelRole::Vae,
+        ])
+        .with_source_status(ModelSourceStatus::Available)
+        .with_metadata("converted_layout", "candle_example_split")
+        .with_metadata(
+            "converter_version",
+            import_result.conversion_manifest().converter_version(),
+        )
+        .with_components(components)
+}
+
+fn component_source(
+    component: SdxlConvertedComponent,
+    import_result: &SdxlCheckpointImportResult,
+    models_dir: &std::path::Path,
+) -> ModelComponentSource {
+    let role = match component {
+        SdxlConvertedComponent::Unet => ModelRole::DiffusionModel,
+        SdxlConvertedComponent::Vae => ModelRole::Vae,
+        SdxlConvertedComponent::ClipL | SdxlConvertedComponent::ClipG => ModelRole::TextEncoder,
+    };
+    let path = path_relative_to_models_dir(import_result.component_path(component), models_dir);
+
+    ModelComponentSource::new(
+        role,
+        ModelSource::relative(ModelRootId::new("base"), path),
+        ModelFormat::Safetensors,
+    )
+    .with_metadata("component", component.metadata_component())
+    .with_metadata(
+        "converted_layout",
+        import_result.conversion_manifest().target_layout(),
+    )
+}
+
+fn path_relative_to_models_dir(path: std::path::PathBuf, models_dir: &std::path::Path) -> String {
+    path.strip_prefix(models_dir)
+        .unwrap_or(path.as_path())
+        .to_string_lossy()
+        .replace('\\', "/")
+}
+
+fn fingerprint_path_segment(fingerprint: &Fingerprint) -> String {
+    format!(
+        "{}-{}",
+        sanitize_path_segment(fingerprint.kind()),
+        sanitize_path_segment(fingerprint.value())
+    )
+}
+
+fn sanitize_path_segment(value: &str) -> String {
+    value
+        .chars()
+        .map(|ch| match ch {
+            'a'..='z' | 'A'..='Z' | '0'..='9' | '-' | '_' | '.' => ch,
+            _ => '_',
+        })
+        .collect()
 }
 
 fn collect_model_refs(workflow: &reimagine_core::workflow::Workflow) -> Vec<ModelRef> {

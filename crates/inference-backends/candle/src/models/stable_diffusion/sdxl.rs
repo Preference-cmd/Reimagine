@@ -7,6 +7,7 @@
 //! the real CLIP / UNet / VAE kernels.
 
 mod bundle;
+pub mod checkpoint_import;
 pub(crate) mod checkpoint_inventory;
 pub(crate) mod checkpoint_projection;
 pub mod diffusion;
