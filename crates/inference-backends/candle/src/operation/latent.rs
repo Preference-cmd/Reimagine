@@ -17,6 +17,15 @@
 //! The operation is model-family-neutral at the protocol level.
 //! SDXL-specific VAE decoding lives behind the facade in
 //! `models/stable_diffusion/sdxl/vae.rs`.
+//!
+//! V1 real decode is limited to `batch=1`. Latents with `batch != 1`
+//! are rejected with a precise unsupported-batch error before any
+//! decode work is performed, so save/preview cannot silently drop
+//! or mishandle outputs.
+//!
+//! The VAE handle and latent handle must point at the same
+//! `BackendInstance`. Mismatched backend instances produce a
+//! precise affinity error.
 
 use candle_core::{DType, Tensor};
 use reimagine_core::model::{TensorDType, TensorShape};
@@ -136,6 +145,45 @@ pub fn execute_latent_decode(
             "latent.decode `latent` handle belongs to backend `{}`, expected `{}`",
             latent_handle.payload().backend().as_str(),
             backend.backend_kind()
+        )));
+    }
+
+    // Validate that VAE and latent handles share the same backend
+    // instance. Cross-instance decode is unsupported in V1; this
+    // must be surfaced as a precise affinity error rather than
+    // silently coercing tensors across instances. The check is
+    // gated on the handle having a non-default instance token so
+    // callers using the legacy `Backend::new("candle")` shortcut
+    // continue to work; the model-bundle affinity check below
+    // still rejects cross-instance decodes for explicit handles.
+    let expected_instance = backend.backend_instance();
+    if vae_handle.backend_instance().as_str() != expected_instance.as_str()
+        && vae_handle.backend_instance().as_str() != backend.backend_kind().as_str()
+    {
+        return Err(CandleBackendError::InvalidRequest(format!(
+            "latent.decode `vae` handle belongs to backend instance `{}`, expected `{}`",
+            vae_handle.backend_instance().as_str(),
+            expected_instance.as_str()
+        )));
+    }
+    if latent_handle.payload().backend_instance().as_str() != expected_instance.as_str()
+        && latent_handle.payload().backend_instance().as_str() != backend.backend_kind().as_str()
+    {
+        return Err(CandleBackendError::InvalidRequest(format!(
+            "latent.decode `latent` handle belongs to backend instance `{}`, expected `{}`",
+            latent_handle.payload().backend_instance().as_str(),
+            expected_instance.as_str()
+        )));
+    }
+
+    // Reject batch != 1 at the operation boundary so save/preview
+    // cannot silently drop or mishandle outputs. V1 real decode is
+    // limited to a single latent sample.
+    if latent_handle.batch() != 1 {
+        return Err(CandleBackendError::InvalidRequest(format!(
+            "latent.decode V1 supports only batch=1; got batch={} for latent handle `{}`. Multi-image decode is not supported in this issue",
+            latent_handle.batch(),
+            latent_handle.payload().payload_key().as_str()
         )));
     }
 

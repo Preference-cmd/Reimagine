@@ -50,25 +50,50 @@ fn load_model_bundle(
     source_set: &reimagine_inference::ResolvedInferenceModelSourceSet,
     backend: &CandleBackend,
 ) -> Result<std::sync::Arc<LoadedModelBundle>, CandleBackendError> {
-    if backend.allow_test_text_projection() {
-        return LoadedModelBundle::load_from_source_set_with_test_text_projection(
+    let bundle = if backend.allow_test_text_projection() {
+        LoadedModelBundle::load_from_source_set_with_test_text_projection(
             resolved.model_id().clone(),
             resolved.series(),
             resolved.variant(),
             source_set,
             resolved.format(),
             backend.device().clone(),
-        );
+        )?
+    } else {
+        LoadedModelBundle::load_from_source_set(
+            resolved.model_id().clone(),
+            resolved.series(),
+            resolved.variant(),
+            source_set,
+            resolved.format(),
+            backend.device().clone(),
+        )?
+    };
+
+    if backend.allow_test_vae_decoder_projection() {
+        install_test_vae_decoder_graph(&bundle);
     }
 
-    LoadedModelBundle::load_from_source_set(
-        resolved.model_id().clone(),
-        resolved.series(),
-        resolved.variant(),
-        source_set,
-        resolved.format(),
-        backend.device().clone(),
-    )
+    Ok(bundle)
+}
+
+/// Install a test-only VAE decoder graph on a freshly loaded bundle.
+/// Production code never reaches this path; only the
+/// `with_test_vae_decoder_projection()` test helper enables it.
+#[doc(hidden)]
+#[allow(irrefutable_let_patterns)]
+fn install_test_vae_decoder_graph(bundle: &std::sync::Arc<LoadedModelBundle>) {
+    // `LoadedModelBundle::TestPlaceholder` is gated to unit tests in
+    // the candle crate and is not reachable through the production
+    // bundle-construction flow used here. Use an `if let` so the
+    // compiler can warn if a future non-SDXL variant lands in
+    // production builds.
+    if let LoadedModelBundle::StableDiffusionSdxl(sdxl) = bundle.as_ref() {
+        use crate::models::stable_diffusion::sdxl::vae::SdxlVaeDecoderGraph;
+        sdxl.install_test_vae_decoder_graph_for_tests(std::sync::Arc::new(
+            SdxlVaeDecoderGraph::test_placeholder(),
+        ));
+    }
 }
 
 fn bundle_response(
