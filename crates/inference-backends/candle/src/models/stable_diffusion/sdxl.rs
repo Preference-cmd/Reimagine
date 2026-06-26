@@ -18,6 +18,8 @@ pub(crate) mod diffusion_sources;
 pub mod text;
 pub(crate) mod text_sources;
 pub mod tokenizer;
+pub(crate) mod unet_key_mapping;
+pub(crate) mod unet_target_keys;
 pub mod vae;
 pub(crate) mod vae_sources;
 
