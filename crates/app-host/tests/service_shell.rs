@@ -223,7 +223,7 @@ async fn model_service_import_failure_does_not_mutate_manifest() {
     tokio::fs::create_dir_all(checkpoint_path.parent().unwrap())
         .await
         .unwrap();
-    write_header_only_safetensors(
+    write_tiny_safetensors(
         &checkpoint_path,
         &[
             "model.diffusion_model.input_blocks.0.0.weight",
@@ -233,6 +233,7 @@ async fn model_service_import_failure_does_not_mutate_manifest() {
             "model.diffusion_model.out.2.weight",
             "model.diffusion_model.label_emb.0.0.weight",
             "conditioner.embedders.0.transformer.text_model.embeddings.token_embedding.weight",
+            "conditioner.embedders.1.model.transformer.text_model.embeddings.token_embedding.weight",
             "first_stage_model.decoder.conv_in.weight",
         ],
     );
@@ -266,9 +267,11 @@ async fn model_service_import_failure_does_not_mutate_manifest() {
         .await
         .unwrap_err();
 
-    assert!(error.to_string().contains(
-        "tensor remapping to Candle example split component keys is not implemented yet"
-    ));
+    assert!(
+        error
+            .to_string()
+            .contains("requires model.diffusion_model.* to Candle example UNet key mapping")
+    );
     let models = service.list_models().await.unwrap();
     assert!(models[0].components().is_empty());
 }
@@ -395,11 +398,16 @@ fn add_string_node_batch(base_version: WorkflowVersion, value: &str) -> CommandB
     )
 }
 
-fn write_header_only_safetensors(path: &std::path::Path, names: &[&str]) {
+fn write_tiny_safetensors(path: &std::path::Path, names: &[&str]) {
+    let mut offset = 0usize;
     let entries = names
         .iter()
         .map(|name| {
-            format!("\"{name}\":{{\"dtype\":\"F32\",\"shape\":[1],\"data_offsets\":[0,4]}}")
+            let start = offset;
+            offset += 4;
+            format!(
+                "\"{name}\":{{\"dtype\":\"F32\",\"shape\":[1],\"data_offsets\":[{start},{offset}]}}"
+            )
         })
         .collect::<Vec<_>>()
         .join(",");
@@ -407,6 +415,9 @@ fn write_header_only_safetensors(path: &std::path::Path, names: &[&str]) {
     let mut bytes = Vec::new();
     bytes.extend_from_slice(&(header.len() as u64).to_le_bytes());
     bytes.extend_from_slice(header.as_bytes());
+    for idx in 0..names.len() {
+        bytes.extend_from_slice(&(idx as f32).to_le_bytes());
+    }
     std::fs::write(path, bytes).unwrap();
 }
 

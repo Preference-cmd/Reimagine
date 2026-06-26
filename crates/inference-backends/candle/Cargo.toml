@@ -11,8 +11,9 @@ license.workspace = true
 async-trait = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }
+safetensors = { workspace = true }
 tracing = { workspace = true }
-tokio = { workspace = true, features = ["rt"] }
+tokio = { workspace = true, features = ["fs", "rt"] }
 reimagine-core = { path = "../../core" }
 reimagine-inference = { path = "../../inference" }
 reimagine-plugin = { path = "../../plugin" }
