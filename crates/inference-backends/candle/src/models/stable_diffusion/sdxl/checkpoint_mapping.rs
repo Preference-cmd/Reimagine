@@ -1,4 +1,5 @@
 use super::checkpoint_import::SdxlConvertedComponent;
+use super::unet_key_mapping::map_original_sdxl_unet_key;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct SdxlMappedTensor {
@@ -48,6 +49,7 @@ pub(crate) fn map_sdxl_checkpoint_tensor(
     }
 
     if name.starts_with("model.diffusion_model.") {
+        let _ = map_original_sdxl_unet_key(name);
         return Err(SdxlTensorMappingError::OriginalUnetUnsupported {
             name: name.to_owned(),
         });
