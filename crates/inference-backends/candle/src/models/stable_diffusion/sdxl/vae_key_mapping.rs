@@ -131,6 +131,7 @@ fn map_vae_down(
     if let Some(rest) = after.strip_prefix("block.") {
         let (idx_str, suffix) = split_index_segment(full_source, rest)?;
         let layer: usize = idx_str.parse().map_err(|_| unknown_family(full_source))?;
+        let suffix = map_resnet_suffix(suffix);
         let target = format!("{side}.down_blocks.{block}.resnets.{layer}.{suffix}");
         return Ok(vec![single(full_source, &target)]);
     }
@@ -159,6 +160,7 @@ fn map_vae_up(
     if let Some(rest) = after.strip_prefix("block.") {
         let (idx_str, suffix) = split_index_segment(full_source, rest)?;
         let layer: usize = idx_str.parse().map_err(|_| unknown_family(full_source))?;
+        let suffix = map_resnet_suffix(suffix);
         let target = format!("{side}.up_blocks.{target_block}.resnets.{layer}.{suffix}");
         return Ok(vec![single(full_source, &target)]);
     }
@@ -287,6 +289,14 @@ fn last_segment(rest: &str) -> &str {
     rest.rsplit_once('.').map(|(_, tail)| tail).unwrap_or(rest)
 }
 
+fn map_resnet_suffix(suffix: &str) -> String {
+    if let Some(rest) = suffix.strip_prefix("nin_shortcut.") {
+        format!("conv_shortcut.{rest}")
+    } else {
+        suffix.to_owned()
+    }
+}
+
 fn single(_full_source: &str, target_name: &str) -> SdxlMappedTensor {
     SdxlMappedTensor {
         component: SdxlConvertedComponent::Vae,
@@ -391,9 +401,8 @@ mod tests {
             first_target("encoder.down.0.block.0.conv2.weight"),
             "encoder.down_blocks.0.resnets.0.conv2.weight"
         );
-        // compvis SDXL VAE uses `conv_shortcut` (one-to-one with diffusers).
         assert_eq!(
-            first_target("encoder.down.1.block.1.conv_shortcut.weight"),
+            first_target("encoder.down.1.block.1.nin_shortcut.weight"),
             "encoder.down_blocks.1.resnets.1.conv_shortcut.weight"
         );
         assert_eq!(
@@ -413,7 +422,7 @@ mod tests {
             "decoder.up_blocks.3.resnets.0.norm1.weight"
         );
         assert_eq!(
-            first_target("decoder.up.2.block.1.conv_shortcut.weight"),
+            first_target("decoder.up.2.block.1.nin_shortcut.weight"),
             "decoder.up_blocks.1.resnets.1.conv_shortcut.weight"
         );
         assert_eq!(

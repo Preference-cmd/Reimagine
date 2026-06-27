@@ -1240,7 +1240,7 @@ mod tests {
             "first_stage_model.encoder.down.0.block.0.conv1.weight",
             "first_stage_model.encoder.down.0.block.0.norm2.weight",
             "first_stage_model.encoder.down.0.block.0.conv2.weight",
-            "first_stage_model.encoder.down.1.block.0.conv_shortcut.weight",
+            "first_stage_model.encoder.down.1.block.0.nin_shortcut.weight",
             "first_stage_model.encoder.down.0.downsample.conv.weight",
             "first_stage_model.encoder.mid.block_1.norm1.weight",
             "first_stage_model.encoder.mid.block_2.conv2.weight",
@@ -1253,7 +1253,7 @@ mod tests {
             "first_stage_model.decoder.conv_out.weight",
             "first_stage_model.decoder.norm_out.weight",
             "first_stage_model.decoder.up.0.block.0.norm1.weight",
-            "first_stage_model.decoder.up.1.block.0.conv_shortcut.weight",
+            "first_stage_model.decoder.up.1.block.0.nin_shortcut.weight",
             "first_stage_model.decoder.up.1.upsample.conv.weight",
             "first_stage_model.decoder.mid.block_1.norm1.weight",
             "first_stage_model.decoder.mid.attn_1.norm.weight",
@@ -1288,7 +1288,7 @@ mod tests {
         assert!(vae.contains_key("encoder.down_blocks.0.resnets.0.conv1.weight"));
         assert!(vae.contains_key("encoder.down_blocks.0.resnets.0.norm2.weight"));
         assert!(vae.contains_key("encoder.down_blocks.0.resnets.0.conv2.weight"));
-        // skip_connection is preserved 1:1 as conv_shortcut in both layouts.
+        // compvis nin_shortcut maps to Candle/Diffusers conv_shortcut.
         assert!(vae.contains_key("encoder.down_blocks.1.resnets.0.conv_shortcut.weight"));
         // downsample → downsamplers.0
         assert!(vae.contains_key("encoder.down_blocks.0.downsamplers.0.conv.weight"));
