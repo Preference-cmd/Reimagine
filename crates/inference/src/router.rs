@@ -429,6 +429,7 @@ impl std::fmt::Debug for DefaultInferenceRuntime {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::LatentSpaceMetadata;
     use crate::RuntimeLatent;
     use crate::backend::InferenceBackend;
     use crate::backend_registry::InferenceBackendRegistry;
@@ -507,6 +508,7 @@ mod tests {
                 64,
                 1,
                 4,
+                LatentSpaceMetadata::sdxl_base(),
             )))
         }
         async fn diffusion_sample(

@@ -39,6 +39,7 @@ mod execution_value;
 mod executor;
 mod executors;
 mod inference_error;
+pub mod latent_space;
 pub mod node_context;
 pub mod operation;
 mod profile;
@@ -62,6 +63,10 @@ pub use execution_value::{
     ExecutionConditioning, ExecutionOutput, ExecutionValue, ExecutionValueKind,
     ExecutionValueRetention, RuntimeClipHandle, RuntimeImage, RuntimeLatent, RuntimeModelHandle,
     RuntimeVaeHandle,
+};
+
+pub use latent_space::{
+    LatentSpaceError, LatentSpaceId, LatentSpaceMetadata, TensorLayout, stable_diffusion_sdxl_base,
 };
 
 pub use backend::InferenceBackend;

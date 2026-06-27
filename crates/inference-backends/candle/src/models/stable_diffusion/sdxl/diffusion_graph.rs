@@ -166,6 +166,7 @@ fn run_euler_normal_denoise_loop(
     request: &SdxlSampleRequest,
     device: &Device,
 ) -> Result<CandleLatent, CandleBackendError> {
+    let latent_space = input_latent.latent_space().clone();
     let input = input_latent.into_tensor();
     if input.dtype() != DType::F32 {
         return Err(CandleBackendError::InvalidRequest(format!(
@@ -214,7 +215,7 @@ fn run_euler_normal_denoise_loop(
         })?;
         sample = scheduler.step(&guided, step.index, &sample)?;
     }
-    Ok(CandleLatent::new(sample))
+    Ok(CandleLatent::new(sample, latent_space))
 }
 
 #[derive(Debug)]
@@ -451,6 +452,7 @@ impl SdxlDiffusionGraph for TestSdxlDiffusionGraph {
 mod tests {
     use super::*;
     use candle_core::{DType, Tensor};
+    use reimagine_inference::LatentSpaceMetadata;
     use std::sync::Mutex;
 
     #[derive(Debug)]
@@ -523,8 +525,10 @@ mod tests {
         negative_value: f32,
     ) -> Tensor {
         let denoiser = FakeDenoiser::new();
-        let latent =
-            CandleLatent::new(Tensor::zeros((1, 4, 4, 4), DType::F32, &Device::Cpu).unwrap());
+        let latent = CandleLatent::new(
+            Tensor::zeros((1, 4, 4, 4), DType::F32, &Device::Cpu).unwrap(),
+            LatentSpaceMetadata::sdxl_base(),
+        );
         run_euler_normal_denoise_loop(
             &denoiser,
             latent,
@@ -540,8 +544,10 @@ mod tests {
     #[test]
     fn euler_normal_loop_uses_seeded_noise_not_zero_latent() {
         let denoiser = FakeDenoiser::new();
-        let latent =
-            CandleLatent::new(Tensor::zeros((1, 4, 4, 4), DType::F32, &Device::Cpu).unwrap());
+        let latent = CandleLatent::new(
+            Tensor::zeros((1, 4, 4, 4), DType::F32, &Device::Cpu).unwrap(),
+            LatentSpaceMetadata::sdxl_base(),
+        );
 
         let output = run_euler_normal_denoise_loop(
             &denoiser,
@@ -603,8 +609,10 @@ mod tests {
     #[test]
     fn euler_normal_loop_calls_positive_and_negative_denoiser_once_per_step() {
         let denoiser = FakeDenoiser::new();
-        let latent =
-            CandleLatent::new(Tensor::zeros((1, 4, 4, 4), DType::F32, &Device::Cpu).unwrap());
+        let latent = CandleLatent::new(
+            Tensor::zeros((1, 4, 4, 4), DType::F32, &Device::Cpu).unwrap(),
+            LatentSpaceMetadata::sdxl_base(),
+        );
 
         let output = run_euler_normal_denoise_loop(
             &denoiser,

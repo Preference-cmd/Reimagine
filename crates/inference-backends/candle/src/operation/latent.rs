@@ -2,17 +2,22 @@
 //!
 //! ## `latent.create_empty`
 //!
-//! Allocates a zero-initialized SDXL latent tensor in the backend store
-//! and returns a [`CreateEmptyLatentResponse`] carrying a lightweight
-//! `RuntimeLatent` handle.
+//! Allocates a zero-initialized latent tensor for the request's
+//! latent space in the backend store and returns a
+//! [`CreateEmptyLatentResponse`] carrying a lightweight
+//! `RuntimeLatent` handle. The handle's metadata is the request's
+//! [`LatentSpaceMetadata`], so the returned latent agrees with
+//! what the caller requested even if a future workflow layer
+//! derives the latent space from a connected model handle.
 //!
 //! ## `latent.decode`
 //!
-//! Consumes a VAE handle and a sampled latent, dispatches to the loaded
-//! model family's decoder through the graph facade, stores the resulting
-//! image payload in the backend store, and returns a
-//! [`LatentDecodeResponse`] carrying a lightweight `RuntimeImage`
-//! handle.
+//! Consumes a VAE handle and a sampled latent, validates that the
+//! latent's metadata matches the loaded VAE's expected latent
+//! space, dispatches to the loaded model family's decoder through
+//! the graph facade, stores the resulting image payload in the
+//! backend store, and returns a [`LatentDecodeResponse`] carrying
+//! a lightweight `RuntimeImage` handle.
 //!
 //! The operation is model-family-neutral at the protocol level.
 //! SDXL-specific VAE decoding lives behind the facade in
@@ -29,44 +34,35 @@
 
 use candle_core::{DType, Tensor};
 use reimagine_core::model::{TensorDType, TensorShape};
+use reimagine_inference::latent_space::validate_pixel_dimensions_against;
 use reimagine_inference::{
     BackendPayloadKey, BackendTensorHandle, CreateEmptyLatentRequest, CreateEmptyLatentResponse,
-    InferenceBackend, LatentDecodeRequest, LatentDecodeResponse, RuntimeImage, RuntimeLatent,
-    RuntimeVaeHandle,
+    InferenceBackend, LatentDecodeRequest, LatentDecodeResponse, LatentSpaceError,
+    LatentSpaceMetadata, RuntimeImage, RuntimeLatent, RuntimeVaeHandle,
 };
 
 use crate::backend::CandleBackend;
 use crate::error::CandleBackendError;
 use crate::graph::{LatentDecodeInput, LatentDecodeResult};
 
-fn validate_latent_dimensions(
-    width: u32,
-    height: u32,
-    batch_size: u32,
-) -> Result<(), CandleBackendError> {
-    if width == 0 {
-        return Err(CandleBackendError::InvalidRequest(format!(
-            "latent width must be positive (got {width})"
-        )));
+fn map_latent_space_error(label: &str, err: LatentSpaceError) -> CandleBackendError {
+    CandleBackendError::InvalidRequest(format!("{label} {err}"))
+}
+
+fn tensor_dtype_for(metadata: &LatentSpaceMetadata) -> Result<DType, CandleBackendError> {
+    match metadata.dtype() {
+        TensorDType::F32 => Ok(DType::F32),
+        TensorDType::F16 => Ok(DType::F16),
+        TensorDType::BF16 => Ok(DType::BF16),
+        TensorDType::I64 => Ok(DType::I64),
+        TensorDType::U8 => Ok(DType::U8),
     }
-    if height == 0 {
-        return Err(CandleBackendError::InvalidRequest(format!(
-            "latent height must be positive (got {height})"
-        )));
-    }
+}
+
+fn validate_batch(batch_size: u32) -> Result<(), CandleBackendError> {
     if batch_size == 0 {
         return Err(CandleBackendError::InvalidRequest(format!(
             "latent batch_size must be positive (got {batch_size})"
-        )));
-    }
-    if width % 8 != 0 {
-        return Err(CandleBackendError::InvalidRequest(format!(
-            "latent width must be divisible by 8 (got {width})"
-        )));
-    }
-    if height % 8 != 0 {
-        return Err(CandleBackendError::InvalidRequest(format!(
-            "latent height must be divisible by 8 (got {height})"
         )));
     }
     Ok(())
@@ -79,12 +75,32 @@ pub fn execute_latent_create_empty(
     let width = request.width();
     let height = request.height();
     let batch_size = request.batch_size();
+    let latent_space = request.latent_space().clone();
 
-    validate_latent_dimensions(width, height, batch_size)?;
+    // V1 Candle only supports the SDXL base latent space. Any
+    // other latent space — even one that is otherwise well-formed
+    // — must be rejected here with a precise error so the
+    // downstream operations do not silently materialize a tensor
+    // that no V1 model can consume.
+    let supported = LatentSpaceMetadata::sdxl_base();
+    if !latent_space.is_compatible(&supported) {
+        return Err(CandleBackendError::InvalidRequest(format!(
+            "latent.create_empty latent space `{}` (channels={}, scale={}) is not supported by backend `candle`; only `{}` is supported in V1",
+            latent_space.id(),
+            latent_space.channels(),
+            latent_space.spatial_scale_factor(),
+            supported.id(),
+        )));
+    }
 
-    let channels: u32 = 4;
-    let latent_width = width / 8;
-    let latent_height = height / 8;
+    validate_batch(batch_size)?;
+    validate_pixel_dimensions_against(width, height, &latent_space)
+        .map_err(|err| map_latent_space_error("latent.create_empty", err))?;
+
+    let channels: u32 = latent_space.channels();
+    let scale = latent_space.spatial_scale_factor();
+    let latent_width = width / scale;
+    let latent_height = height / scale;
     let shape: Vec<usize> = vec![
         batch_size as usize,
         channels as usize,
@@ -92,12 +108,16 @@ pub fn execute_latent_create_empty(
         latent_width as usize,
     ];
 
-    let tensor =
-        Tensor::zeros(shape.clone(), DType::F32, backend.device().as_ref()).map_err(|err| {
-            CandleBackendError::InvalidRequest(format!(
-                "failed to allocate latent tensor for shape {shape:?}: {err}"
-            ))
-        })?;
+    let tensor = Tensor::zeros(
+        shape.clone(),
+        tensor_dtype_for(&latent_space)?,
+        backend.device().as_ref(),
+    )
+    .map_err(|err| {
+        CandleBackendError::InvalidRequest(format!(
+            "failed to allocate latent tensor for shape {shape:?}: {err}"
+        ))
+    })?;
 
     let payload_key = BackendPayloadKey::new(format!(
         "latent:{}:{}",
@@ -105,16 +125,19 @@ pub fn execute_latent_create_empty(
         request.node_id().as_str()
     ));
 
-    backend
-        .store()
-        .insert_latent(request.run_id().clone(), payload_key.clone(), tensor);
+    backend.store().insert_latent(
+        request.run_id().clone(),
+        payload_key.clone(),
+        tensor,
+        latent_space.clone(),
+    );
 
     let latent = RuntimeLatent::new(
         BackendTensorHandle::with_instance(
             backend.backend_kind().clone(),
             backend.backend_instance(),
             payload_key,
-            TensorDType::F32,
+            latent_space.dtype(),
             TensorShape::new(shape),
             backend.device_label(),
         ),
@@ -122,6 +145,7 @@ pub fn execute_latent_create_empty(
         height,
         batch_size,
         channels,
+        latent_space,
     );
     Ok(CreateEmptyLatentResponse::new(latent))
 }
@@ -190,9 +214,41 @@ pub fn execute_latent_decode(
     let bundle = require_bundle_for_vae(&vae_handle, backend)?;
     bundle.validate_vae_handle(&vae_handle)?;
 
+    // Validate the incoming latent space against the VAE bundle's
+    // expected latent space. This is a precise request-time
+    // rejection: if a different latent space reaches the decoder,
+    // the call fails before the decoder tensor ops can blow up
+    // obscurely.
+    let expected = bundle.expected_latent_space();
+    if !latent_handle.latent_space().is_compatible(&expected) {
+        return Err(CandleBackendError::InvalidRequest(format!(
+            "latent.decode input latent space `{}` (channels={}, scale={}) is incompatible with loaded {} VAE expected latent space `{}` (channels={}, scale={})",
+            latent_handle.latent_space().id(),
+            latent_handle.latent_space().channels(),
+            latent_handle.latent_space().spatial_scale_factor(),
+            bundle.family_label(),
+            expected.id(),
+            expected.channels(),
+            expected.spatial_scale_factor(),
+        )));
+    }
+
     let input_latent = backend
         .store()
         .get_latent(latent_handle.payload().payload_key())?;
+
+    // The stored payload and the handle must agree on latent space.
+    // This protects against stale/aliased keys that landed in the
+    // store with a different metadata record than the caller used.
+    if !input_latent.latent_space().is_compatible(&expected) {
+        return Err(CandleBackendError::InvalidRequest(format!(
+            "latent.decode stored latent payload `{}` latent space `{}` disagrees with loaded {} VAE expected latent space `{}`",
+            latent_handle.payload().payload_key().as_str(),
+            input_latent.latent_space().id(),
+            bundle.family_label(),
+            expected.id(),
+        )));
+    }
 
     let LatentDecodeResult { image } = bundle.decode_latent(
         LatentDecodeInput {
@@ -239,4 +295,119 @@ fn require_bundle_for_vae(
             vae.model_id().as_str()
         ))
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use reimagine_core::model::TensorDType;
+    use reimagine_inference::{LatentSpaceId, TensorLayout};
+
+    fn custom_latent_space(id: &str, channels: u32, scale: u32) -> LatentSpaceMetadata {
+        LatentSpaceMetadata::new(
+            LatentSpaceId::new(id),
+            channels,
+            scale,
+            TensorDType::F32,
+            TensorLayout::Nchw,
+        )
+    }
+
+    fn build_request_with_latent_space(
+        latent_space: LatentSpaceMetadata,
+    ) -> CreateEmptyLatentRequest {
+        CreateEmptyLatentRequest::new(
+            64,
+            64,
+            1,
+            reimagine_core::model::RunId::new("run-test"),
+            reimagine_core::model::WorkflowId::new("wf-test"),
+            reimagine_core::model::WorkflowVersion::new(1),
+            reimagine_core::model::NodeId::new("node-test"),
+        )
+        .with_latent_space(latent_space)
+    }
+
+    #[test]
+    fn create_empty_returns_sdxl_base_latent_metadata_by_default() {
+        let backend = test_backend();
+        let request = CreateEmptyLatentRequest::new(
+            64,
+            64,
+            1,
+            reimagine_core::model::RunId::new("run-test"),
+            reimagine_core::model::WorkflowId::new("wf-test"),
+            reimagine_core::model::WorkflowVersion::new(1),
+            reimagine_core::model::NodeId::new("node-test"),
+        );
+
+        let response = execute_latent_create_empty(&backend, request).expect("create");
+        let latent = response.into_latent();
+        assert_eq!(latent.latent_space(), &LatentSpaceMetadata::sdxl_base());
+        assert_eq!(latent.channels(), 4);
+    }
+
+    #[test]
+    fn create_empty_propagates_custom_latent_space_metadata() {
+        let backend = test_backend();
+        let custom = custom_latent_space("custom/v1", 8, 4);
+        let request = build_request_with_latent_space(custom.clone());
+
+        // V1 Candle only supports the SDXL base latent space; a
+        // well-formed but non-SDXL space is rejected with a
+        // precise diagnostic before any tensor allocation.
+        let err = execute_latent_create_empty(&backend, request).unwrap_err();
+        let msg = err.to_string();
+        assert!(msg.contains("not supported"), "msg: {msg}");
+        assert!(msg.contains("custom/v1"), "msg: {msg}");
+        assert!(msg.contains("stable_diffusion/sdxl/base"), "msg: {msg}");
+    }
+
+    #[test]
+    fn create_empty_rejects_pixel_dimensions_not_divisible_by_latent_scale() {
+        let backend = test_backend();
+        // 63 is not divisible by 8 (SDXL base scale)
+        let request = CreateEmptyLatentRequest::new(
+            63,
+            64,
+            1,
+            reimagine_core::model::RunId::new("run-test"),
+            reimagine_core::model::WorkflowId::new("wf-test"),
+            reimagine_core::model::WorkflowVersion::new(1),
+            reimagine_core::model::NodeId::new("node-test"),
+        );
+
+        let err = execute_latent_create_empty(&backend, request).unwrap_err();
+        let msg = err.to_string();
+        assert!(msg.contains("divisible by latent-space"), "got {msg}");
+        assert!(msg.contains("width=63"), "got {msg}");
+    }
+
+    #[test]
+    fn create_empty_rejects_zero_batch_size() {
+        let backend = test_backend();
+        let request = CreateEmptyLatentRequest::new(
+            64,
+            64,
+            0,
+            reimagine_core::model::RunId::new("run-test"),
+            reimagine_core::model::WorkflowId::new("wf-test"),
+            reimagine_core::model::WorkflowVersion::new(1),
+            reimagine_core::model::NodeId::new("node-test"),
+        );
+
+        let err = execute_latent_create_empty(&backend, request).unwrap_err();
+        assert!(err.to_string().contains("batch_size"), "got {}", err);
+    }
+
+    fn test_backend() -> CandleBackend {
+        // Unit tests for `create_empty` exercise the operation
+        // boundary and the store, not the loaded-bundle path. The
+        // existing public `CandleBackend::new` constructor with a
+        // CPU config is sufficient.
+        CandleBackend::new(crate::config::CandleBackendConfig::new(
+            "/models", "/output",
+        ))
+        .expect("test backend")
+    }
 }

@@ -256,7 +256,12 @@ mod tests {
         inputs.insert(
             SlotId::new("clip"),
             Arc::new(ExecutionValue::Latent(crate::RuntimeLatent::new(
-                tensor, 64, 64, 1, 4,
+                tensor,
+                64,
+                64,
+                1,
+                4,
+                crate::LatentSpaceMetadata::sdxl_base(),
             ))),
         );
 

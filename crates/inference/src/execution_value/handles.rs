@@ -10,6 +10,7 @@ use reimagine_core::model::{ModelId, ModelRole, TensorDType, TensorShape};
 
 use crate::execution_value::backend::BackendPayloadKey;
 use crate::execution_value::tensor::BackendTensorMetadata;
+use crate::latent_space::LatentSpaceMetadata;
 use crate::{Backend, BackendInstance};
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash, serde::Serialize, serde::Deserialize)]
@@ -280,15 +281,23 @@ pub struct RuntimeLatent {
     height: u32,
     batch: u32,
     channels: u32,
+    latent_space: LatentSpaceMetadata,
 }
 
 impl RuntimeLatent {
+    /// Build a [`RuntimeLatent`] handle with explicit latent-space
+    /// metadata. The metadata is carried on the handle so downstream
+    /// operations can validate compatibility without a registry
+    /// lookup. Use [`RuntimeLatent::with_sdxl_base`] when the V1
+    /// SDXL base latent space is intended and metadata is not the
+    /// point of the call site.
     pub fn new(
         payload: BackendTensorHandle,
         width: u32,
         height: u32,
         batch: u32,
         channels: u32,
+        latent_space: LatentSpaceMetadata,
     ) -> Self {
         Self {
             payload,
@@ -296,7 +305,38 @@ impl RuntimeLatent {
             height,
             batch,
             channels,
+            latent_space,
         }
+    }
+
+    /// Build a [`RuntimeLatent`] handle using the V1 SDXL base
+    /// latent-space metadata. Prefer [`RuntimeLatent::new`] for new
+    /// code; this helper exists so test fixtures and V1 hard-coded
+    /// paths do not have to spell out the SDXL metadata record.
+    pub fn with_sdxl_base(
+        payload: BackendTensorHandle,
+        width: u32,
+        height: u32,
+        batch: u32,
+        channels: u32,
+    ) -> Self {
+        Self::new(
+            payload,
+            width,
+            height,
+            batch,
+            channels,
+            LatentSpaceMetadata::sdxl_base(),
+        )
+    }
+
+    /// Replace the latent-space metadata. Used by the candle
+    /// backend when materializing a sampled latent so the output
+    /// handle carries the bundle's expected latent space even when
+    /// the input latent used a different (but compatible) record.
+    pub fn with_latent_space(mut self, latent_space: LatentSpaceMetadata) -> Self {
+        self.latent_space = latent_space;
+        self
     }
 
     pub fn payload(&self) -> &BackendTensorHandle {
@@ -317,6 +357,13 @@ impl RuntimeLatent {
 
     pub fn channels(&self) -> u32 {
         self.channels
+    }
+
+    /// Latent-space metadata this handle carries. Backends compare
+    /// this against their expected latent space before tensor
+    /// operations.
+    pub fn latent_space(&self) -> &LatentSpaceMetadata {
+        &self.latent_space
     }
 }
 

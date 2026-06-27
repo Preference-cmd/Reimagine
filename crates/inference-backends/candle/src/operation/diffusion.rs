@@ -66,6 +66,33 @@ pub fn execute_diffusion_sample(
         .store()
         .get_latent(latent_handle.payload().payload_key())?;
 
+    // Validate the input latent space against the loaded bundle's
+    // expected latent space before any sampling tensor work. This
+    // is a precise request-time rejection: incompatible latents
+    // never reach the UNet.
+    let expected = bundle.expected_latent_space();
+    if !latent_handle.latent_space().is_compatible(&expected) {
+        return Err(CandleBackendError::InvalidRequest(format!(
+            "diffusion.sample input latent space `{}` (channels={}, scale={}) is incompatible with loaded {} model expected latent space `{}` (channels={}, scale={})",
+            latent_handle.latent_space().id(),
+            latent_handle.latent_space().channels(),
+            latent_handle.latent_space().spatial_scale_factor(),
+            bundle.family_label(),
+            expected.id(),
+            expected.channels(),
+            expected.spatial_scale_factor(),
+        )));
+    }
+    if !input_latent.latent_space().is_compatible(&expected) {
+        return Err(CandleBackendError::InvalidRequest(format!(
+            "diffusion.sample stored latent payload `{}` latent space `{}` disagrees with loaded {} model expected latent space `{}`",
+            latent_handle.payload().payload_key().as_str(),
+            input_latent.latent_space().id(),
+            bundle.family_label(),
+            expected.id(),
+        )));
+    }
+
     validate_sdxl_conditioning_payload("positive", &positive, latent_handle.batch())?;
     validate_sdxl_conditioning_payload("negative", &negative, latent_handle.batch())?;
 
@@ -99,6 +126,7 @@ pub fn execute_diffusion_sample(
         request.run_id().clone(),
         payload_key.clone(),
         latent.into_tensor(),
+        expected.clone(),
     );
 
     let latent_width = latent_handle.width();
@@ -119,6 +147,7 @@ pub fn execute_diffusion_sample(
         latent_height,
         latent_batch,
         latent_channels,
+        expected,
     );
 
     Ok(DiffusionSampleResponse::new(latent))

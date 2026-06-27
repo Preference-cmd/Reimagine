@@ -10,6 +10,8 @@ use candle_core::{Device, Tensor};
 use crate::error::CandleBackendError;
 #[cfg(test)]
 use crate::store::CandleLatent;
+#[cfg(test)]
+use reimagine_inference::LatentSpaceMetadata;
 
 /// User-controllable sampling parameters extracted from the
 /// backend-neutral request.
@@ -325,6 +327,7 @@ impl SdxlSampler {
         request: &SdxlSampleRequest,
         device: &Device,
     ) -> Result<SdxlSampleResult, CandleBackendError> {
+        let latent_space = input_latent.latent_space().clone();
         let tensor = input_latent.into_tensor();
         if tensor.dtype() != DType::F32 {
             return Err(CandleBackendError::InvalidRequest(format!(
@@ -369,7 +372,7 @@ impl SdxlSampler {
         })?;
 
         Ok(SdxlSampleResult {
-            latent: CandleLatent::new(scaled),
+            latent: CandleLatent::new(scaled, latent_space),
             summary: SampleSummary::from_request(request),
         })
     }
@@ -516,7 +519,10 @@ mod tests {
     fn sampler_is_deterministic_for_same_seed() {
         let sampler = SdxlSampler::new();
         let device = Device::Cpu;
-        let latent = CandleLatent::new(Tensor::zeros((1, 4, 8, 8), DType::F32, &device).unwrap());
+        let latent = CandleLatent::new(
+            Tensor::zeros((1, 4, 8, 8), DType::F32, &device).unwrap(),
+            LatentSpaceMetadata::sdxl_base(),
+        );
         let req = SdxlSampleRequest::from_params(&params(12345, 20, 7.0, 1.0)).unwrap();
 
         let first = sampler
@@ -539,7 +545,10 @@ mod tests {
     fn sampler_changes_output_for_different_seed() {
         let sampler = SdxlSampler::new();
         let device = Device::Cpu;
-        let latent = CandleLatent::new(Tensor::zeros((1, 4, 8, 8), DType::F32, &device).unwrap());
+        let latent = CandleLatent::new(
+            Tensor::zeros((1, 4, 8, 8), DType::F32, &device).unwrap(),
+            LatentSpaceMetadata::sdxl_base(),
+        );
 
         let a = sampler
             .sample(
@@ -569,7 +578,10 @@ mod tests {
     fn sampler_preserves_shape() {
         let sampler = SdxlSampler::new();
         let device = Device::Cpu;
-        let latent = CandleLatent::new(Tensor::zeros((1, 4, 16, 16), DType::F32, &device).unwrap());
+        let latent = CandleLatent::new(
+            Tensor::zeros((1, 4, 16, 16), DType::F32, &device).unwrap(),
+            LatentSpaceMetadata::sdxl_base(),
+        );
         let req = SdxlSampleRequest::from_params(&params(7, 10, 7.0, 1.0)).unwrap();
         let result = sampler.sample(latent, &req, &device).unwrap();
         assert_eq!(result.latent.dims(), vec![1, 4, 16, 16]);
@@ -580,7 +592,10 @@ mod tests {
     fn sampler_rejects_non_f32_input() {
         let sampler = SdxlSampler::new();
         let device = Device::Cpu;
-        let latent = CandleLatent::new(Tensor::zeros((1, 4, 8, 8), DType::U32, &device).unwrap());
+        let latent = CandleLatent::new(
+            Tensor::zeros((1, 4, 8, 8), DType::U32, &device).unwrap(),
+            LatentSpaceMetadata::sdxl_base(),
+        );
         let req = SdxlSampleRequest::from_params(&params(7, 10, 7.0, 1.0)).unwrap();
         let err = sampler.sample(latent, &req, &device).unwrap_err();
         assert!(err.to_string().contains("f32"));

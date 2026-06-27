@@ -346,7 +346,7 @@ mod tests {
     use crate::models::stable_diffusion::sdxl::diffusion_graph::TestSdxlDiffusionGraph;
     use candle_core::{DType, Device, Tensor};
     use reimagine_core::model::ModelId;
-    use reimagine_inference::ModelFormat;
+    use reimagine_inference::{LatentSpaceMetadata, ModelFormat};
     use std::sync::Arc;
 
     fn cpu_device() -> Arc<Device> {
@@ -435,8 +435,10 @@ mod tests {
     fn sample_diffusion_sdxl_materializes_diffusion_graph_once_for_repeated_sampling() {
         let bundle = sdxl_bundle();
         install_test_diffusion_graph(&bundle);
-        let input_latent =
-            CandleLatent::new(Tensor::zeros((1, 4, 8, 8), DType::F32, &Device::Cpu).unwrap());
+        let input_latent = CandleLatent::new(
+            Tensor::zeros((1, 4, 8, 8), DType::F32, &Device::Cpu).unwrap(),
+            LatentSpaceMetadata::sdxl_base(),
+        );
         let result = bundle
             .sample_diffusion(
                 DiffusionSampleInput {
@@ -455,8 +457,10 @@ mod tests {
             .expect("first sample should materialize the diffusion graph");
         assert_eq!(result.latent.dims(), vec![1, 4, 8, 8]);
 
-        let input_latent =
-            CandleLatent::new(Tensor::zeros((1, 4, 8, 8), DType::F32, &Device::Cpu).unwrap());
+        let input_latent = CandleLatent::new(
+            Tensor::zeros((1, 4, 8, 8), DType::F32, &Device::Cpu).unwrap(),
+            LatentSpaceMetadata::sdxl_base(),
+        );
         bundle
             .sample_diffusion(
                 DiffusionSampleInput {
@@ -479,8 +483,10 @@ mod tests {
     fn decode_latent_sdxl_produces_image_shape() {
         let bundle = sdxl_bundle();
         install_test_vae_decoder_graph(&bundle);
-        let input_latent =
-            CandleLatent::new(Tensor::zeros((1, 4, 8, 8), DType::F32, &Device::Cpu).unwrap());
+        let input_latent = CandleLatent::new(
+            Tensor::zeros((1, 4, 8, 8), DType::F32, &Device::Cpu).unwrap(),
+            LatentSpaceMetadata::sdxl_base(),
+        );
         let result = bundle
             .decode_latent(
                 LatentDecodeInput {
@@ -503,8 +509,10 @@ mod tests {
         let bundle = sdxl_bundle();
         install_test_vae_decoder_graph(&bundle);
         for _ in 0..2 {
-            let input_latent =
-                CandleLatent::new(Tensor::zeros((1, 4, 8, 8), DType::F32, &Device::Cpu).unwrap());
+            let input_latent = CandleLatent::new(
+                Tensor::zeros((1, 4, 8, 8), DType::F32, &Device::Cpu).unwrap(),
+                LatentSpaceMetadata::sdxl_base(),
+            );
             let result = bundle
                 .decode_latent(
                     LatentDecodeInput {
@@ -523,8 +531,10 @@ mod tests {
         // precise `import_sdxl_checkpoint_to_candle_example_split`
         // diagnostic instead of silently falling back.
         let bundle = sdxl_bundle();
-        let input_latent =
-            CandleLatent::new(Tensor::zeros((1, 4, 8, 8), DType::F32, &Device::Cpu).unwrap());
+        let input_latent = CandleLatent::new(
+            Tensor::zeros((1, 4, 8, 8), DType::F32, &Device::Cpu).unwrap(),
+            LatentSpaceMetadata::sdxl_base(),
+        );
         let err = bundle
             .decode_latent(
                 LatentDecodeInput {
@@ -565,8 +575,10 @@ mod tests {
     #[test]
     fn sample_diffusion_placeholder_returns_precise_error() {
         let bundle = LoadedModelBundle::TestPlaceholder;
-        let input_latent =
-            CandleLatent::new(Tensor::zeros((1, 4, 8, 8), DType::F32, &Device::Cpu).unwrap());
+        let input_latent = CandleLatent::new(
+            Tensor::zeros((1, 4, 8, 8), DType::F32, &Device::Cpu).unwrap(),
+            LatentSpaceMetadata::sdxl_base(),
+        );
         let err = bundle
             .sample_diffusion(
                 DiffusionSampleInput {
@@ -593,8 +605,10 @@ mod tests {
     #[test]
     fn decode_latent_placeholder_returns_precise_error() {
         let bundle = LoadedModelBundle::TestPlaceholder;
-        let input_latent =
-            CandleLatent::new(Tensor::zeros((1, 4, 8, 8), DType::F32, &Device::Cpu).unwrap());
+        let input_latent = CandleLatent::new(
+            Tensor::zeros((1, 4, 8, 8), DType::F32, &Device::Cpu).unwrap(),
+            LatentSpaceMetadata::sdxl_base(),
+        );
         let err = bundle
             .decode_latent(
                 LatentDecodeInput {

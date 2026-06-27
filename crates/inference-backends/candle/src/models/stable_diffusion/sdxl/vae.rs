@@ -50,6 +50,8 @@ use candle_transformers::models::stable_diffusion::vae::{AutoEncoderKL, AutoEnco
 
 use crate::error::CandleBackendError;
 use crate::store::{CandleImage, CandleLatent};
+#[cfg(test)]
+use reimagine_inference::LatentSpaceMetadata;
 
 /// SDXL VAE latent scale factor (official constant).
 ///
@@ -448,13 +450,19 @@ mod tests {
     }
 
     fn f32_latent(shape: &[usize]) -> CandleLatent {
-        CandleLatent::new(Tensor::zeros(shape, DType::F32, cpu()).unwrap())
+        CandleLatent::new(
+            Tensor::zeros(shape, DType::F32, cpu()).unwrap(),
+            LatentSpaceMetadata::sdxl_base(),
+        )
     }
 
     #[test]
     fn graph_test_placeholder_rejects_non_f32_input() {
         let graph = SdxlVaeDecoderGraph::test_placeholder();
-        let latent = CandleLatent::new(Tensor::zeros((1, 4, 8, 8), DType::U32, cpu()).unwrap());
+        let latent = CandleLatent::new(
+            Tensor::zeros((1, 4, 8, 8), DType::U32, cpu()).unwrap(),
+            LatentSpaceMetadata::sdxl_base(),
+        );
         let err = graph.decode(&latent, cpu()).unwrap_err();
         assert!(err.to_string().contains("f32"), "got: {}", err);
         assert!(matches!(err, SdxlVaeError::Tensor(_)));
@@ -473,7 +481,10 @@ mod tests {
     #[test]
     fn graph_test_placeholder_rejects_non_4d_input() {
         let graph = SdxlVaeDecoderGraph::test_placeholder();
-        let latent = CandleLatent::new(Tensor::zeros((1, 4, 16), DType::F32, cpu()).unwrap());
+        let latent = CandleLatent::new(
+            Tensor::zeros((1, 4, 16), DType::F32, cpu()).unwrap(),
+            LatentSpaceMetadata::sdxl_base(),
+        );
         let err = graph.decode(&latent, cpu()).unwrap_err();
         assert!(err.to_string().contains("4D"), "got: {}", err);
         assert!(matches!(err, SdxlVaeError::Shape(_)));
