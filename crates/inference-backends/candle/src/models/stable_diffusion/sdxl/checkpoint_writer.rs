@@ -289,6 +289,7 @@ const REQUIRED_CLIP_TARGETS: &[&str] = &[
 
 const REQUIRED_VAE_TARGETS: &[&str] = &[
     "encoder.conv_in.weight",
+    "encoder.conv_out.weight",
     "encoder.conv_norm_out.weight",
     "decoder.conv_in.weight",
     "decoder.conv_out.weight",
@@ -638,7 +639,7 @@ mod tests {
         assert_eq!(plan.tensor_count(SdxlConvertedComponent::Unet), 12);
         assert_eq!(plan.tensor_count(SdxlConvertedComponent::ClipL), 8);
         assert_eq!(plan.tensor_count(SdxlConvertedComponent::ClipG), 8);
-        assert_eq!(plan.tensor_count(SdxlConvertedComponent::Vae), 7);
+        assert_eq!(plan.tensor_count(SdxlConvertedComponent::Vae), 8);
         assert!(output.join("unet/model.safetensors").is_file());
         assert!(output.join("text_encoder/model.safetensors").is_file());
         assert!(output.join("text_encoder_2/model.safetensors").is_file());
@@ -861,6 +862,7 @@ mod tests {
         // Minimal Vae.
         for name in &[
             "first_stage_model.encoder.conv_in.weight",
+            "first_stage_model.encoder.conv_out.weight",
             "first_stage_model.encoder.conv_norm_out.weight",
             "first_stage_model.decoder.conv_in.weight",
             "first_stage_model.decoder.conv_out.weight",
@@ -1099,6 +1101,11 @@ mod tests {
                 // Minimal Vae.
                 (
                     "first_stage_model.encoder.conv_in.weight",
+                    vec![0.0f32; 4],
+                    &[4usize],
+                ),
+                (
+                    "first_stage_model.encoder.conv_out.weight",
                     vec![0.0f32; 4],
                     &[4usize],
                 ),

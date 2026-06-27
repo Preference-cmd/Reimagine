@@ -688,6 +688,7 @@ mod tests {
     fn required_vae_source_names() -> Vec<&'static str> {
         let targets = [
             "encoder.conv_in.weight",
+            "encoder.conv_out.weight",
             "encoder.conv_norm_out.weight",
             "decoder.conv_in.weight",
             "decoder.conv_out.weight",
@@ -847,6 +848,83 @@ mod tests {
         assert!(unet.contains_key("time_embedding.linear_1.weight"));
 
         let _ = tokio::fs::remove_dir_all(base).await;
+    }
+
+    #[tokio::test]
+    async fn original_checkpoint_with_compvis_vae_routes_through_vae_key_mapping() {
+        // End-to-end exercise of real-inference/07a1: the source checkpoint
+        // uses compvis/LDM VAE keys (`encoder.down.0.block.0.norm1.weight`
+        // etc.) and the import pipeline must produce a diffusers-layout
+        // `vae/model.safetensors` whose keys Candle's `AutoEncoderKL`
+        // can load.
+        let base = temp_dir("original-compvis-vae");
+        let source = base.join("models/checkpoints/sdxl.safetensors");
+        tokio::fs::create_dir_all(source.parent().unwrap())
+            .await
+            .unwrap();
+        let mut names = complete_original_checkpoint_names();
+        // Drop the diffusers-format VAE keys from the standard fixture and
+        // supply a compvis-format VAE surface instead.
+        names.retain(|name| !name.starts_with("first_stage_model."));
+        names.extend(compvis_vae_source_names_for_import());
+        write_real_safetensors(&source, &names);
+        let request = request(&base, &source);
+
+        let result = import_sdxl_checkpoint_to_candle_example_split(request)
+            .await
+            .expect("compvis VAE keys should round-trip through the import pipeline");
+
+        assert!(!result.reused_existing());
+        assert!(result.component_path(SdxlConvertedComponent::Vae).is_file());
+
+        let vae = candle_core::safetensors::load(
+            result.component_path(SdxlConvertedComponent::Vae),
+            &Device::Cpu,
+        )
+        .expect("vae/model.safetensors must be readable as safetensors");
+
+        // Resnet + downsample + mid resnet + mid attention + norm_out
+        // targets must all be present in diffusers layout.
+        assert!(vae.contains_key("encoder.down_blocks.0.resnets.0.norm1.weight"));
+        assert!(vae.contains_key("encoder.down_blocks.0.downsamplers.0.conv.weight"));
+        assert!(vae.contains_key("encoder.mid_block.resnets.0.norm1.weight"));
+        assert!(vae.contains_key("encoder.mid_block.attentions.0.group_norm.weight"));
+        assert!(vae.contains_key("encoder.conv_norm_out.weight"));
+        // Symmetric decoder mappings.
+        assert!(vae.contains_key("decoder.up_blocks.0.resnets.0.norm1.weight"));
+        assert!(vae.contains_key("decoder.mid_block.resnets.0.norm1.weight"));
+        assert!(vae.contains_key("decoder.conv_norm_out.weight"));
+        // quant_conv / post_quant_conv unchanged.
+        assert!(vae.contains_key("quant_conv.weight"));
+        assert!(vae.contains_key("post_quant_conv.weight"));
+        // Compvis-style keys must not appear in the output.
+        assert!(!vae.contains_key("encoder.down.0.block.0.norm1.weight"));
+        assert!(!vae.contains_key("encoder.norm_out.weight"));
+        assert!(!vae.contains_key("encoder.mid.attn_1.norm.weight"));
+
+        let _ = tokio::fs::remove_dir_all(base).await;
+    }
+
+    fn compvis_vae_source_names_for_import() -> Vec<&'static str> {
+        vec![
+            "first_stage_model.encoder.conv_in.weight",
+            "first_stage_model.encoder.conv_out.weight",
+            "first_stage_model.encoder.norm_out.weight",
+            "first_stage_model.encoder.down.0.block.0.norm1.weight",
+            "first_stage_model.encoder.down.0.block.0.conv1.weight",
+            "first_stage_model.encoder.down.0.block.0.norm2.weight",
+            "first_stage_model.encoder.down.0.block.0.conv2.weight",
+            "first_stage_model.encoder.down.0.downsample.conv.weight",
+            "first_stage_model.encoder.mid.block_1.norm1.weight",
+            "first_stage_model.encoder.mid.attn_1.norm.weight",
+            "first_stage_model.decoder.conv_in.weight",
+            "first_stage_model.decoder.conv_out.weight",
+            "first_stage_model.decoder.norm_out.weight",
+            "first_stage_model.decoder.up.0.block.0.norm1.weight",
+            "first_stage_model.decoder.mid.block_1.norm1.weight",
+            "first_stage_model.quant_conv.weight",
+            "first_stage_model.post_quant_conv.weight",
+        ]
     }
 
     #[tokio::test]
