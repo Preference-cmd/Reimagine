@@ -688,8 +688,10 @@ mod tests {
     fn required_vae_source_names() -> Vec<&'static str> {
         let targets = [
             "encoder.conv_in.weight",
+            "encoder.conv_norm_out.weight",
             "decoder.conv_in.weight",
             "decoder.conv_out.weight",
+            "decoder.conv_norm_out.weight",
             "quant_conv.weight",
             "post_quant_conv.weight",
         ];

@@ -1,5 +1,6 @@
 use super::checkpoint_import::SdxlConvertedComponent;
 use super::unet_key_mapping::{SdxlOriginalUnetMappingDecision, map_original_sdxl_unet_key};
+use super::vae_key_mapping::map_original_sdxl_vae_key;
 
 /// OpenCLIP-G hidden dimension (CLIP-G bigG encoder).
 const CLIP_G_EMBED_DIM: usize = 1280;
@@ -86,12 +87,24 @@ pub(crate) fn map_sdxl_checkpoint_tensor(
         }
     }
 
-    if let Some(target_name) = name.strip_prefix("first_stage_model.") {
-        return Ok(vec![SdxlMappedTensor {
-            component: SdxlConvertedComponent::Vae,
-            target_name: target_name.to_owned(),
-            source_row_range: None,
-        }]);
+    if let Some(suffix) = name.strip_prefix("first_stage_model.") {
+        // First try the compvis/LDM → diffusers VAE mapping (issue
+        // real-inference/07a1). When the suffix is already in diffusers
+        // layout (e.g. `encoder.conv_in.weight`) the mapper rejects it
+        // with `UnknownRequiredFamily`, in which case we fall back to a
+        // 1:1 prefix strip so the existing diffusers-format fixtures
+        // keep working.
+        return match map_original_sdxl_vae_key(name, suffix) {
+            Ok(mapped) => Ok(mapped),
+            Err(SdxlTensorMappingError::UnknownRequiredFamily { .. }) => {
+                Ok(vec![SdxlMappedTensor {
+                    component: SdxlConvertedComponent::Vae,
+                    target_name: suffix.to_owned(),
+                    source_row_range: None,
+                }])
+            }
+            Err(error) => Err(error),
+        };
     }
 
     if let Some(target_name) = name.strip_prefix("conditioner.embedders.0.") {
@@ -150,21 +163,31 @@ fn map_openclipg_top_level(
     suffix: &str,
 ) -> Result<Vec<SdxlMappedTensor>, SdxlTensorMappingError> {
     let (target_name, is_ignored) = match suffix {
-        "token_embedding.weight" => ("transformer.text_model.embeddings.token_embedding.weight", false),
-        "positional_embedding" => ("transformer.text_model.embeddings.position_embedding.weight", false),
+        "token_embedding.weight" => (
+            "transformer.text_model.embeddings.token_embedding.weight",
+            false,
+        ),
+        "positional_embedding" => (
+            "transformer.text_model.embeddings.position_embedding.weight",
+            false,
+        ),
         "ln_final.weight" => ("transformer.text_model.final_layer_norm.weight", false),
         "ln_final.bias" => ("transformer.text_model.final_layer_norm.bias", false),
         "text_projection" => ("text_projection", true),
         "logit_scale" => ("logit_scale", true),
-        _ => return Err(SdxlTensorMappingError::UnknownRequiredFamily {
-            name: _full_source.to_owned(),
-        }),
+        _ => {
+            return Err(SdxlTensorMappingError::UnknownRequiredFamily {
+                name: _full_source.to_owned(),
+            });
+        }
     };
 
     if is_ignored {
         return Err(SdxlTensorMappingError::Ignored {
             name: _full_source.to_owned(),
-            reason: format!("OpenCLIP-G `{suffix}` is not part of the Candle example CLIP load path"),
+            reason: format!(
+                "OpenCLIP-G `{suffix}` is not part of the Candle example CLIP load path"
+            ),
         });
     }
 
@@ -185,17 +208,18 @@ fn map_openclipg_resblock(
     rest: &str,
 ) -> Result<Vec<SdxlMappedTensor>, SdxlTensorMappingError> {
     // rest is like "0.attn.in_proj_weight" or "15.mlp.c_fc.bias"
-    let dot = rest.find('.').ok_or_else(|| {
-        SdxlTensorMappingError::UnknownRequiredFamily {
+    let dot = rest
+        .find('.')
+        .ok_or_else(|| SdxlTensorMappingError::UnknownRequiredFamily {
             name: full_source.to_owned(),
-        }
-    })?;
+        })?;
     let layer_str = &rest[..dot];
-    let layer: usize = layer_str.parse().map_err(|_| {
-        SdxlTensorMappingError::UnknownRequiredFamily {
-            name: full_source.to_owned(),
-        }
-    })?;
+    let layer: usize =
+        layer_str
+            .parse()
+            .map_err(|_| SdxlTensorMappingError::UnknownRequiredFamily {
+                name: full_source.to_owned(),
+            })?;
     if layer >= CLIP_G_NUM_RESBLOCKS {
         return Err(SdxlTensorMappingError::UnknownRequiredFamily {
             name: full_source.to_owned(),
@@ -279,9 +303,7 @@ fn map_openclipg_resblock(
         }]),
         "ln_1.bias" => Ok(vec![SdxlMappedTensor {
             component: SdxlConvertedComponent::ClipG,
-            target_name: format!(
-                "transformer.text_model.encoder.layers.{layer}.layer_norm1.bias"
-            ),
+            target_name: format!("transformer.text_model.encoder.layers.{layer}.layer_norm1.bias"),
             source_row_range: None,
         }]),
         "ln_2.weight" => Ok(vec![SdxlMappedTensor {
@@ -293,37 +315,27 @@ fn map_openclipg_resblock(
         }]),
         "ln_2.bias" => Ok(vec![SdxlMappedTensor {
             component: SdxlConvertedComponent::ClipG,
-            target_name: format!(
-                "transformer.text_model.encoder.layers.{layer}.layer_norm2.bias"
-            ),
+            target_name: format!("transformer.text_model.encoder.layers.{layer}.layer_norm2.bias"),
             source_row_range: None,
         }]),
         "mlp.c_fc.weight" => Ok(vec![SdxlMappedTensor {
             component: SdxlConvertedComponent::ClipG,
-            target_name: format!(
-                "transformer.text_model.encoder.layers.{layer}.mlp.fc1.weight"
-            ),
+            target_name: format!("transformer.text_model.encoder.layers.{layer}.mlp.fc1.weight"),
             source_row_range: None,
         }]),
         "mlp.c_fc.bias" => Ok(vec![SdxlMappedTensor {
             component: SdxlConvertedComponent::ClipG,
-            target_name: format!(
-                "transformer.text_model.encoder.layers.{layer}.mlp.fc1.bias"
-            ),
+            target_name: format!("transformer.text_model.encoder.layers.{layer}.mlp.fc1.bias"),
             source_row_range: None,
         }]),
         "mlp.c_proj.weight" => Ok(vec![SdxlMappedTensor {
             component: SdxlConvertedComponent::ClipG,
-            target_name: format!(
-                "transformer.text_model.encoder.layers.{layer}.mlp.fc2.weight"
-            ),
+            target_name: format!("transformer.text_model.encoder.layers.{layer}.mlp.fc2.weight"),
             source_row_range: None,
         }]),
         "mlp.c_proj.bias" => Ok(vec![SdxlMappedTensor {
             component: SdxlConvertedComponent::ClipG,
-            target_name: format!(
-                "transformer.text_model.encoder.layers.{layer}.mlp.fc2.bias"
-            ),
+            target_name: format!("transformer.text_model.encoder.layers.{layer}.mlp.fc2.bias"),
             source_row_range: None,
         }]),
         _ => Err(SdxlTensorMappingError::UnknownRequiredFamily {
@@ -373,7 +385,8 @@ mod tests {
             "conditioner.embedders.1.model.transformer.text_model.embeddings.token_embedding.weight",
         )
         .unwrap()[0];
-        let vae = &map_sdxl_checkpoint_tensor("first_stage_model.decoder.conv_in.weight").unwrap()[0];
+        let vae =
+            &map_sdxl_checkpoint_tensor("first_stage_model.decoder.conv_in.weight").unwrap()[0];
 
         assert_eq!(clip_l.component, SdxlConvertedComponent::ClipL);
         assert_eq!(
@@ -391,8 +404,8 @@ mod tests {
 
     #[test]
     fn maps_original_unet_keys_to_candle_example_targets() {
-        let mapped =
-            &map_sdxl_checkpoint_tensor("model.diffusion_model.input_blocks.0.0.weight").unwrap()[0];
+        let mapped = &map_sdxl_checkpoint_tensor("model.diffusion_model.input_blocks.0.0.weight")
+            .unwrap()[0];
         assert_eq!(mapped.component, SdxlConvertedComponent::Unet);
         assert_eq!(mapped.target_name, "conv_in.weight");
     }
@@ -524,46 +537,39 @@ mod tests {
 
     #[test]
     fn maps_openclipg_top_level_keys() {
-        let r = &map_sdxl_checkpoint_tensor(
-            "conditioner.embedders.1.model.token_embedding.weight",
-        )
-        .unwrap()[0];
+        let r = &map_sdxl_checkpoint_tensor("conditioner.embedders.1.model.token_embedding.weight")
+            .unwrap()[0];
         assert_eq!(
             r.target_name,
             "transformer.text_model.embeddings.token_embedding.weight"
         );
         assert_eq!(r.source_row_range, None);
 
-        let r = &map_sdxl_checkpoint_tensor(
-            "conditioner.embedders.1.model.positional_embedding",
-        )
-        .unwrap()[0];
+        let r = &map_sdxl_checkpoint_tensor("conditioner.embedders.1.model.positional_embedding")
+            .unwrap()[0];
         assert_eq!(
             r.target_name,
             "transformer.text_model.embeddings.position_embedding.weight"
         );
 
-        let r = &map_sdxl_checkpoint_tensor(
-            "conditioner.embedders.1.model.ln_final.weight",
-        )
-        .unwrap()[0];
-        assert_eq!(r.target_name, "transformer.text_model.final_layer_norm.weight");
+        let r = &map_sdxl_checkpoint_tensor("conditioner.embedders.1.model.ln_final.weight")
+            .unwrap()[0];
+        assert_eq!(
+            r.target_name,
+            "transformer.text_model.final_layer_norm.weight"
+        );
     }
 
     #[test]
     fn ignores_openclipg_text_projection_and_logit_scale() {
-        let err = map_sdxl_checkpoint_tensor(
-            "conditioner.embedders.1.model.text_projection",
-        )
-        .unwrap_err();
+        let err = map_sdxl_checkpoint_tensor("conditioner.embedders.1.model.text_projection")
+            .unwrap_err();
         assert!(matches!(err, SdxlTensorMappingError::Ignored { .. }));
         let msg = err.to_string();
         assert!(msg.contains("text_projection"), "{msg}");
 
-        let err = map_sdxl_checkpoint_tensor(
-            "conditioner.embedders.1.model.logit_scale",
-        )
-        .unwrap_err();
+        let err =
+            map_sdxl_checkpoint_tensor("conditioner.embedders.1.model.logit_scale").unwrap_err();
         assert!(matches!(err, SdxlTensorMappingError::Ignored { .. }));
     }
 
@@ -573,7 +579,10 @@ mod tests {
             "conditioner.embedders.1.model.transformer.resblocks.99.attn.in_proj_weight",
         )
         .unwrap_err();
-        assert!(matches!(err, SdxlTensorMappingError::UnknownRequiredFamily { .. }));
+        assert!(matches!(
+            err,
+            SdxlTensorMappingError::UnknownRequiredFamily { .. }
+        ));
     }
 
     #[test]
@@ -582,6 +591,9 @@ mod tests {
             "conditioner.embedders.1.model.transformer.resblocks.3.attn.unknown_key",
         )
         .unwrap_err();
-        assert!(matches!(err, SdxlTensorMappingError::UnknownRequiredFamily { .. }));
+        assert!(matches!(
+            err,
+            SdxlTensorMappingError::UnknownRequiredFamily { .. }
+        ));
     }
 }
