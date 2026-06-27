@@ -11,29 +11,44 @@ use super::unet_target_keys::{SdxlUnetTargetFamily, classify_sdxl_unet_target_ke
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct SdxlComponentWritePlan {
-    tensors: BTreeMap<SdxlConvertedComponent, Vec<(String, String)>>,
+    tensors: BTreeMap<SdxlConvertedComponent, Vec<WriteEntry>>,
     ignored_families: Vec<SdxlIgnoredFamily>,
+}
+
+/// A single entry in the write plan: a source tensor copied (or
+/// sliced) into a target name.
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct WriteEntry {
+    target_name: String,
+    source_name: String,
+    /// Row range to slice from the source tensor. None means copy
+    /// the full tensor (1:1).
+    source_row_range: Option<(usize, usize)>,
 }
 
 impl SdxlComponentWritePlan {
     pub(crate) fn from_safetensors(
         safetensors: &SafeTensors<'_>,
     ) -> Result<Self, SdxlCheckpointWriterError> {
-        let mut tensors: BTreeMap<SdxlConvertedComponent, Vec<(String, String)>> = BTreeMap::new();
+        let mut tensors: BTreeMap<SdxlConvertedComponent, Vec<WriteEntry>> = BTreeMap::new();
         let mut ignored_families: Vec<SdxlIgnoredFamily> = Vec::new();
 
         for name in safetensors.names() {
             match map_sdxl_checkpoint_tensor(name) {
-                Ok(mapped) => {
-                    tensors
-                        .entry(mapped.component)
-                        .or_default()
-                        .push((mapped.target_name, name.to_owned()));
+                Ok(mapped_vec) => {
+                    for mapped in mapped_vec {
+                        tensors
+                            .entry(mapped.component)
+                            .or_default()
+                            .push(WriteEntry {
+                                target_name: mapped.target_name,
+                                source_name: name.to_owned(),
+                                source_row_range: mapped.source_row_range,
+                            });
+                    }
                 }
                 Err(SdxlTensorMappingError::Ignored { name: _, reason }) => {
-                    // Collect unique ignored family reasons. Multiple
-                    // tensors from the same family share the same
-                    // reason string; deduplicate by reason.
+                    // Collect unique ignored family reasons.
                     if !ignored_families.iter().any(|entry| entry.reason == reason) {
                         let family = name.split('.').take(3).collect::<Vec<_>>().join(".");
                         ignored_families.push(SdxlIgnoredFamily {
@@ -68,7 +83,7 @@ impl SdxlComponentWritePlan {
             .unwrap_or_default()
     }
 
-    fn entries(&self, component: SdxlConvertedComponent) -> Option<&[(String, String)]> {
+    fn entries(&self, component: SdxlConvertedComponent) -> Option<&[WriteEntry]> {
         self.tensors.get(&component).map(Vec::as_slice)
     }
 
@@ -120,6 +135,12 @@ pub(crate) enum SdxlCheckpointWriterError {
     },
     WriteComponent {
         path: PathBuf,
+        reason: String,
+    },
+    RowSlice {
+        target_name: String,
+        source_shape: Vec<usize>,
+        range: (usize, usize),
         reason: String,
     },
 }
@@ -177,6 +198,15 @@ impl std::fmt::Display for SdxlCheckpointWriterError {
                 "failed to write SDXL checkpoint component {}: {reason}",
                 path.display()
             ),
+            Self::RowSlice {
+                target_name,
+                source_shape,
+                range,
+                reason,
+            } => write!(
+                f,
+                "failed to slice source tensor for `{target_name}`: {reason} (source shape {source_shape:?}, range {range:?})",
+            ),
         }
     }
 }
@@ -185,7 +215,7 @@ impl std::error::Error for SdxlCheckpointWriterError {}
 
 fn validate_required_targets(
     component: SdxlConvertedComponent,
-    entries: &[(String, String)],
+    entries: &[WriteEntry],
 ) -> Result<(), SdxlCheckpointWriterError> {
     match component {
         SdxlConvertedComponent::Unet => validate_required_unet_targets(entries),
@@ -199,12 +229,12 @@ fn validate_required_targets(
 }
 
 fn validate_required_unet_targets(
-    entries: &[(String, String)],
+    entries: &[WriteEntry],
 ) -> Result<(), SdxlCheckpointWriterError> {
     for family in REQUIRED_UNET_FAMILIES {
         if entries
             .iter()
-            .any(|(target, _)| classify_sdxl_unet_target_key(target) == Some(*family))
+            .any(|entry| classify_sdxl_unet_target_key(&entry.target_name) == Some(*family))
         {
             continue;
         }
@@ -218,11 +248,11 @@ fn validate_required_unet_targets(
 
 fn validate_required_named_targets(
     component: SdxlConvertedComponent,
-    entries: &[(String, String)],
+    entries: &[WriteEntry],
     required: &[&'static str],
 ) -> Result<(), SdxlCheckpointWriterError> {
     for target in required {
-        if entries.iter().any(|(candidate, _)| candidate == target) {
+        if entries.iter().any(|entry| entry.target_name == *target) {
             continue;
         }
         return Err(SdxlCheckpointWriterError::MissingRequiredTarget {
@@ -317,7 +347,7 @@ pub(crate) fn write_sdxl_checkpoint_components(
 
 fn write_component_file(
     safetensors: &SafeTensors<'_>,
-    entries: &[(String, String)],
+    entries: &[WriteEntry],
     output_path: &Path,
 ) -> Result<(), SdxlCheckpointWriterError> {
     let parent = output_path
@@ -329,17 +359,27 @@ fn write_component_file(
     })?;
 
     let mut views = Vec::with_capacity(entries.len());
-    for (target_name, source_name) in entries {
-        let view = safetensors.tensor(source_name).map_err(|error| {
+    for entry in entries {
+        let view = safetensors.tensor(&entry.source_name).map_err(|error| {
             SdxlCheckpointWriterError::TensorRead {
-                source_name: source_name.clone(),
+                source_name: entry.source_name.clone(),
                 reason: error.to_string(),
             }
         })?;
-        views.push(OwnedTensorView::from_tensor_view(
-            target_name.clone(),
-            view,
-        )?);
+
+        if let Some((row_start, row_end)) = entry.source_row_range {
+            views.push(OwnedTensorView::from_tensor_view_slice(
+                entry.target_name.clone(),
+                view,
+                row_start,
+                row_end,
+            )?);
+        } else {
+            views.push(OwnedTensorView::from_tensor_view(
+                entry.target_name.clone(),
+                view,
+            )?);
+        }
     }
 
     safetensors::serialize_to_file(
@@ -378,6 +418,89 @@ impl OwnedTensorView {
             dtype: view.dtype(),
             shape: view.shape().to_vec(),
             data,
+        })
+    }
+
+    /// Creates a view that copies a row range from the source tensor.
+    ///
+    /// The source tensor is assumed to have shape `[total_rows, embed_dim]`
+    /// (or `[total_rows]` for bias vectors). `row_start` is the first row
+    /// to include, `row_end` is the first row *after* the slice
+    /// (so `row_end - row_start` rows are kept).
+    fn from_tensor_view_slice(
+        target_name: String,
+        view: TensorView<'_>,
+        row_start: usize,
+        row_end: usize,
+    ) -> Result<Self, SdxlCheckpointWriterError> {
+        let shape = view.shape().to_vec();
+        let dtype = view.dtype();
+        let elem_size = match dtype {
+            Dtype::F32 => 4,
+            Dtype::F16 | Dtype::BF16 => 2,
+            _ => {
+                return Err(SdxlCheckpointWriterError::RowSlice {
+                    target_name,
+                    source_shape: shape,
+                    range: (row_start, row_end),
+                    reason: format!("unsupported dtype {dtype:?} for row slicing"),
+                });
+            }
+        };
+
+        let total_rows = shape.first().copied().ok_or_else(|| {
+            SdxlCheckpointWriterError::RowSlice {
+                target_name: target_name.clone(),
+                source_shape: shape.clone(),
+                range: (row_start, row_end),
+                reason: "cannot slice a 0-dimensional tensor".to_owned(),
+            }
+        })?;
+
+        if row_end > total_rows || row_start >= row_end {
+            return Err(SdxlCheckpointWriterError::RowSlice {
+                target_name,
+                source_shape: shape,
+                range: (row_start, row_end),
+                reason: "row range is out of bounds".to_owned(),
+            });
+        }
+
+        let num_rows = row_end - row_start;
+        let cols_per_row: usize = shape.iter().skip(1).copied().product::<usize>().max(1);
+        let row_bytes = cols_per_row * elem_size;
+
+        let src_data = view.data();
+        let start_byte = row_start * row_bytes;
+        let end_byte = row_end * row_bytes;
+
+        if end_byte > src_data.len() {
+            return Err(SdxlCheckpointWriterError::RowSlice {
+                target_name: target_name.clone(),
+                source_shape: shape,
+                range: (row_start, row_end),
+                reason: "byte range exceeds source data length".to_owned(),
+            });
+        }
+
+        let sliced = src_data[start_byte..end_byte].to_vec();
+
+        // Compute output shape: [num_rows, ...rest].
+        let mut out_shape = shape;
+        out_shape[0] = num_rows;
+
+        TensorView::new(dtype, out_shape.clone(), &sliced).map_err(|error| {
+            SdxlCheckpointWriterError::TensorView {
+                target_name: target_name.clone(),
+                reason: error.to_string(),
+            }
+        })?;
+
+        Ok(Self {
+            name: target_name,
+            dtype,
+            shape: out_shape,
+            data: sliced,
         })
     }
 }
@@ -427,6 +550,16 @@ mod tests {
             tensors.insert((*name).to_owned(), tensor);
         }
         candle_core::safetensors::save(&tensors, path).unwrap();
+    }
+
+    fn write_multi_safetensors(path: &Path, tensors: &[(&str, Vec<f32>, &[usize])]) {
+        fs::create_dir_all(path.parent().unwrap()).unwrap();
+        let mut map = HashMap::new();
+        for (name, data, shape) in tensors {
+            let t = Tensor::from_vec(data.clone(), *shape, &Device::Cpu).unwrap();
+            map.insert(name.to_string(), t);
+        }
+        candle_core::safetensors::save(&map, path).unwrap();
     }
 
     fn complete_diffusers_split_names() -> Vec<&'static str> {
@@ -655,6 +788,215 @@ mod tests {
         write_safetensors(&source, &["conv_in.weight"]);
         let tensors = candle_core::safetensors::load(&source, &Device::Cpu).unwrap();
         assert_eq!(tensors["conv_in.weight"].dtype(), DType::F32);
+        let _ = fs::remove_dir_all(dir);
+    }
+
+    // ---- OpenCLIP-G Writer Integration Tests ----
+
+    #[test]
+    fn openclipg_keys_write_to_valid_components() {
+        let dir = temp_dir("openclipg-write");
+        let source = dir.join("source.safetensors");
+        let output = dir.join("converted");
+        fs::create_dir_all(&dir).unwrap();
+
+        // Build all tensors with correct shapes, then write once.
+        let mut all_tensors: Vec<(&str, Vec<f32>, &[usize])> = Vec::new();
+
+        // Minimal Unet (1D `[1]` — no slicing needed).
+        for name in &[
+            "conv_in.weight", "time_embedding.linear_1.weight",
+            "down_blocks.0.resnets.0.norm1.weight", "down_blocks.1.attentions.0.proj_in.weight",
+            "down_blocks.0.downsamplers.0.conv.weight", "mid_block.resnets.0.norm1.weight",
+            "mid_block.attentions.0.proj_in.weight", "up_blocks.0.resnets.0.conv_shortcut.weight",
+            "up_blocks.0.attentions.0.proj_in.weight", "up_blocks.0.upsamplers.0.conv.weight",
+            "conv_norm_out.weight", "conv_out.weight",
+        ] {
+            all_tensors.push((name, vec![0.0f32; 1], &[1usize]));
+        }
+
+        // Minimal ClipL (with reasonable shapes for validate).
+        all_tensors.push(("conditioner.embedders.0.transformer.text_model.embeddings.token_embedding.weight",
+            vec![0.0f32; 768 * 256], &[256usize, 768]));
+        all_tensors.push(("conditioner.embedders.0.transformer.text_model.embeddings.position_embedding.weight",
+            vec![0.0f32; 77 * 768], &[77usize, 768]));
+        for name in &[
+            "transformer.text_model.encoder.layers.0.self_attn.q_proj.weight",
+            "transformer.text_model.encoder.layers.0.self_attn.k_proj.weight",
+            "transformer.text_model.encoder.layers.0.self_attn.v_proj.weight",
+            "transformer.text_model.encoder.layers.0.self_attn.out_proj.weight",
+        ] {
+            let full: String = format!("conditioner.embedders.0.{name}");
+            all_tensors.push((
+                Box::leak(full.into_boxed_str()),
+                vec![0.0f32; 768 * 768], &[768usize, 768]));
+        }
+        all_tensors.push(("conditioner.embedders.0.transformer.text_model.encoder.layers.0.layer_norm1.weight",
+            vec![0.0f32; 768], &[768usize]));
+        all_tensors.push(("conditioner.embedders.0.transformer.text_model.final_layer_norm.weight",
+            vec![0.0f32; 768], &[768usize]));
+
+        // Minimal Vae.
+        for name in &[
+            "first_stage_model.encoder.conv_in.weight",
+            "first_stage_model.decoder.conv_in.weight",
+            "first_stage_model.decoder.conv_out.weight",
+            "first_stage_model.quant_conv.weight",
+            "first_stage_model.post_quant_conv.weight",
+        ] {
+            all_tensors.push((name, vec![0.0f32; 1], &[1usize]));
+        }
+
+        // OpenCLIP-G ClipG — must be shaped for row slicing.
+        all_tensors.push(("conditioner.embedders.1.model.token_embedding.weight",
+            vec![0.0f32; 49408 * 1280], &[49408usize, 1280]));
+        all_tensors.push(("conditioner.embedders.1.model.positional_embedding",
+            vec![0.0f32; 77 * 1280], &[77usize, 1280]));
+        all_tensors.push(("conditioner.embedders.1.model.ln_final.weight",
+            vec![1.0f32; 1280], &[1280usize]));
+        all_tensors.push(("conditioner.embedders.1.model.transformer.resblocks.0.attn.in_proj_weight",
+            vec![0.0f32; 3840 * 1280], &[3840usize, 1280]));
+        all_tensors.push(("conditioner.embedders.1.model.transformer.resblocks.0.attn.out_proj.weight",
+            vec![0.0f32; 1280 * 1280], &[1280usize, 1280]));
+        all_tensors.push(("conditioner.embedders.1.model.transformer.resblocks.0.ln_1.weight",
+            vec![1.0f32; 1280], &[1280usize]));
+        all_tensors.push(("conditioner.embedders.1.model.transformer.resblocks.0.attn.in_proj_bias",
+            vec![0.0f32; 3840], &[3840usize]));
+        all_tensors.push(("conditioner.embedders.1.model.transformer.resblocks.0.attn.out_proj.bias",
+            vec![0.0f32; 1280], &[1280usize]));
+        all_tensors.push(("conditioner.embedders.1.model.transformer.resblocks.0.ln_1.bias",
+            vec![1.0f32; 1280], &[1280usize]));
+        all_tensors.push(("conditioner.embedders.1.model.transformer.resblocks.0.mlp.c_fc.weight",
+            vec![0.0f32; 5120 * 1280], &[5120usize, 1280]));
+        all_tensors.push(("conditioner.embedders.1.model.transformer.resblocks.0.mlp.c_proj.weight",
+            vec![0.0f32; 1280 * 5120], &[1280usize, 5120]));
+        all_tensors.push(("conditioner.embedders.1.model.transformer.resblocks.10.attn.in_proj_weight",
+            vec![0.0f32; 3840 * 1280], &[3840usize, 1280]));
+        all_tensors.push(("conditioner.embedders.1.model.transformer.resblocks.10.attn.out_proj.weight",
+            vec![0.0f32; 1280 * 1280], &[1280usize, 1280]));
+        all_tensors.push(("conditioner.embedders.1.model.transformer.resblocks.10.ln_1.weight",
+            vec![1.0f32; 1280], &[1280usize]));
+
+        write_multi_safetensors(&source, &all_tensors);
+
+        let plan = write_sdxl_checkpoint_components(&source, &output, |component| {
+            component.relative_path().to_owned()
+        })
+        .expect("OpenCLIP-G keys should produce a valid write plan");
+
+        // in_proj_weight splits into 3 per layer; in_proj_bias into 3.
+        // For 2 layers with both in_proj_weight and in_proj_bias:
+        // layer 0: 3 (weight) + 3 (bias) + out_proj.weight + out_proj.bias + ln_1.weight + ln_1.bias + mlp.c_fc.weight + mlp.c_proj.weight = 12
+        // layer 10: 3 (weight) + out_proj.weight + ln_1.weight = 5
+        // top-level: token_embedding (1) + positional_embedding (1) + ln_final.weight (1) = 3
+        // Total ClipG = 12 + 5 + 3 = 20
+        assert_eq!(plan.tensor_count(SdxlConvertedComponent::ClipG), 20);
+        assert!(output.join("text_encoder_2/model.safetensors").is_file());
+
+        let _ = fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn openclipg_in_proj_weight_slice_produces_correct_shapes() {
+        let dir = temp_dir("openclipg-slice");
+        let source = dir.join("source.safetensors");
+        let output = dir.join("converted");
+        fs::create_dir_all(&dir).unwrap();
+
+        // Write a real fused in_proj_weight like OpenCLIP-G uses:
+        // shape [3840, 1280], 32-bit floats, sequential values as a
+        // crude sentinel.
+        let mut data = Vec::with_capacity(3840 * 1280);
+        for i in 0..(3840 * 1280) {
+            data.push(i as f32);
+        }
+        write_multi_safetensors(
+            &source,
+            &[
+                // ClipG OpenCLIP-G tensors
+                ("conditioner.embedders.1.model.transformer.resblocks.0.attn.in_proj_weight", data.clone(), &[3840usize, 1280]),
+                ("conditioner.embedders.1.model.transformer.resblocks.0.attn.out_proj.weight", vec![0.0f32; 1280 * 1280], &[1280usize, 1280]),
+                ("conditioner.embedders.1.model.transformer.resblocks.0.ln_1.weight", vec![1.0f32; 1280], &[1280usize]),
+                ("conditioner.embedders.1.model.token_embedding.weight", vec![0.0f32; 49408 * 1280], &[49408usize, 1280]),
+                ("conditioner.embedders.1.model.positional_embedding", vec![0.0f32; 77 * 1280], &[77usize, 1280]),
+                ("conditioner.embedders.1.model.ln_final.weight", vec![1.0f32; 1280], &[1280usize]),
+                // Minimal Unet (validate_complete needs all families).
+                ("conv_in.weight", vec![0.0f32; 16], &[4usize, 4]),
+                ("time_embedding.linear_1.weight", vec![0.0f32; 4], &[4usize]),
+                ("down_blocks.0.resnets.0.norm1.weight", vec![0.0f32; 4], &[4usize]),
+                ("down_blocks.1.attentions.0.proj_in.weight", vec![0.0f32; 4], &[4usize]),
+                ("down_blocks.0.downsamplers.0.conv.weight", vec![0.0f32; 4], &[4usize]),
+                ("mid_block.resnets.0.norm1.weight", vec![0.0f32; 4], &[4usize]),
+                ("mid_block.attentions.0.proj_in.weight", vec![0.0f32; 4], &[4usize]),
+                ("up_blocks.0.resnets.0.conv_shortcut.weight", vec![0.0f32; 4], &[4usize]),
+                ("up_blocks.0.attentions.0.proj_in.weight", vec![0.0f32; 4], &[4usize]),
+                ("up_blocks.0.upsamplers.0.conv.weight", vec![0.0f32; 4], &[4usize]),
+                ("conv_norm_out.weight", vec![0.0f32; 4], &[4usize]),
+                ("conv_out.weight", vec![0.0f32; 4], &[4usize]),
+                // Minimal ClipL.
+                ("conditioner.embedders.0.transformer.text_model.embeddings.token_embedding.weight", vec![0.0f32; 768 * 49408], &[49408usize, 768]),
+                ("conditioner.embedders.0.transformer.text_model.embeddings.position_embedding.weight", vec![0.0f32; 77 * 768], &[77usize, 768]),
+                ("conditioner.embedders.0.transformer.text_model.encoder.layers.0.self_attn.q_proj.weight", vec![0.0f32; 768 * 768], &[768usize, 768]),
+                ("conditioner.embedders.0.transformer.text_model.encoder.layers.0.self_attn.k_proj.weight", vec![0.0f32; 768 * 768], &[768usize, 768]),
+                ("conditioner.embedders.0.transformer.text_model.encoder.layers.0.self_attn.v_proj.weight", vec![0.0f32; 768 * 768], &[768usize, 768]),
+                ("conditioner.embedders.0.transformer.text_model.encoder.layers.0.self_attn.out_proj.weight", vec![0.0f32; 768 * 768], &[768usize, 768]),
+                ("conditioner.embedders.0.transformer.text_model.encoder.layers.0.layer_norm1.weight", vec![0.0f32; 768], &[768usize]),
+                ("conditioner.embedders.0.transformer.text_model.final_layer_norm.weight", vec![0.0f32; 768], &[768usize]),
+                // Minimal Vae.
+                ("first_stage_model.encoder.conv_in.weight", vec![0.0f32; 4], &[4usize]),
+                ("first_stage_model.decoder.conv_in.weight", vec![0.0f32; 4], &[4usize]),
+                ("first_stage_model.decoder.conv_out.weight", vec![0.0f32; 4], &[4usize]),
+                ("first_stage_model.quant_conv.weight", vec![0.0f32; 4], &[4usize]),
+                ("first_stage_model.post_quant_conv.weight", vec![0.0f32; 4], &[4usize]),
+            ],
+        );
+
+        let plan = write_sdxl_checkpoint_components(&source, &output, |component| {
+            component.relative_path().to_owned()
+        })
+        .expect("OpenCLIP-G with shaped tensors should write successfully");
+
+        // Layer 0 has in_proj_weight (→3) + out_proj.weight (1) + ln_1.weight (1) + top-level (3) = 8
+        assert_eq!(plan.tensor_count(SdxlConvertedComponent::ClipG), 8);
+
+        // Read back the ClipG file and verify shapes.
+        let clip_g = candle_core::safetensors::load(
+            output.join("text_encoder_2/model.safetensors"),
+            &Device::Cpu,
+        )
+        .expect("should read back ClipG safetensors");
+
+        // q/k/v each should be [1280, 1280].
+        let q_proj = clip_g.get("transformer.text_model.encoder.layers.0.self_attn.q_proj.weight")
+            .expect("q_proj.weight should exist");
+        assert_eq!(q_proj.shape().dims(), &[1280, 1280]);
+        let k_proj = clip_g.get("transformer.text_model.encoder.layers.0.self_attn.k_proj.weight")
+            .expect("k_proj.weight should exist");
+        assert_eq!(k_proj.shape().dims(), &[1280, 1280]);
+        let v_proj = clip_g.get("transformer.text_model.encoder.layers.0.self_attn.v_proj.weight")
+            .expect("v_proj.weight should exist");
+        assert_eq!(v_proj.shape().dims(), &[1280, 1280]);
+
+        // Verify split content: row 0 of q_proj should equal row 0 of source,
+        // row 0 of k_proj should equal row 1280, row 0 of v_proj should equal row 2560.
+        let q_row0: Vec<f32> = q_proj.get(0).unwrap().to_vec1().unwrap();
+        let k_row0: Vec<f32> = k_proj.get(0).unwrap().to_vec1().unwrap();
+        let v_row0: Vec<f32> = v_proj.get(0).unwrap().to_vec1().unwrap();
+
+        // We know source data was sequential: element (r,c) = (r * 1280 + c) as f32.
+        let expected_q_row0: Vec<f32> = (0u32..1280).map(|i| i as f32).collect();
+        let expected_k_row0: Vec<f32> = ((1280 * 1280) as u32..(1280 * 1280 + 1280) as u32).map(|i| i as f32).collect();
+        let expected_v_row0: Vec<f32> = ((2560 * 1280) as u32..(2560 * 1280 + 1280) as u32).map(|i| i as f32).collect();
+
+        assert_eq!(q_row0, expected_q_row0, "q_proj row 0 data mismatch");
+        assert_eq!(k_row0, expected_k_row0, "k_proj row 0 data mismatch");
+        assert_eq!(v_row0, expected_v_row0, "v_proj row 0 data mismatch");
+
+        // out_proj.weight should be [1280, 1280].
+        let out_proj = clip_g.get("transformer.text_model.encoder.layers.0.self_attn.out_proj.weight")
+            .expect("out_proj.weight should exist");
+        assert_eq!(out_proj.shape().dims(), &[1280, 1280]);
+
         let _ = fs::remove_dir_all(dir);
     }
 }
