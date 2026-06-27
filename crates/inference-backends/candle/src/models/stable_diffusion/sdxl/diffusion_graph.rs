@@ -147,7 +147,14 @@ impl SdxlDiffusionGraph for DiffusersSdxlUnetGraph {
         request: &SdxlSampleRequest,
         device: &Device,
     ) -> Result<CandleLatent, CandleBackendError> {
-        run_euler_normal_denoise_loop(&self.unet, input_latent, positive, negative, request, device)
+        run_euler_normal_denoise_loop(
+            &self.unet,
+            input_latent,
+            positive,
+            negative,
+            request,
+            device,
+        )
     }
 }
 

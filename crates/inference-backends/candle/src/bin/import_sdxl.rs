@@ -1,13 +1,15 @@
-use std::path::PathBuf;
 use clap::Parser;
 use reimagine_inference_candle::{
+    SdxlCheckpointImportRequest, SdxlConvertedComponent,
     import_sdxl_checkpoint_to_candle_example_split,
-    SdxlCheckpointImportRequest,
-    SdxlConvertedComponent,
 };
+use std::path::PathBuf;
 
 #[derive(Parser)]
-#[command(name = "import-sdxl", about = "Import an original SDXL checkpoint to Candle-compatible split components")]
+#[command(
+    name = "import-sdxl",
+    about = "Import an original SDXL checkpoint to Candle-compatible split components"
+)]
 struct Cli {
     /// Path to the original SDXL safetensors checkpoint.
     checkpoint: PathBuf,
@@ -58,7 +60,12 @@ async fn main() {
                 if path.is_file() {
                     let size = std::fs::metadata(&path).unwrap().len();
                     let mb = size as f64 / 1_000_000.0;
-                    println!("  {:<20} {:>8.2} MB  {}", component.manifest_key(), mb, path.display());
+                    println!(
+                        "  {:<20} {:>8.2} MB  {}",
+                        component.manifest_key(),
+                        mb,
+                        path.display()
+                    );
                 } else {
                     eprintln!("  ERROR: missing component at {}", path.display());
                 }
@@ -72,8 +79,8 @@ async fn main() {
 }
 
 fn sha256_hex(path: &std::path::Path) -> String {
-    use std::io::Read;
     use sha2::{Digest, Sha256};
+    use std::io::Read;
     let mut file = std::fs::File::open(path).expect("cannot open checkpoint for hashing");
     let mut hasher = Sha256::new();
     let mut buffer = [0u8; 65536];

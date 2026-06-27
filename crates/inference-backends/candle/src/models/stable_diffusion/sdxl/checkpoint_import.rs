@@ -890,8 +890,8 @@ mod tests {
         assert!(vae.contains_key("encoder.mid_block.resnets.0.norm1.weight"));
         assert!(vae.contains_key("encoder.mid_block.attentions.0.group_norm.weight"));
         assert!(vae.contains_key("encoder.conv_norm_out.weight"));
-        // Symmetric decoder mappings.
-        assert!(vae.contains_key("decoder.up_blocks.0.resnets.0.norm1.weight"));
+        // Decoder up blocks are reversed by Candle's AutoEncoderKL construction.
+        assert!(vae.contains_key("decoder.up_blocks.3.resnets.0.norm1.weight"));
         assert!(vae.contains_key("decoder.mid_block.resnets.0.norm1.weight"));
         assert!(vae.contains_key("decoder.conv_norm_out.weight"));
         // quant_conv / post_quant_conv unchanged.

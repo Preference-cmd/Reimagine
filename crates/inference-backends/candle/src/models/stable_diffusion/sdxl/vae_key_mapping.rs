@@ -25,7 +25,8 @@
 //! | `encoder.mid.attn_1.to_{q,k,v}.{weight,bias}` | `encoder.mid_block.attentions.0.to_{q,k,v}.{weight,bias}` (1:1) |
 //! | `encoder.mid.attn_1.{proj_out,to_out}.{weight,bias}` | `encoder.mid_block.attentions.0.to_out.0.{weight,bias}` |
 //! | `encoder.mid.attn_1.to_qkv.weight` | split into `to_q/k/v.weight` row ranges |
-//! | `decoder.{...}` | symmetric, with `down` → `up` and `downsamplers.0` → `upsamplers.0` |
+//! | `decoder.up.{N}.block.{M}.*` | `decoder.up_blocks.{3-N}.resnets.{M}.*` |
+//! | `decoder.up.{N}.upsample.*` | `decoder.up_blocks.{3-N}.upsamplers.0.*` |
 //! | `quant_conv.{weight,bias}` | `quant_conv.{weight,bias}` (1:1) |
 //! | `post_quant_conv.{weight,bias}` | `post_quant_conv.{weight,bias}` (1:1) |
 //!
@@ -149,20 +150,36 @@ fn map_vae_up(
 ) -> Result<Vec<SdxlMappedTensor>, SdxlTensorMappingError> {
     let (idx_str, after) = split_index_segment(full_source, rest)?;
     let block: usize = idx_str.parse().map_err(|_| unknown_family(full_source))?;
+    let target_block = if side == "decoder" {
+        decoder_up_target_block(full_source, block)?
+    } else {
+        block
+    };
 
     if let Some(rest) = after.strip_prefix("block.") {
         let (idx_str, suffix) = split_index_segment(full_source, rest)?;
         let layer: usize = idx_str.parse().map_err(|_| unknown_family(full_source))?;
-        let target = format!("{side}.up_blocks.{block}.resnets.{layer}.{suffix}");
+        let target = format!("{side}.up_blocks.{target_block}.resnets.{layer}.{suffix}");
         return Ok(vec![single(full_source, &target)]);
     }
 
     if let Some(rest) = after.strip_prefix("upsample.") {
-        let target = format!("{side}.up_blocks.{block}.upsamplers.0.{rest}");
+        let target = format!("{side}.up_blocks.{target_block}.upsamplers.0.{rest}");
         return Ok(vec![single(full_source, &target)]);
     }
 
     Err(unknown_family(full_source))
+}
+
+fn decoder_up_target_block(
+    full_source: &str,
+    source_block: usize,
+) -> Result<usize, SdxlTensorMappingError> {
+    const SDXL_VAE_UP_BLOCKS: usize = 4;
+    SDXL_VAE_UP_BLOCKS
+        .checked_sub(1)
+        .and_then(|last| last.checked_sub(source_block))
+        .ok_or_else(|| unknown_family(full_source))
 }
 
 fn map_vae_mid(
@@ -393,19 +410,19 @@ mod tests {
     fn decoder_up_blocks_map_resnets_and_upsamplers() {
         assert_eq!(
             first_target("decoder.up.0.block.0.norm1.weight"),
-            "decoder.up_blocks.0.resnets.0.norm1.weight"
+            "decoder.up_blocks.3.resnets.0.norm1.weight"
         );
         assert_eq!(
             first_target("decoder.up.2.block.1.conv_shortcut.weight"),
-            "decoder.up_blocks.2.resnets.1.conv_shortcut.weight"
+            "decoder.up_blocks.1.resnets.1.conv_shortcut.weight"
         );
         assert_eq!(
             first_target("decoder.up.1.upsample.conv.weight"),
-            "decoder.up_blocks.1.upsamplers.0.conv.weight"
+            "decoder.up_blocks.2.upsamplers.0.conv.weight"
         );
         assert_eq!(
             first_target("decoder.up.3.upsample.conv.bias"),
-            "decoder.up_blocks.3.upsamplers.0.conv.bias"
+            "decoder.up_blocks.0.upsamplers.0.conv.bias"
         );
     }
 
