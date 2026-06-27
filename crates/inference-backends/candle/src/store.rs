@@ -4,6 +4,7 @@ use std::sync::{Arc, Mutex};
 use candle_core::{DType, Tensor};
 use reimagine_core::model::{ModelId, RunId};
 use reimagine_inference::BackendPayloadKey;
+use reimagine_inference::LatentSpaceMetadata;
 use reimagine_inference::ResolvedInferenceModelSourceSet;
 
 use crate::error::CandleBackendError;
@@ -27,14 +28,24 @@ fn dtype_byte_size(dtype: DType) -> usize {
 /// a `CandleLatent` is cheap. The wrapper is the typed handle that
 /// operation modules hand around; the raw `Tensor` never crosses the
 /// backend boundary.
+///
+/// The wrapper also carries [`LatentSpaceMetadata`] so the store
+/// can validate that a stored latent matches the latent space the
+/// operation requested. Every store insertion and every returned
+/// `RuntimeLatent` must agree on the metadata.
 #[derive(Debug, Clone)]
 pub struct CandleLatent {
     tensor: Tensor,
+    latent_space: LatentSpaceMetadata,
 }
 
 impl CandleLatent {
-    pub fn new(tensor: Tensor) -> Self {
-        Self { tensor }
+    /// Build a backend-owned latent wrapper.
+    pub fn new(tensor: Tensor, latent_space: LatentSpaceMetadata) -> Self {
+        Self {
+            tensor,
+            latent_space,
+        }
     }
 
     pub fn tensor(&self) -> &Tensor {
@@ -51,6 +62,11 @@ impl CandleLatent {
 
     pub fn dtype(&self) -> DType {
         self.tensor.dtype()
+    }
+
+    /// Latent-space metadata this stored latent belongs to.
+    pub fn latent_space(&self) -> &LatentSpaceMetadata {
+        &self.latent_space
     }
 
     /// Approximate byte size of the latent payload.
@@ -241,11 +257,23 @@ impl CandleStore {
     }
 
     /// Insert a real latent tensor payload and pin it to the run.
-    pub fn insert_latent(&self, run_id: RunId, key: BackendPayloadKey, tensor: Tensor) {
+    ///
+    /// The caller must supply the [`LatentSpaceMetadata`] this
+    /// latent belongs to. The store and the operation layer must
+    /// always agree on the metadata; sampling or decoding that
+    /// disagrees with the stored metadata is rejected with a
+    /// precise error before any tensor work.
+    pub fn insert_latent(
+        &self,
+        run_id: RunId,
+        key: BackendPayloadKey,
+        tensor: Tensor,
+        latent_space: LatentSpaceMetadata,
+    ) {
         let mut inner = self.inner.lock().expect("store poisoned");
         inner.payloads.insert(
             key.clone(),
-            CandlePayload::Latent(CandleLatent::new(tensor)),
+            CandlePayload::Latent(CandleLatent::new(tensor, latent_space)),
         );
         inner.run_index.entry(run_id).or_default().push(key);
     }
@@ -592,6 +620,10 @@ mod tests {
         .expect("zeros tensor")
     }
 
+    fn sdxl_latent_space() -> LatentSpaceMetadata {
+        LatentSpaceMetadata::sdxl_base()
+    }
+
     fn build_image_tensor(shape: &[usize]) -> Tensor {
         Tensor::zeros(
             shape,
@@ -661,7 +693,7 @@ mod tests {
         let run_id = RunId::new("run-1");
         let key = BackendPayloadKey::new("latent:run-1:node-a");
         let tensor = build_latent_tensor(&[1, 4, 8, 8]);
-        store.insert_latent(run_id.clone(), key.clone(), tensor);
+        store.insert_latent(run_id.clone(), key.clone(), tensor, sdxl_latent_space());
         assert_eq!(store.payload_count(), 1);
         assert_eq!(store.run_payload_count(&run_id), 1);
         assert!(store.contains_payload(&key));
@@ -673,12 +705,13 @@ mod tests {
         let run_id = RunId::new("run-1");
         let key = BackendPayloadKey::new("latent:run-1:node-a");
         let tensor = build_latent_tensor(&[1, 4, 8, 8]);
-        store.insert_latent(run_id, key.clone(), tensor);
+        store.insert_latent(run_id, key.clone(), tensor, sdxl_latent_space());
 
         let latent = store.get_latent(&key).expect("latent payload");
         assert_eq!(latent.dims(), vec![1, 4, 8, 8]);
         assert_eq!(latent.dtype(), DType::F32);
         assert_eq!(latent.byte_size(), 1 * 4 * 8 * 8 * 4);
+        assert_eq!(latent.latent_space(), &LatentSpaceMetadata::sdxl_base());
     }
 
     #[test]
@@ -698,7 +731,7 @@ mod tests {
         let run_id = RunId::new("run-1");
         let key = BackendPayloadKey::new("latent:run-1:node-a");
         let tensor = build_latent_tensor(&[1, 4, 8, 8]);
-        store.insert_latent(run_id.clone(), key.clone(), tensor);
+        store.insert_latent(run_id.clone(), key.clone(), tensor, sdxl_latent_space());
 
         let taken = store.take_latent(&key).expect("latent tensor");
         assert_eq!(taken.shape().dims(), &[1, 4, 8, 8]);
@@ -715,6 +748,26 @@ mod tests {
     }
 
     #[test]
+    fn store_insert_latent_preserves_supplied_latent_space_metadata() {
+        let store = CandleStore::new();
+        let run_id = RunId::new("run-meta");
+        let key = BackendPayloadKey::new("latent:run-meta:node-a");
+        let tensor = build_latent_tensor(&[1, 4, 8, 8]);
+        let custom = LatentSpaceMetadata::new(
+            reimagine_inference::LatentSpaceId::new("custom/test"),
+            4,
+            8,
+            reimagine_core::model::TensorDType::F32,
+            reimagine_inference::TensorLayout::Nchw,
+        );
+        store.insert_latent(run_id, key.clone(), tensor, custom.clone());
+
+        let retrieved = store.get_latent(&key).expect("latent payload");
+        assert_eq!(retrieved.latent_space(), &custom);
+        assert_eq!(retrieved.latent_space().id().as_str(), "custom/test");
+    }
+
+    #[test]
     fn store_release_payload_removes_by_key() {
         let store = CandleStore::new();
         let run_id = RunId::new("run-1");
@@ -723,6 +776,7 @@ mod tests {
             run_id.clone(),
             key.clone(),
             build_latent_tensor(&[1, 4, 8, 8]),
+            sdxl_latent_space(),
         );
         assert!(store.release_payload(&key));
         assert!(!store.contains_payload(&key));
@@ -738,6 +792,7 @@ mod tests {
             run_id.clone(),
             key.clone(),
             build_latent_tensor(&[1, 4, 8, 8]),
+            sdxl_latent_space(),
         );
         store.cleanup_run(&run_id);
         assert_eq!(store.payload_count(), 0);
@@ -756,11 +811,13 @@ mod tests {
             run_a.clone(),
             key_a.clone(),
             build_latent_tensor(&[1, 4, 8, 8]),
+            sdxl_latent_space(),
         );
         store.insert_latent(
             run_b.clone(),
             key_b.clone(),
             build_latent_tensor(&[1, 4, 8, 8]),
+            sdxl_latent_space(),
         );
 
         store.cleanup_run(&run_a);
@@ -776,8 +833,18 @@ mod tests {
         let first = BackendPayloadKey::new("latent:run-bytes:a");
         let second = BackendPayloadKey::new("latent:run-bytes:b");
         // 1 * 4 * 8 * 8 = 256 f32 elements = 1024 bytes per payload
-        store.insert_latent(run_id.clone(), first, build_latent_tensor(&[1, 4, 8, 8]));
-        store.insert_latent(run_id, second, build_latent_tensor(&[1, 4, 8, 8]));
+        store.insert_latent(
+            run_id.clone(),
+            first,
+            build_latent_tensor(&[1, 4, 8, 8]),
+            sdxl_latent_space(),
+        );
+        store.insert_latent(
+            run_id,
+            second,
+            build_latent_tensor(&[1, 4, 8, 8]),
+            sdxl_latent_space(),
+        );
         assert_eq!(store.payload_byte_size(), 2048);
     }
 
@@ -877,7 +944,12 @@ mod tests {
         let store = CandleStore::new();
         let run_id = RunId::new("run-img-1");
         let key = BackendPayloadKey::new("latent:run-img-1:node-a");
-        store.insert_latent(run_id, key.clone(), build_latent_tensor(&[1, 4, 8, 8]));
+        store.insert_latent(
+            run_id,
+            key.clone(),
+            build_latent_tensor(&[1, 4, 8, 8]),
+            sdxl_latent_space(),
+        );
 
         let err = store.take_image(&key).unwrap_err();
         assert!(matches!(err, StoreError::WrongPayloadKind { .. }));
@@ -924,6 +996,7 @@ mod tests {
             run_id.clone(),
             key_latent,
             build_latent_tensor(&[1, 4, 8, 8]),
+            sdxl_latent_space(),
         );
         // 1 * 3 * 64 * 64 = 12288 f32 elements = 49152 bytes per image
         let image_tensor = build_image_tensor(&[1, 3, 64, 64]);

@@ -12,7 +12,8 @@ use candle_core::Device;
 use reimagine_core::model::{ModelId, ModelRole, ModelSeries, ModelVariant};
 use reimagine_inference::ModelFormat;
 use reimagine_inference::{
-    ModelSourceKind, ResolvedInferenceModelSource, ResolvedInferenceModelSourceSet,
+    LatentSpaceMetadata, ModelSourceKind, ResolvedInferenceModelSource,
+    ResolvedInferenceModelSourceSet,
 };
 
 use crate::error::CandleBackendError;
@@ -40,6 +41,21 @@ impl LoadedModelBundle {
             Self::StableDiffusionSdxl(_) => "stable_diffusion/sdxl",
             #[cfg(test)]
             Self::TestPlaceholder => "test/placeholder",
+        }
+    }
+
+    /// Latent space the loaded bundle's UNet + VAE expect.
+    ///
+    /// Operation modules compare this against the latent handle's
+    /// [`LatentSpaceMetadata`] before any tensor work. V1 only
+    /// supports the SDXL base latent space, so the SDXL variant
+    /// returns the canonical SDXL base record and the test
+    /// placeholder returns a stable but diagnostic-friendly value.
+    pub fn expected_latent_space(&self) -> LatentSpaceMetadata {
+        match self {
+            Self::StableDiffusionSdxl(_) => LatentSpaceMetadata::sdxl_base(),
+            #[cfg(test)]
+            Self::TestPlaceholder => LatentSpaceMetadata::sdxl_base(),
         }
     }
 

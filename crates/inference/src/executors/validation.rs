@@ -62,6 +62,7 @@ mod tests {
             64,
             1,
             4,
+            crate::LatentSpaceMetadata::sdxl_base(),
         )
     }
 

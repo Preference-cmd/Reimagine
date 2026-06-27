@@ -3,6 +3,7 @@
 use crate::BackendSelectionOverlay;
 use crate::RuntimeLatent;
 use crate::RuntimeVaeHandle;
+use crate::latent_space::LatentSpaceMetadata;
 use reimagine_core::diagnostic::CorrelationId;
 use reimagine_core::model::{NodeId, RunId, WorkflowId, WorkflowVersion};
 
@@ -12,6 +13,7 @@ pub struct CreateEmptyLatentRequest {
     width: u32,
     height: u32,
     batch_size: u32,
+    latent_space: LatentSpaceMetadata,
     run_id: RunId,
     workflow_id: WorkflowId,
     workflow_version: WorkflowVersion,
@@ -34,6 +36,7 @@ impl CreateEmptyLatentRequest {
             width,
             height,
             batch_size,
+            latent_space: LatentSpaceMetadata::sdxl_base(),
             run_id,
             workflow_id,
             workflow_version,
@@ -48,6 +51,14 @@ impl CreateEmptyLatentRequest {
         self
     }
 
+    /// Override the request's latent-space metadata. V1 callers can
+    /// leave this at the default SDXL base; future work will surface
+    /// latent-space selection at the node param level.
+    pub fn with_latent_space(mut self, latent_space: LatentSpaceMetadata) -> Self {
+        self.latent_space = latent_space;
+        self
+    }
+
     pub fn width(&self) -> u32 {
         self.width
     }
@@ -58,6 +69,12 @@ impl CreateEmptyLatentRequest {
 
     pub fn batch_size(&self) -> u32 {
         self.batch_size
+    }
+
+    /// Latent-space metadata this request will create. Defaults to
+    /// SDXL base when the caller did not override it.
+    pub fn latent_space(&self) -> &LatentSpaceMetadata {
+        &self.latent_space
     }
 
     pub fn run_id(&self) -> &RunId {
@@ -81,29 +98,37 @@ impl CreateEmptyLatentRequest {
     }
 
     /// Consume the request and return a [`RuntimeLatent`] handle
-    /// whose payload is built from the request's run/node identity.
+    /// whose payload is built from the request's run/node identity
+    /// and latent-space metadata. The returned handle carries the
+    /// request's latent-space metadata so downstream operations
+    /// (sample, decode) can validate compatibility without
+    /// re-deriving it.
     pub fn into_latent(self) -> RuntimeLatent {
+        let scale = self.latent_space.spatial_scale_factor();
+        let channels = self.latent_space.channels();
+        let payload = crate::BackendTensorHandle::new(
+            crate::Backend::from("request"),
+            crate::BackendPayloadKey::new(format!(
+                "latent:{}:{}",
+                self.run_id.as_str(),
+                self.node_id.as_str()
+            )),
+            self.latent_space.dtype(),
+            reimagine_core::model::TensorShape::new(vec![
+                self.batch_size as usize,
+                channels as usize,
+                (self.height / scale) as usize,
+                (self.width / scale) as usize,
+            ]),
+            "cpu",
+        );
         RuntimeLatent::new(
-            crate::BackendTensorHandle::new(
-                crate::Backend::from("request"),
-                crate::BackendPayloadKey::new(format!(
-                    "latent:{}:{}",
-                    self.run_id.as_str(),
-                    self.node_id.as_str()
-                )),
-                reimagine_core::model::TensorDType::F32,
-                reimagine_core::model::TensorShape::new(vec![
-                    self.batch_size as usize,
-                    4,
-                    (self.height / 8) as usize,
-                    (self.width / 8) as usize,
-                ]),
-                "cpu",
-            ),
+            payload,
             self.width,
             self.height,
             self.batch_size,
-            4,
+            channels,
+            self.latent_space,
         )
     }
 
@@ -212,5 +237,83 @@ impl LatentDecodeRequest {
 fn push_unique(kinds: &mut Vec<crate::BackendInstance>, kind: &crate::BackendInstance) {
     if !kinds.iter().any(|existing| existing == kind) {
         kinds.push(kind.clone());
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::TensorLayout;
+    use crate::latent_space::LatentSpaceMetadata;
+    use reimagine_core::model::{NodeId, RunId, TensorDType, WorkflowId, WorkflowVersion};
+
+    fn request() -> CreateEmptyLatentRequest {
+        CreateEmptyLatentRequest::new(
+            64,
+            64,
+            1,
+            RunId::new("run-1"),
+            WorkflowId::new("wf-1"),
+            WorkflowVersion::new(1),
+            NodeId::new("node-1"),
+        )
+    }
+
+    #[test]
+    fn new_request_defaults_to_sdxl_base_latent_space() {
+        let req = request();
+        assert_eq!(req.latent_space(), &LatentSpaceMetadata::sdxl_base());
+    }
+
+    #[test]
+    fn with_latent_space_overrides_default() {
+        let custom = LatentSpaceMetadata::new(
+            crate::LatentSpaceId::new("custom/v1"),
+            8,
+            4,
+            TensorDType::F32,
+            TensorLayout::Nchw,
+        );
+        let req = request().with_latent_space(custom.clone());
+        assert_eq!(req.latent_space(), &custom);
+    }
+
+    #[test]
+    fn into_latent_carries_request_latent_space() {
+        let req = request();
+        let expected = req.latent_space().clone();
+        let latent = req.into_latent();
+        assert_eq!(latent.latent_space(), &expected);
+        assert_eq!(latent.channels(), expected.channels());
+        assert_eq!(latent.width(), 64);
+        assert_eq!(latent.height(), 64);
+    }
+
+    #[test]
+    fn into_latent_uses_latent_space_scale_factor() {
+        let custom = LatentSpaceMetadata::new(
+            crate::LatentSpaceId::new("scale/4"),
+            4,
+            4,
+            TensorDType::F32,
+            TensorLayout::Nchw,
+        );
+        let req = CreateEmptyLatentRequest::new(
+            64,
+            64,
+            2,
+            RunId::new("run-1"),
+            WorkflowId::new("wf-1"),
+            WorkflowVersion::new(1),
+            NodeId::new("node-1"),
+        )
+        .with_latent_space(custom);
+
+        let latent = req.into_latent();
+        assert_eq!(latent.width(), 64);
+        assert_eq!(latent.height(), 64);
+        let shape = latent.payload().shape();
+        // scale=4: latent dims = 16x16 for a 64x64 image, 2 batch
+        assert_eq!(shape.dims(), &[2, 4, 16, 16]);
     }
 }

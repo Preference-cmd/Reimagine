@@ -82,7 +82,7 @@ impl<Req, Resp> CannedCapabilityResponse<Req, Resp> {
 /// use reimagine_inference::{FakeBackend, CannedCapabilityResponse};
 /// use reimagine_inference::operation::InferenceCapability;
 /// use reimagine_inference::{
-///     Backend, BackendPayloadKey, BackendTensorHandle, RuntimeLatent,
+///     Backend, BackendPayloadKey, BackendTensorHandle, LatentSpaceMetadata, RuntimeLatent,
 /// };
 /// use reimagine_core::model::{TensorDType, TensorShape};
 /// use reimagine_inference::CreateEmptyLatentResponse;
@@ -101,6 +101,7 @@ impl<Req, Resp> CannedCapabilityResponse<Req, Resp> {
 ///             64,
 ///             1,
 ///             4,
+///             LatentSpaceMetadata::sdxl_base(),
 ///         ))
 ///     ));
 /// ```
