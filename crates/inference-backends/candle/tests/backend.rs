@@ -3037,10 +3037,9 @@ async fn latent_decode_rejects_mismatched_backend_instance_between_vae_and_laten
 async fn latent_decode_real_split_vae_weights_produces_non_uniform_image() {
     // Real-weight verification: opt-in / manual test. Set the
     // REIMAGINE_SDXL_REAL_VAE_WEIGHTS env var to a Candle-compatible
-    // split VAE safetensors file, supply a matching source-set on
-    // the model ref, and decode a non-zero latent. The decoded
-    // image should not be a constant: non-zero latent input should
-    // produce non-uniform pixel values.
+    // split VAE safetensors file. The decoded image should not be a
+    // constant: a non-zero random latent input should produce
+    // non-uniform pixel values.
     let Some(weights) = std::env::var_os("REIMAGINE_SDXL_REAL_VAE_WEIGHTS").map(PathBuf::from)
     else {
         eprintln!(
@@ -3061,8 +3060,17 @@ async fn latent_decode_real_split_vae_weights_produces_non_uniform_image() {
         ModelFormat, ModelSourceKind, ResolvedInferenceModelSource, ResolvedInferenceModelSourceSet,
     };
 
-    // Build a source-set that pairs the placeholder checkpoint with
-    // the explicit split VAE source.
+    // Use test text projection so this test only needs real VAE
+    // weights; UNet and CLIP weights are not required for latent
+    // decode. Do NOT enable test VAE projection so the real split VAE
+    // source is loaded and executed.
+    let backend = CandleBackend::new(CandleBackendConfig::new(
+        "/tmp/reimagine-candle-real-vae-tests",
+        "/tmp/reimagine-candle-real-vae-tests-output",
+    ))
+    .unwrap()
+    .with_test_text_projection();
+
     let root = unique_sdxl_root();
     let checkpoint = write_sdxl_placeholder(&root);
     let source_set = ResolvedInferenceModelSourceSet::new(ResolvedInferenceModelSource::new(
@@ -3080,14 +3088,65 @@ async fn latent_decode_real_split_vae_weights_produces_non_uniform_image() {
         )
         .with_metadata("component=vae"),
     );
-    let _ = source_set; // Source-set wiring through LoadBundleRequest is reserved for a follow-up; see issue text.
-    let _ = ModelSeries::new("stable_diffusion");
-    let _ = ModelVariant::new("sdxl");
 
-    // The test hook is exposed so a developer can wire the source-set
-    // onto a production backend; we do not duplicate that wiring here
-    // because the issue requires only that the test hook exist.
-    let _ = root;
+    let model = ResolvedInferenceModel::new(
+        ModelId::new("sdxl-base-1.0"),
+        ModelSeries::new("stable_diffusion"),
+        ModelVariant::new("sdxl"),
+        ModelRole::CheckpointBundle,
+        &checkpoint,
+        ModelFormat::SafeTensors,
+    )
+    .with_source_set(source_set);
+
+    let bundle_response = backend
+        .load_bundle(base_load_bundle_request(model, "node-test"))
+        .await
+        .expect("load_bundle should succeed with real split VAE and test text projection");
+    let vae_handle = bundle_response.vae().clone();
+
+    let run_id = RunId::new("run-real-vae");
+    let latent_key = BackendPayloadKey::new("latent:real-vae-test");
+    let latent_tensor = Tensor::rand(0.0f32, 1.0f32, (1, 4, 64, 64), backend.device().as_ref())
+        .expect("random latent tensor creation should succeed");
+    backend
+        .store()
+        .insert_latent(run_id.clone(), latent_key.clone(), latent_tensor);
+    let latent = fake_runtime_latent(latent_key.as_str(), 512, 512);
+
+    let decode_response = backend
+        .latent_decode(LatentDecodeRequest::new(
+            vae_handle,
+            latent,
+            run_id,
+            WorkflowId::new("wf-test"),
+            WorkflowVersion::new(1),
+            NodeId::new("node-decode"),
+        ))
+        .await
+        .expect("latent_decode with real split VAE weights should succeed");
+
+    let image = decode_response.image();
+    assert_eq!(image.payload().shape().dims(), &[1, 3, 512, 512]);
+    assert_eq!(image.width(), 512);
+    assert_eq!(image.height(), 512);
+    assert_eq!(image.batch(), 1);
+
+    let candle_image = backend
+        .store()
+        .get_image(image.payload().payload_key())
+        .expect("decoded image payload should be in store");
+    let values = candle_image
+        .tensor()
+        .flatten_all()
+        .expect("image tensor should flatten")
+        .to_vec1::<f32>()
+        .expect("image tensor should be convertible to f32 vec");
+    let first = values[0];
+    assert!(
+        values.iter().any(|v| (v - first).abs() > 1e-6),
+        "decoded image should not be uniform; all values equal {first}"
+    );
 }
 
 // --- Resource lifecycle tests ---
