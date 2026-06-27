@@ -346,18 +346,30 @@ impl ClipTextTransformer {
         let (batch, seq_len) = input_ids
             .dims2()
             .map_err(|e| TextEncoderError::Forward(e.to_string()))?;
-        let token_embedding = self
+        let embed_dim = self.config.embed_dim;
+        let flat_input_ids = input_ids
+            .flatten_all()
+            .map_err(|e| TextEncoderError::Forward(e.to_string()))?;
+        let token_embedding_flat = self
             .token_embedding
-            .index_select(input_ids, 0)
+            .index_select(&flat_input_ids, 0)
+            .map_err(|e| TextEncoderError::Forward(e.to_string()))?;
+        let token_embedding = token_embedding_flat
+            .reshape((batch, seq_len, embed_dim))
             .map_err(|e| TextEncoderError::Forward(e.to_string()))?;
         let position_ids = Tensor::arange(0u32, seq_len as u32, input_ids.device())
-            .and_then(|ids| ids.unsqueeze(0))
             .map_err(|e| TextEncoderError::TensorCreation(e.to_string()))?;
-        let position_embedding = self
+        let flat_position_ids = position_ids
+            .flatten_all()
+            .map_err(|e| TextEncoderError::TensorCreation(e.to_string()))?;
+        let position_embedding_flat = self
             .position_embedding
-            .index_select(&position_ids, 0)
+            .index_select(&flat_position_ids, 0)
+            .map_err(|e| TextEncoderError::Forward(e.to_string()))?;
+        let position_embedding = position_embedding_flat
+            .reshape((1, seq_len, embed_dim))
             .map_err(|e| TextEncoderError::Forward(e.to_string()))?
-            .broadcast_as((batch, seq_len, self.config.embed_dim))
+            .broadcast_as((batch, seq_len, embed_dim))
             .map_err(|e| TextEncoderError::Forward(e.to_string()))?;
         let mut hidden = token_embedding
             .broadcast_add(&position_embedding)
@@ -560,21 +572,24 @@ impl ClipLinear {
         in_dim: usize,
         out_dim: usize,
     ) -> Result<Self, TextEncoderError> {
-        let weight = weights.tensor(&format!("{prefix}.weight"))?;
+        let weight_raw = weights.tensor(&format!("{prefix}.weight"))?;
         let bias = weights.tensor(&format!("{prefix}.bias"))?;
-        assert_shape(&weight, &[out_dim, in_dim], prefix)?;
+        // Candle's `matmul` requires both operands to share the same
+        // number of dimensions. Loading CLIP weight tensors in
+        // [in_dim, out_dim] layout (transposed at load time) lets the
+        // forward path matmul a 3D hidden tensor against a 2D weight
+        // directly without broadcasting.
+        let weight = weight_raw
+            .transpose(0, 1)
+            .map_err(|e| TextEncoderError::WeightLoad(format!("{prefix}.weight transpose: {e}")))?;
+        assert_shape(&weight, &[in_dim, out_dim], prefix)?;
         assert_shape(&bias, &[out_dim], prefix)?;
         Ok(Self { weight, bias })
     }
 
     fn forward(&self, input: &Tensor) -> Result<Tensor, TextEncoderError> {
         input
-            .matmul(
-                &self
-                    .weight
-                    .transpose(0, 1)
-                    .map_err(|e| TextEncoderError::Forward(e.to_string()))?,
-            )
+            .broadcast_matmul(&self.weight)
             .and_then(|output| output.broadcast_add(&self.bias))
             .map_err(|e| TextEncoderError::Forward(e.to_string()))
     }
@@ -744,14 +759,15 @@ const CLIP_L_PREFIXES: [&str; 5] = [
     "conditioner.embedders.0.transformer.text_model",
     "cond_stage_model.transformer.text_model",
     "text_encoder.text_model",
-    "text_model",
+    "transformer.text_model",
     "clip_l.text_model",
 ];
 
-const CLIP_G_PREFIXES: [&str; 5] = [
+const CLIP_G_PREFIXES: [&str; 6] = [
     "conditioner.embedders.1.model.transformer.text_model",
     "conditioner.embedders.1.transformer.text_model",
     "text_encoder_2.text_model",
+    "transformer.text_model",
     "clip_g.text_model",
     "text_model",
 ];
