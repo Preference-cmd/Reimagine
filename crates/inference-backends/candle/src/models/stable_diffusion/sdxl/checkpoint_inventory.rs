@@ -132,6 +132,7 @@ fn classify_name(name: &str) -> Option<SdxlCheckpointFamily> {
     if name.starts_with("unet.")
         || name.starts_with("diffusion_model.")
         || name == "conv_in.weight"
+        || name == "conv_in.bias"
         || name.starts_with("time_embedding.")
         || name.starts_with("down_blocks.")
         || name.starts_with("up_blocks.")

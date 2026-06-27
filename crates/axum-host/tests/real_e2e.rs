@@ -321,8 +321,8 @@ async fn real_sdxl_split_weights_produces_png_artifact() {
     let response = app
         .clone()
         .oneshot(json_request(
-            &format!("/workflows/{WORKFLOW_ID}/run"),
             "POST",
+            &format!("/workflows/{WORKFLOW_ID}/run"),
             Some(&run_body),
         ))
         .await
