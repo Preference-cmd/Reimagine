@@ -23,12 +23,13 @@ use reimagine_inference::{
     ImageSaveResponse, InferenceBackend, InferenceBackendCapabilities, InferenceBackendRegistry,
     InferenceCapabilitySupport, InferenceError, InferenceRuntime, IntoNodeExecutorError,
     LoadBundleResponse, ModelFormat, ModelResolver, RejectAllBridgePolicy, ResolvedImageSource,
-    ResolvedInferenceModel, TextEncodeRequest, TextEncodeResponse,
+    ResolvedInferenceModel, RuntimeLatent, TextEncodeRequest, TextEncodeResponse,
     register_builtin_inference_executors,
 };
 use reimagine_inference::{
-    ImageSourceResolver, NodeExecutionContext, NodeExecutorError, NodeExecutorRegistry, NodeInputs,
-    NodeParams, NoopNodeCancellation, RecordingArtifactPublisher,
+    ImageSourceResolver, LatentContent, LatentDecodeResponse, NodeExecutionContext,
+    NodeExecutorError, NodeExecutorRegistry, NodeInputs, NodeParams, NoopNodeCancellation,
+    RecordingArtifactPublisher,
 };
 
 // ── Fake model resolver ────────────────────────────────────────────
@@ -413,8 +414,10 @@ async fn all_v1_executors_register_successfully() {
     for type_id in &[
         "builtin.string",
         "builtin.checkpoint_loader",
+        "builtin.load_image",
         "builtin.clip_text_encode",
         "builtin.empty_latent_image",
+        "builtin.vae_encode",
         "builtin.ksampler",
         "builtin.vae_decode",
         "builtin.save_image",
@@ -468,6 +471,85 @@ async fn save_image_records_backend_returned_artifact_reference() {
     assert_eq!(records.len(), 1);
     assert_eq!(records[0].reference, artifact_ref);
     assert_eq!(records[0].slot_id.as_str(), "artifact");
+}
+
+#[tokio::test]
+async fn vae_decode_executor_rejects_empty_geometry_latent() {
+    // The executor must validate `LatentContent::EmptyGeometry` at
+    // the runtime boundary so a future non-candle backend inherits
+    // the same vocabulary without silently decoding txt2img
+    // geometry.
+    let backend = Arc::new(FakeBackend::new("fake").latent_decode(
+        CannedCapabilityResponse::always(LatentDecodeResponse::new(fake_image_value(
+            Backend::new("fake"),
+            "image:should-not-be-materialized",
+            64,
+            64,
+        ))),
+    ));
+    let resolver = Arc::new(FakeResolver::new("/models/sdxl-base.safetensors"));
+
+    let mut registry = NodeExecutorRegistry::default();
+    register_builtin_inference_executors(
+        &mut registry,
+        runtime_for_backend(backend),
+        resolver,
+        fake_image_resolver(),
+    )
+    .expect("register executors");
+
+    let executor = registry
+        .get(&reimagine_core::model::NodeTypeId::new(
+            "builtin.vae_decode",
+        ))
+        .expect("executor registered");
+
+    let vae = RuntimeVaeHandle::new(
+        ModelId::new("sdxl-base-1.0"),
+        Backend::new("fake"),
+        BackendPayloadKey::new("vae:fake"),
+    );
+    let empty_latent = RuntimeLatent::with_sdxl_base(
+        BackendTensorHandle::new(
+            Backend::new("fake"),
+            BackendPayloadKey::new("latent:empty"),
+            TensorDType::F32,
+            TensorShape::new(vec![1, 4, 8, 8]),
+            "cpu",
+        ),
+        64,
+        64,
+        1,
+        4,
+    );
+    assert_eq!(empty_latent.content(), LatentContent::EmptyGeometry);
+
+    let mut inputs = NodeInputs::new();
+    inputs.insert(SlotId::new("vae"), Arc::new(ExecutionValue::Vae(vae)));
+    inputs.insert(
+        SlotId::new("latent"),
+        Arc::new(ExecutionValue::Latent(empty_latent)),
+    );
+    let context = make_context(
+        "vae-decode",
+        "builtin.vae_decode",
+        inputs,
+        NodeParams::new(),
+    );
+
+    let err = executor
+        .execute(context)
+        .await
+        .expect_err("vae.decode must reject empty geometry before dispatch");
+    match err {
+        NodeExecutorError::Failed { message } => {
+            assert!(
+                message.contains("empty_geometry"),
+                "diagnostic should name the empty geometry content class, got: {message}"
+            );
+        }
+        other => panic!("expected Failed, got {other:?}"),
+    }
 }
 
 #[tokio::test]
