@@ -154,12 +154,10 @@ impl InferenceBackend for CandleBackend {
             .with_support(InferenceCapabilitySupport::new(
                 InferenceCapability::LatentDecode,
             ))
-            // `image.import` and `latent.encode` are reserved in
-            // this slice. V1 Candle advertises them so the executor
-            // surfaces a precise `BackendNotImplemented` rather than
-            // silently dropping to a placeholder tensor or producing
-            // an empty latent. Real weight-driven implementations
-            // land in a follow-up slice.
+            // `image.import` is implemented in this slice. V1 still
+            // advertises `latent.encode` as a reserved capability so
+            // downstream img2img planning can route to a precise
+            // `BackendNotImplemented` until real VAE encode lands.
             .with_support(InferenceCapabilitySupport::new(
                 InferenceCapability::ImageImport,
             ))
