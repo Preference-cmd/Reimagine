@@ -3,7 +3,9 @@
 use crate::BackendSelectionOverlay;
 use crate::RuntimeLatent;
 use crate::RuntimeVaeHandle;
-use crate::latent_space::LatentSpaceMetadata;
+use crate::latent_space::{
+    LatentSpaceError, LatentSpaceMetadata, validate_pixel_dimensions_against,
+};
 use reimagine_core::diagnostic::CorrelationId;
 use reimagine_core::model::{NodeId, RunId, WorkflowId, WorkflowVersion};
 
@@ -103,7 +105,9 @@ impl CreateEmptyLatentRequest {
     /// request's latent-space metadata so downstream operations
     /// (sample, decode) can validate compatibility without
     /// re-deriving it.
-    pub fn into_latent(self) -> RuntimeLatent {
+    pub fn try_into_latent(self) -> Result<RuntimeLatent, LatentSpaceError> {
+        validate_pixel_dimensions_against(self.width, self.height, &self.latent_space)?;
+
         let scale = self.latent_space.spatial_scale_factor();
         let channels = self.latent_space.channels();
         let payload = crate::BackendTensorHandle::new(
@@ -122,14 +126,19 @@ impl CreateEmptyLatentRequest {
             ]),
             "cpu",
         );
-        RuntimeLatent::new(
+        Ok(RuntimeLatent::new(
             payload,
             self.width,
             self.height,
             self.batch_size,
             channels,
             self.latent_space,
-        )
+        ))
+    }
+
+    pub fn into_latent(self) -> RuntimeLatent {
+        self.try_into_latent()
+            .expect("CreateEmptyLatentRequest dimensions must be compatible with latent space")
     }
 
     pub fn backend_affinities(&self) -> Vec<crate::BackendInstance> {
@@ -315,5 +324,50 @@ mod tests {
         let shape = latent.payload().shape();
         // scale=4: latent dims = 16x16 for a 64x64 image, 2 batch
         assert_eq!(shape.dims(), &[2, 4, 16, 16]);
+    }
+
+    #[test]
+    fn try_into_latent_rejects_non_divisible_dimensions() {
+        let req = CreateEmptyLatentRequest::new(
+            63,
+            64,
+            1,
+            RunId::new("run-1"),
+            WorkflowId::new("wf-1"),
+            WorkflowVersion::new(1),
+            NodeId::new("node-1"),
+        );
+
+        let err = req.try_into_latent().unwrap_err();
+        assert!(matches!(
+            err,
+            crate::LatentSpaceError::ScaleMismatch {
+                axis: "width",
+                value: 63,
+                scale: 8,
+            }
+        ));
+    }
+
+    #[test]
+    fn try_into_latent_rejects_zero_scale() {
+        let invalid = LatentSpaceMetadata::new(
+            crate::LatentSpaceId::new("invalid/zero-scale"),
+            4,
+            0,
+            TensorDType::F32,
+            TensorLayout::Nchw,
+        );
+        let req = request().with_latent_space(invalid);
+
+        let err = req.try_into_latent().unwrap_err();
+        assert!(matches!(
+            err,
+            crate::LatentSpaceError::InvalidDimensions {
+                axis: "spatial_scale_factor",
+                value: 0,
+                ..
+            }
+        ));
     }
 }

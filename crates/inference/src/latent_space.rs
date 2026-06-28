@@ -253,6 +253,13 @@ pub fn validate_pixel_dimensions_against(
             reason: "latent height must be positive",
         });
     }
+    if scale == 0 {
+        return Err(LatentSpaceError::InvalidDimensions {
+            axis: "spatial_scale_factor",
+            value: scale,
+            reason: "latent spatial_scale_factor must be positive",
+        });
+    }
     if width % scale != 0 {
         return Err(LatentSpaceError::ScaleMismatch {
             axis: "width",
@@ -370,5 +377,25 @@ mod tests {
         let m = stable_diffusion_sdxl_base();
         let err = validate_pixel_dimensions_against(0, 64, &m).unwrap_err();
         assert!(matches!(err, LatentSpaceError::InvalidDimensions { .. }));
+    }
+
+    #[test]
+    fn validate_pixel_dimensions_rejects_zero_scale() {
+        let m = LatentSpaceMetadata::new(
+            LatentSpaceId::new("invalid/zero-scale"),
+            4,
+            0,
+            TensorDType::F32,
+            TensorLayout::Nchw,
+        );
+        let err = validate_pixel_dimensions_against(64, 64, &m).unwrap_err();
+        assert!(matches!(
+            err,
+            LatentSpaceError::InvalidDimensions {
+                axis: "spatial_scale_factor",
+                value: 0,
+                ..
+            }
+        ));
     }
 }
