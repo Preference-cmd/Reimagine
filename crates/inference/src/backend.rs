@@ -15,12 +15,16 @@ use crate::capability::InferenceBackendCapabilities;
 use crate::inference_error::InferenceError;
 use crate::request::diffusion::DiffusionSampleRequest;
 use crate::request::image::{ImagePreviewRequest, ImageSaveRequest};
+use crate::request::image_import::ImageImportRequest;
 use crate::request::latent::{CreateEmptyLatentRequest, LatentDecodeRequest};
+use crate::request::latent_encode::LatentEncodeRequest;
 use crate::request::model::LoadBundleRequest;
 use crate::request::text::TextEncodeRequest;
 use crate::response::diffusion::DiffusionSampleResponse;
 use crate::response::image::{ImagePreviewResponse, ImageSaveResponse};
+use crate::response::image_import::ImageImportResponse;
 use crate::response::latent::{CreateEmptyLatentResponse, LatentDecodeResponse};
+use crate::response::latent_encode::LatentEncodeResponse;
 use crate::response::model::LoadBundleResponse;
 use crate::response::text::TextEncodeResponse;
 
@@ -62,6 +66,16 @@ pub trait InferenceBackend: Send + Sync + 'static {
         &self,
         request: LatentDecodeRequest,
     ) -> Result<LatentDecodeResponse, InferenceError>;
+
+    async fn latent_encode(
+        &self,
+        request: LatentEncodeRequest,
+    ) -> Result<LatentEncodeResponse, InferenceError>;
+
+    async fn image_import(
+        &self,
+        request: ImageImportRequest,
+    ) -> Result<ImageImportResponse, InferenceError>;
 
     async fn image_save(
         &self,

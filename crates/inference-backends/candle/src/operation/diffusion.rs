@@ -160,6 +160,7 @@ pub fn execute_diffusion_sample(
         latent_batch,
         latent_channels,
         expected,
+        reimagine_inference::LatentContent::Sampled,
     );
 
     Ok(DiffusionSampleResponse::new(latent))
