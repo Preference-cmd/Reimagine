@@ -262,6 +262,7 @@ mod tests {
                 1,
                 4,
                 crate::LatentSpaceMetadata::sdxl_base(),
+                crate::LatentContent::EmptyGeometry,
             ))),
         );
 

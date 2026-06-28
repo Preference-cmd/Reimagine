@@ -5,5 +5,6 @@
 //! and the generic runtime service.
 
 pub(crate) mod compose;
+pub(crate) mod image_source_resolver;
 pub(crate) mod resolve;
 pub(crate) mod resolver;

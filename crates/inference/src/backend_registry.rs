@@ -183,12 +183,16 @@ mod tests {
     use crate::inference_error::InferenceError;
     use crate::request::diffusion::DiffusionSampleRequest;
     use crate::request::image::{ImagePreviewRequest, ImageSaveRequest};
+    use crate::request::image_import::ImageImportRequest;
     use crate::request::latent::{CreateEmptyLatentRequest, LatentDecodeRequest};
+    use crate::request::latent_encode::LatentEncodeRequest;
     use crate::request::model::LoadBundleRequest;
     use crate::request::text::TextEncodeRequest;
     use crate::response::diffusion::DiffusionSampleResponse;
     use crate::response::image::{ImagePreviewResponse, ImageSaveResponse};
+    use crate::response::image_import::ImageImportResponse;
     use crate::response::latent::{CreateEmptyLatentResponse, LatentDecodeResponse};
+    use crate::response::latent_encode::LatentEncodeResponse;
     use crate::response::model::LoadBundleResponse;
     use crate::response::text::TextEncodeResponse;
 
@@ -246,6 +250,18 @@ mod tests {
             &self,
             _request: LatentDecodeRequest,
         ) -> Result<LatentDecodeResponse, InferenceError> {
+            unimplemented!()
+        }
+        async fn latent_encode(
+            &self,
+            _request: LatentEncodeRequest,
+        ) -> Result<LatentEncodeResponse, InferenceError> {
+            unimplemented!()
+        }
+        async fn image_import(
+            &self,
+            _request: ImageImportRequest,
+        ) -> Result<ImageImportResponse, InferenceError> {
             unimplemented!()
         }
         async fn image_save(

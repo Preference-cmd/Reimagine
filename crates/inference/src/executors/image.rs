@@ -67,6 +67,18 @@ impl NodeExecutor for VaeDecodeExecutor {
             request = request.with_correlation_id(cid);
         }
 
+        // Runtime-side content validation. The candle backend
+        // also rejects `EmptyGeometry`, but enforcing the
+        // vocabulary at the executor boundary means a future
+        // non-candle backend inherits the same semantics for free
+        // and surfaces the same `LatentContentError` diagnostic
+        // before any tensor work is dispatched.
+        if let Err(err) = request.validate() {
+            return Err(NodeExecutorError::Failed {
+                message: err.to_string(),
+            });
+        }
+
         let response: LatentDecodeResponse = self
             .inference
             .latent_decode(request)

@@ -10,6 +10,7 @@ use reimagine_core::model::{ModelId, ModelRole, TensorDType, TensorShape};
 
 use crate::execution_value::backend::BackendPayloadKey;
 use crate::execution_value::tensor::BackendTensorMetadata;
+use crate::latent_content::LatentContent;
 use crate::latent_space::LatentSpaceMetadata;
 use crate::{Backend, BackendInstance};
 
@@ -282,15 +283,21 @@ pub struct RuntimeLatent {
     batch: u32,
     channels: u32,
     latent_space: LatentSpaceMetadata,
+    content: LatentContent,
 }
 
 impl RuntimeLatent {
     /// Build a [`RuntimeLatent`] handle with explicit latent-space
-    /// metadata. The metadata is carried on the handle so downstream
-    /// operations can validate compatibility without a registry
-    /// lookup. Use [`RuntimeLatent::with_sdxl_base`] when the V1
-    /// SDXL base latent space is intended and metadata is not the
-    /// point of the call site.
+    /// metadata and content semantics.
+    ///
+    /// The metadata answers "which latent space is this compatible
+    /// with"; [`LatentContent`] answers "is this payload a real
+    /// latent, or just empty geometry?". Callers that want
+    /// SDXL-base txt2img geometry should pass
+    /// `LatentContent::EmptyGeometry`; callers that want a sampled
+    /// or encoded latent should pass `Sampled` or `EncodedImage`.
+    /// Backends producing real tensors downstream should never
+    /// accidentally default to the wrong content class.
     pub fn new(
         payload: BackendTensorHandle,
         width: u32,
@@ -298,6 +305,7 @@ impl RuntimeLatent {
         batch: u32,
         channels: u32,
         latent_space: LatentSpaceMetadata,
+        content: LatentContent,
     ) -> Self {
         Self {
             payload,
@@ -306,13 +314,17 @@ impl RuntimeLatent {
             batch,
             channels,
             latent_space,
+            content,
         }
     }
 
     /// Build a [`RuntimeLatent`] handle using the V1 SDXL base
-    /// latent-space metadata. Prefer [`RuntimeLatent::new`] for new
-    /// code; this helper exists so test fixtures and V1 hard-coded
-    /// paths do not have to spell out the SDXL metadata record.
+    /// latent-space metadata and `EmptyGeometry` content.
+    ///
+    /// Prefer [`RuntimeLatent::new`] for new code; this helper
+    /// exists so test fixtures and V1 hard-coded paths do not
+    /// have to spell out the SDXL metadata record and content
+    /// class.
     pub fn with_sdxl_base(
         payload: BackendTensorHandle,
         width: u32,
@@ -327,6 +339,7 @@ impl RuntimeLatent {
             batch,
             channels,
             LatentSpaceMetadata::sdxl_base(),
+            LatentContent::EmptyGeometry,
         )
     }
 
@@ -336,6 +349,16 @@ impl RuntimeLatent {
     /// the input latent used a different (but compatible) record.
     pub fn with_latent_space(mut self, latent_space: LatentSpaceMetadata) -> Self {
         self.latent_space = latent_space;
+        self
+    }
+
+    /// Replace the runtime content classification. Backends use
+    /// this when materializing a real latent payload (sampled by
+    /// `diffusion.sample`, encoded by `latent.encode`, etc.) so
+    /// downstream capabilities can reject empty geometry before
+    /// decoding or partial-denoising.
+    pub fn with_content(mut self, content: LatentContent) -> Self {
+        self.content = content;
         self
     }
 
@@ -364,6 +387,14 @@ impl RuntimeLatent {
     /// operations.
     pub fn latent_space(&self) -> &LatentSpaceMetadata {
         &self.latent_space
+    }
+
+    /// Runtime content classification for this latent payload.
+    ///
+    /// See [`LatentContent`] for the full vocabulary. Empty
+    /// geometry latents must not be decoded or partially denoised.
+    pub fn content(&self) -> LatentContent {
+        self.content
     }
 }
 
