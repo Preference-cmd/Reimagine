@@ -226,7 +226,7 @@ impl InferenceBackend for CandleBackend {
         &self,
         request: ImageImportRequest,
     ) -> Result<ImageImportResponse, InferenceError> {
-        map_err(execute_image_import(self, request))
+        map_err(execute_image_import(request, self))
     }
 
     async fn image_save(
