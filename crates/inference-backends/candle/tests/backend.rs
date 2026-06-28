@@ -1999,7 +1999,7 @@ async fn diffusion_sample_reads_conditioning_payload_and_requires_pooled_embeddi
 }
 
 #[tokio::test]
-async fn diffusion_sample_rejects_partial_denoise_until_real_img2img_semantics_exist() {
+async fn diffusion_sample_rejects_partial_denoise_for_empty_geometry_before_store_lookup() {
     let backend = backend();
     let (model, _root) = sdxl_model();
     let _ = backend
@@ -2037,18 +2037,14 @@ async fn diffusion_sample_rejects_partial_denoise_until_real_img2img_semantics_e
 
     let positive = make_conditioning(&backend, clip_handle_factory(), "node-pos-cond").await;
     let negative = make_conditioning(&backend, clip_handle_factory(), "node-neg-cond").await;
-
-    let latent_a: RuntimeLatent = backend
-        .create_empty_latent(base_create_empty_latent_request(32, 32, 1, "node-latent-a"))
-        .await
-        .unwrap()
-        .into_latent();
+    let latent = fake_runtime_latent("latent:should-not-read-store", 32, 32)
+        .with_content(LatentContent::EmptyGeometry);
     let err = backend
         .diffusion_sample(DiffusionSampleRequest::new(
             model_handle_factory(),
             positive,
             negative,
-            latent_a,
+            latent,
             42,
             15,
             6.5,
@@ -2063,8 +2059,139 @@ async fn diffusion_sample_rejects_partial_denoise_until_real_img2img_semantics_e
         .await
         .unwrap_err();
 
-    assert_backend_execution_failed_with(&err, "denoise");
-    assert_backend_execution_failed_with(&err, "partial");
+    assert_backend_execution_failed_with(&err, "partial denoise");
+    assert_backend_execution_failed_with(&err, "empty_geometry");
+    assert_backend_execution_failed_with(&err, "encoded_image");
+}
+
+#[tokio::test]
+async fn diffusion_sample_accepts_partial_denoise_real_latent_content_before_store_lookup() {
+    let backend = backend();
+    let (model, _root) = sdxl_model();
+    let _ = backend
+        .load_bundle(base_load_bundle_request(model, "node-test"))
+        .await
+        .unwrap();
+    let bundle = backend
+        .model_cache()
+        .get_bundle(&ModelId::new("sdxl-base-1.0"))
+        .expect("cached bundle");
+    let (model_payload_key, clip_payload_key) = match bundle.as_ref() {
+        LoadedModelBundle::StableDiffusionSdxl(sdxl) => (
+            sdxl.model_payload_key.clone(),
+            sdxl.clip_payload_key.clone(),
+        ),
+    };
+    let model_handle = fake_runtime_model_handle(model_payload_key.as_str());
+    let clip_handle = fake_runtime_clip_handle(clip_payload_key.as_str());
+    let positive = backend
+        .text_encode(base_text_encode_request(
+            clip_handle.clone(),
+            "deterministic test prompt".to_string(),
+            "node-pos-cond",
+        ))
+        .await
+        .unwrap()
+        .into_conditioning();
+    let negative = backend
+        .text_encode(base_text_encode_request(
+            clip_handle,
+            "deterministic test prompt".to_string(),
+            "node-neg-cond",
+        ))
+        .await
+        .unwrap()
+        .into_conditioning();
+    let latent = fake_runtime_latent("latent:should-reach-store", 32, 32)
+        .with_content(LatentContent::Sampled);
+
+    let err = backend
+        .diffusion_sample(DiffusionSampleRequest::new(
+            model_handle,
+            positive,
+            negative,
+            latent,
+            42,
+            15,
+            6.5,
+            SamplerName::Euler,
+            SchedulerName::Normal,
+            0.8,
+            RunId::new("run-test"),
+            WorkflowId::new("wf-test"),
+            WorkflowVersion::new(1),
+            NodeId::new("node-sample"),
+        ))
+        .await
+        .unwrap_err();
+
+    assert_backend_execution_failed_with(&err, "latent:should-reach-store");
+    assert_backend_execution_failed_with(&err, "no `latent` payload registered");
+}
+
+#[tokio::test]
+async fn diffusion_sample_rejects_zero_denoise_as_noop_before_store_lookup() {
+    let backend = backend();
+    let (model, _root) = sdxl_model();
+    let _ = backend
+        .load_bundle(base_load_bundle_request(model, "node-test"))
+        .await
+        .unwrap();
+    let bundle = backend
+        .model_cache()
+        .get_bundle(&ModelId::new("sdxl-base-1.0"))
+        .expect("cached bundle");
+    let (model_payload_key, clip_payload_key) = match bundle.as_ref() {
+        LoadedModelBundle::StableDiffusionSdxl(sdxl) => (
+            sdxl.model_payload_key.clone(),
+            sdxl.clip_payload_key.clone(),
+        ),
+    };
+    let model_handle = fake_runtime_model_handle(model_payload_key.as_str());
+    let clip_handle = fake_runtime_clip_handle(clip_payload_key.as_str());
+    let positive = backend
+        .text_encode(base_text_encode_request(
+            clip_handle.clone(),
+            "deterministic test prompt".to_string(),
+            "node-pos-cond",
+        ))
+        .await
+        .unwrap()
+        .into_conditioning();
+    let negative = backend
+        .text_encode(base_text_encode_request(
+            clip_handle,
+            "deterministic test prompt".to_string(),
+            "node-neg-cond",
+        ))
+        .await
+        .unwrap()
+        .into_conditioning();
+    let latent = fake_runtime_latent("latent:should-not-read-store", 32, 32)
+        .with_content(LatentContent::Sampled);
+
+    let err = backend
+        .diffusion_sample(DiffusionSampleRequest::new(
+            model_handle,
+            positive,
+            negative,
+            latent,
+            42,
+            15,
+            6.5,
+            SamplerName::Euler,
+            SchedulerName::Normal,
+            0.0,
+            RunId::new("run-test"),
+            WorkflowId::new("wf-test"),
+            WorkflowVersion::new(1),
+            NodeId::new("node-sample"),
+        ))
+        .await
+        .unwrap_err();
+
+    assert_backend_execution_failed_with(&err, "no-op/pass-through");
+    assert_backend_execution_failed_with(&err, "denoise 0.0");
 }
 
 #[tokio::test]

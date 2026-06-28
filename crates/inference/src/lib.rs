@@ -95,7 +95,9 @@ pub use profile::{
     SamplerOptionProfile, SamplerSchedulerPairProfile, SchedulerOptionProfile,
     WorkspaceComputeProfile, diagnostics, kind_from_label,
 };
-pub use request::diffusion::{DiffusionSampleRequest, SamplerName, SchedulerName};
+pub use request::diffusion::{
+    DiffusionDenoiseError, DiffusionDenoiseMode, DiffusionSampleRequest, SamplerName, SchedulerName,
+};
 pub use request::image::{FilenamePrefix, ImagePreviewRequest, ImageSaveRequest};
 pub use request::image_import::{ImageImportRequest, ResolvedImageSource};
 pub use request::latent::{CreateEmptyLatentRequest, LatentDecodeRequest};

@@ -177,13 +177,33 @@ fn run_euler_normal_denoise_loop(
     let shape = input.shape().dims().to_vec();
     let noise = seeded_noise_like(request.seed, &shape, device)?;
     let scheduler = EulerNormalScheduler::new(request.steps as usize)?;
-    let mut sample = (noise * scheduler.init_noise_sigma()).map_err(|err| {
-        CandleBackendError::InvalidRequest(format!(
-            "diffusion.sample failed to scale seeded noise for SDXL euler/normal: {err}"
-        ))
-    })?;
+    let is_full_denoise = request.denoise >= 1.0;
+    let start_index = if is_full_denoise {
+        0
+    } else {
+        scheduler.start_index_for_denoise(request.denoise)?
+    };
+    let mut sample = if is_full_denoise {
+        (noise * scheduler.init_noise_sigma()).map_err(|err| {
+            CandleBackendError::InvalidRequest(format!(
+                "diffusion.sample failed to scale seeded noise for SDXL euler/normal: {err}"
+            ))
+        })?
+    } else {
+        let sigma = scheduler.sigma_at(start_index)?;
+        let scaled_noise = noise.affine(sigma, 0.0).map_err(|err| {
+            CandleBackendError::InvalidRequest(format!(
+                "diffusion.sample failed to scale partial denoise seeded noise at scheduler step {start_index}: {err}"
+            ))
+        })?;
+        (&input + &scaled_noise).map_err(|err| {
+            CandleBackendError::InvalidRequest(format!(
+                "diffusion.sample failed to add partial denoise noise at scheduler step {start_index}: {err}"
+            ))
+        })?
+    };
 
-    for step in scheduler.steps() {
+    for step in scheduler.steps_from(start_index) {
         let latent_model_input = scheduler.scale_model_input(sample.clone(), step.index)?;
         let negative_pred = denoiser
             .predict_noise(&latent_model_input, step.timestep, &negative)
@@ -305,16 +325,41 @@ impl EulerNormalScheduler {
             .map(|(index, timestep)| EulerNormalStep { index, timestep })
     }
 
+    fn steps_from(&self, start_index: usize) -> impl Iterator<Item = EulerNormalStep> + '_ {
+        self.steps().skip(start_index)
+    }
+
+    fn start_index_for_denoise(&self, denoise: f64) -> Result<usize, CandleBackendError> {
+        if !denoise.is_finite() || !(0.0..=1.0).contains(&denoise) {
+            return Err(CandleBackendError::InvalidRequest(format!(
+                "diffusion.sample denoise must be a finite number within [0, 1], got {denoise}"
+            )));
+        }
+        if denoise == 0.0 {
+            return Err(CandleBackendError::InvalidRequest(
+                "diffusion.sample denoise 0.0 is unsupported in V1 because it is a no-op/pass-through; save/preview/direct-source handling should bypass diffusion.sample in a future shortcut"
+                    .to_string(),
+            ));
+        }
+        let steps = self.timesteps.len();
+        let raw_index = steps.saturating_sub((steps as f64 * denoise).floor() as usize);
+        Ok(raw_index.clamp(0, steps.saturating_sub(1)))
+    }
+
+    fn sigma_at(&self, step_index: usize) -> Result<f64, CandleBackendError> {
+        self.sigmas.get(step_index).copied().ok_or_else(|| {
+            CandleBackendError::InvalidRequest(format!(
+                "diffusion.sample euler/normal scheduler step {step_index} is out of sigma bounds"
+            ))
+        })
+    }
+
     fn scale_model_input(
         &self,
         sample: Tensor,
         step_index: usize,
     ) -> Result<Tensor, CandleBackendError> {
-        let sigma = self.sigmas.get(step_index).copied().ok_or_else(|| {
-            CandleBackendError::InvalidRequest(format!(
-                "diffusion.sample euler/normal scheduler step {step_index} is out of sigma bounds"
-            ))
-        })?;
+        let sigma = self.sigma_at(step_index)?;
         (sample / (sigma * sigma + 1.0).sqrt()).map_err(|err| {
             CandleBackendError::InvalidRequest(format!(
                 "diffusion.sample euler/normal scheduler input scaling failed at step {step_index}: {err}"
@@ -507,14 +552,22 @@ mod tests {
     }
 
     fn request(seed: u64, steps: u32, cfg: f64) -> SdxlSampleRequest {
+        request_with_denoise(seed, steps, cfg, 1.0)
+    }
+
+    fn request_with_denoise(seed: u64, steps: u32, cfg: f64, denoise: f64) -> SdxlSampleRequest {
         SdxlSampleRequest {
             seed,
             steps,
             cfg,
             sampler_name: "euler".to_string(),
             scheduler_name: "normal".to_string(),
-            denoise: 1.0,
+            denoise,
         }
+    }
+
+    fn tensor_data(tensor: &Tensor) -> Vec<f32> {
+        tensor.flatten_all().unwrap().to_vec1::<f32>().unwrap()
     }
 
     fn sample_with_fake(
@@ -634,5 +687,104 @@ mod tests {
         );
         assert!(calls.chunks_exact(2).all(|pair| pair[0].0 == pair[1].0));
         assert!(calls.iter().all(|(_, _, dims)| dims == &[1, 4, 4, 4]));
+    }
+
+    #[test]
+    fn euler_normal_scheduler_derives_partial_denoise_start_index() {
+        let scheduler = EulerNormalScheduler::new(20).unwrap();
+        assert_eq!(scheduler.start_index_for_denoise(1.0).unwrap(), 0);
+        assert_eq!(scheduler.start_index_for_denoise(0.5).unwrap(), 10);
+        assert_eq!(scheduler.start_index_for_denoise(0.25).unwrap(), 15);
+        assert_eq!(scheduler.start_index_for_denoise(0.05).unwrap(), 19);
+    }
+
+    #[test]
+    fn euler_normal_scheduler_steps_from_preserves_original_step_indexes() {
+        let scheduler = EulerNormalScheduler::new(20).unwrap();
+        let suffix = scheduler.steps_from(10).collect::<Vec<_>>();
+        assert_eq!(suffix.len(), 10);
+        assert_eq!(suffix.first().unwrap().index, 10);
+        assert_eq!(suffix.last().unwrap().index, 19);
+        assert_eq!(
+            suffix[0].timestep,
+            scheduler.steps().nth(10).unwrap().timestep
+        );
+    }
+
+    #[test]
+    fn euler_normal_partial_denoise_initializes_from_input_latent_plus_start_sigma_noise() {
+        let denoiser = FakeDenoiser::new();
+        let shape = vec![1usize, 4, 2, 2];
+        let input_values = (0..16).map(|value| value as f32 * 0.25).collect::<Vec<_>>();
+        let input = Tensor::from_vec(input_values.clone(), shape.clone(), &Device::Cpu).unwrap();
+        let latent = CandleLatent::new(input.clone(), LatentSpaceMetadata::sdxl_base());
+        let request = request_with_denoise(99, 20, 1.0, 0.05);
+        let scheduler = EulerNormalScheduler::new(20).unwrap();
+        let start_index = scheduler.start_index_for_denoise(request.denoise).unwrap();
+        let start_sigma = scheduler.sigma_at(start_index).unwrap();
+        let scaled_noise = seeded_noise_like(request.seed, &shape, &Device::Cpu)
+            .unwrap()
+            .affine(start_sigma, 0.0)
+            .unwrap();
+        let expected = (&input + &scaled_noise).unwrap();
+
+        let output = run_euler_normal_denoise_loop(
+            &denoiser,
+            latent,
+            conditioning(0.0),
+            conditioning(0.0),
+            &request,
+            &Device::Cpu,
+        )
+        .unwrap()
+        .into_tensor();
+
+        assert_eq!(tensor_data(&output), tensor_data(&expected));
+        let calls = denoiser.calls();
+        assert_eq!(calls.len(), 2);
+        assert_eq!(
+            calls[0].0,
+            scheduler.steps().nth(start_index).unwrap().timestep
+        );
+        assert_eq!(calls[1].0, calls[0].0);
+    }
+
+    #[test]
+    fn euler_normal_partial_denoise_runs_only_scheduler_suffix() {
+        let denoiser = FakeDenoiser::new();
+        let latent = CandleLatent::new(
+            Tensor::zeros((1, 4, 4, 4), DType::F32, &Device::Cpu).unwrap(),
+            LatentSpaceMetadata::sdxl_base(),
+        );
+        let request = request_with_denoise(9, 20, 1.5, 0.25);
+        let scheduler = EulerNormalScheduler::new(20).unwrap();
+        let start_index = scheduler.start_index_for_denoise(request.denoise).unwrap();
+
+        let output = run_euler_normal_denoise_loop(
+            &denoiser,
+            latent,
+            conditioning(3.0),
+            conditioning(1.0),
+            &request,
+            &Device::Cpu,
+        )
+        .unwrap()
+        .into_tensor();
+
+        assert_eq!(output.shape().dims(), &[1, 4, 4, 4]);
+        let calls = denoiser.calls();
+        let expected_steps = request.steps as usize - start_index;
+        assert_eq!(calls.len(), expected_steps * 2);
+        let expected_timesteps = scheduler
+            .steps_from(start_index)
+            .flat_map(|step| [step.timestep, step.timestep])
+            .collect::<Vec<_>>();
+        assert_eq!(
+            calls
+                .iter()
+                .map(|(timestep, _, _)| *timestep)
+                .collect::<Vec<_>>(),
+            expected_timesteps
+        );
     }
 }

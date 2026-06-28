@@ -2,6 +2,7 @@
 
 use crate::BackendSelectionOverlay;
 use crate::ExecutionConditioning;
+use crate::LatentContent;
 use crate::RuntimeLatent;
 use crate::RuntimeModelHandle;
 use reimagine_core::diagnostic::CorrelationId;
@@ -176,6 +177,79 @@ mod tests {
         );
         assert_eq!(SchedulerName::SgmUniform.as_str(), "sgm_uniform");
     }
+
+    #[test]
+    fn denoise_mode_classifies_full_partial_and_noop_boundaries() {
+        assert_eq!(
+            DiffusionSampleRequest::classify_denoise_for_latent_content(
+                1.0,
+                crate::LatentContent::EmptyGeometry,
+            )
+            .unwrap(),
+            DiffusionDenoiseMode::Full,
+        );
+        assert_eq!(
+            DiffusionSampleRequest::classify_denoise_for_latent_content(
+                0.5,
+                crate::LatentContent::EncodedImage,
+            )
+            .unwrap(),
+            DiffusionDenoiseMode::Partial(0.5),
+        );
+        let err = DiffusionSampleRequest::classify_denoise_for_latent_content(
+            0.0,
+            crate::LatentContent::EncodedImage,
+        )
+        .unwrap_err();
+        assert!(err.to_string().contains("no-op/pass-through"), "{err}");
+    }
+
+    #[test]
+    fn partial_denoise_requires_real_latent_content() {
+        let err = DiffusionSampleRequest::classify_denoise_for_latent_content(
+            0.8,
+            crate::LatentContent::EmptyGeometry,
+        )
+        .unwrap_err();
+        assert!(err.to_string().contains("partial denoise"), "{err}");
+        assert!(err.to_string().contains("empty_geometry"), "{err}");
+
+        for content in [
+            crate::LatentContent::EmptyGeometry,
+            crate::LatentContent::EncodedImage,
+            crate::LatentContent::Sampled,
+            crate::LatentContent::Imported,
+        ] {
+            assert_eq!(
+                DiffusionSampleRequest::classify_denoise_for_latent_content(1.0, content).unwrap(),
+                DiffusionDenoiseMode::Full,
+            );
+        }
+
+        for content in [
+            crate::LatentContent::EncodedImage,
+            crate::LatentContent::Sampled,
+            crate::LatentContent::Imported,
+        ] {
+            assert_eq!(
+                DiffusionSampleRequest::classify_denoise_for_latent_content(0.8, content).unwrap(),
+                DiffusionDenoiseMode::Partial(0.8),
+            );
+        }
+    }
+
+    #[test]
+    fn denoise_mode_rejects_non_finite_and_out_of_range_values() {
+        for denoise in [f32::NAN, f32::INFINITY, -0.1, 1.1] {
+            let err = DiffusionSampleRequest::classify_denoise_for_latent_content(
+                denoise,
+                crate::LatentContent::EncodedImage,
+            )
+            .unwrap_err();
+            assert!(err.to_string().contains("finite"), "{err}");
+            assert!(err.to_string().contains("[0, 1]"), "{err}");
+        }
+    }
 }
 
 impl std::fmt::Display for SchedulerName {
@@ -202,6 +276,44 @@ impl<'de> Deserialize<'de> for SchedulerName {
         Ok(Self::from_standard_name(value))
     }
 }
+
+/// Model-neutral interpretation of a `diffusion.sample` denoise value.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub enum DiffusionDenoiseMode {
+    /// Full denoise from seeded noise. Empty geometry is valid here.
+    Full,
+    /// Partial denoise from real starting latent content.
+    Partial(f32),
+}
+
+/// Errors raised while classifying `diffusion.sample` denoise semantics.
+#[derive(Debug, Clone, PartialEq)]
+pub enum DiffusionDenoiseError {
+    InvalidRange { denoise: f32 },
+    UnsupportedNoOp,
+    PartialRequiresRealLatent { actual: LatentContent },
+}
+
+impl std::fmt::Display for DiffusionDenoiseError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::InvalidRange { denoise } => write!(
+                f,
+                "diffusion.sample denoise must be a finite number within [0, 1], got {denoise}"
+            ),
+            Self::UnsupportedNoOp => write!(
+                f,
+                "diffusion.sample denoise 0.0 is unsupported in V1 because it is a no-op/pass-through; save/preview/direct-source handling should bypass diffusion.sample in a future shortcut"
+            ),
+            Self::PartialRequiresRealLatent { actual } => write!(
+                f,
+                "diffusion.sample partial denoise requires real latent content (encoded_image, sampled, or imported); got {actual}"
+            ),
+        }
+    }
+}
+
+impl std::error::Error for DiffusionDenoiseError {}
 
 /// `diffusion.sample` request.
 #[derive(Debug, Clone)]
@@ -305,6 +417,39 @@ impl DiffusionSampleRequest {
 
     pub fn denoise(&self) -> f32 {
         self.denoise
+    }
+
+    /// Classify denoise semantics against the input latent's runtime
+    /// content class.
+    ///
+    /// This is model-neutral request validation. It deliberately
+    /// knows nothing about SDXL, Candle, sampler names, scheduler
+    /// sigmas, tensor stores, or runtime graph scheduling.
+    pub fn classify_denoise_for_latent_content(
+        denoise: f32,
+        content: LatentContent,
+    ) -> Result<DiffusionDenoiseMode, DiffusionDenoiseError> {
+        if !denoise.is_finite() || !(0.0..=1.0).contains(&denoise) {
+            return Err(DiffusionDenoiseError::InvalidRange { denoise });
+        }
+        if denoise == 0.0 {
+            return Err(DiffusionDenoiseError::UnsupportedNoOp);
+        }
+        if denoise == 1.0 {
+            return Ok(DiffusionDenoiseMode::Full);
+        }
+        match content {
+            LatentContent::EncodedImage | LatentContent::Sampled | LatentContent::Imported => {
+                Ok(DiffusionDenoiseMode::Partial(denoise))
+            }
+            LatentContent::EmptyGeometry => {
+                Err(DiffusionDenoiseError::PartialRequiresRealLatent { actual: content })
+            }
+        }
+    }
+
+    pub fn denoise_mode(&self) -> Result<DiffusionDenoiseMode, DiffusionDenoiseError> {
+        Self::classify_denoise_for_latent_content(self.denoise, self.latent.content())
     }
 
     pub fn run_id(&self) -> &RunId {
