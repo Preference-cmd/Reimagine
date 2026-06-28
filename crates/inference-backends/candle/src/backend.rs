@@ -27,7 +27,7 @@ pub struct CandleBackend {
     model_cache: Arc<CandleModelCache>,
     next_image_seq: AtomicU64,
     allow_test_text_projection: bool,
-    allow_test_vae_decoder_projection: bool,
+    allow_test_vae_projection: bool,
 }
 
 impl Clone for CandleBackend {
@@ -39,7 +39,7 @@ impl Clone for CandleBackend {
             model_cache: Arc::clone(&self.model_cache),
             next_image_seq: AtomicU64::new(self.next_image_seq.load(Ordering::Relaxed)),
             allow_test_text_projection: self.allow_test_text_projection,
-            allow_test_vae_decoder_projection: self.allow_test_vae_decoder_projection,
+            allow_test_vae_projection: self.allow_test_vae_projection,
         }
     }
 }
@@ -54,7 +54,7 @@ impl CandleBackend {
             model_cache: Arc::new(CandleModelCache::new()),
             next_image_seq: AtomicU64::new(0),
             allow_test_text_projection: false,
-            allow_test_vae_decoder_projection: false,
+            allow_test_vae_projection: false,
         })
     }
 
@@ -65,8 +65,8 @@ impl CandleBackend {
     }
 
     #[doc(hidden)]
-    pub fn with_test_vae_decoder_projection(mut self) -> Self {
-        self.allow_test_vae_decoder_projection = true;
+    pub fn with_test_vae_projection(mut self) -> Self {
+        self.allow_test_vae_projection = true;
         self
     }
 
@@ -74,8 +74,8 @@ impl CandleBackend {
         self.allow_test_text_projection
     }
 
-    pub(crate) fn allow_test_vae_decoder_projection(&self) -> bool {
-        self.allow_test_vae_decoder_projection
+    pub(crate) fn allow_test_vae_projection(&self) -> bool {
+        self.allow_test_vae_projection
     }
 
     pub fn config(&self) -> &CandleBackendConfig {

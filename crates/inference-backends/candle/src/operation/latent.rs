@@ -37,13 +37,14 @@ use reimagine_core::model::{TensorDType, TensorShape};
 use reimagine_inference::latent_space::validate_pixel_dimensions_against;
 use reimagine_inference::{
     BackendPayloadKey, BackendTensorHandle, CreateEmptyLatentRequest, CreateEmptyLatentResponse,
-    InferenceBackend, LatentDecodeRequest, LatentDecodeResponse, LatentSpaceError,
-    LatentSpaceMetadata, RuntimeImage, RuntimeLatent, RuntimeVaeHandle,
+    InferenceBackend, LatentDecodeRequest, LatentDecodeResponse, LatentEncodeRequest,
+    LatentEncodeResponse, LatentSpaceError, LatentSpaceMetadata, RuntimeImage, RuntimeLatent,
+    RuntimeVaeHandle,
 };
 
 use crate::backend::CandleBackend;
 use crate::error::CandleBackendError;
-use crate::graph::{LatentDecodeInput, LatentDecodeResult};
+use crate::graph::{LatentDecodeInput, LatentDecodeResult, LatentEncodeInput, LatentEncodeResult};
 
 fn map_latent_space_error(label: &str, err: LatentSpaceError) -> CandleBackendError {
     CandleBackendError::InvalidRequest(format!("{label} {err}"))
@@ -312,6 +313,231 @@ pub fn execute_latent_decode(
     );
 
     Ok(LatentDecodeResponse::new(image_value))
+}
+
+pub fn execute_latent_encode(
+    backend: &CandleBackend,
+    request: LatentEncodeRequest,
+) -> Result<LatentEncodeResponse, CandleBackendError> {
+    let vae_handle = request.vae().clone();
+    let image_handle = request.image().clone();
+
+    if vae_handle.backend() != backend.backend_kind() {
+        return Err(CandleBackendError::InvalidRequest(format!(
+            "latent.encode `vae` handle belongs to backend `{}`, expected `{}`",
+            vae_handle.backend().as_str(),
+            backend.backend_kind()
+        )));
+    }
+    if image_handle.payload().backend() != backend.backend_kind() {
+        return Err(CandleBackendError::InvalidRequest(format!(
+            "latent.encode `image` handle belongs to backend `{}`, expected `{}`",
+            image_handle.payload().backend().as_str(),
+            backend.backend_kind()
+        )));
+    }
+
+    let expected_instance = backend.backend_instance();
+    if vae_handle.backend_instance().as_str() != expected_instance.as_str()
+        && vae_handle.backend_instance().as_str() != backend.backend_kind().as_str()
+    {
+        return Err(CandleBackendError::InvalidRequest(format!(
+            "latent.encode `vae` handle belongs to backend instance `{}`, expected `{}`",
+            vae_handle.backend_instance().as_str(),
+            expected_instance.as_str()
+        )));
+    }
+    if image_handle.payload().backend_instance().as_str() != expected_instance.as_str()
+        && image_handle.payload().backend_instance().as_str() != backend.backend_kind().as_str()
+    {
+        return Err(CandleBackendError::InvalidRequest(format!(
+            "latent.encode `image` handle belongs to backend instance `{}`, expected `{}`",
+            image_handle.payload().backend_instance().as_str(),
+            expected_instance.as_str()
+        )));
+    }
+
+    let bundle = require_bundle_for_vae(&vae_handle, backend)?;
+    bundle.validate_vae_handle(&vae_handle)?;
+    let expected = bundle.expected_latent_space();
+
+    let image = backend
+        .store()
+        .get_image(image_handle.payload().payload_key())?;
+    validate_image_handle_matches_store(&image_handle, &image)?;
+    validate_image_for_latent_encode(&image_handle, &image, &expected)?;
+
+    let LatentEncodeResult { latent } =
+        bundle.encode_image(LatentEncodeInput { image }, backend.device().as_ref())?;
+
+    let payload_key = BackendPayloadKey::new(format!(
+        "latent:{}:{}",
+        request.run_id().as_str(),
+        request.node_id().as_str()
+    ));
+
+    backend.store().insert_latent(
+        request.run_id().clone(),
+        payload_key.clone(),
+        latent.tensor().clone(),
+        latent.latent_space().clone(),
+    );
+
+    let dims = latent.dims();
+    if dims.len() != 4 {
+        return Err(CandleBackendError::InvalidRequest(format!(
+            "latent.encode encoded latent payload `{}` expected 4D shape, got {:?}",
+            payload_key.as_str(),
+            dims
+        )));
+    }
+    let latent_value = RuntimeLatent::new(
+        BackendTensorHandle::with_instance(
+            backend.backend_kind().clone(),
+            backend.backend_instance(),
+            payload_key,
+            latent.latent_space().dtype(),
+            TensorShape::new(dims),
+            backend.device_label(),
+        ),
+        image_handle.width(),
+        image_handle.height(),
+        image_handle.batch(),
+        latent.latent_space().channels(),
+        latent.latent_space().clone(),
+        reimagine_inference::LatentContent::EncodedImage,
+    );
+
+    Ok(LatentEncodeResponse::new(latent_value))
+}
+
+fn validate_image_handle_matches_store(
+    handle: &RuntimeImage,
+    stored: &crate::store::CandleImage,
+) -> Result<(), CandleBackendError> {
+    if handle.payload().dtype() != TensorDType::F32 {
+        return Err(CandleBackendError::InvalidRequest(format!(
+            "latent.encode image handle `{}` dtype {:?} is unsupported; expected F32",
+            handle.payload().payload_key().as_str(),
+            handle.payload().dtype()
+        )));
+    }
+    if stored.dtype() != DType::F32 {
+        return Err(CandleBackendError::InvalidRequest(format!(
+            "latent.encode stored image payload `{}` dtype {:?} is unsupported; expected F32",
+            handle.payload().payload_key().as_str(),
+            stored.dtype()
+        )));
+    }
+
+    let handle_shape = handle.payload().shape();
+    if handle_shape.dims() != stored.dims().as_slice() {
+        return Err(CandleBackendError::InvalidRequest(format!(
+            "latent.encode image handle shape {:?} disagrees with stored image payload shape {:?} for key `{}`",
+            handle_shape.dims(),
+            stored.dims(),
+            handle.payload().payload_key().as_str()
+        )));
+    }
+    if handle.width() != stored.width() {
+        return Err(CandleBackendError::InvalidRequest(format!(
+            "latent.encode image handle width {} disagrees with stored image payload width {} for key `{}`",
+            handle.width(),
+            stored.width(),
+            handle.payload().payload_key().as_str()
+        )));
+    }
+    if handle.height() != stored.height() {
+        return Err(CandleBackendError::InvalidRequest(format!(
+            "latent.encode image handle height {} disagrees with stored image payload height {} for key `{}`",
+            handle.height(),
+            stored.height(),
+            handle.payload().payload_key().as_str()
+        )));
+    }
+    if handle.batch() != stored.batch() {
+        return Err(CandleBackendError::InvalidRequest(format!(
+            "latent.encode image handle batch {} disagrees with stored image payload batch {} for key `{}`",
+            handle.batch(),
+            stored.batch(),
+            handle.payload().payload_key().as_str()
+        )));
+    }
+    if handle.color_space() != stored.color_space() {
+        return Err(CandleBackendError::InvalidRequest(format!(
+            "latent.encode image handle color space `{}` disagrees with stored image payload color space `{}` for key `{}`",
+            handle.color_space(),
+            stored.color_space(),
+            handle.payload().payload_key().as_str()
+        )));
+    }
+    Ok(())
+}
+
+fn validate_image_for_latent_encode(
+    handle: &RuntimeImage,
+    stored: &crate::store::CandleImage,
+    latent_space: &LatentSpaceMetadata,
+) -> Result<(), CandleBackendError> {
+    let dims = stored.dims();
+    if dims.len() != 4 {
+        return Err(CandleBackendError::InvalidRequest(format!(
+            "latent.encode expected stored image payload `{}` to be 4D [batch, channels, height, width], got {}-D shape {:?}",
+            handle.payload().payload_key().as_str(),
+            dims.len(),
+            dims
+        )));
+    }
+    let batch = dims[0];
+    let channels = dims[1];
+    let height = dims[2];
+    let width = dims[3];
+    if stored.batch() as usize != batch
+        || stored.height() as usize != height
+        || stored.width() as usize != width
+    {
+        return Err(CandleBackendError::InvalidRequest(format!(
+            "latent.encode stored image payload `{}` metadata disagrees with tensor shape {:?}: metadata batch={}, width={}, height={}",
+            handle.payload().payload_key().as_str(),
+            dims,
+            stored.batch(),
+            stored.width(),
+            stored.height()
+        )));
+    }
+    if batch != 1 || stored.batch() != 1 || handle.batch() != 1 {
+        return Err(CandleBackendError::InvalidRequest(format!(
+            "latent.encode V1 supports only batch=1; got handle batch={}, stored batch={}, tensor batch={} for image `{}`",
+            handle.batch(),
+            stored.batch(),
+            batch,
+            handle.payload().payload_key().as_str()
+        )));
+    }
+    if channels != 3 {
+        return Err(CandleBackendError::InvalidRequest(format!(
+            "latent.encode expected 3-channel RGB image payload `{}`, got channels={channels}",
+            handle.payload().payload_key().as_str()
+        )));
+    }
+    if stored.color_space() != "rgb" {
+        return Err(CandleBackendError::InvalidRequest(format!(
+            "latent.encode expected RGB image payload `{}`, got color space `{}`",
+            handle.payload().payload_key().as_str(),
+            stored.color_space()
+        )));
+    }
+    if width == 0 || height == 0 || stored.width() == 0 || stored.height() == 0 {
+        return Err(CandleBackendError::InvalidRequest(format!(
+            "latent.encode expected positive image dimensions for payload `{}`, got width={}, height={}",
+            handle.payload().payload_key().as_str(),
+            stored.width(),
+            stored.height()
+        )));
+    }
+    validate_pixel_dimensions_against(stored.width(), stored.height(), latent_space)
+        .map_err(|err| map_latent_space_error("latent.encode", err))?;
+    Ok(())
 }
 
 fn require_bundle_for_vae(

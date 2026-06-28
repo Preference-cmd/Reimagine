@@ -82,6 +82,17 @@ pub struct LatentDecodeResult {
     pub image: CandleImage,
 }
 
+/// Backend-local input for latent encoding.
+pub struct LatentEncodeInput {
+    pub image: CandleImage,
+}
+
+/// Backend-local result of latent encoding.
+#[derive(Debug)]
+pub struct LatentEncodeResult {
+    pub latent: CandleLatent,
+}
+
 impl LoadedModelBundle {
     /// Expose the loaded model graph for compatibility checks.
     pub fn as_graph(&self) -> &dyn LoadedModelGraph {
@@ -317,10 +328,10 @@ impl LoadedModelBundle {
     /// The operation layer is responsible for storing the resulting image as a
     /// [`crate::store::CandleImage`] payload and building the runtime handle.
     ///
-    /// Real SDXL VAE decode lazy-materializes the underlying decoder graph
-    /// on the first call for the loaded bundle. Subsequent decodes reuse
-    /// the cached decoder; the operation layer must therefore keep the
-    /// bundle alive across calls so the cache is honored.
+    /// Real SDXL VAE decode lazy-materializes the underlying VAE graph
+    /// on the first encode/decode call for the loaded bundle. Subsequent
+    /// VAE operations reuse the cached graph; the operation layer must
+    /// therefore keep the bundle alive across calls so the cache is honored.
     pub fn decode_latent(
         &self,
         input: LatentDecodeInput,
@@ -328,13 +339,35 @@ impl LoadedModelBundle {
     ) -> Result<LatentDecodeResult, CandleBackendError> {
         match self {
             LoadedModelBundle::StableDiffusionSdxl(bundle) => {
-                let graph = bundle.materialize_vae_decoder_graph()?;
+                let graph = bundle.materialize_vae_graph()?;
                 let image = graph.decode(&input.latent, device)?;
                 Ok(LatentDecodeResult { image })
             }
             #[cfg(test)]
             LoadedModelBundle::TestPlaceholder => Err(CandleBackendError::InvalidRequest(
                 "latent.decode is not supported by the test placeholder bundle".to_string(),
+            )),
+        }
+    }
+
+    /// Encode `image` into a latent tensor for the loaded model family.
+    ///
+    /// The operation layer is responsible for storing the resulting latent as
+    /// a [`crate::store::CandleLatent`] payload and building the runtime handle.
+    pub fn encode_image(
+        &self,
+        input: LatentEncodeInput,
+        device: &Device,
+    ) -> Result<LatentEncodeResult, CandleBackendError> {
+        match self {
+            LoadedModelBundle::StableDiffusionSdxl(bundle) => {
+                let graph = bundle.materialize_vae_graph()?;
+                let latent = graph.encode(&input.image, device, self.expected_latent_space())?;
+                Ok(LatentEncodeResult { latent })
+            }
+            #[cfg(test)]
+            LoadedModelBundle::TestPlaceholder => Err(CandleBackendError::InvalidRequest(
+                "latent.encode is not supported by the test placeholder bundle".to_string(),
             )),
         }
     }
@@ -390,11 +423,11 @@ mod tests {
         }
     }
 
-    fn install_test_vae_decoder_graph(bundle: &LoadedModelBundle) {
+    fn install_test_vae_graph(bundle: &LoadedModelBundle) {
         match bundle {
             LoadedModelBundle::StableDiffusionSdxl(sdxl) => {
-                sdxl.install_test_vae_decoder_graph_for_tests(Arc::new(
-                    crate::models::stable_diffusion::sdxl::vae::SdxlVaeDecoderGraph::test_placeholder(),
+                sdxl.install_test_vae_graph_for_tests(Arc::new(
+                    crate::models::stable_diffusion::sdxl::vae::SdxlVaeGraph::test_placeholder(),
                 ));
             }
             LoadedModelBundle::TestPlaceholder => {}
@@ -482,7 +515,7 @@ mod tests {
     #[test]
     fn decode_latent_sdxl_produces_image_shape() {
         let bundle = sdxl_bundle();
-        install_test_vae_decoder_graph(&bundle);
+        install_test_vae_graph(&bundle);
         let input_latent = CandleLatent::new(
             Tensor::zeros((1, 4, 8, 8), DType::F32, &Device::Cpu).unwrap(),
             LatentSpaceMetadata::sdxl_base(),
@@ -501,13 +534,53 @@ mod tests {
     }
 
     #[test]
+    fn encode_image_sdxl_produces_latent_shape() {
+        let bundle = sdxl_bundle();
+        install_test_vae_graph(&bundle);
+        let input_image = CandleImage::new(
+            Tensor::zeros((1, 3, 64, 64), DType::F32, &Device::Cpu).unwrap(),
+            64,
+            64,
+            1,
+            "rgb".to_string(),
+        );
+        let result = bundle
+            .encode_image(LatentEncodeInput { image: input_image }, &Device::Cpu)
+            .expect("encode_image should succeed");
+        assert_eq!(result.latent.tensor().shape().dims(), &[1, 4, 8, 8]);
+        assert_eq!(
+            result.latent.latent_space(),
+            &LatentSpaceMetadata::sdxl_base()
+        );
+    }
+
+    #[test]
+    fn encode_image_sdxl_reuses_materialized_vae_graph_for_repeated_encode() {
+        let bundle = sdxl_bundle();
+        install_test_vae_graph(&bundle);
+        for _ in 0..2 {
+            let input_image = CandleImage::new(
+                Tensor::zeros((1, 3, 64, 64), DType::F32, &Device::Cpu).unwrap(),
+                64,
+                64,
+                1,
+                "rgb".to_string(),
+            );
+            let result = bundle
+                .encode_image(LatentEncodeInput { image: input_image }, &Device::Cpu)
+                .expect("encode_image should reuse cached VAE graph");
+            assert_eq!(result.latent.tensor().shape().dims(), &[1, 4, 8, 8]);
+        }
+    }
+
+    #[test]
     fn decode_latent_sdxl_reuses_materialized_vae_graph_for_repeated_decode() {
         // First decode materializes the graph; the second decode must
         // succeed without reloading VAE weights. We verify this by
         // installing a placeholder graph and ensuring both calls go
         // through the same cached instance.
         let bundle = sdxl_bundle();
-        install_test_vae_decoder_graph(&bundle);
+        install_test_vae_graph(&bundle);
         for _ in 0..2 {
             let input_latent = CandleLatent::new(
                 Tensor::zeros((1, 4, 8, 8), DType::F32, &Device::Cpu).unwrap(),
@@ -620,6 +693,26 @@ mod tests {
         let msg = err.to_string();
         assert!(
             msg.contains("latent.decode") && msg.contains("test placeholder bundle"),
+            "expected precise unsupported-bundle diagnostic, got {msg}"
+        );
+    }
+
+    #[test]
+    fn encode_image_placeholder_returns_precise_error() {
+        let bundle = LoadedModelBundle::TestPlaceholder;
+        let input_image = CandleImage::new(
+            Tensor::zeros((1, 3, 64, 64), DType::F32, &Device::Cpu).unwrap(),
+            64,
+            64,
+            1,
+            "rgb".to_string(),
+        );
+        let err = bundle
+            .encode_image(LatentEncodeInput { image: input_image }, &Device::Cpu)
+            .unwrap_err();
+        let msg = err.to_string();
+        assert!(
+            msg.contains("latent.encode") && msg.contains("test placeholder bundle"),
             "expected precise unsupported-bundle diagnostic, got {msg}"
         );
     }

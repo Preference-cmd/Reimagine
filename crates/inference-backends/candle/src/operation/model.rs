@@ -70,29 +70,29 @@ fn load_model_bundle(
         )?
     };
 
-    if backend.allow_test_vae_decoder_projection() {
-        install_test_vae_decoder_graph(&bundle);
+    if backend.allow_test_vae_projection() {
+        install_test_vae_graph(&bundle);
     }
 
     Ok(bundle)
 }
 
-/// Install a test-only VAE decoder graph on a freshly loaded bundle.
+/// Install a test-only VAE graph on a freshly loaded bundle.
 /// Production code never reaches this path; only the
-/// `with_test_vae_decoder_projection()` test helper enables it.
+/// `with_test_vae_projection()` test helper enables it.
 #[doc(hidden)]
 #[allow(irrefutable_let_patterns)]
-fn install_test_vae_decoder_graph(bundle: &std::sync::Arc<LoadedModelBundle>) {
+fn install_test_vae_graph(bundle: &std::sync::Arc<LoadedModelBundle>) {
     // `LoadedModelBundle::TestPlaceholder` is gated to unit tests in
     // the candle crate and is not reachable through the production
     // bundle-construction flow used here. Use an `if let` so the
     // compiler can warn if a future non-SDXL variant lands in
     // production builds.
     if let LoadedModelBundle::StableDiffusionSdxl(sdxl) = bundle.as_ref() {
-        use crate::models::stable_diffusion::sdxl::vae::SdxlVaeDecoderGraph;
-        sdxl.install_test_vae_decoder_graph_for_tests(std::sync::Arc::new(
-            SdxlVaeDecoderGraph::test_placeholder(),
-        ));
+        use crate::models::stable_diffusion::sdxl::vae::SdxlVaeGraph;
+        sdxl.install_test_vae_graph_for_tests(
+            std::sync::Arc::new(SdxlVaeGraph::test_placeholder()),
+        );
     }
 }
 

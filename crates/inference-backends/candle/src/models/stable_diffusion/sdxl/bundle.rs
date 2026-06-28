@@ -14,7 +14,7 @@ use super::diffusion_sources::{
 };
 use super::text::{SdxlTextEncoderGraph, TextEncoderError};
 use super::tokenizer::SdxlTokenizer;
-use super::vae::{SdxlVaeDecoderGraph, SdxlVaeError};
+use super::vae::{SdxlVaeError, SdxlVaeGraph};
 use super::vae_sources::{SdxlVaeSourceError, SdxlVaeSources, resolve_vae_sources};
 use crate::error::CandleBackendError;
 
@@ -120,7 +120,7 @@ pub struct LoadedSdxlBundle {
     pub(crate) diffusion_sources: SdxlDiffusionSources,
     pub(crate) vae_sources: SdxlVaeSources,
     pub(crate) diffusion_graph: Mutex<Option<Arc<dyn SdxlDiffusionGraph>>>,
-    pub(crate) vae_decoder_graph: Mutex<Option<Arc<SdxlVaeDecoderGraph>>>,
+    pub(crate) vae_graph: Mutex<Option<Arc<SdxlVaeGraph>>>,
     pub tokenizer: SdxlTokenizer,
     pub text_encoder: SdxlTextEncoderGraph,
     pub model_payload_key: BackendPayloadKey,
@@ -195,7 +195,7 @@ impl LoadedSdxlBundle {
             diffusion_sources,
             vae_sources,
             diffusion_graph: Mutex::new(None),
-            vae_decoder_graph: Mutex::new(None),
+            vae_graph: Mutex::new(None),
             tokenizer,
             text_encoder,
             model_payload_key,
@@ -253,7 +253,7 @@ impl LoadedSdxlBundle {
             diffusion_sources,
             vae_sources,
             diffusion_graph: Mutex::new(None),
-            vae_decoder_graph: Mutex::new(None),
+            vae_graph: Mutex::new(None),
             tokenizer,
             text_encoder,
             model_payload_key,
@@ -278,29 +278,26 @@ impl LoadedSdxlBundle {
         Ok(graph)
     }
 
-    /// Lazily materialize the SDXL VAE decoder graph for the loaded
-    /// bundle. The first call constructs the real decoder weights
+    /// Lazily materialize the SDXL VAE graph for the loaded bundle.
+    /// The first encode/decode call constructs the real VAE weights
     /// from the resolved split VAE source; subsequent calls reuse
-    /// the cached decoder instance.
+    /// the cached VAE instance.
     ///
     /// Returns a precise error if the resolved VAE source points at
     /// a checkpoint bundle (callers must run
     /// `import_sdxl_checkpoint_to_candle_example_split` first) or
     /// if weight loading fails.
-    pub(crate) fn materialize_vae_decoder_graph(
-        &self,
-    ) -> Result<Arc<SdxlVaeDecoderGraph>, CandleBackendError> {
-        let mut guard = self.vae_decoder_graph.lock().map_err(|_| {
-            CandleBackendError::InvalidRequest(
-                "latent.decode SDXL VAE decoder graph cache lock is poisoned".to_string(),
-            )
+    pub(crate) fn materialize_vae_graph(&self) -> Result<Arc<SdxlVaeGraph>, CandleBackendError> {
+        let mut guard = self.vae_graph.lock().map_err(|_| {
+            CandleBackendError::InvalidRequest("SDXL VAE graph cache lock is poisoned".to_string())
         })?;
         if let Some(graph) = guard.as_ref() {
             return Ok(graph.clone());
         }
         let graph = match &self.vae_sources {
-            SdxlVaeSources::Split { path } => SdxlVaeDecoderGraph::load(path, self.device.as_ref())
-                .map_err(CandleBackendError::from)?,
+            SdxlVaeSources::Split { path } => {
+                SdxlVaeGraph::load(path, self.device.as_ref()).map_err(CandleBackendError::from)?
+            }
             SdxlVaeSources::Checkpoint { path } => {
                 return Err(CandleBackendError::InvalidRequest(format!(
                     "{}",
@@ -324,18 +321,15 @@ impl LoadedSdxlBundle {
         *guard = Some(graph);
     }
 
-    /// Test-only VAE decoder graph installer. Production code must
-    /// rely on [`Self::materialize_vae_decoder_graph`] instead. This
+    /// Test-only VAE graph installer. Production code must
+    /// rely on [`Self::materialize_vae_graph`] instead. This
     /// helper exists so backend integration tests can wire the
-    /// graph facade through a deterministic shape-only decoder
+    /// graph facade through deterministic shape-only VAE behavior
     /// without loading real VAE weights.
     #[doc(hidden)]
     #[allow(dead_code)]
-    pub fn install_test_vae_decoder_graph_for_tests(&self, graph: Arc<SdxlVaeDecoderGraph>) {
-        let mut guard = self
-            .vae_decoder_graph
-            .lock()
-            .expect("test-only VAE decoder graph lock");
+    pub fn install_test_vae_graph_for_tests(&self, graph: Arc<SdxlVaeGraph>) {
+        let mut guard = self.vae_graph.lock().expect("test-only VAE graph lock");
         *guard = Some(graph);
     }
 }
