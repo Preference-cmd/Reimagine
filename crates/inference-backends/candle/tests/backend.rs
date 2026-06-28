@@ -51,7 +51,7 @@ fn backend_with_dirs(
     ))
     .unwrap()
     .with_test_text_projection()
-    .with_test_vae_decoder_projection()
+    .with_test_vae_projection()
 }
 
 fn production_like_backend() -> CandleBackend {
@@ -262,6 +262,44 @@ fn fake_runtime_vae_handle(key: &str) -> RuntimeVaeHandle {
         Backend::new("candle"),
         BackendInstance::new("candle:cpu"),
         BackendPayloadKey::new(key),
+    )
+}
+
+fn fake_runtime_vae_handle_with_instance(key: &str, instance: &str) -> RuntimeVaeHandle {
+    RuntimeVaeHandle::with_instance(
+        ModelId::new("sdxl-base-1.0"),
+        Backend::new("candle"),
+        BackendInstance::new(instance),
+        BackendPayloadKey::new(key),
+    )
+}
+
+fn fake_runtime_image(key: &str, width: u32, height: u32) -> RuntimeImage {
+    RuntimeImage::new(
+        fake_tensor_handle(key, vec![1, 3, height as usize, width as usize]),
+        width,
+        height,
+        1,
+        "rgb",
+    )
+}
+
+fn fake_runtime_image_with_instance(
+    key: &str,
+    width: u32,
+    height: u32,
+    instance: &str,
+) -> RuntimeImage {
+    RuntimeImage::new(
+        fake_tensor_handle_with_instance(
+            key,
+            vec![1, 3, height as usize, width as usize],
+            instance,
+        ),
+        width,
+        height,
+        1,
+        "rgb",
     )
 }
 
@@ -504,17 +542,32 @@ async fn image_import_missing_file_returns_precise_error() {
 }
 
 #[tokio::test]
-async fn latent_encode_returns_backend_not_implemented() {
+async fn latent_encode_succeeds_for_sdxl_with_loaded_bundle_and_imported_image() {
     let backend = backend();
-    let vae = fake_runtime_vae_handle("bundle:sdxl-base-1.0:vae");
-    let image_tensor = BackendTensorHandle::new(
-        Backend::new("candle"),
-        BackendPayloadKey::new("image:not-implemented"),
-        TensorDType::F32,
-        TensorShape::new(vec![1, 3, 64, 64]),
-        "cpu",
+    let (model, _root) = sdxl_model();
+    let _ = backend
+        .load_bundle(base_load_bundle_request(model, "node-test"))
+        .await
+        .unwrap();
+    let bundle = backend
+        .model_cache()
+        .get_bundle(&ModelId::new("sdxl-base-1.0"))
+        .expect("cached bundle");
+    let vae_payload_key = match bundle.as_ref() {
+        LoadedModelBundle::StableDiffusionSdxl(sdxl) => sdxl.vae_payload_key.clone(),
+    };
+    let vae = fake_runtime_vae_handle(vae_payload_key.as_str());
+
+    let image_key = BackendPayloadKey::new("image:encode-success");
+    let image_tensor =
+        Tensor::zeros((1, 3, 64, 64), DType::F32, backend.device().as_ref()).unwrap();
+    backend.store().insert_image(
+        RunId::new("run-image-source"),
+        image_key.clone(),
+        reimagine_inference_candle::CandleImage::new(image_tensor, 64, 64, 1, "rgb".to_string()),
     );
-    let image = RuntimeImage::new(image_tensor, 64, 64, 1, "rgb");
+    let image = fake_runtime_image(image_key.as_str(), 64, 64);
+
     let request = reimagine_inference::LatentEncodeRequest::new(
         vae,
         image,
@@ -523,20 +576,379 @@ async fn latent_encode_returns_backend_not_implemented() {
         WorkflowVersion::new(1),
         NodeId::new("node-latent-encode"),
     );
-    let err = backend
+    let response = backend
         .latent_encode(request)
         .await
-        .expect_err("latent.encode should be reported as not implemented");
-    let (capability, backend_kind) = match err {
-        InferenceError::BackendNotImplemented {
-            capability,
-            backend_kind,
-            message: _,
-        } => (capability, backend_kind),
-        other => panic!("expected BackendNotImplemented, got {other:?}"),
+        .expect("latent.encode should succeed with test VAE graph");
+
+    let latent = response.latent();
+    assert_eq!(latent.content(), LatentContent::EncodedImage);
+    assert_eq!(latent.width(), 64);
+    assert_eq!(latent.height(), 64);
+    assert_eq!(latent.batch(), 1);
+    assert_eq!(latent.channels(), 4);
+    assert_eq!(latent.latent_space(), &LatentSpaceMetadata::sdxl_base());
+    assert_eq!(latent.payload().dtype(), TensorDType::F32);
+    assert_eq!(latent.payload().shape().dims(), &[1, 4, 8, 8]);
+    let stored = backend
+        .store()
+        .get_latent(latent.payload().payload_key())
+        .expect("encoded latent should be stored");
+    assert_eq!(stored.dims(), vec![1, 4, 8, 8]);
+    assert_eq!(stored.latent_space(), &LatentSpaceMetadata::sdxl_base());
+}
+
+#[tokio::test]
+async fn latent_encode_rejects_wrong_backend_image_handle_before_store_lookup() {
+    let backend = backend();
+    let vae = fake_runtime_vae_handle("bundle:sdxl-base-1.0:vae");
+    let wrong_backend_image = RuntimeImage::new(
+        BackendTensorHandle::new(
+            Backend::new("other-backend"),
+            BackendPayloadKey::new("image:other"),
+            TensorDType::F32,
+            TensorShape::new(vec![1, 3, 64, 64]),
+            "cpu",
+        ),
+        64,
+        64,
+        1,
+        "rgb",
+    );
+    let err = backend
+        .latent_encode(reimagine_inference::LatentEncodeRequest::new(
+            vae,
+            wrong_backend_image,
+            RunId::new("run-latent-encode"),
+            WorkflowId::new("wf-latent-encode"),
+            WorkflowVersion::new(1),
+            NodeId::new("node-latent-encode"),
+        ))
+        .await
+        .unwrap_err();
+    assert_backend_execution_failed_with(&err, "other-backend");
+    assert_backend_execution_failed_with(&err, "candle");
+}
+
+#[tokio::test]
+async fn latent_encode_rejects_mismatched_backend_instances() {
+    let backend = backend();
+    let vae = fake_runtime_vae_handle_with_instance("bundle:sdxl-base-1.0:vae", "candle:cpu");
+    let image = fake_runtime_image_with_instance("image:mismatch", 64, 64, "candle:other");
+    let err = backend
+        .latent_encode(reimagine_inference::LatentEncodeRequest::new(
+            vae,
+            image,
+            RunId::new("run-latent-encode"),
+            WorkflowId::new("wf-latent-encode"),
+            WorkflowVersion::new(1),
+            NodeId::new("node-latent-encode"),
+        ))
+        .await
+        .unwrap_err();
+    assert_backend_execution_failed_with(&err, "backend instance");
+    assert_backend_execution_failed_with(&err, "candle:other");
+}
+
+#[tokio::test]
+async fn latent_encode_rejects_missing_loaded_bundle() {
+    let backend = backend();
+    let vae = fake_runtime_vae_handle("bundle:sdxl-base-1.0:vae");
+    let image = fake_runtime_image("image:not-needed", 64, 64);
+    let err = backend
+        .latent_encode(reimagine_inference::LatentEncodeRequest::new(
+            vae,
+            image,
+            RunId::new("run-latent-encode"),
+            WorkflowId::new("wf-latent-encode"),
+            WorkflowVersion::new(1),
+            NodeId::new("node-latent-encode"),
+        ))
+        .await
+        .unwrap_err();
+    assert_backend_execution_failed_with(&err, "no loaded model bundle");
+    assert_backend_execution_failed_with(&err, "sdxl-base-1.0");
+}
+
+#[tokio::test]
+async fn latent_encode_rejects_missing_image_payload() {
+    let backend = backend();
+    let (model, _root) = sdxl_model();
+    let _ = backend
+        .load_bundle(base_load_bundle_request(model, "node-test"))
+        .await
+        .unwrap();
+    let bundle = backend
+        .model_cache()
+        .get_bundle(&ModelId::new("sdxl-base-1.0"))
+        .expect("cached bundle");
+    let vae_payload_key = match bundle.as_ref() {
+        LoadedModelBundle::StableDiffusionSdxl(sdxl) => sdxl.vae_payload_key.clone(),
     };
-    assert_eq!(capability, InferenceCapability::LatentEncode);
-    assert_eq!(backend_kind, "candle");
+    let vae = fake_runtime_vae_handle(vae_payload_key.as_str());
+    let image = fake_runtime_image("image:not-in-store", 64, 64);
+    let err = backend
+        .latent_encode(reimagine_inference::LatentEncodeRequest::new(
+            vae,
+            image,
+            RunId::new("run-latent-encode"),
+            WorkflowId::new("wf-latent-encode"),
+            WorkflowVersion::new(1),
+            NodeId::new("node-latent-encode"),
+        ))
+        .await
+        .unwrap_err();
+    assert_backend_execution_failed_with(&err, "image:not-in-store");
+    assert_backend_execution_failed_with(&err, "image");
+}
+
+#[tokio::test]
+async fn latent_encode_rejects_wrong_vae_payload_key() {
+    let backend = backend();
+    let (model, _root) = sdxl_model();
+    let _ = backend
+        .load_bundle(base_load_bundle_request(model, "node-test"))
+        .await
+        .unwrap();
+    let vae = fake_runtime_vae_handle("bundle:sdxl-base-1.0:not-vae");
+    let image = fake_runtime_image("image:not-needed", 64, 64);
+    let err = backend
+        .latent_encode(reimagine_inference::LatentEncodeRequest::new(
+            vae,
+            image,
+            RunId::new("run-latent-encode"),
+            WorkflowId::new("wf-latent-encode"),
+            WorkflowVersion::new(1),
+            NodeId::new("node-latent-encode"),
+        ))
+        .await
+        .unwrap_err();
+    assert_backend_execution_failed_with(&err, "not-vae");
+    assert_backend_execution_failed_with(&err, "VAE payload");
+}
+
+#[tokio::test]
+async fn latent_encode_rejects_wrong_payload_kind_for_image_key() {
+    let backend = backend();
+    let (model, _root) = sdxl_model();
+    let _ = backend
+        .load_bundle(base_load_bundle_request(model, "node-test"))
+        .await
+        .unwrap();
+    let bundle = backend
+        .model_cache()
+        .get_bundle(&ModelId::new("sdxl-base-1.0"))
+        .expect("cached bundle");
+    let vae_payload_key = match bundle.as_ref() {
+        LoadedModelBundle::StableDiffusionSdxl(sdxl) => sdxl.vae_payload_key.clone(),
+    };
+    let vae = fake_runtime_vae_handle(vae_payload_key.as_str());
+    let latent_response = backend
+        .create_empty_latent(base_create_empty_latent_request(
+            64,
+            64,
+            1,
+            "node-source-latent",
+        ))
+        .await
+        .unwrap();
+    let image = fake_runtime_image(
+        latent_response.latent().payload().payload_key().as_str(),
+        64,
+        64,
+    );
+    let err = backend
+        .latent_encode(reimagine_inference::LatentEncodeRequest::new(
+            vae,
+            image,
+            RunId::new("run-latent-encode"),
+            WorkflowId::new("wf-latent-encode"),
+            WorkflowVersion::new(1),
+            NodeId::new("node-latent-encode"),
+        ))
+        .await
+        .unwrap_err();
+    assert_backend_execution_failed_with(&err, "expected `image`");
+    assert_backend_execution_failed_with(&err, "latent");
+}
+
+#[tokio::test]
+async fn latent_encode_rejects_image_handle_shape_disagreeing_with_store() {
+    let backend = backend();
+    let (model, _root) = sdxl_model();
+    let _ = backend
+        .load_bundle(base_load_bundle_request(model, "node-test"))
+        .await
+        .unwrap();
+    let bundle = backend
+        .model_cache()
+        .get_bundle(&ModelId::new("sdxl-base-1.0"))
+        .expect("cached bundle");
+    let vae_payload_key = match bundle.as_ref() {
+        LoadedModelBundle::StableDiffusionSdxl(sdxl) => sdxl.vae_payload_key.clone(),
+    };
+    let vae = fake_runtime_vae_handle(vae_payload_key.as_str());
+    let image_key = BackendPayloadKey::new("image:shape-mismatch");
+    let image_tensor =
+        Tensor::zeros((1, 3, 64, 64), DType::F32, backend.device().as_ref()).unwrap();
+    backend.store().insert_image(
+        RunId::new("run-image-source"),
+        image_key.clone(),
+        reimagine_inference_candle::CandleImage::new(image_tensor, 64, 64, 1, "rgb".to_string()),
+    );
+    let image = RuntimeImage::new(
+        fake_tensor_handle(image_key.as_str(), vec![1, 3, 32, 64]),
+        64,
+        64,
+        1,
+        "rgb",
+    );
+    let err = backend
+        .latent_encode(reimagine_inference::LatentEncodeRequest::new(
+            vae,
+            image,
+            RunId::new("run-latent-encode"),
+            WorkflowId::new("wf-latent-encode"),
+            WorkflowVersion::new(1),
+            NodeId::new("node-latent-encode"),
+        ))
+        .await
+        .unwrap_err();
+    assert_backend_execution_failed_with(&err, "shape");
+    assert_backend_execution_failed_with(&err, "disagrees");
+}
+
+#[tokio::test]
+async fn latent_encode_rejects_stored_image_metadata_disagreeing_with_tensor_shape() {
+    let backend = backend();
+    let (model, _root) = sdxl_model();
+    let _ = backend
+        .load_bundle(base_load_bundle_request(model, "node-test"))
+        .await
+        .unwrap();
+    let bundle = backend
+        .model_cache()
+        .get_bundle(&ModelId::new("sdxl-base-1.0"))
+        .expect("cached bundle");
+    let vae_payload_key = match bundle.as_ref() {
+        LoadedModelBundle::StableDiffusionSdxl(sdxl) => sdxl.vae_payload_key.clone(),
+    };
+    let vae = fake_runtime_vae_handle(vae_payload_key.as_str());
+    let image_key = BackendPayloadKey::new("image:stored-metadata-mismatch");
+    let image_tensor =
+        Tensor::zeros((1, 3, 64, 64), DType::F32, backend.device().as_ref()).unwrap();
+    backend.store().insert_image(
+        RunId::new("run-image-source"),
+        image_key.clone(),
+        reimagine_inference_candle::CandleImage::new(image_tensor, 64, 32, 1, "rgb".to_string()),
+    );
+    let image = RuntimeImage::new(
+        fake_tensor_handle(image_key.as_str(), vec![1, 3, 64, 64]),
+        64,
+        32,
+        1,
+        "rgb",
+    );
+
+    let err = backend
+        .latent_encode(reimagine_inference::LatentEncodeRequest::new(
+            vae,
+            image,
+            RunId::new("run-latent-encode"),
+            WorkflowId::new("wf-latent-encode"),
+            WorkflowVersion::new(1),
+            NodeId::new("node-latent-encode"),
+        ))
+        .await
+        .unwrap_err();
+    assert_backend_execution_failed_with(&err, "metadata disagrees");
+    assert_backend_execution_failed_with(&err, "stored-metadata-mismatch");
+}
+
+#[tokio::test]
+async fn latent_encode_rejects_non_rgb_stored_image() {
+    let backend = backend();
+    let (model, _root) = sdxl_model();
+    let _ = backend
+        .load_bundle(base_load_bundle_request(model, "node-test"))
+        .await
+        .unwrap();
+    let bundle = backend
+        .model_cache()
+        .get_bundle(&ModelId::new("sdxl-base-1.0"))
+        .expect("cached bundle");
+    let vae_payload_key = match bundle.as_ref() {
+        LoadedModelBundle::StableDiffusionSdxl(sdxl) => sdxl.vae_payload_key.clone(),
+    };
+    let vae = fake_runtime_vae_handle(vae_payload_key.as_str());
+    let image_key = BackendPayloadKey::new("image:non-rgb");
+    let image_tensor =
+        Tensor::zeros((1, 3, 64, 64), DType::F32, backend.device().as_ref()).unwrap();
+    backend.store().insert_image(
+        RunId::new("run-image-source"),
+        image_key.clone(),
+        reimagine_inference_candle::CandleImage::new(image_tensor, 64, 64, 1, "bgr".to_string()),
+    );
+    let image = RuntimeImage::new(
+        fake_tensor_handle(image_key.as_str(), vec![1, 3, 64, 64]),
+        64,
+        64,
+        1,
+        "bgr",
+    );
+    let err = backend
+        .latent_encode(reimagine_inference::LatentEncodeRequest::new(
+            vae,
+            image,
+            RunId::new("run-latent-encode"),
+            WorkflowId::new("wf-latent-encode"),
+            WorkflowVersion::new(1),
+            NodeId::new("node-latent-encode"),
+        ))
+        .await
+        .unwrap_err();
+    assert_backend_execution_failed_with(&err, "RGB");
+    assert_backend_execution_failed_with(&err, "bgr");
+}
+
+#[tokio::test]
+async fn latent_encode_rejects_dimensions_not_compatible_with_vae_latent_space() {
+    let backend = backend();
+    let (model, _root) = sdxl_model();
+    let _ = backend
+        .load_bundle(base_load_bundle_request(model, "node-test"))
+        .await
+        .unwrap();
+    let bundle = backend
+        .model_cache()
+        .get_bundle(&ModelId::new("sdxl-base-1.0"))
+        .expect("cached bundle");
+    let vae_payload_key = match bundle.as_ref() {
+        LoadedModelBundle::StableDiffusionSdxl(sdxl) => sdxl.vae_payload_key.clone(),
+    };
+    let vae = fake_runtime_vae_handle(vae_payload_key.as_str());
+    let image_key = BackendPayloadKey::new("image:bad-size");
+    let image_tensor =
+        Tensor::zeros((1, 3, 63, 64), DType::F32, backend.device().as_ref()).unwrap();
+    backend.store().insert_image(
+        RunId::new("run-image-source"),
+        image_key.clone(),
+        reimagine_inference_candle::CandleImage::new(image_tensor, 64, 63, 1, "rgb".to_string()),
+    );
+    let image = fake_runtime_image(image_key.as_str(), 64, 63);
+    let err = backend
+        .latent_encode(reimagine_inference::LatentEncodeRequest::new(
+            vae,
+            image,
+            RunId::new("run-latent-encode"),
+            WorkflowId::new("wf-latent-encode"),
+            WorkflowVersion::new(1),
+            NodeId::new("node-latent-encode"),
+        ))
+        .await
+        .unwrap_err();
+    assert_backend_execution_failed_with(&err, "divisible by latent-space");
+    assert_backend_execution_failed_with(&err, "63");
 }
 
 #[tokio::test]
