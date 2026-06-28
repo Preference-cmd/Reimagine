@@ -15,6 +15,7 @@ use reimagine_plugin::{Extension, Plugin};
 use reimagine_runtime::NodeExecutorRegistry;
 
 use crate::ModelService;
+use crate::inference::image_source_resolver::InputImageSourceResolver;
 use crate::inference::resolver::ModelResolverAdapter;
 
 #[derive(Debug)]
@@ -52,6 +53,7 @@ pub(crate) fn compose_inference_runtime(
     );
 
     let mut executor_registry = NodeExecutorRegistry::default();
+    let image_source_resolver = Arc::new(InputImageSourceResolver::new(config.paths()));
     register_builtin_inference_executors(
         &mut executor_registry,
         inference_runtime,
@@ -59,6 +61,7 @@ pub(crate) fn compose_inference_runtime(
             model_service,
             config.paths().clone(),
         )),
+        image_source_resolver,
     )
     .expect("register executors");
 

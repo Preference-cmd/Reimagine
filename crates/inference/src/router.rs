@@ -12,12 +12,16 @@ use crate::capability::InferenceCapability;
 use crate::inference_error::InferenceError;
 use crate::request::diffusion::DiffusionSampleRequest;
 use crate::request::image::{ImagePreviewRequest, ImageSaveRequest};
+use crate::request::image_import::ImageImportRequest;
 use crate::request::latent::{CreateEmptyLatentRequest, LatentDecodeRequest};
+use crate::request::latent_encode::LatentEncodeRequest;
 use crate::request::model::LoadBundleRequest;
 use crate::request::text::TextEncodeRequest;
 use crate::response::diffusion::DiffusionSampleResponse;
 use crate::response::image::{ImagePreviewResponse, ImageSaveResponse};
+use crate::response::image_import::ImageImportResponse;
 use crate::response::latent::{CreateEmptyLatentResponse, LatentDecodeResponse};
+use crate::response::latent_encode::LatentEncodeResponse;
 use crate::response::model::LoadBundleResponse;
 use crate::response::text::TextEncodeResponse;
 
@@ -49,6 +53,16 @@ pub trait InferenceRuntime: Send + Sync + 'static {
         &self,
         request: LatentDecodeRequest,
     ) -> Result<LatentDecodeResponse, InferenceError>;
+
+    async fn latent_encode(
+        &self,
+        request: LatentEncodeRequest,
+    ) -> Result<LatentEncodeResponse, InferenceError>;
+
+    async fn image_import(
+        &self,
+        request: ImageImportRequest,
+    ) -> Result<ImageImportResponse, InferenceError>;
 
     async fn image_save(
         &self,
@@ -381,6 +395,40 @@ impl InferenceRuntime for DefaultInferenceRuntime {
         backend.backend.latent_decode(request).await
     }
 
+    async fn latent_encode(
+        &self,
+        request: LatentEncodeRequest,
+    ) -> Result<LatentEncodeResponse, InferenceError> {
+        let selection = self.build_selection_request(
+            InferenceCapability::LatentEncode,
+            Some(request.node_id().clone()),
+            &request.backend_affinities(),
+            request
+                .backend_selection_overlay()
+                .explicit_override
+                .clone(),
+        );
+        let backend = self.resolve_backend(&selection)?;
+        backend.backend.latent_encode(request).await
+    }
+
+    async fn image_import(
+        &self,
+        request: ImageImportRequest,
+    ) -> Result<ImageImportResponse, InferenceError> {
+        let selection = self.build_selection_request(
+            InferenceCapability::ImageImport,
+            Some(request.node_id().clone()),
+            &request.backend_affinities(),
+            request
+                .backend_selection_overlay()
+                .explicit_override
+                .clone(),
+        );
+        let backend = self.resolve_backend(&selection)?;
+        backend.backend.image_import(request).await
+    }
+
     async fn image_save(
         &self,
         request: ImageSaveRequest,
@@ -509,6 +557,7 @@ mod tests {
                 1,
                 4,
                 LatentSpaceMetadata::sdxl_base(),
+                crate::LatentContent::EmptyGeometry,
             )))
         }
         async fn diffusion_sample(
@@ -527,6 +576,26 @@ mod tests {
         ) -> Result<LatentDecodeResponse, InferenceError> {
             Err(InferenceError::BackendNotImplemented {
                 capability: InferenceCapability::LatentDecode,
+                backend_kind: self.kind.to_string(),
+                message: None,
+            })
+        }
+        async fn latent_encode(
+            &self,
+            _request: LatentEncodeRequest,
+        ) -> Result<LatentEncodeResponse, InferenceError> {
+            Err(InferenceError::BackendNotImplemented {
+                capability: InferenceCapability::LatentEncode,
+                backend_kind: self.kind.to_string(),
+                message: None,
+            })
+        }
+        async fn image_import(
+            &self,
+            _request: ImageImportRequest,
+        ) -> Result<ImageImportResponse, InferenceError> {
+            Err(InferenceError::BackendNotImplemented {
+                capability: InferenceCapability::ImageImport,
                 backend_kind: self.kind.to_string(),
                 message: None,
             })

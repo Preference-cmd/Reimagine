@@ -36,6 +36,8 @@ pub enum InferenceCapability {
     CreateEmptyLatent,
     DiffusionSample,
     LatentDecode,
+    LatentEncode,
+    ImageImport,
     ImageSave,
     ImagePreview,
 }
@@ -51,6 +53,8 @@ impl InferenceCapability {
             Self::CreateEmptyLatent => "latent.create_empty",
             Self::DiffusionSample => "diffusion.sample",
             Self::LatentDecode => "latent.decode",
+            Self::LatentEncode => "latent.encode",
+            Self::ImageImport => "image.import",
             Self::ImageSave => "image.save",
             Self::ImagePreview => "image.preview",
         }
@@ -63,6 +67,8 @@ impl InferenceCapability {
             "latent.create_empty" => Some(Self::CreateEmptyLatent),
             "diffusion.sample" => Some(Self::DiffusionSample),
             "latent.decode" => Some(Self::LatentDecode),
+            "latent.encode" => Some(Self::LatentEncode),
+            "image.import" => Some(Self::ImageImport),
             "image.save" => Some(Self::ImageSave),
             "image.preview" => Some(Self::ImagePreview),
             _ => None,
@@ -77,6 +83,8 @@ impl InferenceCapability {
             Self::CreateEmptyLatent,
             Self::DiffusionSample,
             Self::LatentDecode,
+            Self::LatentEncode,
+            Self::ImageImport,
             Self::ImageSave,
             Self::ImagePreview,
         ]
@@ -204,21 +212,25 @@ mod tests {
             "diffusion.sample"
         );
         assert_eq!(InferenceCapability::LatentDecode.as_str(), "latent.decode");
+        assert_eq!(InferenceCapability::LatentEncode.as_str(), "latent.encode");
+        assert_eq!(InferenceCapability::ImageImport.as_str(), "image.import");
         assert_eq!(InferenceCapability::ImageSave.as_str(), "image.save");
         assert_eq!(InferenceCapability::ImagePreview.as_str(), "image.preview");
     }
 
     #[test]
-    fn all_v1_lists_seven_capabilities_in_order() {
+    fn all_v1_lists_nine_capabilities_in_order() {
         let caps = InferenceCapability::all_v1();
-        assert_eq!(caps.len(), 7);
+        assert_eq!(caps.len(), 9);
         assert_eq!(caps[0], InferenceCapability::LoadBundle);
         assert_eq!(caps[1], InferenceCapability::TextEncode);
         assert_eq!(caps[2], InferenceCapability::CreateEmptyLatent);
         assert_eq!(caps[3], InferenceCapability::DiffusionSample);
         assert_eq!(caps[4], InferenceCapability::LatentDecode);
-        assert_eq!(caps[5], InferenceCapability::ImageSave);
-        assert_eq!(caps[6], InferenceCapability::ImagePreview);
+        assert_eq!(caps[5], InferenceCapability::LatentEncode);
+        assert_eq!(caps[6], InferenceCapability::ImageImport);
+        assert_eq!(caps[7], InferenceCapability::ImageSave);
+        assert_eq!(caps[8], InferenceCapability::ImagePreview);
     }
 
     #[test]

@@ -21,9 +21,10 @@ use std::time::Duration;
 
 use crate::{
     Backend, CreateEmptyLatentRequest, CreateEmptyLatentResponse, DiffusionSampleRequest,
-    DiffusionSampleResponse, ImagePreviewRequest, ImagePreviewResponse, ImageSaveRequest,
-    ImageSaveResponse, InferenceBackend, InferenceBackendCapabilities, InferenceCapability,
-    InferenceCapabilitySupport, InferenceError, LatentDecodeRequest, LatentDecodeResponse,
+    DiffusionSampleResponse, ImageImportRequest, ImageImportResponse, ImagePreviewRequest,
+    ImagePreviewResponse, ImageSaveRequest, ImageSaveResponse, InferenceBackend,
+    InferenceBackendCapabilities, InferenceCapability, InferenceCapabilitySupport, InferenceError,
+    LatentDecodeRequest, LatentDecodeResponse, LatentEncodeRequest, LatentEncodeResponse,
     LoadBundleRequest, LoadBundleResponse, TextEncodeRequest, TextEncodeResponse,
 };
 use async_trait::async_trait;
@@ -86,6 +87,7 @@ impl<Req, Resp> CannedCapabilityResponse<Req, Resp> {
 /// };
 /// use reimagine_core::model::{TensorDType, TensorShape};
 /// use reimagine_inference::CreateEmptyLatentResponse;
+/// use reimagine_inference::LatentContent;
 ///
 /// let backend = FakeBackend::new("fake")
 ///     .create_empty_latent(CannedCapabilityResponse::always(
@@ -102,6 +104,7 @@ impl<Req, Resp> CannedCapabilityResponse<Req, Resp> {
 ///             1,
 ///             4,
 ///             LatentSpaceMetadata::sdxl_base(),
+///             LatentContent::EmptyGeometry,
 ///         ))
 ///     ));
 /// ```
@@ -119,6 +122,8 @@ struct CannedCapabilities {
     diffusion_sample:
         Option<CannedCapabilityResponse<DiffusionSampleRequest, DiffusionSampleResponse>>,
     latent_decode: Option<CannedCapabilityResponse<LatentDecodeRequest, LatentDecodeResponse>>,
+    latent_encode: Option<CannedCapabilityResponse<LatentEncodeRequest, LatentEncodeResponse>>,
+    image_import: Option<CannedCapabilityResponse<ImageImportRequest, ImageImportResponse>>,
     image_save: Option<CannedCapabilityResponse<ImageSaveRequest, ImageSaveResponse>>,
     image_preview: Option<CannedCapabilityResponse<ImagePreviewRequest, ImagePreviewResponse>>,
 }
@@ -183,6 +188,28 @@ impl FakeBackend {
             .lock()
             .expect("fake backend poisoned")
             .latent_decode = Some(response);
+        self
+    }
+
+    pub fn latent_encode(
+        self,
+        response: CannedCapabilityResponse<LatentEncodeRequest, LatentEncodeResponse>,
+    ) -> Self {
+        self.canned
+            .lock()
+            .expect("fake backend poisoned")
+            .latent_encode = Some(response);
+        self
+    }
+
+    pub fn image_import(
+        self,
+        response: CannedCapabilityResponse<ImageImportRequest, ImageImportResponse>,
+    ) -> Self {
+        self.canned
+            .lock()
+            .expect("fake backend poisoned")
+            .image_import = Some(response);
         self
     }
 
@@ -261,6 +288,12 @@ impl FakeBackend {
         }
         if canned.latent_decode.is_some() {
             caps.push(InferenceCapability::LatentDecode);
+        }
+        if canned.latent_encode.is_some() {
+            caps.push(InferenceCapability::LatentEncode);
+        }
+        if canned.image_import.is_some() {
+            caps.push(InferenceCapability::ImageImport);
         }
         if canned.image_save.is_some() {
             caps.push(InferenceCapability::ImageSave);
@@ -352,6 +385,28 @@ impl InferenceBackend for FakeBackend {
         }
     }
 
+    async fn latent_encode(
+        &self,
+        request: LatentEncodeRequest,
+    ) -> Result<LatentEncodeResponse, InferenceError> {
+        let canned = self.canned.lock().expect("fake backend poisoned");
+        match canned.latent_encode.as_ref() {
+            Some(c) => c.run(request),
+            None => Err(not_implemented(self, InferenceCapability::LatentEncode)),
+        }
+    }
+
+    async fn image_import(
+        &self,
+        request: ImageImportRequest,
+    ) -> Result<ImageImportResponse, InferenceError> {
+        let canned = self.canned.lock().expect("fake backend poisoned");
+        match canned.image_import.as_ref() {
+            Some(c) => c.run(request),
+            None => Err(not_implemented(self, InferenceCapability::ImageImport)),
+        }
+    }
+
     async fn image_save(
         &self,
         request: ImageSaveRequest,
@@ -389,6 +444,186 @@ impl CannedCapabilities {
     #[allow(dead_code)]
     fn _referenced(&self) -> bool {
         self.load_bundle.is_some() || self.text_encode.is_some()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::{
+        Backend, BackendPayloadKey, BackendTensorHandle, ImageImportRequest, ImageImportResponse,
+        LatentContent, LatentEncodeRequest, LatentEncodeResponse, RuntimeImage,
+    };
+    use reimagine_core::model::{
+        ModelId, NodeId, RunId, TensorDType, TensorShape, WorkflowId, WorkflowVersion,
+    };
+
+    fn fake_image() -> RuntimeImage {
+        RuntimeImage::new(
+            BackendTensorHandle::new(
+                Backend::new("fake"),
+                BackendPayloadKey::new("image-1"),
+                TensorDType::F32,
+                TensorShape::new(vec![1, 3, 64, 64]),
+                "cpu",
+            ),
+            64,
+            64,
+            1,
+            "rgb",
+        )
+    }
+
+    #[test]
+    fn capabilities_advertise_only_registered_canned_responses() {
+        let backend = FakeBackend::new("fake")
+            .image_import(CannedCapabilityResponse::always(ImageImportResponse::new(
+                fake_image(),
+            )))
+            .latent_encode(CannedCapabilityResponse::always(LatentEncodeResponse::new(
+                crate::RuntimeLatent::new(
+                    BackendTensorHandle::new(
+                        Backend::new("fake"),
+                        BackendPayloadKey::new("latent-1"),
+                        TensorDType::F32,
+                        TensorShape::new(vec![1, 4, 8, 8]),
+                        "cpu",
+                    ),
+                    64,
+                    64,
+                    1,
+                    4,
+                    crate::LatentSpaceMetadata::sdxl_base(),
+                    LatentContent::EncodedImage,
+                ),
+            )));
+        let caps = backend.capabilities();
+        assert!(caps.supports_capability(InferenceCapability::ImageImport));
+        assert!(caps.supports_capability(InferenceCapability::LatentEncode));
+        assert!(!caps.supports_capability(InferenceCapability::LoadBundle));
+        assert!(!caps.supports_capability(InferenceCapability::TextEncode));
+    }
+
+    #[test]
+    fn image_import_returns_canned_response() {
+        let backend = FakeBackend::new("fake").image_import(CannedCapabilityResponse::always(
+            ImageImportResponse::new(fake_image()),
+        ));
+        let source = crate::ResolvedImageSource::new(
+            "/workspace/input/cat.png",
+            "image/png",
+            Some("cat.png".to_string()),
+        );
+        let request = ImageImportRequest::new(
+            source,
+            RunId::new("run-1"),
+            WorkflowId::new("wf-1"),
+            WorkflowVersion::new(1),
+            NodeId::new("node-1"),
+        );
+        let future = InferenceBackend::image_import(&backend, request);
+        let response = tokio::runtime::Runtime::new()
+            .unwrap()
+            .block_on(future)
+            .expect("image.import should return canned response");
+        assert_eq!(response.image().width(), 64);
+    }
+
+    #[test]
+    fn latent_encode_returns_canned_response() {
+        let backend = FakeBackend::new("fake").latent_encode(CannedCapabilityResponse::always(
+            LatentEncodeResponse::new(crate::RuntimeLatent::new(
+                BackendTensorHandle::new(
+                    Backend::new("fake"),
+                    BackendPayloadKey::new("latent-1"),
+                    TensorDType::F32,
+                    TensorShape::new(vec![1, 4, 8, 8]),
+                    "cpu",
+                ),
+                64,
+                64,
+                1,
+                4,
+                crate::LatentSpaceMetadata::sdxl_base(),
+                LatentContent::EncodedImage,
+            )),
+        ));
+        let vae = crate::RuntimeVaeHandle::new(
+            ModelId::new("sdxl-base-1.0"),
+            Backend::new("fake"),
+            BackendPayloadKey::new("vae-1"),
+        );
+        let request = LatentEncodeRequest::new(
+            vae,
+            fake_image(),
+            RunId::new("run-1"),
+            WorkflowId::new("wf-1"),
+            WorkflowVersion::new(1),
+            NodeId::new("node-1"),
+        );
+        let future = InferenceBackend::latent_encode(&backend, request);
+        let response = tokio::runtime::Runtime::new()
+            .unwrap()
+            .block_on(future)
+            .expect("latent.encode should return canned response");
+        assert_eq!(response.latent().content(), LatentContent::EncodedImage);
+    }
+
+    #[test]
+    fn unregistered_image_import_returns_backend_not_implemented() {
+        let backend = FakeBackend::new("fake");
+        let source = crate::ResolvedImageSource::new(
+            "/workspace/input/cat.png",
+            "image/png",
+            Some("cat.png".to_string()),
+        );
+        let request = ImageImportRequest::new(
+            source,
+            RunId::new("run-1"),
+            WorkflowId::new("wf-1"),
+            WorkflowVersion::new(1),
+            NodeId::new("node-1"),
+        );
+        let future = InferenceBackend::image_import(&backend, request);
+        let err = tokio::runtime::Runtime::new()
+            .unwrap()
+            .block_on(future)
+            .expect_err("image.import should be reported as not implemented");
+        match err {
+            InferenceError::BackendNotImplemented { capability, .. } => {
+                assert_eq!(capability, InferenceCapability::ImageImport);
+            }
+            other => panic!("expected BackendNotImplemented, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn unregistered_latent_encode_returns_backend_not_implemented() {
+        let backend = FakeBackend::new("fake");
+        let vae = crate::RuntimeVaeHandle::new(
+            ModelId::new("sdxl-base-1.0"),
+            Backend::new("fake"),
+            BackendPayloadKey::new("vae-1"),
+        );
+        let request = LatentEncodeRequest::new(
+            vae,
+            fake_image(),
+            RunId::new("run-1"),
+            WorkflowId::new("wf-1"),
+            WorkflowVersion::new(1),
+            NodeId::new("node-1"),
+        );
+        let future = InferenceBackend::latent_encode(&backend, request);
+        let err = tokio::runtime::Runtime::new()
+            .unwrap()
+            .block_on(future)
+            .expect_err("latent.encode should be reported as not implemented");
+        match err {
+            InferenceError::BackendNotImplemented { capability, .. } => {
+                assert_eq!(capability, InferenceCapability::LatentEncode);
+            }
+            other => panic!("expected BackendNotImplemented, got {other:?}"),
+        }
     }
 }
 

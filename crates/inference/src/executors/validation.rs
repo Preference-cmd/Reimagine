@@ -7,7 +7,8 @@
 
 use crate::{
     CreateEmptyLatentResponse, DiffusionSampleResponse, ExecutionOutput, ExecutionValue,
-    LatentDecodeResponse, LoadBundleResponse, TextEncodeResponse,
+    ImageImportResponse, LatentDecodeResponse, LatentEncodeResponse, LoadBundleResponse,
+    TextEncodeResponse,
 };
 
 use super::common::{run_output, workspace_output};
@@ -32,7 +33,34 @@ pub fn latent_output(response: &CreateEmptyLatentResponse) -> ExecutionOutput {
 }
 
 pub fn sampled_latent_output(response: &DiffusionSampleResponse) -> ExecutionOutput {
-    run_output("latent", ExecutionValue::Latent(response.latent().clone()))
+    // The backend produces the latent handle; the executor enforces
+    // the runtime content class so downstream capabilities (decode,
+    // partial-denoise sample) can reject empty geometry precisely.
+    // `diffusion.sample` always returns a real sampled latent,
+    // regardless of whether the input was empty geometry, encoded
+    // from an image, or sampled from a previous run.
+    let mut latent = response.latent().clone();
+    if latent.content() != crate::LatentContent::Sampled {
+        latent = latent.with_content(crate::LatentContent::Sampled);
+    }
+    run_output("latent", ExecutionValue::Latent(latent))
+}
+
+pub fn encoded_latent_output(response: &LatentEncodeResponse) -> ExecutionOutput {
+    // `latent.encode` produces a real latent payload derived from
+    // an image. The executor enforces the runtime content class
+    // regardless of whether the backend shipped the response with
+    // the right semantics, so downstream consumers can rely on
+    // `LatentContent::EncodedImage`.
+    let mut latent = response.latent().clone();
+    if latent.content() != crate::LatentContent::EncodedImage {
+        latent = latent.with_content(crate::LatentContent::EncodedImage);
+    }
+    run_output("latent", ExecutionValue::Latent(latent))
+}
+
+pub fn imported_image_output(response: &ImageImportResponse) -> ExecutionOutput {
+    run_output("image", ExecutionValue::Image(response.image().clone()))
 }
 
 pub fn image_output(response: &LatentDecodeResponse) -> ExecutionOutput {
@@ -63,6 +91,7 @@ mod tests {
             1,
             4,
             crate::LatentSpaceMetadata::sdxl_base(),
+            crate::LatentContent::EmptyGeometry,
         )
     }
 

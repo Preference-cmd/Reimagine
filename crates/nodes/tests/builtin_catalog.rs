@@ -3,8 +3,8 @@ use reimagine_core::validation::validate_structure;
 use reimagine_core::workflow::{Workflow, WorkflowNode};
 use reimagine_nodes::{
     BUILTIN_CHECKPOINT_LOADER, BUILTIN_CLIP_TEXT_ENCODE, BUILTIN_EMPTY_LATENT_IMAGE,
-    BUILTIN_KSAMPLER, BUILTIN_PREVIEW_IMAGE, BUILTIN_SAVE_IMAGE, BUILTIN_STRING,
-    BUILTIN_VAE_DECODE, BuiltinNodeCatalog, comfy_aliases,
+    BUILTIN_KSAMPLER, BUILTIN_LOAD_IMAGE, BUILTIN_PREVIEW_IMAGE, BUILTIN_SAVE_IMAGE,
+    BUILTIN_STRING, BUILTIN_VAE_DECODE, BUILTIN_VAE_ENCODE, BuiltinNodeCatalog, comfy_aliases,
 };
 
 #[test]
@@ -13,9 +13,11 @@ fn builtin_catalog_contains_v1_sdxl_node_defs() {
 
     for type_id in [
         BUILTIN_STRING,
+        BUILTIN_LOAD_IMAGE,
         BUILTIN_CHECKPOINT_LOADER,
         BUILTIN_CLIP_TEXT_ENCODE,
         BUILTIN_EMPTY_LATENT_IMAGE,
+        BUILTIN_VAE_ENCODE,
         BUILTIN_KSAMPLER,
         BUILTIN_VAE_DECODE,
         BUILTIN_SAVE_IMAGE,
@@ -76,6 +78,36 @@ fn builtin_catalog_contains_v1_sdxl_node_defs() {
         .expect("preview image exists");
     assert_eq!(preview.effect(), NodeEffect::SideEffect);
     assert!(preview.output_slots().is_empty());
+
+    let load_image = catalog
+        .get(&NodeTypeId::new(BUILTIN_LOAD_IMAGE))
+        .expect("load image exists");
+    assert_eq!(load_image.effect(), NodeEffect::Pure);
+    assert_eq!(
+        load_image
+            .input_slot(&"image".into())
+            .expect("image input slot exists")
+            .kind(),
+        SlotKind::Path
+    );
+    assert_eq!(
+        load_image
+            .output_slot(&"image".into())
+            .expect("image output slot exists")
+            .kind(),
+        SlotKind::Image
+    );
+
+    let vae_encode = catalog
+        .get(&NodeTypeId::new(BUILTIN_VAE_ENCODE))
+        .expect("vae encode exists");
+    assert_eq!(vae_encode.effect(), NodeEffect::Pure);
+    assert!(vae_encode.input_slot(&"vae".into()).unwrap().is_dynamic());
+    assert!(vae_encode.input_slot(&"image".into()).unwrap().is_dynamic());
+    assert_eq!(
+        vae_encode.output_slot(&"latent".into()).unwrap().kind(),
+        SlotKind::Latent
+    );
 }
 
 #[test]

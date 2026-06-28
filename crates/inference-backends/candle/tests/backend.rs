@@ -27,7 +27,7 @@ use reimagine_inference::{
 use reimagine_inference::{
     CreateEmptyLatentRequest, CreateEmptyLatentResponse, DiffusionSampleRequest,
     ImagePreviewRequest, ImagePreviewResponse, ImageSaveRequest, ImageSaveResponse,
-    InferenceBackend, InferenceCapability, InferenceError, LatentDecodeRequest,
+    InferenceBackend, InferenceCapability, InferenceError, LatentContent, LatentDecodeRequest,
     LatentDecodeResponse, LoadBundleRequest, ModelFormat, ResolvedInferenceModel, SamplerName,
     SchedulerName, TextEncodeRequest, TextEncodeResponse,
 };
@@ -273,6 +273,7 @@ fn fake_runtime_latent(key: &str, width: u32, height: u32) -> RuntimeLatent {
         1,
         4,
         LatentSpaceMetadata::sdxl_base(),
+        reimagine_inference::LatentContent::Sampled,
     )
 }
 
@@ -308,6 +309,7 @@ fn fake_runtime_latent_with_instance(
         1,
         4,
         LatentSpaceMetadata::sdxl_base(),
+        reimagine_inference::LatentContent::Sampled,
     )
 }
 
@@ -336,6 +338,7 @@ fn fake_runtime_latent_with_instance_mismatched_space(
         1,
         channels,
         latent_space,
+        reimagine_inference::LatentContent::Sampled,
     )
 }
 
@@ -392,6 +395,108 @@ fn capabilities_cover_all_v1_capabilities() {
             "capability report should include {cap}"
         );
     }
+}
+
+#[tokio::test]
+async fn latent_decode_rejects_empty_geometry_latent() {
+    let backend = backend();
+    let empty = backend
+        .create_empty_latent(base_create_empty_latent_request(64, 64, 1, "node-empty"))
+        .await
+        .unwrap()
+        .into_latent();
+    assert_eq!(empty.content(), LatentContent::EmptyGeometry);
+
+    // Use a fake VAE handle with the candle backend kind so the
+    // affinity / payload-key checks do not fire before the
+    // content check we want to exercise.
+    let vae = fake_runtime_vae_handle("bundle:sdxl-base-1.0:vae");
+    let err = backend
+        .latent_decode(LatentDecodeRequest::new(
+            vae,
+            empty,
+            RunId::new("run-empty-decode"),
+            WorkflowId::new("wf-empty"),
+            WorkflowVersion::new(1),
+            NodeId::new("node-empty-decode"),
+        ))
+        .await
+        .expect_err("latent.decode must reject empty geometry");
+    let msg = match err {
+        InferenceError::BackendExecutionFailed { message } => message,
+        other => panic!("expected BackendExecutionFailed, got {other:?}"),
+    };
+    assert!(
+        msg.contains("empty_geometry"),
+        "diagnostic should name the empty geometry content class, got: {msg}"
+    );
+}
+
+#[tokio::test]
+async fn image_import_returns_backend_not_implemented() {
+    let backend = backend();
+    let source = reimagine_inference::ResolvedImageSource::new(
+        "/workspace/input/cat.png",
+        "image/png",
+        Some("cat.png".to_string()),
+    );
+    let request = reimagine_inference::ImageImportRequest::new(
+        source,
+        RunId::new("run-image-import"),
+        WorkflowId::new("wf-image"),
+        WorkflowVersion::new(1),
+        NodeId::new("node-image-import"),
+    );
+    let err = backend
+        .image_import(request)
+        .await
+        .expect_err("image.import should be reported as not implemented");
+    let (capability, backend_kind) = match err {
+        InferenceError::BackendNotImplemented {
+            capability,
+            backend_kind,
+            message: _,
+        } => (capability, backend_kind),
+        other => panic!("expected BackendNotImplemented, got {other:?}"),
+    };
+    assert_eq!(capability, InferenceCapability::ImageImport);
+    assert_eq!(backend_kind, "candle");
+}
+
+#[tokio::test]
+async fn latent_encode_returns_backend_not_implemented() {
+    let backend = backend();
+    let vae = fake_runtime_vae_handle("bundle:sdxl-base-1.0:vae");
+    let image_tensor = BackendTensorHandle::new(
+        Backend::new("candle"),
+        BackendPayloadKey::new("image:not-implemented"),
+        TensorDType::F32,
+        TensorShape::new(vec![1, 3, 64, 64]),
+        "cpu",
+    );
+    let image = RuntimeImage::new(image_tensor, 64, 64, 1, "rgb");
+    let request = reimagine_inference::LatentEncodeRequest::new(
+        vae,
+        image,
+        RunId::new("run-latent-encode"),
+        WorkflowId::new("wf-latent-encode"),
+        WorkflowVersion::new(1),
+        NodeId::new("node-latent-encode"),
+    );
+    let err = backend
+        .latent_encode(request)
+        .await
+        .expect_err("latent.encode should be reported as not implemented");
+    let (capability, backend_kind) = match err {
+        InferenceError::BackendNotImplemented {
+            capability,
+            backend_kind,
+            message: _,
+        } => (capability, backend_kind),
+        other => panic!("expected BackendNotImplemented, got {other:?}"),
+    };
+    assert_eq!(capability, InferenceCapability::LatentEncode);
+    assert_eq!(backend_kind, "candle");
 }
 
 #[tokio::test]
@@ -1564,6 +1669,7 @@ async fn diffusion_sample_rejects_wrong_backend_latent() {
         1,
         4,
         LatentSpaceMetadata::sdxl_base(),
+        reimagine_inference::LatentContent::Sampled,
     );
 
     let err = backend
@@ -2128,7 +2234,9 @@ async fn latent_decode_succeeds_for_sdxl_with_loaded_bundle() {
         .create_empty_latent(base_create_empty_latent_request(64, 64, 1, "node-latent"))
         .await
         .unwrap();
-    let latent = latent_response.into_latent();
+    let latent = latent_response
+        .into_latent()
+        .with_content(LatentContent::Sampled);
 
     let decode_response: LatentDecodeResponse = backend
         .latent_decode(LatentDecodeRequest::new(
@@ -2215,6 +2323,7 @@ async fn latent_decode_rejects_wrong_backend_latent_handle() {
         1,
         4,
         LatentSpaceMetadata::sdxl_base(),
+        reimagine_inference::LatentContent::Sampled,
     );
     let err = backend
         .latent_decode(LatentDecodeRequest::new(
@@ -2255,7 +2364,9 @@ async fn latent_decode_rejects_wrong_vae_payload_key() {
     let err = backend
         .latent_decode(LatentDecodeRequest::new(
             vae_handle,
-            latent_response.into_latent(),
+            latent_response
+                .into_latent()
+                .with_content(LatentContent::Sampled),
             RunId::new("run-test"),
             WorkflowId::new("wf-test"),
             WorkflowVersion::new(1),
@@ -2299,6 +2410,7 @@ async fn latent_decode_rejects_missing_latent_payload() {
         1,
         4,
         LatentSpaceMetadata::sdxl_base(),
+        reimagine_inference::LatentContent::Sampled,
     );
     let err = backend
         .latent_decode(LatentDecodeRequest::new(
@@ -2367,6 +2479,7 @@ async fn latent_decode_rejects_incompatible_latent_space() {
         1,
         8,
         custom_space,
+        reimagine_inference::LatentContent::Sampled,
     );
 
     let err = backend
@@ -2461,7 +2574,9 @@ async fn latent_decode_rejects_missing_loaded_bundle() {
     let err = backend
         .latent_decode(LatentDecodeRequest::new(
             vae_handle,
-            latent_response.into_latent(),
+            latent_response
+                .into_latent()
+                .with_content(LatentContent::Sampled),
             RunId::new("run-test"),
             WorkflowId::new("wf-test"),
             WorkflowVersion::new(1),
@@ -2498,7 +2613,9 @@ async fn latent_decode_stores_real_image_payload_in_store() {
         .create_empty_latent(base_create_empty_latent_request(64, 64, 1, "node-latent"))
         .await
         .unwrap();
-    let latent = latent_response.into_latent();
+    let latent = latent_response
+        .into_latent()
+        .with_content(LatentContent::Sampled);
 
     let decode_response: LatentDecodeResponse = backend
         .latent_decode(LatentDecodeRequest::new(
@@ -2549,7 +2666,9 @@ async fn latent_decode_output_handle_carries_correct_metadata() {
         .create_empty_latent(base_create_empty_latent_request(128, 64, 2, "node-latent"))
         .await
         .unwrap();
-    let latent = latent_response.into_latent();
+    let latent = latent_response
+        .into_latent()
+        .with_content(LatentContent::Sampled);
     let err = backend
         .latent_decode(LatentDecodeRequest::new(
             vae_handle,
@@ -2602,7 +2721,9 @@ async fn latent_decode_batch_one_succeeds_and_returns_f32_rgb_metadata() {
         .create_empty_latent(base_create_empty_latent_request(128, 64, 1, "node-latent"))
         .await
         .unwrap();
-    let latent = latent_response.into_latent();
+    let latent = latent_response
+        .into_latent()
+        .with_content(LatentContent::Sampled);
     let decode_response = backend
         .latent_decode(LatentDecodeRequest::new(
             vae_handle,
@@ -2659,7 +2780,9 @@ async fn latent_decode_runs_scoped_payload_cleanup() {
     backend
         .latent_decode(LatentDecodeRequest::new(
             vae_handle,
-            latent_response.into_latent(),
+            latent_response
+                .into_latent()
+                .with_content(LatentContent::Sampled),
             run_id.clone(),
             WorkflowId::new("wf-test"),
             WorkflowVersion::new(1),
@@ -2706,7 +2829,9 @@ async fn setup_decoded_image_for_save(
         .create_empty_latent(base_create_empty_latent_request(64, 64, 1, "node-latent"))
         .await
         .unwrap();
-    let input_latent = latent_resp.into_latent();
+    let input_latent = latent_resp
+        .into_latent()
+        .with_content(LatentContent::Sampled);
 
     let decode_resp = backend
         .latent_decode(LatentDecodeRequest::new(
@@ -3306,7 +3431,8 @@ async fn latent_decode_repeated_calls_reuse_materialized_vae_graph() {
                 .create_empty_latent(base_create_empty_latent_request(64, 64, 1, "node-latent-1"))
                 .await
                 .unwrap()
-                .into_latent(),
+                .into_latent()
+                .with_content(LatentContent::Sampled),
             RunId::new("run-test"),
             WorkflowId::new("wf-test"),
             WorkflowVersion::new(1),
@@ -3323,7 +3449,8 @@ async fn latent_decode_repeated_calls_reuse_materialized_vae_graph() {
                 .create_empty_latent(base_create_empty_latent_request(64, 64, 1, "node-latent-2"))
                 .await
                 .unwrap()
-                .into_latent(),
+                .into_latent()
+                .with_content(LatentContent::Sampled),
             RunId::new("run-test"),
             WorkflowId::new("wf-test"),
             WorkflowVersion::new(1),

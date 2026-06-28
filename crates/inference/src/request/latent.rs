@@ -105,6 +105,12 @@ impl CreateEmptyLatentRequest {
     /// request's latent-space metadata so downstream operations
     /// (sample, decode) can validate compatibility without
     /// re-deriving it.
+    ///
+    /// The returned latent is marked `LatentContent::EmptyGeometry`:
+    /// it is a txt2img geometry placeholder, not a real sampled or
+    /// encoded starting latent. Downstream capabilities (decode,
+    /// partial-denoise sample) reject empty geometry precisely
+    /// before any tensor work.
     pub fn try_into_latent(self) -> Result<RuntimeLatent, LatentSpaceError> {
         validate_pixel_dimensions_against(self.width, self.height, &self.latent_space)?;
 
@@ -133,6 +139,7 @@ impl CreateEmptyLatentRequest {
             self.batch_size,
             channels,
             self.latent_space,
+            crate::LatentContent::EmptyGeometry,
         ))
     }
 
@@ -202,6 +209,28 @@ impl LatentDecodeRequest {
 
     pub fn latent(&self) -> &RuntimeLatent {
         &self.latent
+    }
+
+    /// Validate the request's latent content semantics.
+    ///
+    /// `latent.decode` rejects [`LatentContent::EmptyGeometry`]
+    /// because txt2img geometry is not a real latent payload and
+    /// the VAE decoder must not consume it. Real latents from
+    /// `latent.encode` (`EncodedImage`), `diffusion.sample`
+    /// (`Sampled`), or future loaders (`Imported`) are accepted.
+    pub fn validate(&self) -> Result<(), crate::latent_content::LatentContentError> {
+        use crate::latent_content::LatentContentError;
+        match self.latent.content() {
+            crate::LatentContent::EmptyGeometry => {
+                Err(LatentContentError::UnsupportedForCapability {
+                    capability: "latent.decode",
+                    actual: crate::LatentContent::EmptyGeometry,
+                })
+            }
+            crate::LatentContent::EncodedImage
+            | crate::LatentContent::Sampled
+            | crate::LatentContent::Imported => Ok(()),
+        }
     }
 
     pub fn run_id(&self) -> &RunId {
@@ -369,5 +398,84 @@ mod tests {
                 ..
             }
         ));
+    }
+
+    #[test]
+    fn into_latent_carries_empty_geometry_content() {
+        let latent = request().into_latent();
+        assert_eq!(latent.content(), crate::LatentContent::EmptyGeometry);
+        assert_eq!(latent.latent_space(), &LatentSpaceMetadata::sdxl_base());
+    }
+
+    #[test]
+    fn sampled_latent_passes_decode_validate() {
+        use crate::Backend;
+        use crate::BackendPayloadKey;
+        use crate::BackendTensorHandle;
+        use reimagine_core::model::{ModelId, TensorDType, TensorShape};
+
+        let sampled = RuntimeLatent::new(
+            BackendTensorHandle::new(
+                Backend::new("candle"),
+                BackendPayloadKey::new("latent:sampled"),
+                TensorDType::F32,
+                TensorShape::new(vec![1, 4, 8, 8]),
+                "cpu",
+            ),
+            64,
+            64,
+            1,
+            4,
+            LatentSpaceMetadata::sdxl_base(),
+            crate::LatentContent::Sampled,
+        );
+        let vae = RuntimeVaeHandle::new(
+            ModelId::new("sdxl-base-1.0"),
+            Backend::new("candle"),
+            BackendPayloadKey::new("vae-key"),
+        );
+        let req = LatentDecodeRequest::new(
+            vae,
+            sampled,
+            RunId::new("run-1"),
+            WorkflowId::new("wf-1"),
+            WorkflowVersion::new(1),
+            NodeId::new("node-1"),
+        );
+        assert!(req.validate().is_ok());
+    }
+
+    #[test]
+    fn empty_geometry_latent_fails_decode_validate() {
+        use crate::Backend;
+        use crate::BackendPayloadKey;
+        use crate::BackendTensorHandle;
+        use reimagine_core::model::{ModelId, TensorDType, TensorShape};
+
+        let empty = request().into_latent();
+        let vae = RuntimeVaeHandle::new(
+            ModelId::new("sdxl-base-1.0"),
+            Backend::new("candle"),
+            BackendPayloadKey::new("vae-key"),
+        );
+        let req = LatentDecodeRequest::new(
+            vae,
+            empty,
+            RunId::new("run-1"),
+            WorkflowId::new("wf-1"),
+            WorkflowVersion::new(1),
+            NodeId::new("node-1"),
+        );
+        let err = req.validate().unwrap_err();
+        match err {
+            crate::latent_content::LatentContentError::UnsupportedForCapability {
+                capability,
+                actual,
+            } => {
+                assert_eq!(capability, "latent.decode");
+                assert_eq!(actual, crate::LatentContent::EmptyGeometry);
+            }
+            other => panic!("expected UnsupportedForCapability, got {other:?}"),
+        }
     }
 }
