@@ -449,8 +449,7 @@ mod tests {
     fn empty_geometry_latent_fails_decode_validate() {
         use crate::Backend;
         use crate::BackendPayloadKey;
-        use crate::BackendTensorHandle;
-        use reimagine_core::model::{ModelId, TensorDType, TensorShape};
+        use reimagine_core::model::ModelId;
 
         let empty = request().into_latent();
         let vae = RuntimeVaeHandle::new(
@@ -467,15 +466,11 @@ mod tests {
             NodeId::new("node-1"),
         );
         let err = req.validate().unwrap_err();
-        match err {
-            crate::latent_content::LatentContentError::UnsupportedForCapability {
-                capability,
-                actual,
-            } => {
-                assert_eq!(capability, "latent.decode");
-                assert_eq!(actual, crate::LatentContent::EmptyGeometry);
-            }
-            other => panic!("expected UnsupportedForCapability, got {other:?}"),
-        }
+        let crate::latent_content::LatentContentError::UnsupportedForCapability {
+            capability,
+            actual,
+        } = err;
+        assert_eq!(capability, "latent.decode");
+        assert_eq!(actual, crate::LatentContent::EmptyGeometry);
     }
 }
