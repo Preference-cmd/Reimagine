@@ -54,3 +54,4 @@ candle-core = { version = "0.10", default-features = false, features = ["metal"]
 candle-nn = { version = "0.10", default-features = false, features = ["metal"] }
 candle-transformers = { version = "0.10", default-features = false, features = ["metal"] }
 tokenizers = "0.21"
+image = "0.25"

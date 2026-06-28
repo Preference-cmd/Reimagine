@@ -15,15 +15,16 @@
 //! - Result is bounded to avoid OS path limits (prefix: 64 chars,
 //!   run_id/node_id: 128 chars)
 
-use candle_core::Device;
-use reimagine_core::model::ArtifactRef;
+use candle_core::{Device, Tensor};
+use reimagine_core::model::{ArtifactRef, TensorDType, TensorShape};
 use reimagine_inference::{
-    FilenamePrefix, ImagePreviewRequest, ImagePreviewResponse, ImageSaveRequest, ImageSaveResponse,
-    InferenceBackend, RuntimeImage,
+    BackendPayloadKey, FilenamePrefix, ImageImportRequest, ImageImportResponse, ImagePreviewRequest,
+    ImagePreviewResponse, ImageSaveRequest, ImageSaveResponse, InferenceBackend, RuntimeImage,
 };
 
 use crate::backend::CandleBackend;
 use crate::error::CandleBackendError;
+use crate::store::CandleImage;
 
 fn is_cpu_device(device: &Device) -> bool {
     matches!(device, Device::Cpu)
@@ -53,6 +54,101 @@ pub fn execute_image_preview(
     let response_artifact =
         persist_image(request.into_image(), "preview", &run_id, &node_id, backend)?;
     Ok(ImagePreviewResponse::new(response_artifact))
+}
+
+const SUPPORTED_MEDIA_TYPES: &[&str] = &["image/png", "image/jpeg", "image/webp"];
+
+pub fn execute_image_import(
+    backend: &CandleBackend,
+    request: ImageImportRequest,
+) -> Result<ImageImportResponse, CandleBackendError> {
+    let source = request.source();
+    let media_type = source.media_type();
+
+    if !SUPPORTED_MEDIA_TYPES.contains(&media_type) {
+        return Err(CandleBackendError::InvalidRequest(format!(
+            "image.import unsupported media type `{media_type}`; supported: png, jpeg, webp"
+        )));
+    }
+
+    let path = source.path();
+    let bytes = std::fs::read(path).map_err(|e| {
+        CandleBackendError::InvalidRequest(format!(
+            "image.import failed to read source file `{}`: {e}",
+            path.display()
+        ))
+    })?;
+
+    let dynamic = image::load_from_memory(&bytes).map_err(|e| {
+        CandleBackendError::InvalidRequest(format!(
+            "image.import failed to decode image from `{}`: {e}",
+            path.display()
+        ))
+    })?;
+
+    let width = dynamic.width();
+    let height = dynamic.height();
+
+    if width == 0 || height == 0 {
+        return Err(CandleBackendError::InvalidRequest(format!(
+            "image.import rejected zero-dimension image: {width}x{height}"
+        )));
+    }
+
+    let rgb8 = dynamic.to_rgb8();
+    let raw = rgb8.as_raw();
+
+    let plane = (width * height) as usize;
+    let mut nchw = vec![0.0f32; plane * 3];
+    for (i, pixel) in raw.chunks_exact(3).enumerate() {
+        nchw[i] = pixel[0] as f32 / 255.0;
+        nchw[plane + i] = pixel[1] as f32 / 255.0;
+        nchw[2 * plane + i] = pixel[2] as f32 / 255.0;
+    }
+
+    let tensor = Tensor::from_vec(nchw, (1, 3, height as usize, width as usize), backend.device())
+        .map_err(|e| {
+            CandleBackendError::InvalidRequest(format!(
+                "image.import failed to create tensor: {e}"
+            ))
+        })?;
+
+    let payload_key = BackendPayloadKey::new(format!(
+        "image:{}:{}",
+        request.run_id().as_str(),
+        request.node_id().as_str()
+    ));
+
+    let candle_image = CandleImage::new(
+        tensor,
+        width,
+        height,
+        1,
+        "rgb".to_string(),
+    );
+
+    backend
+        .store()
+        .insert_image(request.run_id().clone(), payload_key.clone(), candle_image);
+
+    let device_label = backend.device_label().to_string();
+    let tensor_handle = BackendPayloadKey::new(payload_key.as_str());
+    let runtime_image = RuntimeImage::new(
+        reimagine_inference::BackendTensorHandle::with_instance(
+            backend.backend_kind().clone(),
+            backend.backend_instance(),
+            tensor_handle,
+            TensorDType::F32,
+            TensorShape::new(vec![1, 3, height as usize, width as usize]),
+            device_label,
+        ),
+        width,
+        height,
+        1,
+        "rgb",
+    );
+
+    Ok(ImageImportResponse::new(runtime_image))
 }
 
 fn persist_image(
@@ -525,5 +621,253 @@ mod tests {
         let a = adler32(b"hello");
         let b = adler32(b"world");
         assert_ne!(a, b);
+    }
+
+    #[test]
+    fn image_import_png_produces_correct_runtime_image() {
+        use crate::config::CandleBackendConfig;
+        use reimagine_core::model::{NodeId, RunId, WorkflowId, WorkflowVersion};
+
+        let tmp = std::env::temp_dir().join(format!(
+            "reimagine-img-import-test-{}",
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        std::fs::create_dir_all(&tmp).unwrap();
+
+        let img = image::RgbImage::from_fn(8, 6, |x, y| {
+            image::Rgb([(x * 32) as u8, (y * 40) as u8, 200])
+        });
+        let path = tmp.join("test.png");
+        img.save(&path).unwrap();
+
+        let backend = CandleBackend::new(CandleBackendConfig::new(
+            tmp.join("models"),
+            tmp.join("output"),
+        ))
+        .unwrap();
+
+        let source = reimagine_inference::ResolvedImageSource::new(
+            &path,
+            "image/png",
+            Some("test.png".to_string()),
+        );
+        let request = ImageImportRequest::new(
+            source,
+            RunId::new("run-test"),
+            WorkflowId::new("wf-test"),
+            WorkflowVersion::new(1),
+            NodeId::new("node-import"),
+        );
+
+        let response = execute_image_import(&backend, request).unwrap();
+        let image = response.image();
+        assert_eq!(image.width(), 8);
+        assert_eq!(image.height(), 6);
+        assert_eq!(image.batch(), 1);
+        assert_eq!(image.color_space(), "rgb");
+        assert_eq!(image.payload().dtype(), TensorDType::F32);
+        assert_eq!(image.payload().shape().dims(), &[1, 3, 6, 8]);
+
+        let stored = backend
+            .store()
+            .get_image(image.payload().payload_key())
+            .expect("image should be in store");
+        assert_eq!(stored.width(), 8);
+        assert_eq!(stored.height(), 6);
+
+        let _ = std::fs::remove_dir_all(&tmp);
+    }
+
+    #[test]
+    fn image_import_missing_file_returns_error() {
+        use crate::config::CandleBackendConfig;
+        use reimagine_core::model::{NodeId, RunId, WorkflowId, WorkflowVersion};
+
+        let backend = CandleBackend::new(CandleBackendConfig::new(
+            "/tmp/reimagine-img-import-missing",
+            "/tmp/reimagine-img-import-missing-output",
+        ))
+        .unwrap();
+
+        let source = reimagine_inference::ResolvedImageSource::new(
+            "/tmp/reimagine-img-import-missing/no-such-file.png",
+            "image/png",
+            None,
+        );
+        let request = ImageImportRequest::new(
+            source,
+            RunId::new("run-test"),
+            WorkflowId::new("wf-test"),
+            WorkflowVersion::new(1),
+            NodeId::new("node-import"),
+        );
+
+        let err = execute_image_import(&backend, request).unwrap_err();
+        let msg = match err {
+            CandleBackendError::InvalidRequest(msg) => msg,
+            other => panic!("expected InvalidRequest, got {other:?}"),
+        };
+        assert!(msg.contains("failed to read source file"), "msg: {msg}");
+    }
+
+    #[test]
+    fn image_import_unsupported_media_type_returns_error() {
+        use crate::config::CandleBackendConfig;
+        use reimagine_core::model::{NodeId, RunId, WorkflowId, WorkflowVersion};
+
+        let tmp = std::env::temp_dir().join(format!(
+            "reimagine-img-import-media-{}",
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        std::fs::create_dir_all(&tmp).unwrap();
+        std::fs::write(tmp.join("test.bmp"), b"not a real bmp").unwrap();
+
+        let backend = CandleBackend::new(CandleBackendConfig::new(
+            tmp.join("models"),
+            tmp.join("output"),
+        ))
+        .unwrap();
+
+        let source = reimagine_inference::ResolvedImageSource::new(
+            tmp.join("test.bmp"),
+            "image/bmp",
+            None,
+        );
+        let request = ImageImportRequest::new(
+            source,
+            RunId::new("run-test"),
+            WorkflowId::new("wf-test"),
+            WorkflowVersion::new(1),
+            NodeId::new("node-import"),
+        );
+
+        let err = execute_image_import(&backend, request).unwrap_err();
+        let msg = match err {
+            CandleBackendError::InvalidRequest(msg) => msg,
+            other => panic!("expected InvalidRequest, got {other:?}"),
+        };
+        assert!(msg.contains("unsupported media type"), "msg: {msg}");
+        assert!(msg.contains("image/bmp"), "msg: {msg}");
+
+        let _ = std::fs::remove_dir_all(&tmp);
+    }
+
+    #[test]
+    fn image_import_corrupt_image_returns_decoder_error() {
+        use crate::config::CandleBackendConfig;
+        use reimagine_core::model::{NodeId, RunId, WorkflowId, WorkflowVersion};
+
+        let tmp = std::env::temp_dir().join(format!(
+            "reimagine-img-import-corrupt-{}",
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        std::fs::create_dir_all(&tmp).unwrap();
+        std::fs::write(tmp.join("corrupt.png"), b"this is not a valid PNG file").unwrap();
+
+        let backend = CandleBackend::new(CandleBackendConfig::new(
+            tmp.join("models"),
+            tmp.join("output"),
+        ))
+        .unwrap();
+
+        let source = reimagine_inference::ResolvedImageSource::new(
+            tmp.join("corrupt.png"),
+            "image/png",
+            None,
+        );
+        let request = ImageImportRequest::new(
+            source,
+            RunId::new("run-test"),
+            WorkflowId::new("wf-test"),
+            WorkflowVersion::new(1),
+            NodeId::new("node-import"),
+        );
+
+        let err = execute_image_import(&backend, request).unwrap_err();
+        let msg = match err {
+            CandleBackendError::InvalidRequest(msg) => msg,
+            other => panic!("expected InvalidRequest, got {other:?}"),
+        };
+        assert!(msg.contains("failed to decode image"), "msg: {msg}");
+
+        let _ = std::fs::remove_dir_all(&tmp);
+    }
+
+    #[test]
+    fn image_import_normalizes_to_unit_range() {
+        use crate::config::CandleBackendConfig;
+        use reimagine_core::model::{NodeId, RunId, WorkflowId, WorkflowVersion};
+
+        let tmp = std::env::temp_dir().join(format!(
+            "reimagine-img-import-norm-{}",
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        std::fs::create_dir_all(&tmp).unwrap();
+
+        // Create a 2x1 image: pixel 0 = pure white (255,255,255), pixel 1 = pure black (0,0,0)
+        let img = image::RgbImage::from_fn(2, 1, |x, _| {
+            if x == 0 {
+                image::Rgb([255u8, 255, 255])
+            } else {
+                image::Rgb([0u8, 0, 0])
+            }
+        });
+        let path = tmp.join("white_black.png");
+        img.save(&path).unwrap();
+
+        let backend = CandleBackend::new(CandleBackendConfig::new(
+            tmp.join("models"),
+            tmp.join("output"),
+        ))
+        .unwrap();
+
+        let source = reimagine_inference::ResolvedImageSource::new(&path, "image/png", None);
+        let request = ImageImportRequest::new(
+            source,
+            RunId::new("run-test"),
+            WorkflowId::new("wf-test"),
+            WorkflowVersion::new(1),
+            NodeId::new("node-import"),
+        );
+
+        let response = execute_image_import(&backend, request).unwrap();
+        let payload_key = response.image().payload().payload_key().clone();
+        let stored = backend.store().get_image(&payload_key).unwrap();
+        let values = stored
+            .tensor()
+            .flatten_all()
+            .unwrap()
+            .to_vec1::<f32>()
+            .unwrap();
+
+        // NCHW layout: [1, 3, 1, 2]
+        // R plane: [1.0, 0.0]
+        // G plane: [1.0, 0.0]
+        // B plane: [1.0, 0.0]
+        assert!((values[0] - 1.0).abs() < 1e-6, "white R should be 1.0");
+        assert!((values[1] - 0.0).abs() < 1e-6, "black R should be 0.0");
+        assert!((values[2] - 1.0).abs() < 1e-6, "white G should be 1.0");
+        assert!((values[3] - 0.0).abs() < 1e-6, "black G should be 0.0");
+        assert!((values[4] - 1.0).abs() < 1e-6, "white B should be 1.0");
+        assert!((values[5] - 0.0).abs() < 1e-6, "black B should be 0.0");
+
+        // All values should be in [0, 1]
+        for v in &values {
+            assert!(*v >= 0.0 && *v <= 1.0, "value {v} outside [0, 1]");
+        }
+
+        let _ = std::fs::remove_dir_all(&tmp);
     }
 }
