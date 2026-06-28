@@ -240,6 +240,17 @@ pub fn execute_latent_decode(
     // The stored payload and the handle must agree on latent space.
     // This protects against stale/aliased keys that landed in the
     // store with a different metadata record than the caller used.
+    if !input_latent
+        .latent_space()
+        .is_compatible(latent_handle.latent_space())
+    {
+        return Err(CandleBackendError::InvalidRequest(format!(
+            "latent.decode stored latent payload `{}` latent space `{}` disagrees with latent handle latent space `{}`",
+            latent_handle.payload().payload_key().as_str(),
+            input_latent.latent_space().id(),
+            latent_handle.latent_space().id(),
+        )));
+    }
     if !input_latent.latent_space().is_compatible(&expected) {
         return Err(CandleBackendError::InvalidRequest(format!(
             "latent.decode stored latent payload `{}` latent space `{}` disagrees with loaded {} VAE expected latent space `{}`",

@@ -66,6 +66,18 @@ pub fn execute_diffusion_sample(
         .store()
         .get_latent(latent_handle.payload().payload_key())?;
 
+    if !input_latent
+        .latent_space()
+        .is_compatible(latent_handle.latent_space())
+    {
+        return Err(CandleBackendError::InvalidRequest(format!(
+            "diffusion.sample stored latent payload `{}` latent space `{}` disagrees with latent handle latent space `{}`",
+            latent_handle.payload().payload_key().as_str(),
+            input_latent.latent_space().id(),
+            latent_handle.latent_space().id(),
+        )));
+    }
+
     // Validate the input latent space against the loaded bundle's
     // expected latent space before any sampling tensor work. This
     // is a precise request-time rejection: incompatible latents

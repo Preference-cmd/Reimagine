@@ -1729,6 +1729,82 @@ async fn diffusion_sample_rejects_incompatible_latent_space() {
 }
 
 #[tokio::test]
+async fn diffusion_sample_rejects_stored_latent_space_disagreeing_with_handle() {
+    let backend = backend();
+    let (model, _root) = sdxl_model();
+    let _ = backend
+        .load_bundle(base_load_bundle_request(model, "node-test"))
+        .await
+        .unwrap();
+    let bundle = backend
+        .model_cache()
+        .get_bundle(&ModelId::new("sdxl-base-1.0"))
+        .expect("cached bundle");
+    let (model_payload_key, clip_payload_key) = match bundle.as_ref() {
+        LoadedModelBundle::StableDiffusionSdxl(sdxl) => (
+            sdxl.model_payload_key.clone(),
+            sdxl.clip_payload_key.clone(),
+        ),
+    };
+    let model_handle = fake_runtime_model_handle(model_payload_key.as_str());
+
+    let custom_space = LatentSpaceMetadata::new(
+        reimagine_inference::LatentSpaceId::new("custom/v1"),
+        8,
+        4,
+        TensorDType::F32,
+        reimagine_inference::TensorLayout::Nchw,
+    );
+    let payload_key = BackendPayloadKey::new("latent:stored-custom-handle-sdxl-sample");
+    let latent_tensor =
+        Tensor::zeros((1, 8, 16, 16), DType::F32, backend.device().as_ref()).unwrap();
+    backend.store().insert_latent(
+        RunId::new("run-custom"),
+        payload_key.clone(),
+        latent_tensor,
+        custom_space,
+    );
+    let sdxl_handle = fake_runtime_latent_with_instance(payload_key.as_str(), 64, 64, "candle:cpu");
+
+    let positive = backend
+        .text_encode(base_text_encode_request(
+            fake_runtime_clip_handle(clip_payload_key.as_str()),
+            "positive".to_string(),
+            "node-positive",
+        ))
+        .await
+        .unwrap()
+        .into_conditioning();
+    let negative = backend
+        .text_encode(base_text_encode_request(
+            fake_runtime_clip_handle(clip_payload_key.as_str()),
+            "negative".to_string(),
+            "node-negative",
+        ))
+        .await
+        .unwrap()
+        .into_conditioning();
+
+    let err = backend
+        .diffusion_sample(base_diffusion_sample_request(
+            model_handle,
+            positive,
+            negative,
+            sdxl_handle,
+            "node-test",
+        ))
+        .await
+        .unwrap_err();
+    let msg = match err {
+        InferenceError::BackendExecutionFailed { message } => message,
+        other => panic!("expected BackendExecutionFailed, got {other:?}"),
+    };
+    assert!(msg.contains("disagrees with latent handle"), "msg: {msg}");
+    assert!(msg.contains("custom/v1"), "msg: {msg}");
+    assert!(msg.contains("stable_diffusion/sdxl/base"), "msg: {msg}");
+}
+
+#[tokio::test]
 async fn diffusion_sample_rejects_mismatched_backend_instance_affinity() {
     let backend = backend();
     let (model, _root) = sdxl_model();
@@ -2317,6 +2393,61 @@ async fn latent_decode_rejects_incompatible_latent_space() {
         msg.contains("stable_diffusion/sdxl/base"),
         "expected expected latent space id in msg, got {msg}"
     );
+}
+
+#[tokio::test]
+async fn latent_decode_rejects_stored_latent_space_disagreeing_with_handle() {
+    let backend = backend();
+    let (model, _root) = sdxl_model();
+    let _ = backend
+        .load_bundle(base_load_bundle_request(model, "node-test"))
+        .await
+        .unwrap();
+    let bundle = backend
+        .model_cache()
+        .get_bundle(&ModelId::new("sdxl-base-1.0"))
+        .expect("cached bundle");
+    let vae_payload_key = match bundle.as_ref() {
+        LoadedModelBundle::StableDiffusionSdxl(sdxl) => sdxl.vae_payload_key.clone(),
+    };
+    let vae_handle = fake_runtime_vae_handle(vae_payload_key.as_str());
+
+    let custom_space = LatentSpaceMetadata::new(
+        reimagine_inference::LatentSpaceId::new("custom/v1"),
+        8,
+        4,
+        TensorDType::F32,
+        reimagine_inference::TensorLayout::Nchw,
+    );
+    let payload_key = BackendPayloadKey::new("latent:stored-custom-handle-sdxl-decode");
+    let latent_tensor =
+        Tensor::zeros((1, 8, 16, 16), DType::F32, backend.device().as_ref()).unwrap();
+    backend.store().insert_latent(
+        RunId::new("run-custom"),
+        payload_key.clone(),
+        latent_tensor,
+        custom_space,
+    );
+    let sdxl_handle = fake_runtime_latent_with_instance(payload_key.as_str(), 64, 64, "candle:cpu");
+
+    let err = backend
+        .latent_decode(LatentDecodeRequest::new(
+            vae_handle,
+            sdxl_handle,
+            RunId::new("run-test"),
+            WorkflowId::new("wf-test"),
+            WorkflowVersion::new(1),
+            NodeId::new("node-decode"),
+        ))
+        .await
+        .unwrap_err();
+    let msg = match err {
+        InferenceError::BackendExecutionFailed { message } => message,
+        other => panic!("expected BackendExecutionFailed, got {other:?}"),
+    };
+    assert!(msg.contains("disagrees with latent handle"), "msg: {msg}");
+    assert!(msg.contains("custom/v1"), "msg: {msg}");
+    assert!(msg.contains("stable_diffusion/sdxl/base"), "msg: {msg}");
 }
 
 #[tokio::test]
