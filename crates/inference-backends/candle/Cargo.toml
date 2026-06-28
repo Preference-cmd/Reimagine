@@ -27,4 +27,4 @@ tokenizers = { workspace = true }
 
 [dev-dependencies]
 tokio = { workspace = true, features = ["rt", "rt-multi-thread", "macros"] }
-tempfile = "3"
+tempfile = { workspace = true }

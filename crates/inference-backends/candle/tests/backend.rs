@@ -482,12 +482,7 @@ async fn image_import_returns_runtime_image_for_png() {
 }
 
 #[tokio::test]
-async fn image_import_returns_backend_not_implemented() {
-    // The old test was for the stub; this test now verifies the
-    // import succeeds for a valid PNG. The stub behavior is gone.
-    // Keeping the test name for git-history continuity but the
-    // body is replaced by the PNG import test above. This test
-    // verifies missing-file error instead.
+async fn image_import_missing_file_returns_precise_error() {
     let backend = backend();
     let source = reimagine_inference::ResolvedImageSource::new(
         "/workspace/input/does-not-exist.png",

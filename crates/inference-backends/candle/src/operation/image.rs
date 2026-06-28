@@ -19,8 +19,9 @@
 use candle_core::{Device, Tensor};
 use reimagine_core::model::{ArtifactRef, TensorDType, TensorShape};
 use reimagine_inference::{
-    BackendPayloadKey, FilenamePrefix, ImageImportRequest, ImageImportResponse, ImagePreviewRequest,
-    ImagePreviewResponse, ImageSaveRequest, ImageSaveResponse, InferenceBackend, RuntimeImage,
+    BackendPayloadKey, FilenamePrefix, ImageImportRequest, ImageImportResponse,
+    ImagePreviewRequest, ImagePreviewResponse, ImageSaveRequest, ImageSaveResponse,
+    InferenceBackend, RuntimeImage,
 };
 
 use crate::backend::CandleBackend;
@@ -130,12 +131,14 @@ pub fn execute_image_import(
         nchw[2 * plane + i] = pixel[2] as f32 / 255.0;
     }
 
-    let tensor = Tensor::from_vec(nchw, (1, 3, height as usize, width as usize), backend.device())
-        .map_err(|e| {
-            CandleBackendError::InvalidRequest(format!(
-                "image.import failed to create tensor: {e}"
-            ))
-        })?;
+    let tensor = Tensor::from_vec(
+        nchw,
+        (1, 3, height as usize, width as usize),
+        backend.device(),
+    )
+    .map_err(|e| {
+        CandleBackendError::InvalidRequest(format!("image.import failed to create tensor: {e}"))
+    })?;
 
     let payload_key = BackendPayloadKey::new(format!(
         "image:{}:{}",
@@ -143,13 +146,7 @@ pub fn execute_image_import(
         request.node_id().as_str()
     ));
 
-    let candle_image = CandleImage::new(
-        tensor,
-        width,
-        height,
-        1,
-        "rgb".to_string(),
-    );
+    let candle_image = CandleImage::new(tensor, width, height, 1, "rgb".to_string());
 
     backend
         .store()
@@ -770,7 +767,11 @@ mod tests {
         use reimagine_core::model::{NodeId, RunId, WorkflowId, WorkflowVersion};
 
         let tmp = tempfile::tempdir().unwrap();
-        std::fs::write(tmp.path().join("corrupt.png"), b"this is not a valid PNG file").unwrap();
+        std::fs::write(
+            tmp.path().join("corrupt.png"),
+            b"this is not a valid PNG file",
+        )
+        .unwrap();
 
         let backend = CandleBackend::new(CandleBackendConfig::new(
             tmp.path().join("models"),
