@@ -433,12 +433,20 @@ async fn latent_decode_rejects_empty_geometry_latent() {
 }
 
 #[tokio::test]
-async fn image_import_returns_backend_not_implemented() {
+async fn image_import_returns_runtime_image_for_png() {
     let backend = backend();
+    let tmp = unique_sdxl_root();
+    std::fs::create_dir_all(&tmp).unwrap();
+    let img = image::RgbImage::from_fn(16, 12, |x, y| {
+        image::Rgb([(x * 16) as u8, (y * 20) as u8, 128])
+    });
+    let path = tmp.join("test.png");
+    img.save(&path).unwrap();
+
     let source = reimagine_inference::ResolvedImageSource::new(
-        "/workspace/input/cat.png",
+        &path,
         "image/png",
-        Some("cat.png".to_string()),
+        Some("test.png".to_string()),
     );
     let request = reimagine_inference::ImageImportRequest::new(
         source,
@@ -447,20 +455,57 @@ async fn image_import_returns_backend_not_implemented() {
         WorkflowVersion::new(1),
         NodeId::new("node-image-import"),
     );
+    let response = backend
+        .image_import(request)
+        .await
+        .expect("image.import should succeed for a valid PNG");
+
+    let image = response.image();
+    assert_eq!(image.width(), 16);
+    assert_eq!(image.height(), 12);
+    assert_eq!(image.batch(), 1);
+    assert_eq!(image.color_space(), "rgb");
+    assert_eq!(image.payload().backend().as_str(), "candle");
+    assert_eq!(image.payload().dtype(), TensorDType::F32);
+    assert_eq!(image.payload().shape().dims(), &[1, 3, 12, 16]);
+
+    let payload_key = image.payload().payload_key().clone();
+    let stored = backend
+        .store()
+        .get_image(&payload_key)
+        .expect("image should be stored");
+    assert_eq!(stored.width(), 16);
+    assert_eq!(stored.height(), 12);
+    assert_eq!(stored.color_space(), "rgb");
+
+    let _ = std::fs::remove_dir_all(&tmp);
+}
+
+#[tokio::test]
+async fn image_import_returns_backend_not_implemented() {
+    // The old test was for the stub; this test now verifies the
+    // import succeeds for a valid PNG. The stub behavior is gone.
+    // Keeping the test name for git-history continuity but the
+    // body is replaced by the PNG import test above. This test
+    // verifies missing-file error instead.
+    let backend = backend();
+    let source = reimagine_inference::ResolvedImageSource::new(
+        "/workspace/input/does-not-exist.png",
+        "image/png",
+        Some("missing.png".to_string()),
+    );
+    let request = reimagine_inference::ImageImportRequest::new(
+        source,
+        RunId::new("run-image-import-missing"),
+        WorkflowId::new("wf-image"),
+        WorkflowVersion::new(1),
+        NodeId::new("node-image-import-missing"),
+    );
     let err = backend
         .image_import(request)
         .await
-        .expect_err("image.import should be reported as not implemented");
-    let (capability, backend_kind) = match err {
-        InferenceError::BackendNotImplemented {
-            capability,
-            backend_kind,
-            message: _,
-        } => (capability, backend_kind),
-        other => panic!("expected BackendNotImplemented, got {other:?}"),
-    };
-    assert_eq!(capability, InferenceCapability::ImageImport);
-    assert_eq!(backend_kind, "candle");
+        .expect_err("image.import should fail for missing file");
+    assert_backend_execution_failed_with(&err, "failed to read source file");
 }
 
 #[tokio::test]
