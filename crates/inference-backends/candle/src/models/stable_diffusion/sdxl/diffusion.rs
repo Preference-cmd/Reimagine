@@ -59,16 +59,7 @@ impl SdxlSampleRequest {
                 "diffusion.sample scheduler `{scheduler_name}` is not supported in V1; expected `normal`"
             )));
         }
-        if !(0.0..=1.0).contains(&denoise) {
-            return Err(CandleBackendError::InvalidRequest(format!(
-                "diffusion.sample denoise must be within [0, 1], got {denoise}"
-            )));
-        }
-        if denoise < 1.0 {
-            return Err(CandleBackendError::InvalidRequest(format!(
-                "diffusion.sample partial denoise/img2img is not supported in V1; expected denoise 1.0, got {denoise}"
-            )));
-        }
+        validate_denoise(denoise)?;
         if steps == 0 {
             return Err(CandleBackendError::InvalidRequest(
                 "diffusion.sample steps must be positive".to_string(),
@@ -116,16 +107,7 @@ impl SdxlSampleRequest {
                 "diffusion.sample scheduler `{scheduler_name}` is not supported in V1; expected `normal`"
             )));
         }
-        if !(0.0..=1.0).contains(&denoise) {
-            return Err(CandleBackendError::InvalidRequest(format!(
-                "diffusion.sample denoise must be within [0, 1], got {denoise}"
-            )));
-        }
-        if denoise < 1.0 {
-            return Err(CandleBackendError::InvalidRequest(format!(
-                "diffusion.sample partial denoise/img2img is not supported in V1; expected denoise 1.0, got {denoise}"
-            )));
-        }
+        validate_denoise(denoise)?;
         if steps == 0 {
             return Err(CandleBackendError::InvalidRequest(
                 "diffusion.sample steps must be positive".to_string(),
@@ -146,6 +128,21 @@ impl SdxlSampleRequest {
             denoise,
         })
     }
+}
+
+fn validate_denoise(denoise: f64) -> Result<(), CandleBackendError> {
+    if !denoise.is_finite() || !(0.0..=1.0).contains(&denoise) {
+        return Err(CandleBackendError::InvalidRequest(format!(
+            "diffusion.sample denoise must be a finite number within [0, 1], got {denoise}"
+        )));
+    }
+    if denoise == 0.0 {
+        return Err(CandleBackendError::InvalidRequest(
+            "diffusion.sample denoise 0.0 is unsupported in V1 because it is a no-op/pass-through; save/preview/direct-source handling should bypass diffusion.sample in a future shortcut"
+                .to_string(),
+        ));
+    }
+    Ok(())
 }
 
 #[allow(dead_code)]
@@ -507,6 +504,39 @@ mod tests {
         assert!(err.to_string().contains("denoise"));
         let err = SdxlSampleRequest::from_params(&params(7, 20, 7.0, -0.1)).unwrap_err();
         assert!(err.to_string().contains("denoise"));
+    }
+
+    #[test]
+    fn sample_request_accepts_partial_denoise_for_euler_normal() {
+        let req = SdxlSampleRequest::from_params(&params(7, 20, 7.0, 0.5)).unwrap();
+        assert_eq!(req.sampler_name, "euler");
+        assert_eq!(req.scheduler_name, "normal");
+        assert_eq!(req.denoise, 0.5);
+
+        let req = SdxlSampleRequest::new(7, 20, 7.0, "euler", "normal", 0.25).unwrap();
+        assert_eq!(req.denoise, 0.25);
+    }
+
+    #[test]
+    fn sample_request_rejects_zero_denoise_as_v1_noop() {
+        let err = SdxlSampleRequest::from_params(&params(7, 20, 7.0, 0.0)).unwrap_err();
+        assert!(err.to_string().contains("denoise 0.0"), "{err}");
+        assert!(err.to_string().contains("no-op/pass-through"), "{err}");
+
+        let err = SdxlSampleRequest::new(7, 20, 7.0, "euler", "normal", 0.0).unwrap_err();
+        assert!(err.to_string().contains("denoise 0.0"), "{err}");
+        assert!(err.to_string().contains("no-op/pass-through"), "{err}");
+    }
+
+    #[test]
+    fn sample_request_rejects_non_finite_denoise() {
+        let err = SdxlSampleRequest::from_params(&params(7, 20, 7.0, f64::NAN)).unwrap_err();
+        assert!(err.to_string().contains("finite"), "{err}");
+        assert!(err.to_string().contains("[0, 1]"), "{err}");
+
+        let err = SdxlSampleRequest::new(7, 20, 7.0, "euler", "normal", f32::INFINITY).unwrap_err();
+        assert!(err.to_string().contains("finite"), "{err}");
+        assert!(err.to_string().contains("[0, 1]"), "{err}");
     }
 
     #[test]

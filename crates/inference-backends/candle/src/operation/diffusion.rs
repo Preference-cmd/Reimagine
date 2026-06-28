@@ -31,6 +31,9 @@ pub fn execute_diffusion_sample(
     let negative_handle = require_conditioning_handle(request.negative(), backend)?;
     let latent_handle = require_latent_handle(request.latent(), backend)?;
     require_backend_instance_affinity(&request, backend)?;
+    let _denoise_mode = request
+        .denoise_mode()
+        .map_err(|err| CandleBackendError::InvalidRequest(err.to_string()))?;
 
     let bundle = backend
         .model_cache()
