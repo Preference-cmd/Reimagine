@@ -11,7 +11,9 @@
 pub mod common;
 pub mod diffusion;
 pub mod image;
+pub mod image_import;
 pub mod latent;
+pub mod latent_encode;
 pub mod model;
 pub mod string;
 pub mod text;

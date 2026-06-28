@@ -22,12 +22,13 @@ use reimagine_inference::{
     CannedCapabilityResponse, CreateEmptyLatentRequest, CreateEmptyLatentResponse, FakeBackend,
     ImageSaveResponse, InferenceBackend, InferenceBackendCapabilities, InferenceBackendRegistry,
     InferenceCapabilitySupport, InferenceError, InferenceRuntime, IntoNodeExecutorError,
-    LoadBundleResponse, ModelFormat, ModelResolver, RejectAllBridgePolicy, ResolvedInferenceModel,
-    TextEncodeRequest, TextEncodeResponse, register_builtin_inference_executors,
+    LoadBundleResponse, ModelFormat, ModelResolver, RejectAllBridgePolicy, ResolvedImageSource,
+    ResolvedInferenceModel, TextEncodeRequest, TextEncodeResponse,
+    register_builtin_inference_executors,
 };
 use reimagine_inference::{
-    NodeExecutionContext, NodeExecutorError, NodeExecutorRegistry, NodeInputs, NodeParams,
-    NoopNodeCancellation, RecordingArtifactPublisher,
+    ImageSourceResolver, NodeExecutionContext, NodeExecutorError, NodeExecutorRegistry, NodeInputs,
+    NodeParams, NoopNodeCancellation, RecordingArtifactPublisher,
 };
 
 // ── Fake model resolver ────────────────────────────────────────────
@@ -57,6 +58,37 @@ impl ModelResolver for FakeResolver {
             ModelFormat::SafeTensors,
         ))
     }
+}
+
+// ── Fake image source resolver ─────────────────────────────────────
+
+struct FakeImageSourceResolver {
+    path: std::path::PathBuf,
+}
+
+impl FakeImageSourceResolver {
+    fn new(path: impl Into<std::path::PathBuf>) -> Self {
+        Self { path: path.into() }
+    }
+}
+
+impl ImageSourceResolver for FakeImageSourceResolver {
+    fn resolve(&self, _path: &std::path::Path) -> Result<ResolvedImageSource, NodeExecutorError> {
+        Ok(ResolvedImageSource::new(
+            &self.path,
+            "image/png",
+            self.path
+                .file_name()
+                .and_then(|n| n.to_str())
+                .map(str::to_string),
+        ))
+    }
+}
+
+fn fake_image_resolver() -> Arc<dyn ImageSourceResolver> {
+    Arc::new(FakeImageSourceResolver::new(std::path::PathBuf::from(
+        "/workspace/input/cat.png",
+    )))
 }
 
 // ── Test helpers ───────────────────────────────────────────────────
@@ -198,8 +230,13 @@ async fn checkpoint_loader_multi_output_by_slot_id() {
     let resolver = Arc::new(FakeResolver::new("/models/sdxl-base.safetensors"));
 
     let mut registry = NodeExecutorRegistry::default();
-    register_builtin_inference_executors(&mut registry, runtime_for_backend(backend), resolver)
-        .expect("register executors");
+    register_builtin_inference_executors(
+        &mut registry,
+        runtime_for_backend(backend),
+        resolver,
+        fake_image_resolver(),
+    )
+    .expect("register executors");
 
     let executor = registry
         .get(&reimagine_core::model::NodeTypeId::new(
@@ -256,8 +293,13 @@ async fn checkpoint_loader_requires_all_three_outputs() {
     let resolver = Arc::new(FakeResolver::new("/models/sdxl-base.safetensors"));
 
     let mut registry = NodeExecutorRegistry::default();
-    register_builtin_inference_executors(&mut registry, runtime_for_backend(backend), resolver)
-        .expect("register executors");
+    register_builtin_inference_executors(
+        &mut registry,
+        runtime_for_backend(backend),
+        resolver,
+        fake_image_resolver(),
+    )
+    .expect("register executors");
 
     let executor = registry
         .get(&reimagine_core::model::NodeTypeId::new(
@@ -290,8 +332,13 @@ async fn unregistered_capability_is_rejected_by_inference_runtime_router() {
     let resolver = Arc::new(FakeResolver::new("/models/sdxl-base.safetensors"));
 
     let mut registry = NodeExecutorRegistry::default();
-    register_builtin_inference_executors(&mut registry, runtime_for_backend(backend), resolver)
-        .expect("register executors");
+    register_builtin_inference_executors(
+        &mut registry,
+        runtime_for_backend(backend),
+        resolver,
+        fake_image_resolver(),
+    )
+    .expect("register executors");
 
     let executor = registry
         .get(&reimagine_core::model::NodeTypeId::new(
@@ -321,8 +368,13 @@ async fn string_executor_passthrough() {
     let resolver = Arc::new(FakeResolver::new("/unused"));
 
     let mut registry = NodeExecutorRegistry::default();
-    register_builtin_inference_executors(&mut registry, runtime_for_backend(backend), resolver)
-        .expect("register executors");
+    register_builtin_inference_executors(
+        &mut registry,
+        runtime_for_backend(backend),
+        resolver,
+        fake_image_resolver(),
+    )
+    .expect("register executors");
 
     let executor = registry
         .get(&reimagine_core::model::NodeTypeId::new("builtin.string"))
@@ -350,8 +402,13 @@ async fn all_v1_executors_register_successfully() {
     let resolver = Arc::new(FakeResolver::new("/models/test.safetensors"));
 
     let mut registry = NodeExecutorRegistry::default();
-    register_builtin_inference_executors(&mut registry, runtime_for_backend(backend), resolver)
-        .expect("register executors");
+    register_builtin_inference_executors(
+        &mut registry,
+        runtime_for_backend(backend),
+        resolver,
+        fake_image_resolver(),
+    )
+    .expect("register executors");
 
     for type_id in &[
         "builtin.string",
@@ -383,8 +440,13 @@ async fn save_image_records_backend_returned_artifact_reference() {
     let resolver = Arc::new(FakeResolver::new("/models/sdxl-base.safetensors"));
 
     let mut registry = NodeExecutorRegistry::default();
-    register_builtin_inference_executors(&mut registry, runtime_for_backend(backend), resolver)
-        .expect("register executors");
+    register_builtin_inference_executors(
+        &mut registry,
+        runtime_for_backend(backend),
+        resolver,
+        fake_image_resolver(),
+    )
+    .expect("register executors");
 
     let executor = registry
         .get(&reimagine_core::model::NodeTypeId::new(
@@ -417,8 +479,13 @@ async fn checkpoint_loader_missing_model_ref_is_error() {
     let resolver = Arc::new(FakeResolver::new("/models/sdxl-base.safetensors"));
 
     let mut registry = NodeExecutorRegistry::default();
-    register_builtin_inference_executors(&mut registry, runtime_for_backend(backend), resolver)
-        .expect("register executors");
+    register_builtin_inference_executors(
+        &mut registry,
+        runtime_for_backend(backend),
+        resolver,
+        fake_image_resolver(),
+    )
+    .expect("register executors");
 
     let executor = registry
         .get(&reimagine_core::model::NodeTypeId::new(
@@ -487,8 +554,13 @@ async fn text_encode_executor_calls_typed_text_encode() {
     let resolver = Arc::new(FakeResolver::new("/models/clip.safetensors"));
 
     let mut registry = NodeExecutorRegistry::default();
-    register_builtin_inference_executors(&mut registry, runtime_for_backend(backend), resolver)
-        .expect("register executors");
+    register_builtin_inference_executors(
+        &mut registry,
+        runtime_for_backend(backend),
+        resolver,
+        fake_image_resolver(),
+    )
+    .expect("register executors");
 
     let executor = registry
         .get(&reimagine_core::model::NodeTypeId::new(
@@ -552,8 +624,13 @@ async fn create_empty_latent_executor_calls_typed_create_empty_latent() {
     let resolver = Arc::new(FakeResolver::new("/models/test.safetensors"));
 
     let mut registry = NodeExecutorRegistry::default();
-    register_builtin_inference_executors(&mut registry, runtime_for_backend(backend), resolver)
-        .expect("register executors");
+    register_builtin_inference_executors(
+        &mut registry,
+        runtime_for_backend(backend),
+        resolver,
+        fake_image_resolver(),
+    )
+    .expect("register executors");
 
     let executor = registry
         .get(&reimagine_core::model::NodeTypeId::new(

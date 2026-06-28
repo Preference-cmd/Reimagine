@@ -146,6 +146,7 @@ pub fn execute_latent_create_empty(
         batch_size,
         channels,
         latent_space,
+        reimagine_inference::LatentContent::EmptyGeometry,
     );
     Ok(CreateEmptyLatentResponse::new(latent))
 }
@@ -156,6 +157,23 @@ pub fn execute_latent_decode(
 ) -> Result<LatentDecodeResponse, CandleBackendError> {
     let vae_handle = request.vae().clone();
     let latent_handle = request.latent().clone();
+
+    // Reject `LatentContent::EmptyGeometry` at the operation
+    // boundary. txt2img geometry is a placeholder tensor, not a
+    // real latent payload; the VAE decoder must not consume it.
+    // The check fires before any affinity / latent-space
+    // validation so the diagnostic is precise and easy to attribute
+    // to the upstream node producing empty geometry.
+    if matches!(
+        latent_handle.content(),
+        reimagine_inference::LatentContent::EmptyGeometry
+    ) {
+        return Err(CandleBackendError::InvalidRequest(format!(
+            "latent.decode rejects latent content `empty_geometry`; \
+             the input latent was produced by `latent.create_empty` and is not a real starting latent. \
+             Use `latent.encode` (image → latent) or `diffusion.sample` (geometry → sampled) before decoding."
+        )));
+    }
 
     if vae_handle.backend() != backend.backend_kind() {
         return Err(CandleBackendError::InvalidRequest(format!(

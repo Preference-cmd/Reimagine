@@ -4,8 +4,8 @@ use reimagine_core::model::{
 };
 use reimagine_inference::{
     Backend, BackendPayloadKey, BackendTensorHandle, ConditioningMetadata, ExecutionConditioning,
-    ExecutionValue, LatentSpaceMetadata, RuntimeClipHandle, RuntimeImage, RuntimeLatent,
-    RuntimeModelHandle, RuntimeVaeHandle,
+    ExecutionValue, LatentContent, LatentSpaceMetadata, RuntimeClipHandle, RuntimeImage,
+    RuntimeLatent, RuntimeModelHandle, RuntimeVaeHandle,
 };
 use reimagine_runtime::{NodeInputs, OutputKey, RunInputs, RunValueStore};
 use std::sync::Arc;
@@ -89,6 +89,7 @@ fn runtime_values_can_express_the_minimal_sdxl_base_intermediates() {
         1,
         4,
         LatentSpaceMetadata::sdxl_base(),
+        LatentContent::Sampled,
     );
     assert_eq!(latent.payload(), &latent_tensor);
     assert_eq!(latent.width(), 1024);

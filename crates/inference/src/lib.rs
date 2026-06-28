@@ -39,6 +39,7 @@ mod execution_value;
 mod executor;
 mod executors;
 mod inference_error;
+pub mod latent_content;
 pub mod latent_space;
 pub mod node_context;
 pub mod operation;
@@ -65,6 +66,7 @@ pub use execution_value::{
     RuntimeVaeHandle,
 };
 
+pub use latent_content::{LatentContent, LatentContentError};
 pub use latent_space::{
     LatentSpaceError, LatentSpaceId, LatentSpaceMetadata, TensorLayout, stable_diffusion_sdxl_base,
 };
@@ -95,7 +97,9 @@ pub use profile::{
 };
 pub use request::diffusion::{DiffusionSampleRequest, SamplerName, SchedulerName};
 pub use request::image::{FilenamePrefix, ImagePreviewRequest, ImageSaveRequest};
+pub use request::image_import::{ImageImportRequest, ResolvedImageSource};
 pub use request::latent::{CreateEmptyLatentRequest, LatentDecodeRequest};
+pub use request::latent_encode::LatentEncodeRequest;
 pub use request::model::LoadBundleRequest;
 pub use request::text::TextEncodeRequest;
 pub use resolver::{
@@ -110,7 +114,9 @@ pub use resources::{
 };
 pub use response::diffusion::DiffusionSampleResponse;
 pub use response::image::{ImagePreviewResponse, ImageSaveResponse};
+pub use response::image_import::ImageImportResponse;
 pub use response::latent::{CreateEmptyLatentResponse, LatentDecodeResponse};
+pub use response::latent_encode::LatentEncodeResponse;
 pub use response::model::LoadBundleResponse;
 pub use response::text::TextEncodeResponse;
 pub use router::{DefaultInferenceRuntime, InferenceRuntime};
@@ -122,6 +128,7 @@ pub use executor::{
     BoxedNodeExecutor, NodeExecutionOutputs, NodeExecutor, NodeExecutorError, NodeExecutorRegistry,
     NodeExecutorRegistryError,
 };
+pub use executors::image_import::{ImageSourceResolver, LoadImageExecutor};
 pub use node_context::{NodeExecutionContext, NodeInputs, NodeParams};
 pub use registry::register_builtin_inference_executors;
 #[doc(hidden)]

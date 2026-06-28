@@ -5,11 +5,12 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use candle_core::Device;
 use reimagine_inference::{
     Backend, BackendInstance, CreateEmptyLatentRequest, CreateEmptyLatentResponse,
-    DiffusionSampleRequest, DiffusionSampleResponse, ImagePreviewRequest, ImagePreviewResponse,
-    ImageSaveRequest, ImageSaveResponse, InferenceBackend, InferenceBackendCapabilities,
-    InferenceCapability, InferenceCapabilitySupport, InferenceError, LatentDecodeRequest,
-    LatentDecodeResponse, LoadBundleRequest, LoadBundleResponse, TextEncodeRequest,
-    TextEncodeResponse,
+    DiffusionSampleRequest, DiffusionSampleResponse, ImageImportRequest, ImageImportResponse,
+    ImagePreviewRequest, ImagePreviewResponse, ImageSaveRequest, ImageSaveResponse,
+    InferenceBackend, InferenceBackendCapabilities, InferenceCapability,
+    InferenceCapabilitySupport, InferenceError, LatentDecodeRequest, LatentDecodeResponse,
+    LatentEncodeRequest, LatentEncodeResponse, LoadBundleRequest, LoadBundleResponse,
+    TextEncodeRequest, TextEncodeResponse,
 };
 
 use crate::config::CandleBackendConfig;
@@ -153,6 +154,18 @@ impl InferenceBackend for CandleBackend {
             .with_support(InferenceCapabilitySupport::new(
                 InferenceCapability::LatentDecode,
             ))
+            // `image.import` and `latent.encode` are reserved in
+            // this slice. V1 Candle advertises them so the executor
+            // surfaces a precise `BackendNotImplemented` rather than
+            // silently dropping to a placeholder tensor or producing
+            // an empty latent. Real weight-driven implementations
+            // land in a follow-up slice.
+            .with_support(InferenceCapabilitySupport::new(
+                InferenceCapability::ImageImport,
+            ))
+            .with_support(InferenceCapabilitySupport::new(
+                InferenceCapability::LatentEncode,
+            ))
             .with_support(InferenceCapabilitySupport::new(
                 InferenceCapability::ImageSave,
             ))
@@ -200,6 +213,20 @@ impl InferenceBackend for CandleBackend {
         request: LatentDecodeRequest,
     ) -> Result<LatentDecodeResponse, InferenceError> {
         map_err(execute_latent_decode(request, self))
+    }
+
+    async fn latent_encode(
+        &self,
+        request: LatentEncodeRequest,
+    ) -> Result<LatentEncodeResponse, InferenceError> {
+        map_err(execute_latent_encode(self, request))
+    }
+
+    async fn image_import(
+        &self,
+        request: ImageImportRequest,
+    ) -> Result<ImageImportResponse, InferenceError> {
+        map_err(execute_image_import(self, request))
     }
 
     async fn image_save(
