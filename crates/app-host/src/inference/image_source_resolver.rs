@@ -112,6 +112,25 @@ impl reimagine_inference::ImageSourceResolver for InputImageSourceResolver {
             });
         }
 
+        // V1 inputs are user-supplied image files. Reject
+        // directories and other non-files precisely so the backend
+        // does not have to.
+        let metadata =
+            std::fs::metadata(&canonical_candidate).map_err(|err| NodeExecutorError::Failed {
+                message: format!(
+                    "builtin.load_image could not stat resolved path `{}`: {err}",
+                    canonical_candidate.display()
+                ),
+            })?;
+        if !metadata.is_file() {
+            return Err(NodeExecutorError::Failed {
+                message: format!(
+                    "builtin.load_image resolved path `{}` is not a regular file; V1 inputs must be regular files",
+                    canonical_candidate.display()
+                ),
+            });
+        }
+
         let media_type = media_type_for_extension(
             canonical_candidate
                 .extension()
@@ -237,6 +256,28 @@ mod tests {
             other => panic!("expected Failed, got {other:?}"),
         };
         assert!(msg.contains("unsupported media type"), "{msg}");
+
+        let _ = std::fs::remove_dir_all(&base);
+    }
+
+    #[test]
+    fn rejects_directory_paths() {
+        let base = tempdir("dir");
+        let input = base.join("input");
+        std::fs::create_dir_all(&input).unwrap();
+        std::fs::create_dir_all(input.join("nested.png")).unwrap();
+        let resolver = InputImageSourceResolver::with_input_dir(&input);
+
+        let err = <InputImageSourceResolver as reimagine_inference::ImageSourceResolver>::resolve(
+            &resolver,
+            Path::new("nested.png"),
+        )
+        .expect_err("directory path must be rejected");
+        let msg = match err {
+            NodeExecutorError::Failed { message } => message,
+            other => panic!("expected Failed, got {other:?}"),
+        };
+        assert!(msg.contains("not a regular file"), "{msg}");
 
         let _ = std::fs::remove_dir_all(&base);
     }
