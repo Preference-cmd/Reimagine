@@ -5,8 +5,8 @@
 //!   cargo run --bin import-sdxl -- /path/to/sd_xl_base_1.0.safetensors /tmp/split-out/
 //!
 //! Output layout:
-//!   <output-dir>/
-//!     <source-model-id>/<fingerprint>/
+//!   <output-root>/
+//!     <source-model-id>/<source-fingerprint>/
 //!       unet/model.safetensors
 //!       text_encoder/model.safetensors
 //!       text_encoder_2/model.safetensors
@@ -23,7 +23,11 @@ use reimagine_inference_candle::{
 };
 
 fn usage() -> ! {
-    eprintln!("Usage: import-sdxl <checkpoint.safetensors> <output-dir>");
+    eprintln!("Usage: import-sdxl <checkpoint.safetensors> <output-root>");
+    eprintln!();
+    eprintln!(
+        "Writes <output-root>/<source-model-id>/<source-fingerprint>/<component>/model.safetensors"
+    );
     std::process::exit(1);
 }
 
