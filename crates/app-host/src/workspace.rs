@@ -5,24 +5,17 @@ use reimagine_agent::{AgentToolRegistry, WorkspaceScope};
 use reimagine_config::{AppConfig, AppPaths, ConfigDocument, InferenceBackendConfig};
 use reimagine_core::model::NodeDef;
 use reimagine_inference::WorkspaceComputeProfile;
-use reimagine_inference_candle::CandleProfileProvider;
 use reimagine_nodes::BuiltinNodeCatalog;
 use reimagine_runtime::{BoxedRunEventSink, RuntimeService, VecRunEventSink};
 
+use crate::inference::compose::bootstrap_inference;
+#[cfg(test)]
 use crate::inference::compose::compose_inference_runtime;
-use crate::inference::resolve::{CANDLE_CPU_FALLBACK_LABEL, resolve_candle_instance};
+use crate::inference::selection::resolved_candle_device_label;
 use crate::node_catalog::{NodeCatalogAlignment, NodeCatalogService};
 use crate::services::WorkspaceServices;
 use crate::tools::register_app_tools;
 use crate::{AgentService, AppHostError, BackendSelection, ModelService, WorkflowService};
-
-/// Compute profile source the workspace uses during bootstrap.
-///
-/// V1 only knows the Candle backend, so the workspace probes the
-/// [`CandleProfileProvider`] directly. A future multi-backend
-/// workspace will collect an `Arc<dyn BackendProfileProvider>` list
-/// here and aggregate their results.
-const BOOTSTRAP_PROFILE_PROVIDER: CandleProfileProvider = CandleProfileProvider::new();
 
 #[derive(Debug)]
 pub struct WorkspaceHost {
@@ -171,30 +164,11 @@ impl WorkspaceHost {
     ) -> Self {
         let model_service = Arc::new(ModelService::new(config.paths().clone()));
 
-        // Probe the live backend profile, resolve the configured label
-        // against it, and cache the resulting profile. The fallback
-        // diagnostics ride on the cached profile so
-        // `WorkspaceHost::compute_profile()` reports the bootstrap
-        // decision without needing to re-probe.
-        let mut workspace_profile =
-            WorkspaceComputeProfile::new().with_backend_profile(BOOTSTRAP_PROFILE_PROVIDER.probe());
-        let (resolved_instance, fallback_diagnostics) = resolve_candle_instance(
-            workspace_profile
-                .backend_profiles
-                .first()
-                .expect("candle backend profile populated by probe"),
-            &backend_config.candle_device,
-        );
-        for diagnostic in fallback_diagnostics {
-            workspace_profile = workspace_profile.with_diagnostic(diagnostic);
-        }
-
-        let resolved_label = instance_label(&resolved_instance);
-        let composed = compose_inference_runtime(&config, resolved_label, model_service.clone())
-            .expect("resolved Candle label is validated against profile before compose");
+        let bootstrapped = bootstrap_inference(&config, &backend_config, model_service.clone())
+            .expect("default backend composition should build a usable Candle fallback");
         let runtime_service = Arc::new(RuntimeService::new(
-            composed.executor_registry,
-            Arc::new(composed.runtime_hooks),
+            bootstrapped.runtime.executor_registry,
+            bootstrapped.runtime.runtime_hooks.clone(),
             event_sink,
             Arc::new(reimagine_runtime::SystemClock),
         ));
@@ -205,8 +179,8 @@ impl WorkspaceHost {
             backend_config,
             runtime_service,
             builtin_catalog,
-            Arc::new(workspace_profile),
-            resolved_instance,
+            Arc::new(bootstrapped.compute_profile),
+            bootstrapped.runtime.selected_instance,
         )
     }
 
@@ -303,7 +277,7 @@ impl WorkspaceHost {
     /// know which [`reimagine_inference::BackendInstance`] the
     /// workspace is actually running.
     pub fn resolved_candle_device_label(&self) -> String {
-        instance_label(&self.resolved_backend_instance).to_string()
+        resolved_candle_device_label(&self.resolved_backend_instance)
     }
 
     /// Return the resolved [`reimagine_inference::BackendInstance`]
@@ -311,16 +285,6 @@ impl WorkspaceHost {
     pub fn resolved_backend_instance(&self) -> &reimagine_inference::BackendInstance {
         &self.resolved_backend_instance
     }
-}
-
-/// Strip the `<backend>:` prefix from a resolved backend instance id
-/// and return the bare device label.
-fn instance_label(instance: &reimagine_inference::BackendInstance) -> &str {
-    instance
-        .as_str()
-        .split_once(':')
-        .map(|(_, label)| label)
-        .unwrap_or(CANDLE_CPU_FALLBACK_LABEL)
 }
 
 fn load_backend_config(config: &AppConfig) -> InferenceBackendConfig {
@@ -413,8 +377,12 @@ mod tests {
         let config = AppConfig::new(reimagine_config::AppPaths::new(&base));
         let model_service = Arc::new(ModelService::new(config.paths().clone()));
 
-        let composed = super::compose_inference_runtime(&config, "cpu", Arc::clone(&model_service))
-            .expect("compose inference runtime");
+        let composed = compose_inference_runtime(
+            &config,
+            BackendInstance::new("candle:cpu"),
+            Arc::clone(&model_service),
+        )
+        .expect("compose inference runtime");
 
         assert!(
             composed
@@ -631,6 +599,42 @@ mod tests {
             "INFERENCE_PROFILE/INVALID_DEVICE",
             "fallback diagnostic should use the invalid-device code"
         );
+        let _ = fs::remove_dir_all(&base);
+    }
+
+    #[test]
+    fn unknown_open_selected_instance_falls_back_to_cpu_with_diagnostic() {
+        let base = temp_dir("profile-unknown-selected");
+        let backend_config = InferenceBackendConfig {
+            selected_instance: Some("burn:cpu".to_string()),
+            candle_device: "metal".to_string(),
+            ..InferenceBackendConfig::default()
+        };
+        let workspace = WorkspaceHost::with_backend_config(
+            WorkspaceScope::new("profile-unknown-selected"),
+            &base,
+            backend_config,
+            Arc::new(VecRunEventSink::new()),
+        );
+
+        assert_eq!(
+            workspace.resolved_backend_instance(),
+            &BackendInstance::new("candle:cpu"),
+            "unknown open selected instance should fall back to candle:cpu"
+        );
+        let profile = workspace.compute_profile();
+        assert_cpu_available(&profile);
+        let diagnostic = profile
+            .diagnostics
+            .iter()
+            .find(|d| d.code().as_str() == "APP_HOST/BACKEND_SELECTED_INSTANCE_UNKNOWN")
+            .unwrap_or_else(|| {
+                panic!(
+                    "expected unknown selected-instance diagnostic, got: {:?}",
+                    profile.diagnostics
+                )
+            });
+        assert!(diagnostic.message().contains("burn:cpu"));
         let _ = fs::remove_dir_all(&base);
     }
 

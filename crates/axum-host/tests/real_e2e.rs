@@ -324,6 +324,7 @@ async fn real_sdxl_split_weights_produces_png_artifact() {
         schema_version: "1".to_owned(),
         backend: InferenceBackendKind::Candle,
         candle_device: device,
+        ..InferenceBackendConfig::default()
     };
     let backend_config_path = paths.config_dir().join("inference_backend.json");
     tokio::fs::write(
@@ -401,6 +402,7 @@ async fn real_sdxl_img2img_split_weights_produces_png_artifact() {
         schema_version: "1".to_owned(),
         backend: InferenceBackendKind::Candle,
         candle_device: device,
+        ..InferenceBackendConfig::default()
     };
     let backend_config_path = paths.config_dir().join("inference_backend.json");
     tokio::fs::write(
