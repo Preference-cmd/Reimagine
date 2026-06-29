@@ -11,5 +11,6 @@ mod backend;
 mod config;
 mod device;
 mod error;
+pub mod models;
 mod profile;
 mod resource;
