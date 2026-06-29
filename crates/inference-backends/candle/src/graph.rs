@@ -14,7 +14,7 @@
 //! `models/stable_diffusion/sdxl/*` directly; they only import the facade and
 //! the backend-local input/result types in this module.
 
-use candle_core::Device;
+use candle_core::{DType, Device};
 use reimagine_core::model::ModelRole;
 use reimagine_inference::ResolvedInferenceModelSourceSet;
 use reimagine_inference::{
@@ -32,9 +32,9 @@ pub trait LoadedModelGraph: Send + Sync {
 use crate::error::CandleBackendError;
 use crate::models::LoadedModelBundle;
 use crate::models::stable_diffusion::sdxl::diffusion::SdxlSampleRequest;
-use crate::models::stable_diffusion::sdxl::diffusion_graph::SdxlDiffusionConditioning;
+use crate::models::stable_diffusion::sdxl::diffusion_graph::SdxlUnetForwardConditioning;
 use crate::models::stable_diffusion::sdxl::text::SdxlTextEncoder;
-use crate::store::{CandleImage, CandleLatent};
+use crate::store::{CandleConditioning, CandleImage, CandleLatent};
 
 /// Backend-local input for text encoding.
 pub struct TextEncodeInput {
@@ -61,8 +61,9 @@ pub struct DiffusionSampleInput {
     pub sampler_name: String,
     pub scheduler_name: String,
     pub denoise: f32,
-    pub(crate) positive: SdxlDiffusionConditioning,
-    pub(crate) negative: SdxlDiffusionConditioning,
+    pub expected_batch: u32,
+    pub positive: CandleConditioning,
+    pub negative: CandleConditioning,
 }
 
 /// Backend-local result of diffusion sampling.
@@ -306,14 +307,18 @@ impl LoadedModelBundle {
                     input.scheduler_name,
                     input.denoise,
                 )?;
-                let graph = bundle.materialize_diffusion_graph()?;
-                let latent = graph.sample(
-                    input_latent,
-                    input.positive,
-                    input.negative,
-                    &request,
-                    device,
+                let positive = sdxl_unet_forward_conditioning_from_payload(
+                    "positive",
+                    &input.positive,
+                    input.expected_batch,
                 )?;
+                let negative = sdxl_unet_forward_conditioning_from_payload(
+                    "negative",
+                    &input.negative,
+                    input.expected_batch,
+                )?;
+                let graph = bundle.materialize_diffusion_graph()?;
+                let latent = graph.sample(input_latent, positive, negative, &request, device)?;
                 Ok(DiffusionSampleResult { latent })
             }
             #[cfg(test)]
@@ -371,6 +376,32 @@ impl LoadedModelBundle {
             )),
         }
     }
+}
+
+fn sdxl_unet_forward_conditioning_from_payload(
+    label: &str,
+    conditioning: &CandleConditioning,
+    expected_batch: u32,
+) -> Result<SdxlUnetForwardConditioning, CandleBackendError> {
+    let expected_text = [expected_batch as usize, 77, 2048];
+    let text = conditioning.text_embedding();
+    if text.dtype() != DType::F32 {
+        return Err(CandleBackendError::InvalidRequest(format!(
+            "diffusion.sample {label} text_embedding must be f32, got {:?}",
+            text.dtype()
+        )));
+    }
+    if text.shape().dims() != expected_text {
+        return Err(CandleBackendError::InvalidRequest(format!(
+            "diffusion.sample {label} text_embedding must have shape {:?}, got {:?}",
+            expected_text,
+            text.shape().dims()
+        )));
+    }
+
+    Ok(SdxlUnetForwardConditioning {
+        text_embedding: text.clone(),
+    })
 }
 
 #[cfg(test)]
@@ -434,10 +465,24 @@ mod tests {
         }
     }
 
-    fn sdxl_conditioning() -> SdxlDiffusionConditioning {
-        SdxlDiffusionConditioning {
-            text_embedding: Tensor::zeros((1, 77, 2048), DType::F32, &Device::Cpu).unwrap(),
-            pooled_embedding: Tensor::zeros((1, 1280), DType::F32, &Device::Cpu).unwrap(),
+    fn sdxl_conditioning() -> CandleConditioning {
+        CandleConditioning::new(
+            Tensor::zeros((1, 77, 2048), DType::F32, &Device::Cpu).unwrap(),
+            Some(Tensor::zeros((1, 1280), DType::F32, &Device::Cpu).unwrap()),
+        )
+    }
+
+    fn sample_input() -> DiffusionSampleInput {
+        DiffusionSampleInput {
+            seed: 42,
+            steps: 10,
+            cfg: 7.0,
+            sampler_name: "euler".to_string(),
+            scheduler_name: "normal".to_string(),
+            denoise: 1.0,
+            expected_batch: 1,
+            positive: sdxl_conditioning(),
+            negative: sdxl_conditioning(),
         }
     }
 
@@ -473,20 +518,7 @@ mod tests {
             LatentSpaceMetadata::sdxl_base(),
         );
         let result = bundle
-            .sample_diffusion(
-                DiffusionSampleInput {
-                    seed: 42,
-                    steps: 10,
-                    cfg: 7.0,
-                    sampler_name: "euler".to_string(),
-                    scheduler_name: "normal".to_string(),
-                    denoise: 1.0,
-                    positive: sdxl_conditioning(),
-                    negative: sdxl_conditioning(),
-                },
-                input_latent,
-                &Device::Cpu,
-            )
+            .sample_diffusion(sample_input(), input_latent, &Device::Cpu)
             .expect("first sample should materialize the diffusion graph");
         assert_eq!(result.latent.dims(), vec![1, 4, 8, 8]);
 
@@ -495,20 +527,7 @@ mod tests {
             LatentSpaceMetadata::sdxl_base(),
         );
         bundle
-            .sample_diffusion(
-                DiffusionSampleInput {
-                    seed: 42,
-                    steps: 10,
-                    cfg: 7.0,
-                    sampler_name: "euler".to_string(),
-                    scheduler_name: "normal".to_string(),
-                    denoise: 1.0,
-                    positive: sdxl_conditioning(),
-                    negative: sdxl_conditioning(),
-                },
-                input_latent,
-                &Device::Cpu,
-            )
+            .sample_diffusion(sample_input(), input_latent, &Device::Cpu)
             .expect("second sample should reuse the materialized diffusion graph");
     }
 
@@ -661,6 +680,7 @@ mod tests {
                     sampler_name: "euler".to_string(),
                     scheduler_name: "normal".to_string(),
                     denoise: 1.0,
+                    expected_batch: 1,
                     positive: sdxl_conditioning(),
                     negative: sdxl_conditioning(),
                 },

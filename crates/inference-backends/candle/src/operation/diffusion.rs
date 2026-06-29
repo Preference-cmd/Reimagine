@@ -5,10 +5,9 @@
 //! [`DiffusionSampleResponse`] carrying a `RuntimeLatent` handle.
 //!
 //! The operation is model-family-neutral at the protocol level.
-//! SDXL-specific tokenization, sampling, and UNet work live behind the
-//! facade in `models/stable_diffusion/sdxl/diffusion.rs`.
+//! Model-family-specific sampling and UNet work live behind the loaded-bundle
+//! graph facade.
 //!
-use candle_core::DType;
 use reimagine_core::model::{TensorDType, TensorShape};
 use reimagine_inference::{
     BackendPayloadKey, BackendTensorHandle, DiffusionSampleRequest, DiffusionSampleResponse,
@@ -19,8 +18,6 @@ use reimagine_inference::{
 use crate::backend::CandleBackend;
 use crate::error::CandleBackendError;
 use crate::graph::{DiffusionSampleInput, DiffusionSampleResult};
-use crate::models::stable_diffusion::sdxl::diffusion_graph::SdxlDiffusionConditioning;
-use crate::store::CandleConditioning;
 
 pub fn execute_diffusion_sample(
     request: DiffusionSampleRequest,
@@ -108,9 +105,6 @@ pub fn execute_diffusion_sample(
         )));
     }
 
-    validate_sdxl_conditioning_payload("positive", &positive, latent_handle.batch())?;
-    validate_sdxl_conditioning_payload("negative", &negative, latent_handle.batch())?;
-
     let sample_input = DiffusionSampleInput {
         seed: request.seed(),
         steps: request.steps(),
@@ -118,8 +112,9 @@ pub fn execute_diffusion_sample(
         sampler_name,
         scheduler_name,
         denoise: request.denoise(),
-        positive: diffusion_conditioning_from_payload("positive", &positive)?,
-        negative: diffusion_conditioning_from_payload("negative", &negative)?,
+        expected_batch: latent_handle.batch(),
+        positive,
+        negative,
     };
 
     // Validate model-family-specific sampler parameters before sampling so
@@ -167,65 +162,6 @@ pub fn execute_diffusion_sample(
     );
 
     Ok(DiffusionSampleResponse::new(latent))
-}
-
-fn diffusion_conditioning_from_payload(
-    label: &str,
-    conditioning: &CandleConditioning,
-) -> Result<SdxlDiffusionConditioning, CandleBackendError> {
-    let pooled_embedding = conditioning.pooled_embedding().ok_or_else(|| {
-        CandleBackendError::InvalidRequest(format!(
-            "diffusion.sample {label} pooled_embedding is required for SDXL"
-        ))
-    })?;
-    Ok(SdxlDiffusionConditioning {
-        text_embedding: conditioning.text_embedding().clone(),
-        pooled_embedding: pooled_embedding.clone(),
-    })
-}
-
-fn validate_sdxl_conditioning_payload(
-    label: &str,
-    conditioning: &CandleConditioning,
-    expected_batch: u32,
-) -> Result<(), CandleBackendError> {
-    let expected_text = [expected_batch as usize, 77, 2048];
-    let text = conditioning.text_embedding();
-    if text.dtype() != DType::F32 {
-        return Err(CandleBackendError::InvalidRequest(format!(
-            "diffusion.sample {label} text_embedding must be f32, got {:?}",
-            text.dtype()
-        )));
-    }
-    if text.shape().dims() != expected_text {
-        return Err(CandleBackendError::InvalidRequest(format!(
-            "diffusion.sample {label} text_embedding must have shape {:?}, got {:?}",
-            expected_text,
-            text.shape().dims()
-        )));
-    }
-
-    let expected_pooled = [expected_batch as usize, 1280];
-    let pooled = conditioning.pooled_embedding().ok_or_else(|| {
-        CandleBackendError::InvalidRequest(format!(
-            "diffusion.sample {label} pooled_embedding is required for SDXL and must have shape {:?}",
-            expected_pooled
-        ))
-    })?;
-    if pooled.dtype() != DType::F32 {
-        return Err(CandleBackendError::InvalidRequest(format!(
-            "diffusion.sample {label} pooled_embedding must be f32, got {:?}",
-            pooled.dtype()
-        )));
-    }
-    if pooled.shape().dims() != expected_pooled {
-        return Err(CandleBackendError::InvalidRequest(format!(
-            "diffusion.sample {label} pooled_embedding must have shape {:?}, got {:?}",
-            expected_pooled,
-            pooled.shape().dims()
-        )));
-    }
-    Ok(())
 }
 
 fn require_backend_instance_affinity(
