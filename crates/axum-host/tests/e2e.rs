@@ -6,6 +6,8 @@
 //! `RunEventRecorder` so `GET /runs/:id/events` returns real events
 //! emitted during the run.
 
+mod sdxl_workflows;
+
 use std::sync::Arc;
 use std::time::Duration;
 
@@ -37,6 +39,7 @@ use serde_json::Value;
 use tower::ServiceExt;
 
 use reimagine_axum_host::{AxumHostState, RunEventRecorder, build_router};
+use sdxl_workflows::{SdxlWorkflowOptions, text_to_image};
 
 const WORKFLOW_ID: &str = "wf-axum-test";
 const MODEL_ID: &str = "sdxl-base-1.0";
@@ -271,13 +274,15 @@ async fn build_candle_ready_host(
     (Arc::new(host), recorder, base_path)
 }
 
-fn load_sdxl_workflow_json() -> serde_json::Value {
-    let path = std::path::PathBuf::from(concat!(
-        env!("CARGO_MANIFEST_DIR"),
-        "/../../docs/architecture/examples/sdxl-base-workflow.json"
-    ));
-    let bytes = std::fs::read(&path).unwrap_or_else(|e| panic!("failed to read {path:?}: {e}"));
-    serde_json::from_slice(&bytes).unwrap_or_else(|e| panic!("failed to parse SDXL workflow: {e}"))
+fn sdxl_placeholder_workflow_json() -> serde_json::Value {
+    text_to_image(SdxlWorkflowOptions {
+        workflow_id: WORKFLOW_ID,
+        model_id: MODEL_ID,
+        name: "SDXL Placeholder Axum E2E",
+        description: "Inline SDXL workflow used to verify Axum surfaces backend diagnostics without local architecture docs.",
+        filename_prefix: "sdxl_placeholder_e2e",
+        denoise: 1.0,
+    })
 }
 
 fn build_state(host: Arc<WorkspaceHost>, recorder: Arc<RunEventRecorder>) -> AxumHostState {
@@ -732,8 +737,9 @@ async fn candle_sdxl_placeholder_workflow_reports_missing_text_encoder_weights()
     .await;
     let app = build_router().with_state(build_state(host.clone(), recorder.clone()));
 
-    // Open the canonical SDXL workflow inline.
-    let workflow_json = load_sdxl_workflow_json();
+    // Open an inline SDXL workflow. Public tests must not depend on
+    // local-only architecture documents.
+    let workflow_json = sdxl_placeholder_workflow_json();
     let workflow_id = workflow_json["id"].as_str().expect("workflow id");
     let open_body = serde_json::json!({ "workflow": workflow_json }).to_string();
     let response = app
