@@ -1940,7 +1940,7 @@ async fn diffusion_sample_reads_conditioning_payload_and_rejects_bad_text_shape(
 }
 
 #[tokio::test]
-async fn diffusion_sample_reads_conditioning_payload_and_requires_pooled_embedding() {
+async fn diffusion_sample_does_not_require_pooled_conditioning_for_candle_example_forward() {
     let backend = backend();
     let (model, _root) = sdxl_model();
     let _ = backend
@@ -1994,8 +1994,7 @@ async fn diffusion_sample_reads_conditioning_payload_and_requires_pooled_embeddi
         .await
         .unwrap_err();
 
-    assert_backend_execution_failed_with(&err, "pooled_embedding");
-    assert_backend_execution_failed_with(&err, "[1, 1280]");
+    assert_backend_execution_failed_with(&err, "invalid SDXL diffusion safetensors header");
 }
 
 #[tokio::test]

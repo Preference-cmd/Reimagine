@@ -16,21 +16,16 @@ use crate::error::CandleBackendError;
 use crate::store::CandleLatent;
 
 #[derive(Debug, Clone)]
-pub(crate) struct SdxlDiffusionConditioning {
+pub(crate) struct SdxlUnetForwardConditioning {
     pub text_embedding: Tensor,
-    /// Pooled embedding is stored for future added-conditioning deepening.
-    /// V1 aligns with Candle's official SDXL example, which does not pass
-    /// pooled embeddings or time ids through the UNet forward path.
-    #[allow(dead_code)]
-    pub pooled_embedding: Tensor,
 }
 
 pub(crate) trait SdxlDiffusionGraph: std::fmt::Debug + Send + Sync {
     fn sample(
         &self,
         input_latent: CandleLatent,
-        positive: SdxlDiffusionConditioning,
-        negative: SdxlDiffusionConditioning,
+        positive: SdxlUnetForwardConditioning,
+        negative: SdxlUnetForwardConditioning,
         request: &SdxlSampleRequest,
         device: &Device,
     ) -> Result<CandleLatent, CandleBackendError>;
@@ -123,7 +118,7 @@ trait SdxlDenoiser {
         &self,
         latent_model_input: &Tensor,
         timestep: f64,
-        conditioning: &SdxlDiffusionConditioning,
+        conditioning: &SdxlUnetForwardConditioning,
     ) -> candle_core::Result<Tensor>;
 }
 
@@ -132,7 +127,7 @@ impl SdxlDenoiser for UNet2DConditionModel {
         &self,
         latent_model_input: &Tensor,
         timestep: f64,
-        conditioning: &SdxlDiffusionConditioning,
+        conditioning: &SdxlUnetForwardConditioning,
     ) -> candle_core::Result<Tensor> {
         self.forward(latent_model_input, timestep, &conditioning.text_embedding)
     }
@@ -142,8 +137,8 @@ impl SdxlDiffusionGraph for DiffusersSdxlUnetGraph {
     fn sample(
         &self,
         input_latent: CandleLatent,
-        positive: SdxlDiffusionConditioning,
-        negative: SdxlDiffusionConditioning,
+        positive: SdxlUnetForwardConditioning,
+        negative: SdxlUnetForwardConditioning,
         request: &SdxlSampleRequest,
         device: &Device,
     ) -> Result<CandleLatent, CandleBackendError> {
@@ -161,8 +156,8 @@ impl SdxlDiffusionGraph for DiffusersSdxlUnetGraph {
 fn run_euler_normal_denoise_loop(
     denoiser: &dyn SdxlDenoiser,
     input_latent: CandleLatent,
-    positive: SdxlDiffusionConditioning,
-    negative: SdxlDiffusionConditioning,
+    positive: SdxlUnetForwardConditioning,
+    negative: SdxlUnetForwardConditioning,
     request: &SdxlSampleRequest,
     device: &Device,
 ) -> Result<CandleLatent, CandleBackendError> {
@@ -476,16 +471,14 @@ impl SdxlDiffusionGraph for TestSdxlDiffusionGraph {
     fn sample(
         &self,
         input_latent: CandleLatent,
-        positive: SdxlDiffusionConditioning,
-        negative: SdxlDiffusionConditioning,
+        positive: SdxlUnetForwardConditioning,
+        negative: SdxlUnetForwardConditioning,
         request: &SdxlSampleRequest,
         device: &Device,
     ) -> Result<CandleLatent, CandleBackendError> {
         let _conditioning_dims = (
             positive.text_embedding.shape().dims(),
-            positive.pooled_embedding.shape().dims(),
             negative.text_embedding.shape().dims(),
-            negative.pooled_embedding.shape().dims(),
         );
         super::diffusion::SdxlSampler::new()
             .sample(input_latent, request, device)
@@ -522,10 +515,10 @@ mod tests {
             &self,
             latent_model_input: &Tensor,
             timestep: f64,
-            conditioning: &SdxlDiffusionConditioning,
+            conditioning: &SdxlUnetForwardConditioning,
         ) -> candle_core::Result<Tensor> {
             let value = conditioning
-                .pooled_embedding
+                .text_embedding
                 .flatten_all()?
                 .to_vec1::<f32>()?
                 .first()
@@ -544,10 +537,9 @@ mod tests {
         }
     }
 
-    fn conditioning(value: f32) -> SdxlDiffusionConditioning {
-        SdxlDiffusionConditioning {
-            text_embedding: Tensor::zeros((1, 77, 2048), DType::F32, &Device::Cpu).unwrap(),
-            pooled_embedding: Tensor::full(value, (1, 1280), &Device::Cpu).unwrap(),
+    fn conditioning(value: f32) -> SdxlUnetForwardConditioning {
+        SdxlUnetForwardConditioning {
+            text_embedding: Tensor::full(value, (1, 77, 2048), &Device::Cpu).unwrap(),
         }
     }
 
