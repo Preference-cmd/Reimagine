@@ -606,7 +606,7 @@ mod tests {
     fn unknown_open_selected_instance_falls_back_to_cpu_with_diagnostic() {
         let base = temp_dir("profile-unknown-selected");
         let backend_config = InferenceBackendConfig {
-            selected_instance: Some("burn:cpu".to_string()),
+            selected_instance: Some("ghost:cpu".to_string()),
             candle_device: "metal".to_string(),
             ..InferenceBackendConfig::default()
         };
@@ -634,7 +634,55 @@ mod tests {
                     profile.diagnostics
                 )
             });
-        assert!(diagnostic.message().contains("burn:cpu"));
+        assert!(diagnostic.message().contains("ghost:cpu"));
+        let _ = fs::remove_dir_all(&base);
+    }
+
+    #[test]
+    fn burn_selected_instance_is_resolved_without_candle_fallback_diagnostic() {
+        let base = temp_dir("profile-burn-selected");
+        let backend_config = InferenceBackendConfig {
+            selected_instance: Some("burn:cpu".to_string()),
+            ..InferenceBackendConfig::default()
+        };
+        let workspace = WorkspaceHost::with_backend_config(
+            WorkspaceScope::new("profile-burn-selected"),
+            &base,
+            backend_config,
+            Arc::new(VecRunEventSink::new()),
+        );
+
+        assert_eq!(
+            workspace.resolved_backend_instance(),
+            &BackendInstance::new("burn:cpu")
+        );
+        let profile = workspace.compute_profile();
+        assert!(
+            profile
+                .backend_profiles
+                .iter()
+                .any(|backend| backend.backend.as_str() == "candle"),
+            "compute profile should keep Candle observable"
+        );
+        let burn = profile
+            .backend_profiles
+            .iter()
+            .find(|backend| backend.backend.as_str() == "burn")
+            .expect("burn backend profile");
+        let burn_cpu = burn
+            .instances
+            .iter()
+            .find(|instance| instance.instance == BackendInstance::new("burn:cpu"))
+            .expect("burn:cpu profile");
+        assert_eq!(
+            burn_cpu.status,
+            reimagine_inference::BackendInstanceStatus::Available
+        );
+        assert!(
+            profile.diagnostics.is_empty(),
+            "known burn:cpu selection should not emit fallback diagnostics: {:?}",
+            profile.diagnostics
+        );
         let _ = fs::remove_dir_all(&base);
     }
 

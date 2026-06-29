@@ -29,6 +29,8 @@ pub(crate) struct ComposedBackends {
 
 pub(crate) struct ComposedInferenceRuntime {
     pub(crate) executor_registry: NodeExecutorRegistry,
+    #[cfg(test)]
+    pub(crate) inference_runtime: Arc<DefaultInferenceRuntime>,
     pub(crate) runtime_hooks: Arc<dyn BackendInstanceRuntimeHooks>,
     pub(crate) selected_instance: BackendInstance,
 }
@@ -81,9 +83,9 @@ fn bootstrap_inference_with_candidates(
 
 /// Construct the inference runtime for a workspace from built-in candidates.
 ///
-/// Production V1 registers only Candle, but the composition path is backend-
-/// keyed: candidates provide profiles, selected instances, backend builders,
-/// and runtime hooks. Tests inject an additional stub candidate through
+/// Production V1 registers built-in backend candidates through a backend-
+/// keyed path: candidates provide profiles, selected instances, backend
+/// builders, and runtime hooks. Tests inject an additional stub candidate through
 /// `bootstrap_inference_with_candidates` to prove this path is no longer
 /// Candle-shaped.
 #[cfg(test)]
@@ -139,9 +141,11 @@ fn compose_inference_runtime_with_candidates(
 
     let mut executor_registry = NodeExecutorRegistry::default();
     let image_source_resolver = Arc::new(InputImageSourceResolver::new(config.paths()));
+    let executor_inference_runtime: Arc<dyn reimagine_inference::InferenceRuntime> =
+        inference_runtime.clone();
     register_builtin_inference_executors(
         &mut executor_registry,
-        inference_runtime,
+        executor_inference_runtime,
         Arc::new(ModelResolverAdapter::new(
             model_service,
             config.paths().clone(),
@@ -152,6 +156,8 @@ fn compose_inference_runtime_with_candidates(
 
     Ok(ComposedInferenceRuntime {
         executor_registry,
+        #[cfg(test)]
+        inference_runtime,
         runtime_hooks: composed_backends.runtime_hooks,
         selected_instance: composed_backends.selected_instance,
     })
@@ -240,8 +246,8 @@ mod tests {
         Backend, BackendInstanceDescriptor, BackendInstanceObservation, BackendInstanceProfile,
         BackendInstanceSnapshot, BackendProfile, BackendRunLifecycle, BackendRunLifecycleReport,
         BackendRunLifecycleRequest, CannedCapabilityResponse, CreateEmptyLatentRequest,
-        CreateEmptyLatentResponse, DeviceKind, DeviceProfile, FakeBackend, InferenceError,
-        LatentContent, LatentSpaceMetadata, RuntimeLatent,
+        CreateEmptyLatentResponse, DeviceKind, DeviceProfile, FakeBackend, InferenceCapability,
+        InferenceError, InferenceRuntime, LatentContent, LatentSpaceMetadata, RuntimeLatent,
     };
     use reimagine_plugin::{Extension, Plugin};
     use std::collections::BTreeMap;
@@ -316,6 +322,140 @@ mod tests {
             descriptor.device.as_ref().map(|d| d.label.as_str()),
             Some("cpu")
         );
+        let _ = std::fs::remove_dir_all(&base);
+    }
+
+    #[test]
+    fn builtin_compute_profile_includes_burn_without_capabilities() {
+        let profile = collect_compute_profile(&builtin_backend_candidates());
+
+        let burn = profile
+            .backend_profiles
+            .iter()
+            .find(|profile| profile.backend == Backend::new("burn"))
+            .expect("burn backend profile");
+        assert_eq!(
+            burn.plugin.as_ref().map(|plugin| plugin.as_str()),
+            Some("builtin.burn")
+        );
+        assert_eq!(
+            burn.extension.as_ref().map(|extension| extension.as_str()),
+            Some("backend.burn")
+        );
+        let cpu = burn
+            .instances
+            .iter()
+            .find(|instance| instance.instance == BackendInstance::new("burn:cpu"))
+            .expect("burn:cpu instance profile");
+        assert_eq!(cpu.status, BackendInstanceStatus::Available);
+        assert_eq!(cpu.device.kind, DeviceKind::Cpu);
+        assert!(cpu.capabilities.is_empty());
+        assert!(cpu.operation_options.is_empty());
+        assert!(cpu.diagnostics.is_empty());
+    }
+
+    #[tokio::test]
+    async fn bootstrap_with_burn_selected_registers_only_burn_candidate_and_hooks() {
+        let base = temp_dir("burn-bootstrap");
+        let config = AppConfig::new(AppPaths::new(&base));
+        let model_service = Arc::new(ModelService::new(config.paths().clone()));
+        let backend_config = InferenceBackendConfig {
+            selected_instance: Some("burn:cpu".to_string()),
+            ..InferenceBackendConfig::default()
+        };
+
+        let bootstrapped = bootstrap_inference_with_candidates(
+            &config,
+            &backend_config,
+            model_service,
+            builtin_backend_candidates(),
+        )
+        .expect("bootstrap");
+
+        assert_eq!(
+            bootstrapped.runtime.selected_instance,
+            BackendInstance::new("burn:cpu")
+        );
+        let snapshots = reimagine_inference::BackendInstanceObservation::snapshots(
+            bootstrapped.runtime.runtime_hooks.as_ref(),
+        )
+        .await;
+        assert_eq!(
+            snapshots.len(),
+            1,
+            "selected Burn should not add Candle fallback hooks"
+        );
+        assert_eq!(
+            snapshots[0].backend_instance,
+            BackendInstance::new("burn:cpu")
+        );
+        assert_eq!(
+            snapshots[0].plugin.as_ref().map(|plugin| plugin.as_str()),
+            Some("builtin.burn")
+        );
+        assert_eq!(
+            snapshots[0]
+                .extension
+                .as_ref()
+                .map(|extension| extension.as_str()),
+            Some("backend.burn")
+        );
+        assert_eq!(
+            snapshots[0]
+                .device
+                .as_ref()
+                .map(|device| device.label.as_str()),
+            Some("cpu")
+        );
+        let _ = std::fs::remove_dir_all(&base);
+    }
+
+    #[tokio::test]
+    async fn burn_selected_create_empty_latent_fails_at_router_capability_check() {
+        let base = temp_dir("burn-router");
+        let config = AppConfig::new(AppPaths::new(&base));
+        let model_service = Arc::new(ModelService::new(config.paths().clone()));
+        let backend_config = InferenceBackendConfig {
+            selected_instance: Some("burn:cpu".to_string()),
+            ..InferenceBackendConfig::default()
+        };
+
+        let bootstrapped = bootstrap_inference_with_candidates(
+            &config,
+            &backend_config,
+            model_service,
+            builtin_backend_candidates(),
+        )
+        .expect("bootstrap");
+
+        let request = CreateEmptyLatentRequest::new(
+            512,
+            512,
+            1,
+            reimagine_core::model::RunId::new("run-burn-router"),
+            reimagine_core::model::WorkflowId::new("workflow-burn-router"),
+            reimagine_core::model::WorkflowVersion::new(1),
+            reimagine_core::model::NodeId::new("latent-burn-router"),
+        );
+        let err = bootstrapped
+            .runtime
+            .inference_runtime
+            .create_empty_latent(request)
+            .await
+            .expect_err("burn skeleton advertises no latent capability");
+
+        match err {
+            InferenceError::CandidateBackendLacksCapability {
+                instance,
+                backend,
+                capability,
+            } => {
+                assert_eq!(instance, BackendInstance::new("burn:cpu"));
+                assert_eq!(backend, Backend::new("burn"));
+                assert_eq!(capability, InferenceCapability::CreateEmptyLatent);
+            }
+            other => panic!("expected CandidateBackendLacksCapability, got {other:?}"),
+        }
         let _ = std::fs::remove_dir_all(&base);
     }
 

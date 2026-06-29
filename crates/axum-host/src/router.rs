@@ -103,12 +103,33 @@ mod tests {
         let json: serde_json::Value =
             serde_json::from_slice(&body).expect("compute-profile body is JSON");
 
+        let backend_profiles = json["backend_profiles"]
+            .as_array()
+            .expect("backend_profiles is an array");
+
+        let burn = backend_profiles
+            .iter()
+            .find(|bp| bp["backend"].as_str() == Some("burn"))
+            .expect("burn backend profile is serialized");
+        assert_eq!(burn["plugin"].as_str(), Some("builtin.burn"));
+        assert_eq!(burn["extension"].as_str(), Some("backend.burn"));
+        let burn_cpu = burn["instances"]
+            .as_array()
+            .expect("burn instances is an array")
+            .iter()
+            .find(|inst| inst["instance"].as_str() == Some("burn:cpu"))
+            .expect("burn:cpu instance is serialized");
+        assert_eq!(burn_cpu["status"].as_str(), Some("Available"));
+        assert_eq!(burn_cpu["device"]["kind"].as_str(), Some("Cpu"));
+        assert!(
+            burn_cpu["capabilities"].as_array().unwrap().is_empty(),
+            "Burn skeleton should serialize an empty capability list, got: {burn_cpu}"
+        );
+
         // V1 must always include a `candle:cpu` instance, regardless
         // of host hardware. The wire shape mirrors the app-host
         // DTO projection exactly.
-        let instances = json["backend_profiles"]
-            .as_array()
-            .expect("backend_profiles is an array")
+        let instances = backend_profiles
             .iter()
             .flat_map(|bp| bp["instances"].as_array().cloned().unwrap_or_default())
             .collect::<Vec<_>>();

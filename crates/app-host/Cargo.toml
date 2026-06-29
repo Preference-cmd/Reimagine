@@ -13,6 +13,7 @@ reimagine-agent = { path = "../agent" }
 reimagine-config = { path = "../config" }
 reimagine-core = { path = "../core" }
 reimagine-inference = { path = "../inference" }
+reimagine-inference-burn = { path = "../inference-backends/burn" }
 reimagine-inference-candle = { path = "../inference-backends/candle" }
 reimagine-model-manager = { path = "../model-manager" }
 reimagine-nodes = { path = "../nodes" }
