@@ -50,6 +50,7 @@ mod resolver;
 mod resources;
 mod response;
 mod router;
+mod routing_request;
 /// Test-only fake backend and canned-response helpers.
 ///
 /// Compiled for both unit tests and integration tests so downstream
