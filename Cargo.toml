@@ -14,6 +14,7 @@ members = [
     "crates/axum-host",
     "crates/inference",
     "crates/inference-backends/candle",
+    "crates/inference-backends/burn",
     "crates/plugin",
 ]
 
@@ -53,6 +54,7 @@ rig-core = { version = "0.31", default-features = false, features = ["reqwest-mi
 candle-core = { version = "0.10", default-features = false, features = ["metal"] }
 candle-nn = { version = "0.10", default-features = false, features = ["metal"] }
 candle-transformers = { version = "0.10", default-features = false, features = ["metal"] }
+burn-ndarray = { version = "0.21", default-features = false, features = ["std"] }
 tokenizers = "0.21"
 image = "0.25"
 tempfile = "3"
