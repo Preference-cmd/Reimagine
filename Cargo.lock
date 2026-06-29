@@ -5761,6 +5761,7 @@ dependencies = [
  "reimagine-config",
  "reimagine-core",
  "reimagine-inference",
+ "reimagine-inference-burn",
  "reimagine-inference-candle",
  "reimagine-model-manager",
  "reimagine-nodes",

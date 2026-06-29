@@ -39,6 +39,7 @@ pub(crate) fn resolve_backend_selection(
         .as_deref()
         .map(str::trim)
         .filter(|id| !id.is_empty());
+    let has_explicit_selected_instance = explicit.is_some();
 
     let selected_instance = if let Some(instance_id) = explicit {
         match resolve_open_selected_instance(instance_id, profile, &disabled) {
@@ -64,10 +65,12 @@ pub(crate) fn resolve_backend_selection(
         }
         push_unique(&mut priority_order, BackendInstance::new(configured));
     }
-    push_unique(
-        &mut priority_order,
-        BackendInstance::new(CANDLE_CPU_FALLBACK),
-    );
+    if !has_explicit_selected_instance {
+        push_unique(
+            &mut priority_order,
+            BackendInstance::new(CANDLE_CPU_FALLBACK),
+        );
+    }
 
     ResolvedBackendSelection {
         selected_instance,
@@ -267,13 +270,18 @@ mod tests {
         assert_eq!(resolved.selected_instance, BackendInstance::new("stub:cpu"));
         assert!(resolved.diagnostics.is_empty());
         assert_eq!(resolved.priority_order[0], BackendInstance::new("stub:cpu"));
+        assert_eq!(
+            resolved.priority_order,
+            vec![BackendInstance::new("stub:cpu")],
+            "open selected instance should not append Candle fallback unless config asks for it"
+        );
     }
 
     #[test]
     fn resolve_unknown_selected_instance_falls_back_to_candle_cpu() {
         let profile = profile_with_stub();
         let cfg = InferenceBackendConfig {
-            selected_instance: Some("burn:cpu".to_string()),
+            selected_instance: Some("ghost:cpu".to_string()),
             ..InferenceBackendConfig::default()
         };
 
@@ -287,6 +295,26 @@ mod tests {
         assert_eq!(
             resolved.diagnostics[0].code().as_str(),
             "APP_HOST/BACKEND_SELECTED_INSTANCE_UNKNOWN"
+        );
+    }
+
+    #[test]
+    fn explicit_priority_order_can_allow_candle_after_open_selected_instance() {
+        let profile = profile_with_stub();
+        let cfg = InferenceBackendConfig {
+            selected_instance: Some("stub:cpu".to_string()),
+            priority_order: vec!["candle:cpu".to_string()],
+            ..InferenceBackendConfig::default()
+        };
+
+        let resolved = resolve_backend_selection(&cfg, &profile);
+
+        assert_eq!(
+            resolved.priority_order,
+            vec![
+                BackendInstance::new("stub:cpu"),
+                BackendInstance::new("candle:cpu")
+            ]
         );
     }
 
