@@ -24,6 +24,7 @@ use crate::response::latent::{CreateEmptyLatentResponse, LatentDecodeResponse};
 use crate::response::latent_encode::LatentEncodeResponse;
 use crate::response::model::LoadBundleResponse;
 use crate::response::text::TextEncodeResponse;
+use crate::routing_request::RoutableInferenceRequest;
 
 /// Executor-facing router. Built-in executors call this trait rather
 /// than a concrete backend directly.
@@ -191,22 +192,6 @@ impl DefaultInferenceRuntime {
         Ok(Some(first))
     }
 
-    fn build_selection_request(
-        &self,
-        capability: InferenceCapability,
-        node_id: Option<reimagine_core::model::NodeId>,
-        backend_affinities: &[BackendInstance],
-        explicit_override: Option<BackendInstance>,
-    ) -> BackendSelectionRequest {
-        BackendSelectionRequest {
-            capability,
-            node_id,
-            affinities: backend_affinities.to_vec(),
-            registered: self.registry.descriptors(),
-            explicit_override,
-        }
-    }
-
     /// Pick the first viable candidate and verify the backend
     /// advertises the requested capability.
     fn resolve_backend(
@@ -306,6 +291,14 @@ impl DefaultInferenceRuntime {
             registered: self.registry.len(),
         })
     }
+
+    fn resolve_for_request<R: RoutableInferenceRequest>(
+        &self,
+        request: &R,
+    ) -> Result<RegisteredInstance, InferenceError> {
+        let selection = request.selection_request(self.registry.descriptors());
+        self.resolve_backend(&selection)
+    }
 }
 
 #[async_trait::async_trait]
@@ -314,16 +307,7 @@ impl InferenceRuntime for DefaultInferenceRuntime {
         &self,
         request: LoadBundleRequest,
     ) -> Result<LoadBundleResponse, InferenceError> {
-        let selection = self.build_selection_request(
-            InferenceCapability::LoadBundle,
-            Some(request.node_id().clone()),
-            &request.backend_affinities(),
-            request
-                .backend_selection_overlay()
-                .explicit_override
-                .clone(),
-        );
-        let backend = self.resolve_backend(&selection)?;
+        let backend = self.resolve_for_request(&request)?;
         backend.backend.load_bundle(request).await
     }
 
@@ -331,16 +315,7 @@ impl InferenceRuntime for DefaultInferenceRuntime {
         &self,
         request: TextEncodeRequest,
     ) -> Result<TextEncodeResponse, InferenceError> {
-        let selection = self.build_selection_request(
-            InferenceCapability::TextEncode,
-            Some(request.node_id().clone()),
-            &request.backend_affinities(),
-            request
-                .backend_selection_overlay()
-                .explicit_override
-                .clone(),
-        );
-        let backend = self.resolve_backend(&selection)?;
+        let backend = self.resolve_for_request(&request)?;
         backend.backend.text_encode(request).await
     }
 
@@ -348,16 +323,7 @@ impl InferenceRuntime for DefaultInferenceRuntime {
         &self,
         request: CreateEmptyLatentRequest,
     ) -> Result<CreateEmptyLatentResponse, InferenceError> {
-        let selection = self.build_selection_request(
-            InferenceCapability::CreateEmptyLatent,
-            Some(request.node_id().clone()),
-            &request.backend_affinities(),
-            request
-                .backend_selection_overlay()
-                .explicit_override
-                .clone(),
-        );
-        let backend = self.resolve_backend(&selection)?;
+        let backend = self.resolve_for_request(&request)?;
         backend.backend.create_empty_latent(request).await
     }
 
@@ -365,16 +331,7 @@ impl InferenceRuntime for DefaultInferenceRuntime {
         &self,
         request: DiffusionSampleRequest,
     ) -> Result<DiffusionSampleResponse, InferenceError> {
-        let selection = self.build_selection_request(
-            InferenceCapability::DiffusionSample,
-            Some(request.node_id().clone()),
-            &request.backend_affinities(),
-            request
-                .backend_selection_overlay()
-                .explicit_override
-                .clone(),
-        );
-        let backend = self.resolve_backend(&selection)?;
+        let backend = self.resolve_for_request(&request)?;
         backend.backend.diffusion_sample(request).await
     }
 
@@ -382,16 +339,7 @@ impl InferenceRuntime for DefaultInferenceRuntime {
         &self,
         request: LatentDecodeRequest,
     ) -> Result<LatentDecodeResponse, InferenceError> {
-        let selection = self.build_selection_request(
-            InferenceCapability::LatentDecode,
-            Some(request.node_id().clone()),
-            &request.backend_affinities(),
-            request
-                .backend_selection_overlay()
-                .explicit_override
-                .clone(),
-        );
-        let backend = self.resolve_backend(&selection)?;
+        let backend = self.resolve_for_request(&request)?;
         backend.backend.latent_decode(request).await
     }
 
@@ -399,16 +347,7 @@ impl InferenceRuntime for DefaultInferenceRuntime {
         &self,
         request: LatentEncodeRequest,
     ) -> Result<LatentEncodeResponse, InferenceError> {
-        let selection = self.build_selection_request(
-            InferenceCapability::LatentEncode,
-            Some(request.node_id().clone()),
-            &request.backend_affinities(),
-            request
-                .backend_selection_overlay()
-                .explicit_override
-                .clone(),
-        );
-        let backend = self.resolve_backend(&selection)?;
+        let backend = self.resolve_for_request(&request)?;
         backend.backend.latent_encode(request).await
     }
 
@@ -416,16 +355,7 @@ impl InferenceRuntime for DefaultInferenceRuntime {
         &self,
         request: ImageImportRequest,
     ) -> Result<ImageImportResponse, InferenceError> {
-        let selection = self.build_selection_request(
-            InferenceCapability::ImageImport,
-            Some(request.node_id().clone()),
-            &request.backend_affinities(),
-            request
-                .backend_selection_overlay()
-                .explicit_override
-                .clone(),
-        );
-        let backend = self.resolve_backend(&selection)?;
+        let backend = self.resolve_for_request(&request)?;
         backend.backend.image_import(request).await
     }
 
@@ -433,16 +363,7 @@ impl InferenceRuntime for DefaultInferenceRuntime {
         &self,
         request: ImageSaveRequest,
     ) -> Result<ImageSaveResponse, InferenceError> {
-        let selection = self.build_selection_request(
-            InferenceCapability::ImageSave,
-            Some(request.node_id().clone()),
-            &request.backend_affinities(),
-            request
-                .backend_selection_overlay()
-                .explicit_override
-                .clone(),
-        );
-        let backend = self.resolve_backend(&selection)?;
+        let backend = self.resolve_for_request(&request)?;
         backend.backend.image_save(request).await
     }
 
@@ -450,16 +371,7 @@ impl InferenceRuntime for DefaultInferenceRuntime {
         &self,
         request: ImagePreviewRequest,
     ) -> Result<ImagePreviewResponse, InferenceError> {
-        let selection = self.build_selection_request(
-            InferenceCapability::ImagePreview,
-            Some(request.node_id().clone()),
-            &request.backend_affinities(),
-            request
-                .backend_selection_overlay()
-                .explicit_override
-                .clone(),
-        );
-        let backend = self.resolve_backend(&selection)?;
+        let backend = self.resolve_for_request(&request)?;
         backend.backend.image_preview(request).await
     }
 }
