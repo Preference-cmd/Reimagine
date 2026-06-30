@@ -17,6 +17,10 @@ mod contract;
 #[allow(dead_code)]
 mod conversion;
 mod metadata;
+#[allow(dead_code)]
+mod source_layout;
+#[allow(dead_code)]
+mod source_mapping;
 mod validation;
 #[allow(dead_code)]
 mod writer;
