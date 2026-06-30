@@ -5838,6 +5838,10 @@ dependencies = [
  "reimagine-core",
  "reimagine-inference",
  "reimagine-plugin",
+ "safetensors 0.7.0",
+ "serde",
+ "serde_json",
+ "tempfile",
  "tokio",
 ]
 

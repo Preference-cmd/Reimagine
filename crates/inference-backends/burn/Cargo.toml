@@ -12,7 +12,11 @@ async-trait = { workspace = true }
 burn-ndarray = { workspace = true }
 reimagine-inference = { path = "../../inference" }
 reimagine-plugin = { path = "../../plugin" }
+serde = { workspace = true }
+serde_json = { workspace = true }
+safetensors = { workspace = true }
 
 [dev-dependencies]
 reimagine-core = { path = "../../core" }
+tempfile = { workspace = true }
 tokio = { workspace = true, features = ["macros", "rt"] }

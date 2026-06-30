@@ -13,5 +13,10 @@ pub use validation::{
 
 mod component;
 mod contract;
+// Offline conversion scaffolding is exercised by module tests and consumed by later Burn slices.
+#[allow(dead_code)]
+mod conversion;
 mod metadata;
 mod validation;
+#[allow(dead_code)]
+mod writer;
