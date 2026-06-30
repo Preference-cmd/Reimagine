@@ -1,12 +1,18 @@
 use std::fmt;
 
+use serde::{Deserialize, Serialize};
+
 use super::contract::BurnSdxlComponentContract;
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub enum BurnSdxlComponentRole {
+    #[serde(rename = "diffusion")]
     Diffusion,
+    #[serde(rename = "vae")]
     Vae,
+    #[serde(rename = "text_encoder")]
     TextEncoder,
+    #[serde(rename = "text_encoder_2")]
     TextEncoder2,
 }
 
