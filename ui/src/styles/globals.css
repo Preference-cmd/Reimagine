@@ -1,19 +1,6 @@
 @import "tailwindcss";
 @import "./theme.css";
 
-/* UI 整体缩放：layout 撑到 1/0.7，再用 transform: scale(0.7) 缩回 painted 100%。
-   - layout box  = 100% 视口（topLeft 锚定，painted 不溢出）
-   - painted     = 100% 视口（铺满）
-   - children    = 70% 设计尺寸
-   修正：原来是 width/height: 200%（200% × 0.7 = 140%，会溢出），正确值是 142.857%。 */
-#root {
-  --ui-scale: 0.7;
-  width: calc(100% / var(--ui-scale));
-  height: calc(100% / var(--ui-scale));
-  transform: scale(var(--ui-scale));
-  transform-origin: top left;
-}
-
 @layer base {
   html {
     background-color: var(--color-background);
@@ -46,6 +33,57 @@
 }
 
 @layer utilities {
+  .overlay-root {
+    --overlay-edge: var(--spacing-md);
+    --overlay-rail-left: 12px;
+    --overlay-rail-width: 44px;
+    --overlay-panel-gap: 8px;
+    --overlay-top-safe: 80px;
+    --overlay-bottom-safe: 16px;
+    --overlay-agent-reserve: 0px;
+    --overlay-z-canvas-tools: 10;
+    --overlay-z-panel: 40;
+    --overlay-z-topbar: 50;
+    --overlay-z-modal-backdrop: 80;
+    --overlay-z-modal: 81;
+  }
+
+  .overlay-slot-rail {
+    position: absolute;
+    left: var(--overlay-rail-left);
+    top: 50%;
+    z-index: var(--overlay-z-panel);
+    transform: translateY(-50%);
+  }
+
+  .overlay-slot-explorer {
+    position: absolute;
+    left: calc(var(--overlay-rail-left) + var(--overlay-rail-width) + var(--overlay-panel-gap));
+    top: 50%;
+    z-index: var(--overlay-z-panel);
+    transform: translateY(-50%);
+  }
+
+  .overlay-slot-inspector {
+    position: absolute;
+    right: var(--overlay-edge);
+    top: var(--overlay-top-safe);
+    z-index: calc(var(--overlay-z-panel) - 10);
+  }
+
+  .overlay-slot-canvas-controls {
+    position: absolute;
+    left: calc(var(--overlay-rail-left) + var(--overlay-rail-width) + var(--overlay-panel-gap));
+    bottom: calc(var(--overlay-bottom-safe) + var(--overlay-agent-reserve));
+    z-index: var(--overlay-z-canvas-tools);
+  }
+
+  .overlay-slot-minimap {
+    right: var(--overlay-edge) !important;
+    bottom: calc(var(--overlay-bottom-safe) + var(--overlay-agent-reserve)) !important;
+    z-index: var(--overlay-z-canvas-tools);
+  }
+
   /* Hide scrollbar for dense panels (explorer, properties, inspector). */
   .scrollbar-hide {
     scrollbar-width: none;
@@ -55,48 +93,51 @@
     display: none;
   }
 
-  /* Infinite canvas dot grid — 20px spacing per design system. */
+  /* Infinite canvas dot grid. */
   .canvas-grid {
-    background-color: #000;
+    background-color: var(--color-canvas);
     background-image: radial-gradient(
       circle,
-      #2a2a2a 1.5px,
+      var(--color-canvas-grid-dot) 1.5px,
       transparent 1.5px
     );
-    background-size: 20px 20px;
+    background-size: var(--spacing-canvas-grid) var(--spacing-canvas-grid);
   }
 
-  /* Glass panels: floating side panels (explorer, properties, dialogs).
-     Luminance-stacked dark surface with 20px blur. */
-  .panel-glass {
-    background: linear-gradient(
-      145deg,
-      rgba(24, 24, 24, 0.8),
-      rgba(12, 12, 12, 0.8)
-    );
-    border: 1px solid rgba(255, 255, 255, 0.05);
-    backdrop-filter: blur(20px);
-    -webkit-backdrop-filter: blur(20px);
+  /* Floating instruments that sit over the canvas without becoming chrome.
+     `panel-raised` carries a stacked drop-shadow so the surface reads as
+     a true raised panel. For compact top-bar chrome, use `panel-flat`
+     instead — it's defined by a single hairline border, no shadow. */
+  .panel-raised {
+    background: var(--color-panel-float);
+    backdrop-filter: blur(8px);
+    -webkit-backdrop-filter: blur(8px);
+    box-shadow: var(--shadow-panel-raised);
+  }
+
+  /* Flat floating surface for top-bar pills and similar compact
+     chrome. Borderless, shadowless. Uses a solid surface so the
+     panel reads as a clearly defined object against the canvas —
+     no translucency or blur to dilute the boundary. */
+  .panel-flat {
+    background: var(--color-panel-flat);
   }
 }
 
 @layer components {
-  /* Node base surface — pure transparent frosted glass: no background
-     tint of its own, just the 20px backdrop blur. The canvas dot grid
-     shows through clearly (blurred), and the node reads as a glass
-     frame. `--node-tone` is set per-instance from React and drives
-     the header dot, the selected ring, and the outer glow. */
+  /* Node base surface — lightweight frame over the canvas.
+     `--node-tone` is set per-instance from React and drives the header
+     dot and the selected ring. Selected state uses a crisp ring instead
+     of a colored glow. */
   .node-base {
     position: relative;
     width: 280px;
     border-radius: 16px;
-    background: transparent;
+    background: var(--color-node);
     backdrop-filter: blur(20px);
     -webkit-backdrop-filter: blur(20px);
-    border: 1px solid rgba(255, 255, 255, 0.06);
-    box-shadow:
-      inset 0 1px 0 rgba(255, 255, 255, 0.04),
-      0 8px 24px rgba(0, 0, 0, 0.4);
+    border: 1px solid var(--color-node-border);
+    box-shadow: var(--shadow-node);
     color: var(--color-on-surface);
     font-family: var(--font-sans);
     transition:
@@ -104,23 +145,17 @@
       box-shadow 180ms ease;
   }
   .node-base:hover {
-    border-color: rgba(255, 255, 255, 0.1);
+    border-color: var(--color-node-border-hover);
   }
   .node-base--selected {
     border-color: var(--node-tone);
-    box-shadow:
-      inset 0 1px 0 rgba(255, 255, 255, 0.06),
-      0 0 0 1px var(--node-tone),
-      0 0 18px color-mix(in srgb, var(--node-tone) 35%, transparent),
-      0 8px 24px rgba(0, 0, 0, 0.4);
+    box-shadow: var(--shadow-node-selected);
   }
 
   /* Header — bare title row, no background, no bottom divider. The
      tone dot + title sit directly on the node-base glass; the body's
      own rounded surface (which sits below with margin and a light-gray
-     fill) is what visually separates the body from the header.
-     Vertical padding is 40% larger than before (10px → 14px) so the
-     title row reads as more prominent. */
+     fill) is what visually separates the body from the header. */
   .node-base__header {
     display: flex;
     align-items: center;
@@ -128,29 +163,41 @@
     padding: 14px 12px;
   }
 
-  /* Body — a rounded light-gray card inside node-base. Visually distinct
-     from the darker glass of node-base: same hue family but lighter,
-     so the body reads as "the content area" and the surrounding
-     node-base reads as the frame. The 8px inset (down from 10px) keeps
-     the card close to the frame without touching it. Horizontal padding
-     is 14px so the React Flow `Handle` (positioned at the node's edge)
-     has room without overlapping the inner content. */
+  /* Body — a quiet inset surface inside node-base. */
   .node-base__body {
     margin: 0 8px 8px;
     border-radius: 10px;
-    background: rgba(255, 255, 255, 0.06);
+    background: var(--color-node-body);
     padding: 8px 14px 10px;
     display: flex;
     flex-direction: column;
     gap: 8px;
   }
 
-  /* Inner card — transparent container inside the body. No background,
-     no border; only a rounded shape and a hair of padding so the
-     parameters / children read as a grouped unit. The body's own
-     light-gray surface provides the visual container. */
+  /* Inner card — transparent container inside the body. */
   .node-base__inner {
     border-radius: 8px;
     padding: 4px 2px;
+  }
+
+  /* MiniMap containment. react-flow's MiniMap renders an internal SVG
+     that ignores the parent panel's padding and rounded corners, so
+     node previews and the mask overlay can bleed past the boundary.
+     Force the root to clip to the rounded shape, kill the default
+     border, and let the panel-flat show through (bgColor on the
+     component is set to var(--color-panel-flat) for the same reason). */
+  .react-flow__minimap {
+    overflow: hidden !important;
+    border: none !important;
+    background: var(--color-panel-flat) !important;
+    clip-path: inset(0 round 16px);
+  }
+  .react-flow__minimap svg {
+    background: transparent !important;
+    border-radius: 12px;
+  }
+  .react-flow__minimap .react-flow__minimap-mask {
+    fill: transparent !important;
+    stroke: none !important;
   }
 }

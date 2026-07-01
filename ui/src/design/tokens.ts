@@ -1,7 +1,7 @@
 /**
  * Design tokens — runtime constants for the UI.
  *
- * Source of truth: docs/design/editor/DESIGN.md
+ * Source of truth: Reimagine theme primitives in ui/src/styles/theme.css.
  * Mirrored to CSS in ui/src/styles/theme.css (@theme block).
  *
  * Rule: any value added here MUST also be added to theme.css in the
@@ -11,10 +11,10 @@
 
 /** Socket type → color hex. Mirrored as --color-socket-* in theme.css. */
 export const SOCKET_COLORS = {
-  model:        '#f59e0b',  // amber
-  conditioning: '#f59e0b',  // amber (positive/negative share color in MVP)
-  latent:       '#a855f7',  // purple
-  image:        '#22c55e',  // green
+  model:        '#f5a623',  // model and checkpoint route
+  conditioning: '#f5a623',  // positive/negative conditioning route
+  latent:       '#7928ca',  // latent tensor route
+  image:        '#50e3c2',  // image artifact route
 } as const;
 
 export type SocketKind = keyof typeof SOCKET_COLORS;

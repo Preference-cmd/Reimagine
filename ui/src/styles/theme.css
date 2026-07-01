@@ -1,62 +1,145 @@
 @theme {
-  /* ───── Colors · Obsidian Node System (Material 3 surface roles) ───── */
-  --color-surface:                   #131313;
-  --color-surface-dim:               #131313;
-  --color-surface-bright:            #393939;
-  --color-surface-container-lowest:  #0e0e0e;
-  --color-surface-container-low:     #1c1b1b;
-  --color-surface-container:         #201f1f;
-  --color-surface-container-high:    #2a2a2a;
-  --color-surface-container-highest: #353534;
-  --color-on-surface:                #e5e2e1;
-  --color-on-surface-variant:        #cbc3d7;
-  --color-inverse-surface:           #e5e2e1;
-  --color-inverse-on-surface:        #313030;
-  --color-outline:                   #958ea0;
-  --color-outline-variant:           #494454;
-  --color-surface-tint:              #d0bcff;
-  --color-primary:                   #d0bcff;
-  --color-on-primary:                #3c0091;
-  --color-primary-container:         #a078ff;
-  --color-on-primary-container:      #340080;
-  --color-inverse-primary:           #6d3bd7;
-  --color-secondary:                 #4cd7f6;
-  --color-on-secondary:              #003640;
-  --color-secondary-container:       #03b5d3;
-  --color-on-secondary-container:    #00424e;
-  --color-tertiary:                  #ffb0cd;
-  --color-on-tertiary:               #640039;
-  --color-tertiary-container:        #f751a1;
+  /* Reimagine theme primitives.
+     The editor is canvas-first: semantic primitives describe product
+     roles (canvas, panel, node, status, socket), while framework aliases
+     below keep Tailwind and shadcn-compatible color names stable. */
+  --color-canvas:                #fafafa;
+  --color-canvas-grid-dot:       #dbdbdb;
+  --color-canvas-grid-line:      #eeeeee;
+  --color-on-canvas:             #171717;
+
+  --color-panel:                 #ffffff;
+  --color-panel-float:           rgb(255 255 255 / 0.92);
+  --color-panel-flat:            #ffffff;
+  --color-panel-raised:          #f5f5f5;
+  --color-panel-pressed:         #ebebeb;
+  --color-panel-border:          rgb(0 0 0 / 0.08);
+  --color-panel-border-hover:    rgb(0 0 0 / 0.12);
+  --color-on-panel:              #171717;
+  --color-on-panel-muted:        #4d4d4d;
+
+  --color-node:                  rgb(255 255 255 / 0.72);
+  --color-node-body:             rgb(0 0 0 / 0.04);
+  --color-node-border:           rgb(0 0 0 / 0.08);
+  --color-node-border-hover:     rgb(0 0 0 / 0.12);
+  --color-node-highlight:        rgb(255 255 255 / 0.8);
+
+  --color-control-hover:         rgb(0 0 0 / 0.05);
+  --color-control-active:        rgb(0 0 0 / 0.10);
+  --color-control-border:        rgb(0 0 0 / 0.06);
+  --color-divider:               rgb(0 0 0 / 0.08);
+  --color-preview-scrim:         rgb(0 0 0 / 0.40);
+  --color-edge-dash:             #171717;
+  --color-edge-label:            rgb(255 255 255 / 0.90);
+  --color-minimap-mask:          rgb(255 255 255 / 0.55);
+
+  --color-status-ready:          #0070f3;
+  --color-status-running:        #7928ca;
+  --color-status-warning:        #f5a623;
+  --color-status-error:          #ee0000;
+  --color-status-success:        #29bc9b;
+
+  /* Elevation: stacked small offsets + an inset hairline so edges stay crisp
+     without relying on a separate heavy drop-shadow. */
+  --shadow-panel-raised:
+    inset 0 0 0 1px var(--color-panel-border),
+    0 1px 1px rgb(0 0 0 / 0.02),
+    0 2px 2px rgb(0 0 0 / 0.04),
+    0 4px 12px -2px rgb(0 0 0 / 0.06);
+  --shadow-node:
+    inset 0 1px 0 var(--color-node-highlight),
+    0 1px 1px rgb(0 0 0 / 0.02),
+    0 2px 2px rgb(0 0 0 / 0.04),
+    0 4px 12px -2px rgb(0 0 0 / 0.06);
+  --shadow-node-selected:
+    inset 0 1px 0 var(--color-node-highlight),
+    0 0 0 1px var(--node-tone),
+    0 1px 1px rgb(0 0 0 / 0.02),
+    0 4px 12px -2px rgb(0 0 0 / 0.06);
+  --shadow-modal:
+    0 1px 1px rgb(0 0 0 / 0.03),
+    0 4px 6px -2px rgb(0 0 0 / 0.04),
+    0 8px 12px -4px rgb(0 0 0 / 0.06);
+
+  /* Framework aliases. Keep these names stable for existing utilities. */
+  --color-surface:                   var(--color-panel);
+  --color-surface-dim:               var(--color-panel-raised);
+  --color-surface-bright:            var(--color-panel);
+  --color-surface-container-lowest:  var(--color-canvas);
+  --color-surface-container-low:     var(--color-panel);
+  --color-surface-container:         var(--color-panel);
+  --color-surface-container-high:    var(--color-panel-raised);
+  --color-surface-container-highest: var(--color-panel-pressed);
+  --color-on-surface:                var(--color-on-panel);
+  --color-on-surface-variant:        var(--color-on-panel-muted);
+  --color-inverse-surface:           var(--color-on-panel);
+  --color-inverse-on-surface:        var(--color-panel);
+  --color-outline:                   var(--color-panel-border);
+  --color-outline-variant:           var(--color-control-border);
+  --color-surface-tint:              var(--color-status-ready);
+  --color-primary:                   var(--color-on-panel);
+  --color-on-primary:                var(--color-panel);
+  --color-primary-container:         var(--color-on-panel);
+  --color-on-primary-container:      var(--color-panel);
+  --color-inverse-primary:           var(--color-panel);
+  --color-secondary:                 var(--color-status-ready);
+  --color-on-secondary:              #ffffff;
+  --color-secondary-container:       #d3e5ff;
+  --color-on-secondary-container:    #0761d1;
+  --color-tertiary:                  #ff0080;
+  --color-on-tertiary:               #ffffff;
+  --color-tertiary-container:        #ffd9e4;
   --color-on-tertiary-container:     #570032;
-  --color-error:                     #ffb4ab;
-  --color-on-error:                  #690005;
-  --color-error-container:           #93000a;
-  --color-on-error-container:        #ffdad6;
+  --color-error:                     var(--color-status-error);
+  --color-on-error:                  #ffffff;
+  --color-error-container:           #f7d4d6;
+  --color-on-error-container:        #c50000;
   --color-primary-fixed:             #e9ddff;
   --color-primary-fixed-dim:         #d0bcff;
   --color-on-primary-fixed:          #23005c;
   --color-on-primary-fixed-variant:  #5516be;
-  --color-secondary-fixed:           #acedff;
-  --color-secondary-fixed-dim:       #4cd7f6;
+  --color-secondary-fixed:           #d3e5ff;
+  --color-secondary-fixed-dim:       var(--color-status-ready);
   --color-on-secondary-fixed:        #001f26;
   --color-on-secondary-fixed-variant:#004e5c;
   --color-tertiary-fixed:            #ffd9e4;
-  --color-tertiary-fixed-dim:        #ffb0cd;
+  --color-tertiary-fixed-dim:        #ff0080;
   --color-on-tertiary-fixed:         #3e0022;
   --color-on-tertiary-fixed-variant: #8c0053;
-  --color-background:                #131313;
-  --color-on-background:             #e5e2e1;
-  --color-surface-variant:           #353534;
+  --color-background:                var(--color-canvas);
+  --color-on-background:             var(--color-on-canvas);
+  --color-surface-variant:           var(--color-panel-raised);
 
-  /* ───── Socket type colors (mirror of tokens.ts SOCKET_COLORS) ───── */
-  --color-socket-model:        #f59e0b;
-  --color-socket-conditioning: #f59e0b;
-  --color-socket-latent:       #a855f7;
-  --color-socket-image:        #22c55e;
+  /* Socket type colors (mirror of tokens.ts SOCKET_COLORS). */
+  --color-socket-model:        #f5a623;
+  --color-socket-conditioning: #f5a623;
+  --color-socket-latent:       #7928ca;
+  --color-socket-image:        #50e3c2;
 
-  /* ───── Typography ───── */
-  --font-sans: "Inter", system-ui, sans-serif;
-  --font-mono: "JetBrains Mono", ui-monospace, monospace;
+  /* Typography. Geist is preferred when available; Inter / JetBrains Mono
+     are bundled fallbacks for the editor surface. */
+  --font-sans: "Geist", "Inter", system-ui, sans-serif;
+  --font-mono: "Geist Mono", "JetBrains Mono", ui-monospace, monospace;
+
+  --text-display-xl: 48px;
+  --text-display-xl--line-height: 48px;
+  --text-display-xl--font-weight: 600;
+  --text-display-xl--letter-spacing: -0.05em;
+
+  --text-display-lg: 32px;
+  --text-display-lg--line-height: 40px;
+  --text-display-lg--font-weight: 600;
+  --text-display-lg--letter-spacing: -0.04em;
+
+  --text-display-md: 24px;
+  --text-display-md--line-height: 32px;
+  --text-display-md--font-weight: 600;
+  --text-display-md--letter-spacing: -0.04em;
+
+  --text-display-sm: 20px;
+  --text-display-sm--line-height: 28px;
+  --text-display-sm--font-weight: 600;
+  --text-display-sm--letter-spacing: -0.03em;
 
   --text-headline-lg: 24px;
   --text-headline-lg--line-height: 32px;
@@ -67,24 +150,36 @@
   --text-headline-md--line-height: 24px;
   --text-headline-md--font-weight: 600;
 
-  --text-body-md: 14px;
-  --text-body-md--line-height: 20px;
+  --text-body-lg: 18px;
+  --text-body-lg--line-height: 28px;
+  --text-body-lg--font-weight: 400;
+
+  --text-body-md: 16px;
+  --text-body-md--line-height: 24px;
   --text-body-md--font-weight: 400;
 
-  --text-body-sm: 12px;
-  --text-body-sm--line-height: 16px;
+  --text-body-sm: 14px;
+  --text-body-sm--line-height: 20px;
   --text-body-sm--font-weight: 400;
 
-  --text-code-md: 13px;
-  --text-code-md--line-height: 18px;
-  --text-code-md--font-weight: 500;
+  --text-caption: 12px;
+  --text-caption--line-height: 16px;
+  --text-caption--font-weight: 400;
 
-  --text-label-caps: 10px;
-  --text-label-caps--line-height: 12px;
+  --text-caption-mono: 12px;
+  --text-caption-mono--line-height: 16px;
+  --text-caption-mono--font-weight: 400;
+
+  --text-code-md: 13px;
+  --text-code-md--line-height: 20px;
+  --text-code-md--font-weight: 400;
+
+  --text-label-caps: 12px;
+  --text-label-caps--line-height: 16px;
   --text-label-caps--font-weight: 700;
   --text-label-caps--letter-spacing: 0.05em;
 
-  /* ───── Radii ───── */
+  /* Radii. */
   --radius-sm: 0.125rem;
   --radius:    0.25rem;        /* DEFAULT */
   --radius-md: 0.375rem;
@@ -92,7 +187,19 @@
   --radius-xl: 0.75rem;
   --radius-full: 9999px;
 
-  /* ───── Spacing ───── */
+  /* Spacing. */
+  --spacing-xxs: 4px;
+  --spacing-xs:  8px;
+  --spacing-sm:  12px;
+  --spacing-md:  16px;
+  --spacing-lg:  24px;
+  --spacing-xl:  32px;
+  --spacing-2xl: 40px;
+  --spacing-3xl: 48px;
+  --spacing-4xl: 64px;
+  --spacing-5xl: 96px;
+  --spacing-6xl: 128px;
+
   --spacing-canvas-grid:   20px;
   --spacing-node-padding:  12px;
   --spacing-sidebar-width: 280px;
@@ -101,12 +208,12 @@
   --spacing-stack-base:    8px;
 }
 
-/* shadcn CSS variables — aliased to Obsidian Node System tokens.
-   Lets shadcn primitives (Button, Dialog, etc.) pick up our palette
+/* shadcn CSS variables, aliased to Reimagine theme primitives.
+   Lets shadcn primitives (Button, Dialog, etc.) pick up the palette
    without forking the components.
 
    Note: --color-background is NOT bridged here — it's already defined
-   in the @theme block above with the real value (#131313). Re-declaring
+   in the @theme block above as the canvas alias. Re-declaring
    it as `var(--color-background)` here would create a self-reference. */
 @theme inline {
   --color-foreground:           var(--color-on-background);
@@ -122,7 +229,74 @@
   --color-accent-foreground:    var(--color-on-surface);
   --color-destructive:          var(--color-error);
   --color-destructive-foreground: var(--color-on-error);
-  --color-border:               var(--color-outline-variant);
-  --color-input:                var(--color-outline-variant);
+  --color-border:               var(--color-outline);
+  --color-input:                var(--color-outline);
   --color-ring:                 var(--color-primary);
+}
+
+:root,
+[data-theme="light"] {
+  color-scheme: light;
+}
+
+.dark,
+[data-theme="dark"] {
+  color-scheme: dark;
+
+  --color-canvas:                #111111;
+  --color-canvas-grid-dot:       #2b2b2b;
+  --color-canvas-grid-line:      #242424;
+  --color-on-canvas:             #f5f5f5;
+
+  --color-panel:                 #171717;
+  --color-panel-float:           rgb(23 23 23 / 0.90);
+  --color-panel-flat:            #2a2a2a;
+  --color-panel-raised:          #242424;
+  --color-panel-pressed:         #333333;
+  --color-panel-border:          rgb(255 255 255 / 0.10);
+  --color-panel-border-hover:    rgb(255 255 255 / 0.16);
+  --color-on-panel:              #f5f5f5;
+  --color-on-panel-muted:        #a3a3a3;
+
+  --color-node:                  rgb(23 23 23 / 0.76);
+  --color-node-body:             rgb(255 255 255 / 0.06);
+  --color-node-border:           rgb(255 255 255 / 0.10);
+  --color-node-border-hover:     rgb(255 255 255 / 0.16);
+  --color-node-highlight:        rgb(255 255 255 / 0.08);
+
+  --color-control-hover:         rgb(255 255 255 / 0.08);
+  --color-control-active:        rgb(255 255 255 / 0.12);
+  --color-control-border:        rgb(255 255 255 / 0.08);
+  --color-divider:               rgb(255 255 255 / 0.10);
+  --color-preview-scrim:         rgb(0 0 0 / 0.52);
+  --color-edge-dash:             #f5f5f5;
+  --color-edge-label:            rgb(23 23 23 / 0.92);
+  --color-minimap-mask:          rgb(0 0 0 / 0.45);
+
+  --shadow-panel-raised:
+    inset 0 0 0 1px var(--color-panel-border),
+    0 1px 1px rgb(0 0 0 / 0.20),
+    0 4px 8px -2px rgb(0 0 0 / 0.30),
+    0 8px 12px -4px rgb(0 0 0 / 0.40);
+  --shadow-node:
+    inset 0 1px 0 var(--color-node-highlight),
+    0 1px 1px rgb(0 0 0 / 0.25),
+    0 2px 4px -1px rgb(0 0 0 / 0.28),
+    0 4px 12px -2px rgb(0 0 0 / 0.32);
+  --shadow-node-selected:
+    inset 0 1px 0 var(--color-node-highlight),
+    0 0 0 1px var(--node-tone),
+    0 1px 1px rgb(0 0 0 / 0.25),
+    0 4px 12px -2px rgb(0 0 0 / 0.32);
+  --shadow-modal:
+    0 1px 1px rgb(0 0 0 / 0.20),
+    0 4px 8px -2px rgb(0 0 0 / 0.30),
+    0 8px 12px -4px rgb(0 0 0 / 0.40);
+
+  --color-secondary-container:       #0f315f;
+  --color-on-secondary-container:    #b8d6ff;
+  --color-tertiary-container:        #5f143d;
+  --color-on-tertiary-container:     #ffd9e4;
+  --color-error-container:           #5f1717;
+  --color-on-error-container:        #ffd4d4;
 }
