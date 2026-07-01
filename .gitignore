@@ -49,15 +49,19 @@ workspace/
 .scratch/
 .sc/
 .claude/
+.playwright-mcp/
 .mimocode/
 .worktrees/
+.impeccable/
 CONTEXT.md
 AGENTS.local.md
+PRODUCT.md
+DESIGN.md
+reports/
 
-# Project docs: ignore architecture/design/agent/local drafts.
-docs/*
-docs/adr/
-docs/dev/
+
+# Project docs.
+docs/
 
 # ----- Editor / OS -----
 .vscode/*
