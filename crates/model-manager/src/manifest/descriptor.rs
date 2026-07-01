@@ -212,6 +212,10 @@ impl ModelDescriptor {
         self.updated_at.as_deref()
     }
 
+    pub fn metadata(&self) -> &BTreeMap<String, String> {
+        &self.metadata
+    }
+
     pub fn is_runnable_candidate(&self) -> bool {
         self.model_series.as_str() != "unknown"
             && self.variant.as_str() != "unknown"
