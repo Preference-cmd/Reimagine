@@ -169,11 +169,12 @@ pub fn execute_latent_decode(
         latent_handle.content(),
         reimagine_inference::LatentContent::EmptyGeometry
     ) {
-        return Err(CandleBackendError::InvalidRequest(format!(
+        return Err(CandleBackendError::InvalidRequest(
             "latent.decode rejects latent content `empty_geometry`; \
              the input latent was produced by `latent.create_empty` and is not a real starting latent. \
              Use `latent.encode` (image → latent) or `diffusion.sample` (geometry → sampled) before decoding."
-        )));
+                .to_string(),
+        ));
     }
 
     if vae_handle.backend() != backend.backend_kind() {

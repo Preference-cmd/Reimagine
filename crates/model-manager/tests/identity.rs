@@ -279,13 +279,14 @@ fn auto_id_collision_avoids_taken_suffixed_id() {
     .with_fingerprint(test_fingerprint("first"))
     .with_source_status(ModelSourceStatus::Available);
 
-    let first_result = IdPolicy::new(&[first_collision.clone()]).generate_auto_id_with_resolution(
-        &ModelSeries::new("stable_diffusion"),
-        &ModelVariant::new("sdxl"),
-        ModelRole::CheckpointBundle,
-        &source,
-        Some(&test_fingerprint("second")),
-    );
+    let first_result = IdPolicy::new(std::slice::from_ref(&first_collision))
+        .generate_auto_id_with_resolution(
+            &ModelSeries::new("stable_diffusion"),
+            &ModelVariant::new("sdxl"),
+            ModelRole::CheckpointBundle,
+            &source,
+            Some(&test_fingerprint("second")),
+        );
 
     let taken_suffixed_id = first_result.id().as_str().to_owned();
     let existing = vec![

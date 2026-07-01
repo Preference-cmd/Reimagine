@@ -232,10 +232,10 @@ impl ToolCallResult {
     /// missing or non-boolean, `effective` stays `None` — the harness
     /// never infers side effects from tool name or status.
     pub fn set_effective_from_output(mut self) -> Self {
-        if let Some(Value::Object(map)) = &self.output {
-            if let Some(Value::Bool(b)) = map.get("effective") {
-                self.effective = Some(*b);
-            }
+        if let Some(Value::Object(map)) = &self.output
+            && let Some(Value::Bool(b)) = map.get("effective")
+        {
+            self.effective = Some(*b);
         }
         self
     }

@@ -37,6 +37,10 @@ pub struct ExecutionPlan {
 }
 
 impl ExecutionPlan {
+    #[allow(
+        clippy::too_many_arguments,
+        reason = "ExecutionPlan is a wire-stable data aggregate"
+    )]
     pub fn new(
         workflow_id: WorkflowId,
         workflow_version: WorkflowVersion,

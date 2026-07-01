@@ -90,11 +90,12 @@ impl WorkflowSession {
                 None,
             ),
             BatchEvaluation::Applied {
-                mut workflow,
+                workflow,
                 projected_version,
                 forward_changes,
                 inverse_changes,
             } => {
+                let mut workflow = *workflow;
                 let before = self.workflow.clone();
                 workflow.set_version(projected_version);
                 let history_entry_id = history_entry_id(batch.id().as_str());
@@ -228,7 +229,7 @@ impl WorkflowSession {
         let inverse_changes = inverse_steps.into_iter().rev().flatten().collect();
 
         BatchEvaluation::Applied {
-            workflow: working,
+            workflow: Box::new(working),
             projected_version,
             forward_changes,
             inverse_changes,
@@ -242,7 +243,7 @@ enum BatchEvaluation {
     },
     NoOp,
     Applied {
-        workflow: Workflow,
+        workflow: Box<Workflow>,
         projected_version: WorkflowVersion,
         forward_changes: Vec<WorkflowChange>,
         inverse_changes: Vec<WorkflowChange>,

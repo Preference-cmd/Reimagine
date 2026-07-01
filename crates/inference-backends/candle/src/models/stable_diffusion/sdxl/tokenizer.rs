@@ -88,21 +88,21 @@ impl SdxlTokenizerResources {
     ) -> Result<PathBuf, TokenizerError> {
         // 1. Explicit source-set entry with TextEncoder role.
         for source in source_set.sources() {
-            if source.role() == ModelRole::TextEncoder {
-                if let Some(meta) = source.metadata().and_then(primary_tokenizer_metadata_path) {
-                    // Explicit entry exists — must resolve or error.
-                    let p = Path::new(meta);
-                    if p.is_file() {
-                        return Ok(p.to_path_buf());
-                    }
-                    let inner = p.join("tokenizer.json");
-                    if inner.exists() {
-                        return Ok(inner);
-                    }
-                    return Err(TokenizerError::Missing {
-                        path: meta.to_string(),
-                    });
+            if source.role() == ModelRole::TextEncoder
+                && let Some(meta) = source.metadata().and_then(primary_tokenizer_metadata_path)
+            {
+                // Explicit entry exists — must resolve or error.
+                let p = Path::new(meta);
+                if p.is_file() {
+                    return Ok(p.to_path_buf());
                 }
+                let inner = p.join("tokenizer.json");
+                if inner.exists() {
+                    return Ok(inner);
+                }
+                return Err(TokenizerError::Missing {
+                    path: meta.to_string(),
+                });
             }
         }
 
@@ -131,26 +131,25 @@ impl SdxlTokenizerResources {
         // 1. Explicit source-set entry with TextEncoder role (separate
         //    metadata convention: "tokenizer_2" key).
         for source in source_set.sources() {
-            if source.role() == ModelRole::TextEncoder {
-                if let Some(meta) = source
+            if source.role() == ModelRole::TextEncoder
+                && let Some(meta) = source
                     .metadata()
                     .and_then(secondary_tokenizer_metadata_path)
                     .or_else(|| source.metadata().and_then(primary_tokenizer_metadata_path))
-                {
-                    // Explicit entry exists — must resolve or error.
-                    let meta_path = Path::new(meta);
-                    let candidate = if meta_path.is_dir() {
-                        meta_path.join("tokenizer_2/tokenizer.json")
-                    } else {
-                        meta_path.to_path_buf()
-                    };
-                    if candidate.exists() {
-                        return Ok(candidate);
-                    }
-                    return Err(TokenizerError::Missing {
-                        path: meta.to_string(),
-                    });
+            {
+                // Explicit entry exists — must resolve or error.
+                let meta_path = Path::new(meta);
+                let candidate = if meta_path.is_dir() {
+                    meta_path.join("tokenizer_2/tokenizer.json")
+                } else {
+                    meta_path.to_path_buf()
+                };
+                if candidate.exists() {
+                    return Ok(candidate);
                 }
+                return Err(TokenizerError::Missing {
+                    path: meta.to_string(),
+                });
             }
         }
 
@@ -343,9 +342,11 @@ impl SdxlTokenizer {
 
         // Truncate from the right when the encoded sequence exceeds
         // the context window.
-        let mut truncation = tokenizers::TruncationParams::default();
-        truncation.max_length = MAX_SEQUENCE_LENGTH;
-        truncation.direction = tokenizers::TruncationDirection::Right;
+        let truncation = tokenizers::TruncationParams {
+            max_length: MAX_SEQUENCE_LENGTH,
+            direction: tokenizers::TruncationDirection::Right,
+            ..Default::default()
+        };
         tok.with_truncation(Some(truncation))
             .map_err(|e| TokenizerError::LoadFailed {
                 path: String::new(),
@@ -435,12 +436,12 @@ fn load_one(path: &Path) -> Result<tokenizers::Tokenizer, TokenizerError> {
     let path_str = path.display().to_string();
 
     // File: tokenizer.json
-    if path.is_file() && path.extension().map_or(false, |e| e == "json") {
+    if path.is_file() && path.extension().is_some_and(|e| e == "json") {
         // Check if this is actually a vocab.json used with merges.txt
-        if path.file_name().map_or(false, |n| n == "vocab.json") {
+        if path.file_name().is_some_and(|n| n == "vocab.json") {
             let merges = path.with_file_name("merges.txt");
             if merges.exists() {
-                return load_bpe(&path, &merges);
+                return load_bpe(path, &merges);
             }
         }
         // Regular tokenizer.json

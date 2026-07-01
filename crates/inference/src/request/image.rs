@@ -7,8 +7,9 @@ use reimagine_core::model::{NodeId, RunId, WorkflowId, WorkflowVersion};
 
 /// Optional filename prefix for `image.save`. `None` falls back to
 /// the backend's default prefix.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
 pub enum FilenamePrefix {
+    #[default]
     Default,
     Custom(String),
 }
@@ -19,12 +20,6 @@ impl FilenamePrefix {
             Self::Default => "reimagine",
             Self::Custom(s) => s.as_str(),
         }
-    }
-}
-
-impl Default for FilenamePrefix {
-    fn default() -> Self {
-        Self::Default
     }
 }
 

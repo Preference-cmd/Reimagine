@@ -36,7 +36,7 @@ impl ConfigError {
         let target = DiagnosticTarget::new(DiagnosticTargetDomain::new("config"))
             .with_id(self.target_id())
             .with_path(self.target_path());
-        self.into_diagnostic(id, target, correlation_id)
+        self.to_diagnostic_with(id, target, correlation_id)
     }
 
     fn diagnostic_id(&self) -> String {

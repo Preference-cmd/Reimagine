@@ -103,6 +103,7 @@ impl std::error::Error for NodeExecutorRegistryError {}
 /// Hosts assemble a registry at workspace startup and hand it to the
 /// `RuntimeService`. The registry owns the executors; the runtime only
 /// borrows them.
+#[derive(Default)]
 pub struct NodeExecutorRegistry {
     executors: HashMap<NodeTypeId, BoxedNodeExecutor>,
 }
@@ -112,14 +113,6 @@ impl std::fmt::Debug for NodeExecutorRegistry {
         f.debug_struct("NodeExecutorRegistry")
             .field("type_ids", &self.executors.keys().collect::<Vec<_>>())
             .finish()
-    }
-}
-
-impl Default for NodeExecutorRegistry {
-    fn default() -> Self {
-        Self {
-            executors: HashMap::new(),
-        }
     }
 }
 

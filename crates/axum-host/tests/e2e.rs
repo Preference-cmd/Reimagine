@@ -637,15 +637,9 @@ async fn run_happy_path_completes_and_serves_snapshot_and_events() {
         .iter()
         .map(|e| e["kind"].as_str().unwrap_or(""))
         .collect();
-    assert!(kinds.iter().any(|k| *k == "RunQueued"), "kinds = {kinds:?}");
-    assert!(
-        kinds.iter().any(|k| *k == "RunStarted"),
-        "kinds = {kinds:?}"
-    );
-    assert!(
-        kinds.iter().any(|k| *k == "RunCompleted"),
-        "kinds = {kinds:?}"
-    );
+    assert!(kinds.contains(&"RunQueued"), "kinds = {kinds:?}");
+    assert!(kinds.contains(&"RunStarted"), "kinds = {kinds:?}");
+    assert!(kinds.contains(&"RunCompleted"), "kinds = {kinds:?}");
     assert!(
         events.iter().any(|e| e["correlation_id"]
             .as_str()
@@ -826,14 +820,11 @@ async fn candle_sdxl_placeholder_workflow_reports_missing_text_encoder_weights()
         .iter()
         .map(|e| e["kind"].as_str().unwrap_or(""))
         .collect();
-    assert!(kinds.iter().any(|k| *k == "RunQueued"), "kinds = {kinds:?}");
+    assert!(kinds.contains(&"RunQueued"), "kinds = {kinds:?}");
+    assert!(kinds.contains(&"RunStarted"), "kinds = {kinds:?}");
+    assert!(kinds.contains(&"RunFailed"), "kinds = {kinds:?}");
     assert!(
-        kinds.iter().any(|k| *k == "RunStarted"),
-        "kinds = {kinds:?}"
-    );
-    assert!(kinds.iter().any(|k| *k == "RunFailed"), "kinds = {kinds:?}");
-    assert!(
-        !kinds.iter().any(|k| *k == "RunCompleted"),
+        !kinds.contains(&"RunCompleted"),
         "expected no RunCompleted event, got {kinds:?}"
     );
     assert!(

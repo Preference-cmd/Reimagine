@@ -190,7 +190,7 @@ mod tests {
             mode,
         )
         .with_permissions(PermissionSet::from_iter(
-            perms.into_iter().map(|p| ToolPermission::new(*p)),
+            perms.iter().map(|p| ToolPermission::new(*p)),
         ))
     }
 

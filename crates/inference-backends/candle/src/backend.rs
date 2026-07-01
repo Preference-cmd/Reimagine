@@ -138,7 +138,7 @@ impl InferenceBackend for CandleBackend {
     }
 
     fn capabilities(&self) -> InferenceBackendCapabilities {
-        let caps = InferenceBackendCapabilities::new(self.backend_kind().clone())
+        InferenceBackendCapabilities::new(self.backend_kind().clone())
             .with_support(InferenceCapabilitySupport::new(
                 InferenceCapability::LoadBundle,
             ))
@@ -169,8 +169,7 @@ impl InferenceBackend for CandleBackend {
             ))
             .with_support(InferenceCapabilitySupport::new(
                 InferenceCapability::ImagePreview,
-            ));
-        caps
+            ))
     }
 
     async fn load_bundle(

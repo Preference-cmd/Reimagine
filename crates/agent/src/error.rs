@@ -150,7 +150,7 @@ impl ToolError {
                 .with_id(name.as_str()),
             None => DiagnosticTarget::new(DiagnosticTargetDomain::new("agent.tool")),
         };
-        self.into_diagnostic(
+        self.to_diagnostic_with(
             DiagnosticId::new(self.diagnostic_id()),
             target,
             correlation_id,

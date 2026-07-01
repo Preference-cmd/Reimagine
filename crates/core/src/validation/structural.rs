@@ -134,16 +134,16 @@ impl<'a, C: NodeCatalog> StructuralValidator<'a, C> {
             let from_kind = self.validate_from_endpoint(edge.id(), edge.from());
             let to_kind = self.validate_to_endpoint(edge.id(), edge.to());
 
-            if let (Some(from_kind), Some(to_kind)) = (from_kind, to_kind) {
-                if from_kind != to_kind {
-                    self.push_edge_diagnostic(
-                        "slot_kind_mismatch",
-                        edge.id(),
-                        "CORE/WORKFLOW_SLOT_KIND_MISMATCH",
-                        "edge connects incompatible slot kinds",
-                        Some("to.slot"),
-                    );
-                }
+            if let (Some(from_kind), Some(to_kind)) = (from_kind, to_kind)
+                && from_kind != to_kind
+            {
+                self.push_edge_diagnostic(
+                    "slot_kind_mismatch",
+                    edge.id(),
+                    "CORE/WORKFLOW_SLOT_KIND_MISMATCH",
+                    "edge connects incompatible slot kinds",
+                    Some("to.slot"),
+                );
             }
 
             if let Endpoint::NodeSlot { node, slot } = edge.to() {

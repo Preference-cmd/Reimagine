@@ -704,13 +704,17 @@ mod tests {
         let store = CandleStore::new();
         let run_id = RunId::new("run-1");
         let key = BackendPayloadKey::new("latent:run-1:node-a");
-        let tensor = build_latent_tensor(&[1, 4, 8, 8]);
+        let expected_shape = [1, 4, 8, 8];
+        let tensor = build_latent_tensor(&expected_shape);
         store.insert_latent(run_id, key.clone(), tensor, sdxl_latent_space());
 
         let latent = store.get_latent(&key).expect("latent payload");
-        assert_eq!(latent.dims(), vec![1, 4, 8, 8]);
+        assert_eq!(latent.dims(), expected_shape);
         assert_eq!(latent.dtype(), DType::F32);
-        assert_eq!(latent.byte_size(), 1 * 4 * 8 * 8 * 4);
+        assert_eq!(
+            latent.byte_size(),
+            expected_shape.into_iter().product::<usize>() * std::mem::size_of::<f32>()
+        );
         assert_eq!(latent.latent_space(), &LatentSpaceMetadata::sdxl_base());
     }
 
@@ -887,14 +891,18 @@ mod tests {
         let store = CandleStore::new();
         let run_id = RunId::new("run-img-1");
         let key = BackendPayloadKey::new("image:run-img-1:node-a");
-        let tensor = build_image_tensor(&[1, 3, 64, 64]);
+        let expected_shape = [1, 3, 64, 64];
+        let tensor = build_image_tensor(&expected_shape);
         let image = CandleImage::new(tensor, 64, 64, 1, "rgb".to_string());
         store.insert_image(run_id, key.clone(), image);
 
         let retrieved = store.get_image(&key).expect("image payload");
-        assert_eq!(retrieved.dims(), vec![1, 3, 64, 64]);
+        assert_eq!(retrieved.dims(), expected_shape);
         assert_eq!(retrieved.dtype(), DType::F32);
-        assert_eq!(retrieved.byte_size(), 1 * 3 * 64 * 64 * 4);
+        assert_eq!(
+            retrieved.byte_size(),
+            expected_shape.into_iter().product::<usize>() * std::mem::size_of::<f32>()
+        );
         assert_eq!(retrieved.width(), 64);
         assert_eq!(retrieved.height(), 64);
         assert_eq!(retrieved.batch(), 1);

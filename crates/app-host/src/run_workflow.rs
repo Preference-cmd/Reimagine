@@ -77,7 +77,7 @@ pub enum RunWorkflowResult {
     },
     Started {
         handle: RunHandle,
-        initial_snapshot: RunSnapshot,
+        initial_snapshot: Box<RunSnapshot>,
         report: OperationReport,
     },
 }
@@ -145,7 +145,7 @@ impl WorkspaceHost {
 
         Ok(RunWorkflowResult::Started {
             handle,
-            initial_snapshot,
+            initial_snapshot: Box::new(initial_snapshot),
             report: started_report,
         })
     }

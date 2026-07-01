@@ -105,9 +105,10 @@ impl std::fmt::Display for LatentSpaceId {
 /// V1 only knows `Nchw`; future latent spaces (e.g. SD3/Flux with
 /// packed 2×2 patches) can introduce a new variant or a backend-
 /// specific `Other(String)` tag without breaking existing callers.
-#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize, Default)]
 pub enum TensorLayout {
     /// Standard `[batch, channels, height, width]` layout.
+    #[default]
     Nchw,
     /// Backend-defined layout tag that V1 callers do not need to
     /// interpret; future work may promote frequent cases to variants.
@@ -121,12 +122,6 @@ impl TensorLayout {
             Self::Nchw => "nchw",
             Self::Other(s) => s.as_str(),
         }
-    }
-}
-
-impl Default for TensorLayout {
-    fn default() -> Self {
-        Self::Nchw
     }
 }
 
@@ -260,14 +255,14 @@ pub fn validate_pixel_dimensions_against(
             reason: "latent spatial_scale_factor must be positive",
         });
     }
-    if width % scale != 0 {
+    if !width.is_multiple_of(scale) {
         return Err(LatentSpaceError::ScaleMismatch {
             axis: "width",
             value: width,
             scale,
         });
     }
-    if height % scale != 0 {
+    if !height.is_multiple_of(scale) {
         return Err(LatentSpaceError::ScaleMismatch {
             axis: "height",
             value: height,

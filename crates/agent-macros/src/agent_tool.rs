@@ -166,13 +166,15 @@ impl AgentToolArgs {
                 ));
             }
         }
-        if let Some(risk) = &self.risk {
-            if risk != "read" && risk != "editor" && risk != "external" {
-                return Err(syn::Error::new(
-                    proc_macro2::Span::call_site(),
-                    "`risk` must be `read`, `editor`, or `external`",
-                ));
-            }
+        if let Some(risk) = &self.risk
+            && risk != "read"
+            && risk != "editor"
+            && risk != "external"
+        {
+            return Err(syn::Error::new(
+                proc_macro2::Span::call_site(),
+                "`risk` must be `read`, `editor`, or `external`",
+            ));
         }
         Ok(())
     }
@@ -219,7 +221,7 @@ fn parse_modes(input: ParseStream<'_>) -> syn::Result<Vec<String>> {
 fn validate_async_fn(input_fn: &ItemFn) -> syn::Result<()> {
     if input_fn.sig.asyncness.is_none() {
         return Err(syn::Error::new_spanned(
-            &input_fn.sig.fn_token,
+            input_fn.sig.fn_token,
             "`#[agent_tool]` requires an async function",
         ));
     }

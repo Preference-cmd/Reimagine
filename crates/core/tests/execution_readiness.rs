@@ -682,9 +682,7 @@ impl ExternalReadinessProvider for SnapshotProvider {
     }
 }
 
-fn diagnostic_codes<'a>(
-    result: &'a reimagine_core::readiness::ExecutionPlanResult,
-) -> Vec<&'a str> {
+fn diagnostic_codes(result: &reimagine_core::readiness::ExecutionPlanResult) -> Vec<&str> {
     result
         .report()
         .diagnostics()

@@ -4,16 +4,11 @@ use serde::{Deserialize, Serialize};
 use crate::{ConfigDocument, ConfigValidationContext};
 
 /// Supported inference backend kinds.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
 #[serde(rename_all = "snake_case")]
 pub enum InferenceBackendKind {
+    #[default]
     Candle,
-}
-
-impl Default for InferenceBackendKind {
-    fn default() -> Self {
-        Self::Candle
-    }
 }
 
 /// Persisted inference backend configuration.
