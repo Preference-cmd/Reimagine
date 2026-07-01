@@ -1,0 +1,105 @@
+name: ci-rust
+
+on:
+  push:
+    branches: [main, develop]
+    paths:
+      - 'crates/**'
+      - 'src-tauri/**'
+      - 'Cargo.toml'
+      - 'Cargo.lock'
+      - 'rust-toolchain.toml'
+      - '.github/workflows/ci-rust.yml'
+  pull_request:
+    branches: [main, develop]
+    paths:
+      - 'crates/**'
+      - 'src-tauri/**'
+      - 'Cargo.toml'
+      - 'Cargo.lock'
+      - 'rust-toolchain.toml'
+      - '.github/workflows/ci-rust.yml'
+  workflow_dispatch:
+
+# Cancel superseded runs of this same workflow on the same ref.
+concurrency:
+  group: ci-rust-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  CARGO_TERM_COLOR: always
+  RUSTFLAGS: -D warnings
+
+jobs:
+  # ---------------------------------------------------------------------------
+  # Domain crates only (`crates/*`).
+  # `src-tauri` is intentionally excluded — Tauri shell needs webkit2gtk/gtk
+  # system libs and we have no tauri-specific test or build target today.
+  # Add a dedicated job when that becomes a real requirement.
+  # ---------------------------------------------------------------------------
+  domain:
+    name: domain-crates
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Install Rust toolchain (1.96, matches workspace MSRV)
+        uses: dtolnay/rust-toolchain@1.96
+        with:
+          components: rustfmt, clippy
+
+      - name: Cache cargo registry & build artifacts
+        uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: |
+            .
+            crates/* -> target
+          shared-key: domain-crates
+
+      - name: Module layout scan
+        # Enforces the "Post-change scans" rule from AGENTS.local.md:
+        # `mod.rs` and `#[path = "..."]` are not allowed in new code under
+        # `crates/` or `src-tauri/`. Use foo.rs + foo/ directory layout and
+        # let Cargo resolve modules from the source tree.
+        run: |
+          set -euo pipefail
+
+          # 1) mod.rs: legacy module entry style, banned by AGENTS.local.md.
+          if mod_rs=$(rg --files \
+                --glob '**/mod.rs' \
+                --glob '!**/target/**' \
+                crates src-tauri); then
+            echo "::error title=mod.rs is not allowed::禁止 mod.rs 模块入口模式，请改用 foo.rs + foo/ 目录布局。"
+            {
+              echo "Found mod.rs files:"
+              echo "$mod_rs" | sed 's/^/  - /'
+            } >&2
+            exit 1
+          fi
+
+          # 2) #[path = "..."]: bypasses Cargo's module resolution, banned by AGENTS.local.md.
+          if path_attr=$(rg -n --type rust \
+                -e '^#\[path\s*=' \
+                --glob '!**/target/**' \
+                crates src-tauri); then
+            echo "::error title=#[path] is not allowed::禁止 #[path = \"...\"] 显式路径属性，让 Cargo 自动解析模块路径。"
+            {
+              echo "Found #[path] attributes:"
+              echo "$path_attr" | sed 's/^/  /'
+            } >&2
+            exit 1
+          fi
+
+      - name: Format check
+        run: cargo fmt --all -- --check
+
+      - name: Check (all targets, no tauri shell)
+        run: cargo check --workspace --exclude reimagine --all-targets --locked
+
+      - name: Clippy
+        run: cargo clippy --workspace --exclude reimagine --all-targets --locked -- -D warnings
+
+      - name: Test
+        run: cargo test --workspace --exclude reimagine --locked
