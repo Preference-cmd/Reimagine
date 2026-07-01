@@ -1,13 +1,14 @@
 use std::collections::BTreeMap;
+use std::sync::Arc;
 
 use reimagine_inference::{
     Backend, BackendInstance, BackendInstanceObservation, BackendInstanceSnapshot,
-    BackendRunLifecycle, BackendRunLifecycleReport, BackendRunLifecycleRequest, DeviceKind,
-    DeviceProfile, InferenceError,
+    BackendRunLifecycle, BackendRunLifecycleReport, BackendRunLifecycleRequest, DeviceProfile,
+    InferenceError,
 };
 use reimagine_plugin::{Extension, Plugin};
 
-use crate::profile::BurnProfileProvider;
+use crate::store::{BurnModelCache, BurnStore};
 
 #[derive(Debug, Clone)]
 pub struct BurnBackendInstanceRuntimeHooks {
@@ -16,26 +17,28 @@ pub struct BurnBackendInstanceRuntimeHooks {
     plugin: Option<Plugin>,
     extension: Option<Extension>,
     device: Option<DeviceProfile>,
+    store: Arc<BurnStore>,
+    model_cache: Arc<BurnModelCache>,
 }
 
 impl BurnBackendInstanceRuntimeHooks {
-    pub fn new(backend_instance: BackendInstance, device_label: Option<String>) -> Self {
-        let (plugin, extension) = BurnProfileProvider::plugin_provenance();
-        let device = device_label.map(|label| {
-            let kind = if label == "cpu" {
-                DeviceKind::Cpu
-            } else {
-                DeviceKind::Unknown
-            };
-            DeviceProfile::new(label).with_kind(kind)
-        });
-
+    pub fn new(
+        backend_instance: BackendInstance,
+        backend: Backend,
+        plugin: Option<Plugin>,
+        extension: Option<Extension>,
+        device: Option<DeviceProfile>,
+        store: Arc<BurnStore>,
+        model_cache: Arc<BurnModelCache>,
+    ) -> Self {
         Self {
             backend_instance,
-            backend: BurnProfileProvider::backend_kind(),
-            plugin: Some(plugin),
-            extension: Some(extension),
+            backend,
+            plugin,
+            extension,
             device,
+            store,
+            model_cache,
         }
     }
 }
@@ -74,13 +77,23 @@ impl BackendInstanceObservation for BurnBackendInstanceRuntimeHooks {
     }
 
     async fn snapshot(&self) -> BackendInstanceSnapshot {
+        let mut observations = BTreeMap::new();
+        observations.insert(
+            "run_payloads".to_owned(),
+            self.store.payload_count().to_string(),
+        );
+        observations.insert(
+            "cached_models".to_owned(),
+            self.model_cache.bundle_count().to_string(),
+        );
+
         BackendInstanceSnapshot {
             backend_instance: self.backend_instance.clone(),
             backend: self.backend.clone(),
             plugin: self.plugin.clone(),
             extension: self.extension.clone(),
             device: self.device.clone(),
-            observations: BTreeMap::new(),
+            observations,
             diagnostics: Vec::new(),
         }
     }

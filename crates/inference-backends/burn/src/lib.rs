@@ -12,5 +12,7 @@ mod config;
 mod device;
 mod error;
 pub mod models;
+mod operation;
 mod profile;
 mod resource;
+mod store;

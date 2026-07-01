@@ -1,6 +1,6 @@
 use reimagine_inference::{
     Backend, BackendInstance, BackendInstanceProfile, BackendInstanceStatus, BackendProfile,
-    BackendProfileProvider, DeviceKind, DeviceProfile,
+    BackendProfileProvider, DeviceKind, DeviceProfile, InferenceCapability,
 };
 use reimagine_plugin::{Extension, Plugin};
 
@@ -40,7 +40,8 @@ impl BurnProfileProvider {
             backend.clone(),
             DeviceProfile::new("cpu").with_kind(DeviceKind::Cpu),
             BackendInstanceStatus::Available,
-        );
+        )
+        .with_capability(InferenceCapability::LoadBundle);
 
         BackendProfile::new(backend)
             .with_plugin(plugin, extension)

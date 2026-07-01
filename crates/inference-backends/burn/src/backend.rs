@@ -1,27 +1,40 @@
+use std::sync::Arc;
+
 use burn_ndarray::NdArrayDevice;
 use reimagine_inference::{
     Backend, BackendInstance, CreateEmptyLatentRequest, CreateEmptyLatentResponse,
     DiffusionSampleRequest, DiffusionSampleResponse, ImageImportRequest, ImageImportResponse,
     ImagePreviewRequest, ImagePreviewResponse, ImageSaveRequest, ImageSaveResponse,
-    InferenceBackend, InferenceBackendCapabilities, InferenceCapability, InferenceError,
-    LatentDecodeRequest, LatentDecodeResponse, LatentEncodeRequest, LatentEncodeResponse,
-    LoadBundleRequest, LoadBundleResponse, TextEncodeRequest, TextEncodeResponse,
+    InferenceBackend, InferenceBackendCapabilities, InferenceCapability,
+    InferenceCapabilitySupport, InferenceError, LatentDecodeRequest, LatentDecodeResponse,
+    LatentEncodeRequest, LatentEncodeResponse, LoadBundleRequest, LoadBundleResponse,
+    TextEncodeRequest, TextEncodeResponse,
 };
 
 use crate::config::BurnBackendConfig;
 use crate::error::BurnBackendError;
+use crate::operation::execute_model_load_bundle;
 use crate::profile::{BACKEND_LABEL, BurnProfileProvider};
+use crate::resource::BurnBackendInstanceRuntimeHooks;
+use crate::store::{BurnModelCache, BurnStore};
 
 #[derive(Debug, Clone)]
 pub struct BurnBackend {
     config: BurnBackendConfig,
     device: NdArrayDevice,
+    store: Arc<BurnStore>,
+    model_cache: Arc<BurnModelCache>,
 }
 
 impl BurnBackend {
     pub fn new(config: BurnBackendConfig) -> Result<Self, BurnBackendError> {
         let device = config.device().try_build_device()?;
-        Ok(Self { config, device })
+        Ok(Self {
+            config,
+            device,
+            store: Arc::new(BurnStore::new()),
+            model_cache: Arc::new(BurnModelCache::new()),
+        })
     }
 
     pub fn config(&self) -> &BurnBackendConfig {
@@ -40,6 +53,31 @@ impl BurnBackend {
         BackendInstance::new(format!("{BACKEND_LABEL}:{}", self.device_label()))
     }
 
+    pub fn store(&self) -> &Arc<BurnStore> {
+        &self.store
+    }
+
+    pub fn model_cache(&self) -> &Arc<BurnModelCache> {
+        &self.model_cache
+    }
+
+    pub fn runtime_hooks(
+        &self,
+        plugin: Option<reimagine_plugin::Plugin>,
+        extension: Option<reimagine_plugin::Extension>,
+        device: Option<reimagine_inference::DeviceProfile>,
+    ) -> BurnBackendInstanceRuntimeHooks {
+        BurnBackendInstanceRuntimeHooks::new(
+            self.backend_instance(),
+            self.backend_kind().clone(),
+            plugin,
+            extension,
+            device,
+            self.store.clone(),
+            self.model_cache.clone(),
+        )
+    }
+
     fn not_implemented<T>(&self, capability: InferenceCapability) -> Result<T, InferenceError> {
         Err(InferenceError::BackendNotImplemented {
             capability,
@@ -52,6 +90,12 @@ impl BurnBackend {
     }
 }
 
+fn map_err<T>(result: Result<T, BurnBackendError>) -> Result<T, InferenceError> {
+    result.map_err(|err| InferenceError::BackendExecutionFailed {
+        message: err.to_string(),
+    })
+}
+
 #[async_trait::async_trait]
 impl InferenceBackend for BurnBackend {
     fn backend_kind(&self) -> &Backend {
@@ -60,14 +104,16 @@ impl InferenceBackend for BurnBackend {
     }
 
     fn capabilities(&self) -> InferenceBackendCapabilities {
-        InferenceBackendCapabilities::new(self.backend_kind().clone())
+        InferenceBackendCapabilities::new(self.backend_kind().clone()).with_support(
+            InferenceCapabilitySupport::new(InferenceCapability::LoadBundle),
+        )
     }
 
     async fn load_bundle(
         &self,
-        _request: LoadBundleRequest,
+        request: LoadBundleRequest,
     ) -> Result<LoadBundleResponse, InferenceError> {
-        self.not_implemented(InferenceCapability::LoadBundle)
+        map_err(execute_model_load_bundle(request, self))
     }
 
     async fn text_encode(
