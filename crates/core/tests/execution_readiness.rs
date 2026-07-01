@@ -21,7 +21,7 @@ use reimagine_core::workflow::{
 #[test]
 fn successful_sdxl_like_plan_is_built_for_default_targets() {
     let workflow: Workflow = serde_json::from_str(include_str!(
-        "../../../docs/architecture/examples/sdxl-base-workflow.json"
+        "../../../examples/workflows/sdxl-base-workflow.json"
     ))
     .expect("parse sdxl workflow example");
     let catalog = sdxl_catalog();
@@ -94,7 +94,7 @@ fn missing_required_input_blocks_terminal_target_execution() {
 #[test]
 fn missing_external_readiness_entry_blocks_required_model_ref_subject() {
     let workflow: Workflow = serde_json::from_str(include_str!(
-        "../../../docs/architecture/examples/sdxl-base-workflow.json"
+        "../../../examples/workflows/sdxl-base-workflow.json"
     ))
     .expect("parse sdxl workflow example");
     let catalog = sdxl_catalog();
@@ -116,7 +116,7 @@ fn missing_external_readiness_entry_blocks_required_model_ref_subject() {
 #[test]
 fn external_readiness_warnings_do_not_block_plan_construction() {
     let workflow: Workflow = serde_json::from_str(include_str!(
-        "../../../docs/architecture/examples/sdxl-base-workflow.json"
+        "../../../examples/workflows/sdxl-base-workflow.json"
     ))
     .expect("parse sdxl workflow example");
     let catalog = sdxl_catalog();
