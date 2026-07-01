@@ -1,82 +1,143 @@
 import {
-  Play,
-  Undo2,
-  Redo2,
+  ChevronLeft,
+  ChevronRight,
   ChevronDown,
-  StickyNote,
-  Cpu,
+  Download,
+  Play,
+  Save,
+  Search,
+  Share2,
 } from "lucide-react";
-import { Button } from "@/components/ui/button";
-import { useWorkflowStore } from "@/store/workflow";
-import { useUndoRedoAvailability } from "@/hooks/useUndoRedo";
+import { cn } from "@/lib/utils";
+import { RuntimeIsland } from "./RuntimeIsland";
+import { useRuntimeStore } from "@/store/runtime";
 
-const NAV_TABS = ["Workflow", "Edit", "View"] as const;
+function Logo({ className }: { className?: string }) {
+  return (
+    <svg
+      viewBox="0 0 32 32"
+      fill="none"
+      xmlns="http://www.w3.org/2000/svg"
+      className={cn("h-6 w-6", className)}
+      aria-label="Reimagine logo"
+    >
+      <path
+        d="M16 4C10.5 4 6.5 8.5 6.5 13.5C6.5 18 9 21.5 12.5 24.5C14 25.8 15 27 16 29C17 27 18 25.8 19.5 24.5C23 21.5 25.5 18 25.5 13.5C25.5 8.5 21.5 4 16 4Z"
+        fill="currentColor"
+      />
+      <ellipse cx="16" cy="13.5" rx="4" ry="5.5" fill="#131313" />
+    </svg>
+  );
+}
 
-export function TopBar() {
-  const { canUndo, canRedo } = useUndoRedoAvailability();
-  const undo = () => useWorkflowStore.temporal.getState().undo();
-  const redo = () => useWorkflowStore.temporal.getState().redo();
+function TopBarButton({
+  children,
+  ariaLabel,
+  variant = "ghost",
+  disabled,
+  onClick,
+  className,
+}: {
+  children: React.ReactNode;
+  ariaLabel: string;
+  variant?: "ghost" | "primary";
+  disabled?: boolean;
+  onClick?: () => void;
+  className?: string;
+}) {
+  return (
+    <button
+      type="button"
+      disabled={disabled}
+      onClick={onClick}
+      aria-label={ariaLabel}
+      className={cn(
+        "flex h-8 w-8 cursor-pointer items-center justify-center rounded-full transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary/30 focus-visible:ring-offset-2 focus-visible:ring-offset-background disabled:cursor-default disabled:opacity-45",
+        variant === "primary"
+          ? "bg-primary text-on-primary hover:bg-primary/90"
+          : "text-on-surface-variant hover:bg-control-hover hover:text-on-surface",
+        className,
+      )}
+    >
+      {children}
+    </button>
+  );
+}
+
+function ProjectSelector({ name }: { name: string }) {
+  return (
+    <button
+      type="button"
+      aria-label={`Switch project, current project ${name}`}
+      className="panel-flat ml-1.5 flex h-11 min-w-0 cursor-pointer items-center gap-1.5 rounded-2xl px-sm text-body-sm font-medium text-on-surface-variant transition-colors hover:bg-control-hover hover:text-on-surface focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary/30 focus-visible:ring-offset-2 focus-visible:ring-offset-background"
+    >
+      <span className="truncate max-w-36">{name}</span>
+      <ChevronDown className="h-3.5 w-3.5 shrink-0" />
+    </button>
+  );
+}
+
+export function TopBar({
+  forceRuntimeCollapsed = false,
+}: {
+  forceRuntimeCollapsed?: boolean;
+}) {
+  const startMockRun = useRuntimeStore((s) => s.startMockRun);
+  const phase = useRuntimeStore((s) => s.phase);
+  const runActive = phase === "starting" || phase === "running";
 
   return (
-    <header className="absolute top-0 left-0 right-0 z-50 flex h-14 items-center gap-4 border-b border-white/5 px-4 backdrop-blur-md">
-      <div className="flex h-8 w-8 items-center justify-center rounded-lg bg-gradient-to-br from-gray-700 to-gray-900 shadow-lg">
-        <Cpu className="h-4 w-4 text-zinc-400" />
-      </div>
+    <div className="pointer-events-auto absolute inset-x-0 top-0 z-[var(--overlay-z-topbar)] flex flex-col gap-2 px-md py-2.5">
+      <header className="relative flex h-11 items-center">
+        <div className="panel-flat z-20 flex h-11 w-11 items-center justify-center rounded-2xl text-on-surface">
+          <Logo className="h-5 w-5" />
+        </div>
 
-      <nav className="flex items-center gap-1 rounded-xl border border-white/5 bg-zinc-900/50 p-1">
-        {NAV_TABS.map((tab, i) => (
-          <button
-            key={tab}
-            className={
-              i === 0
-                ? "rounded-lg bg-zinc-800 px-3 py-1.5 text-sm font-medium text-white"
-                : "rounded-lg px-3 py-1.5 text-sm font-medium text-zinc-400 transition-colors hover:text-white"
-            }
+        <ProjectSelector name="Black bear" />
+
+        <TopBarButton
+          ariaLabel="Search commands"
+          className="panel-flat ml-1.5 h-11 w-11 rounded-2xl"
+        >
+          <Search className="h-4 w-4" />
+        </TopBarButton>
+
+        <div className="pointer-events-auto absolute left-1/2 top-0 z-30 -translate-x-1/2">
+          <RuntimeIsland forceCollapsed={forceRuntimeCollapsed} />
+        </div>
+
+        <div className="panel-flat z-20 ml-auto flex h-11 items-center gap-1 rounded-2xl pr-1.5">
+          <TopBarButton ariaLabel="Go back">
+            <ChevronLeft className="h-4 w-4" />
+          </TopBarButton>
+          <TopBarButton ariaLabel="Go forward">
+            <ChevronRight className="h-4 w-4" />
+          </TopBarButton>
+          <TopBarButton ariaLabel="Save workflow">
+            <Save className="h-4 w-4" />
+          </TopBarButton>
+          <TopBarButton ariaLabel="Export workflow">
+            <Download className="h-4 w-4" />
+          </TopBarButton>
+          <TopBarButton ariaLabel="Share workflow">
+            <Share2 className="h-4 w-4" />
+          </TopBarButton>
+          <TopBarButton
+            ariaLabel="Run workflow"
+            disabled={runActive}
+            onClick={startMockRun}
+            variant="primary"
           >
-            {tab}
-          </button>
-        ))}
-        <div className="mx-1 h-4 w-px bg-white/10" />
-        <Button
-          size="icon-sm"
-          variant="ghost"
-          className="text-zinc-400 hover:text-white"
-        >
-          <Play />
-        </Button>
-      </nav>
+            <Play className="h-4 w-4 fill-current" />
+          </TopBarButton>
+        </div>
+      </header>
 
-      <div className="flex gap-1">
-        <Button
-          size="icon-sm"
-          variant="ghost"
-          onClick={undo}
-          disabled={!canUndo}
-          className="text-zinc-500 hover:text-white disabled:opacity-30"
-          title="Undo (Cmd/Ctrl+Z)"
-        >
-          <Undo2 />
-        </Button>
-        <Button
-          size="icon-sm"
-          variant="ghost"
-          onClick={redo}
-          disabled={!canRedo}
-          className="text-zinc-500 hover:text-white disabled:opacity-30"
-          title="Redo (Cmd/Ctrl+Shift+Z)"
-        >
-          <Redo2 />
-        </Button>
-      </div>
-
-      <div className="flex items-center gap-2 rounded-xl border border-white/5 bg-zinc-900/50 px-3 py-1.5">
-        <StickyNote className="h-4 w-4 text-zinc-500" />
-        <span className="text-sm font-medium text-zinc-200">
-          Untitled workflow
+      <div className="flex items-start justify-end px-xs">
+        <span className="text-caption font-medium text-on-surface-variant/70">
+          image generation v.3
         </span>
-        <span className="h-2 w-2 rounded-full bg-zinc-700" />
-        <ChevronDown className="h-3.5 w-3.5 text-zinc-500" />
       </div>
-    </header>
+    </div>
   );
 }

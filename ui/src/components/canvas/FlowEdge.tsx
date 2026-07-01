@@ -46,11 +46,11 @@ export const FlowEdgeComponent: FC<EdgeProps<FlowEdge>> = ({
   });
 
   const startColor = data?.sourceKind
-    ? `var(--color-socket-${data.sourceKind}, #a855f7)`
-    : "#a855f7";
+    ? `var(--color-socket-${data.sourceKind}, var(--color-status-running))`
+    : "var(--color-status-running)";
   const endColor = data?.targetKind
-    ? `var(--color-socket-${data.targetKind}, #22c55e)`
-    : "#22c55e";
+    ? `var(--color-socket-${data.targetKind}, var(--color-status-success))`
+    : "var(--color-status-success)";
   const labelColor = data?.tone || startColor;
   const glowId = `glow-${id}`;
 
@@ -91,10 +91,10 @@ export const FlowEdgeComponent: FC<EdgeProps<FlowEdge>> = ({
       <path
         d={path}
         fill="none"
-        stroke="#ffffff"
+        stroke="var(--color-edge-dash)"
         strokeWidth={1.5}
         strokeDasharray="6 10"
-        strokeOpacity={0.55}
+        strokeOpacity={0.35}
         className="pointer-events-none"
         style={{ animation: "flow 1.2s linear infinite" }}
       />
@@ -111,7 +111,7 @@ export const FlowEdgeComponent: FC<EdgeProps<FlowEdge>> = ({
             width={60}
             height={20}
             rx={10}
-            fill="rgba(20, 20, 20, 0.75)"
+            fill="var(--color-edge-label)"
             stroke={labelColor}
             strokeOpacity={0.5}
             strokeWidth={1}
@@ -123,7 +123,7 @@ export const FlowEdgeComponent: FC<EdgeProps<FlowEdge>> = ({
             fill={labelColor}
             fontSize={10}
             fontWeight={500}
-            fontFamily="Inter, system-ui, sans-serif"
+            fontFamily="var(--font-sans)"
           >
             {data.label}
           </text>

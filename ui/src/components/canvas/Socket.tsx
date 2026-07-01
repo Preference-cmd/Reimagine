@@ -44,7 +44,7 @@ export function Socket({
           : { right: "-19px", left: "auto" }),
         backgroundColor: color,
         boxShadow: connected
-          ? `0 0 0 2px ${color}33, 0 0 10px ${color}88`
+          ? `0 0 0 2px ${color}22`
           : "none",
         ...style,
       }}

@@ -1,42 +1,71 @@
+import { useEffect, useState } from "react";
 import { TopBar } from "./TopBar";
 import { SideRail } from "./SideRail";
 import { ExplorerPanel } from "./ExplorerPanel";
 import { PropertiesPanel } from "./PropertiesPanel";
+import { SettingsPanel, type ThemeMode } from "./SettingsPanel";
+import {
+  getOverlayPolicy,
+} from "./overlayLayout";
 import { NodeCanvas } from "@/components/canvas/NodeCanvas";
+const THEME_STORAGE_KEY = "reimagine.theme";
+
+function readStoredTheme(): ThemeMode {
+  if (typeof window === "undefined") {
+    return "light";
+  }
+
+  const stored = window.localStorage.getItem(THEME_STORAGE_KEY);
+  return stored === "dark" ? "dark" : "light";
+}
 
 /**
  * AppShell — root layout for the editor workspace.
  *
- * Structure (mirrors docs/design/editor/ref.html):
- *   - TopBar: 56px overlay at the top, transparent + blur, floats over canvas
- *   - SideRail: 64px overlay on the left, full height below top
- *   - main: fills the viewport region to the right of the SideRail; the
- *     canvas extends under the floating TopBar (so the TopBar's
- *     backdrop-blur has something to sample)
- *     - NodeCanvas: React Flow with demo nodes (issue 05)
- *     - ExplorerPanel / PropertiesPanel: floating glass panes positioned
- *       absolutely inside main, so they automatically track viewport
- *       resizes
- *
- * Layout uses a CSS grid to keep the main column honest on resize:
- *   columns: [64px sidebar track | 1fr main track]
- *   row:     1fr (= full viewport height)
- *
- * TopBar and SideRail are `position: absolute` (not `fixed`) so their width
- * is measured against this shell — which is sized to the scaled #root (see
- * globals.css) — and the 0.7 transform on #root paints them at full
- * viewport width. The grid only contains main as a real grid item.
+ * Structure:
+ *   - NodeCanvas lives inside an overflow-hidden layer so the canvas grid
+ *     cannot scroll the viewport.
+ *   - TopBar, SideRail, ExplorerPanel, and PropertiesPanel are siblings
+ *     outside that clipping layer so tooltips/menus/popovers can escape.
  */
 export function AppShell() {
+  const [activePanel, setActivePanel] = useState<string | null>(null);
+  const [themeMode, setThemeMode] = useState<ThemeMode>(readStoredTheme);
+  const overlayPolicy = getOverlayPolicy(activePanel);
+
+  useEffect(() => {
+    document.documentElement.dataset.theme = themeMode;
+    document.documentElement.classList.toggle("dark", themeMode === "dark");
+    window.localStorage.setItem(THEME_STORAGE_KEY, themeMode);
+  }, [themeMode]);
+
   return (
-    <div className="relative grid h-full w-full grid-cols-[64px_1fr] grid-rows-[1fr] bg-background text-foreground">
-      <TopBar />
-      <SideRail />
-      <main className="relative col-start-2 overflow-hidden">
-        <NodeCanvas />
-        <ExplorerPanel />
-        <PropertiesPanel />
-      </main>
+    <div className="overlay-root relative h-full w-full bg-background text-foreground">
+      <div className="absolute inset-0">
+        <NodeCanvas themeMode={themeMode} />
+      </div>
+
+      <TopBar forceRuntimeCollapsed={overlayPolicy.forceRuntimeCollapsed} />
+
+      <div className="overlay-slot-rail pointer-events-none">
+        <SideRail activePanel={activePanel} onPanelChange={setActivePanel} />
+      </div>
+
+      <ExplorerPanel
+        className="overlay-slot-explorer pointer-events-auto"
+        open={overlayPolicy.explorerOpen}
+        view={overlayPolicy.explorerView}
+        onClose={() => setActivePanel(null)}
+      />
+
+      <SettingsPanel
+        open={overlayPolicy.settingsOpen}
+        themeMode={themeMode}
+        onThemeModeChange={setThemeMode}
+        onClose={() => setActivePanel(null)}
+      />
+
+      {!overlayPolicy.suppressContextPanels && <PropertiesPanel />}
     </div>
   );
 }

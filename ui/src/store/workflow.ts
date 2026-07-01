@@ -33,7 +33,7 @@ type WorkflowState = {
 
 /* ───── Demo graph (matches the reference layout) ─────
    Topology: Model ─┐
-                    ├─→ Image Generator ─→ Image
+                    ├─→ Sampler ─→ Image
    Positive ────────┤
    Negative ────────┘
    Edges carry an optional `label` + `tone` for the midpoint pill tag. */
@@ -45,14 +45,14 @@ const initialNodes: Node[] = [
     position: { x: 60, y: 220 },
     data: {
       title: "Model",
-      tone: "#a855f7",
+      tone: "#7928ca",
       outputs: [
-        { id: "model", kind: "model", label: "model", dotColor: "#f59e0b" },
-        { id: "positive", kind: "conditioning", label: "positive", dotColor: "#22c55e" },
-        { id: "negative", kind: "conditioning", label: "negative", dotColor: "#ef4444" },
+        { id: "model", kind: "model", label: "model", dotColor: "#f5a623" },
+        { id: "positive", kind: "conditioning", label: "positive", dotColor: "#50e3c2" },
+        { id: "negative", kind: "conditioning", label: "negative", dotColor: "#ff0080" },
       ],
       parameters: [
-        { id: "model", label: "", value: "DreamShaper 6 (SD1.5)" },
+        { id: "model", label: "", value: "sdxl_base_1.0.safetensors" },
       ],
     },
   },
@@ -62,7 +62,7 @@ const initialNodes: Node[] = [
     position: { x: 380, y: 60 },
     data: {
       title: "Positive",
-      tone: "#22c55e",
+      tone: "#50e3c2",
       prompt:
         "A black bear with a pink snout, minimalist style, soft gradients, clear blue sky",
     },
@@ -73,7 +73,7 @@ const initialNodes: Node[] = [
     position: { x: 380, y: 320 },
     data: {
       title: "Negative",
-      tone: "#ef4444",
+      tone: "#ff0080",
       prompt:
         "No text, unnecessary details, background objects, other animals or people",
     },
@@ -83,23 +83,23 @@ const initialNodes: Node[] = [
     type: "imageGenerator",
     position: { x: 720, y: 120 },
     data: {
-      title: "Image Generator",
-      tone: "#a855f7",
+      title: "Sampler",
+      tone: "#7928ca",
       inputs: [
-        { id: "model", kind: "model", label: "OCTAVES", dotColor: "#3b82f6", badge: "F" },
-        { id: "positive", kind: "conditioning", label: "SHIFT", dotColor: "#6b7280", badge: "V" },
-        { id: "negative", kind: "conditioning", label: "DECAY", dotColor: "#3b82f6", badge: "F" },
-        { id: "uv", kind: "latent", label: "UV", dotColor: "#6b7280", badge: "V" },
+        { id: "model", kind: "model", label: "model", dotColor: "#f5a623" },
+        { id: "positive", kind: "conditioning", label: "positive", dotColor: "#50e3c2" },
+        { id: "negative", kind: "conditioning", label: "negative", dotColor: "#ff0080" },
+        { id: "latent", kind: "latent", label: "latent", dotColor: "#7928ca" },
       ],
       outputs: [
-        { id: "image", kind: "image", label: "OUTPUT", dotColor: "#3b82f6", badge: "V" },
+        { id: "image", kind: "image", label: "image", dotColor: "#50e3c2" },
       ],
       parameters: [
-        { id: "randomness", label: "Randomness", value: "12345", tag: "Kate" },
-        { id: "control", label: "Control mode", value: "Fixed" },
-        { id: "quality", label: "Quality steps", value: "30" },
-        { id: "strength", label: "Prompt strength", value: "8.0" },
-        { id: "sampling", label: "Sampling method", value: "dpm++ 2M" },
+        { id: "seed", label: "Seed", value: "12345", tag: "Fixed" },
+        { id: "steps", label: "Steps", value: "30" },
+        { id: "cfg", label: "CFG scale", value: "8.0" },
+        { id: "sampler", label: "Sampler", value: "dpm++ 2M" },
+        { id: "scheduler", label: "Scheduler", value: "karras" },
       ],
     },
   },
@@ -109,9 +109,9 @@ const initialNodes: Node[] = [
     position: { x: 1080, y: 140 },
     data: {
       title: "Image",
-      tone: "#22c55e",
+      tone: "#50e3c2",
       inputs: [
-        { id: "image", kind: "image", label: "image", dotColor: "#22c55e" },
+        { id: "image", kind: "image", label: "image", dotColor: "#50e3c2" },
       ],
     },
   },
@@ -159,7 +159,7 @@ export const useWorkflowStore = create<WorkflowState>()(
         nodes: initialNodes,
         edges: initialEdges,
         selectedNode: null,
-        propertiesPanelOpen: true,
+        propertiesPanelOpen: false,
         onNodesChange: (changes: NodeChange[]) => {
           const s = get();
           set({ nodes: applyNodeChanges(changes, s.nodes) });
@@ -181,7 +181,11 @@ export const useWorkflowStore = create<WorkflowState>()(
           set({ edges: newEdges });
         },
         onNodeSelect: (sel: SelectionInfo) =>
-          set(sel ? { selectedNode: sel, propertiesPanelOpen: true } : { selectedNode: sel }),
+          set(
+            sel
+              ? { selectedNode: sel, propertiesPanelOpen: true }
+              : { selectedNode: sel, propertiesPanelOpen: false },
+          ),
         setPropertiesPanelOpen: (open: boolean) =>
           set({ propertiesPanelOpen: open }),
       };

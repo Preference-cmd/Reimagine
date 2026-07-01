@@ -19,7 +19,7 @@ export type ParamRow = {
   id: string;
   label: string;
   value: string;
-  /** Optional secondary chip rendered next to the value (e.g. a "Kate" tag). */
+  /** Optional secondary chip rendered next to the value (e.g. a fixed seed tag). */
   tag?: string;
 };
 
@@ -39,18 +39,14 @@ type Props = {
  *
  * Three structural layers, each with a distinct surface treatment:
  *
- *   1. .node-base       — outer frosted-glass card; lets the canvas dot
- *                         grid show through (blurred). One per node.
- *   2. .node-base__header — its own sub-container, faint white wash +
- *                         hairline divider. Holds the tone dot + title.
+ *   1. .node-base       — outer node surface; lets the canvas stay present.
+ *   2. .node-base__header — title row that holds the tone dot + title.
  *   3. .node-base__body — the shared container for sockets + inner card.
  *                         No background of its own.
  *   4. .node-base__inner — the deepest "well", holds children / parameters.
  *
  * `style` sets the per-instance `--node-tone` CSS custom property, which
- * `.node-base--selected` reads for the border, the 1px ring, and the
- * outer glow. The header dot is driven by inline style so the tone can
- * be set per node without a new CSS class.
+ * `.node-base--selected` reads for the border and the 1px ring.
  */
 export function BaseNode({
   title,
@@ -74,12 +70,9 @@ export function BaseNode({
       <div className="node-base__header">
         <span
           className="h-2 w-2 shrink-0 rounded-full"
-          style={{
-            backgroundColor: tone,
-            boxShadow: `0 0 8px ${tone}`,
-          }}
+          style={{ backgroundColor: tone }}
         />
-        <span className="truncate text-[13px] font-medium leading-none text-zinc-200">
+        <span className="truncate text-body-sm font-medium leading-none text-on-surface">
           {title}
         </span>
       </div>
@@ -103,7 +96,7 @@ export function BaseNode({
                     />
                     {slot.badge && (
                       <span
-                        className="flex h-4 w-4 shrink-0 items-center justify-center rounded text-[9px] font-bold text-white"
+                        className="flex h-5 w-5 shrink-0 items-center justify-center rounded text-caption font-bold text-white"
                         style={{
                           backgroundColor:
                             slot.dotColor || SOCKET_COLORS[slot.kind],
@@ -112,7 +105,7 @@ export function BaseNode({
                         {slot.badge}
                       </span>
                     )}
-                    <span className="text-[11px] leading-none text-zinc-400">
+                    <span className="text-body-sm leading-none text-on-surface-variant">
                       {slot.label}
                     </span>
                   </div>
@@ -124,12 +117,12 @@ export function BaseNode({
                     key={slot.id}
                     className="relative flex h-5 w-full items-center justify-end gap-2"
                   >
-                    <span className="text-[11px] leading-none text-zinc-400">
+                    <span className="text-body-sm leading-none text-on-surface-variant">
                       {slot.label}
                     </span>
                     {slot.badge && (
                       <span
-                        className="flex h-4 w-4 shrink-0 items-center justify-center rounded text-[9px] font-bold text-white"
+                        className="flex h-5 w-5 shrink-0 items-center justify-center rounded text-caption font-bold text-white"
                         style={{
                           backgroundColor:
                             slot.dotColor || SOCKET_COLORS[slot.kind],
@@ -161,17 +154,17 @@ export function BaseNode({
                       className="flex items-center justify-between gap-2"
                     >
                       {p.label && (
-                        <span className="text-[11px] leading-none text-zinc-400">
+                        <span className="text-body-sm leading-none text-on-surface-variant">
                           {p.label}
                         </span>
                       )}
                       <div className="flex items-center gap-1.5">
-                        <span className="flex items-center gap-1.5 rounded-md bg-zinc-800/70 px-2.5 py-1.5 text-[11px] font-medium leading-none text-zinc-100">
+                        <span className="flex items-center gap-1.5 rounded-md bg-surface-container-high px-2.5 py-1.5 text-body-sm font-medium leading-none text-on-surface">
                           <span className="truncate">{p.value}</span>
-                          <ChevronDown className="h-3 w-3 shrink-0 text-zinc-500" />
+                          <ChevronDown className="h-3 w-3 shrink-0 text-on-surface-variant" />
                         </span>
                         {p.tag && (
-                          <span className="rounded-md bg-zinc-700/60 px-2 py-1.5 text-[10px] font-medium leading-none text-zinc-300">
+                          <span className="rounded-md bg-surface-container-highest px-2 py-1.5 text-caption font-medium leading-none text-on-surface-variant">
                             {p.tag}
                           </span>
                         )}
