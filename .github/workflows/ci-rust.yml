@@ -36,10 +36,18 @@ jobs:
   # `src-tauri` is intentionally excluded — Tauri shell needs webkit2gtk/gtk
   # system libs and we have no tauri-specific test or build target today.
   # Add a dedicated job when that becomes a real requirement.
+  #
+  # Matrix covers both Linux (the reference CI target) and macOS (matches
+  # the development environment so the candle `metal` feature path is
+  # actually exercised — see `crates/inference-backends/candle/Cargo.toml`).
   # ---------------------------------------------------------------------------
   domain:
-    name: domain-crates
-    runs-on: ubuntu-latest
+    name: domain-crates (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest]
 
     steps:
       - name: Checkout
@@ -56,7 +64,7 @@ jobs:
           workspaces: |
             .
             crates/* -> target
-          shared-key: domain-crates
+          shared-key: domain-crates-${{ matrix.os }}
 
       - name: Module layout scan
         # Enforces the "Post-change scans" rule from AGENTS.local.md:
