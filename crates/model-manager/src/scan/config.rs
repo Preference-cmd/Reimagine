@@ -11,6 +11,8 @@ pub const DEFAULT_EXCLUDE_PATTERNS: &[&str] = &[
     "**/cache/**",
     "**/build/**",
     "**/dist/**",
+    "models/converted/**",
+    "**/models/converted/**",
 ];
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]

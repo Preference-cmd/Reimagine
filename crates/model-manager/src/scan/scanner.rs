@@ -2,7 +2,7 @@ use std::collections::VecDeque;
 use std::path::Path;
 use std::time::UNIX_EPOCH;
 
-use crate::{ModelFormat, ModelManagerError, ModelManagerResult, ModelRoot};
+use crate::{ModelFormat, ModelManagerError, ModelManagerResult, ModelRoot, ModelRootKind};
 
 use super::{ScanConfig, ScanObservation};
 
@@ -58,7 +58,9 @@ impl ModelScanner {
                     continue;
                 }
 
-                if matches_any(self.config.exclude_patterns(), &relative) {
+                if matches_any(self.config.exclude_patterns(), &relative)
+                    || is_generated_package_path(root.kind(), &relative)
+                {
                     continue;
                 }
 
@@ -153,6 +155,11 @@ fn matches_include(patterns: &[String], relative: &str) -> bool {
         || patterns
             .iter()
             .any(|pattern| glob_match::glob_match(pattern, relative))
+}
+
+fn is_generated_package_path(root_kind: ModelRootKind, relative: &str) -> bool {
+    matches!(root_kind, ModelRootKind::BasePathModels)
+        && (relative == "converted" || relative.starts_with("converted/"))
 }
 
 fn extension(path: &Path) -> String {

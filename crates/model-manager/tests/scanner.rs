@@ -46,6 +46,67 @@ async fn scanner_default_ignores_hidden_and_unsupported_files() {
 }
 
 #[tokio::test]
+async fn scanner_skips_generated_converted_packages_in_base_models_root() {
+    let base = test_base("base-generated-converted");
+    let models_dir = base.join("models");
+    write_file(
+        &models_dir.join("converted/burn/sdxl-base/stat-v1/diffusion/model.safetensors"),
+        b"generated",
+    )
+    .await;
+    write_file(
+        &models_dir.join("checkpoints/user-model.safetensors"),
+        b"user",
+    )
+    .await;
+
+    let observations = ModelScanner::new(ScanConfig::default())
+        .scan_root(&ModelRoot::base_models(), &models_dir)
+        .await
+        .unwrap();
+    let paths = observations
+        .iter()
+        .map(|observation| observation.relative_path())
+        .collect::<Vec<_>>();
+
+    assert_eq!(paths, vec!["checkpoints/user-model.safetensors"]);
+
+    cleanup(base).await;
+}
+
+#[tokio::test]
+async fn scanner_does_not_globally_skip_user_selected_top_level_converted_dir() {
+    let base = test_base("user-converted-dir");
+    let root_dir = base.join("external");
+    write_file(&root_dir.join("converted/plain.safetensors"), b"user").await;
+    write_file(
+        &root_dir.join("models/converted/burn/generated/model.safetensors"),
+        b"generated",
+    )
+    .await;
+
+    let observations = ModelScanner::new(ScanConfig::default())
+        .scan_root(
+            &ModelRoot::new(
+                ModelRootId::new("external"),
+                ".",
+                ModelRootKind::UserSelected,
+            ),
+            &root_dir,
+        )
+        .await
+        .unwrap();
+    let paths = observations
+        .iter()
+        .map(|observation| observation.relative_path())
+        .collect::<Vec<_>>();
+
+    assert_eq!(paths, vec!["converted/plain.safetensors"]);
+
+    cleanup(base).await;
+}
+
+#[tokio::test]
 async fn scanner_custom_config_controls_recursion_patterns_and_extensions() {
     let base = test_base("custom-config");
     let models_dir = base.join("models");
