@@ -18,6 +18,8 @@ mod contract;
 mod conversion;
 mod metadata;
 #[allow(dead_code)]
+mod package;
+#[allow(dead_code)]
 mod source_layout;
 #[allow(dead_code)]
 mod source_mapping;

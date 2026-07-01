@@ -456,6 +456,7 @@ mod tests {
             mapped_tensor_count: 0,
             ignored_tensor_families: vec!["source.unused".to_owned()],
             diagnostics: vec!["synthetic fixture".to_owned()],
+            package: None,
         };
 
         let json = serde_json::to_string_pretty(&report).expect("serialize report");

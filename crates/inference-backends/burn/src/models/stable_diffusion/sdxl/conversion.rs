@@ -118,6 +118,53 @@ pub struct BurnSdxlOutputComponentReport {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct BurnSdxlPackageReport {
+    pub schema_version: u32,
+    pub layout: String,
+    pub converter_version: String,
+    pub package_root: String,
+    pub created_at: Option<u64>,
+    pub source: BurnSdxlPackageSourceReport,
+    pub target: BurnSdxlPackageTargetReport,
+    pub components: Vec<BurnSdxlPackageComponentReport>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct BurnSdxlPackageSourceReport {
+    pub source_model_id: String,
+    pub source_layout: String,
+    pub source_fingerprint: String,
+    pub fingerprint_kind: String,
+    pub source_files: Vec<BurnSdxlPackageSourceFileReport>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct BurnSdxlPackageSourceFileReport {
+    pub relative_path: String,
+    pub size_bytes: u64,
+    pub modified_at: Option<u64>,
+    pub fingerprint: Option<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct BurnSdxlPackageTargetReport {
+    pub backend: String,
+    pub contract: String,
+    pub contract_version: u32,
+    pub model_series: String,
+    pub variant: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct BurnSdxlPackageComponentReport {
+    pub component_role: BurnSdxlComponentRole,
+    pub model_role: String,
+    pub relative_path: String,
+    pub format: String,
+    pub metadata: BTreeMap<String, String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct BurnSdxlConversionReport {
     pub source_identity: String,
     pub source_layout: String,
@@ -126,6 +173,8 @@ pub struct BurnSdxlConversionReport {
     pub mapped_tensor_count: usize,
     pub ignored_tensor_families: Vec<String>,
     pub diagnostics: Vec<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub package: Option<BurnSdxlPackageReport>,
 }
 
 impl BurnSdxlConversionReport {
@@ -138,6 +187,7 @@ impl BurnSdxlConversionReport {
             mapped_tensor_count: 0,
             ignored_tensor_families: Vec::new(),
             diagnostics: Vec::new(),
+            package: None,
         }
     }
 }
