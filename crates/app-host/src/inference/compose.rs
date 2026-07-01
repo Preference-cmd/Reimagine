@@ -326,7 +326,7 @@ mod tests {
     }
 
     #[test]
-    fn builtin_compute_profile_includes_burn_without_capabilities() {
+    fn builtin_compute_profile_includes_burn_load_bundle_capability() {
         let profile = collect_compute_profile(&builtin_backend_candidates());
 
         let burn = profile
@@ -349,7 +349,10 @@ mod tests {
             .expect("burn:cpu instance profile");
         assert_eq!(cpu.status, BackendInstanceStatus::Available);
         assert_eq!(cpu.device.kind, DeviceKind::Cpu);
-        assert!(cpu.capabilities.is_empty());
+        assert_eq!(
+            cpu.capabilities,
+            vec![reimagine_inference::InferenceCapability::LoadBundle]
+        );
         assert!(cpu.operation_options.is_empty());
         assert!(cpu.diagnostics.is_empty());
     }

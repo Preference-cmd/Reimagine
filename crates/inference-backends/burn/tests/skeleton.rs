@@ -6,10 +6,7 @@ use reimagine_inference::{
     BackendRunLifecycle, BackendRunLifecycleRequest, CreateEmptyLatentRequest, DeviceKind,
     InferenceBackend, InferenceCapability, InferenceError,
 };
-use reimagine_inference_burn::{
-    BurnBackend, BurnBackendConfig, BurnBackendInstanceRuntimeHooks, BurnDevice,
-    BurnProfileProvider,
-};
+use reimagine_inference_burn::{BurnBackend, BurnBackendConfig, BurnDevice, BurnProfileProvider};
 
 fn backend() -> BurnBackend {
     BurnBackend::new(BurnBackendConfig::new("/models", "/output")).expect("burn backend")
@@ -34,7 +31,7 @@ fn device_builds_cpu_and_rejects_unknown_labels() {
 }
 
 #[tokio::test]
-async fn profile_reports_builtin_burn_cpu_without_capabilities() {
+async fn profile_reports_builtin_burn_cpu_with_load_bundle_capability() {
     let profile = BurnProfileProvider::new().backend_profile().await;
 
     assert_eq!(profile.backend.as_str(), "burn");
@@ -56,21 +53,21 @@ async fn profile_reports_builtin_burn_cpu_without_capabilities() {
     assert_eq!(cpu.backend.as_str(), "burn");
     assert_eq!(cpu.device.label, "cpu");
     assert_eq!(cpu.device.kind, DeviceKind::Cpu);
-    assert!(cpu.capabilities.is_empty());
+    assert_eq!(cpu.capabilities, vec![InferenceCapability::LoadBundle]);
     assert!(cpu.operation_options.is_empty());
     assert!(cpu.diagnostics.is_empty());
 }
 
 #[test]
-fn backend_kind_instance_and_capabilities_are_empty() {
+fn backend_kind_instance_and_capabilities_report_load_bundle() {
     let backend = backend();
     let capabilities = backend.capabilities();
 
     assert_eq!(backend.backend_kind().as_str(), "burn");
     assert_eq!(backend.backend_instance(), BackendInstance::new("burn:cpu"));
     assert_eq!(capabilities.backend_kind().as_str(), "burn");
-    assert!(capabilities.capability_supports().is_empty());
-    assert!(!capabilities.supports_capability(InferenceCapability::LoadBundle));
+    assert_eq!(capabilities.capability_supports().len(), 1);
+    assert!(capabilities.supports_capability(InferenceCapability::LoadBundle));
 }
 
 #[tokio::test]
@@ -102,9 +99,9 @@ async fn direct_methods_return_structured_backend_not_implemented() {
 }
 
 #[tokio::test]
-async fn runtime_hooks_are_noop_and_report_snapshot_identity() {
-    let hooks =
-        BurnBackendInstanceRuntimeHooks::new(BackendInstance::new("burn:cpu"), Some("cpu".into()));
+async fn runtime_hooks_report_snapshot_identity_and_cache_counts() {
+    let backend = backend();
+    let hooks = backend.runtime_hooks(None, None, None);
     let request = BackendRunLifecycleRequest {
         run_id: reimagine_core::model::RunId::new("run-burn-hooks"),
     };
@@ -119,21 +116,16 @@ async fn runtime_hooks_are_noop_and_report_snapshot_identity() {
     assert!(cleanup.diagnostics.is_empty());
     assert_eq!(snapshot.backend_instance, BackendInstance::new("burn:cpu"));
     assert_eq!(snapshot.backend.as_str(), "burn");
+    assert!(snapshot.plugin.is_none());
+    assert!(snapshot.extension.is_none());
+    assert!(snapshot.device.is_none());
     assert_eq!(
-        snapshot.plugin.as_ref().map(|plugin| plugin.as_str()),
-        Some("builtin.burn")
+        snapshot.observations.get("cached_models"),
+        Some(&"0".to_owned())
     );
     assert_eq!(
-        snapshot
-            .extension
-            .as_ref()
-            .map(|extension| extension.as_str()),
-        Some("backend.burn")
+        snapshot.observations.get("run_payloads"),
+        Some(&"0".to_owned())
     );
-    assert_eq!(
-        snapshot.device.as_ref().map(|device| device.label.as_str()),
-        Some("cpu")
-    );
-    assert!(snapshot.observations.is_empty());
     assert!(snapshot.diagnostics.is_empty());
 }

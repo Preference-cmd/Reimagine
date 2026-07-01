@@ -6,8 +6,7 @@ use reimagine_inference::{
     BackendProfile, DeviceProfile, InferenceBackend,
 };
 use reimagine_inference_burn::{
-    BurnBackend, BurnBackendConfig, BurnBackendError, BurnBackendInstanceRuntimeHooks, BurnDevice,
-    BurnProfileProvider,
+    BurnBackend, BurnBackendConfig, BurnBackendError, BurnDevice, BurnProfileProvider,
 };
 use reimagine_inference_candle::{
     CandleBackend, CandleBackendConfig, CandleBackendError, CandleDevice, CandleProfileProvider,
@@ -102,20 +101,18 @@ impl BackendCandidate for BurnBackendCandidate {
             Extension::try_from("backend.burn").expect("valid built-in Burn extension id");
         let descriptor =
             BackendInstanceDescriptor::new(instance.clone(), backend.backend_kind().clone())
-                .with_plugin(plugin, extension);
+                .with_plugin(plugin.clone(), extension.clone());
         let descriptor = if let Some(device) = device.clone() {
             descriptor.with_device(device)
         } else {
             descriptor
         };
+        let runtime_hooks = backend.runtime_hooks(Some(plugin), Some(extension), device);
         let backend: Arc<dyn InferenceBackend> = backend;
         Ok(BuiltBackendInstance {
             descriptor,
             backend,
-            runtime_hooks: Arc::new(BurnBackendInstanceRuntimeHooks::new(
-                instance.clone(),
-                Some(device_label.to_string()),
-            )),
+            runtime_hooks: Arc::new(runtime_hooks),
         })
     }
 }
