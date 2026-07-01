@@ -20,7 +20,12 @@ crate-type = ["staticlib", "cdylib", "rlib"]
 tauri-build = { workspace = true }
 
 [dependencies]
+reimagine-agent = { path = "../crates/agent" }
+reimagine-app-host = { path = "../crates/app-host" }
+reimagine-config = { path = "../crates/config" }
+reimagine-runtime = { path = "../crates/runtime" }
 tauri = { workspace = true }
 tauri-plugin-opener = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }
+tokio = { workspace = true, features = ["fs"] }
