@@ -113,7 +113,7 @@ fn builtin_catalog_contains_v1_sdxl_node_defs() {
 #[test]
 fn sdxl_base_workflow_example_validates_against_builtin_catalog() {
     let workflow: Workflow = serde_json::from_str(include_str!(
-        "../../../docs/architecture/examples/sdxl-base-workflow.json"
+        "../../../examples/workflows/sdxl-base-workflow.json"
     ))
     .expect("parse sdxl workflow example");
 
