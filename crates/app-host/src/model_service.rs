@@ -10,7 +10,7 @@ use reimagine_model_manager::{
     Fingerprint, ManifestModelResolver, ManifestValidationReport, ModelComponentSource,
     ModelDescriptor, ModelDescriptorResolver, ModelFormat, ModelManifest, ModelManifestStore,
     ModelReadinessResolver, ModelResolution, ModelRootId, ModelSource, ModelSourceStatus,
-    ResolvedDescriptorView, ResolvedModelInfo, resolve_source_path,
+    ResolvedDescriptorView, ResolvedModelInfo, resolve_source_path, upsert_burn_package_descriptor,
 };
 
 use crate::AppHostResult;
@@ -126,6 +126,22 @@ impl ModelService {
         Ok((manifest, report, import_result))
     }
 
+    pub async fn import_burn_converted_package(
+        &self,
+        report_path: impl AsRef<std::path::Path>,
+    ) -> AppHostResult<(ModelManifest, ManifestValidationReport, ModelDescriptor)> {
+        let report_path = self.normalize_burn_package_report_path(report_path.as_ref())?;
+        let (mut manifest, _) = self.load_manifest().await?;
+        let descriptor = upsert_burn_package_descriptor(
+            &mut manifest,
+            &report_path,
+            self.app_paths.models_dir(),
+        )
+        .await?;
+        let report = self.save_manifest(&manifest).await?;
+        Ok((manifest, report, descriptor))
+    }
+
     pub async fn resolve_readiness(
         &self,
         model_ref: &ModelRef,
@@ -200,6 +216,36 @@ impl ModelService {
             .report
             .write()
             .expect("model manifest report cache poisoned") = Some(report);
+    }
+
+    fn normalize_burn_package_report_path(
+        &self,
+        report_path: &std::path::Path,
+    ) -> AppHostResult<std::path::PathBuf> {
+        let canonical_report =
+            report_path
+                .canonicalize()
+                .map_err(|error| crate::AppHostError::Io {
+                    path: report_path.to_path_buf(),
+                    message: format!("Burn package report path cannot be resolved: {error}"),
+                })?;
+        let canonical_models_dir = self
+            .app_paths
+            .models_dir()
+            .canonicalize()
+            .map_err(|error| crate::AppHostError::Io {
+                path: self.app_paths.models_dir().to_path_buf(),
+                message: format!("models directory cannot be resolved: {error}"),
+            })?;
+
+        if !canonical_report.starts_with(&canonical_models_dir) {
+            return Err(crate::AppHostError::Io {
+                path: canonical_report,
+                message: "Burn package report path must stay under models directory".to_owned(),
+            });
+        }
+
+        Ok(report_path.to_path_buf())
     }
 }
 

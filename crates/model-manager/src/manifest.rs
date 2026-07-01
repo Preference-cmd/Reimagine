@@ -1,5 +1,6 @@
 //! Serializable model manifest schema.
 
+mod burn_package;
 mod component;
 mod descriptor;
 mod fingerprint;
@@ -12,6 +13,7 @@ mod validation;
 
 use serde::{Deserialize, Serialize};
 
+pub use burn_package::{import_burn_package_descriptor, upsert_burn_package_descriptor};
 pub use component::ModelComponentSource;
 pub use descriptor::ModelDescriptor;
 pub use fingerprint::Fingerprint;

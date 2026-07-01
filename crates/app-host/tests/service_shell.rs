@@ -312,6 +312,95 @@ async fn model_service_import_original_checkpoint_adds_split_components() {
     assert_eq!(models[0].components().len(), 4);
 }
 
+#[tokio::test]
+async fn model_service_imports_burn_package_report_and_persists_manifest() {
+    let paths = AppPaths::new(temp_dir("burn-package-import"));
+    let report_path = write_burn_package(paths.models_dir(), "sdxl-base-1.0", "sha256-abc123");
+    let service = ModelService::new(paths.clone());
+
+    let (manifest, report, descriptor) = service
+        .import_burn_converted_package(&report_path)
+        .await
+        .expect("burn package import should persist descriptor");
+
+    assert!(report.diagnostics().is_empty());
+    assert_eq!(descriptor.id().as_str(), "sdxl-base-1.0-burn");
+    assert_eq!(manifest.models(), &[descriptor.clone()]);
+    assert_eq!(descriptor.components().len(), 4);
+    assert_eq!(
+        descriptor.metadata().get("backend").map(String::as_str),
+        Some("burn")
+    );
+
+    let reloaded = service.list_models().await.unwrap();
+    assert_eq!(reloaded, vec![descriptor.clone()]);
+
+    let model_ref = ModelRef::new(
+        ModelId::new("sdxl-base-1.0-burn"),
+        ModelSeries::new("stable_diffusion"),
+        ModelVariant::new("sdxl"),
+        ModelRole::CheckpointBundle,
+    );
+    let resolved = service
+        .resolve_descriptor_with_components(&model_ref)
+        .await
+        .expect("resolver should run");
+    assert!(
+        resolved
+            .report()
+            .diagnostics()
+            .iter()
+            .all(|diagnostic| !diagnostic.severity().is_error()),
+        "resolved burn package should not emit error diagnostics: {:?}",
+        resolved.report().diagnostics()
+    );
+    assert_eq!(resolved.value().unwrap().components().len(), 4);
+}
+
+#[tokio::test]
+async fn model_service_rejects_burn_package_descriptor_collision_without_saving() {
+    let paths = AppPaths::new(temp_dir("burn-package-collision"));
+    let first_report = write_burn_package(paths.models_dir(), "sdxl-base-1.0", "sha256-abc123");
+    let second_report = write_burn_package(paths.models_dir(), "sdxl-base-1.0", "sha256-def456");
+    let service = ModelService::new(paths);
+    let (_, _, original) = service
+        .import_burn_converted_package(&first_report)
+        .await
+        .expect("first burn package import should persist descriptor");
+
+    let error = service
+        .import_burn_converted_package(&second_report)
+        .await
+        .expect_err("colliding burn package import should fail");
+
+    assert!(
+        error.to_string().contains("descriptor id collision"),
+        "expected descriptor collision, got: {error}"
+    );
+    assert_eq!(service.list_models().await.unwrap(), vec![original]);
+}
+
+#[tokio::test]
+async fn model_service_rejects_burn_package_report_outside_models_dir() {
+    let paths = AppPaths::new(temp_dir("burn-package-outside-models"));
+    std::fs::create_dir_all(paths.models_dir()).unwrap();
+    let outside = temp_dir("burn-package-outside-report");
+    let report_path = write_burn_package(&outside.join("models"), "sdxl-base-1.0", "sha256-abc123");
+    let service = ModelService::new(paths);
+
+    let error = service
+        .import_burn_converted_package(&report_path)
+        .await
+        .expect_err("outside package report should be rejected by app-host path boundary");
+
+    assert!(
+        error
+            .to_string()
+            .contains("Burn package report path must stay under models directory"),
+        "expected app-host models directory boundary diagnostic, got: {error}"
+    );
+}
+
 #[test]
 fn agent_service_creates_workspace_scoped_sessions() {
     let workspace =
@@ -455,6 +544,115 @@ fn write_tiny_safetensors(path: &std::path::Path, names: &[&str]) {
         bytes.extend_from_slice(&(idx as f32).to_le_bytes());
     }
     std::fs::write(path, bytes).unwrap();
+}
+
+fn write_burn_package(
+    models_dir: &std::path::Path,
+    source_model_id: &str,
+    source_fingerprint: &str,
+) -> std::path::PathBuf {
+    let package_root = models_dir
+        .join("converted/burn")
+        .join(source_model_id)
+        .join(source_fingerprint);
+    for component in ["diffusion", "vae", "text_encoder", "text_encoder_2"] {
+        let path = package_root.join(component).join("model.safetensors");
+        std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+        std::fs::write(path, b"component").unwrap();
+    }
+
+    let report_path = package_root.join("conversion-report.json");
+    std::fs::write(
+        &report_path,
+        serde_json::to_vec_pretty(&serde_json::json!({
+            "source_identity": source_model_id,
+            "source_layout": "diffusers_style_split_safetensors",
+            "target_contract_version": 1,
+            "output_components": [],
+            "mapped_tensor_count": 0,
+            "ignored_tensor_families": [],
+            "diagnostics": [],
+            "package": {
+                "schema_version": 1,
+                "layout": "burn_native_component_package",
+                "converter_version": "burn-sdxl-package-04c-v1",
+                "package_root": ".",
+                "created_at": 1,
+                "source": {
+                    "source_model_id": source_model_id,
+                    "source_layout": "diffusers_style_split_safetensors",
+                    "source_fingerprint": source_fingerprint,
+                    "fingerprint_kind": "supplied",
+                    "source_files": []
+                },
+                "target": {
+                    "backend": "burn",
+                    "contract": "burn.component",
+                    "contract_version": 1,
+                    "model_series": "stable_diffusion",
+                    "variant": "sdxl"
+                },
+                "components": [
+                    {
+                        "component_role": "Diffusion",
+                        "model_role": "DiffusionModel",
+                        "relative_path": "diffusion/model.safetensors",
+                        "format": "safetensors",
+                        "metadata": {
+                            "component": "diffusion",
+                            "backend": "burn",
+                            "converted_layout": "burn_native_component_package",
+                            "contract": "burn.component",
+                            "contract_version": "1"
+                        }
+                    },
+                    {
+                        "component_role": "Vae",
+                        "model_role": "Vae",
+                        "relative_path": "vae/model.safetensors",
+                        "format": "safetensors",
+                        "metadata": {
+                            "component": "vae",
+                            "backend": "burn",
+                            "converted_layout": "burn_native_component_package",
+                            "contract": "burn.component",
+                            "contract_version": "1"
+                        }
+                    },
+                    {
+                        "component_role": "TextEncoder",
+                        "model_role": "TextEncoder",
+                        "relative_path": "text_encoder/model.safetensors",
+                        "format": "safetensors",
+                        "metadata": {
+                            "component": "text_encoder",
+                            "backend": "burn",
+                            "converted_layout": "burn_native_component_package",
+                            "contract": "burn.component",
+                            "contract_version": "1"
+                        }
+                    },
+                    {
+                        "component_role": "TextEncoder2",
+                        "model_role": "TextEncoder",
+                        "relative_path": "text_encoder_2/model.safetensors",
+                        "format": "safetensors",
+                        "metadata": {
+                            "component": "text_encoder_2",
+                            "backend": "burn",
+                            "converted_layout": "burn_native_component_package",
+                            "contract": "burn.component",
+                            "contract_version": "1"
+                        }
+                    }
+                ]
+            }
+        }))
+        .unwrap(),
+    )
+    .unwrap();
+
+    report_path
 }
 
 fn complete_original_checkpoint_names() -> Vec<&'static str> {

@@ -20,7 +20,8 @@ pub use identity::{AutoIdResult, IdPolicy, IdResolution};
 pub use manifest::{
     Fingerprint, ManifestValidationReport, ModelComponentSource, ModelDescriptor, ModelFormat,
     ModelManifest, ModelRoot, ModelRootId, ModelRootKind, ModelSource, ModelSourceStatus,
-    resolve_source_path, validate_manifest, validate_manifest_with_series_config,
+    import_burn_package_descriptor, resolve_source_path, upsert_burn_package_descriptor,
+    validate_manifest, validate_manifest_with_series_config,
 };
 pub use resolve::{
     ManifestModelResolver, ModelDescriptorResolver, ModelReadinessResolver, ModelResolution,
