@@ -142,7 +142,7 @@ pub async fn run(
                 run_id,
                 workflow_id: handle.workflow_id().clone(),
                 workflow_version: handle.workflow_version(),
-                initial_snapshot: initial_snapshot.into(),
+                initial_snapshot: Box::new((*initial_snapshot).into()),
                 diagnostics: report
                     .diagnostics()
                     .iter()

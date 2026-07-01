@@ -4,16 +4,13 @@
 //! supports Candle, but the enum leaves room for future backends without
 //! changing the runtime or inference executor APIs.
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, serde::Serialize, serde::Deserialize)]
+#[derive(
+    Debug, Clone, Copy, PartialEq, Eq, Hash, serde::Serialize, serde::Deserialize, Default,
+)]
 #[serde(rename_all = "snake_case")]
 pub enum BackendSelection {
+    #[default]
     Candle,
-}
-
-impl Default for BackendSelection {
-    fn default() -> Self {
-        Self::Candle
-    }
 }
 
 impl std::fmt::Display for BackendSelection {

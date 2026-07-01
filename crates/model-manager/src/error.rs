@@ -17,7 +17,7 @@ pub enum ModelManagerError {
 
 impl ModelManagerError {
     pub fn to_diagnostic(&self, correlation_id: Option<CorrelationId>) -> Diagnostic {
-        self.into_diagnostic(
+        self.to_diagnostic_with(
             DiagnosticId::new(self.diagnostic_id()),
             DiagnosticTarget::new(DiagnosticTargetDomain::new("model-manager"))
                 .with_path(self.target_path()),

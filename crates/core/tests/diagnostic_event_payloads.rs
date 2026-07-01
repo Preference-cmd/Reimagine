@@ -112,7 +112,7 @@ impl DiagnosticError for ExampleConfigError {
 
 #[test]
 fn service_errors_opt_into_diagnostic_conversion() {
-    let diagnostic = ExampleConfigError::InvalidJson.into_diagnostic(
+    let diagnostic = ExampleConfigError::InvalidJson.to_diagnostic_with(
         DiagnosticId::new("diag-from-error"),
         DiagnosticTarget::new(DiagnosticTargetDomain::new("config.file"))
             .with_path("model_series.json"),

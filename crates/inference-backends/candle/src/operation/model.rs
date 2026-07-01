@@ -33,11 +33,10 @@ pub fn execute_model_load_bundle(
             .get_compatible_bundle(resolved.model_id(), &source_set)
         {
             Some(bundle) => bundle,
-            None => load_model_bundle(resolved, &source_set, backend).map(|bundle| {
+            None => load_model_bundle(resolved, &source_set, backend).inspect(|bundle| {
                 backend
                     .model_cache()
                     .insert_bundle(resolved.model_id().clone(), bundle.clone());
-                bundle
             })?,
         }
     };

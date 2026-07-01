@@ -22,7 +22,7 @@ impl WorkflowCommandPolicy {
     ///   `SetWorkflowMetadata` are allowed.
     /// - Graph/data semantic changes must go through proposals in V1.
     pub fn allows_auto_apply(&self, commands: &[WorkflowCommand]) -> bool {
-        commands.iter().all(|cmd| Self::is_editor_only(cmd))
+        commands.iter().all(Self::is_editor_only)
     }
 
     fn is_editor_only(command: &WorkflowCommand) -> bool {

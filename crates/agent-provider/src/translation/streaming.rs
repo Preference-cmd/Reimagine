@@ -39,10 +39,9 @@ impl OpenAiStreamAccumulator {
             .and_then(|c| c.get("delta"))
             .and_then(|d| d.get("content"))
             .and_then(|v| v.as_str())
+            && !delta_content.is_empty()
         {
-            if !delta_content.is_empty() {
-                out.push(AgentStreamEvent::ContentDelta(delta_content.to_string()));
-            }
+            out.push(AgentStreamEvent::ContentDelta(delta_content.to_string()));
         }
         if let Some(tool_calls) = chunk
             .get("choices")
@@ -177,26 +176,26 @@ impl AnthropicStreamAccumulator {
                 while self.tool_calls.len() <= index {
                     self.tool_calls.push(PartialToolCall::default());
                 }
-                if let Some(b) = block {
-                    if b.get("type").and_then(|v| v.as_str()) == Some("tool_use") {
-                        if let Some(id) = b.get("id").and_then(|v| v.as_str()) {
-                            self.tool_calls[index].id = Some(id.to_string());
-                            out.push(AgentStreamEvent::ToolCallDelta {
-                                index: index as u32,
-                                id: Some(ToolCallId::new(id.to_string())),
-                                name: None,
-                                arguments_delta: None,
-                            });
-                        }
-                        if let Some(name) = b.get("name").and_then(|v| v.as_str()) {
-                            self.tool_calls[index].name = Some(name.to_string());
-                            out.push(AgentStreamEvent::ToolCallDelta {
-                                index: index as u32,
-                                id: None,
-                                name: Some(name.to_string()),
-                                arguments_delta: None,
-                            });
-                        }
+                if let Some(b) = block
+                    && b.get("type").and_then(|v| v.as_str()) == Some("tool_use")
+                {
+                    if let Some(id) = b.get("id").and_then(|v| v.as_str()) {
+                        self.tool_calls[index].id = Some(id.to_string());
+                        out.push(AgentStreamEvent::ToolCallDelta {
+                            index: index as u32,
+                            id: Some(ToolCallId::new(id.to_string())),
+                            name: None,
+                            arguments_delta: None,
+                        });
+                    }
+                    if let Some(name) = b.get("name").and_then(|v| v.as_str()) {
+                        self.tool_calls[index].name = Some(name.to_string());
+                        out.push(AgentStreamEvent::ToolCallDelta {
+                            index: index as u32,
+                            id: None,
+                            name: Some(name.to_string()),
+                            arguments_delta: None,
+                        });
                     }
                 }
             }
@@ -235,27 +234,27 @@ impl AnthropicStreamAccumulator {
                 let index = event.get("index").and_then(|v| v.as_u64()).ok_or_else(|| {
                     ProviderAdapterError::serialization("content_block_stop missing index")
                 })? as usize;
-                if let Some(partial) = self.tool_calls.get_mut(index) {
-                    if let (Some(id), Some(name)) = (partial.id.clone(), partial.name.clone()) {
-                        let arguments = if partial.arguments.is_empty() {
-                            Value::Null
-                        } else {
-                            serde_json::from_str(&partial.arguments).unwrap_or(Value::Null)
-                        };
-                        *partial = PartialToolCall::default();
-                        out.push(AgentStreamEvent::ToolCall(ToolCall::new(
-                            ToolCallId::new(id),
-                            name,
-                            arguments,
-                        )));
-                    }
+                if let Some(partial) = self.tool_calls.get_mut(index)
+                    && let (Some(id), Some(name)) = (partial.id.clone(), partial.name.clone())
+                {
+                    let arguments = if partial.arguments.is_empty() {
+                        Value::Null
+                    } else {
+                        serde_json::from_str(&partial.arguments).unwrap_or(Value::Null)
+                    };
+                    *partial = PartialToolCall::default();
+                    out.push(AgentStreamEvent::ToolCall(ToolCall::new(
+                        ToolCallId::new(id),
+                        name,
+                        arguments,
+                    )));
                 }
             }
             "message_delta" => {
-                if let Some(delta) = event.get("delta") {
-                    if let Some(reason) = delta.get("stop_reason").and_then(|v| v.as_str()) {
-                        self.stop_reason = Some(reason.to_string());
-                    }
+                if let Some(delta) = event.get("delta")
+                    && let Some(reason) = delta.get("stop_reason").and_then(|v| v.as_str())
+                {
+                    self.stop_reason = Some(reason.to_string());
                 }
                 if let Some(usage) = event.get("usage") {
                     let input = usage.get("input_tokens").and_then(|v| v.as_u64());

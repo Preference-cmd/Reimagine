@@ -87,16 +87,6 @@ impl PermissionSet {
         Self::default()
     }
 
-    /// Create a permission set from an iterator of permissions.
-    pub fn from_iter<I>(iter: I) -> Self
-    where
-        I: IntoIterator<Item = ToolPermission>,
-    {
-        Self {
-            permissions: iter.into_iter().collect(),
-        }
-    }
-
     /// Returns `true` when the set contains `permission`.
     pub fn contains(&self, permission: &ToolPermission) -> bool {
         self.permissions.contains(permission)
@@ -121,6 +111,17 @@ impl PermissionSet {
     /// the permission.
     pub fn insert(&mut self, permission: ToolPermission) -> bool {
         self.permissions.insert(permission)
+    }
+}
+
+impl FromIterator<ToolPermission> for PermissionSet {
+    fn from_iter<I>(iter: I) -> Self
+    where
+        I: IntoIterator<Item = ToolPermission>,
+    {
+        Self {
+            permissions: iter.into_iter().collect(),
+        }
     }
 }
 

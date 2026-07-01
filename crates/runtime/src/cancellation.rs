@@ -54,8 +54,7 @@ impl CancellationToken {
         // no-op waker to register the waiter before any re-check.
         let mut notified = Box::pin(self.notify.notified());
         {
-            let noop_waker = noop_waker();
-            let mut cx = std::task::Context::from_waker(&noop_waker);
+            let mut cx = std::task::Context::from_waker(std::task::Waker::noop());
             if std::future::Future::poll(notified.as_mut(), &mut cx).is_ready() {
                 return;
             }
@@ -107,17 +106,6 @@ impl NodeCancellation for CombinedCancellation {
             _ = self.secondary.cancelled() => {}
         }
     }
-}
-
-fn noop_waker() -> std::task::Waker {
-    use std::sync::Arc;
-    use std::task::{Wake, Waker};
-    struct Noop;
-    impl Wake for Noop {
-        fn wake(self: Arc<Self>) {}
-        fn wake_by_ref(self: &Arc<Self>) {}
-    }
-    Waker::from(Arc::new(Noop))
 }
 
 #[cfg(test)]

@@ -1702,13 +1702,12 @@ fn snapshot_reports_running_node_while_executor_is_in_flight() {
             .unwrap();
 
         for _ in 0..100 {
-            if let Some(snapshot) = service.snapshot(handle.run_id()) {
-                if snapshot.node_states.get(&NodeId::new("node_a")).copied()
+            if let Some(snapshot) = service.snapshot(handle.run_id())
+                && snapshot.node_states.get(&NodeId::new("node_a")).copied()
                     == Some(reimagine_runtime::NodeState::Running)
-                {
-                    run_to_completion(&service, &handle);
-                    return;
-                }
+            {
+                run_to_completion(&service, &handle);
+                return;
             }
             tokio::time::sleep(Duration::from_millis(5)).await;
         }
@@ -2101,10 +2100,10 @@ where
 {
     let deadline = std::time::Instant::now() + timeout;
     loop {
-        if let Some(snapshot) = service.snapshot(run_id) {
-            if predicate(&snapshot) {
-                return Some(snapshot);
-            }
+        if let Some(snapshot) = service.snapshot(run_id)
+            && predicate(&snapshot)
+        {
+            return Some(snapshot);
         }
         if std::time::Instant::now() > deadline {
             return None;

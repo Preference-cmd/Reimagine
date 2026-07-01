@@ -77,16 +77,16 @@ fn rule_matches(
         }
     }
 
-    if let Some(pattern) = rule.path_pattern() {
-        if !glob_match::glob_match(pattern, candidate.path()) {
-            return false;
-        }
+    if let Some(pattern) = rule.path_pattern()
+        && !glob_match::glob_match(pattern, candidate.path())
+    {
+        return false;
     }
 
-    if let Some(pattern) = rule.filename_pattern() {
-        if !glob_match::glob_match(pattern, candidate.filename()) {
-            return false;
-        }
+    if let Some(pattern) = rule.filename_pattern()
+        && !glob_match::glob_match(pattern, candidate.filename())
+    {
+        return false;
     }
 
     if let Some(rule_ext) = rule.extension() {

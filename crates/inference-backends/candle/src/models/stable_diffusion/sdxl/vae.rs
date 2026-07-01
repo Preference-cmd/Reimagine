@@ -215,7 +215,9 @@ impl SdxlRealVae {
                 "real VAE decoder expects positive spatial dimensions h>0 and w>0, got h={h}, w={w}"
             )));
         }
-        if h % SDXL_VAE_SPATIAL_UPSCALE != 0 || w % SDXL_VAE_SPATIAL_UPSCALE != 0 {
+        if !h.is_multiple_of(SDXL_VAE_SPATIAL_UPSCALE)
+            || !w.is_multiple_of(SDXL_VAE_SPATIAL_UPSCALE)
+        {
             // SDXL VAE always upsamples by 8; latent spatial
             // dimensions must yield integer pixel sizes after the
             // upscale. The latent space is already on integer grid
@@ -351,7 +353,9 @@ impl SdxlRealVae {
                 "real VAE encoder expects positive spatial dimensions height>0 and width>0, got height={h}, width={w}"
             )));
         }
-        if h % SDXL_VAE_SPATIAL_UPSCALE != 0 || w % SDXL_VAE_SPATIAL_UPSCALE != 0 {
+        if !h.is_multiple_of(SDXL_VAE_SPATIAL_UPSCALE)
+            || !w.is_multiple_of(SDXL_VAE_SPATIAL_UPSCALE)
+        {
             return Err(SdxlVaeError::Shape(format!(
                 "real VAE encoder image spatial dims must be divisible by {SDXL_VAE_SPATIAL_UPSCALE}; got height={h}, width={w}"
             )));
@@ -435,7 +439,7 @@ pub struct SdxlVaeGraph {
 #[derive(Debug)]
 enum SdxlVaeMode {
     Real {
-        vae: SdxlRealVae,
+        vae: Box<SdxlRealVae>,
     },
     /// Test-only mode used by graph/unit tests that cannot load real
     /// VAE weights. Not exposed in production. The shape contract
@@ -450,7 +454,7 @@ impl SdxlVaeGraph {
     pub fn load(source: &Path, device: &Device) -> Result<Self, SdxlVaeError> {
         let vae = SdxlRealVae::load(source, device)?;
         Ok(Self {
-            mode: SdxlVaeMode::Real { vae },
+            mode: SdxlVaeMode::Real { vae: Box::new(vae) },
         })
     }
 
@@ -473,7 +477,7 @@ impl SdxlVaeGraph {
         device: &Device,
     ) -> Result<CandleImage, SdxlVaeError> {
         match &self.mode {
-            SdxlVaeMode::Real { vae } => vae.decode(latent, device),
+            SdxlVaeMode::Real { vae } => vae.as_ref().decode(latent, device),
             SdxlVaeMode::TestPlaceholder => test_placeholder_decode(latent, device),
         }
     }
@@ -489,7 +493,7 @@ impl SdxlVaeGraph {
         latent_space: LatentSpaceMetadata,
     ) -> Result<CandleLatent, SdxlVaeError> {
         match &self.mode {
-            SdxlVaeMode::Real { vae } => vae.encode(image, device, latent_space),
+            SdxlVaeMode::Real { vae } => vae.as_ref().encode(image, device, latent_space),
             SdxlVaeMode::TestPlaceholder => test_placeholder_encode(image, device, latent_space),
         }
     }
@@ -619,7 +623,7 @@ fn test_placeholder_encode(
             "test placeholder VAE encoder expects positive spatial dimensions height>0 and width>0, got height={h}, width={w}"
         )));
     }
-    if h % SDXL_VAE_SPATIAL_UPSCALE != 0 || w % SDXL_VAE_SPATIAL_UPSCALE != 0 {
+    if !h.is_multiple_of(SDXL_VAE_SPATIAL_UPSCALE) || !w.is_multiple_of(SDXL_VAE_SPATIAL_UPSCALE) {
         return Err(SdxlVaeError::Shape(format!(
             "test placeholder VAE encoder image spatial dims must be divisible by {SDXL_VAE_SPATIAL_UPSCALE}; got height={h}, width={w}"
         )));

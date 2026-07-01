@@ -93,6 +93,16 @@ pub struct RuntimeService {
     next_event_seq: Arc<AtomicU64>,
 }
 
+struct LifecycleEvent<'a> {
+    run_id: &'a RunId,
+    workflow_id: &'a WorkflowId,
+    workflow_version: WorkflowVersion,
+    kind: RunEventKind,
+    node_id: Option<NodeId>,
+    diagnostics: &'a [Diagnostic],
+    correlation_id: Option<CorrelationId>,
+}
+
 impl std::fmt::Debug for RuntimeService {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("RuntimeService")
@@ -185,24 +195,24 @@ impl RuntimeService {
         self.store.put_snapshot(initial_snapshot);
         self.store.register_active(handle.clone());
 
-        self.emit_lifecycle(
-            &run_id,
-            plan.workflow_id(),
-            plan.workflow_version(),
-            RunEventKind::RunQueued,
-            None,
-            &[],
-            None,
-        );
-        self.emit_lifecycle(
-            &run_id,
-            plan.workflow_id(),
-            plan.workflow_version(),
-            RunEventKind::RunStarted,
-            None,
-            &[],
-            options.correlation_id.clone(),
-        );
+        self.emit_lifecycle(LifecycleEvent {
+            run_id: &run_id,
+            workflow_id: plan.workflow_id(),
+            workflow_version: plan.workflow_version(),
+            kind: RunEventKind::RunQueued,
+            node_id: None,
+            diagnostics: &[],
+            correlation_id: None,
+        });
+        self.emit_lifecycle(LifecycleEvent {
+            run_id: &run_id,
+            workflow_id: plan.workflow_id(),
+            workflow_version: plan.workflow_version(),
+            kind: RunEventKind::RunStarted,
+            node_id: None,
+            diagnostics: &[],
+            correlation_id: options.correlation_id.clone(),
+        });
 
         let runner = Runner {
             run_id: run_id.clone(),
@@ -251,32 +261,23 @@ impl RuntimeService {
         BackendInstanceObservation::snapshots(self.backend.as_ref()).await
     }
 
-    fn emit_lifecycle(
-        &self,
-        run_id: &RunId,
-        workflow_id: &WorkflowId,
-        workflow_version: WorkflowVersion,
-        kind: RunEventKind,
-        node_id: Option<NodeId>,
-        diagnostics: &[Diagnostic],
-        correlation_id: Option<CorrelationId>,
-    ) {
+    fn emit_lifecycle(&self, lifecycle: LifecycleEvent<'_>) {
         let event_id_index = self.next_event_seq.fetch_add(1, Ordering::Relaxed);
         let mut event = RunEvent::new(
-            RunEventId::new(format!("{run_id}-evt-{event_id_index}")),
-            run_id.clone(),
-            workflow_id.clone(),
-            workflow_version,
-            kind,
+            RunEventId::new(format!("{}-evt-{event_id_index}", lifecycle.run_id)),
+            lifecycle.run_id.clone(),
+            lifecycle.workflow_id.clone(),
+            lifecycle.workflow_version,
+            lifecycle.kind,
             self.clock.now(),
         );
-        if let Some(nid) = node_id {
+        if let Some(nid) = lifecycle.node_id {
             event = event.with_node_id(nid);
         }
-        for diag in diagnostics {
+        for diag in lifecycle.diagnostics {
             event = event.with_diagnostic(diag.clone());
         }
-        if let Some(cid) = correlation_id {
+        if let Some(cid) = lifecycle.correlation_id {
             event = event.with_correlation_id(cid);
         }
         match std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| self.sink.emit(event))) {

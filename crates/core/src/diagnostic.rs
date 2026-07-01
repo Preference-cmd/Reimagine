@@ -203,7 +203,7 @@ pub trait DiagnosticError: DiagnosticSource {
 /// [`Diagnostic`], supplying the id, target, and optional correlation id that
 /// the caller owns.
 pub trait IntoDiagnostic {
-    fn into_diagnostic(
+    fn to_diagnostic_with(
         &self,
         id: DiagnosticId,
         target: DiagnosticTarget,
@@ -213,7 +213,7 @@ pub trait IntoDiagnostic {
 
 /// Blanket implementation for any type that implements `DiagnosticError`.
 impl<T: DiagnosticError> IntoDiagnostic for T {
-    fn into_diagnostic(
+    fn to_diagnostic_with(
         &self,
         id: DiagnosticId,
         target: DiagnosticTarget,
@@ -320,7 +320,7 @@ mod tests {
         let err = ConfigError::FileNotFound("~/.reimagine/config.toml".into());
         let target = DiagnosticTarget::new(DiagnosticTargetDomain::new("config"))
             .with_path("~/.reimagine/config.toml");
-        let diag = err.into_diagnostic(
+        let diag = err.to_diagnostic_with(
             DiagnosticId::new("cfg-001"),
             target,
             Some(CorrelationId::new("corr-config")),
@@ -385,7 +385,7 @@ mod tests {
         let target = DiagnosticTarget::new(DiagnosticTargetDomain::new("model"))
             .with_id("sd-1.5")
             .with_path("/models/sd-1.5.safetensors");
-        let diag = err.into_diagnostic(
+        let diag = err.to_diagnostic_with(
             DiagnosticId::new("mm-001"),
             target,
             Some(CorrelationId::new("corr-model")),

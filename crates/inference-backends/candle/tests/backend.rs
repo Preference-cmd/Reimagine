@@ -75,6 +75,14 @@ fn unique_sdxl_root() -> PathBuf {
     ))
 }
 
+fn find_png_file(files: &[std::io::Result<std::fs::DirEntry>]) -> Option<std::path::PathBuf> {
+    files
+        .iter()
+        .flatten()
+        .find(|entry| entry.file_name().to_string_lossy().ends_with(".png"))
+        .map(std::fs::DirEntry::path)
+}
+
 fn write_sdxl_placeholder(root: &std::path::Path) -> PathBuf {
     std::fs::create_dir_all(root).unwrap();
     let path = root.join("sdxl-base-1.0.safetensors");
@@ -1199,9 +1207,9 @@ async fn model_load_bundle_dispatches_to_sdxl_for_matching_series_variant() {
         .await
         .unwrap();
     // SDXL loader emits three typed handles — same as before the refactor.
-    assert!(response.model().payload_key().as_str().len() > 0);
-    assert!(response.clip().payload_key().as_str().len() > 0);
-    assert!(response.vae().payload_key().as_str().len() > 0);
+    assert!(!response.model().payload_key().as_str().is_empty());
+    assert!(!response.clip().payload_key().as_str().is_empty());
+    assert!(!response.vae().payload_key().as_str().is_empty());
     assert_eq!(
         backend.model_cache().bundle_count(),
         1,
@@ -1262,9 +1270,13 @@ async fn latent_create_empty_registers_real_tensor_in_store() {
         .store()
         .get_latent(&payload_key)
         .expect("typed latent lookup");
-    assert_eq!(latent.dims(), vec![1, 4, 64, 64]);
+    let expected_shape = [1, 4, 64, 64];
+    assert_eq!(latent.dims(), expected_shape);
     assert_eq!(latent.dtype(), DType::F32);
-    assert_eq!(latent.byte_size(), 1 * 4 * 64 * 64 * 4);
+    assert_eq!(
+        latent.byte_size(),
+        expected_shape.into_iter().product::<usize>() * std::mem::size_of::<f32>()
+    );
     // The returned `RuntimeLatent` and the stored `CandleLatent`
     // must agree on latent-space metadata.
     assert_eq!(
@@ -1554,13 +1566,12 @@ async fn text_encode_conditioning_is_run_scoped_and_cleaned() {
         .await
         .unwrap();
     assert!(
-        response
+        !response
             .conditioning()
             .text_embedding()
             .payload_key()
             .as_str()
-            .len()
-            > 0
+            .is_empty()
     );
     assert_eq!(backend.store().run_payload_count(&run_id), 1);
 
@@ -3432,7 +3443,7 @@ async fn setup_decoded_image_for_save(
 async fn image_save_writes_png_to_output_dir_for_sdxl_pipeline() {
     let root = unique_sdxl_root();
     std::fs::create_dir_all(&root).unwrap();
-    let backend = backend_with_dirs(&root, &root.join("output"));
+    let backend = backend_with_dirs(&root, root.join("output"));
 
     let (image_value, output_dir) = setup_decoded_image_for_save(&backend, "node-save").await;
     let response: ImageSaveResponse = backend
@@ -3447,16 +3458,7 @@ async fn image_save_writes_png_to_output_dir_for_sdxl_pipeline() {
         "expected at least one PNG file in output dir"
     );
 
-    let mut png_file: Option<std::path::PathBuf> = None;
-    for f in &files {
-        if let Ok(entry) = f {
-            if entry.file_name().to_string_lossy().ends_with(".png") {
-                png_file = Some(entry.path());
-                break;
-            }
-        }
-    }
-    let png_file = png_file.expect("expected a PNG file");
+    let png_file = find_png_file(&files).expect("expected a PNG file");
     assert!(
         artifact_ref.as_str().starts_with("output/"),
         "artifact ref should be workspace-output relative, got {}",
@@ -3492,7 +3494,7 @@ async fn image_save_writes_png_to_output_dir_for_sdxl_pipeline() {
 async fn image_preview_writes_png_to_output_dir_for_sdxl_pipeline() {
     let root = unique_sdxl_root();
     std::fs::create_dir_all(&root).unwrap();
-    let backend = backend_with_dirs(&root, &root.join("output"));
+    let backend = backend_with_dirs(&root, root.join("output"));
 
     let (image_value, output_dir) = setup_decoded_image_for_save(&backend, "node-preview").await;
     let response: ImagePreviewResponse = backend
@@ -3507,16 +3509,7 @@ async fn image_preview_writes_png_to_output_dir_for_sdxl_pipeline() {
         "expected at least one PNG file in output dir"
     );
 
-    let mut png_path: Option<std::path::PathBuf> = None;
-    for f in &files {
-        if let Ok(entry) = f {
-            if entry.file_name().to_string_lossy().ends_with(".png") {
-                png_path = Some(entry.path());
-                break;
-            }
-        }
-    }
-    let png_path = png_path.expect("expected a PNG file");
+    let png_path = find_png_file(&files).expect("expected a PNG file");
     let metadata = std::fs::metadata(&png_path).unwrap();
     assert!(metadata.len() > 0);
 
@@ -3527,7 +3520,7 @@ async fn image_preview_writes_png_to_output_dir_for_sdxl_pipeline() {
 async fn image_save_filename_includes_prefix_run_id_node_id() {
     let root = unique_sdxl_root();
     std::fs::create_dir_all(&root).unwrap();
-    let backend = backend_with_dirs(&root, &root.join("output"));
+    let backend = backend_with_dirs(&root, root.join("output"));
 
     let (image_value, output_dir) = setup_decoded_image_for_save(&backend, "node-save-test").await;
     let request = ImageSaveRequest::new(
@@ -3567,7 +3560,7 @@ async fn image_save_filename_includes_prefix_run_id_node_id() {
 async fn image_save_rejects_path_traversal_via_filename_prefix() {
     let root = unique_sdxl_root();
     std::fs::create_dir_all(&root).unwrap();
-    let backend = backend_with_dirs(&root, &root.join("output"));
+    let backend = backend_with_dirs(&root, root.join("output"));
 
     let (image_value, output_dir) = setup_decoded_image_for_save(&backend, "node-traversal").await;
     let request = ImageSaveRequest::new(
@@ -3683,7 +3676,7 @@ async fn image_save_rejects_missing_image_input() {
 async fn image_save_overwrites_existing_file() {
     let root = unique_sdxl_root();
     std::fs::create_dir_all(&root).unwrap();
-    let backend = backend_with_dirs(&root, &root.join("output"));
+    let backend = backend_with_dirs(&root, root.join("output"));
 
     let (image_value1, output_dir) =
         setup_decoded_image_for_save(&backend, "node-overwrite-1").await;
@@ -3732,7 +3725,7 @@ async fn image_save_overwrites_existing_file() {
 async fn image_save_returns_artifact_response() {
     let root = unique_sdxl_root();
     std::fs::create_dir_all(&root).unwrap();
-    let backend = backend_with_dirs(&root, &root.join("output"));
+    let backend = backend_with_dirs(&root, root.join("output"));
 
     let (image_value, _output_dir) = setup_decoded_image_for_save(&backend, "node-slotid").await;
     let response = backend
@@ -3751,7 +3744,7 @@ async fn image_save_returns_artifact_response() {
 async fn image_preview_uses_different_prefix() {
     let root = unique_sdxl_root();
     std::fs::create_dir_all(&root).unwrap();
-    let backend = backend_with_dirs(&root, &root.join("output"));
+    let backend = backend_with_dirs(&root, root.join("output"));
 
     let (image_value_save, output_dir) =
         setup_decoded_image_for_save(&backend, "node-save-img").await;
@@ -3820,7 +3813,7 @@ async fn image_preview_uses_different_prefix() {
 async fn image_save_png_bytes_have_valid_signature() {
     let root = unique_sdxl_root();
     std::fs::create_dir_all(&root).unwrap();
-    let backend = backend_with_dirs(&root, &root.join("output"));
+    let backend = backend_with_dirs(&root, root.join("output"));
 
     let (image_value, output_dir) = setup_decoded_image_for_save(&backend, "node-sig").await;
     backend
@@ -3829,16 +3822,7 @@ async fn image_save_png_bytes_have_valid_signature() {
         .unwrap();
 
     let files: Vec<_> = std::fs::read_dir(&output_dir).unwrap().collect();
-    let mut png_path: Option<std::path::PathBuf> = None;
-    for f in &files {
-        if let Ok(entry) = f {
-            if entry.file_name().to_string_lossy().ends_with(".png") {
-                png_path = Some(entry.path());
-                break;
-            }
-        }
-    }
-    let png_path = png_path.expect("expected a PNG file in output dir");
+    let png_path = find_png_file(&files).expect("expected a PNG file in output dir");
 
     let png_bytes = std::fs::read(&png_path).unwrap();
     assert_eq!(
@@ -3854,7 +3838,7 @@ async fn image_save_png_bytes_have_valid_signature() {
 async fn image_save_png_ihdr_has_correct_dimensions() {
     let root = unique_sdxl_root();
     std::fs::create_dir_all(&root).unwrap();
-    let backend = backend_with_dirs(&root, &root.join("output"));
+    let backend = backend_with_dirs(&root, root.join("output"));
 
     let (image_value, output_dir) = setup_decoded_image_for_save(&backend, "node-ihdr").await;
     backend
@@ -3863,16 +3847,7 @@ async fn image_save_png_ihdr_has_correct_dimensions() {
         .unwrap();
 
     let files: Vec<_> = std::fs::read_dir(&output_dir).unwrap().collect();
-    let mut png_path: Option<std::path::PathBuf> = None;
-    for f in &files {
-        if let Ok(entry) = f {
-            if entry.file_name().to_string_lossy().ends_with(".png") {
-                png_path = Some(entry.path());
-                break;
-            }
-        }
-    }
-    let png_path = png_path.expect("expected a PNG file in output dir");
+    let png_path = find_png_file(&files).expect("expected a PNG file in output dir");
 
     let png_bytes = std::fs::read(&png_path).unwrap();
 
@@ -3912,7 +3887,7 @@ async fn image_save_keeps_image_payload_in_store_for_fanout() {
     // (save + preview) in the same run.
     let root = unique_sdxl_root();
     std::fs::create_dir_all(&root).unwrap();
-    let backend = backend_with_dirs(&root, &root.join("output"));
+    let backend = backend_with_dirs(&root, root.join("output"));
 
     let (image_value, _output_dir) = setup_decoded_image_for_save(&backend, "node-cleanup").await;
     let payload_key = image_value.payload().payload_key().clone();
@@ -3939,7 +3914,7 @@ async fn image_save_keeps_image_payload_in_store_for_fanout() {
 async fn one_decoded_image_can_feed_both_image_save_and_image_preview() {
     let root = unique_sdxl_root();
     std::fs::create_dir_all(&root).unwrap();
-    let backend = backend_with_dirs(&root, &root.join("output"));
+    let backend = backend_with_dirs(&root, root.join("output"));
 
     // Decode once.
     let (image_value, output_dir) = setup_decoded_image_for_save(&backend, "node-fanout").await;

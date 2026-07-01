@@ -45,7 +45,7 @@ pub(crate) fn resolve_backend_selection(
         match resolve_open_selected_instance(instance_id, profile, &disabled) {
             Ok(instance) => instance,
             Err(diagnostic) => {
-                diagnostics.push(diagnostic);
+                diagnostics.push(*diagnostic);
                 BackendInstance::new(CANDLE_CPU_FALLBACK)
             }
         }
@@ -108,16 +108,16 @@ fn resolve_open_selected_instance(
     instance_id: &str,
     profile: &WorkspaceComputeProfile,
     disabled: &HashSet<BackendInstance>,
-) -> Result<BackendInstance, Diagnostic> {
+) -> Result<BackendInstance, Box<Diagnostic>> {
     let instance = BackendInstance::new(instance_id);
     if disabled.contains(&instance) {
-        return Err(selected_instance_unavailable(
+        return Err(Box::new(selected_instance_unavailable(
             instance_id,
             "backend instance is disabled by config",
-        ));
+        )));
     }
     let Some(profile) = find_instance_profile(profile, &instance) else {
-        return Err(unknown_selected_instance(instance_id));
+        return Err(Box::new(unknown_selected_instance(instance_id)));
     };
     if profile.status != BackendInstanceStatus::Available {
         let reason = profile
@@ -125,7 +125,10 @@ fn resolve_open_selected_instance(
             .first()
             .map(|d| d.message().to_string())
             .unwrap_or_else(|| "backend instance unavailable on this host".to_string());
-        return Err(selected_instance_unavailable(instance_id, &reason));
+        return Err(Box::new(selected_instance_unavailable(
+            instance_id,
+            &reason,
+        )));
     }
     Ok(instance)
 }

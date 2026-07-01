@@ -14,7 +14,7 @@ use super::runs::{DiagnosticDto, RunSnapshotDto};
 /// fields are mutually exclusive; clients that need round-trip
 /// persistence should use `id`; clients that want to drive an in-memory
 /// test should use `workflow`.
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
 pub struct OpenWorkflowRequest {
     /// Optional workflow id. When present, the host loads the JSON from
     /// the workspace's `workflows_dir` and registers it.
@@ -24,15 +24,6 @@ pub struct OpenWorkflowRequest {
     /// and registers the workflow under the id declared inside.
     #[serde(default)]
     pub workflow: Option<serde_json::Value>,
-}
-
-impl Default for OpenWorkflowRequest {
-    fn default() -> Self {
-        Self {
-            id: None,
-            workflow: None,
-        }
-    }
 }
 
 /// `POST /workflows/open` response. The resolved `workflow_id` is the
@@ -77,19 +68,14 @@ pub struct RunWorkflowRequestDto {
 /// supports: explicit node targets and explicit node-output targets.
 /// Workflow-output targets and the `AllDefaultTargets` shorthand are
 /// represented as their concrete `RunTarget` lists.
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
 #[serde(tag = "kind", rename_all = "snake_case")]
 pub enum TargetSelectionDto {
     /// Empty list, equivalent to core's `AllDefaultTargets`.
+    #[default]
     AllDefault,
     /// Explicit list of `RunTarget` values.
     Explicit { targets: Vec<RunTargetDto> },
-}
-
-impl Default for TargetSelectionDto {
-    fn default() -> Self {
-        Self::AllDefault
-    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -157,7 +143,7 @@ pub enum RunWorkflowResponse {
         run_id: RunId,
         workflow_id: WorkflowId,
         workflow_version: WorkflowVersion,
-        initial_snapshot: RunSnapshotDto,
+        initial_snapshot: Box<RunSnapshotDto>,
         diagnostics: Vec<DiagnosticDto>,
     },
     Blocked {

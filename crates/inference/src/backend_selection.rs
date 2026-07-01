@@ -418,10 +418,10 @@ impl BackendSelectionPolicy for StaticBackendSelectionPolicy {
             if self.disabled.contains(instance) {
                 continue;
             }
-            if let Some(allow) = allowed {
-                if !allow.contains(instance) {
-                    continue;
-                }
+            if let Some(allow) = allowed
+                && !allow.contains(instance)
+            {
+                continue;
             }
             if out.contains(instance) {
                 continue;
@@ -440,10 +440,10 @@ impl BackendSelectionPolicy for StaticBackendSelectionPolicy {
         if self.disabled.contains(instance) {
             return false;
         }
-        if let Some(allowed) = &self.allowed {
-            if !allowed.contains(instance) {
-                return false;
-            }
+        if let Some(allowed) = &self.allowed
+            && !allowed.contains(instance)
+        {
+            return false;
         }
         true
     }

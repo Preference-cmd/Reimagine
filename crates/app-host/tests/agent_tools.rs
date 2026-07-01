@@ -204,7 +204,7 @@ async fn propose_commands_stores_pending_proposal_without_mutation() {
     let receipt: ProposalReceipt = serde_json::from_value(output).expect("valid receipt");
     assert_eq!(receipt.proposal_id().as_str(), "prop-1");
     assert_eq!(receipt.status(), ProposalStatus::Pending);
-    assert_eq!(receipt.effective(), false);
+    assert!(!receipt.effective());
     assert_eq!(
         receipt.preview_result().status(),
         CommandResultStatus::Applied
@@ -283,7 +283,7 @@ async fn apply_commands_in_build_mode_is_not_effective() {
 
     let out: serde_json::Value = output;
     assert_eq!(out["effective"], false);
-    assert!(out["diagnostics"].as_array().unwrap().len() > 0);
+    assert!(!out["diagnostics"].as_array().unwrap().is_empty());
 
     let snapshot = service.snapshot(&workflow_id).unwrap();
     assert_eq!(snapshot.version(), WorkflowVersion::new(0));
@@ -348,7 +348,7 @@ async fn apply_commands_in_agent_mode_rejects_graph_semantic_batch() {
 
     let out: serde_json::Value = output;
     assert_eq!(out["effective"], false);
-    assert!(out["diagnostics"].as_array().unwrap().len() > 0);
+    assert!(!out["diagnostics"].as_array().unwrap().is_empty());
 
     let snapshot = service.snapshot(&workflow_id).unwrap();
     assert_eq!(snapshot.version(), WorkflowVersion::new(0));
@@ -658,7 +658,7 @@ async fn propose_commands_returns_rejected_when_preview_fails() {
     let receipt: ProposalReceipt = serde_json::from_value(output).expect("valid receipt");
     assert_eq!(receipt.proposal_id().as_str(), "prop-reject");
     assert_eq!(receipt.status(), ProposalStatus::Rejected);
-    assert_eq!(receipt.effective(), false);
+    assert!(!receipt.effective());
     assert_eq!(
         receipt.preview_result().status(),
         CommandResultStatus::Rejected

@@ -142,9 +142,6 @@ impl AgentStream for ScriptedStream {
         // We deliberately drop per-event errors at the fake boundary:
         // scripted `Result` only carries the event itself, errors are
         // signalled by returning `None` to the runtime.
-        match self.events.remove(0) {
-            Ok(ev) => Some(ev),
-            Err(_) => None,
-        }
+        self.events.remove(0).ok()
     }
 }
