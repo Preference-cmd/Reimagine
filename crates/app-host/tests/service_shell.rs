@@ -325,7 +325,7 @@ async fn model_service_imports_burn_package_report_and_persists_manifest() {
 
     assert!(report.diagnostics().is_empty());
     assert_eq!(descriptor.id().as_str(), "sdxl-base-1.0-burn");
-    assert_eq!(manifest.models(), &[descriptor.clone()]);
+    assert_eq!(manifest.models(), std::slice::from_ref(&descriptor));
     assert_eq!(descriptor.components().len(), 4);
     assert_eq!(
         descriptor.metadata().get("backend").map(String::as_str),
