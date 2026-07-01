@@ -13,7 +13,7 @@ use reimagine_core::workflow::{
 #[test]
 fn structural_validation_accepts_sdxl_example_with_matching_catalog() {
     let workflow: Workflow = serde_json::from_str(include_str!(
-        "../../../docs/architecture/examples/sdxl-base-workflow.json"
+        "../../../examples/workflows/sdxl-base-workflow.json"
     ))
     .expect("parse sdxl workflow example");
     let catalog = sdxl_catalog();

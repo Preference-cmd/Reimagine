@@ -6,7 +6,7 @@ use reimagine_core::workflow::{Endpoint, Workflow};
 
 #[test]
 fn sdxl_base_workflow_example_roundtrips_through_core_schema() {
-    let json = include_str!("../../../docs/architecture/examples/sdxl-base-workflow.json");
+    let json = include_str!("../../../examples/workflows/sdxl-base-workflow.json");
 
     let workflow: Workflow = serde_json::from_str(json).expect("parse sdxl workflow example");
     let serialized = serde_json::to_string_pretty(&workflow).expect("serialize workflow");
