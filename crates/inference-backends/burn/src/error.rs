@@ -1,6 +1,7 @@
 use std::path::PathBuf;
 
 use crate::models::stable_diffusion::sdxl::BurnSdxlContractError;
+use crate::models::stable_diffusion::sdxl::BurnTokenizerError;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum BurnBackendError {
@@ -27,6 +28,7 @@ pub enum BurnBackendError {
     },
     CacheIncompatible(String),
     BackendNotImplemented(String),
+    Tokenizer(BurnTokenizerError),
     SdxlContract(BurnSdxlContractError),
 }
 
@@ -71,6 +73,7 @@ impl std::fmt::Display for BurnBackendError {
             Self::BackendNotImplemented(capability) => {
                 write!(f, "Burn backend does not implement `{capability}`")
             }
+            Self::Tokenizer(error) => write!(f, "{error}"),
             Self::SdxlContract(error) => write!(f, "{error}"),
         }
     }
@@ -81,5 +84,11 @@ impl std::error::Error for BurnBackendError {}
 impl From<BurnSdxlContractError> for BurnBackendError {
     fn from(value: BurnSdxlContractError) -> Self {
         Self::SdxlContract(value)
+    }
+}
+
+impl From<BurnTokenizerError> for BurnBackendError {
+    fn from(value: BurnTokenizerError) -> Self {
+        Self::Tokenizer(value)
     }
 }

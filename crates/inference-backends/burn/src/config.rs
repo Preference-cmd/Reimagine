@@ -7,6 +7,7 @@ pub struct BurnBackendConfig {
     models_dir: PathBuf,
     output_dir: PathBuf,
     device: BurnDevice,
+    tokenizer_root: Option<PathBuf>,
 }
 
 impl BurnBackendConfig {
@@ -15,11 +16,24 @@ impl BurnBackendConfig {
             models_dir: models_dir.into(),
             output_dir: output_dir.into(),
             device: BurnDevice::new("cpu"),
+            tokenizer_root: None,
         }
     }
 
     pub fn with_device(mut self, device: BurnDevice) -> Self {
         self.device = device;
+        self
+    }
+
+    /// Override the SDXL tokenizer asset root.
+    ///
+    /// Library code must resolve bundled tokenizer assets through this
+    /// explicit seam instead of the process current working directory.
+    /// When `None`, the bundled assets shipped under
+    /// `assets/tokenizers/stable_diffusion/sdxl` (relative to the
+    /// workspace) are used.
+    pub fn with_tokenizer_root(mut self, root: impl Into<PathBuf>) -> Self {
+        self.tokenizer_root = Some(root.into());
         self
     }
 
@@ -37,5 +51,9 @@ impl BurnBackendConfig {
 
     pub fn device_label(&self) -> &str {
         self.device.label()
+    }
+
+    pub fn tokenizer_root(&self) -> Option<&PathBuf> {
+        self.tokenizer_root.as_ref()
     }
 }
