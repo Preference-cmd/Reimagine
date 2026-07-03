@@ -4,7 +4,7 @@ use reimagine_core::model::{NodeId, RunId, WorkflowId, WorkflowVersion};
 use reimagine_inference::{
     BackendInstance, BackendInstanceObservation, BackendInstanceStatus, BackendProfileProvider,
     BackendRunLifecycle, BackendRunLifecycleRequest, CreateEmptyLatentRequest, DeviceKind,
-    InferenceBackend, InferenceCapability, InferenceError,
+    InferenceBackend, InferenceCapability,
 };
 use reimagine_inference_burn::{BurnBackend, BurnBackendConfig, BurnDevice, BurnProfileProvider};
 
@@ -53,25 +53,47 @@ async fn profile_reports_builtin_burn_cpu_with_load_bundle_capability() {
     assert_eq!(cpu.backend.as_str(), "burn");
     assert_eq!(cpu.device.label, "cpu");
     assert_eq!(cpu.device.kind, DeviceKind::Cpu);
-    assert_eq!(cpu.capabilities, vec![InferenceCapability::LoadBundle]);
+    // burn/05 advertised LoadBundle; burn/09 extends the CPU
+    // instance profile with CreateEmptyLatent. Future issues will
+    // add more capabilities.
+    assert_eq!(
+        cpu.capabilities,
+        vec![
+            InferenceCapability::LoadBundle,
+            InferenceCapability::CreateEmptyLatent,
+        ]
+    );
     assert!(cpu.operation_options.is_empty());
     assert!(cpu.diagnostics.is_empty());
 }
 
 #[test]
-fn backend_kind_instance_and_capabilities_report_load_bundle() {
+fn backend_kind_instance_and_capabilities_report_load_bundle_and_create_empty_latent() {
     let backend = backend();
     let capabilities = backend.capabilities();
 
     assert_eq!(backend.backend_kind().as_str(), "burn");
     assert_eq!(backend.backend_instance(), BackendInstance::new("burn:cpu"));
     assert_eq!(capabilities.backend_kind().as_str(), "burn");
-    assert_eq!(capabilities.capability_supports().len(), 1);
+    // burn/05 advertised LoadBundle; burn/09 adds
+    // CreateEmptyLatent. The capability set is intentionally
+    // small in V1; later issues (text/sample/decode/encode/image)
+    // will extend it.
+    assert_eq!(capabilities.capability_supports().len(), 2);
     assert!(capabilities.supports_capability(InferenceCapability::LoadBundle));
+    assert!(capabilities.supports_capability(InferenceCapability::CreateEmptyLatent));
 }
 
 #[tokio::test]
-async fn direct_methods_return_structured_backend_not_implemented() {
+async fn create_empty_latent_succeeds_with_burn_affine_handle() {
+    // burn/09 implements `latent.create_empty`. The skeleton-era
+    // `BackendNotImplemented` path is no longer the source of
+    // truth for CreateEmptyLatent; downstream capabilities
+    // (text_encode, diffusion_sample, latent_decode/encode,
+    // image_*) remain BackendNotImplemented until their
+    // dedicated issues land — this is exercised by the burn
+    // backend's `not_implemented` helper, which is shared with
+    // the same path the other capabilities take.
     let backend = backend();
     let request = CreateEmptyLatentRequest::new(
         512,
@@ -83,19 +105,18 @@ async fn direct_methods_return_structured_backend_not_implemented() {
         NodeId::new("latent-burn"),
     );
 
-    let err = backend.create_empty_latent(request).await.unwrap_err();
-    match err {
-        InferenceError::BackendNotImplemented {
-            capability,
-            backend_kind,
-            message,
-        } => {
-            assert_eq!(capability, InferenceCapability::CreateEmptyLatent);
-            assert_eq!(backend_kind, "burn");
-            assert!(message.unwrap().contains("skeleton"));
-        }
-        other => panic!("expected BackendNotImplemented, got {other:?}"),
-    }
+    let response = backend
+        .create_empty_latent(request)
+        .await
+        .expect("burn/09 implements latent.create_empty");
+    let latent = response.into_latent();
+    assert_eq!(latent.payload().backend().as_str(), "burn");
+    assert_eq!(latent.payload().backend_instance().as_str(), "burn:cpu");
+    assert_eq!(
+        latent.latent_space().id().as_str(),
+        "stable_diffusion/sdxl/base"
+    );
+    assert_eq!(latent.payload().shape().dims(), &[1_usize, 4, 64, 64]);
 }
 
 #[tokio::test]

@@ -10,6 +10,7 @@ license.workspace = true
 [dependencies]
 async-trait = { workspace = true }
 burn-ndarray = { workspace = true }
+burn-tensor = { workspace = true }
 reimagine-core = { path = "../../core" }
 reimagine-inference = { path = "../../inference" }
 reimagine-plugin = { path = "../../plugin" }

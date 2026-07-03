@@ -414,7 +414,15 @@ async fn runtime_hooks_snapshot_reports_cached_model_count_after_load() {
 }
 
 #[tokio::test]
-async fn downstream_capabilities_remain_not_implemented() {
+async fn downstream_capabilities_remain_not_implemented_except_create_empty_latent() {
+    // burn/05 originally asserted every downstream capability
+    // (including CreateEmptyLatent) was BackendNotImplemented.
+    // burn/09 ships a real V1 `latent.create_empty` implementation
+    // for the burn backend, so CreateEmptyLatent is now expected
+    // to succeed. Other downstream capabilities (text_encode,
+    // diffusion_sample, latent_decode/encode, image_*)
+    // remain BackendNotImplemented until their dedicated issues
+    // land.
     let backend = backend();
     let request = CreateEmptyLatentRequest::new(
         512,
@@ -426,15 +434,17 @@ async fn downstream_capabilities_remain_not_implemented() {
         NodeId::new("latent"),
     );
 
-    let err = backend
+    let response = backend
         .create_empty_latent(request)
         .await
-        .expect_err("downstream capability remains unimplemented");
+        .expect("burn/09 implements latent.create_empty");
 
-    match err {
-        InferenceError::BackendNotImplemented { capability, .. } => {
-            assert_eq!(capability, InferenceCapability::CreateEmptyLatent);
-        }
-        other => panic!("expected BackendNotImplemented, got {other:?}"),
-    }
+    let latent = response.into_latent();
+    assert_eq!(
+        latent.latent_space().id().as_str(),
+        "stable_diffusion/sdxl/base"
+    );
+    assert_eq!(latent.payload().backend().as_str(), "burn");
+    assert_eq!(latent.payload().backend_instance().as_str(), "burn:cpu");
+    assert_eq!(latent.payload().shape().dims(), &[1_usize, 4, 64, 64]);
 }

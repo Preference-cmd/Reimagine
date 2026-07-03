@@ -13,7 +13,9 @@ use reimagine_inference::{
 
 use crate::config::BurnBackendConfig;
 use crate::error::BurnBackendError;
-use crate::operation::execute_model_load_bundle;
+use crate::operation::{
+    execute_latent_create_empty, execute_model_load_bundle, map_to_inference_error,
+};
 use crate::profile::{BACKEND_LABEL, BurnProfileProvider};
 use crate::resource::BurnBackendInstanceRuntimeHooks;
 use crate::store::{BurnModelCache, BurnStore};
@@ -104,9 +106,13 @@ impl InferenceBackend for BurnBackend {
     }
 
     fn capabilities(&self) -> InferenceBackendCapabilities {
-        InferenceBackendCapabilities::new(self.backend_kind().clone()).with_support(
-            InferenceCapabilitySupport::new(InferenceCapability::LoadBundle),
-        )
+        InferenceBackendCapabilities::new(self.backend_kind().clone())
+            .with_support(InferenceCapabilitySupport::new(
+                InferenceCapability::LoadBundle,
+            ))
+            .with_support(InferenceCapabilitySupport::new(
+                InferenceCapability::CreateEmptyLatent,
+            ))
     }
 
     async fn load_bundle(
@@ -125,9 +131,9 @@ impl InferenceBackend for BurnBackend {
 
     async fn create_empty_latent(
         &self,
-        _request: CreateEmptyLatentRequest,
+        request: CreateEmptyLatentRequest,
     ) -> Result<CreateEmptyLatentResponse, InferenceError> {
-        self.not_implemented(InferenceCapability::CreateEmptyLatent)
+        execute_latent_create_empty(self, request).map_err(map_to_inference_error)
     }
 
     async fn diffusion_sample(

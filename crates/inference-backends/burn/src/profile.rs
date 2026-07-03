@@ -41,7 +41,8 @@ impl BurnProfileProvider {
             DeviceProfile::new("cpu").with_kind(DeviceKind::Cpu),
             BackendInstanceStatus::Available,
         )
-        .with_capability(InferenceCapability::LoadBundle);
+        .with_capability(InferenceCapability::LoadBundle)
+        .with_capability(InferenceCapability::CreateEmptyLatent);
 
         BackendProfile::new(backend)
             .with_plugin(plugin, extension)
