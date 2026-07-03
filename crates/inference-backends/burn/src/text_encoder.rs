@@ -16,4 +16,6 @@ pub(crate) mod specs;
 
 pub use clip::{ClipTextEncoderProfile, ClipTextEncoderVariant};
 pub use keyspace::{TextEncoderKeyspace, TextEncoderTensorFamily};
-pub use specs::{OwnedTensorSpec, TextEncoderSpecSet, TextEncoderSpecSetBuilder, text_encoder_spec_set};
+pub use specs::{
+    OwnedTensorSpec, TextEncoderSpecSet, TextEncoderSpecSetBuilder, text_encoder_spec_set,
+};

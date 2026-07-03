@@ -105,12 +105,10 @@ impl BurnSdxlComponentContract {
                 })
                 .collect(),
             BurnSdxlComponentRole::TextEncoder => {
-                crate::text_encoder::specs::TextEncoderSpecSetBuilder::sdxl_clip_l()
-                    .specs
+                crate::text_encoder::specs::TextEncoderSpecSetBuilder::sdxl_clip_l().specs
             }
             BurnSdxlComponentRole::TextEncoder2 => {
-                crate::text_encoder::specs::TextEncoderSpecSetBuilder::sdxl_open_clip_g()
-                    .specs
+                crate::text_encoder::specs::TextEncoderSpecSetBuilder::sdxl_open_clip_g().specs
             }
         }
     }

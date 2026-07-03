@@ -346,7 +346,9 @@ async fn text_encode_succeeds_and_stores_conditioning() {
         conditioning.text_embedding().shape().dims(),
         &[1_usize, 77, 2048]
     );
-    let pooled = conditioning.pooled_embedding().expect("pooled handle present");
+    let pooled = conditioning
+        .pooled_embedding()
+        .expect("pooled handle present");
     assert_eq!(pooled.shape().dims(), &[1_usize, 1280]);
     // Production text.encode must insert a conditioning payload
     // into the shared store.

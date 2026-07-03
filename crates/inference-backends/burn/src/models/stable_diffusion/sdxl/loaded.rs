@@ -16,9 +16,7 @@ use crate::error::BurnBackendError;
 
 use super::component::{BurnSdxlComponentRole, BurnTensorDType, BurnTensorInventoryEntry};
 use super::metadata::BurnComponentMetadata;
-use super::validation::{
-    BurnSdxlComponentValidationReport, validate_component_inventory_full,
-};
+use super::validation::{BurnSdxlComponentValidationReport, validate_component_inventory_full};
 
 const PACKAGE_LAYOUT: &str = "burn_native_component_package";
 const PACKAGE_CONTRACT: &str = "burn.component";
@@ -151,16 +149,12 @@ impl BurnLoadedSdxlBundle {
             .components
             .iter()
             .find(|c| c.component_role == BurnSdxlComponentRole::TextEncoder)
-            .ok_or_else(|| {
-                BurnBackendError::MissingComponent("text_encoder".to_owned())
-            })?;
+            .ok_or_else(|| BurnBackendError::MissingComponent("text_encoder".to_owned()))?;
         let secondary = self
             .components
             .iter()
             .find(|c| c.component_role == BurnSdxlComponentRole::TextEncoder2)
-            .ok_or_else(|| {
-                BurnBackendError::MissingComponent("text_encoder_2".to_owned())
-            })?;
+            .ok_or_else(|| BurnBackendError::MissingComponent("text_encoder_2".to_owned()))?;
         Ok((primary.source_path.clone(), secondary.source_path.clone()))
     }
 
@@ -309,11 +303,13 @@ fn inspect_source(
             source: source_error,
         }
     })?;
-    let validation_report = validate_component_inventory_full(&inspected.metadata, &inspected.inventory)
-        .map_err(|source_error| BurnBackendError::ComponentValidation {
-            path: source.path().clone(),
-            source: source_error,
-        })?;
+    let validation_report =
+        validate_component_inventory_full(&inspected.metadata, &inspected.inventory).map_err(
+            |source_error| BurnBackendError::ComponentValidation {
+                path: source.path().clone(),
+                source: source_error,
+            },
+        )?;
 
     if let Some(projection) = projection.as_ref()
         && let Some(component) = projection.get("component")

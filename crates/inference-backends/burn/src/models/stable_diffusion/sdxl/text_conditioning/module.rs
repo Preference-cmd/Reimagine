@@ -7,8 +7,8 @@
 //! architecture; full Module trait integration is deferred to when
 //! burn-core's derive supports plain `Backend` with Vec fields.
 
-use burn_ndarray::NdArray;
 use burn_core::tensor::Tensor;
+use burn_ndarray::NdArray;
 
 /// Weight data loaded from safetensors — pre-allocated f32 buffers
 /// that can be converted to Burn tensors on demand.

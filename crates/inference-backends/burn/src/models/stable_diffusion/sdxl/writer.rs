@@ -360,8 +360,9 @@ mod tests {
         BurnSdxlComponentRole::all()
             .into_iter()
             .map(|role| match role {
-                BurnSdxlComponentRole::TextEncoder
-                | BurnSdxlComponentRole::TextEncoder2 => full_text_encoder(role),
+                BurnSdxlComponentRole::TextEncoder | BurnSdxlComponentRole::TextEncoder2 => {
+                    full_text_encoder(role)
+                }
                 _ => required_component(role),
             })
             .collect()
@@ -388,7 +389,13 @@ mod tests {
             BURN_SDXL_COMPONENT_CONTRACT_VERSION
         );
         assert_eq!(report.output_components.len(), 4);
-        assert_eq!(report.mapped_tensor_count, plan.components.iter().map(|c| c.tensors.len()).sum::<usize>());
+        assert_eq!(
+            report.mapped_tensor_count,
+            plan.components
+                .iter()
+                .map(|c| c.tensors.len())
+                .sum::<usize>()
+        );
         assert!(report.ignored_tensor_families.is_empty());
         assert!(report.diagnostics.is_empty());
 
@@ -410,8 +417,10 @@ mod tests {
                 BurnSdxlComponentRole::TextEncoder2 => 390,
                 _ => 2,
             };
-            assert_eq!(output.tensor_count, expected_tensor_count,
-                "tensor count mismatch for role {role}");
+            assert_eq!(
+                output.tensor_count, expected_tensor_count,
+                "tensor count mismatch for role {role}"
+            );
             assert_eq!(output.path, expected_path);
             assert!(temp.path().join(&output.path).is_file());
 
@@ -426,8 +435,11 @@ mod tests {
             // 2 representative specs for each role including text
             // encoders. The full spec check (all_expected_tensor_specs)
             // belongs in the runtime loading path.
-            assert_eq!(validation.matched_required_tensors.len(), 2,
-                "matched tensor count mismatch for role {role}");
+            assert_eq!(
+                validation.matched_required_tensors.len(),
+                2,
+                "matched tensor count mismatch for role {role}"
+            );
             assert_eq!(
                 inspected
                     .metadata

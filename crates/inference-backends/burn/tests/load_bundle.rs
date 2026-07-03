@@ -103,14 +103,13 @@ fn write_component_with_metadata(
     // so the runtime validation (validate_component_inventory_full)
     // passes with all transformer-block keys present.
     let specs: Vec<(String, Vec<usize>)> = match role {
-        BurnSdxlComponentRole::TextEncoder | BurnSdxlComponentRole::TextEncoder2 => {
-            role.contract()
-                .all_expected_tensor_specs()
-                .into_iter()
-                .filter(|s| s.required)
-                .map(|s| (s.key, vec![1; s.shape.rank()]))
-                .collect()
-        }
+        BurnSdxlComponentRole::TextEncoder | BurnSdxlComponentRole::TextEncoder2 => role
+            .contract()
+            .all_expected_tensor_specs()
+            .into_iter()
+            .filter(|s| s.required)
+            .map(|s| (s.key, vec![1; s.shape.rank()]))
+            .collect(),
         _ => role
             .contract()
             .expected_tensor_specs()

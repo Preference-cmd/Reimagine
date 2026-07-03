@@ -1,7 +1,9 @@
 use std::collections::{BTreeMap, BTreeSet};
 
 use super::component::{BurnSdxlComponentRole, BurnTensorInventoryEntry};
-use super::contract::{BACKEND_NAME, CONTRACT_NAME, MODEL_SERIES, TENSOR_LAYOUT, VARIANT, BurnSdxlComponentContract};
+use super::contract::{
+    BACKEND_NAME, BurnSdxlComponentContract, CONTRACT_NAME, MODEL_SERIES, TENSOR_LAYOUT, VARIANT,
+};
 use super::metadata::{BurnComponentMetadata, metadata_keys};
 use crate::text_encoder::specs::OwnedTensorSpec;
 

@@ -35,12 +35,22 @@ impl TextEncoderSpecSet {
     /// spec. Returns the list of missing required keys and the list
     /// of unexpected (unmatched) keys.
     pub fn classify(&self, available: &BTreeSet<String>) -> (Vec<String>, Vec<String>) {
-        let required_keys: BTreeSet<&str> =
-            self.specs.iter().filter(|s| s.required).map(|s| s.key.as_str()).collect();
+        let required_keys: BTreeSet<&str> = self
+            .specs
+            .iter()
+            .filter(|s| s.required)
+            .map(|s| s.key.as_str())
+            .collect();
         let available_keys: BTreeSet<&str> = available.iter().map(|s| s.as_str()).collect();
 
-        let missing: Vec<String> = required_keys.difference(&available_keys).map(|s| s.to_string()).collect();
-        let unexpected: Vec<String> = available_keys.difference(&required_keys).map(|s| s.to_string()).collect();
+        let missing: Vec<String> = required_keys
+            .difference(&available_keys)
+            .map(|s| s.to_string())
+            .collect();
+        let unexpected: Vec<String> = available_keys
+            .difference(&required_keys)
+            .map(|s| s.to_string())
+            .collect();
         (missing, unexpected)
     }
 
@@ -94,10 +104,22 @@ pub fn text_encoder_spec_set(profile: &ClipTextEncoderProfile) -> TextEncoderSpe
 
     // Optional text projection (OpenCLIP-G only).
     if let Some(w) = keys.text_projection_weight() {
-        push_spec(&mut specs, w, 2, true, "OpenCLIP-G text projection weight".into());
+        push_spec(
+            &mut specs,
+            w,
+            2,
+            true,
+            "OpenCLIP-G text projection weight".into(),
+        );
     }
     if let Some(b) = keys.text_projection_bias() {
-        push_spec(&mut specs, b, 1, profile.produces_pooled_output, "OpenCLIP-G text projection bias".into());
+        push_spec(
+            &mut specs,
+            b,
+            1,
+            profile.produces_pooled_output,
+            "OpenCLIP-G text projection bias".into(),
+        );
     }
 
     // Per-layer block specs.
@@ -256,7 +278,10 @@ mod tests {
         available.remove(&removed);
 
         let (missing, _unexpected) = set.classify(&available);
-        assert!(missing.contains(&removed), "missing should contain {removed}");
+        assert!(
+            missing.contains(&removed),
+            "missing should contain {removed}"
+        );
     }
 
     #[test]

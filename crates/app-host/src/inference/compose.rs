@@ -246,8 +246,8 @@ mod tests {
         Backend, BackendInstanceDescriptor, BackendInstanceObservation, BackendInstanceProfile,
         BackendInstanceSnapshot, BackendProfile, BackendRunLifecycle, BackendRunLifecycleReport,
         BackendRunLifecycleRequest, CannedCapabilityResponse, CreateEmptyLatentRequest,
-        CreateEmptyLatentResponse, DeviceKind, DeviceProfile, FakeBackend,
-        InferenceError, InferenceRuntime, LatentContent, LatentSpaceMetadata, RuntimeLatent,
+        CreateEmptyLatentResponse, DeviceKind, DeviceProfile, FakeBackend, InferenceError,
+        InferenceRuntime, LatentContent, LatentSpaceMetadata, RuntimeLatent,
     };
     use reimagine_plugin::{Extension, Plugin};
     use std::collections::BTreeMap;

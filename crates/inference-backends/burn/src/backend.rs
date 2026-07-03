@@ -135,10 +135,8 @@ impl InferenceBackend for BurnBackend {
         // payload, and return backend-affine handles. The CLIP-L/CLIP-G
         // tensor forward pass is wired for correct shape metadata;
         // the actual tensor execution is a follow-up deepening.
-        execute_text_encode(self, request).map_err(|err| {
-            InferenceError::BackendExecutionFailed {
-                message: err.to_string(),
-            }
+        execute_text_encode(self, request).map_err(|err| InferenceError::BackendExecutionFailed {
+            message: err.to_string(),
         })
     }
 

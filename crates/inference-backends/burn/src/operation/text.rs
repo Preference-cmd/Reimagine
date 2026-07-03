@@ -43,14 +43,11 @@ pub fn execute_text_encode(
 
     // Persist the conditioning payload in the shared store.
     let payload = preflight.into_conditioning_payload();
-    let payload_key = reimagine_inference::BackendPayloadKey::new(format!(
-        "conditioning:{model_id}"
-    ));
-    backend.store().insert_conditioning(
-        run_id,
-        payload_key.clone(),
-        payload,
-    );
+    let payload_key =
+        reimagine_inference::BackendPayloadKey::new(format!("conditioning:{model_id}"));
+    backend
+        .store()
+        .insert_conditioning(run_id, payload_key.clone(), payload);
 
     // Build response handles with correct shape metadata.
     let text_handle = reimagine_inference::BackendTensorHandle::with_instance(
@@ -70,11 +67,8 @@ pub fn execute_text_encode(
         backend.device_label(),
     );
 
-    let conditioning = ExecutionConditioning::new(
-        text_handle,
-        ConditioningMetadata::new(512, 512),
-    )
-    .with_pooled_embedding(pooled_handle);
+    let conditioning = ExecutionConditioning::new(text_handle, ConditioningMetadata::new(512, 512))
+        .with_pooled_embedding(pooled_handle);
 
     Ok(TextEncodeResponse::new(conditioning))
 }
