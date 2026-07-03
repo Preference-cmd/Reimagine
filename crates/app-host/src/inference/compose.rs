@@ -354,6 +354,7 @@ mod tests {
             vec![
                 reimagine_inference::InferenceCapability::LoadBundle,
                 reimagine_inference::InferenceCapability::CreateEmptyLatent,
+                reimagine_inference::InferenceCapability::TextEncode,
             ]
         );
         assert!(cpu.operation_options.is_empty());
