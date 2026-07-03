@@ -94,15 +94,25 @@ fn component_metadata(role: BurnSdxlComponentRole) -> HashMap<String, String> {
 
 fn write_component(path: &Path, role: BurnSdxlComponentRole) {
     std::fs::create_dir_all(path.parent().expect("component parent")).expect("component dir");
-    let tensors = role
-        .contract()
-        .expected_tensor_specs()
-        .iter()
-        .filter(|spec| spec.required)
-        .map(|spec| {
-            let shape = vec![1; spec.shape.rank()];
-            (spec.key.to_owned(), tensor_view(shape))
-        })
+    let specs: Vec<(String, Vec<usize>)> = match role {
+        BurnSdxlComponentRole::TextEncoder | BurnSdxlComponentRole::TextEncoder2 => role
+            .contract()
+            .all_expected_tensor_specs()
+            .into_iter()
+            .filter(|s| s.required)
+            .map(|s| (s.key, vec![1; s.shape.rank()]))
+            .collect(),
+        _ => role
+            .contract()
+            .expected_tensor_specs()
+            .iter()
+            .filter(|spec| spec.required)
+            .map(|spec| (spec.key.to_owned(), vec![1; spec.shape.rank()]))
+            .collect(),
+    };
+    let tensors = specs
+        .into_iter()
+        .map(|(key, shape)| (key, tensor_view(shape)))
         .collect::<Vec<_>>();
 
     serialize_to_file(tensors, Some(component_metadata(role)), path).expect("component file");
@@ -247,12 +257,12 @@ fn latent_value() -> ExecutionValue {
 // ---------------------------------------------------------------------------
 
 #[tokio::test]
-async fn text_encode_is_not_advertised_as_a_burn_capability() {
+async fn text_encode_is_advertised_as_a_burn_capability() {
     let backend = backend();
     let capabilities = backend.capabilities();
     assert!(
-        !capabilities.supports_capability(InferenceCapability::TextEncode),
-        "burn/08a must not advertise TextEncode; the capability lands with burn/08f"
+        capabilities.supports_capability(InferenceCapability::TextEncode),
+        "burn/08f adds TextEncode capability"
     );
 }
 
@@ -320,38 +330,26 @@ async fn text_encode_non_string_prompt_is_backend_execution_failed() {
 }
 
 #[tokio::test]
-async fn text_encode_preflight_succeeds_and_surfaces_backend_not_implemented() {
+async fn text_encode_succeeds_and_stores_conditioning() {
     let backend = backend();
     seed_bundle_via_load(&backend).await;
     let clip = burn_clip(&backend, backend.backend_instance());
     let request = build_text_request(clip, string_prompt("hello"));
 
-    // The preflight exercises the validation + tokenization
-    // pipeline; the CLIP-L/CLIP-G forward pass is the next
-    // slice. The inference-layer error variant must be
-    // BackendNotImplemented (not BackendExecutionFailed) so the
-    // router and downstream callers see the same unimplemented
-    // shape they see for every other burn capability that is
-    // not yet wired.
-    let err = backend
+    let response = backend
         .text_encode(request)
         .await
-        .expect_err("not implemented");
-    match err {
-        InferenceError::BackendNotImplemented {
-            capability,
-            backend_kind,
-            message,
-        } => {
-            assert_eq!(capability, InferenceCapability::TextEncode);
-            assert_eq!(backend_kind, BACKEND_LABEL);
-            let message = message.expect("diagnostic message present");
-            assert!(message.contains("burn/08f"), "message: {message}");
-            assert!(message.contains("CLIP-L/CLIP-G"), "message: {message}");
-        }
-        other => panic!("expected BackendNotImplemented, got {other:?}"),
-    }
-    // Production text.encode must never insert a successful
-    // conditioning payload into the store.
-    assert_eq!(backend.store().payload_count(), 0);
+        .expect("burn/08f implements text.encode");
+    let conditioning = response.conditioning();
+    assert_eq!(conditioning.text_embedding().backend().as_str(), "burn");
+    assert_eq!(
+        conditioning.text_embedding().shape().dims(),
+        &[1_usize, 77, 2048]
+    );
+    let pooled = conditioning.pooled_embedding().expect("pooled handle present");
+    assert_eq!(pooled.shape().dims(), &[1_usize, 1280]);
+    // Production text.encode must insert a conditioning payload
+    // into the shared store.
+    let store = backend.store();
+    assert!(store.payload_count() > 0, "conditioning payload stored");
 }

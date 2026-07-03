@@ -124,17 +124,22 @@ mod tests {
         let caps = burn_cpu["capabilities"]
             .as_array()
             .expect("capabilities is an array");
-        assert_eq!(caps.len(), 2, "burn/09 adds CreateEmptyLatent; burn:cpu should have 2 capabilities, got: {burn_cpu}");
-        assert_eq!(
-            caps[0].as_str(),
-            Some("model.load_bundle"),
-            "burn:cpu capability[0] should be load_bundle, got: {burn_cpu}"
-        );
-        assert_eq!(
-            caps[1].as_str(),
-            Some("latent.create_empty"),
-            "burn:cpu capability[1] should be create_empty_latent, got: {burn_cpu}"
-        );
+	        assert_eq!(caps.len(), 3, "burn/08f adds TextEncode; burn:cpu should have 3 capabilities, got: {burn_cpu}");
+	        assert_eq!(
+	            caps[0].as_str(),
+	            Some("model.load_bundle"),
+	            "burn:cpu capability[0] should be load_bundle, got: {burn_cpu}"
+	        );
+	        assert_eq!(
+	            caps[1].as_str(),
+	            Some("latent.create_empty"),
+	            "burn:cpu capability[1] should be create_empty_latent, got: {burn_cpu}"
+	        );
+	        assert_eq!(
+	            caps[2].as_str(),
+	            Some("text.encode"),
+	            "burn:cpu capability[2] should be text.encode, got: {burn_cpu}"
+	        );
 
         // V1 must always include a `candle:cpu` instance, regardless
         // of host hardware. The wire shape mirrors the app-host

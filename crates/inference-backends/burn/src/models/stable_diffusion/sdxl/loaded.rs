@@ -16,7 +16,9 @@ use crate::error::BurnBackendError;
 
 use super::component::{BurnSdxlComponentRole, BurnTensorDType, BurnTensorInventoryEntry};
 use super::metadata::BurnComponentMetadata;
-use super::validation::{BurnSdxlComponentValidationReport, validate_component_inventory};
+use super::validation::{
+    BurnSdxlComponentValidationReport, validate_component_inventory_full,
+};
 
 const PACKAGE_LAYOUT: &str = "burn_native_component_package";
 const PACKAGE_CONTRACT: &str = "burn.component";
@@ -142,6 +144,26 @@ impl BurnLoadedSdxlBundle {
         &self.model_id
     }
 
+    /// Return the paths of the primary (text_encoder) and secondary
+    /// (text_encoder_2) component files in this bundle.
+    pub fn text_encoder_component_paths(&self) -> Result<(PathBuf, PathBuf), BurnBackendError> {
+        let primary = self
+            .components
+            .iter()
+            .find(|c| c.component_role == BurnSdxlComponentRole::TextEncoder)
+            .ok_or_else(|| {
+                BurnBackendError::MissingComponent("text_encoder".to_owned())
+            })?;
+        let secondary = self
+            .components
+            .iter()
+            .find(|c| c.component_role == BurnSdxlComponentRole::TextEncoder2)
+            .ok_or_else(|| {
+                BurnBackendError::MissingComponent("text_encoder_2".to_owned())
+            })?;
+        Ok((primary.source_path.clone(), secondary.source_path.clone()))
+    }
+
     /// Test-only constructor that builds a minimal bundle for
     /// the cross-run cache without going through the file-system
     /// resolver. Real production code must use
@@ -194,10 +216,8 @@ impl BurnLoadedSdxlBundle {
 
 #[derive(Debug)]
 pub struct BurnLoadedSdxlComponent {
-    #[allow(dead_code)]
-    component_role: BurnSdxlComponentRole,
-    #[allow(dead_code)]
-    source_path: PathBuf,
+    pub component_role: BurnSdxlComponentRole,
+    pub source_path: PathBuf,
     #[allow(dead_code)]
     metadata: BurnComponentMetadata,
     #[allow(dead_code)]
@@ -289,7 +309,7 @@ fn inspect_source(
             source: source_error,
         }
     })?;
-    let validation_report = validate_component_inventory(&inspected.metadata, &inspected.inventory)
+    let validation_report = validate_component_inventory_full(&inspected.metadata, &inspected.inventory)
         .map_err(|source_error| BurnBackendError::ComponentValidation {
             path: source.path().clone(),
             source: source_error,

@@ -1,4 +1,5 @@
 use super::component::{BurnSdxlComponentRole, BurnTensorSpec};
+use crate::text_encoder::specs::OwnedTensorSpec;
 
 pub const BURN_SDXL_COMPONENT_CONTRACT_VERSION: u32 = 1;
 pub(crate) const CONTRACT_NAME: &str = "burn.component";
@@ -82,6 +83,35 @@ impl BurnSdxlComponentContract {
             BurnSdxlComponentRole::Vae => VAE_SPECS,
             BurnSdxlComponentRole::TextEncoder => TEXT_ENCODER_SPECS,
             BurnSdxlComponentRole::TextEncoder2 => TEXT_ENCODER_2_SPECS,
+        }
+    }
+
+    /// Return the complete set of required tensor specs for this
+    /// component, including all generated transformer-block keys
+    /// for text-encoder roles. For diffusion and VAE roles the
+    /// return value is a copy of the static representative specs;
+    /// for text-encoder roles the set covers every tensor the
+    /// executable module will try to deserialize.
+    pub fn all_expected_tensor_specs(&self) -> Vec<OwnedTensorSpec> {
+        match self.component_role {
+            BurnSdxlComponentRole::Diffusion | BurnSdxlComponentRole::Vae => self
+                .expected_tensor_specs()
+                .iter()
+                .map(|s| OwnedTensorSpec {
+                    key: s.key.to_owned(),
+                    shape: s.shape,
+                    required: s.required,
+                    notes: s.notes.to_owned(),
+                })
+                .collect(),
+            BurnSdxlComponentRole::TextEncoder => {
+                crate::text_encoder::specs::TextEncoderSpecSetBuilder::sdxl_clip_l()
+                    .specs
+            }
+            BurnSdxlComponentRole::TextEncoder2 => {
+                crate::text_encoder::specs::TextEncoderSpecSetBuilder::sdxl_open_clip_g()
+                    .specs
+            }
         }
     }
 }

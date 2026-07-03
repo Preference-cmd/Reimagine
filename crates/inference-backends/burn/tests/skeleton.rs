@@ -54,13 +54,14 @@ async fn profile_reports_builtin_burn_cpu_with_load_bundle_capability() {
     assert_eq!(cpu.device.label, "cpu");
     assert_eq!(cpu.device.kind, DeviceKind::Cpu);
     // burn/05 advertised LoadBundle; burn/09 extends the CPU
-    // instance profile with CreateEmptyLatent. Future issues will
-    // add more capabilities.
+    // instance profile with CreateEmptyLatent. burn/08f adds
+    // TextEncode.
     assert_eq!(
         cpu.capabilities,
         vec![
             InferenceCapability::LoadBundle,
             InferenceCapability::CreateEmptyLatent,
+            InferenceCapability::TextEncode,
         ]
     );
     assert!(cpu.operation_options.is_empty());
@@ -76,10 +77,8 @@ fn backend_kind_instance_and_capabilities_report_load_bundle_and_create_empty_la
     assert_eq!(backend.backend_instance(), BackendInstance::new("burn:cpu"));
     assert_eq!(capabilities.backend_kind().as_str(), "burn");
     // burn/05 advertised LoadBundle; burn/09 adds
-    // CreateEmptyLatent. The capability set is intentionally
-    // small in V1; later issues (text/sample/decode/encode/image)
-    // will extend it.
-    assert_eq!(capabilities.capability_supports().len(), 2);
+    // CreateEmptyLatent. burn/08f adds TextEncode.
+    assert_eq!(capabilities.capability_supports().len(), 3);
     assert!(capabilities.supports_capability(InferenceCapability::LoadBundle));
     assert!(capabilities.supports_capability(InferenceCapability::CreateEmptyLatent));
 }

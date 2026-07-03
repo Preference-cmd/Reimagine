@@ -42,7 +42,8 @@ impl BurnProfileProvider {
             BackendInstanceStatus::Available,
         )
         .with_capability(InferenceCapability::LoadBundle)
-        .with_capability(InferenceCapability::CreateEmptyLatent);
+        .with_capability(InferenceCapability::CreateEmptyLatent)
+        .with_capability(InferenceCapability::TextEncode);
 
         BackendProfile::new(backend)
             .with_plugin(plugin, extension)

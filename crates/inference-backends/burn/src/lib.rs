@@ -16,3 +16,4 @@ mod operation;
 mod profile;
 mod resource;
 mod store;
+pub mod text_encoder;
