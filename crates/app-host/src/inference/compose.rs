@@ -246,7 +246,7 @@ mod tests {
         Backend, BackendInstanceDescriptor, BackendInstanceObservation, BackendInstanceProfile,
         BackendInstanceSnapshot, BackendProfile, BackendRunLifecycle, BackendRunLifecycleReport,
         BackendRunLifecycleRequest, CannedCapabilityResponse, CreateEmptyLatentRequest,
-        CreateEmptyLatentResponse, DeviceKind, DeviceProfile, FakeBackend, InferenceCapability,
+        CreateEmptyLatentResponse, DeviceKind, DeviceProfile, FakeBackend,
         InferenceError, InferenceRuntime, LatentContent, LatentSpaceMetadata, RuntimeLatent,
     };
     use reimagine_plugin::{Extension, Plugin};
@@ -351,7 +351,10 @@ mod tests {
         assert_eq!(cpu.device.kind, DeviceKind::Cpu);
         assert_eq!(
             cpu.capabilities,
-            vec![reimagine_inference::InferenceCapability::LoadBundle]
+            vec![
+                reimagine_inference::InferenceCapability::LoadBundle,
+                reimagine_inference::InferenceCapability::CreateEmptyLatent,
+            ]
         );
         assert!(cpu.operation_options.is_empty());
         assert!(cpu.diagnostics.is_empty());
@@ -414,7 +417,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn burn_selected_create_empty_latent_fails_at_router_capability_check() {
+    async fn burn_selected_create_empty_latent_succeeds_through_router() {
         let base = temp_dir("burn-router");
         let config = AppConfig::new(AppPaths::new(&base));
         let model_service = Arc::new(ModelService::new(config.paths().clone()));
@@ -440,25 +443,21 @@ mod tests {
             reimagine_core::model::WorkflowVersion::new(1),
             reimagine_core::model::NodeId::new("latent-burn-router"),
         );
-        let err = bootstrapped
+        let response = bootstrapped
             .runtime
             .inference_runtime
             .create_empty_latent(request)
             .await
-            .expect_err("burn skeleton advertises no latent capability");
+            .expect("burn/09 implements create_empty_latent through the router");
 
-        match err {
-            InferenceError::CandidateBackendLacksCapability {
-                instance,
-                backend,
-                capability,
-            } => {
-                assert_eq!(instance, BackendInstance::new("burn:cpu"));
-                assert_eq!(backend, Backend::new("burn"));
-                assert_eq!(capability, InferenceCapability::CreateEmptyLatent);
-            }
-            other => panic!("expected CandidateBackendLacksCapability, got {other:?}"),
-        }
+        let latent = response.into_latent();
+        assert_eq!(latent.payload().backend().as_str(), "burn");
+        assert_eq!(latent.payload().backend_instance().as_str(), "burn:cpu");
+        assert_eq!(
+            latent.latent_space().id().as_str(),
+            "stable_diffusion/sdxl/base"
+        );
+        assert_eq!(latent.payload().shape().dims(), &[1_usize, 4, 64, 64]);
         let _ = std::fs::remove_dir_all(&base);
     }
 
