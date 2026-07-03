@@ -6,7 +6,9 @@ use burn_tensor::{Tensor, TensorData};
 use reimagine_core::model::{ModelId, RunId};
 use reimagine_inference::{BackendPayloadKey, LatentSpaceMetadata};
 
-use crate::models::stable_diffusion::sdxl::{BurnLoadedModelBundle, BurnSdxlSourceSignature};
+use crate::models::stable_diffusion::sdxl::{
+    BurnLoadedModelBundle, BurnSdxlSourceSignature, BurnSdxlTokenizedPromptPair,
+};
 
 /// Backend-owned latent payload wrapper.
 ///
@@ -92,6 +94,178 @@ impl BurnLatentPayload {
     }
 }
 
+/// Backend-private metadata captured for a text-encode preflight.
+///
+/// This type lives only inside the Burn backend. It is richer than
+/// the public inference-layer `ExecutionConditioning` because the
+/// store must also remember facts that are only relevant inside
+/// Burn (per-role tokenizer identity, source signature, model
+/// series/variant, and the requested sequence length). Keeping this
+/// metadata attached to the payload lets the future burn/08f and
+/// burn/10 operations resolve the conditioning without having to
+/// re-run the preflight.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct BurnConditioningMetadata {
+    model_id: ModelId,
+    series: String,
+    variant: String,
+    sequence_length: u32,
+    pooled_embedding_available: bool,
+    primary_tokenizer_id: String,
+    secondary_tokenizer_id: String,
+    source_signature: BurnSdxlSourceSignature,
+}
+
+impl BurnConditioningMetadata {
+    /// Build a metadata record from a loaded bundle and the
+    /// resolved tokenizer resources. The tokenizer ids are the
+    /// resolved file paths so the record is reproducible from the
+    /// preflight inputs alone.
+    pub fn from_bundle(
+        bundle: &BurnLoadedModelBundle,
+        sequence_length: u32,
+        primary_tokenizer_id: String,
+        secondary_tokenizer_id: String,
+    ) -> Self {
+        Self {
+            model_id: bundle_model_id(bundle).clone(),
+            series: "stable_diffusion".to_owned(),
+            variant: "sdxl".to_owned(),
+            sequence_length,
+            pooled_embedding_available: true,
+            primary_tokenizer_id,
+            secondary_tokenizer_id,
+            source_signature: bundle.source_signature().clone(),
+        }
+    }
+
+    /// Test-only constructor used by conditioning-payload shape
+    /// tests. Production code must not assemble fake metadata
+    /// records.
+    #[cfg(test)]
+    pub(crate) fn test_only(
+        model_id: ModelId,
+        sequence_length: u32,
+        primary_tokenizer_id: String,
+        secondary_tokenizer_id: String,
+    ) -> Self {
+        Self {
+            model_id,
+            series: "stable_diffusion".to_owned(),
+            variant: "sdxl".to_owned(),
+            sequence_length,
+            pooled_embedding_available: true,
+            primary_tokenizer_id,
+            secondary_tokenizer_id,
+            source_signature: BurnSdxlSourceSignature::empty(),
+        }
+    }
+
+    pub fn model_id(&self) -> &ModelId {
+        &self.model_id
+    }
+
+    pub fn series(&self) -> &str {
+        &self.series
+    }
+
+    pub fn variant(&self) -> &str {
+        &self.variant
+    }
+
+    pub fn sequence_length(&self) -> u32 {
+        self.sequence_length
+    }
+
+    pub fn pooled_embedding_available(&self) -> bool {
+        self.pooled_embedding_available
+    }
+
+    pub fn primary_tokenizer_id(&self) -> &str {
+        &self.primary_tokenizer_id
+    }
+
+    pub fn secondary_tokenizer_id(&self) -> &str {
+        &self.secondary_tokenizer_id
+    }
+
+    pub fn source_signature(&self) -> BurnSdxlSourceSignature {
+        self.source_signature.clone()
+    }
+}
+
+/// Backend-owned conditioning payload wrapper.
+///
+/// V1 carries only the deterministic tokenization output. The
+/// payload exists so the future burn/08f CLIP forward pass can
+/// store the produced `[1,77,768]` / `[1,77,1280]` embeddings and
+/// the `[1,768]` / `[1,1280]` pooled embeddings under the same
+/// store seam; that extension is intentionally out of scope for
+/// burn/08a, which only defines the shape.
+#[derive(Debug, Clone)]
+pub struct BurnConditioningPayload {
+    metadata: BurnConditioningMetadata,
+    tokenized_prompts: BurnSdxlTokenizedPromptPair,
+}
+
+impl BurnConditioningPayload {
+    /// Build a payload from a tokenized prompt pair and metadata.
+    /// Visible to the burn/08a preflight so the preconditioned
+    /// record can be assembled for the future store insertion; the
+    /// preflight deliberately does not insert the payload into the
+    /// store — CLIP forward is not yet wired.
+    pub(crate) fn from_tokenized(
+        metadata: BurnConditioningMetadata,
+        tokenized_prompts: BurnSdxlTokenizedPromptPair,
+    ) -> Self {
+        Self {
+            metadata,
+            tokenized_prompts,
+        }
+    }
+
+    /// Test-only constructor. Production code paths must not build
+    /// fake successful conditioning payloads; this seam exists so
+    /// store-shape tests can exercise the conditioning variant
+    /// without depending on a real CLIP forward pass.
+    #[cfg(test)]
+    pub(crate) fn test_only(
+        metadata: BurnConditioningMetadata,
+        tokenized_prompts: BurnSdxlTokenizedPromptPair,
+    ) -> Self {
+        Self::from_tokenized(metadata, tokenized_prompts)
+    }
+
+    pub fn metadata(&self) -> &BurnConditioningMetadata {
+        &self.metadata
+    }
+
+    pub fn tokenized_prompts(&self) -> &BurnSdxlTokenizedPromptPair {
+        &self.tokenized_prompts
+    }
+
+    /// Approximate byte size of the V1 payload: two tokenized
+    /// prompts, each carrying `MAX_SEQUENCE_LENGTH` `u32` token ids
+    /// and `u32` attention masks.
+    pub fn byte_size(&self) -> usize {
+        let tokens = self.tokenized_prompts.clip_l.token_ids.len()
+            + self.tokenized_prompts.clip_g.token_ids.len();
+        let masks = self.tokenized_prompts.clip_l.attention_mask.len()
+            + self.tokenized_prompts.clip_g.attention_mask.len();
+        (tokens + masks) * std::mem::size_of::<u32>()
+    }
+}
+
+/// Pull the model id out of an [`BurnLoadedModelBundle`] without
+/// re-exporting the inner SDXL enum variant outside the burn
+/// crate. Both currently supported variants are SDXL bundles, so
+/// this accessor is exhaustive.
+fn bundle_model_id(bundle: &BurnLoadedModelBundle) -> &ModelId {
+    match bundle {
+        BurnLoadedModelBundle::StableDiffusionSdxl(bundle) => bundle.as_ref().model_id(),
+    }
+}
+
 /// Errors returned by typed [`BurnStore`] accessors.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum StoreError {
@@ -148,12 +322,14 @@ struct BurnStoreInner {
 #[derive(Debug, Clone)]
 enum BurnStorePayload {
     Latent(BurnLatentPayload),
+    Conditioning(BurnConditioningPayload),
 }
 
 impl BurnStorePayload {
     fn kind(&self) -> &'static str {
         match self {
             Self::Latent(_) => "latent",
+            Self::Conditioning(_) => "conditioning",
         }
     }
 }
@@ -221,6 +397,76 @@ impl BurnStore {
         }
     }
 
+    /// Insert a real Burn-private conditioning payload and pin it
+    /// to the run. The payload shape is defined by burn/08a and
+    /// will be populated with real CLIP forward outputs by
+    /// burn/08f. Production `text.encode` does not call this
+    /// method until burn/08f lands.
+    pub fn insert_conditioning(
+        &self,
+        run_id: RunId,
+        key: BackendPayloadKey,
+        payload: BurnConditioningPayload,
+    ) {
+        let mut inner = self.inner.lock().expect("store poisoned");
+        inner
+            .payloads
+            .insert(key.clone(), BurnStorePayload::Conditioning(payload));
+        inner.run_index.entry(run_id).or_default().push(key);
+    }
+
+    /// Borrow a conditioning payload by key. The lock is released
+    /// as soon as the cheap payload clone completes; no work
+    /// happens outside the lock beyond the return.
+    #[allow(unreachable_patterns)]
+    pub fn get_conditioning(
+        &self,
+        key: &BackendPayloadKey,
+    ) -> Result<BurnConditioningPayload, StoreError> {
+        let inner = self.inner.lock().expect("store poisoned");
+        let cloned = inner.payloads.get(key).cloned();
+        drop(inner);
+        match cloned {
+            Some(BurnStorePayload::Conditioning(payload)) => Ok(payload),
+            Some(other) => Err(StoreError::WrongPayloadKind {
+                key: key.clone(),
+                expected: "conditioning",
+                actual: other.kind(),
+            }),
+            None => Err(StoreError::PayloadNotFound {
+                key: key.clone(),
+                expected: "conditioning",
+            }),
+        }
+    }
+
+    /// Take ownership of a conditioning payload, removing it from
+    /// the store and unpinning it from any run index.
+    #[allow(unreachable_patterns)]
+    pub fn take_conditioning(
+        &self,
+        key: &BackendPayloadKey,
+    ) -> Result<BurnConditioningPayload, StoreError> {
+        let mut inner = self.inner.lock().expect("store poisoned");
+        match inner.payloads.remove(key) {
+            Some(BurnStorePayload::Conditioning(payload)) => {
+                for keys in inner.run_index.values_mut() {
+                    keys.retain(|k| k != key);
+                }
+                Ok(payload)
+            }
+            Some(other) => Err(StoreError::WrongPayloadKind {
+                key: key.clone(),
+                expected: "conditioning",
+                actual: other.kind(),
+            }),
+            None => Err(StoreError::PayloadNotFound {
+                key: key.clone(),
+                expected: "conditioning",
+            }),
+        }
+    }
+
     /// Remove all payloads and run pins for the given run id.
     ///
     /// Returns the number of payloads evicted so the runtime hooks
@@ -284,6 +530,7 @@ impl BurnStore {
             .values()
             .map(|payload| match payload {
                 BurnStorePayload::Latent(latent) => latent.byte_size(),
+                BurnStorePayload::Conditioning(conditioning) => conditioning.byte_size(),
             })
             .sum()
     }
@@ -314,6 +561,28 @@ impl BurnModelCache {
         let bundles = self.bundles.lock().expect("model cache poisoned");
         let bundle = bundles.get(model_id)?;
         (bundle.source_signature() == signature).then(|| bundle.clone())
+    }
+
+    /// Return the bundle currently registered for a model id,
+    /// without checking the source signature. Used by the
+    /// burn/08a text.encode preflight to confirm a bundle is
+    /// loaded before the CLIP forward pass becomes real.
+    pub fn get_bundle(&self, model_id: &ModelId) -> Option<Arc<BurnLoadedModelBundle>> {
+        self.bundles
+            .lock()
+            .expect("model cache poisoned")
+            .get(model_id)
+            .cloned()
+    }
+
+    /// Check whether a bundle is currently registered for a
+    /// model id. Used by the burn/08a preflight before the
+    /// signature-bearing lookup.
+    pub fn contains(&self, model_id: &ModelId) -> bool {
+        self.bundles
+            .lock()
+            .expect("model cache poisoned")
+            .contains_key(model_id)
     }
 
     pub fn insert_bundle(&self, model_id: ModelId, bundle: Arc<BurnLoadedModelBundle>) {
@@ -546,5 +815,156 @@ mod tests {
         let payload = BurnLatentPayload::new_ndarray(tensor, custom.clone(), 64, 64, 1);
         assert_eq!(payload.latent_space(), &custom);
         assert_eq!(payload.latent_space().id().as_str(), "custom/test");
+    }
+
+    fn build_conditioning(model_id: &str, primary: u32, secondary: u32) -> BurnConditioningPayload {
+        let metadata = BurnConditioningMetadata::test_only(
+            ModelId::new(model_id),
+            77,
+            format!("primary://{primary}"),
+            format!("secondary://{secondary}"),
+        );
+        use crate::models::stable_diffusion::sdxl::BurnSdxlTokenizedPrompt;
+        let pair = BurnSdxlTokenizedPromptPair {
+            clip_l: BurnSdxlTokenizedPrompt {
+                token_ids: vec![primary; 77],
+                attention_mask: vec![1; 77],
+            },
+            clip_g: BurnSdxlTokenizedPrompt {
+                token_ids: vec![secondary; 77],
+                attention_mask: vec![1; 77],
+            },
+        };
+        BurnConditioningPayload::test_only(metadata, pair)
+    }
+
+    #[test]
+    fn store_insert_conditioning_registers_payload_and_run_pin() {
+        let store = BurnStore::new();
+        let run_id = RunId::new("run-cond");
+        let key = BackendPayloadKey::new("conditioning:run-cond:node-a");
+        store.insert_conditioning(
+            run_id.clone(),
+            key.clone(),
+            build_conditioning("sdxl-base", 1, 2),
+        );
+        assert_eq!(store.payload_count(), 1);
+        assert_eq!(store.run_payload_count(&run_id), 1);
+        assert!(store.contains_payload(&key));
+    }
+
+    #[test]
+    fn store_get_conditioning_returns_inserted_payload() {
+        let store = BurnStore::new();
+        let run_id = RunId::new("run-cond");
+        let key = BackendPayloadKey::new("conditioning:run-cond:node-a");
+        let original = build_conditioning("sdxl-base", 11, 22);
+        store.insert_conditioning(run_id, key.clone(), original.clone());
+
+        let got = store.get_conditioning(&key).expect("conditioning payload");
+        assert_eq!(got.metadata().model_id().as_str(), "sdxl-base");
+        assert_eq!(got.tokenized_prompts().clip_l.token_ids[0], 11);
+        assert_eq!(got.tokenized_prompts().clip_g.token_ids[0], 22);
+        assert_eq!(got.byte_size(), 4 * 77 * std::mem::size_of::<u32>());
+    }
+
+    #[test]
+    fn store_get_conditioning_reports_missing_key() {
+        let store = BurnStore::new();
+        let key = BackendPayloadKey::new("conditioning:missing");
+        let err = store.get_conditioning(&key).unwrap_err();
+        assert!(matches!(err, StoreError::PayloadNotFound { .. }));
+        let msg = err.to_string();
+        assert!(msg.contains("conditioning"), "msg: {msg}");
+        assert!(msg.contains("conditioning:missing"), "msg: {msg}");
+    }
+
+    #[test]
+    fn store_take_conditioning_removes_entry_and_returns_payload() {
+        let store = BurnStore::new();
+        let run_id = RunId::new("run-cond");
+        let key = BackendPayloadKey::new("conditioning:run-cond:node-a");
+        store.insert_conditioning(
+            run_id.clone(),
+            key.clone(),
+            build_conditioning("sdxl-base", 3, 4),
+        );
+
+        let taken = store.take_conditioning(&key).expect("conditioning payload");
+        assert_eq!(taken.metadata().model_id().as_str(), "sdxl-base");
+        assert!(!store.contains_payload(&key));
+        assert_eq!(store.run_payload_count(&run_id), 0);
+    }
+
+    #[test]
+    fn store_get_conditioning_on_latent_key_reports_wrong_kind() {
+        let store = BurnStore::new();
+        let run_id = RunId::new("run-cond");
+        let key = BackendPayloadKey::new("latent:run-cond:node-a");
+        store.insert_latent(run_id, key.clone(), build_payload(1, 64, 64));
+
+        let err = store.get_conditioning(&key).unwrap_err();
+        assert!(matches!(err, StoreError::WrongPayloadKind { .. }));
+        let msg = err.to_string();
+        assert!(msg.contains("latent"), "msg: {msg}");
+        assert!(msg.contains("conditioning"), "msg: {msg}");
+    }
+
+    #[test]
+    fn store_release_payload_evicts_conditioning() {
+        let store = BurnStore::new();
+        let run_id = RunId::new("run-cond");
+        let key = BackendPayloadKey::new("conditioning:run-cond:node-a");
+        store.insert_conditioning(run_id.clone(), key.clone(), build_conditioning("m", 1, 2));
+        assert!(store.release_payload(&key));
+        assert!(!store.contains_payload(&key));
+        assert_eq!(store.run_payload_count(&run_id), 0);
+    }
+
+    #[test]
+    fn store_cleanup_run_evicts_conditioning_payloads() {
+        let store = BurnStore::new();
+        let run_id = RunId::new("run-cond");
+        let key = BackendPayloadKey::new("conditioning:run-cond:node-a");
+        store.insert_conditioning(run_id.clone(), key.clone(), build_conditioning("m", 1, 2));
+        assert_eq!(store.cleanup_run(&run_id), 1);
+        assert!(!store.contains_payload(&key));
+    }
+
+    #[test]
+    fn store_payload_byte_size_sums_conditioning_payloads() {
+        let store = BurnStore::new();
+        let run_id = RunId::new("run-cond");
+        let key_a = BackendPayloadKey::new("conditioning:run-cond:a");
+        let key_b = BackendPayloadKey::new("conditioning:run-cond:b");
+        store.insert_conditioning(run_id.clone(), key_a, build_conditioning("m-a", 1, 2));
+        store.insert_conditioning(run_id, key_b, build_conditioning("m-b", 3, 4));
+        // Each conditioning payload is 4 * 77 u32 values.
+        assert_eq!(
+            store.payload_byte_size(),
+            2 * 4 * 77 * std::mem::size_of::<u32>()
+        );
+    }
+
+    #[test]
+    fn conditioning_metadata_test_only_captures_inputs() {
+        let metadata = BurnConditioningMetadata::test_only(
+            ModelId::new("sdxl-base"),
+            77,
+            "primary://p".to_owned(),
+            "secondary://s".to_owned(),
+        );
+        assert_eq!(metadata.model_id().as_str(), "sdxl-base");
+        assert_eq!(metadata.series(), "stable_diffusion");
+        assert_eq!(metadata.variant(), "sdxl");
+        assert_eq!(metadata.sequence_length(), 77);
+        assert!(metadata.pooled_embedding_available());
+        assert_eq!(metadata.primary_tokenizer_id(), "primary://p");
+        assert_eq!(metadata.secondary_tokenizer_id(), "secondary://s");
+        // The test-only signature is empty — verifying it via
+        // Debug output avoids leaking the private component
+        // signature type through a public accessor.
+        let debug = format!("{:?}", metadata.source_signature());
+        assert!(debug.contains("components"), "debug: {debug}");
     }
 }

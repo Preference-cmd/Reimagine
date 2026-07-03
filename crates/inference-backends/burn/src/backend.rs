@@ -14,7 +14,8 @@ use reimagine_inference::{
 use crate::config::BurnBackendConfig;
 use crate::error::BurnBackendError;
 use crate::operation::{
-    execute_latent_create_empty, execute_model_load_bundle, map_to_inference_error,
+    execute_latent_create_empty, execute_model_load_bundle, execute_text_encode_preflight,
+    map_to_inference_error,
 };
 use crate::profile::{BACKEND_LABEL, BurnProfileProvider};
 use crate::resource::BurnBackendInstanceRuntimeHooks;
@@ -124,9 +125,41 @@ impl InferenceBackend for BurnBackend {
 
     async fn text_encode(
         &self,
-        _request: TextEncodeRequest,
+        request: TextEncodeRequest,
     ) -> Result<TextEncodeResponse, InferenceError> {
-        self.not_implemented(InferenceCapability::TextEncode)
+        // burn/08a wires the preflight path: validate the request,
+        // resolve the bundle in the cross-run cache, tokenize the
+        // prompt with both primary and secondary tokenizers, and
+        // assemble the Burn-private conditioning payload shape.
+        // The preflight path is exercised end-to-end; the
+        // CLIP-L/CLIP-G forward pass lands in burn/08f. We
+        // distinguish the two failure modes at the inference
+        // layer so the router and downstream callers see the
+        // same `BackendNotImplemented` shape they see for every
+        // other unimplemented burn capability, while
+        // preflight/validation failures remain deterministic
+        // `BackendExecutionFailed` errors. The backend does not
+        // advertise `TextEncode` so the router should not
+        // reach this method in production; the
+        // `BackendNotImplemented` mapping is the defense-in-depth
+        // contract for tests and ad-hoc callers.
+        match execute_text_encode_preflight(self, request) {
+            Err(BurnBackendError::BackendNotImplemented(message)) => {
+                Err(InferenceError::BackendNotImplemented {
+                    capability: InferenceCapability::TextEncode,
+                    backend_kind: BACKEND_LABEL.to_owned(),
+                    message: Some(message),
+                })
+            }
+            Err(other) => Err(InferenceError::BackendExecutionFailed {
+                message: other.to_string(),
+            }),
+            // The preflight always errors today; the `Ok` arm is
+            // the future burn/08f seam — kept so the operation
+            // signature does not change when the forward pass
+            // lands.
+            Ok(response) => Ok(response),
+        }
     }
 
     async fn create_empty_latent(

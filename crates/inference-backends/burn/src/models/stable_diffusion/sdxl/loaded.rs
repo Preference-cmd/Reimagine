@@ -32,6 +32,14 @@ impl BurnSdxlSourceSignature {
         components.sort_by_key(|component| component.role.as_str());
         Self { components }
     }
+
+    /// Empty signature used by test-only metadata builders. Real
+    /// bundle signatures are always populated by the bundle loader.
+    pub fn empty() -> Self {
+        Self {
+            components: Vec::new(),
+        }
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -125,6 +133,30 @@ impl BurnLoadedSdxlBundle {
 
     pub fn source_signature(&self) -> &BurnSdxlSourceSignature {
         &self.source_signature
+    }
+
+    /// Borrow the model id this bundle was loaded for. Used by
+    /// the cross-run cache and by the text-encode preflight to
+    /// record the conditioning payload's provenance.
+    pub fn model_id(&self) -> &ModelId {
+        &self.model_id
+    }
+
+    /// Test-only constructor that builds a minimal bundle for
+    /// the cross-run cache without going through the file-system
+    /// resolver. Real production code must use
+    /// [`BurnLoadedSdxlBundle::from_resolved`].
+    #[cfg(test)]
+    pub(crate) fn for_test_only(model_id: ModelId, clip_payload_key: BackendPayloadKey) -> Self {
+        let key_prefix = format!("burn:model:{model_id}");
+        Self {
+            model_id,
+            source_signature: BurnSdxlSourceSignature::empty(),
+            diffusion_payload_key: BackendPayloadKey::new(format!("{key_prefix}:diffusion")),
+            clip_payload_key,
+            vae_payload_key: BackendPayloadKey::new(format!("{key_prefix}:vae")),
+            components: Vec::new(),
+        }
     }
 
     fn load_bundle_response(
