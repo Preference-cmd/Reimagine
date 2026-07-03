@@ -95,7 +95,7 @@ pub struct BurnSdxlComponentValidationReport {
 /// (static) spec used by the converter pipeline. Text encoder
 /// components only check the representative subset (token embedding
 /// + final layer norm) — the full executable spec set is checked
-/// by [`validate_component_inventory_full`].
+///   by [`validate_component_inventory_full`].
 pub fn validate_component_inventory(
     metadata: &BTreeMap<String, String>,
     inventory: &[BurnTensorInventoryEntry],
