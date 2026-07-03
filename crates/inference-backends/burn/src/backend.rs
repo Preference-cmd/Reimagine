@@ -15,7 +15,7 @@ use crate::config::BurnBackendConfig;
 use crate::error::BurnBackendError;
 use crate::operation::{
     execute_latent_create_empty, execute_model_load_bundle, execute_text_encode,
-    execute_text_encode_preflight, map_to_inference_error,
+    map_to_inference_error,
 };
 use crate::profile::{BACKEND_LABEL, BurnProfileProvider};
 use crate::resource::BurnBackendInstanceRuntimeHooks;

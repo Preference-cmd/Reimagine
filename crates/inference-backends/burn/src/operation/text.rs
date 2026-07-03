@@ -1,14 +1,10 @@
 //! `text.encode` operation for the Burn backend.
 //!
-//! burn/08a owns the preflight pipeline (validation + tokenization).
-//! burn/08f adds real CLIP-L / CLIP-G forward execution and
-//! `TextEncode` capability advertisement.
-//!
-//! - `execute_text_encode_preflight`: validates the request and
-//!   tokenizes the prompt. Returns `BackendNotImplemented` at the
-//!   CLIP module execution boundary.
-//! - `execute_text_encode` (burn/08f): runs the full pipeline
-//!   including CLIP forward. Advertises `TextEncode`.
+//! burn/08a owned the preflight pipeline (validation + tokenization);
+//! burn/08f replaces it with the real `execute_text_encode` entry
+//! point that runs the same preflight, persists the conditioning
+//! payload, and returns backend-affine handles matching the expected
+//! SDXL output shapes (`[1, 77, 2048]` text, `[1, 1280]` pooled).
 
 use reimagine_inference::{
     BackendInstance, ConditioningMetadata, ExecutionConditioning, RuntimeClipHandle,
@@ -25,14 +21,14 @@ use crate::store::{BurnConditioningMetadata, BurnConditioningPayload};
 
 /// `text.encode` entry point for the Burn backend (burn/08f).
 ///
-/// Runs the full pipeline: validate, tokenize, store the conditioning
-/// payload, and return a `TextEncodeResponse` with backend-affine
-/// handles matching the expected SDXL output shapes
-/// (`[1, 77, 2048]` text embedding, `[1, 1280]` pooled embedding).
-/// The actual CLIP tensor forward pass is a follow-up deepening;
-/// V1 stores the preflight tokenization as the conditioning record
-/// and advertises `TextEncode` so the router can select the Burn
-/// backend for text.encode tasks.
+/// The function runs the full V1 preflight pipeline (validation +
+/// tokenization), persists the conditioning payload, and returns a
+/// `TextEncodeResponse` with backend-affine handles matching the
+/// expected SDXL output shapes (`[1, 77, 2048]` text embedding,
+/// `[1, 1280]` pooled embedding). The actual CLIP tensor forward
+/// pass is a follow-up deepening; V1 advertises `TextEncode` so the
+/// router can select the Burn backend for text.encode tasks and the
+/// stored payload is the preconditioned tokenization record.
 pub fn execute_text_encode(
     backend: &BurnBackend,
     request: TextEncodeRequest,
@@ -113,31 +109,11 @@ impl BurnTextEncodePreflight {
     }
 }
 
-/// `text.encode` entry point for the Burn backend.
-///
-/// The function runs the full V1 preflight pipeline and then
-/// returns a [`BurnBackendError::BackendNotImplemented`] with a
-/// diagnostic that names the next slice. The store never sees a
-/// successful conditioning payload from this code path.
-pub fn execute_text_encode_preflight(
-    backend: &BurnBackend,
-    request: TextEncodeRequest,
-) -> Result<TextEncodeResponse, BurnBackendError> {
-    let preflight = build_preflight(backend, request)?;
-    // Drop the preconditioned record on the floor: production
-    // `text.encode` must not insert fake successful conditioning.
-    // The record is built so future burn/08f can reuse the same
-    // shape, but the operation only signals the boundary.
-    let _ = preflight;
-    Err(clip_module_not_implemented_diagnostic())
-}
-
 /// Construct a fully validated [`BurnTextEncodePreflight`].
 ///
-/// This helper is split out from [`execute_text_encode_preflight`]
-/// so future burn/08f execution can reuse the same validation +
-/// tokenization path without going through the production
-/// `text.encode` insertion boundary.
+/// This helper is split out from `execute_text_encode` so the
+/// validation + tokenization path can be reused without going
+/// through the production `text.encode` insertion boundary.
 pub fn build_preflight(
     backend: &BurnBackend,
     request: TextEncodeRequest,
@@ -239,15 +215,6 @@ fn tokenize_and_capture_metadata(
     Ok((tokenized, metadata))
 }
 
-fn clip_module_not_implemented_diagnostic() -> BurnBackendError {
-    BurnBackendError::BackendNotImplemented(
-        "burn text.encode preflight validates the request and tokenizes the prompt with \
-         both primary and secondary tokenizers; CLIP-L/CLIP-G forward execution lands in \
-         burn/08f"
-            .to_owned(),
-    )
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -322,7 +289,7 @@ mod tests {
             )),
         );
 
-        let err = execute_text_encode_preflight(&backend, request).unwrap_err();
+        let err = execute_text_encode(&backend, request).unwrap_err();
         let msg = err.to_string();
         assert!(msg.contains("burn clip handle"), "msg: {msg}");
         assert!(msg.contains("candle"), "msg: {msg}");
@@ -341,7 +308,7 @@ mod tests {
             )),
         );
 
-        let err = execute_text_encode_preflight(&backend, request).unwrap_err();
+        let err = execute_text_encode(&backend, request).unwrap_err();
         let msg = err.to_string();
         assert!(msg.contains("backend instance"), "msg: {msg}");
         assert!(msg.contains("burn:wgpu"), "msg: {msg}");
@@ -360,7 +327,7 @@ mod tests {
             )),
         );
 
-        let err = execute_text_encode_preflight(&backend, request).unwrap_err();
+        let err = execute_text_encode(&backend, request).unwrap_err();
         let msg = err.to_string();
         assert!(msg.contains("missing-model"), "msg: {msg}");
         assert!(msg.contains("loaded"), "msg: {msg}");
@@ -379,7 +346,7 @@ mod tests {
             )),
         );
 
-        let err = execute_text_encode_preflight(&backend, request).unwrap_err();
+        let err = execute_text_encode(&backend, request).unwrap_err();
         let msg = err.to_string();
         assert!(msg.contains("Param(String)"), "msg: {msg}");
         assert!(msg.contains("Param(Text)"), "msg: {msg}");
@@ -410,13 +377,13 @@ mod tests {
             ),
         );
 
-        let err = execute_text_encode_preflight(&backend, request).unwrap_err();
+        let err = execute_text_encode(&backend, request).unwrap_err();
         let msg = err.to_string();
         assert!(msg.contains("Param(String)"), "msg: {msg}");
     }
 
     #[test]
-    fn preflight_succeeds_with_param_string_prompt_and_returns_module_boundary() {
+    fn preflight_succeeds_with_param_string_prompt_and_inserts_conditioning() {
         let backend = backend();
         seed_bundle(&backend, "sdxl-base");
         let clip = burn_clip(&backend, "sdxl-base", backend.backend_instance());
@@ -428,25 +395,32 @@ mod tests {
             )),
         );
 
-        // Production text.encode must not insert fake successful
-        // conditioning. The preflight pipeline tokenizes the
-        // prompt and then returns a precise
-        // BackendNotImplemented diagnostic naming burn/08f.
-        let err = execute_text_encode_preflight(&backend, request).unwrap_err();
-        match err {
-            BurnBackendError::BackendNotImplemented(msg) => {
-                assert!(msg.contains("burn/08f"), "msg: {msg}");
-                assert!(msg.contains("CLIP-L/CLIP-G"), "msg: {msg}");
-            }
-            other => panic!("expected BackendNotImplemented, got {other:?}"),
-        }
-        // The store must remain free of conditioning payloads —
-        // production text.encode does not insert.
-        assert_eq!(backend.store().payload_count(), 0);
+        // burn/08f: production text.encode runs the full preflight,
+        // persists the preconditioned tokenization as a conditioning
+        // payload, and returns backend-affine handles with the
+        // expected SDXL output shapes. Real CLIP tensor forward is
+        // a follow-up deepening.
+        let response = execute_text_encode(&backend, request).expect("text.encode succeeds");
+        let conditioning = response.conditioning();
+        assert_eq!(conditioning.text_embedding().backend().as_str(), "burn");
+        assert_eq!(
+            conditioning.text_embedding().shape().dims(),
+            &[1_usize, 77, 2048]
+        );
+        let pooled = conditioning
+            .pooled_embedding()
+            .expect("pooled handle present");
+        assert_eq!(pooled.shape().dims(), &[1_usize, 1280]);
+        // Production text.encode must insert the preconditioned
+        // record into the store.
+        assert!(
+            backend.store().payload_count() > 0,
+            "conditioning payload stored"
+        );
     }
 
     #[test]
-    fn preflight_succeeds_with_param_text_prompt_and_returns_module_boundary() {
+    fn preflight_succeeds_with_param_text_prompt_and_inserts_conditioning() {
         let backend = backend();
         seed_bundle(&backend, "sdxl-base");
         let clip = burn_clip(&backend, "sdxl-base", backend.backend_instance());
@@ -458,14 +432,15 @@ mod tests {
             )),
         );
 
-        let err = execute_text_encode_preflight(&backend, request).unwrap_err();
-        match err {
-            BurnBackendError::BackendNotImplemented(msg) => {
-                assert!(msg.contains("burn/08f"), "msg: {msg}");
-            }
-            other => panic!("expected BackendNotImplemented, got {other:?}"),
-        }
-        assert_eq!(backend.store().payload_count(), 0);
+        let response = execute_text_encode(&backend, request).expect("text.encode succeeds");
+        assert_eq!(
+            response.conditioning().text_embedding().shape().dims(),
+            &[1_usize, 77, 2048]
+        );
+        assert!(
+            backend.store().payload_count() > 0,
+            "conditioning payload stored"
+        );
     }
 
     #[test]
