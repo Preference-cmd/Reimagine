@@ -27,13 +27,13 @@ use reimagine_core::model::{NodeId, RunId, TensorShape};
 use reimagine_inference::latent_space::validate_pixel_dimensions_against;
 use reimagine_inference::{
     BackendPayloadKey, BackendTensorHandle, CreateEmptyLatentRequest, CreateEmptyLatentResponse,
-    InferenceBackend, InferenceError, LatentContent, LatentSpaceError, LatentSpaceMetadata,
-    RuntimeLatent,
+    InferenceBackend, InferenceError, LatentContent, LatentDecodeRequest, LatentDecodeResponse,
+    LatentSpaceError, LatentSpaceMetadata, RuntimeImage, RuntimeLatent,
 };
 
 use crate::backend::BurnBackend;
 use crate::error::BurnBackendError;
-use crate::store::BurnLatentPayload;
+use crate::store::{BurnImagePayload, BurnLatentPayload};
 
 fn map_latent_space_error(label: &'static str, err: LatentSpaceError) -> BurnBackendError {
     BurnBackendError::InvalidRequest(format!("{label} {err}"))
@@ -90,7 +90,7 @@ fn allocate_zero_latent(backend: &BurnBackend, spec: &LatentAllocationSpec) -> B
             spec.latent_height as usize,
             spec.latent_width as usize,
         ],
-        backend.device(),
+        &backend.ndarray_device(),
     );
     BurnLatentPayload::new_ndarray(
         tensor,
@@ -193,6 +193,116 @@ pub fn map_to_inference_error(err: BurnBackendError) -> InferenceError {
     }
 }
 
+/// `latent.decode` entry point for the Burn backend.
+///
+/// V1 accepts real latent contents (`Sampled`, `EncodedImage`, `Imported`)
+/// and rejects `EmptyGeometry`. Runs Burn VAE decode and stores the
+/// resulting image payload in the shared BurnStore.
+pub fn execute_latent_decode(
+    backend: &BurnBackend,
+    request: LatentDecodeRequest,
+) -> Result<LatentDecodeResponse, BurnBackendError> {
+    let latent_handle = request.latent();
+
+    // Validate backend affinity
+    let handle_backend = latent_handle.payload().backend();
+    if handle_backend.as_str() != crate::profile::BACKEND_LABEL {
+        return Err(BurnBackendError::InvalidRequest(format!(
+            "latent.decode handle belongs to backend `{}`, expected `{}`",
+            handle_backend.as_str(),
+            crate::profile::BACKEND_LABEL
+        )));
+    }
+    if latent_handle.payload().backend_instance() != &backend.backend_instance() {
+        return Err(BurnBackendError::InvalidRequest(format!(
+            "latent.decode handle belongs to backend instance `{}`, expected `{}`",
+            latent_handle.payload().backend_instance(),
+            backend.backend_instance()
+        )));
+    }
+
+    // Reject EmptyGeometry
+    if latent_handle.content() == LatentContent::EmptyGeometry {
+        return Err(BurnBackendError::InvalidRequest(
+            "latent.decode cannot decode EmptyGeometry; use diffusion.sample first".to_owned(),
+        ));
+    }
+
+    // Validate latent space is SDXL base
+    if !latent_handle
+        .latent_space()
+        .is_compatible(&LatentSpaceMetadata::sdxl_base())
+    {
+        return Err(BurnBackendError::InvalidRequest(format!(
+            "latent.decode latent space `{}` is not compatible with SDXL base",
+            latent_handle.latent_space().id()
+        )));
+    }
+
+    // batch=1 only
+    if latent_handle.batch() != 1 {
+        return Err(BurnBackendError::InvalidRequest(format!(
+            "latent.decode V1 only supports batch=1, got {}",
+            latent_handle.batch()
+        )));
+    }
+
+    // Get latent payload from store
+    let latent_payload = backend
+        .store()
+        .get_latent(latent_handle.payload().payload_key())?;
+
+    // Run VAE decode
+    let vae = request.vae();
+    let bundle = backend
+        .model_cache()
+        .get_bundle(vae.model_id())
+        .ok_or_else(|| {
+            BurnBackendError::InvalidRequest(format!(
+                "latent.decode requires loaded bundle; call load_bundle first"
+            ))
+        })?;
+
+    let decoded = crate::models::stable_diffusion::sdxl::vae::decode_latent(
+        &bundle,
+        latent_payload,
+        backend,
+    )?;
+
+    // Store image payload
+    let dims: [usize; 4] = decoded.shape().dims();
+    let height = dims[2] as u32;
+    let width = dims[3] as u32;
+    let image_payload = BurnImagePayload::new(decoded, width, height, 1, "rgb");
+
+    let image_key = reimagine_inference::BackendPayloadKey::new(format!(
+        "image:{}:{}",
+        request.run_id().as_str(),
+        request.node_id().as_str()
+    ));
+    backend
+        .store()
+        .insert_image(request.run_id().clone(), image_key.clone(), image_payload);
+
+    // Build RuntimeImage response
+    let runtime_image = RuntimeImage::new(
+        BackendTensorHandle::with_instance(
+            backend.backend_kind().clone(),
+            backend.backend_instance(),
+            image_key,
+            reimagine_core::model::TensorDType::F32,
+            TensorShape::new(vec![1, 3, height as usize, width as usize]),
+            backend.device_label(),
+        ),
+        width,
+        height,
+        1,
+        "rgb",
+    );
+
+    Ok(LatentDecodeResponse::new(runtime_image))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -259,7 +369,18 @@ mod tests {
         let response = execute_latent_create_empty(&backend, build_request(1)).expect("create");
         let latent = response.into_latent();
         assert_eq!(latent.payload().backend().as_str(), "burn");
-        assert_eq!(latent.payload().backend_instance().as_str(), "burn:cpu");
+        // burn/13: under the `flex` feature the default backend
+        // instance is `burn:flex:cpu`; under wgpu (or neither)
+        // it's `burn:cpu`.
+        let expected_instance = if cfg!(all(not(feature = "wgpu"), feature = "flex")) {
+            "burn:flex:cpu"
+        } else {
+            "burn:cpu"
+        };
+        assert_eq!(
+            latent.payload().backend_instance().as_str(),
+            expected_instance
+        );
     }
 
     #[test]

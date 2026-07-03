@@ -26,6 +26,7 @@ mod loaded;
 // Offline conversion scaffolding is exercised by module tests and consumed by later Burn slices.
 #[allow(dead_code)]
 mod conversion;
+pub mod diffusion;
 mod metadata;
 #[allow(dead_code)]
 mod package;
@@ -36,6 +37,7 @@ mod source_mapping;
 mod text;
 pub mod text_conditioning;
 mod tokenizer;
+pub mod vae;
 mod validation;
 #[allow(dead_code)]
 mod writer;
