@@ -14,8 +14,8 @@ use reimagine_inference::{
 use crate::config::BurnBackendConfig;
 use crate::error::BurnBackendError;
 use crate::operation::{
-    execute_latent_create_empty, execute_model_load_bundle, execute_text_encode,
-    map_to_inference_error,
+    execute_diffusion_sample, execute_latent_create_empty, execute_latent_decode,
+    execute_model_load_bundle, execute_text_encode, map_to_inference_error,
 };
 use crate::profile::{BACKEND_LABEL, BurnProfileProvider};
 use crate::resource::BurnBackendInstanceRuntimeHooks;
@@ -117,6 +117,21 @@ impl InferenceBackend for BurnBackend {
             .with_support(InferenceCapabilitySupport::new(
                 InferenceCapability::TextEncode,
             ))
+            .with_support(InferenceCapabilitySupport::new(
+                InferenceCapability::DiffusionSample,
+            ))
+            .with_support(InferenceCapabilitySupport::new(
+                InferenceCapability::LatentDecode,
+            ))
+            .with_support(InferenceCapabilitySupport::new(
+                InferenceCapability::ImageImport,
+            ))
+            .with_support(InferenceCapabilitySupport::new(
+                InferenceCapability::ImageSave,
+            ))
+            .with_support(InferenceCapabilitySupport::new(
+                InferenceCapability::ImagePreview,
+            ))
     }
 
     async fn load_bundle(
@@ -149,16 +164,16 @@ impl InferenceBackend for BurnBackend {
 
     async fn diffusion_sample(
         &self,
-        _request: DiffusionSampleRequest,
+        request: DiffusionSampleRequest,
     ) -> Result<DiffusionSampleResponse, InferenceError> {
-        self.not_implemented(InferenceCapability::DiffusionSample)
+        map_err(execute_diffusion_sample(self, request))
     }
 
     async fn latent_decode(
         &self,
-        _request: LatentDecodeRequest,
+        request: LatentDecodeRequest,
     ) -> Result<LatentDecodeResponse, InferenceError> {
-        self.not_implemented(InferenceCapability::LatentDecode)
+        map_err(execute_latent_decode(self, request))
     }
 
     async fn latent_encode(

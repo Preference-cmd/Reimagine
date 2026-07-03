@@ -76,9 +76,10 @@ fn backend_kind_instance_and_capabilities_report_load_bundle_and_create_empty_la
     assert_eq!(backend.backend_kind().as_str(), "burn");
     assert_eq!(backend.backend_instance(), BackendInstance::new("burn:cpu"));
     assert_eq!(capabilities.backend_kind().as_str(), "burn");
-    // burn/05 advertised LoadBundle; burn/09 adds
-    // CreateEmptyLatent. burn/08f adds TextEncode.
-    assert_eq!(capabilities.capability_supports().len(), 3);
+    // burn/08b-d-f merged text.encode, burn/10 adds
+    // DiffusionSample, burn/11 adds LatentDecode,
+    // burn/12 adds ImageImport/ImageSave/ImagePreview.
+    assert_eq!(capabilities.capability_supports().len(), 8);
     assert!(capabilities.supports_capability(InferenceCapability::LoadBundle));
     assert!(capabilities.supports_capability(InferenceCapability::CreateEmptyLatent));
 }

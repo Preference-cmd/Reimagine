@@ -256,6 +256,69 @@ impl BurnConditioningPayload {
     }
 }
 
+/// Backend-owned image payload wrapper.
+///
+/// Holds a decoded VAE output tensor in NCHW float32 format with
+/// metadata about the image dimensions and color space.
+#[derive(Debug, Clone)]
+pub struct BurnImagePayload {
+    tensor: Tensor<NdArray, 4>,
+    width: u32,
+    height: u32,
+    batch: u32,
+    color_space: String,
+}
+
+impl BurnImagePayload {
+    pub fn new(
+        tensor: Tensor<NdArray, 4>,
+        width: u32,
+        height: u32,
+        batch: u32,
+        color_space: impl Into<String>,
+    ) -> Self {
+        Self {
+            tensor,
+            width,
+            height,
+            batch,
+            color_space: color_space.into(),
+        }
+    }
+
+    pub fn tensor(&self) -> &Tensor<NdArray, 4> {
+        &self.tensor
+    }
+
+    pub fn into_tensor(self) -> Tensor<NdArray, 4> {
+        self.tensor
+    }
+
+    pub fn dims(&self) -> [usize; 4] {
+        self.tensor.shape().dims()
+    }
+
+    pub fn width(&self) -> u32 {
+        self.width
+    }
+
+    pub fn height(&self) -> u32 {
+        self.height
+    }
+
+    pub fn batch(&self) -> u32 {
+        self.batch
+    }
+
+    pub fn color_space(&self) -> &str {
+        &self.color_space
+    }
+
+    pub fn byte_size(&self) -> usize {
+        self.tensor.shape().num_elements() * std::mem::size_of::<f32>()
+    }
+}
+
 /// Pull the model id out of an [`BurnLoadedModelBundle`] without
 /// re-exporting the inner SDXL enum variant outside the burn
 /// crate. Both currently supported variants are SDXL bundles, so
@@ -323,6 +386,7 @@ struct BurnStoreInner {
 enum BurnStorePayload {
     Latent(BurnLatentPayload),
     Conditioning(BurnConditioningPayload),
+    Image(BurnImagePayload),
 }
 
 impl BurnStorePayload {
@@ -330,6 +394,7 @@ impl BurnStorePayload {
         match self {
             Self::Latent(_) => "latent",
             Self::Conditioning(_) => "conditioning",
+            Self::Image(_) => "image",
         }
     }
 }
@@ -467,6 +532,58 @@ impl BurnStore {
         }
     }
 
+    /// Insert an image payload and pin it to the run.
+    pub fn insert_image(&self, run_id: RunId, key: BackendPayloadKey, payload: BurnImagePayload) {
+        let mut inner = self.inner.lock().expect("store poisoned");
+        inner
+            .payloads
+            .insert(key.clone(), BurnStorePayload::Image(payload));
+        inner.run_index.entry(run_id).or_default().push(key);
+    }
+
+    /// Borrow an image payload by key.
+    #[allow(unreachable_patterns)]
+    pub fn get_image(&self, key: &BackendPayloadKey) -> Result<BurnImagePayload, StoreError> {
+        let inner = self.inner.lock().expect("store poisoned");
+        let cloned = inner.payloads.get(key).cloned();
+        drop(inner);
+        match cloned {
+            Some(BurnStorePayload::Image(payload)) => Ok(payload),
+            Some(other) => Err(StoreError::WrongPayloadKind {
+                key: key.clone(),
+                expected: "image",
+                actual: other.kind(),
+            }),
+            None => Err(StoreError::PayloadNotFound {
+                key: key.clone(),
+                expected: "image",
+            }),
+        }
+    }
+
+    /// Take ownership of an image payload.
+    #[allow(unreachable_patterns)]
+    pub fn take_image(&self, key: &BackendPayloadKey) -> Result<BurnImagePayload, StoreError> {
+        let mut inner = self.inner.lock().expect("store poisoned");
+        match inner.payloads.remove(key) {
+            Some(BurnStorePayload::Image(payload)) => {
+                for keys in inner.run_index.values_mut() {
+                    keys.retain(|k| k != key);
+                }
+                Ok(payload)
+            }
+            Some(other) => Err(StoreError::WrongPayloadKind {
+                key: key.clone(),
+                expected: "image",
+                actual: other.kind(),
+            }),
+            None => Err(StoreError::PayloadNotFound {
+                key: key.clone(),
+                expected: "image",
+            }),
+        }
+    }
+
     /// Remove all payloads and run pins for the given run id.
     ///
     /// Returns the number of payloads evicted so the runtime hooks
@@ -531,6 +648,7 @@ impl BurnStore {
             .map(|payload| match payload {
                 BurnStorePayload::Latent(latent) => latent.byte_size(),
                 BurnStorePayload::Conditioning(conditioning) => conditioning.byte_size(),
+                BurnStorePayload::Image(image) => image.byte_size(),
             })
             .sum()
     }
