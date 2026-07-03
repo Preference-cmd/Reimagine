@@ -12,21 +12,54 @@ fn backend() -> BurnBackend {
     BurnBackend::new(BurnBackendConfig::new("/models", "/output")).expect("burn backend")
 }
 
+/// Expected short device label for the default
+/// `BurnBackendConfig::new(...)` configuration. burn/13 maps
+/// `"cpu"` differently depending on the active Cargo feature:
+///
+/// - Under `wgpu`: the legacy burn-ndarray CPU path. Label
+///   remains `"cpu"` so the axum-host router assertion on
+///   `burn:cpu` continues to hold.
+/// - Under `flex`: the burn-flex backend. Label is
+///   `"flex:cpu"`.
+/// - With neither: legacy burn-ndarray CPU path.
+fn expected_cpu_label() -> &'static str {
+    #[cfg(all(not(feature = "wgpu"), feature = "flex"))]
+    {
+        "flex:cpu"
+    }
+    #[cfg(not(all(not(feature = "wgpu"), feature = "flex")))]
+    {
+        "cpu"
+    }
+}
+
+/// Expected full backend instance label for the default CPU
+/// configuration under each feature.
+fn expected_cpu_instance() -> &'static str {
+    if cfg!(all(not(feature = "wgpu"), feature = "flex")) {
+        "burn:flex:cpu"
+    } else {
+        "burn:cpu"
+    }
+}
+
 #[test]
 fn config_defaults_to_cpu_device_and_stores_paths() {
     let config = BurnBackendConfig::new("/models", "/output");
 
     assert_eq!(config.models_dir(), &PathBuf::from("/models"));
     assert_eq!(config.output_dir(), &PathBuf::from("/output"));
-    assert_eq!(config.device().label(), "cpu");
-    assert_eq!(config.device_label(), "cpu");
+    assert_eq!(config.device().label(), expected_cpu_label());
+    assert_eq!(config.device_label(), expected_cpu_label());
 }
 
 #[test]
-fn device_builds_cpu_and_rejects_unknown_labels() {
-    assert!(BurnDevice::new("cpu").try_build_device().is_ok());
+fn device_resolves_feature_default_and_rejects_unknown_labels() {
+    let expected_label = expected_cpu_label();
+    let built = BurnDevice::try_build_device("cpu").expect("cpu resolves");
+    assert_eq!(built.label(), expected_label);
 
-    let err = BurnDevice::new("gpu").try_build_device().unwrap_err();
+    let err = BurnDevice::try_build_device("gpu").unwrap_err();
     assert!(err.to_string().contains("gpu"));
 }
 
@@ -55,7 +88,8 @@ async fn profile_reports_builtin_burn_cpu_with_load_bundle_capability() {
     assert_eq!(cpu.device.kind, DeviceKind::Cpu);
     // burn/05 advertised LoadBundle; burn/09 extends the CPU
     // instance profile with CreateEmptyLatent. burn/08f adds
-    // TextEncode.
+    // TextEncode. burn/13 keeps this stack on the legacy
+    // ndarray CPU instance for backward compatibility.
     assert_eq!(
         cpu.capabilities,
         vec![
@@ -74,7 +108,10 @@ fn backend_kind_instance_and_capabilities_report_load_bundle_and_create_empty_la
     let capabilities = backend.capabilities();
 
     assert_eq!(backend.backend_kind().as_str(), "burn");
-    assert_eq!(backend.backend_instance(), BackendInstance::new("burn:cpu"));
+    assert_eq!(
+        backend.backend_instance(),
+        BackendInstance::new(expected_cpu_instance())
+    );
     assert_eq!(capabilities.backend_kind().as_str(), "burn");
     // burn/08b-d-f merged text.encode, burn/10 adds
     // DiffusionSample, burn/11 adds LatentDecode,
@@ -111,7 +148,10 @@ async fn create_empty_latent_succeeds_with_burn_affine_handle() {
         .expect("burn/09 implements latent.create_empty");
     let latent = response.into_latent();
     assert_eq!(latent.payload().backend().as_str(), "burn");
-    assert_eq!(latent.payload().backend_instance().as_str(), "burn:cpu");
+    assert_eq!(
+        latent.payload().backend_instance().as_str(),
+        expected_cpu_instance()
+    );
     assert_eq!(
         latent.latent_space().id().as_str(),
         "stable_diffusion/sdxl/base"
@@ -130,12 +170,13 @@ async fn runtime_hooks_report_snapshot_identity_and_cache_counts() {
     let begin = hooks.begin_run(request.clone()).await.expect("begin");
     let cleanup = hooks.cleanup_run(request).await.expect("cleanup");
     let snapshot = hooks.snapshot().await;
+    let expected_instance = BackendInstance::new(expected_cpu_instance());
 
-    assert_eq!(begin.backend_instance, BackendInstance::new("burn:cpu"));
+    assert_eq!(begin.backend_instance, expected_instance);
     assert!(begin.diagnostics.is_empty());
-    assert_eq!(cleanup.backend_instance, BackendInstance::new("burn:cpu"));
+    assert_eq!(cleanup.backend_instance, expected_instance);
     assert!(cleanup.diagnostics.is_empty());
-    assert_eq!(snapshot.backend_instance, BackendInstance::new("burn:cpu"));
+    assert_eq!(snapshot.backend_instance, expected_instance);
     assert_eq!(snapshot.backend.as_str(), "burn");
     assert!(snapshot.plugin.is_none());
     assert!(snapshot.extension.is_none());

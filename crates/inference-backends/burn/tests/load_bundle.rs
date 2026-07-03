@@ -45,6 +45,30 @@ fn backend() -> BurnBackend {
     BurnBackend::new(BurnBackendConfig::new("/models", "/output")).expect("burn backend")
 }
 
+/// Default `burn:<label>` backend instance label expected for the
+/// test backend under the active feature. burn/13 maps the
+/// default `cpu` config to:
+///
+/// - `burn:cpu` under `wgpu` (or with neither feature) —
+///   legacy burn-ndarray path.
+/// - `burn:flex:cpu` under `flex`.
+fn expected_default_instance() -> &'static str {
+    if cfg!(all(not(feature = "wgpu"), feature = "flex")) {
+        "burn:flex:cpu"
+    } else {
+        "burn:cpu"
+    }
+}
+
+/// Default device short label (`"cpu"` or `"flex:cpu"`).
+fn expected_default_device_label() -> &'static str {
+    if cfg!(all(not(feature = "wgpu"), feature = "flex")) {
+        "flex:cpu"
+    } else {
+        "cpu"
+    }
+}
+
 fn tensor_view(shape: Vec<usize>) -> ZeroTensorView {
     let byte_len = shape.iter().product::<usize>() * Dtype::F32.bitsize() / 8;
     ZeroTensorView {
@@ -248,8 +272,14 @@ async fn load_bundle_accepts_converted_burn_native_sdxl_components() {
     assert!(capabilities.supports_capability(InferenceCapability::LoadBundle));
 
     assert_eq!(response.model().backend().as_str(), "burn");
-    assert_eq!(response.model().backend_instance().as_str(), "burn:cpu");
-    assert_eq!(response.model().device_label(), Some("cpu"));
+    assert_eq!(
+        response.model().backend_instance().as_str(),
+        expected_default_instance()
+    );
+    assert_eq!(
+        response.model().device_label(),
+        Some(expected_default_device_label())
+    );
     assert_eq!(response.model().model_id().as_str(), "sdxl-base-burn");
     assert_eq!(response.model().role(), ModelRole::CheckpointBundle);
     assert_eq!(
@@ -258,16 +288,28 @@ async fn load_bundle_accepts_converted_burn_native_sdxl_components() {
     );
 
     assert_eq!(response.clip().backend().as_str(), "burn");
-    assert_eq!(response.clip().backend_instance().as_str(), "burn:cpu");
-    assert_eq!(response.clip().device_label(), Some("cpu"));
+    assert_eq!(
+        response.clip().backend_instance().as_str(),
+        expected_default_instance()
+    );
+    assert_eq!(
+        response.clip().device_label(),
+        Some(expected_default_device_label())
+    );
     assert_eq!(
         response.clip().payload_key().as_str(),
         "burn:model:sdxl-base-burn:clip"
     );
 
     assert_eq!(response.vae().backend().as_str(), "burn");
-    assert_eq!(response.vae().backend_instance().as_str(), "burn:cpu");
-    assert_eq!(response.vae().device_label(), Some("cpu"));
+    assert_eq!(
+        response.vae().backend_instance().as_str(),
+        expected_default_instance()
+    );
+    assert_eq!(
+        response.vae().device_label(),
+        Some(expected_default_device_label())
+    );
     assert_eq!(
         response.vae().payload_key().as_str(),
         "burn:model:sdxl-base-burn:vae"
@@ -458,6 +500,9 @@ async fn downstream_capabilities_remain_not_implemented_except_create_empty_late
         "stable_diffusion/sdxl/base"
     );
     assert_eq!(latent.payload().backend().as_str(), "burn");
-    assert_eq!(latent.payload().backend_instance().as_str(), "burn:cpu");
+    assert_eq!(
+        latent.payload().backend_instance().as_str(),
+        expected_default_instance()
+    );
     assert_eq!(latent.payload().shape().dims(), &[1_usize, 4, 64, 64]);
 }

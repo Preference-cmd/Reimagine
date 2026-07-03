@@ -312,7 +312,15 @@ mod tests {
         let msg = err.to_string();
         assert!(msg.contains("backend instance"), "msg: {msg}");
         assert!(msg.contains("burn:wgpu"), "msg: {msg}");
-        assert!(msg.contains("burn:cpu"), "msg: {msg}");
+        // burn/13: the default instance label is `burn:cpu`
+        // under `wgpu` (or neither), or `burn:flex:cpu` under
+        // `flex`.
+        let expected_self = if cfg!(all(not(feature = "wgpu"), feature = "flex")) {
+            "burn:flex:cpu"
+        } else {
+            "burn:cpu"
+        };
+        assert!(msg.contains(expected_self), "msg: {msg}");
     }
 
     #[test]

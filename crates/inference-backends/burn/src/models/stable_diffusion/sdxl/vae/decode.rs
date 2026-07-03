@@ -36,7 +36,7 @@ pub fn vae_decode_placeholder(
 
     let tensor = Tensor::<NdArray, 4>::from_data(
         TensorData::new(data, [batch, 3, height, width]),
-        backend.device(),
+        backend.ndarray_device(),
     );
 
     Ok(tensor)

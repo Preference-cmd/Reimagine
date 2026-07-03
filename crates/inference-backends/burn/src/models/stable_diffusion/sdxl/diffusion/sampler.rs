@@ -22,13 +22,13 @@ pub fn euler_normal_sample(
     seed: u64,
     backend: &BurnBackend,
 ) -> Result<Tensor<NdArray, 4>, BurnBackendError> {
-    let device = backend.device();
+    let device = backend.ndarray_device();
     let shape = latent.shape().dims();
 
     // V1: apply seed-dependent noise and return a modified latent
     // The noise is deterministic from the seed so tests can verify
     // seed reproducibility.
-    let noise = seeded_noise(shape, seed, device);
+    let noise = seeded_noise(shape, seed, &device);
     let result = latent + noise;
 
     Ok(result)

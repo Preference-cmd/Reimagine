@@ -79,13 +79,13 @@ impl BurnLoadedModelBundle {
 
 #[derive(Debug)]
 pub struct BurnLoadedSdxlBundle {
-    model_id: ModelId,
-    source_signature: BurnSdxlSourceSignature,
-    diffusion_payload_key: BackendPayloadKey,
-    clip_payload_key: BackendPayloadKey,
-    vae_payload_key: BackendPayloadKey,
+    pub model_id: ModelId,
+    pub source_signature: BurnSdxlSourceSignature,
+    pub diffusion_payload_key: BackendPayloadKey,
+    pub clip_payload_key: BackendPayloadKey,
+    pub vae_payload_key: BackendPayloadKey,
     #[allow(dead_code)]
-    components: Vec<BurnLoadedSdxlComponent>,
+    pub components: Vec<BurnLoadedSdxlComponent>,
 }
 
 impl BurnLoadedSdxlBundle {
@@ -138,6 +138,10 @@ impl BurnLoadedSdxlBundle {
     /// Borrow the model id this bundle was loaded for. Used by
     /// the cross-run cache and by the text-encode preflight to
     /// record the conditioning payload's provenance.
+    pub fn components(&self) -> &[BurnLoadedSdxlComponent] {
+        &self.components
+    }
+
     pub fn model_id(&self) -> &ModelId {
         &self.model_id
     }
