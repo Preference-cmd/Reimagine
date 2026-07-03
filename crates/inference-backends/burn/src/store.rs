@@ -204,8 +204,8 @@ impl BurnConditioningMetadata {
 /// burn/08a, which only defines the shape.
 #[derive(Debug, Clone)]
 pub struct BurnConditioningPayload {
-    metadata: BurnConditioningMetadata,
-    tokenized_prompts: BurnSdxlTokenizedPromptPair,
+    pub(crate) metadata: BurnConditioningMetadata,
+    pub(crate) tokenized_prompts: BurnSdxlTokenizedPromptPair,
 }
 
 impl BurnConditioningPayload {

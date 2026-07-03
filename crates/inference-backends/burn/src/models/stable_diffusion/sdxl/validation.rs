@@ -1,8 +1,9 @@
 use std::collections::{BTreeMap, BTreeSet};
 
 use super::component::{BurnSdxlComponentRole, BurnTensorInventoryEntry};
-use super::contract::{BACKEND_NAME, CONTRACT_NAME, MODEL_SERIES, TENSOR_LAYOUT, VARIANT};
+use super::contract::{BACKEND_NAME, CONTRACT_NAME, MODEL_SERIES, TENSOR_LAYOUT, VARIANT, BurnSdxlComponentContract};
 use super::metadata::{BurnComponentMetadata, metadata_keys};
+use crate::text_encoder::specs::OwnedTensorSpec;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum BurnSdxlContractError {
@@ -88,9 +89,47 @@ pub struct BurnSdxlComponentValidationReport {
     pub warnings: Vec<BurnSdxlValidationWarning>,
 }
 
+/// Validate a component inventory against the representative
+/// (static) spec used by the converter pipeline. Text encoder
+/// components only check the representative subset (token embedding
+/// + final layer norm) — the full executable spec set is checked
+/// by [`validate_component_inventory_full`].
 pub fn validate_component_inventory(
     metadata: &BTreeMap<String, String>,
     inventory: &[BurnTensorInventoryEntry],
+) -> Result<BurnSdxlComponentValidationReport, BurnSdxlContractError> {
+    validate_against(metadata, inventory, |contract| {
+        contract
+            .expected_tensor_specs()
+            .iter()
+            .map(|s| OwnedTensorSpec {
+                key: s.key.to_owned(),
+                shape: s.shape,
+                required: s.required,
+                notes: s.notes.to_owned(),
+            })
+            .collect()
+    })
+}
+
+/// Validate a component inventory against the full executable spec
+/// set. For text-encoder components this covers every transformer
+/// block key; for diffusion/VAE it is identical to the
+/// representative check. Used by the runtime loading path
+/// (burn/05, burn/08d) that must reject incomplete components.
+pub fn validate_component_inventory_full(
+    metadata: &BTreeMap<String, String>,
+    inventory: &[BurnTensorInventoryEntry],
+) -> Result<BurnSdxlComponentValidationReport, BurnSdxlContractError> {
+    validate_against(metadata, inventory, |contract| {
+        contract.all_expected_tensor_specs()
+    })
+}
+
+fn validate_against(
+    metadata: &BTreeMap<String, String>,
+    inventory: &[BurnTensorInventoryEntry],
+    spec_fn: impl FnOnce(&BurnSdxlComponentContract) -> Vec<OwnedTensorSpec>,
 ) -> Result<BurnSdxlComponentValidationReport, BurnSdxlContractError> {
     let metadata = BurnComponentMetadata::parse(metadata)?;
     validate_metadata_values(&metadata)?;
@@ -100,19 +139,16 @@ pub fn validate_component_inventory(
         .iter()
         .map(|entry| (entry.key.as_str(), entry))
         .collect::<BTreeMap<_, _>>();
-    let expected_keys = contract
-        .expected_tensor_specs()
-        .iter()
-        .map(|spec| spec.key)
-        .collect::<BTreeSet<_>>();
+    let all_specs = spec_fn(&contract);
+    let expected_keys: BTreeSet<&str> = all_specs.iter().map(|spec| spec.key.as_str()).collect();
 
     let mut matched_required_tensors = Vec::new();
     let mut missing_required_tensors = Vec::new();
 
-    for spec in contract.expected_tensor_specs() {
-        let Some(entry) = inventory_by_key.get(spec.key) else {
+    for spec in &all_specs {
+        let Some(entry) = inventory_by_key.get(spec.key.as_str()) else {
             if spec.required {
-                missing_required_tensors.push(spec.key.to_owned());
+                missing_required_tensors.push(spec.key.clone());
             }
             continue;
         };
@@ -133,7 +169,7 @@ pub fn validate_component_inventory(
         }
 
         if spec.required {
-            matched_required_tensors.push(spec.key.to_owned());
+            matched_required_tensors.push(spec.key.clone());
         }
     }
 

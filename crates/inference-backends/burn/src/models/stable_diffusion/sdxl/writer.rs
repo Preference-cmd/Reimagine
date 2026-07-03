@@ -332,10 +332,38 @@ mod tests {
         }
     }
 
+    /// Build a synthetic text-encoder component with the full
+    /// executable spec set. This generates all transformer-block
+    /// tensors that the burn/08b contract requires.
+    fn full_text_encoder(role: BurnSdxlComponentRole) -> BurnSdxlSyntheticComponent {
+        let specs = role.contract().all_expected_tensor_specs();
+        let tensors = specs
+            .into_iter()
+            .filter(|spec| spec.required)
+            .map(|spec| {
+                BurnSyntheticTensor::zeros(
+                    &spec.key,
+                    vec![1; spec.shape.rank()],
+                    BurnTensorDType::F32,
+                )
+            })
+            .collect();
+
+        BurnSdxlSyntheticComponent {
+            role,
+            dtype_policy: BurnDTypePolicy::Fp32,
+            tensors,
+        }
+    }
+
     fn all_required_components() -> Vec<BurnSdxlSyntheticComponent> {
         BurnSdxlComponentRole::all()
             .into_iter()
-            .map(required_component)
+            .map(|role| match role {
+                BurnSdxlComponentRole::TextEncoder
+                | BurnSdxlComponentRole::TextEncoder2 => full_text_encoder(role),
+                _ => required_component(role),
+            })
             .collect()
     }
 
@@ -360,7 +388,7 @@ mod tests {
             BURN_SDXL_COMPONENT_CONTRACT_VERSION
         );
         assert_eq!(report.output_components.len(), 4);
-        assert_eq!(report.mapped_tensor_count, 8);
+        assert_eq!(report.mapped_tensor_count, plan.components.iter().map(|c| c.tensors.len()).sum::<usize>());
         assert!(report.ignored_tensor_families.is_empty());
         assert!(report.diagnostics.is_empty());
 
@@ -377,7 +405,13 @@ mod tests {
                 .iter()
                 .find(|component| component.role == role)
                 .expect("role output report");
-            assert_eq!(output.tensor_count, 2);
+            let expected_tensor_count: usize = match role {
+                BurnSdxlComponentRole::TextEncoder => 148,
+                BurnSdxlComponentRole::TextEncoder2 => 390,
+                _ => 2,
+            };
+            assert_eq!(output.tensor_count, expected_tensor_count,
+                "tensor count mismatch for role {role}");
             assert_eq!(output.path, expected_path);
             assert!(temp.path().join(&output.path).is_file());
 
@@ -388,7 +422,12 @@ mod tests {
                     .expect("read-back inventory validates");
 
             assert_eq!(validation.component_role, role);
-            assert_eq!(validation.matched_required_tensors.len(), 2);
+            // validate_component_inventory (the rep validator) checks
+            // 2 representative specs for each role including text
+            // encoders. The full spec check (all_expected_tensor_specs)
+            // belongs in the runtime loading path.
+            assert_eq!(validation.matched_required_tensors.len(), 2,
+                "matched tensor count mismatch for role {role}");
             assert_eq!(
                 inspected
                     .metadata

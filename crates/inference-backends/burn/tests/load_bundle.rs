@@ -99,15 +99,29 @@ fn write_component_with_metadata(
     metadata: HashMap<String, String>,
 ) {
     std::fs::create_dir_all(path.parent().expect("component parent")).expect("component dir");
-    let tensors = role
-        .contract()
-        .expected_tensor_specs()
-        .iter()
-        .filter(|spec| spec.required)
-        .map(|spec| {
-            let shape = vec![1; spec.shape.rank()];
-            (spec.key.to_owned(), tensor_view(shape))
-        })
+    // Use the full executable spec set for text-encoder components
+    // so the runtime validation (validate_component_inventory_full)
+    // passes with all transformer-block keys present.
+    let specs: Vec<(String, Vec<usize>)> = match role {
+        BurnSdxlComponentRole::TextEncoder | BurnSdxlComponentRole::TextEncoder2 => {
+            role.contract()
+                .all_expected_tensor_specs()
+                .into_iter()
+                .filter(|s| s.required)
+                .map(|s| (s.key, vec![1; s.shape.rank()]))
+                .collect()
+        }
+        _ => role
+            .contract()
+            .expected_tensor_specs()
+            .iter()
+            .filter(|spec| spec.required)
+            .map(|spec| (spec.key.to_owned(), vec![1; spec.shape.rank()]))
+            .collect(),
+    };
+    let tensors = specs
+        .into_iter()
+        .map(|(key, shape)| (key, tensor_view(shape)))
         .collect::<Vec<_>>();
 
     serialize_to_file(tensors, Some(metadata), path).expect("component file");

@@ -8,6 +8,7 @@ pub use contract::{
 pub use loaded::{BurnLoadedModelBundle, BurnLoadedSdxlBundle, BurnSdxlSourceSignature};
 pub use metadata::{BurnComponentMetadata, metadata_keys};
 pub use text::{BurnSdxlTextEncoderResources, load_sdxl_tokenizer};
+pub use text_conditioning::sdxl_text_encoder_spec_set;
 pub use tokenizer::{
     BurnSdxlTokenizedPrompt, BurnSdxlTokenizedPromptPair, BurnSdxlTokenizer,
     BurnSdxlTokenizerContext, BurnSdxlTokenizerResources, BurnTokenizerError, BurnTokenizerRole,
@@ -16,7 +17,7 @@ pub use tokenizer::{
 };
 pub use validation::{
     BurnSdxlComponentValidationReport, BurnSdxlContractError, BurnSdxlValidationWarning,
-    validate_component_inventory,
+    validate_component_inventory, validate_component_inventory_full,
 };
 
 mod component;
@@ -33,6 +34,7 @@ mod source_layout;
 #[allow(dead_code)]
 mod source_mapping;
 mod text;
+pub mod text_conditioning;
 mod tokenizer;
 mod validation;
 #[allow(dead_code)]
