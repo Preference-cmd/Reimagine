@@ -90,7 +90,7 @@ fn allocate_zero_latent(backend: &BurnBackend, spec: &LatentAllocationSpec) -> B
             spec.latent_height as usize,
             spec.latent_width as usize,
         ],
-        backend.device(),
+        &backend.ndarray_device(),
     );
     BurnLatentPayload::new_ndarray(
         tensor,
@@ -259,7 +259,18 @@ mod tests {
         let response = execute_latent_create_empty(&backend, build_request(1)).expect("create");
         let latent = response.into_latent();
         assert_eq!(latent.payload().backend().as_str(), "burn");
-        assert_eq!(latent.payload().backend_instance().as_str(), "burn:cpu");
+        // burn/13: under the `flex` feature the default backend
+        // instance is `burn:flex:cpu`; under wgpu (or neither)
+        // it's `burn:cpu`.
+        let expected_instance = if cfg!(all(not(feature = "wgpu"), feature = "flex")) {
+            "burn:flex:cpu"
+        } else {
+            "burn:cpu"
+        };
+        assert_eq!(
+            latent.payload().backend_instance().as_str(),
+            expected_instance
+        );
     }
 
     #[test]
