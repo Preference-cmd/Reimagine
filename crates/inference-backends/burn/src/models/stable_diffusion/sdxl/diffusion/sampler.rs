@@ -44,7 +44,7 @@ fn seeded_noise(shape: [usize; 4], seed: u64, device: &NdArrayDevice) -> Tensor<
     let mut state = seed.wrapping_add(1);
     for _ in 0..total {
         state = state.wrapping_mul(6364136223846793005).wrapping_add(1);
-        let val = (state >> 33) as f32 / u32::MAX as f32 * 2.0 - 1.0;
+        let val = (state >> 32) as f32 / u32::MAX as f32 * 2.0 - 1.0;
         data.push(val * 0.1); // scale noise to 0.1 magnitude
     }
     Tensor::from_data(TensorData::new(data, shape), device)

@@ -135,13 +135,15 @@ impl BurnLoadedSdxlBundle {
         &self.source_signature
     }
 
-    /// Borrow the model id this bundle was loaded for. Used by
-    /// the cross-run cache and by the text-encode preflight to
-    /// record the conditioning payload's provenance.
+    /// Return the loaded SDXL components (weight file sources and
+    /// metadata) in this bundle.
     pub fn components(&self) -> &[BurnLoadedSdxlComponent] {
         &self.components
     }
 
+    /// Borrow the model id this bundle was loaded for. Used by
+    /// the cross-run cache and by the text-encode preflight to
+    /// record the conditioning payload's provenance.
     pub fn model_id(&self) -> &ModelId {
         &self.model_id
     }
