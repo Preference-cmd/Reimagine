@@ -4,7 +4,7 @@
 //! output tensor in the correct shape. The real weight-driven VAE
 //! decode is a follow-up deepening.
 
-use burn_ndarray::NdArray;
+use burn_ndarray::{NdArray, NdArrayDevice};
 use burn_tensor::{Tensor, TensorData};
 
 use crate::backend::BurnBackend;
@@ -18,7 +18,7 @@ use crate::store::BurnLatentPayload;
 /// preview capabilities can verify the full pipeline works.
 pub fn vae_decode_placeholder(
     latent: BurnLatentPayload,
-    backend: &BurnBackend,
+    _backend: &BurnBackend,
 ) -> Result<Tensor<NdArray, 4>, BurnBackendError> {
     let dims = latent.dims();
     let batch = dims[0];
@@ -36,7 +36,7 @@ pub fn vae_decode_placeholder(
 
     let tensor = Tensor::<NdArray, 4>::from_data(
         TensorData::new(data, [batch, 3, height, width]),
-        backend.ndarray_device(),
+        &NdArrayDevice::Cpu,
     );
 
     Ok(tensor)

@@ -14,6 +14,7 @@ use super::module::{DiffusionBlockWeights, DiffusionUNetWeights, DiffusionWeight
 /// file. The bundle owns the resolved component path; this loader
 /// reads the safetensors file and projects the keys into the weight
 /// struct.
+#[allow(dead_code)]
 pub fn load_diffusion_weights(
     bundle: &BurnLoadedModelBundle,
 ) -> Result<DiffusionUNetWeights, BurnBackendError> {
@@ -88,6 +89,7 @@ pub fn load_diffusion_weights(
     })
 }
 
+#[allow(dead_code)]
 fn load_tensor(
     safetensors: &SafeTensors,
     key: &str,
@@ -111,6 +113,7 @@ fn load_tensor(
     })
 }
 
+#[allow(dead_code)]
 fn load_tensor_opt(
     safetensors: &SafeTensors,
     key: &str,

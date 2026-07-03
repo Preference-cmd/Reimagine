@@ -258,9 +258,9 @@ pub fn execute_latent_decode(
         .model_cache()
         .get_bundle(vae.model_id())
         .ok_or_else(|| {
-            BurnBackendError::InvalidRequest(format!(
-                "latent.decode requires loaded bundle; call load_bundle first"
-            ))
+            BurnBackendError::InvalidRequest(
+                "latent.decode requires loaded bundle; call load_bundle first".to_string(),
+            )
         })?;
 
     let decoded = crate::models::stable_diffusion::sdxl::vae::decode_latent(

@@ -5,6 +5,7 @@
 
 /// Weight data buffer.
 #[derive(Debug, Clone)]
+#[allow(dead_code)]
 pub struct VaeWeightData {
     pub data: Vec<f32>,
     pub shape: Vec<usize>,
@@ -12,6 +13,7 @@ pub struct VaeWeightData {
 
 /// VAE decoder weights loaded from the VAE component safetensors.
 #[derive(Debug, Clone)]
+#[allow(dead_code)]
 pub struct SdxlVaeDecoderWeights {
     pub conv_in_weight: VaeWeightData,
     pub conv_in_bias: VaeWeightData,
@@ -23,6 +25,7 @@ pub struct SdxlVaeDecoderWeights {
 
 /// Weights for one VAE decoder up-block.
 #[derive(Debug, Clone)]
+#[allow(dead_code)]
 pub struct VaeBlockWeights {
     pub conv_weight: VaeWeightData,
     pub conv_bias: VaeWeightData,

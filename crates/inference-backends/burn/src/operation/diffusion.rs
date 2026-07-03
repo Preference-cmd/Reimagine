@@ -184,7 +184,7 @@ pub fn execute_diffusion_sample(
         &positive_payload,
         &negative_payload,
         steps,
-        cfg as f32,
+        cfg,
         seed,
         backend,
     )?;
@@ -286,7 +286,6 @@ mod tests {
     use super::*;
     use crate::config::BurnBackendConfig;
     use crate::models::stable_diffusion::sdxl::{BurnLoadedModelBundle, BurnLoadedSdxlBundle};
-    use crate::operation::text::build_preflight;
     use crate::profile::BACKEND_LABEL;
     use reimagine_core::model::{ModelId, NodeId, RunId, WorkflowId, WorkflowVersion};
     use reimagine_inference::{

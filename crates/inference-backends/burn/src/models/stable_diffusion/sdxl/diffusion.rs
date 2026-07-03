@@ -17,6 +17,7 @@ use crate::store::BurnConditioningPayload;
 ///
 /// Accepts a zero latent (EmptyGeometry), positive and negative
 /// conditioning payloads, and returns a sampled latent tensor.
+#[allow(clippy::too_many_arguments)]
 pub fn sample_sdxl(
     _bundle: &BurnLoadedModelBundle,
     latent: Tensor<NdArray, 4>,
