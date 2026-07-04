@@ -2,6 +2,8 @@ use reimagine_config::ConfigError;
 use reimagine_core::model::{RunId, WorkflowId, WorkflowVersion};
 use reimagine_runtime::RuntimeServiceError;
 
+use crate::artifact_access::ArtifactAccessError;
+
 pub type AppHostResult<T> = Result<T, AppHostError>;
 
 #[derive(Debug)]
@@ -41,6 +43,7 @@ pub enum AppHostError {
     Runtime(RuntimeServiceError),
     ModelManager(reimagine_model_manager::ModelManagerError),
     CandleCheckpointImport(reimagine_inference_candle::SdxlCheckpointImportError),
+    ArtifactAccess(ArtifactAccessError),
 }
 
 impl std::fmt::Display for AppHostError {
@@ -82,6 +85,7 @@ impl std::fmt::Display for AppHostError {
             Self::Runtime(error) => write!(f, "{error}"),
             Self::ModelManager(error) => write!(f, "{error}"),
             Self::CandleCheckpointImport(error) => write!(f, "{error}"),
+            Self::ArtifactAccess(error) => write!(f, "artifact access error: {error}"),
         }
     }
 }
@@ -109,5 +113,11 @@ impl From<RuntimeServiceError> for AppHostError {
 impl From<reimagine_inference_candle::SdxlCheckpointImportError> for AppHostError {
     fn from(value: reimagine_inference_candle::SdxlCheckpointImportError) -> Self {
         Self::CandleCheckpointImport(value)
+    }
+}
+
+impl From<ArtifactAccessError> for AppHostError {
+    fn from(error: ArtifactAccessError) -> Self {
+        Self::ArtifactAccess(error)
     }
 }

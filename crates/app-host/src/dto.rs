@@ -25,7 +25,7 @@ mod nodes;
 mod runs;
 mod workflows;
 
-pub use artifacts::ArtifactDto;
+pub use artifacts::{ArtifactDto, ArtifactMetadataDto};
 pub use compute_profile::{
     BackendInstanceProfileDto, BackendProfileDto, ComputeProfileDto, DTypeProfileDto,
     DeviceProfileDto, MemoryProfileDto,

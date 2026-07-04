@@ -4,7 +4,8 @@ mod event_hub;
 use desktop_host::{default_workspace_path, DesktopHostState};
 use event_hub::RunEventPayload;
 use reimagine_app_host::dto::{
-    ComputeProfileDto, HealthResponse, ModelInfoDto, NodeDefDto, RunWorkflowResponse,
+    ArtifactMetadataDto, ComputeProfileDto, HealthResponse, ModelInfoDto, NodeDefDto,
+    RunWorkflowResponse,
 };
 use serde::Serialize;
 use tauri::{ipc::Channel, Manager};
@@ -91,6 +92,26 @@ async fn cancel_run(
         .map_err(|e| TauriCommandError::command(e.to_string()))
 }
 
+#[tauri::command]
+async fn resolve_artifact(
+    state: tauri::State<'_, DesktopHostState>,
+    artifact_id: String,
+) -> Result<ArtifactMetadataDto, TauriCommandError> {
+    state
+        .resolve_artifact(&artifact_id)
+        .map_err(|e| TauriCommandError::command(e.to_string()))
+}
+
+#[tauri::command]
+async fn open_artifact(
+    state: tauri::State<'_, DesktopHostState>,
+    artifact_id: String,
+) -> Result<(), TauriCommandError> {
+    state
+        .open_artifact(&artifact_id)
+        .map_err(|e| TauriCommandError::command(e.to_string()))
+}
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     tauri::Builder::default()
@@ -114,6 +135,8 @@ pub fn run() {
             list_models,
             run_workflow,
             cancel_run,
+            resolve_artifact,
+            open_artifact,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

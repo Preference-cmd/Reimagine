@@ -1,4 +1,5 @@
 import {
+  type ArtifactMetadata,
   type ModelInfo,
   type NodeDef,
   type RunEventPayload,
@@ -9,6 +10,8 @@ import {
   mockCancelRun,
   mockGetNodeDefs,
   mockListModels,
+  mockOpenArtifact,
+  mockResolveArtifact,
   mockRunWorkflow,
 } from "./mock";
 
@@ -56,4 +59,22 @@ export function listModels(): Promise<ModelInfo[]> {
 
 export function getNodeDefs(): Promise<NodeDef[]> {
   return dispatch("get_node_defs", null, undefined, mockGetNodeDefs);
+}
+
+export async function resolveArtifact(
+  artifactId: string,
+): Promise<ArtifactMetadata> {
+  if (USE_MOCK) {
+    return mockResolveArtifact(artifactId);
+  }
+  const { invoke } = await import("@tauri-apps/api/core");
+  return invoke<ArtifactMetadata>("resolve_artifact", { artifactId });
+}
+
+export async function openArtifact(artifactId: string): Promise<void> {
+  if (USE_MOCK) {
+    return mockOpenArtifact(artifactId);
+  }
+  const { invoke } = await import("@tauri-apps/api/core");
+  return invoke<void>("open_artifact", { artifactId });
 }

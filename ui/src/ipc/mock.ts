@@ -1,4 +1,5 @@
 import {
+  type ArtifactMetadata,
   type ModelInfo,
   type NodeDef,
   type RunWorkflowResponse,
@@ -72,4 +73,21 @@ export async function mockGetNodeDefs(): Promise<NodeDef[]> {
   const payload = await response.json();
   const nodes: unknown[] = Array.isArray(payload?.nodes) ? payload.nodes : [];
   return nodes.map((node) => NodeDefSchema.parse(node));
+}
+
+export async function mockResolveArtifact(
+  artifactId: string,
+): Promise<ArtifactMetadata> {
+  await delay(100);
+  return {
+    id: artifactId,
+    nodeId: "node-save-image",
+    mediaType: "image/png",
+    filename: `${artifactId}.png`,
+    path: `/workspace/output/${artifactId}.png`,
+  };
+}
+
+export async function mockOpenArtifact(_artifactId: string): Promise<void> {
+  await delay(100);
 }

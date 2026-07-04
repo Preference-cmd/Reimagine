@@ -168,3 +168,14 @@ export const RunWorkflowResponseSchema = z.discriminatedUnion("outcome", [
   }),
 ]);
 export type RunWorkflowResponse = z.infer<typeof RunWorkflowResponseSchema>;
+
+/* ───── Artifact metadata from Rust IPC ───── */
+
+export const ArtifactMetadataSchema = z.object({
+  id: z.string(),
+  nodeId: z.string(),
+  mediaType: z.string(),
+  filename: z.string(),
+  path: z.string(),
+});
+export type ArtifactMetadata = z.infer<typeof ArtifactMetadataSchema>;

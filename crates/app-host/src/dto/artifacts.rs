@@ -20,3 +20,36 @@ impl From<RunArtifactRef> for ArtifactDto {
         }
     }
 }
+
+/// Host‑neutral projection of resolved artifact access information.
+///
+/// Strips raw paths from the serialised form — the `path` field is included
+/// so the UI can hand it back to Tauri for desktop open/reveal affordances,
+/// but callers should treat it as an opaque string.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ArtifactMetadataDto {
+    pub id: String,
+    pub node_id: String,
+    pub media_type: String,
+    pub filename: String,
+    pub path: String,
+}
+
+impl From<crate::artifact_access::ArtifactAccess> for ArtifactMetadataDto {
+    fn from(value: crate::artifact_access::ArtifactAccess) -> Self {
+        let filename = value
+            .path
+            .file_name()
+            .and_then(|n| n.to_str())
+            .unwrap_or("unknown")
+            .to_owned();
+        Self {
+            id: value.artifact_id.to_string(),
+            node_id: value.node_id.to_string(),
+            media_type: value.media_type,
+            filename,
+            path: value.path.to_string_lossy().into_owned(),
+        }
+    }
+}

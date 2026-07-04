@@ -3,7 +3,8 @@ use std::sync::Arc;
 
 use reimagine_agent::WorkspaceScope;
 use reimagine_app_host::dto::{
-    ComputeProfileDto, HealthResponse, ModelInfoDto, NodeCatalogResponse, RunWorkflowResponse,
+    ArtifactMetadataDto, ComputeProfileDto, HealthResponse, ModelInfoDto, NodeCatalogResponse,
+    RunWorkflowResponse,
 };
 use reimagine_app_host::{AppHost, AppHostError, WorkspaceHost};
 use reimagine_config::AppPaths;
@@ -151,6 +152,25 @@ impl DesktopHostState {
             .map_err(|_e| AppHostError::UnknownRun {
                 run_id: run_id.clone(),
             })
+    }
+
+    /// Resolve an artifact id to metadata (path-safe, validated).
+    pub fn resolve_artifact(&self, artifact_id: &str) -> Result<ArtifactMetadataDto, AppHostError> {
+        use reimagine_core::model::ArtifactId;
+        let id = ArtifactId::new(artifact_id);
+        let access = self.app_host.workspace().resolve_artifact(&id)?;
+        Ok(ArtifactMetadataDto::from(access))
+    }
+
+    /// Open an artifact file with the desktop system handler.
+    pub fn open_artifact(&self, artifact_id: &str) -> Result<(), AppHostError> {
+        use reimagine_core::model::ArtifactId;
+        let id = ArtifactId::new(artifact_id);
+        let access = self.app_host.workspace().resolve_artifact(&id)?;
+        opener::open(access.path.as_path()).map_err(|e| AppHostError::Io {
+            path: access.path,
+            message: format!("failed to open artifact: {e}"),
+        })
     }
 }
 
