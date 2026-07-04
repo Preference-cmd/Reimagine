@@ -14,9 +14,9 @@ use crate::config::BurnBackendConfig;
 use crate::device::BurnDevice;
 use crate::error::BurnBackendError;
 use crate::operation::{
-    execute_diffusion_sample, execute_image_preview, execute_image_save, execute_latent_create_empty,
-    execute_latent_decode, execute_model_load_bundle, execute_text_encode,
-    map_to_inference_error,
+    execute_diffusion_sample, execute_image_preview, execute_image_save,
+    execute_latent_create_empty, execute_latent_decode, execute_model_load_bundle,
+    execute_text_encode, map_to_inference_error,
 };
 use crate::profile::{BACKEND_LABEL, BurnProfileProvider};
 use crate::resource::BurnBackendInstanceRuntimeHooks;

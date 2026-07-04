@@ -132,7 +132,19 @@ fn write_component_with_metadata(
             .all_expected_tensor_specs()
             .into_iter()
             .filter(|s| s.required)
-            .map(|s| (s.key, vec![1; s.shape.rank()]))
+            .map(|s| {
+                // The test fixture writes a single-element zero
+                // buffer for each text-encoder tensor. Real CLIP
+                // forward (burn/14c) treats zero-data weights as a
+                // no-op so the surrounding plumbing can be exercised
+                // without materializing the full vocab × width
+                // embedding tensors. The validator checks tensor
+                // rank (not specific dim values), so use
+                // `vec![1; rank]` as the shape and a 1-element
+                // zero buffer.
+                let rank = s.shape.rank();
+                (s.key.clone(), vec![1usize; rank.max(1)])
+            })
             .collect(),
         _ => role
             .contract()
