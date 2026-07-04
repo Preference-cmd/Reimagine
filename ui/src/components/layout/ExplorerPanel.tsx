@@ -23,7 +23,8 @@ import type { ModelInfo } from "@/ipc";
 import { useRuntimeStore } from "@/store/runtime";
 import { useWorkflowStore } from "@/store/workflow";
 
-function formatBytes(bytes: number): string {
+function formatBytes(bytes: number | null): string {
+  if (bytes == null || bytes <= 0) return "0 B";
   const units = ["B", "KB", "MB", "GB", "TB"];
   let value = bytes;
   let unitIndex = 0;

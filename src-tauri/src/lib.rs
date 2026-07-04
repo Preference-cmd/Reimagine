@@ -1,9 +1,11 @@
 mod desktop_host;
 mod event_hub;
 
-use desktop_host::{DesktopHostState, default_workspace_path};
+use desktop_host::{default_workspace_path, DesktopHostState};
 use event_hub::RunEventPayload;
-use reimagine_app_host::dto::{ComputeProfileDto, HealthResponse, RunWorkflowResponse};
+use reimagine_app_host::dto::{
+    ComputeProfileDto, HealthResponse, ModelInfoDto, NodeDefDto, RunWorkflowResponse,
+};
 use serde::Serialize;
 use tauri::{ipc::Channel, Manager};
 
@@ -50,6 +52,24 @@ fn get_compute_profile(
 }
 
 #[tauri::command]
+fn get_node_defs(
+    state: tauri::State<'_, DesktopHostState>,
+) -> Result<Vec<NodeDefDto>, TauriCommandError> {
+    let response = state.list_node_defs();
+    Ok(response.nodes)
+}
+
+#[tauri::command]
+async fn list_models(
+    state: tauri::State<'_, DesktopHostState>,
+) -> Result<Vec<ModelInfoDto>, TauriCommandError> {
+    state
+        .list_models()
+        .await
+        .map_err(|e| TauriCommandError::command(e.to_string()))
+}
+
+#[tauri::command]
 async fn run_workflow(
     state: tauri::State<'_, DesktopHostState>,
     workflow: serde_json::Value,
@@ -90,6 +110,8 @@ pub fn run() {
         .invoke_handler(tauri::generate_handler![
             health,
             get_compute_profile,
+            get_node_defs,
+            list_models,
             run_workflow,
             cancel_run,
         ])

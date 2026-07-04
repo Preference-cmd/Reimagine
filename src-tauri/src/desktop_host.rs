@@ -2,7 +2,9 @@ use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
 use reimagine_agent::WorkspaceScope;
-use reimagine_app_host::dto::{ComputeProfileDto, HealthResponse, RunWorkflowResponse};
+use reimagine_app_host::dto::{
+    ComputeProfileDto, HealthResponse, ModelInfoDto, NodeCatalogResponse, RunWorkflowResponse,
+};
 use reimagine_app_host::{AppHost, AppHostError, WorkspaceHost};
 use reimagine_config::AppPaths;
 use reimagine_core::workflow::Workflow;
@@ -51,6 +53,27 @@ impl DesktopHostState {
         self.app_host.workspace().compute_profile_dto()
     }
 
+    /// Returns the workspace node catalog as a host‑neutral DTO.
+    pub fn list_node_defs(&self) -> NodeCatalogResponse {
+        use reimagine_app_host::dto::NodeDefDto;
+        let defs = self.app_host.workspace().list_node_defs();
+        NodeCatalogResponse {
+            nodes: defs.into_iter().map(NodeDefDto::from).collect(),
+        }
+    }
+
+    /// Returns the model list as a host‑neutral DTO.
+    pub async fn list_models(&self) -> Result<Vec<ModelInfoDto>, AppHostError> {
+        use reimagine_app_host::dto::ModelInfoDto;
+        let descriptors = self
+            .app_host
+            .workspace()
+            .model_service()
+            .list_models()
+            .await?;
+        Ok(descriptors.into_iter().map(ModelInfoDto::from).collect())
+    }
+
     pub async fn run_workflow(
         &self,
         workflow_value: serde_json::Value,
@@ -64,7 +87,9 @@ impl DesktopHostState {
                 path: std::path::PathBuf::new(),
                 message: e.to_string(),
             })?;
-        let workflow_id = self.app_host.workspace()
+        let workflow_id = self
+            .app_host
+            .workspace()
             .workflow_service()
             .register_workflow(workflow);
 
@@ -89,8 +114,6 @@ impl DesktopHostState {
                 self.event_hub.subscribe(&run_id, channel);
 
                 // 5. Replay any events already emitted before we subscribed.
-                //    This uses `replay()` rather than re‑emitting to avoid
-                //    duplicating events in the recorded store.
                 self.event_hub.replay(&run_id);
 
                 Ok(RunWorkflowResponse::Started {

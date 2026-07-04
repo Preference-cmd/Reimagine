@@ -103,7 +103,7 @@ export const ModelInfoSchema = z.object({
   roles: z.array(z.string()),
   format: z.string(),
   sourceStatus: z.string(),
-  sizeBytes: z.number(),
+  sizeBytes: z.number().nullable(),
 });
 export type ModelInfo = z.infer<typeof ModelInfoSchema>;
 
