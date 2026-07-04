@@ -9,6 +9,7 @@
 use std::borrow::Cow;
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
+use std::sync::Mutex;
 
 use reimagine_core::model::{
     ModelId, ModelRole, NodeId, ParamValue, RunId, TensorDType, TensorShape, WorkflowId,
@@ -25,6 +26,12 @@ use reimagine_inference_burn::models::stable_diffusion::sdxl::{
 };
 use reimagine_inference_burn::{BurnBackend, BurnBackendConfig};
 use safetensors::tensor::{Dtype, View, serialize_to_file};
+
+/// Held tempdirs keep the bundle's safetensors component files alive
+/// for the duration of the test. Dropping the tempdir while a bundle
+/// still references its component paths produces missing-file errors
+/// when text.encode tries to load CLIP weights.
+static LIVE_TEMPDIRS: Mutex<Vec<tempfile::TempDir>> = Mutex::new(Vec::new());
 
 const BACKEND_LABEL: &str = "burn";
 
@@ -192,6 +199,13 @@ async fn seed_bundle_via_load(backend: &BurnBackend) {
         .load_bundle(load_request(temp.path()))
         .await
         .expect("load bundle");
+    // Keep the tempdir alive for the duration of the test process so
+    // the bundle's component paths remain valid when text.encode
+    // (which now actually loads CLIP weights) runs after this helper.
+    LIVE_TEMPDIRS
+        .lock()
+        .expect("tempdir registry poisoned")
+        .push(temp);
 }
 
 // ---------------------------------------------------------------------------

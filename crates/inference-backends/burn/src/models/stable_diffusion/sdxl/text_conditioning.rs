@@ -10,6 +10,7 @@
 //! into the [`BurnSdxlComponentContract`] surface so the existing
 //! validation and writer infrastructure stays compatible.
 
+pub mod forward;
 pub mod loading;
 pub mod module;
 

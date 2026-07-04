@@ -190,6 +190,15 @@ impl BurnConditioningMetadata {
     }
 }
 
+/// Output from a CLIP text encoder forward pass.
+#[derive(Debug, Clone)]
+pub struct ClipOutputs {
+    /// Text embeddings tensor of shape [1, sequence_length, width].
+    pub text_embeddings: BurnTensor<3>,
+    /// Pooled embedding for CLIP-G: [1, 1280]; absent for CLIP-L.
+    pub pooled_embeddings: Option<BurnTensor<2>>,
+}
+
 /// Backend-owned conditioning payload wrapper.
 ///
 /// V1 carries only the deterministic tokenization output. The
@@ -202,6 +211,7 @@ impl BurnConditioningMetadata {
 pub struct BurnConditioningPayload {
     pub(crate) metadata: BurnConditioningMetadata,
     pub(crate) tokenized_prompts: BurnSdxlTokenizedPromptPair,
+    pub(crate) embeddings: Option<ClipOutputs>,
 }
 
 impl BurnConditioningPayload {
@@ -217,7 +227,14 @@ impl BurnConditioningPayload {
         Self {
             metadata,
             tokenized_prompts,
+            embeddings: None,
         }
+    }
+
+    /// Attach real CLIP forward outputs to the payload.
+    pub(crate) fn with_embeddings(mut self, embeddings: ClipOutputs) -> Self {
+        self.embeddings = Some(embeddings);
+        self
     }
 
     /// Test-only constructor. Production code paths must not build
@@ -240,15 +257,19 @@ impl BurnConditioningPayload {
         &self.tokenized_prompts
     }
 
-    /// Approximate byte size of the V1 payload: two tokenized
-    /// prompts, each carrying `MAX_SEQUENCE_LENGTH` `u32` token ids
-    /// and `u32` attention masks.
+    /// Approximate byte size of the payload: tokenized prompts plus
+    /// any stored embedding tensors.
     pub fn byte_size(&self) -> usize {
         let tokens = self.tokenized_prompts.clip_l.token_ids.len()
             + self.tokenized_prompts.clip_g.token_ids.len();
         let masks = self.tokenized_prompts.clip_l.attention_mask.len()
             + self.tokenized_prompts.clip_g.attention_mask.len();
-        (tokens + masks) * std::mem::size_of::<u32>()
+        let token_size = (tokens + masks) * std::mem::size_of::<u32>();
+        let embed_size = self.embeddings.as_ref().map_or(0, |emb| {
+            emb.text_embeddings.byte_size()
+                + emb.pooled_embeddings.as_ref().map_or(0, |p| p.byte_size())
+        });
+        token_size + embed_size
     }
 }
 
@@ -379,6 +400,7 @@ struct BurnStoreInner {
 }
 
 #[derive(Debug, Clone)]
+#[allow(clippy::large_enum_variant)]
 enum BurnStorePayload {
     Latent(BurnLatentPayload),
     Conditioning(BurnConditioningPayload),

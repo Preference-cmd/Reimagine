@@ -7,8 +7,8 @@
 
 use reimagine_core::model::{ArtifactRef, RunId};
 use reimagine_inference::{
-    FilenamePrefix, ImagePreviewRequest, ImagePreviewResponse, ImageSaveRequest,
-    ImageSaveResponse, InferenceBackend,
+    FilenamePrefix, ImagePreviewRequest, ImagePreviewResponse, ImageSaveRequest, ImageSaveResponse,
+    InferenceBackend,
 };
 
 use crate::backend::BurnBackend;
@@ -38,8 +38,7 @@ pub fn execute_image_preview(
 ) -> Result<ImagePreviewResponse, BurnBackendError> {
     let run_id = request.run_id().clone();
     let node_id = request.node_id().clone();
-    let artifact =
-        persist_image(request.into_image(), "preview", &run_id, &node_id, backend)?;
+    let artifact = persist_image(request.into_image(), "preview", &run_id, &node_id, backend)?;
     Ok(ImagePreviewResponse::new(artifact))
 }
 
@@ -90,7 +89,10 @@ fn persist_image(
         BurnBackendError::InvalidRequest(format!("image.save failed to write PNG file: {e}"))
     })?;
 
-    Ok(artifact_ref_for_output_path(&output_path, backend.config().output_dir()))
+    Ok(artifact_ref_for_output_path(
+        &output_path,
+        backend.config().output_dir(),
+    ))
 }
 
 fn artifact_ref_for_output_path(
@@ -109,7 +111,13 @@ fn build_safe_filename(prefix: &str, run_id: &str, node_id: &str) -> String {
     let safe_prefix = sanitize_component(prefix, 64);
     let safe_run_id = sanitize_component(run_id, 128);
     let safe_node_id = sanitize_component(node_id, 128);
-    format!("{}_{}_{}_{}.png", safe_prefix, safe_run_id, safe_node_id, next_seq())
+    format!(
+        "{}_{}_{}_{}.png",
+        safe_prefix,
+        safe_run_id,
+        safe_node_id,
+        next_seq()
+    )
 }
 
 fn next_seq() -> u64 {
@@ -174,7 +182,9 @@ fn validate_path_inside_output_dir(
 // Tensor → PNG encoding
 // ---------------------------------------------------------------------------
 
-fn encode_image_to_png(image: &crate::store::BurnImagePayload) -> Result<Vec<u8>, BurnBackendError> {
+fn encode_image_to_png(
+    image: &crate::store::BurnImagePayload,
+) -> Result<Vec<u8>, BurnBackendError> {
     let dims = image.dims();
     let batch = dims[0];
     let channels = dims[1];
@@ -234,14 +244,16 @@ fn nchw_f32_to_interleaved_rgb8(
     Ok(rgb)
 }
 
-fn encode_rgb8_to_png(rgb: &[u8], width: usize, height: usize) -> Result<Vec<u8>, BurnBackendError> {
+fn encode_rgb8_to_png(
+    rgb: &[u8],
+    width: usize,
+    height: usize,
+) -> Result<Vec<u8>, BurnBackendError> {
     let width_u32 = u32::try_from(width).map_err(|_| {
         BurnBackendError::InvalidRequest(format!("image.save width too large for PNG: {width}"))
     })?;
     let height_u32 = u32::try_from(height).map_err(|_| {
-        BurnBackendError::InvalidRequest(format!(
-            "image.save height too large for PNG: {height}"
-        ))
+        BurnBackendError::InvalidRequest(format!("image.save height too large for PNG: {height}"))
     })?;
 
     let mut out = Vec::new();
@@ -274,9 +286,9 @@ mod tests {
         assert_eq!(
             rgb,
             vec![
-                255, 0, 0,   // pixel 0
-                0, 255, 0,   // pixel 1
-                0, 0, 255,   // pixel 2
+                255, 0, 0, // pixel 0
+                0, 255, 0, // pixel 1
+                0, 0, 255, // pixel 2
                 255, 255, 255, // pixel 3
             ]
         );
@@ -292,9 +304,8 @@ mod tests {
             &[0x89, b'P', b'N', b'G', 0x0d, 0x0a, 0x1a, 0x0a]
         );
 
-        let decoded =
-            ::image::load_from_memory_with_format(&png, ::image::ImageFormat::Png)
-                .expect("encoded PNG should decode");
+        let decoded = ::image::load_from_memory_with_format(&png, ::image::ImageFormat::Png)
+            .expect("encoded PNG should decode");
         assert_eq!(decoded.width(), 32);
         assert_eq!(decoded.height(), 16);
     }

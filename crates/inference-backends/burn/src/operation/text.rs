@@ -13,11 +13,13 @@ use reimagine_inference::{
 
 use crate::backend::BurnBackend;
 use crate::error::BurnBackendError;
+use crate::models::stable_diffusion::sdxl::text_conditioning::forward::clip_forward;
+use crate::models::stable_diffusion::sdxl::text_conditioning::loading;
 use crate::models::stable_diffusion::sdxl::{
     BurnSdxlTextEncoderResources, BurnSdxlTokenizedPromptPair,
 };
 use crate::profile::{BACKEND_LABEL, BurnProfileProvider};
-use crate::store::{BurnConditioningMetadata, BurnConditioningPayload};
+use crate::store::{BurnConditioningMetadata, BurnConditioningPayload, ClipOutputs};
 
 /// `text.encode` entry point for the Burn backend (burn/08f).
 ///
@@ -37,8 +39,81 @@ pub fn execute_text_encode(
     let preflight = build_preflight(backend, request)?;
     let model_id = preflight.metadata().model_id().to_string();
 
-    // Persist the conditioning payload in the shared store.
-    let payload = preflight.into_conditioning_payload();
+    // burn/14c: run the real CLIP-L and OpenCLIP-G forward passes
+    // using weights loaded from the bundle's component files. The
+    // tokenized prompts were already validated and produced by
+    // `build_preflight`.
+    let bundle = backend
+        .model_cache()
+        .get_bundle(preflight.metadata().model_id())
+        .ok_or_else(|| {
+            BurnBackendError::InvalidRequest(format!(
+                "text.encode could not resolve the loaded bundle for model `{}`; \
+                 the bundle may have been evicted between validation and lookup",
+                preflight.metadata().model_id()
+            ))
+        })?;
+    let sdxl_bundle = match bundle.as_ref() {
+        crate::models::stable_diffusion::sdxl::BurnLoadedModelBundle::StableDiffusionSdxl(b) => {
+            b.as_ref()
+        }
+    };
+
+    // For test-only bundles that have no component paths (e.g. those built
+    // via `for_test_only`), the CLIP weights are unavailable. Production
+    // bundles built via `from_resolved` always populate component paths,
+    // so this branch is purely a test seam.
+    let embeddings = if let (Some(_), Some(_)) = (
+        sdxl_bundle.components().iter().find(|c| {
+            c.component_role
+                == crate::models::stable_diffusion::sdxl::BurnSdxlComponentRole::TextEncoder
+        }),
+        sdxl_bundle.components().iter().find(|c| {
+            c.component_role
+                == crate::models::stable_diffusion::sdxl::BurnSdxlComponentRole::TextEncoder2
+        }),
+    ) {
+        let clip_l_weights = loading::load_clip_l(sdxl_bundle)?;
+        let clip_g_weights = loading::load_clip_g(sdxl_bundle)?;
+
+        let profile_l = crate::text_encoder::clip::ClipTextEncoderProfile::clip_l();
+        let profile_g = crate::text_encoder::clip::ClipTextEncoderProfile::open_clip_g();
+
+        let clip_l_out = clip_forward(
+            &preflight.tokenized_prompts().clip_l.token_ids,
+            &clip_l_weights,
+            &profile_l,
+        )?;
+        let clip_g_out = clip_forward(
+            &preflight.tokenized_prompts().clip_g.token_ids,
+            &clip_g_weights,
+            &profile_g,
+        )?;
+
+        // Concatenate last hidden states along channel axis: [1,77,768] + [1,77,1280] → [1,77,2048]
+        let text_emb = concat_channel(clip_l_out.text_embeddings, clip_g_out.text_embeddings)?;
+        let pooled_emb = clip_g_out.pooled.ok_or_else(|| {
+            BurnBackendError::InvalidRequest(
+                "OpenCLIP-G forward did not produce a pooled embedding".to_string(),
+            )
+        })?;
+        ClipOutputs {
+            text_embeddings: text_emb,
+            pooled_embeddings: Some(pooled_emb),
+        }
+    } else {
+        // Test-only bundle without components: fall back to synthetic
+        // shape-correct placeholders so unit tests can still exercise
+        // the surrounding store + handle plumbing.
+        synthetic_clip_outputs(preflight.tokenized_prompts())?
+    };
+
+    let payload = BurnConditioningPayload::from_tokenized(
+        preflight.metadata().clone(),
+        preflight.tokenized_prompts().clone(),
+    )
+    .with_embeddings(embeddings);
+
     let payload_key =
         reimagine_inference::BackendPayloadKey::new(format!("conditioning:{model_id}"));
     backend
@@ -67,6 +142,85 @@ pub fn execute_text_encode(
         .with_pooled_embedding(pooled_handle);
 
     Ok(TextEncodeResponse::new(conditioning))
+}
+
+/// Build synthetic `ClipOutputs` for tests where the bundle has no
+/// component paths (constructed via `BurnLoadedSdxlBundle::for_test_only`).
+/// The placeholders carry the correct shapes so surrounding store and
+/// handle logic can be exercised. Production bundles always have real
+/// CLIP weights and never take this branch.
+fn synthetic_clip_outputs(
+    tokenized: &crate::models::stable_diffusion::sdxl::BurnSdxlTokenizedPromptPair,
+) -> Result<ClipOutputs, BurnBackendError> {
+    use burn_ndarray::NdArray;
+    let seq_len = tokenized.clip_l.token_ids.len();
+    let total_text = seq_len * 2048;
+    let text_data = vec![0.0f32; total_text];
+    let text_tensor = burn_tensor::Tensor::<NdArray, 3>::from_data(
+        burn_tensor::TensorData::new(text_data, burn_tensor::Shape::new([1, seq_len, 2048])),
+        &burn_ndarray::NdArrayDevice::Cpu,
+    );
+    let pooled_tensor = burn_tensor::Tensor::<NdArray, 2>::from_data(
+        burn_tensor::TensorData::new(vec![0.0f32; 1280], burn_tensor::Shape::new([1, 1280])),
+        &burn_ndarray::NdArrayDevice::Cpu,
+    );
+    Ok(ClipOutputs {
+        text_embeddings: crate::tensor::BurnTensor::Ndarray(text_tensor),
+        pooled_embeddings: Some(crate::tensor::BurnTensor::Ndarray(pooled_tensor)),
+    })
+}
+
+/// Concatenate two `[batch, seq, w1]` and `[batch, seq, w2]` tensors along
+/// the channel axis to produce `[batch, seq, w1 + w2]`.
+fn concat_channel(
+    a: crate::tensor::BurnTensor<3>,
+    b: crate::tensor::BurnTensor<3>,
+) -> Result<crate::tensor::BurnTensor<3>, BurnBackendError> {
+    use burn_ndarray::NdArray;
+    let (ta, tb) = match (a, b) {
+        (crate::tensor::BurnTensor::Ndarray(ta), crate::tensor::BurnTensor::Ndarray(tb)) => {
+            (ta, tb)
+        }
+    };
+    let shape_a = ta.dims();
+    let shape_b = tb.dims();
+    if shape_a[0] != shape_b[0] || shape_a[1] != shape_b[1] {
+        return Err(BurnBackendError::InvalidRequest(format!(
+            "concat_channel: shape mismatch (a={shape_a:?}, b={shape_b:?})"
+        )));
+    }
+    let batch = shape_a[0];
+    let seq_len = shape_a[1];
+    let w1 = shape_a[2];
+    let w2 = shape_b[2];
+    let w_combined = w1 + w2;
+
+    let a_data = ta.to_data();
+    let b_data = tb.to_data();
+    let a_slice = a_data
+        .to_vec::<f32>()
+        .map_err(|e| BurnBackendError::InvalidRequest(format!("concat_channel a data: {e}")))?;
+    let b_slice = b_data
+        .to_vec::<f32>()
+        .map_err(|e| BurnBackendError::InvalidRequest(format!("concat_channel b data: {e}")))?;
+
+    // Plan: for each (b, s) row, output [a_row; b_row]
+    let mut combined = Vec::with_capacity(batch * seq_len * w_combined);
+    for idx in 0..(batch * seq_len) {
+        let a_start = idx * w1;
+        let b_start = idx * w2;
+        combined.extend_from_slice(&a_slice[a_start..a_start + w1]);
+        combined.extend_from_slice(&b_slice[b_start..b_start + w2]);
+    }
+
+    let tensor = burn_tensor::Tensor::<NdArray, 3>::from_data(
+        burn_tensor::TensorData::new(
+            combined,
+            burn_tensor::Shape::new([batch, seq_len, w_combined]),
+        ),
+        &burn_ndarray::NdArrayDevice::Cpu,
+    );
+    Ok(crate::tensor::BurnTensor::Ndarray(tensor))
 }
 
 /// Result of a `text.encode` preflight: the validated inputs and
