@@ -10,6 +10,7 @@ use burn_tensor::{Tensor, TensorData};
 
 use crate::backend::BurnBackend;
 use crate::error::BurnBackendError;
+use crate::tensor::BurnTensor;
 
 /// Run the euler/normal denoise loop.
 ///
@@ -17,19 +18,19 @@ use crate::error::BurnBackendError;
 /// returns the result. The real weight-driven UNet forward
 /// pass is a follow-up deepening.
 pub fn euler_normal_sample(
-    latent: Tensor<NdArray, 4>,
+    latent: BurnTensor<4>,
     _steps: u32,
     seed: u64,
     backend: &BurnBackend,
-) -> Result<Tensor<NdArray, 4>, BurnBackendError> {
+) -> Result<BurnTensor<4>, BurnBackendError> {
     let device = backend.ndarray_device();
-    let shape = latent.shape().dims();
+    let dims = latent.dims();
 
-    // V1: apply seed-dependent noise and return a modified latent
+    // V1: apply seed-dependent noise and return a modified latent.
     // The noise is deterministic from the seed so tests can verify
     // seed reproducibility.
-    let noise = seeded_noise(shape, seed, &device);
-    let result = latent + noise;
+    let noise = seeded_noise(dims, seed, &device);
+    let result = latent.map(move |t| t + noise);
 
     Ok(result)
 }

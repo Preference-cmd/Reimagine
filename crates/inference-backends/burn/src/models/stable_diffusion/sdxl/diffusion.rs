@@ -5,13 +5,11 @@ mod loading;
 pub mod module;
 mod sampler;
 
-use burn_ndarray::NdArray;
-use burn_tensor::Tensor;
-
 use crate::backend::BurnBackend;
 use crate::error::BurnBackendError;
 use crate::models::stable_diffusion::sdxl::BurnLoadedModelBundle;
 use crate::store::BurnConditioningPayload;
+use crate::tensor::BurnTensor;
 
 /// Run the SDXL euler/normal denoise loop.
 ///
@@ -20,14 +18,14 @@ use crate::store::BurnConditioningPayload;
 #[allow(clippy::too_many_arguments)]
 pub fn sample_sdxl(
     _bundle: &BurnLoadedModelBundle,
-    latent: Tensor<NdArray, 4>,
+    latent: BurnTensor<4>,
     _positive_cond: &BurnConditioningPayload,
     _negative_cond: &BurnConditioningPayload,
     steps: u32,
     _cfg: f32,
     seed: u64,
     backend: &BurnBackend,
-) -> Result<Tensor<NdArray, 4>, BurnBackendError> {
+) -> Result<BurnTensor<4>, BurnBackendError> {
     // V1: apply seed-dependent noise and return a modified latent.
     // The real weight-driven UNet forward pass is a follow-up deepening.
     let result = sampler::euler_normal_sample(latent, steps, seed, backend)?;

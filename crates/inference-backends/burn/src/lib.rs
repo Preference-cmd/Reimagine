@@ -16,4 +16,5 @@ mod operation;
 mod profile;
 mod resource;
 mod store;
+pub mod tensor;
 pub mod text_encoder;

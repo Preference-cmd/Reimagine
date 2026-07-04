@@ -34,6 +34,7 @@ use reimagine_inference::{
 use crate::backend::BurnBackend;
 use crate::error::BurnBackendError;
 use crate::store::{BurnImagePayload, BurnLatentPayload};
+use crate::tensor::BurnTensor;
 
 fn map_latent_space_error(label: &'static str, err: LatentSpaceError) -> BurnBackendError {
     BurnBackendError::InvalidRequest(format!("{label} {err}"))
@@ -92,8 +93,8 @@ fn allocate_zero_latent(backend: &BurnBackend, spec: &LatentAllocationSpec) -> B
         ],
         &backend.ndarray_device(),
     );
-    BurnLatentPayload::new_ndarray(
-        tensor,
+    BurnLatentPayload::new_burn(
+        BurnTensor::Ndarray(tensor),
         spec.latent_space.clone(),
         spec.width,
         spec.height,
@@ -270,7 +271,7 @@ pub fn execute_latent_decode(
     )?;
 
     // Store image payload
-    let dims: [usize; 4] = decoded.shape().dims();
+    let dims: [usize; 4] = decoded.dims();
     let height = dims[2] as u32;
     let width = dims[3] as u32;
     let image_payload = BurnImagePayload::new(decoded, width, height, 1, "rgb");

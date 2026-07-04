@@ -1,14 +1,14 @@
 use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
 
-use burn_ndarray::NdArray;
-use burn_tensor::{Tensor, TensorData};
+use burn_tensor::TensorData;
 use reimagine_core::model::{ModelId, RunId};
 use reimagine_inference::{BackendPayloadKey, LatentSpaceMetadata};
 
 use crate::models::stable_diffusion::sdxl::{
     BurnLoadedModelBundle, BurnSdxlSourceSignature, BurnSdxlTokenizedPromptPair,
 };
+use crate::tensor::BurnTensor;
 
 /// Backend-owned latent payload wrapper.
 ///
@@ -19,7 +19,7 @@ use crate::models::stable_diffusion::sdxl::{
 /// extend this enum without changing the operation/store seams.
 #[derive(Debug, Clone)]
 pub struct BurnLatentPayload {
-    tensor: Tensor<NdArray, 4>,
+    tensor: BurnTensor<4>,
     latent_space: LatentSpaceMetadata,
     width: u32,
     height: u32,
@@ -27,10 +27,9 @@ pub struct BurnLatentPayload {
 }
 
 impl BurnLatentPayload {
-    /// Build a backend-owned latent payload from a concrete
-    /// burn-ndarray 4D tensor.
-    pub fn new_ndarray(
-        tensor: Tensor<NdArray, 4>,
+    /// Build a backend-owned latent payload from a `BurnTensor<4>`.
+    pub fn new_burn(
+        tensor: BurnTensor<4>,
         latent_space: LatentSpaceMetadata,
         width: u32,
         height: u32,
@@ -45,20 +44,19 @@ impl BurnLatentPayload {
         }
     }
 
-    /// Borrow the underlying Burn tensor. The tensor never crosses
-    /// the backend boundary; only Burn-private callers can use this.
-    pub fn tensor(&self) -> &Tensor<NdArray, 4> {
+    /// Borrow the underlying Burn tensor.
+    pub fn tensor(&self) -> &BurnTensor<4> {
         &self.tensor
     }
 
     /// Consume the payload and return the underlying tensor.
-    pub fn into_tensor(self) -> Tensor<NdArray, 4> {
+    pub fn into_tensor(self) -> BurnTensor<4> {
         self.tensor
     }
 
     /// Shape of the stored tensor as a `[batch, channels, h, w]` slice.
     pub fn dims(&self) -> [usize; 4] {
-        self.tensor.shape().dims()
+        self.tensor.dims()
     }
 
     /// Latent-space metadata this payload belongs to.
@@ -81,14 +79,12 @@ impl BurnLatentPayload {
         self.batch
     }
 
-    /// Approximate byte size of the payload. Burn tensors are
-    /// float32 by default in V1.
+    /// Approximate byte size of the payload.
     pub fn byte_size(&self) -> usize {
-        self.tensor.shape().num_elements() * std::mem::size_of::<f32>()
+        self.tensor.byte_size()
     }
 
-    /// Pull the data buffer out of the tensor. Used by tests and
-    /// future sampling/decode paths that need a contiguous view.
+    /// Pull the data buffer out of the tensor.
     pub fn to_data(&self) -> TensorData {
         self.tensor.to_data()
     }
@@ -262,7 +258,7 @@ impl BurnConditioningPayload {
 /// metadata about the image dimensions and color space.
 #[derive(Debug, Clone)]
 pub struct BurnImagePayload {
-    tensor: Tensor<NdArray, 4>,
+    tensor: BurnTensor<4>,
     width: u32,
     height: u32,
     batch: u32,
@@ -271,7 +267,7 @@ pub struct BurnImagePayload {
 
 impl BurnImagePayload {
     pub fn new(
-        tensor: Tensor<NdArray, 4>,
+        tensor: BurnTensor<4>,
         width: u32,
         height: u32,
         batch: u32,
@@ -286,16 +282,16 @@ impl BurnImagePayload {
         }
     }
 
-    pub fn tensor(&self) -> &Tensor<NdArray, 4> {
+    pub fn tensor(&self) -> &BurnTensor<4> {
         &self.tensor
     }
 
-    pub fn into_tensor(self) -> Tensor<NdArray, 4> {
+    pub fn into_tensor(self) -> BurnTensor<4> {
         self.tensor
     }
 
     pub fn dims(&self) -> [usize; 4] {
-        self.tensor.shape().dims()
+        self.tensor.dims()
     }
 
     pub fn width(&self) -> u32 {
@@ -315,7 +311,7 @@ impl BurnImagePayload {
     }
 
     pub fn byte_size(&self) -> usize {
-        self.tensor.shape().num_elements() * std::mem::size_of::<f32>()
+        self.tensor.byte_size()
     }
 }
 
@@ -718,19 +714,24 @@ impl BurnModelCache {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::tensor::BurnTensor;
     use burn_ndarray::NdArrayDevice;
+    use burn_tensor::Tensor;
 
     fn sdxl_latent_space() -> LatentSpaceMetadata {
         LatentSpaceMetadata::sdxl_base()
     }
 
-    fn zero_latent(batch: usize, channels: usize, h: usize, w: usize) -> Tensor<NdArray, 4> {
-        Tensor::<NdArray, 4>::zeros([batch, channels, h, w], &NdArrayDevice::Cpu)
+    fn burn_zero_tensor(batch: usize, channels: usize, h: usize, w: usize) -> BurnTensor<4> {
+        BurnTensor::Ndarray(Tensor::<burn_ndarray::NdArray, 4>::zeros(
+            [batch, channels, h, w],
+            &NdArrayDevice::Cpu,
+        ))
     }
 
     fn build_payload(batch: u32, h: u32, w: u32) -> BurnLatentPayload {
-        BurnLatentPayload::new_ndarray(
-            zero_latent(batch as usize, 4, (h / 8) as usize, (w / 8) as usize),
+        BurnLatentPayload::new_burn(
+            burn_zero_tensor(batch as usize, 4, (h / 8) as usize, (w / 8) as usize),
             sdxl_latent_space(),
             w,
             h,
@@ -929,8 +930,8 @@ mod tests {
             reimagine_core::model::TensorDType::F32,
             reimagine_inference::TensorLayout::Nchw,
         );
-        let tensor = zero_latent(1, 4, 8, 8);
-        let payload = BurnLatentPayload::new_ndarray(tensor, custom.clone(), 64, 64, 1);
+        let tensor = burn_zero_tensor(1, 4, 8, 8);
+        let payload = BurnLatentPayload::new_burn(tensor, custom.clone(), 64, 64, 1);
         assert_eq!(payload.latent_space(), &custom);
         assert_eq!(payload.latent_space().id().as_str(), "custom/test");
     }

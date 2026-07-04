@@ -191,7 +191,7 @@ pub fn execute_diffusion_sample(
 
     // 7. Store sampled latent
     let output_key = sampled_latent_key(request.run_id(), request.node_id());
-    let output_payload = BurnLatentPayload::new_ndarray(
+    let output_payload = BurnLatentPayload::new_burn(
         sampled,
         LatentSpaceMetadata::sdxl_base(),
         latent_handle.width(),

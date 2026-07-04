@@ -10,6 +10,7 @@ use burn_tensor::{Tensor, TensorData};
 use crate::backend::BurnBackend;
 use crate::error::BurnBackendError;
 use crate::store::BurnLatentPayload;
+use crate::tensor::BurnTensor;
 
 /// Placeholder VAE decode returning a minimal image tensor.
 ///
@@ -19,7 +20,7 @@ use crate::store::BurnLatentPayload;
 pub fn vae_decode_placeholder(
     latent: BurnLatentPayload,
     _backend: &BurnBackend,
-) -> Result<Tensor<NdArray, 4>, BurnBackendError> {
+) -> Result<BurnTensor<4>, BurnBackendError> {
     let dims = latent.dims();
     let batch = dims[0];
     let latent_h = dims[2];
@@ -29,7 +30,7 @@ pub fn vae_decode_placeholder(
     let height = latent_h * 8;
     let width = latent_w * 8;
 
-    // V1: produce a simple deterministic output from the latent
+    // V1: produce a simple deterministic output from the latent.
     // The real VAE decode would run through the decoder modules.
     let total = batch * 3 * height * width;
     let data = vec![0.5f32; total]; // mid-gray
@@ -39,5 +40,5 @@ pub fn vae_decode_placeholder(
         &NdArrayDevice::Cpu,
     );
 
-    Ok(tensor)
+    Ok(BurnTensor::Ndarray(tensor))
 }

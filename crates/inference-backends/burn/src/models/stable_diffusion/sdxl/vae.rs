@@ -3,13 +3,11 @@
 mod decode;
 mod module;
 
-use burn_ndarray::NdArray;
-use burn_tensor::Tensor;
-
 use crate::backend::BurnBackend;
 use crate::error::BurnBackendError;
 use crate::models::stable_diffusion::sdxl::BurnLoadedModelBundle;
 use crate::store::BurnLatentPayload;
+use crate::tensor::BurnTensor;
 
 /// Run SDXL VAE decode on a sampled latent.
 ///
@@ -19,7 +17,7 @@ pub fn decode_latent(
     _bundle: &BurnLoadedModelBundle,
     latent: BurnLatentPayload,
     backend: &BurnBackend,
-) -> Result<Tensor<NdArray, 4>, BurnBackendError> {
+) -> Result<BurnTensor<4>, BurnBackendError> {
     // V1: apply a minimal decode that produces a correct-shape output
     // from a real latent. The actual VAE weight-driven decode is a
     // follow-up deepening.
