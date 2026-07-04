@@ -1,3 +1,4 @@
+use std::fmt;
 use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
 
@@ -11,7 +12,7 @@ use tauri::ipc::Channel;
 ///
 /// Recorded events are stored per-run for replay; subscribed channels
 /// receive events live. Channel send failures are silently dropped.
-#[derive(Clone)]
+#[derive(Debug, Clone)]
 pub struct TauriRunEventHub {
     inner: Arc<Mutex<HubInner>>,
 }
@@ -20,6 +21,15 @@ pub struct TauriRunEventHub {
 struct HubInner {
     events: HashMap<RunId, Vec<RunEvent>>,
     subscribers: HashMap<RunId, Channel<RunEventPayload>>,
+}
+
+impl fmt::Debug for HubInner {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("HubInner")
+            .field("events", &self.events)
+            .field("subscribers", &format_args!("Channel<RunEventPayload>"))
+            .finish()
+    }
 }
 
 /// Lightweight projection of a `RunEvent` for IPC transport.
@@ -50,6 +60,29 @@ impl TauriRunEventHub {
     pub fn subscribe(&self, run_id: &RunId, channel: Channel<RunEventPayload>) {
         let mut guard = self.inner.lock().expect("hub poisoned");
         guard.subscribers.insert(run_id.clone(), channel);
+    }
+
+    /// Replay recorded events to the subscribed channel (if any).
+    ///
+    /// This reads the already‑recorded events and sends them to the
+    /// subscriber **without** re‑recording them (the events are already in
+    /// the `events` map from the original `emit` calls).
+    pub fn replay(&self, run_id: &RunId) {
+        let events = self.events_for(run_id);
+        if events.is_empty() {
+            return;
+        }
+        let mut guard = self.inner.lock().expect("hub poisoned");
+        let Some(channel) = guard.subscribers.get(run_id) else {
+            return;
+        };
+        for event in &events {
+            let payload = RunEventPayload::from(event);
+            if channel.send(payload).is_err() {
+                guard.subscribers.remove(run_id);
+                break;
+            }
+        }
     }
 
     /// Return all recorded events for a run (for replay).
