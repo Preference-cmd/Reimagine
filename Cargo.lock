@@ -6166,6 +6166,7 @@ dependencies = [
  "burn-ndarray",
  "burn-tensor",
  "burn-wgpu",
+ "image",
  "reimagine-core",
  "reimagine-inference",
  "reimagine-plugin",

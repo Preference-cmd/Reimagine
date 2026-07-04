@@ -14,8 +14,9 @@ use crate::config::BurnBackendConfig;
 use crate::device::BurnDevice;
 use crate::error::BurnBackendError;
 use crate::operation::{
-    execute_diffusion_sample, execute_latent_create_empty, execute_latent_decode,
-    execute_model_load_bundle, execute_text_encode, map_to_inference_error,
+    execute_diffusion_sample, execute_image_preview, execute_image_save, execute_latent_create_empty,
+    execute_latent_decode, execute_model_load_bundle, execute_text_encode,
+    map_to_inference_error,
 };
 use crate::profile::{BACKEND_LABEL, BurnProfileProvider};
 use crate::resource::BurnBackendInstanceRuntimeHooks;
@@ -225,15 +226,19 @@ impl InferenceBackend for BurnBackend {
 
     async fn image_save(
         &self,
-        _request: ImageSaveRequest,
+        request: ImageSaveRequest,
     ) -> Result<ImageSaveResponse, InferenceError> {
-        self.not_implemented(InferenceCapability::ImageSave)
+        execute_image_save(request, self).map_err(|err| InferenceError::BackendExecutionFailed {
+            message: err.to_string(),
+        })
     }
 
     async fn image_preview(
         &self,
-        _request: ImagePreviewRequest,
+        request: ImagePreviewRequest,
     ) -> Result<ImagePreviewResponse, InferenceError> {
-        self.not_implemented(InferenceCapability::ImagePreview)
+        execute_image_preview(request, self).map_err(|err| InferenceError::BackendExecutionFailed {
+            message: err.to_string(),
+        })
     }
 }

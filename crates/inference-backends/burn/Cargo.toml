@@ -33,6 +33,7 @@ burn-ndarray = { workspace = true }
 burn-tensor = { workspace = true }
 burn-flex = { workspace = true, optional = true }
 burn-wgpu = { workspace = true, optional = true }
+image = { workspace = true }
 reimagine-core = { path = "../../core" }
 reimagine-inference = { path = "../../inference" }
 reimagine-plugin = { path = "../../plugin" }
