@@ -23,6 +23,17 @@ import type { ModelInfo } from "@/ipc";
 import { useRuntimeStore } from "@/store/runtime";
 import { useWorkflowStore } from "@/store/workflow";
 
+function formatBytes(bytes: number): string {
+  const units = ["B", "KB", "MB", "GB", "TB"];
+  let value = bytes;
+  let unitIndex = 0;
+  while (value >= 1024 && unitIndex < units.length - 1) {
+    value /= 1024;
+    unitIndex++;
+  }
+  return `${value.toFixed(2)} ${units[unitIndex]}`;
+}
+
 type ExplorerView = "Graph" | "Models" | "Runs" | "Assets";
 
 type ExplorerPanelProps = {
@@ -441,9 +452,9 @@ function modelRows(
     ...graphModels,
     ...models.map((model) => ({
       id: `model-${model.id}`,
-      label: model.name,
-      meta: model.family,
-      detail: model.size,
+      label: model.displayName,
+      meta: model.modelSeries,
+      detail: formatBytes(model.sizeBytes),
       icon: Boxes,
       muted: graphModels.some((row) => row.label.includes(model.id)),
     })),

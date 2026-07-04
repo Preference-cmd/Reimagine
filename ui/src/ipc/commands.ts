@@ -1,24 +1,16 @@
 import {
-  WorkflowSchema,
-  type Workflow,
-  type RunId,
   type ModelInfo,
   type NodeDef,
+  type RunEventPayload,
+  type RunWorkflowResponse,
+  type Workflow,
 } from "./schemas";
 import {
-  mockRunWorkflow,
   mockCancelRun,
-  mockListModels,
   mockGetNodeDefs,
+  mockListModels,
+  mockRunWorkflow,
 } from "./mock";
-
-/**
- * Type-safe IPC command wrappers.
- *
- * In dev (no Rust backend yet) they call the local mock. When the Tauri
- * side is wired up (issue after the next), this file is the only place
- * that needs to swap `mockX` for `invoke("x", ...)`.
- */
 
 const USE_MOCK = import.meta.env.DEV || import.meta.env.VITE_FORCE_MOCK === "1";
 
@@ -28,26 +20,34 @@ async function dispatch<TIn, TOut>(
   input: TIn,
   mockFn: (i: TIn) => Promise<TOut>,
 ): Promise<TOut> {
-  // Validate input at the boundary (catches dev-time drift between
-  // TS types and zod schemas).
   if (schema) schema.parse(input);
-
-  if (USE_MOCK) {
-    return mockFn(input);
-  }
-
-  // Production path — Tauri runtime. The Tauri `invoke` is dynamically
-  // imported so dev builds don't pull it in.
+  if (USE_MOCK) return mockFn(input);
   const { invoke } = await import("@tauri-apps/api/core");
   return invoke<TOut>(name, { input });
 }
 
-export function runWorkflow(workflow: Workflow): Promise<RunId> {
-  return dispatch("run_workflow", WorkflowSchema, workflow, mockRunWorkflow);
+export async function runWorkflow(
+  workflow: Workflow,
+  onEvent?: (event: RunEventPayload) => void,
+): Promise<RunWorkflowResponse> {
+  if (USE_MOCK) {
+    return mockRunWorkflow(workflow);
+  }
+
+  const { Channel, invoke } = await import("@tauri-apps/api/core");
+  const channel = new Channel<RunEventPayload>();
+  if (onEvent) {
+    channel.onmessage = onEvent;
+  }
+  return invoke<RunWorkflowResponse>("run_workflow", { workflow, channel });
 }
 
-export function cancelRun(runId: RunId): Promise<void> {
-  return dispatch("cancel_run", null, runId, mockCancelRun);
+export async function cancelRun(runId: string): Promise<void> {
+  if (USE_MOCK) {
+    return mockCancelRun(runId);
+  }
+  const { invoke } = await import("@tauri-apps/api/core");
+  return invoke<void>("cancel_run", { runId });
 }
 
 export function listModels(): Promise<ModelInfo[]> {

@@ -1,14 +1,10 @@
 import {
-  WorkflowSchema,
-  RunIdSchema,
-  type Workflow,
-  type RunId,
   type ModelInfo,
   type NodeDef,
+  type RunWorkflowResponse,
+  type Workflow,
   NodeDefSchema,
 } from "./schemas";
-
-/* ───── Helpers ───── */
 
 const delay = (ms: number) => new Promise((r) => setTimeout(r, ms));
 
@@ -18,30 +14,50 @@ function rand(prefix: string) {
 
 const MOCK_MODELS: ModelInfo[] = [
   {
-    id: "sd_xl_base_1.0",
-    name: "SDXL Base 1.0",
-    family: "stable-diffusion-xl",
-    size: "6.94 GB",
-    path: "/models/sd_xl_base_1.0.safetensors",
+    id: "sd_xl_base_1_0",
+    displayName: "Stable Diffusion Xl Base",
+    modelSeries: "stable-diffusion-xl",
+    variant: "base",
+    roles: ["checkpoint-bundle", "diffusion-model"],
+    format: "safetensors",
+    sourceStatus: "available",
+    sizeBytes: 6_940_000_000,
   },
   {
     id: "dreamshaper_8",
-    name: "DreamShaper 8",
-    family: "stable-diffusion-1.5",
-    size: "2.07 GB",
-    path: "/models/dreamshaper_8.safetensors",
+    displayName: "Stable Diffusion 1.5 Dreamshaper",
+    modelSeries: "stable-diffusion-1.5",
+    variant: "dreamshaper",
+    roles: ["checkpoint-bundle"],
+    format: "safetensors",
+    sourceStatus: "available",
+    sizeBytes: 2_070_000_000,
   },
 ];
 
-/* ───── Mock command implementations ───── */
-
-export async function mockRunWorkflow(workflow: Workflow): Promise<RunId> {
+export async function mockRunWorkflow(_workflow: Workflow): Promise<RunWorkflowResponse> {
   await delay(200);
-  WorkflowSchema.parse(workflow); // validates; result unused but ensures shape
-  return RunIdSchema.parse(rand("run"));
+  const runId = rand("run");
+  return {
+    outcome: "started",
+    runId,
+    workflowId: rand("wf"),
+    workflowVersion: "1",
+    initialSnapshot: {
+      runId,
+      workflowId: "mock-wf",
+      state: "running",
+      nodeStates: {},
+      diagnostics: [],
+      artifacts: [],
+      startedAt: new Date().toISOString(),
+      updatedAt: new Date().toISOString(),
+    },
+    diagnostics: [],
+  };
 }
 
-export async function mockCancelRun(_runId: RunId): Promise<void> {
+export async function mockCancelRun(_runId: string): Promise<void> {
   await delay(100);
 }
 

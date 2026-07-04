@@ -97,9 +97,74 @@ export type RunId = z.infer<typeof RunIdSchema>;
 
 export const ModelInfoSchema = z.object({
   id: z.string(),
-  name: z.string(),
-  family: z.string(),
-  size: z.string(),
-  path: z.string(),
+  displayName: z.string(),
+  modelSeries: z.string(),
+  variant: z.string(),
+  roles: z.array(z.string()),
+  format: z.string(),
+  sourceStatus: z.string(),
+  sizeBytes: z.number(),
 });
 export type ModelInfo = z.infer<typeof ModelInfoSchema>;
+
+/* ───── Run events from Rust IPC ───── */
+
+export const RunEventPayloadSchema = z.object({
+  id: z.string(),
+  runId: z.string(),
+  kind: z.string(),
+  nodeId: z.string().nullable(),
+  artifactId: z.string().nullable(),
+  createdAt: z.string(),
+});
+export type RunEventPayload = z.infer<typeof RunEventPayloadSchema>;
+
+export const RunSnapshotDtoSchema = z.object({
+  runId: z.string(),
+  workflowId: z.string(),
+  state: z.string(),
+  nodeStates: z.record(z.string(), z.string()),
+  diagnostics: z.array(z.object({
+    id: z.string(),
+    code: z.string(),
+    severity: z.string(),
+    source: z.string(),
+    message: z.string(),
+    target: z.string(),
+  })),
+  artifacts: z.array(z.any()),
+  startedAt: z.string(),
+  updatedAt: z.string(),
+});
+export type RunSnapshotDto = z.infer<typeof RunSnapshotDtoSchema>;
+
+export const RunWorkflowResponseSchema = z.discriminatedUnion("outcome", [
+  z.object({
+    outcome: z.literal("started"),
+    runId: z.string(),
+    workflowId: z.string(),
+    workflowVersion: z.string(),
+    initialSnapshot: RunSnapshotDtoSchema,
+    diagnostics: z.array(z.object({
+      id: z.string(),
+      code: z.string(),
+      severity: z.string(),
+      source: z.string(),
+      message: z.string(),
+      target: z.string(),
+    })),
+  }),
+  z.object({
+    outcome: z.literal("blocked"),
+    workflowId: z.string(),
+    diagnostics: z.array(z.object({
+      id: z.string(),
+      code: z.string(),
+      severity: z.string(),
+      source: z.string(),
+      message: z.string(),
+      target: z.string(),
+    })),
+  }),
+]);
+export type RunWorkflowResponse = z.infer<typeof RunWorkflowResponseSchema>;

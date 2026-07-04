@@ -6030,6 +6030,7 @@ dependencies = [
  "reimagine-agent",
  "reimagine-app-host",
  "reimagine-config",
+ "reimagine-core",
  "reimagine-runtime",
  "serde",
  "serde_json",

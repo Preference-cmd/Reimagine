@@ -23,6 +23,7 @@ const PHASE_LABEL: Record<RuntimePhase, string> = {
   running: "Running",
   completed: "Done",
   failed: "Failed",
+  cancelled: "Cancelled",
 };
 
 function phaseTone(phase: RuntimePhase) {

@@ -82,7 +82,7 @@ export function TopBar({
 }: {
   forceRuntimeCollapsed?: boolean;
 }) {
-  const startMockRun = useRuntimeStore((s) => s.startMockRun);
+  const startRun = useRuntimeStore((s) => s.startRun);
   const phase = useRuntimeStore((s) => s.phase);
   const runActive = phase === "starting" || phase === "running";
 
@@ -125,7 +125,7 @@ export function TopBar({
           <TopBarButton
             ariaLabel="Run workflow"
             disabled={runActive}
-            onClick={startMockRun}
+            onClick={startRun}
             variant="primary"
           >
             <Play className="h-4 w-4 fill-current" />

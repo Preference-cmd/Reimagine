@@ -1,17 +1,18 @@
 import { create } from "zustand";
+import type { RunEventPayload } from "@/ipc/schemas";
+import { runWorkflow as ipcRunWorkflow, cancelRun as ipcCancelRun } from "@/ipc";
 
 export type RuntimePhase =
   | "idle"
   | "starting"
   | "running"
   | "completed"
-  | "failed";
-
-export type RuntimeDiagnosticSeverity = "info" | "warning" | "error";
+  | "failed"
+  | "cancelled";
 
 export type RuntimeDiagnostic = {
   id: string;
-  severity: RuntimeDiagnosticSeverity;
+  severity: string;
   message: string;
   source: string;
 };
@@ -26,119 +27,113 @@ type RuntimeState = {
   progress: number;
   elapsedMs: number;
   diagnostics: RuntimeDiagnostic[];
-  startMockRun: () => void;
-  cancelRun: () => void;
+  startRun: (workflowJson?: unknown) => Promise<void>;
+  cancelRun: () => Promise<void>;
+  reset: () => void;
 };
-
-let phaseTimer: ReturnType<typeof setTimeout> | null = null;
-let progressTimer: ReturnType<typeof setInterval> | null = null;
-
-function clearMockTimers() {
-  if (phaseTimer) {
-    clearTimeout(phaseTimer);
-    phaseTimer = null;
-  }
-  if (progressTimer) {
-    clearInterval(progressTimer);
-    progressTimer = null;
-  }
-}
-
-function nodeForProgress(progress: number) {
-  if (progress < 0.22) return "Model";
-  if (progress < 0.48) return "Positive prompt";
-  if (progress < 0.78) return "Sampler";
-  return "Image output";
-}
-
-function runId() {
-  return `run_${Math.random().toString(36).slice(2, 10)}`;
-}
 
 export const useRuntimeStore = create<RuntimeState>()((set, get) => ({
   phase: "idle",
   runId: null,
-  workflowName: "Black bear",
+  workflowName: "",
   backend: "Candle",
-  device: "Metal",
+  device: "CPU",
   currentNode: null,
   progress: 0,
   elapsedMs: 0,
   diagnostics: [],
 
-  startMockRun: () => {
-    clearMockTimers();
+  startRun: async (workflowJson?: unknown) => {
+    set({ phase: "starting", diagnostics: [], progress: 0, elapsedMs: 0 });
 
     const startedAt = Date.now();
-    const id = runId();
+    const progressTimer = setInterval(() => {
+      set((s) => ({
+        elapsedMs: Date.now() - startedAt,
+        ...(s.phase === "running" ? { progress: Math.min(1, s.progress + 0.02) } : {}),
+      }));
+    }, 500);
 
-    set({
-      phase: "starting",
-      runId: id,
-      currentNode: "Readiness",
-      progress: 0,
-      elapsedMs: 0,
-      diagnostics: [
-        {
-          id: "runtime-ready",
-          severity: "info",
-          source: "Runtime",
-          message: "Graph accepted. Preparing execution plan.",
-        },
-      ],
-    });
+    const handleEvent = (event: RunEventPayload) => {
+      set((s) => ({
+        runId: event.runId,
+        currentNode: event.nodeId ?? s.currentNode,
+        phase: eventKindToPhase(event.kind),
+      }));
+    };
 
-    phaseTimer = setTimeout(() => {
-      set({
-        phase: "running",
-        currentNode: "Model",
-        diagnostics: [],
-      });
+    try {
+      const response = await ipcRunWorkflow(
+        workflowJson as any,
+        handleEvent,
+      );
 
-      progressTimer = setInterval(() => {
-        const state = get();
-        if (state.phase !== "running") return;
-
-        const nextProgress = Math.min(1, state.progress + 0.055);
-        const nextElapsed = Date.now() - startedAt;
-
-        if (nextProgress >= 1) {
-          clearMockTimers();
-          set({
-            phase: "completed",
-            currentNode: "Image output",
-            progress: 1,
-            elapsedMs: nextElapsed,
-            diagnostics: [
-              {
-                id: "run-complete",
-                severity: "info",
-                source: "Runtime",
-                message: "Workflow finished without blocking diagnostics.",
-              },
-            ],
-          });
-          return;
-        }
-
+      if (response.outcome === "started") {
         set({
-          progress: nextProgress,
-          elapsedMs: nextElapsed,
-          currentNode: nodeForProgress(nextProgress),
+          runId: response.runId,
+          phase: "running",
+          diagnostics: response.diagnostics.map((d) => ({
+            id: d.id,
+            severity: d.severity,
+            message: d.message,
+            source: d.source,
+          })),
         });
-      }, 420);
-    }, 650);
+      } else {
+        set({
+          phase: "failed",
+          diagnostics: response.diagnostics.map((d) => ({
+            id: d.id,
+            severity: d.severity,
+            message: d.message,
+            source: d.source,
+          })),
+        });
+        clearInterval(progressTimer);
+      }
+    } catch (err) {
+      set({
+        phase: "failed",
+        diagnostics: [{
+          id: "run-error",
+          severity: "error",
+          message: String(err),
+          source: "Runtime",
+        }],
+      });
+      clearInterval(progressTimer);
+    }
   },
 
-  cancelRun: () => {
-    clearMockTimers();
-    set({
-      phase: "idle",
-      runId: null,
-      currentNode: null,
-      progress: 0,
-      elapsedMs: 0,
-      diagnostics: [],
-    });
+  cancelRun: async () => {
+    const { runId } = get();
+    if (!runId) return;
+    try {
+      await ipcCancelRun(runId);
+      set({ phase: "cancelled" });
+    } catch {
+      // If cancel fails, just reset
+      set({ phase: "idle", runId: null, currentNode: null, progress: 0, elapsedMs: 0, diagnostics: [] });
+    }
   },
+
+  reset: () => set({
+    phase: "idle",
+    runId: null,
+    currentNode: null,
+    progress: 0,
+    elapsedMs: 0,
+    diagnostics: [],
+  }),
 }));
+
+function eventKindToPhase(kind: string): RuntimePhase {
+  switch (kind) {
+    case "RunQueued": return "starting";
+    case "RunStarted": return "running";
+    case "RunCompleted": return "completed";
+    case "RunFailed": return "failed";
+    case "RunCancelled": return "cancelled";
+    default: return "running";
+  }
+}
