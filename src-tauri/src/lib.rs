@@ -1,4 +1,5 @@
 mod desktop_host;
+mod event_hub;
 
 use desktop_host::{DesktopHostState, default_workspace_path};
 use reimagine_app_host::dto::{ComputeProfileDto, HealthResponse};
