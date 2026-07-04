@@ -4,6 +4,8 @@
 mod loading;
 pub mod module;
 mod sampler;
+pub(crate) mod scheduler;
+pub mod unet;
 
 use crate::backend::BurnBackend;
 use crate::error::BurnBackendError;
