@@ -40,7 +40,12 @@ pub struct ClipForwardOutput {
 }
 
 /// Run the full CLIP transformer forward pass for the given encoder.
-#[allow(clippy::too_many_arguments, clippy::single_match, clippy::needless_match, clippy::infallible_destructuring_match)]
+#[allow(
+    clippy::too_many_arguments,
+    clippy::single_match,
+    clippy::needless_match,
+    clippy::infallible_destructuring_match
+)]
 pub fn clip_forward(
     token_ids: &[u32],
     weights: &ClipTextEncoderWeights,
@@ -136,7 +141,11 @@ pub fn clip_forward(
 /// fall back to a zero-filled tensor of the requested shape so the
 /// rest of the forward pass can still execute against deterministic
 /// zeros. Real production bundles always carry the full vocab tensor.
-#[allow(clippy::single_match, clippy::needless_match, clippy::infallible_destructuring_match)]
+#[allow(
+    clippy::single_match,
+    clippy::needless_match,
+    clippy::infallible_destructuring_match
+)]
 fn token_embedding_lookup(
     embedding: &ClipWeightData,
     token_ids: &[u32],
@@ -174,7 +183,11 @@ fn token_embedding_lookup(
 }
 
 /// Add position embedding (broadcast over batch dim).
-#[allow(clippy::single_match, clippy::needless_match, clippy::infallible_destructuring_match)]
+#[allow(
+    clippy::single_match,
+    clippy::needless_match,
+    clippy::infallible_destructuring_match
+)]
 fn add_position_embedding(
     hidden: BurnTensor<3>,
     position: &ClipWeightData,
@@ -202,7 +215,12 @@ fn add_position_embedding(
 }
 
 /// Run a single transformer block.
-#[allow(clippy::too_many_arguments, clippy::single_match, clippy::needless_match, clippy::infallible_destructuring_match)]
+#[allow(
+    clippy::too_many_arguments,
+    clippy::single_match,
+    clippy::needless_match,
+    clippy::infallible_destructuring_match
+)]
 fn transformer_block(
     hidden: BurnTensor<3>,
     block: &ClipTransformerWeights,
@@ -244,7 +262,12 @@ fn transformer_block(
 }
 
 /// LayerNorm over the channel dimension.
-#[allow(clippy::too_many_arguments, clippy::single_match, clippy::needless_match, clippy::infallible_destructuring_match)]
+#[allow(
+    clippy::too_many_arguments,
+    clippy::single_match,
+    clippy::needless_match,
+    clippy::infallible_destructuring_match
+)]
 fn layer_norm(
     hidden: BurnTensor<3>,
     weight: &ClipWeightData,
@@ -298,7 +321,12 @@ fn layer_norm(
 }
 
 /// Causal multi-head self-attention.
-#[allow(clippy::too_many_arguments, clippy::single_match, clippy::needless_match, clippy::infallible_destructuring_match)]
+#[allow(
+    clippy::too_many_arguments,
+    clippy::single_match,
+    clippy::needless_match,
+    clippy::infallible_destructuring_match
+)]
 fn self_attention(
     hidden: BurnTensor<3>,
     in_proj_weight: &ClipWeightData,
@@ -314,7 +342,8 @@ fn self_attention(
     // empty weights (test fixture), the output must be `[batch, seq,
     // 3*width]` so the slice operations below find a contiguous Q/K/V
     // partition.
-    let qkv = if in_proj_weight.data.is_empty() || !in_proj_weight.data.len().is_multiple_of(width) {
+    let qkv = if in_proj_weight.data.is_empty() || !in_proj_weight.data.len().is_multiple_of(width)
+    {
         let input_nd = match hidden {
             BurnTensor::Ndarray(t) => t,
         };
@@ -396,7 +425,12 @@ fn self_attention(
 }
 
 /// MLP: quick_gelu(fc1(x)) @ fc2 + bias
-#[allow(clippy::too_many_arguments, clippy::single_match, clippy::needless_match, clippy::infallible_destructuring_match)]
+#[allow(
+    clippy::too_many_arguments,
+    clippy::single_match,
+    clippy::needless_match,
+    clippy::infallible_destructuring_match
+)]
 fn mlp(
     hidden: BurnTensor<3>,
     fc1_weight: &ClipWeightData,
@@ -417,7 +451,11 @@ fn mlp(
 }
 
 /// quick_gelu(x) = x * sigmoid(1.702 * x)
-#[allow(clippy::single_match, clippy::needless_match, clippy::infallible_destructuring_match)]
+#[allow(
+    clippy::single_match,
+    clippy::needless_match,
+    clippy::infallible_destructuring_match
+)]
 fn quick_gelu(tensor: Tensor<NdArray, 3>) -> Tensor<NdArray, 3> {
     let scaled = tensor.clone() * 1.702f32;
     let sig = activation::sigmoid(scaled);
@@ -429,7 +467,12 @@ fn quick_gelu(tensor: Tensor<NdArray, 3>) -> Tensor<NdArray, 3> {
 // ---------------------------------------------------------------------------
 
 /// Linear layer: y = x @ W^T + b.  Input [batch, seq, in], weight [out, in], bias [out].
-#[allow(clippy::too_many_arguments, clippy::single_match, clippy::needless_match, clippy::infallible_destructuring_match)]
+#[allow(
+    clippy::too_many_arguments,
+    clippy::single_match,
+    clippy::needless_match,
+    clippy::infallible_destructuring_match
+)]
 fn linear_with_bias(
     input: &BurnTensor<3>,
     weight: &ClipWeightData,
@@ -486,7 +529,11 @@ fn linear_with_bias(
 }
 
 /// Linear layer without bias.
-#[allow(clippy::single_match, clippy::needless_match, clippy::infallible_destructuring_match)]
+#[allow(
+    clippy::single_match,
+    clippy::needless_match,
+    clippy::infallible_destructuring_match
+)]
 fn linear(
     input: &BurnTensor<3>,
     weight: &ClipWeightData,
@@ -496,7 +543,11 @@ fn linear(
 }
 
 /// Add residual: out = x + residual. Both are [batch, seq, width].
-#[allow(clippy::single_match, clippy::needless_match, clippy::infallible_destructuring_match)]
+#[allow(
+    clippy::single_match,
+    clippy::needless_match,
+    clippy::infallible_destructuring_match
+)]
 fn add_residual(
     hidden: BurnTensor<3>,
     residual: BurnTensor<3>,
@@ -511,7 +562,11 @@ fn add_residual(
 }
 
 /// Slice the first token position from [1, seq, width] → [1, width].
-#[allow(clippy::single_match, clippy::needless_match, clippy::infallible_destructuring_match)]
+#[allow(
+    clippy::single_match,
+    clippy::needless_match,
+    clippy::infallible_destructuring_match
+)]
 fn slice_first_token(
     hidden: &BurnTensor<3>,
     width: usize,
@@ -524,7 +579,11 @@ fn slice_first_token(
 }
 
 /// Add a dummy seq dim to a 2D [1, width] tensor → [1, 1, width] for use with linear layers.
-#[allow(clippy::single_match, clippy::needless_match, clippy::infallible_destructuring_match)]
+#[allow(
+    clippy::single_match,
+    clippy::needless_match,
+    clippy::infallible_destructuring_match
+)]
 fn unsqueeze_first_token(token: &BurnTensor<2>) -> Tensor<NdArray, 3> {
     let t = match token {
         BurnTensor::Ndarray(t) => t.clone(),
