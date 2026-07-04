@@ -2,9 +2,10 @@ mod desktop_host;
 mod event_hub;
 
 use desktop_host::{DesktopHostState, default_workspace_path};
-use reimagine_app_host::dto::{ComputeProfileDto, HealthResponse};
+use event_hub::RunEventPayload;
+use reimagine_app_host::dto::{ComputeProfileDto, HealthResponse, RunWorkflowResponse};
 use serde::Serialize;
-use tauri::Manager;
+use tauri::{ipc::Channel, Manager};
 
 #[derive(Debug, Clone, Serialize)]
 struct TauriCommandError {
@@ -16,6 +17,13 @@ impl TauriCommandError {
     fn bootstrap(message: impl Into<String>) -> Self {
         Self {
             code: "bootstrap_failed",
+            message: message.into(),
+        }
+    }
+
+    fn command(message: impl Into<String>) -> Self {
+        Self {
+            code: "command_failed",
             message: message.into(),
         }
     }
@@ -41,6 +49,28 @@ fn get_compute_profile(
     Ok(state.compute_profile())
 }
 
+#[tauri::command]
+async fn run_workflow(
+    state: tauri::State<'_, DesktopHostState>,
+    workflow: serde_json::Value,
+    channel: Channel<RunEventPayload>,
+) -> Result<RunWorkflowResponse, TauriCommandError> {
+    state
+        .run_workflow(workflow, channel)
+        .await
+        .map_err(|e| TauriCommandError::command(e.to_string()))
+}
+
+#[tauri::command]
+async fn cancel_run(
+    state: tauri::State<'_, DesktopHostState>,
+    run_id: String,
+) -> Result<(), TauriCommandError> {
+    state
+        .cancel_run(&run_id)
+        .map_err(|e| TauriCommandError::command(e.to_string()))
+}
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     tauri::Builder::default()
@@ -57,7 +87,12 @@ pub fn run() {
             app.manage(state);
             Ok(())
         })
-        .invoke_handler(tauri::generate_handler![health, get_compute_profile])
+        .invoke_handler(tauri::generate_handler![
+            health,
+            get_compute_profile,
+            run_workflow,
+            cancel_run,
+        ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
 }
