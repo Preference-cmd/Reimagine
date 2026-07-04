@@ -20,6 +20,7 @@
 mod artifacts;
 mod compute_profile;
 mod health;
+mod models;
 mod nodes;
 mod runs;
 mod workflows;
@@ -30,6 +31,7 @@ pub use compute_profile::{
     DeviceProfileDto, MemoryProfileDto,
 };
 pub use health::HealthResponse;
+pub use models::ModelInfoDto;
 pub use nodes::{NodeCatalogResponse, NodeDefDto, ParamSpecDto, SocketSpecDto};
 pub use runs::{
     DiagnosticDto, NodeStateDto, RunDto, RunEventDto, RunEventsResponse, RunSnapshotDto,

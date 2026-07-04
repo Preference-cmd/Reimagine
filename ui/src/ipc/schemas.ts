@@ -97,9 +97,12 @@ export type RunId = z.infer<typeof RunIdSchema>;
 
 export const ModelInfoSchema = z.object({
   id: z.string(),
-  name: z.string(),
-  family: z.string(),
-  size: z.string(),
-  path: z.string(),
+  displayName: z.string(),
+  modelSeries: z.string(),
+  variant: z.string(),
+  roles: z.array(z.string()),
+  format: z.string(),
+  sourceStatus: z.string(),
+  sizeBytes: z.number().nullable(),
 });
 export type ModelInfo = z.infer<typeof ModelInfoSchema>;

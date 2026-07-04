@@ -441,9 +441,9 @@ function modelRows(
     ...graphModels,
     ...models.map((model) => ({
       id: `model-${model.id}`,
-      label: model.name,
-      meta: model.family,
-      detail: model.size,
+      label: model.displayName,
+      meta: model.modelSeries,
+      detail: model.sizeBytes != null ? formatSizeBytes(model.sizeBytes) : "",
       icon: Boxes,
       muted: graphModels.some((row) => row.label.includes(model.id)),
     })),
@@ -552,6 +552,14 @@ function formatType(type: string | null | undefined) {
 
 function formatPhase(phase: string) {
   return phase.replace(/^./, (char) => char.toUpperCase());
+}
+
+function formatSizeBytes(bytes: number): string {
+  if (bytes <= 0) return "0 B";
+  const units = ["B", "KB", "MB", "GB", "TB"];
+  const i = Math.min(Math.floor(Math.log(bytes) / Math.log(1024)), units.length - 1);
+  const value = bytes / Math.pow(1024, i);
+  return `${value.toFixed(2)} ${units[i]}`;
 }
 
 function formatElapsed(ms: number) {

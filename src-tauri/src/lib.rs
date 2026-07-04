@@ -1,7 +1,7 @@
 mod desktop_host;
 
 use desktop_host::{DesktopHostState, default_workspace_path};
-use reimagine_app_host::dto::{ComputeProfileDto, HealthResponse};
+use reimagine_app_host::dto::{ComputeProfileDto, HealthResponse, ModelInfoDto, NodeDefDto};
 use serde::Serialize;
 use tauri::Manager;
 
@@ -15,6 +15,13 @@ impl TauriCommandError {
     fn bootstrap(message: impl Into<String>) -> Self {
         Self {
             code: "bootstrap_failed",
+            message: message.into(),
+        }
+    }
+
+    fn command(message: impl Into<String>) -> Self {
+        Self {
+            code: "command_failed",
             message: message.into(),
         }
     }
@@ -40,6 +47,21 @@ fn get_compute_profile(
     Ok(state.compute_profile())
 }
 
+#[tauri::command]
+fn get_node_defs(
+    state: tauri::State<'_, DesktopHostState>,
+) -> Result<Vec<NodeDefDto>, TauriCommandError> {
+    let response = state.list_node_defs();
+    Ok(response.nodes)
+}
+
+#[tauri::command]
+async fn list_models(
+    state: tauri::State<'_, DesktopHostState>,
+) -> Result<Vec<ModelInfoDto>, TauriCommandError> {
+    state.list_models().await.map_err(|e| TauriCommandError::command(e.to_string()))
+}
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     tauri::Builder::default()
@@ -56,7 +78,12 @@ pub fn run() {
             app.manage(state);
             Ok(())
         })
-        .invoke_handler(tauri::generate_handler![health, get_compute_profile])
+        .invoke_handler(tauri::generate_handler![
+            health,
+            get_compute_profile,
+            get_node_defs,
+            list_models,
+        ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
 }

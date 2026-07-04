@@ -1,7 +1,9 @@
 use std::path::{Path, PathBuf};
 
 use reimagine_agent::WorkspaceScope;
-use reimagine_app_host::dto::{ComputeProfileDto, HealthResponse};
+use reimagine_app_host::dto::{
+    ComputeProfileDto, HealthResponse, ModelInfoDto, NodeCatalogResponse,
+};
 use reimagine_app_host::{AppHost, AppHostError, WorkspaceHost};
 use reimagine_config::AppPaths;
 use reimagine_runtime::{RunEventSink, VecRunEventSink};
@@ -42,6 +44,30 @@ impl DesktopHostState {
 
     pub fn compute_profile(&self) -> ComputeProfileDto {
         self.app_host.workspace().compute_profile_dto()
+    }
+
+    /// Returns the workspace node catalog as a host‑neutral DTO.
+    pub fn list_node_defs(&self) -> NodeCatalogResponse {
+        use reimagine_app_host::dto::NodeDefDto;
+        let defs = self.app_host.workspace().list_node_defs();
+        NodeCatalogResponse {
+            nodes: defs.into_iter().map(NodeDefDto::from).collect(),
+        }
+    }
+
+    /// Returns the model list as a host‑neutral DTO.
+    ///
+    /// Loads the manifest from disk on first call; subsequent calls
+    /// return the cached manifest until it is explicitly refreshed.
+    pub async fn list_models(&self) -> Result<Vec<ModelInfoDto>, AppHostError> {
+        use reimagine_app_host::dto::ModelInfoDto;
+        let descriptors = self
+            .app_host
+            .workspace()
+            .model_service()
+            .list_models()
+            .await?;
+        Ok(descriptors.into_iter().map(ModelInfoDto::from).collect())
     }
 }
 
