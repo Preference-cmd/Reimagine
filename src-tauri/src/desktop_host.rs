@@ -9,7 +9,7 @@ use reimagine_app_host::dto::{
 use reimagine_app_host::{AppHost, AppHostError, WorkspaceHost};
 use reimagine_config::AppPaths;
 use reimagine_core::workflow::Workflow;
-use reimagine_runtime::{BoxedRunEventSink, RunEventSink};
+use reimagine_runtime::BoxedRunEventSink;
 use tauri::ipc::Channel;
 
 use crate::event_hub::{RunEventPayload, TauriRunEventHub};
@@ -83,8 +83,8 @@ impl DesktopHostState {
         use reimagine_app_host::RunWorkflowRequest;
 
         // 1. Deserialize and register the workflow
-        let workflow: Workflow = serde_json::from_value(workflow_value)
-            .map_err(|e| AppHostError::WorkflowJson {
+        let workflow: Workflow =
+            serde_json::from_value(workflow_value).map_err(|e| AppHostError::WorkflowJson {
                 path: std::path::PathBuf::new(),
                 message: e.to_string(),
             })?;

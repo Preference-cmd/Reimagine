@@ -1,5 +1,5 @@
-use std::fmt;
 use std::collections::HashMap;
+use std::fmt;
 use std::sync::{Arc, Mutex};
 
 use reimagine_core::event::RunEvent;
@@ -52,6 +52,7 @@ impl TauriRunEventHub {
     }
 
     /// Wrap in a `BoxedRunEventSink` for `WorkspaceHost` bootstrap.
+    #[allow(dead_code)]
     pub fn boxed() -> BoxedRunEventSink {
         Arc::new(Self::new()) as BoxedRunEventSink
     }
@@ -92,6 +93,7 @@ impl TauriRunEventHub {
     }
 
     /// Remove a subscriber and its events from the hub (cleanup).
+    #[allow(dead_code)]
     pub fn unsubscribe(&self, run_id: &RunId) {
         let mut guard = self.inner.lock().expect("hub poisoned");
         guard.subscribers.remove(run_id);
@@ -109,12 +111,11 @@ impl RunEventSink for TauriRunEventHub {
         // Record the event
         guard.events.entry(run_id.clone()).or_default().push(event);
 
-        // Best-effort send to subscriber
-        if let Some(channel) = guard.subscribers.get(&run_id) {
-            if channel.send(payload).is_err() {
-                // Dead subscriber — remove it silently
-                guard.subscribers.remove(&run_id);
-            }
+        // Best-effort send to subscriber; remove dead channels silently
+        if let Some(channel) = guard.subscribers.get(&run_id)
+            && channel.send(payload).is_err()
+        {
+            guard.subscribers.remove(&run_id);
         }
 
         Ok(())
@@ -157,9 +158,12 @@ mod tests {
         let run_a = RunId::new("run-a");
         let run_b = RunId::new("run-b");
 
-        hub.emit(make_event(&run_a, RunEventKind::RunQueued)).unwrap();
-        hub.emit(make_event(&run_a, RunEventKind::RunStarted)).unwrap();
-        hub.emit(make_event(&run_b, RunEventKind::RunQueued)).unwrap();
+        hub.emit(make_event(&run_a, RunEventKind::RunQueued))
+            .unwrap();
+        hub.emit(make_event(&run_a, RunEventKind::RunStarted))
+            .unwrap();
+        hub.emit(make_event(&run_b, RunEventKind::RunQueued))
+            .unwrap();
 
         assert_eq!(hub.events_for(&run_a).len(), 2);
         assert_eq!(hub.events_for(&run_b).len(), 1);
@@ -185,7 +189,8 @@ mod tests {
     fn boxed_wraps_correctly() {
         let sink = TauriRunEventHub::boxed();
         let run = RunId::new("run-d");
-        sink.emit(make_event(&run, RunEventKind::RunStarted)).unwrap();
+        sink.emit(make_event(&run, RunEventKind::RunStarted))
+            .unwrap();
         // Can't downcast Arc<dyn RunEventSink> back, so this just tests no crash
     }
 }

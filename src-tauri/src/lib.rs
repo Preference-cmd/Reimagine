@@ -1,14 +1,14 @@
 mod desktop_host;
 mod event_hub;
 
-use desktop_host::{default_workspace_path, DesktopHostState};
+use desktop_host::{DesktopHostState, default_workspace_path};
 use event_hub::RunEventPayload;
 use reimagine_app_host::dto::{
     ArtifactMetadataDto, ComputeProfileDto, HealthResponse, ModelInfoDto, NodeDefDto,
     RunWorkflowResponse,
 };
 use serde::Serialize;
-use tauri::{ipc::Channel, Manager};
+use tauri::{Manager, ipc::Channel};
 
 #[derive(Debug, Clone, Serialize)]
 struct TauriCommandError {

@@ -40,11 +40,7 @@ impl From<ModelDescriptor> for ModelInfoDto {
             display_name,
             model_series: series,
             variant,
-            roles: descriptor
-                .roles()
-                .iter()
-                .map(|r| format_role(r))
-                .collect(),
+            roles: descriptor.roles().iter().map(format_role).collect(),
             format: format!("{:?}", descriptor.format()).to_ascii_lowercase(),
             source_status: format_status(descriptor.source_status()),
             size_bytes: descriptor.size_bytes(),
@@ -103,14 +99,15 @@ fn format_status(status: reimagine_model_manager::ModelSourceStatus) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use reimagine_core::model::{
-        ModelId, ModelRole, ModelSeries, ModelVariant,
-    };
-    use reimagine_model_manager::{
-        ModelDescriptor, ModelFormat, ModelSource,
-    };
+    use reimagine_core::model::{ModelId, ModelRole, ModelSeries, ModelVariant};
+    use reimagine_model_manager::{ModelDescriptor, ModelFormat, ModelSource};
 
-    fn make_descriptor(id: &str, series: &str, variant: &str, roles: Vec<ModelRole>) -> ModelDescriptor {
+    fn make_descriptor(
+        id: &str,
+        series: &str,
+        variant: &str,
+        roles: Vec<ModelRole>,
+    ) -> ModelDescriptor {
         ModelDescriptor::new(
             ModelId::new(id),
             ModelSeries::new(series),
@@ -170,7 +167,11 @@ mod tests {
             ModelId::new("my_converted_model"),
             ModelSeries::new("stable-diffusion-xl"),
             ModelVariant::new("base"),
-            vec![ModelRole::DiffusionModel, ModelRole::TextEncoder, ModelRole::Vae],
+            vec![
+                ModelRole::DiffusionModel,
+                ModelRole::TextEncoder,
+                ModelRole::Vae,
+            ],
             ModelSource::relative(
                 reimagine_model_manager::ModelRootId::new("base"),
                 "models/converted/src_id/fp/sdxl",
