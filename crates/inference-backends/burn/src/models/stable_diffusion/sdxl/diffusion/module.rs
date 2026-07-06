@@ -11,7 +11,7 @@ use burn_nn::{
     modules::attention::{MhaInput, MultiHeadAttention, MultiHeadAttentionConfig},
     norm::{GroupNorm, GroupNormConfig},
 };
-use burn_tensor::{Tensor, activation, backend::Backend};
+use burn_tensor::{Int, Tensor, activation, backend::Backend};
 
 /// Reimagine-owned SDXL UNet topology facts.
 #[derive(Debug, Clone)]
@@ -256,12 +256,16 @@ impl<B: Backend> SdxlUnet<B> {
     pub fn forward(
         &self,
         latent: Tensor<B, 4>,
-        _timestep: Tensor<B, 1>,
+        timestep: Tensor<B, 1>,
         conditioning: Tensor<B, 3>,
     ) -> Tensor<B, 4> {
         let [batch, _, _, _] = latent.dims();
-        let timestep_embedding =
-            Tensor::<B, 2>::zeros([batch, self.time_embedding.input_dim()], &latent.device());
+        let timestep_embedding = sinusoidal_timestep_embedding(
+            timestep,
+            batch,
+            self.time_embedding.input_dim(),
+            &latent.device(),
+        );
         let time_hidden = self.time_embedding.forward(timestep_embedding);
         let mut hidden = self.conv_in.forward(latent);
         for stage in &self.down_blocks {
@@ -320,6 +324,32 @@ impl<B: Backend> SdxlUnet<B> {
             .iter()
             .chain(self.middle_blocks.iter())
             .chain(self.up_blocks.iter())
+    }
+}
+
+fn sinusoidal_timestep_embedding<B: Backend>(
+    timestep: Tensor<B, 1>,
+    batch: usize,
+    width: usize,
+    device: &B::Device,
+) -> Tensor<B, 2> {
+    let [timestep_batch] = timestep.dims();
+    let timestep = match timestep_batch {
+        len if len == batch => timestep,
+        1 => timestep.repeat_dim(0, batch),
+        len => panic!("UNet timestep batch {len} does not match latent batch {batch}"),
+    };
+    let half = width / 2;
+    let positions = Tensor::<B, 1, Int>::arange(0..half as i64, device).float();
+    let exponent = positions * (-(10_000.0_f32).ln() / half as f32);
+    let frequencies = exponent.exp().reshape([1, half]);
+    let args = timestep.reshape([batch, 1]) * frequencies;
+    let embedding = Tensor::cat(vec![args.clone().cos(), args.sin()], 1);
+
+    if width.is_multiple_of(2) {
+        embedding
+    } else {
+        Tensor::cat(vec![embedding, Tensor::zeros([batch, 1], device)], 1)
     }
 }
 
@@ -678,6 +708,30 @@ mod tests {
         let output = module.forward(latent, timestep, conditioning);
 
         assert_eq!(output.dims(), [2, 4, 8, 8]);
+    }
+
+    #[test]
+    fn sdxl_unet_forward_uses_supplied_timestep() {
+        let config = BurnBackendConfig::new("/models", "/output");
+        let runtime = BurnRuntime::<ActiveBurnBackend>::new(active_device(config.device()));
+        let module = super::SdxlUnet::<ActiveBurnBackend>::init_tiny(runtime.device());
+        let latent = Tensor::<ActiveBurnBackend, 4>::zeros([1, 4, 8, 8], runtime.device());
+        let conditioning = Tensor::<ActiveBurnBackend, 3>::zeros([1, 3, 16], runtime.device());
+        let output_a = module.forward(
+            latent.clone(),
+            Tensor::<ActiveBurnBackend, 1>::zeros([1], runtime.device()),
+            conditioning.clone(),
+        );
+        let output_b = module.forward(
+            latent,
+            Tensor::<ActiveBurnBackend, 1>::ones([1], runtime.device()),
+            conditioning,
+        );
+
+        let values_a = output_a.to_data().to_vec::<f32>().expect("output a");
+        let values_b = output_b.to_data().to_vec::<f32>().expect("output b");
+
+        assert_ne!(values_a, values_b);
     }
 
     #[test]
