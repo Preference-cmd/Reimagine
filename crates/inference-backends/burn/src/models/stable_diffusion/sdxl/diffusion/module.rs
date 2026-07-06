@@ -22,6 +22,8 @@ pub struct SdxlUnetTopology {
     pub time_input_dim: usize,
     pub time_hidden_dim: usize,
     pub conditioning_dim: usize,
+    pub pooled_conditioning_dim: usize,
+    pub time_ids_dim: usize,
     pub down_blocks: Vec<SdxlStageSpec>,
     pub middle_blocks: Vec<SdxlStageSpec>,
     pub up_blocks: Vec<SdxlStageSpec>,
@@ -63,6 +65,8 @@ impl SdxlUnetTopology {
             time_input_dim: 4,
             time_hidden_dim: 8,
             conditioning_dim: 16,
+            pooled_conditioning_dim: 8,
+            time_ids_dim: 6,
             down_blocks: vec![SdxlStageSpec {
                 res_blocks: vec![SdxlResBlockSpec {
                     in_channels: 4,
@@ -120,6 +124,8 @@ impl SdxlUnetTopology {
             time_input_dim: 320,
             time_hidden_dim: 1280,
             conditioning_dim: 2048,
+            pooled_conditioning_dim: 1280,
+            time_ids_dim: 6,
             down_blocks: vec![stage(320, 5), stage(640, 10), stage(1280, 20)],
             middle_blocks: vec![stage(1280, 20)],
             up_blocks: vec![stage(1280, 20), stage(640, 10), stage(320, 5)],
@@ -196,6 +202,7 @@ pub struct SdxlCrossAttentionBlockSpec {
 pub struct SdxlUnet<B: Backend> {
     pub conv_in: Conv2d<B>,
     time_embedding: SdxlTimeEmbedding<B>,
+    added_conditioning: SdxlAddedConditioningProjection<B>,
     down_blocks: Vec<SdxlUnetStage<B>>,
     middle_blocks: Vec<SdxlUnetStage<B>>,
     up_blocks: Vec<SdxlUnetStage<B>>,
@@ -218,6 +225,12 @@ impl<B: Backend> SdxlUnet<B> {
                 .init(device),
             time_embedding: SdxlTimeEmbedding::init(
                 topology.time_input_dim,
+                topology.time_hidden_dim,
+                device,
+            ),
+            added_conditioning: SdxlAddedConditioningProjection::init(
+                topology.pooled_conditioning_dim,
+                topology.time_ids_dim,
                 topology.time_hidden_dim,
                 device,
             ),
@@ -257,13 +270,30 @@ impl<B: Backend> SdxlUnet<B> {
         conditioning: Tensor<B, 3>,
     ) -> Tensor<B, 4> {
         let [batch, _, _, _] = latent.dims();
+        let device = latent.device();
+        let added_conditioning = SdxlAddedConditioning::new(
+            Tensor::<B, 2>::zeros([batch, self.added_conditioning.pooled_dim()], &device),
+            Tensor::<B, 2>::zeros([batch, self.added_conditioning.time_ids_dim()], &device),
+        );
+        self.forward_with_added_conditioning(latent, timestep, conditioning, added_conditioning)
+    }
+
+    pub fn forward_with_added_conditioning(
+        &self,
+        latent: Tensor<B, 4>,
+        timestep: Tensor<B, 1>,
+        conditioning: Tensor<B, 3>,
+        added_conditioning: SdxlAddedConditioning<B>,
+    ) -> Tensor<B, 4> {
+        let [batch, _, _, _] = latent.dims();
         let timestep_embedding = sinusoidal_timestep_embedding(
             timestep,
             batch,
             self.time_embedding.input_dim(),
             &latent.device(),
         );
-        let time_hidden = self.time_embedding.forward(timestep_embedding);
+        let time_hidden = self.time_embedding.forward(timestep_embedding)
+            + self.added_conditioning.forward(added_conditioning);
         let mut hidden = self.conv_in.forward(latent);
         for stage in &self.down_blocks {
             hidden = stage.forward(hidden, time_hidden.clone(), conditioning.clone());
@@ -304,6 +334,10 @@ impl<B: Backend> SdxlUnet<B> {
         self.time_embedding.dims()
     }
 
+    pub fn added_conditioning_dims(&self) -> [usize; 3] {
+        self.added_conditioning.dims()
+    }
+
     pub fn down_block_count(&self) -> usize {
         self.down_blocks.len()
     }
@@ -321,6 +355,74 @@ impl<B: Backend> SdxlUnet<B> {
             .iter()
             .chain(self.middle_blocks.iter())
             .chain(self.up_blocks.iter())
+    }
+}
+
+/// Burn-private SDXL added-conditioning tensors.
+///
+/// SDXL injects pooled text conditioning and six scalar time ids into the same
+/// residual time path as the denoising timestep. Tiny fixtures keep the same
+/// shape contract with a smaller pooled width.
+#[derive(Debug, Clone)]
+pub struct SdxlAddedConditioning<B: Backend> {
+    pooled_text: Tensor<B, 2>,
+    time_ids: Tensor<B, 2>,
+}
+
+impl<B: Backend> SdxlAddedConditioning<B> {
+    pub fn new(pooled_text: Tensor<B, 2>, time_ids: Tensor<B, 2>) -> Self {
+        Self {
+            pooled_text,
+            time_ids,
+        }
+    }
+}
+
+/// Burn-native projection from SDXL added-conditioning into time hidden width.
+#[derive(Module, Debug)]
+pub struct SdxlAddedConditioningProjection<B: Backend> {
+    projection: Linear<B>,
+    pooled_dim: usize,
+    time_ids_dim: usize,
+}
+
+impl<B: Backend> SdxlAddedConditioningProjection<B> {
+    pub fn init(
+        pooled_dim: usize,
+        time_ids_dim: usize,
+        time_hidden_dim: usize,
+        device: &B::Device,
+    ) -> Self {
+        Self {
+            projection: LinearConfig::new(pooled_dim + time_ids_dim, time_hidden_dim).init(device),
+            pooled_dim,
+            time_ids_dim,
+        }
+    }
+
+    pub fn forward(&self, conditioning: SdxlAddedConditioning<B>) -> Tensor<B, 2> {
+        let vector = Tensor::cat(vec![conditioning.pooled_text, conditioning.time_ids], 1);
+        self.projection.forward(activation::silu(vector))
+    }
+
+    pub fn dims(&self) -> [usize; 3] {
+        [
+            self.pooled_dim(),
+            self.time_ids_dim(),
+            self.time_hidden_dim(),
+        ]
+    }
+
+    fn pooled_dim(&self) -> usize {
+        self.pooled_dim
+    }
+
+    fn time_ids_dim(&self) -> usize {
+        self.time_ids_dim
+    }
+
+    fn time_hidden_dim(&self) -> usize {
+        self.projection.weight.dims()[1]
     }
 }
 
@@ -732,6 +834,39 @@ mod tests {
     }
 
     #[test]
+    fn sdxl_unet_forward_uses_added_conditioning_projection() {
+        let config = BurnBackendConfig::new("/models", "/output");
+        let runtime = BurnRuntime::<ActiveBurnBackend>::new(active_device(config.device()));
+        let module = super::SdxlUnet::<ActiveBurnBackend>::init_tiny(runtime.device());
+        let latent = Tensor::<ActiveBurnBackend, 4>::zeros([1, 4, 8, 8], runtime.device());
+        let timestep = Tensor::<ActiveBurnBackend, 1>::zeros([1], runtime.device());
+        let conditioning = Tensor::<ActiveBurnBackend, 3>::zeros([1, 3, 16], runtime.device());
+        let output_a = module.forward_with_added_conditioning(
+            latent.clone(),
+            timestep.clone(),
+            conditioning.clone(),
+            super::SdxlAddedConditioning::new(
+                Tensor::<ActiveBurnBackend, 2>::zeros([1, 8], runtime.device()),
+                Tensor::<ActiveBurnBackend, 2>::zeros([1, 6], runtime.device()),
+            ),
+        );
+        let output_b = module.forward_with_added_conditioning(
+            latent,
+            timestep,
+            conditioning,
+            super::SdxlAddedConditioning::new(
+                Tensor::<ActiveBurnBackend, 2>::ones([1, 8], runtime.device()),
+                Tensor::<ActiveBurnBackend, 2>::ones([1, 6], runtime.device()),
+            ),
+        );
+
+        let values_a = output_a.to_data().to_vec::<f32>().expect("output a");
+        let values_b = output_b.to_data().to_vec::<f32>().expect("output b");
+
+        assert_ne!(values_a, values_b);
+    }
+
+    #[test]
     fn sdxl_unet_module_saves_and_loads_through_burn_store() {
         let config = BurnBackendConfig::new("/models", "/output");
         let runtime = BurnRuntime::<ActiveBurnBackend>::new(active_device(config.device()));
@@ -877,10 +1012,14 @@ mod tests {
         let tiny = super::SdxlUnetTopologyProfile::TinySdxlE2e.topology();
         assert_eq!(tiny.name(), "tiny_sdxl_e2e");
         assert_eq!(tiny.conditioning_dim, 16);
+        assert_eq!(tiny.pooled_conditioning_dim, 8);
+        assert_eq!(tiny.time_ids_dim, 6);
 
         let full = super::SdxlUnetTopologyProfile::SdxlBase.topology();
         assert_eq!(full.name(), "sdxl_base");
         assert_eq!(full.conditioning_dim, 2048);
+        assert_eq!(full.pooled_conditioning_dim, 1280);
+        assert_eq!(full.time_ids_dim, 6);
     }
 
     #[test]
@@ -892,6 +1031,8 @@ mod tests {
         assert_eq!(topology.model_channels, 320);
         assert_eq!(topology.time_hidden_dim, 1280);
         assert_eq!(topology.conditioning_dim, 2048);
+        assert_eq!(topology.pooled_conditioning_dim, 1280);
+        assert_eq!(topology.time_ids_dim, 6);
         assert_eq!(topology.down_blocks.len(), 3);
         assert_eq!(topology.middle_blocks.len(), 1);
         assert_eq!(topology.up_blocks.len(), 3);
@@ -918,5 +1059,14 @@ mod tests {
         let module = super::SdxlUnet::<ActiveBurnBackend>::init_tiny(runtime.device());
 
         assert_eq!(module.time_embedding_dims(), [4, 8]);
+    }
+
+    #[test]
+    fn sdxl_unet_scaffold_contains_burn_native_added_conditioning_projection() {
+        let config = BurnBackendConfig::new("/models", "/output");
+        let runtime = BurnRuntime::<ActiveBurnBackend>::new(active_device(config.device()));
+        let module = super::SdxlUnet::<ActiveBurnBackend>::init_tiny(runtime.device());
+
+        assert_eq!(module.added_conditioning_dims(), [8, 6, 8]);
     }
 }

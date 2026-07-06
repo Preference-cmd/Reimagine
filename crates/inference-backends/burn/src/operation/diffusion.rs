@@ -183,6 +183,8 @@ pub fn execute_diffusion_sample(
         latent_tensor,
         &positive_payload,
         &negative_payload,
+        positive_cond.metadata(),
+        negative_cond.metadata(),
         steps,
         cfg,
         seed,
@@ -284,13 +286,15 @@ fn validate_store_payload(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::active_backend::{ActiveBurnBackend, active_device};
     use crate::config::BurnBackendConfig;
     use crate::models::stable_diffusion::sdxl::{
         BurnLoadedModelBundle, BurnLoadedSdxlBundle, BurnSdxlTokenizedPrompt,
         BurnSdxlTokenizedPromptPair,
     };
     use crate::profile::BACKEND_LABEL;
-    use crate::store::{BurnConditioningMetadata, BurnConditioningPayload};
+    use crate::store::{BurnConditioningMetadata, BurnConditioningPayload, ClipOutputs};
+    use burn_tensor::Tensor;
     use reimagine_core::model::{ModelId, NodeId, RunId, WorkflowId, WorkflowVersion};
     use reimagine_inference::{
         Backend, BackendInstance, BackendPayloadKey, ExecutionConditioning, RuntimeClipHandle,
@@ -403,6 +407,14 @@ mod tests {
             },
         };
         BurnConditioningPayload::test_only(metadata, tokenized)
+    }
+
+    fn conditioning_payload_without_pooled_embeddings(model_id: &str) -> BurnConditioningPayload {
+        let config = BurnBackendConfig::new("/models", "/output");
+        let device = active_device(config.device());
+        let text = Tensor::<ActiveBurnBackend, 3>::zeros([1, 77, 2048], &device);
+        conditioning_payload_without_embeddings(model_id)
+            .with_embeddings(ClipOutputs::active(text, None))
     }
 
     #[test]
@@ -634,6 +646,31 @@ mod tests {
         let msg = err.to_string();
 
         assert!(msg.contains("stored text encoder embeddings"), "msg: {msg}");
+    }
+
+    #[test]
+    fn diffusion_sample_rejects_conditioning_without_pooled_embeddings_before_store_mutation() {
+        let backend = test_backend();
+        seed_bundle(&backend, "sdxl-base");
+        let request = build_request(&backend, "sdxl-base");
+        let key = request.positive().text_embedding().payload_key().clone();
+        backend.store().insert_conditioning(
+            RunId::new("run-test"),
+            key,
+            conditioning_payload_without_pooled_embeddings("sdxl-base"),
+        );
+        let before_payload_count = backend.store().payload_count();
+
+        let err = execute_diffusion_sample(&backend, request).unwrap_err();
+        let msg = err.to_string();
+
+        assert!(msg.contains("pooled"), "msg: {msg}");
+        assert_eq!(backend.store().payload_count(), before_payload_count);
+        assert!(
+            !backend
+                .store()
+                .contains_payload(&BackendPayloadKey::new("diffusion:run-test:node-sample"))
+        );
     }
 
     #[test]

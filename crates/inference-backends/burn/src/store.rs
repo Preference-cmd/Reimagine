@@ -235,6 +235,24 @@ impl ClipOutputs {
         }
     }
 
+    pub(crate) fn active_pooled_embeddings(
+        &self,
+    ) -> Result<Tensor<ActiveBurnBackend, 2>, crate::error::BurnBackendError> {
+        match self {
+            Self::Active {
+                pooled_embeddings, ..
+            } => pooled_embeddings
+                .as_ref()
+                .map(|tensor| tensor.as_ref().clone())
+                .ok_or_else(|| {
+                    crate::error::BurnBackendError::InvalidRequest(
+                        "diffusion.sample requires stored pooled text encoder embeddings"
+                            .to_owned(),
+                    )
+                }),
+        }
+    }
+
     pub(crate) fn pooled_dims(&self) -> Option<[usize; 2]> {
         match self {
             Self::Active {
@@ -338,6 +356,19 @@ impl BurnConditioningPayload {
                 )
             })?
             .active_text_embeddings()
+    }
+
+    pub(crate) fn active_pooled_embeddings(
+        &self,
+    ) -> Result<Tensor<ActiveBurnBackend, 2>, crate::error::BurnBackendError> {
+        self.embeddings
+            .as_ref()
+            .ok_or_else(|| {
+                crate::error::BurnBackendError::InvalidRequest(
+                    "diffusion.sample requires stored text encoder embeddings".to_owned(),
+                )
+            })?
+            .active_pooled_embeddings()
     }
 }
 
@@ -1123,6 +1154,36 @@ mod tests {
         assert!(embeddings.is_active_backend());
         assert_eq!(embeddings.text_dims(), [1, 77, 2048]);
         assert_eq!(embeddings.pooled_dims(), Some([1, 1280]));
+    }
+
+    #[test]
+    fn conditioning_payload_exposes_active_pooled_embeddings() {
+        let device = active_device_for_test();
+        let text = Tensor::<ActiveBurnBackend, 3>::zeros([1, 77, 2048], &device);
+        let pooled = Tensor::<ActiveBurnBackend, 2>::ones([1, 1280], &device);
+        let payload = build_conditioning("sdxl-base", 11, 22)
+            .with_embeddings(ClipOutputs::active(text, Some(pooled)));
+
+        let pooled = payload
+            .active_pooled_embeddings()
+            .expect("active pooled embeddings");
+
+        assert_eq!(pooled.dims(), [1, 1280]);
+    }
+
+    #[test]
+    fn conditioning_payload_reports_missing_active_pooled_embeddings() {
+        let device = active_device_for_test();
+        let text = Tensor::<ActiveBurnBackend, 3>::zeros([1, 77, 2048], &device);
+        let payload = build_conditioning("sdxl-base", 11, 22)
+            .with_embeddings(ClipOutputs::active(text, None));
+
+        let err = payload
+            .active_pooled_embeddings()
+            .expect_err("missing pooled embeddings should be rejected");
+        let msg = err.to_string();
+
+        assert!(msg.contains("pooled"), "msg: {msg}");
     }
 
     #[test]

@@ -7,7 +7,8 @@ mod sampler;
 pub(crate) mod scheduler;
 pub mod unet;
 
-use burn_tensor::Tensor;
+use burn_tensor::{Tensor, TensorData};
+use reimagine_inference::ConditioningMetadata;
 
 use crate::active_backend::ActiveBurnBackend;
 use crate::backend::BurnBackend;
@@ -27,6 +28,8 @@ pub fn sample_sdxl(
     latent: Tensor<ActiveBurnBackend, 4>,
     positive_cond: &BurnConditioningPayload,
     negative_cond: &BurnConditioningPayload,
+    positive_metadata: &ConditioningMetadata,
+    negative_metadata: &ConditioningMetadata,
     steps: u32,
     cfg: f32,
     seed: u64,
@@ -38,7 +41,25 @@ pub fn sample_sdxl(
     let unet = load_or_init_unet(sdxl, backend)?;
     let positive = project_conditioning_for_unet(positive_cond.active_text_embeddings()?, &unet)?;
     let negative = project_conditioning_for_unet(negative_cond.active_text_embeddings()?, &unet)?;
-    sampler::euler_normal_cfg_sample(&unet, latent, positive, negative, steps, cfg, seed)
+    let positive_added = build_added_conditioning_for_unet(
+        positive_cond.active_pooled_embeddings()?,
+        positive_metadata,
+        &unet,
+    )?;
+    let negative_added = build_added_conditioning_for_unet(
+        negative_cond.active_pooled_embeddings()?,
+        negative_metadata,
+        &unet,
+    )?;
+    sampler::euler_normal_cfg_sample(
+        &unet,
+        latent,
+        sampler::SdxlCfgConditioning::new(positive, positive_added),
+        sampler::SdxlCfgConditioning::new(negative, negative_added),
+        steps,
+        cfg,
+        seed,
+    )
 }
 
 fn load_or_init_unet(
@@ -98,6 +119,65 @@ fn project_conditioning_for_unet(
         )));
     }
     Ok(conditioning.slice([0..batch, 0..seq, 0..width]))
+}
+
+fn build_added_conditioning_for_unet(
+    pooled: Tensor<ActiveBurnBackend, 2>,
+    metadata: &ConditioningMetadata,
+    unet: &module::SdxlUnet<ActiveBurnBackend>,
+) -> Result<module::SdxlAddedConditioning<ActiveBurnBackend>, BurnBackendError> {
+    let [pooled_width, time_ids_width, _] = unet.added_conditioning_dims();
+    let pooled = project_pooled_conditioning_for_unet(pooled, pooled_width)?;
+    let time_ids =
+        time_ids_for_conditioning(metadata, pooled.dims()[0], time_ids_width, &pooled.device())?;
+    Ok(module::SdxlAddedConditioning::new(pooled, time_ids))
+}
+
+fn project_pooled_conditioning_for_unet(
+    pooled: Tensor<ActiveBurnBackend, 2>,
+    width: usize,
+) -> Result<Tensor<ActiveBurnBackend, 2>, BurnBackendError> {
+    let [batch, actual_width] = pooled.dims();
+    if actual_width == width {
+        return Ok(pooled);
+    }
+    if actual_width < width {
+        return Err(BurnBackendError::InvalidRequest(format!(
+            "diffusion.sample pooled conditioning width {actual_width} is smaller than UNet added-conditioning width {width}"
+        )));
+    }
+    Ok(pooled.slice([0..batch, 0..width]))
+}
+
+fn time_ids_for_conditioning(
+    metadata: &ConditioningMetadata,
+    batch: usize,
+    width: usize,
+    device: &burn_tensor::Device<ActiveBurnBackend>,
+) -> Result<Tensor<ActiveBurnBackend, 2>, BurnBackendError> {
+    let values = [
+        metadata.width() as f32,
+        metadata.height() as f32,
+        metadata.crop_x() as f32,
+        metadata.crop_y() as f32,
+        metadata.target_width() as f32,
+        metadata.target_height() as f32,
+    ];
+    if width != values.len() {
+        return Err(BurnBackendError::InvalidRequest(format!(
+            "diffusion.sample SDXL time ids width is {}; expected {}",
+            width,
+            values.len()
+        )));
+    }
+    let mut data = Vec::with_capacity(batch * width);
+    for _ in 0..batch {
+        data.extend_from_slice(&values);
+    }
+    Ok(Tensor::<ActiveBurnBackend, 2>::from_data(
+        TensorData::new(data, [batch, width]),
+        device,
+    ))
 }
 
 #[cfg(test)]
