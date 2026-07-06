@@ -122,6 +122,36 @@ impl ClipTextEncoderProfile {
         Self::open_clip_g().with_target_prefix("model.text_encoder_2")
     }
 
+    /// Tiny executable profile used only by the public end-to-end fixture.
+    pub fn tiny_sdxl_clip_l() -> Self {
+        Self {
+            variant: ClipTextEncoderVariant::ClipL,
+            target_prefix: "model.text_encoder".to_owned(),
+            num_layers: 1,
+            width: 8,
+            heads: 1,
+            inner_width: 32,
+            vocab_size: 49408,
+            sequence_length: 77,
+            produces_pooled_output: false,
+        }
+    }
+
+    /// Tiny executable OpenCLIP profile used only by the public fixture.
+    pub fn tiny_sdxl_open_clip_g() -> Self {
+        Self {
+            variant: ClipTextEncoderVariant::OpenClipG,
+            target_prefix: "model.text_encoder_2".to_owned(),
+            num_layers: 1,
+            width: 8,
+            heads: 1,
+            inner_width: 32,
+            vocab_size: 49408,
+            sequence_length: 77,
+            produces_pooled_output: true,
+        }
+    }
+
     pub fn block_prefix(&self, layer: u32) -> String {
         format!("{}.transformer.resblocks.{}", self.target_prefix, layer)
     }

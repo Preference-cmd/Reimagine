@@ -10,9 +10,10 @@
 //! into the [`BurnSdxlComponentContract`] surface so the existing
 //! validation and writer infrastructure stays compatible.
 
-pub mod forward;
+pub(crate) mod cache;
 pub mod loading;
 pub mod module;
+pub mod store;
 
 use crate::text_encoder::specs::{TextEncoderSpecSet, TextEncoderSpecSetBuilder};
 

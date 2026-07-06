@@ -240,6 +240,14 @@ impl TextEncoderSpecSetBuilder {
     pub fn sdxl_open_clip_g() -> TextEncoderSpecSet {
         text_encoder_spec_set(&ClipTextEncoderProfile::sdxl_open_clip_g())
     }
+
+    pub fn tiny_sdxl_clip_l() -> TextEncoderSpecSet {
+        text_encoder_spec_set(&ClipTextEncoderProfile::tiny_sdxl_clip_l())
+    }
+
+    pub fn tiny_sdxl_open_clip_g() -> TextEncoderSpecSet {
+        text_encoder_spec_set(&ClipTextEncoderProfile::tiny_sdxl_open_clip_g())
+    }
 }
 
 #[cfg(test)]
