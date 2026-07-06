@@ -393,28 +393,10 @@ fn write_diffusion_component(path: &Path) {
         path,
         BurnSdxlComponentRole::Diffusion,
         vec![
-            tensor(
-                "model.diffusion.input_blocks.0.0.weight",
-                vec![4, 4, 3, 3],
-                zeros(4 * 4 * 3 * 3),
-            ),
-            tensor(
-                "model.diffusion.time_embed.0.weight",
-                vec![8, 4],
-                zeros(8 * 4),
-            ),
-            tensor(
-                "model.diffusion.conv_in.weight",
-                vec![4, 4, 3, 3],
-                zeros(4 * 4 * 3 * 3),
-            ),
-            tensor("model.diffusion.conv_in.bias", vec![4], vec![0.0; 4]),
-            tensor(
-                "model.diffusion.out.0.weight",
-                vec![4, 4, 3, 3],
-                zeros(4 * 4 * 3 * 3),
-            ),
-            tensor("model.diffusion.out.0.bias", vec![4], vec![0.0; 4]),
+            tensor("conv_in.weight", vec![4, 4, 3, 3], zeros(4 * 4 * 3 * 3)),
+            tensor("conv_in.bias", vec![4], vec![0.0; 4]),
+            tensor("conv_out.weight", vec![4, 4, 3, 3], zeros(4 * 4 * 3 * 3)),
+            tensor("conv_out.bias", vec![4], vec![0.0; 4]),
         ],
     );
 }

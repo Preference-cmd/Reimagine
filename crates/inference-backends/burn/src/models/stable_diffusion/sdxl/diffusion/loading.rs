@@ -295,6 +295,8 @@ mod tests {
         SdxlUnet, SdxlUnetTopology, SdxlUnetTopologyProfile,
     };
     use crate::models::stable_diffusion::sdxl::load_diagnostics::format_apply_report;
+    use crate::models::stable_diffusion::sdxl::source_layout::BurnSdxlSourceSet;
+    use crate::models::stable_diffusion::sdxl::source_mapping::map_diffusers_style_split_source;
     use crate::runtime::BurnRuntime;
 
     #[test]
@@ -435,6 +437,46 @@ mod tests {
             "down_blocks.0.res_blocks.0.time_projection.bias",
             "down_blocks.0.res_blocks.0.conv_2.weight",
             "down_blocks.0.res_blocks.0.conv_2.bias",
+        ] {
+            assert!(
+                result.applied.contains(&expected.to_owned()),
+                "missing applied snapshot `{expected}` in: {result}"
+            );
+        }
+    }
+
+    #[test]
+    fn mapped_diffusion_component_loads_through_full_profile_unet_loader() {
+        let source = tempfile::tempdir().expect("source temp dir");
+        let output = tempfile::tempdir().expect("output temp dir");
+        crate::models::stable_diffusion::sdxl::source_mapping::tests::write_complete_split_source(
+            source.path(),
+        );
+        let source_set =
+            BurnSdxlSourceSet::diffusers_style_split_safetensors(source.path().to_path_buf());
+        map_diffusers_style_split_source(&source_set, output.path()).expect("map source");
+        let diffusion_path = output.path().join("diffusion/model.safetensors");
+        let config = BurnBackendConfig::new("/models", "/output");
+        let runtime = BurnRuntime::<ActiveBurnBackend>::new(active_device(config.device()));
+        let mut module = SdxlUnet::<ActiveBurnBackend>::init_from_topology(
+            &SdxlUnetTopology::sdxl_base(),
+            runtime.device(),
+        );
+
+        let result = super::load_unet_module_from_path_with_profile(
+            &runtime,
+            &mut module,
+            &diffusion_path,
+            SdxlUnetTopologyProfile::SdxlBase,
+        )
+        .expect("mapped diffusion component should load through full-profile UNet loader");
+
+        for expected in [
+            "time_embedding.linear_1.weight",
+            "time_embedding.linear_2.weight",
+            "down_blocks.0.res_blocks.0.conv_1.weight",
+            "down_blocks.0.res_blocks.0.time_projection.weight",
+            "down_blocks.0.res_blocks.0.conv_2.weight",
         ] {
             assert!(
                 result.applied.contains(&expected.to_owned()),

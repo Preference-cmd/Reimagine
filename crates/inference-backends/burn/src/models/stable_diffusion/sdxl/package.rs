@@ -574,13 +574,11 @@ mod tests {
     }
 
     fn write_complete_split_source(root: &Path) {
-        write_source_file(
-            &root.join("unet/model.safetensors"),
-            &[
-                ("conv_in.weight", vec![1, 1, 1, 1]),
-                ("time_embedding.linear_1.weight", vec![1, 1]),
-            ],
-        );
+        write_full_profile_diffusion_source(root, vec![320, 4, 3, 3]);
+        write_complete_non_diffusion_source(root);
+    }
+
+    fn write_complete_non_diffusion_source(root: &Path) {
         write_source_file(
             &root.join("vae/model.safetensors"),
             &[
@@ -600,6 +598,46 @@ mod tests {
                 ],
             );
         }
+    }
+
+    fn write_full_profile_diffusion_source(root: &Path, conv_in_weight_shape: Vec<usize>) {
+        write_source_file(
+            &root.join("unet/model.safetensors"),
+            &[
+                ("model.diffusion.conv_in.weight", conv_in_weight_shape),
+                ("model.diffusion.conv_in.bias", vec![320]),
+                ("model.diffusion.time_embed.0.weight", vec![1280, 320]),
+                ("model.diffusion.time_embed.0.bias", vec![1280]),
+                ("model.diffusion.time_embed.2.weight", vec![1280, 1280]),
+                ("model.diffusion.time_embed.2.bias", vec![1280]),
+                (
+                    "model.diffusion.input_blocks.1.0.in_layers.2.weight",
+                    vec![320, 320, 3, 3],
+                ),
+                (
+                    "model.diffusion.input_blocks.1.0.in_layers.2.bias",
+                    vec![320],
+                ),
+                (
+                    "model.diffusion.input_blocks.1.0.emb_layers.1.weight",
+                    vec![320, 1280],
+                ),
+                (
+                    "model.diffusion.input_blocks.1.0.emb_layers.1.bias",
+                    vec![320],
+                ),
+                (
+                    "model.diffusion.input_blocks.1.0.out_layers.3.weight",
+                    vec![320, 320, 3, 3],
+                ),
+                (
+                    "model.diffusion.input_blocks.1.0.out_layers.3.bias",
+                    vec![320],
+                ),
+                ("model.diffusion.out.0.weight", vec![4, 320, 3, 3]),
+                ("model.diffusion.out.0.bias", vec![4]),
+            ],
+        );
     }
 
     fn fixed_request(
@@ -670,7 +708,7 @@ mod tests {
             report_from_disk.source_layout,
             "diffusers_style_split_safetensors"
         );
-        assert_eq!(report_from_disk.mapped_tensor_count, 8);
+        assert_eq!(report_from_disk.mapped_tensor_count, 20);
 
         let package = report_from_disk.package.expect("package report");
         assert_eq!(package.schema_version, 1);
@@ -856,13 +894,7 @@ mod tests {
         write_complete_split_source(source.path());
         let request = fixed_request(source.path(), models.path(), "fixed-source", false);
         let first = package_diffusers_style_split_source(&request).expect("first package");
-        write_source_file(
-            &source.path().join("unet/model.safetensors"),
-            &[
-                ("conv_in.weight", vec![1, 1, 1, 2]),
-                ("time_embedding.linear_1.weight", vec![1, 1]),
-            ],
-        );
+        write_full_profile_diffusion_source(source.path(), vec![320, 4, 3, 2]);
 
         let err = package_diffusers_style_split_source(&request)
             .expect_err("stale package should be rejected");

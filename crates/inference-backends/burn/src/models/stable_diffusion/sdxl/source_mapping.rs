@@ -14,11 +14,50 @@ use super::source_layout::{BurnSdxlSourceSet, DIFFUSERS_STYLE_SPLIT_SAFETENSORS}
 use super::writer::{write_conversion_report, write_synthetic_sdxl_components};
 
 const DIFFUSION_MAPPINGS: &[TensorMapping] = &[
-    TensorMapping::new("conv_in.weight", "model.diffusion.input_blocks.0.0.weight"),
+    TensorMapping::new("model.diffusion.conv_in.weight", "conv_in.weight"),
+    TensorMapping::new("model.diffusion.conv_in.bias", "conv_in.bias"),
     TensorMapping::new(
-        "time_embedding.linear_1.weight",
         "model.diffusion.time_embed.0.weight",
+        "time_embedding.linear_1.weight",
     ),
+    TensorMapping::new(
+        "model.diffusion.time_embed.0.bias",
+        "time_embedding.linear_1.bias",
+    ),
+    TensorMapping::new(
+        "model.diffusion.time_embed.2.weight",
+        "time_embedding.linear_2.weight",
+    ),
+    TensorMapping::new(
+        "model.diffusion.time_embed.2.bias",
+        "time_embedding.linear_2.bias",
+    ),
+    TensorMapping::new(
+        "model.diffusion.input_blocks.1.0.in_layers.2.weight",
+        "down_blocks.0.res_blocks.0.conv_1.weight",
+    ),
+    TensorMapping::new(
+        "model.diffusion.input_blocks.1.0.in_layers.2.bias",
+        "down_blocks.0.res_blocks.0.conv_1.bias",
+    ),
+    TensorMapping::new(
+        "model.diffusion.input_blocks.1.0.emb_layers.1.weight",
+        "down_blocks.0.res_blocks.0.time_projection.weight",
+    ),
+    TensorMapping::new(
+        "model.diffusion.input_blocks.1.0.emb_layers.1.bias",
+        "down_blocks.0.res_blocks.0.time_projection.bias",
+    ),
+    TensorMapping::new(
+        "model.diffusion.input_blocks.1.0.out_layers.3.weight",
+        "down_blocks.0.res_blocks.0.conv_2.weight",
+    ),
+    TensorMapping::new(
+        "model.diffusion.input_blocks.1.0.out_layers.3.bias",
+        "down_blocks.0.res_blocks.0.conv_2.bias",
+    ),
+    TensorMapping::new("model.diffusion.out.0.weight", "conv_out.weight"),
+    TensorMapping::new("model.diffusion.out.0.bias", "conv_out.bias"),
 ];
 const VAE_MAPPINGS: &[TensorMapping] = &[
     TensorMapping::new("encoder.conv_in.weight", "model.vae.encoder.conv_in.weight"),
@@ -252,7 +291,7 @@ fn burn_dtype(dtype: Dtype) -> BurnTensorDType {
 }
 
 #[cfg(test)]
-mod tests {
+pub(crate) mod tests {
     use std::borrow::Cow;
     use std::collections::HashMap;
     use std::fs;
@@ -311,14 +350,12 @@ mod tests {
         serialize_to_file(views, Some(HashMap::new()), path).unwrap();
     }
 
-    fn write_complete_split_source(root: &Path) {
-        write_source_file(
-            &root.join("unet/model.safetensors"),
-            &[
-                ("conv_in.weight", vec![1, 1, 1, 1]),
-                ("time_embedding.linear_1.weight", vec![1, 1]),
-            ],
-        );
+    pub(crate) fn write_complete_split_source(root: &Path) {
+        write_full_profile_diffusion_source(root);
+        write_complete_non_diffusion_source(root);
+    }
+
+    fn write_complete_non_diffusion_source(root: &Path) {
         write_source_file(
             &root.join("vae/model.safetensors"),
             &[
@@ -340,6 +377,72 @@ mod tests {
         }
     }
 
+    fn write_legacy_representative_split_source(root: &Path) {
+        write_source_file(
+            &root.join("unet/model.safetensors"),
+            &[
+                ("conv_in.weight", vec![1, 1, 1, 1]),
+                ("time_embedding.linear_1.weight", vec![1, 1]),
+            ],
+        );
+        write_complete_non_diffusion_source(root);
+    }
+
+    fn write_full_profile_diffusion_source(root: &Path) {
+        write_source_file(
+            &root.join("unet/model.safetensors"),
+            &[
+                ("model.diffusion.conv_in.weight", vec![320, 4, 3, 3]),
+                ("model.diffusion.conv_in.bias", vec![320]),
+                ("model.diffusion.time_embed.0.weight", vec![1280, 320]),
+                ("model.diffusion.time_embed.0.bias", vec![1280]),
+                ("model.diffusion.time_embed.2.weight", vec![1280, 1280]),
+                ("model.diffusion.time_embed.2.bias", vec![1280]),
+                (
+                    "model.diffusion.input_blocks.1.0.in_layers.2.weight",
+                    vec![320, 320, 3, 3],
+                ),
+                (
+                    "model.diffusion.input_blocks.1.0.in_layers.2.bias",
+                    vec![320],
+                ),
+                (
+                    "model.diffusion.input_blocks.1.0.emb_layers.1.weight",
+                    vec![320, 1280],
+                ),
+                (
+                    "model.diffusion.input_blocks.1.0.emb_layers.1.bias",
+                    vec![320],
+                ),
+                (
+                    "model.diffusion.input_blocks.1.0.out_layers.3.weight",
+                    vec![320, 320, 3, 3],
+                ),
+                (
+                    "model.diffusion.input_blocks.1.0.out_layers.3.bias",
+                    vec![320],
+                ),
+                ("model.diffusion.out.0.weight", vec![4, 320, 3, 3]),
+                ("model.diffusion.out.0.bias", vec![4]),
+            ],
+        );
+    }
+
+    #[test]
+    fn rejects_legacy_diffusion_representative_source_keys_before_writing_output() {
+        let source = tempfile::tempdir().expect("source temp dir");
+        let output = tempfile::tempdir().expect("output temp dir");
+        write_legacy_representative_split_source(source.path());
+        let source_set =
+            BurnSdxlSourceSet::diffusers_style_split_safetensors(source.path().to_path_buf());
+
+        let err = map_diffusers_style_split_source(&source_set, output.path())
+            .expect_err("legacy diffusion source keys should fail");
+
+        assert!(err.to_string().contains("conv_in.weight"));
+        assert_eq!(fs::read_dir(output.path()).unwrap().count(), 0);
+    }
+
     #[test]
     fn maps_diffusers_style_split_source_through_burn_writer() {
         let source = tempfile::tempdir().expect("source temp dir");
@@ -353,7 +456,7 @@ mod tests {
 
         assert_eq!(report.source_layout, "diffusers_style_split_safetensors");
         assert_eq!(report.output_components.len(), 4);
-        assert_eq!(report.mapped_tensor_count, 8);
+        assert_eq!(report.mapped_tensor_count, 20);
         assert!(report.diagnostics.is_empty());
         let report_json = fs::read_to_string(output.path().join("conversion-report.json"))
             .expect("conversion report");
@@ -380,6 +483,40 @@ mod tests {
     }
 
     #[test]
+    fn mapped_diffusion_component_uses_runtime_loader_snapshot_names() {
+        let source = tempfile::tempdir().expect("source temp dir");
+        let output = tempfile::tempdir().expect("output temp dir");
+        write_complete_split_source(source.path());
+        let source_set =
+            BurnSdxlSourceSet::diffusers_style_split_safetensors(source.path().to_path_buf());
+        map_diffusers_style_split_source(&source_set, output.path()).expect("map source");
+        let inspected =
+            inspect_component_safetensors(output.path().join("diffusion/model.safetensors"))
+                .expect("inspect mapped diffusion");
+        let keys = inspected
+            .inventory
+            .iter()
+            .map(|entry| entry.key.as_str())
+            .collect::<std::collections::BTreeSet<_>>();
+
+        for expected in [
+            "conv_in.weight",
+            "time_embedding.linear_1.weight",
+            "time_embedding.linear_2.weight",
+            "down_blocks.0.res_blocks.0.conv_1.weight",
+            "down_blocks.0.res_blocks.0.time_projection.weight",
+            "down_blocks.0.res_blocks.0.conv_2.weight",
+            "conv_out.weight",
+        ] {
+            assert!(keys.contains(expected), "missing mapped key `{expected}`");
+        }
+        assert!(
+            !keys.contains("model.diffusion.time_embed.0.weight"),
+            "source-style keys should not be written into mapped components"
+        );
+    }
+
+    #[test]
     fn rejects_missing_required_source_file_before_writing_output() {
         let source = tempfile::tempdir().expect("source temp dir");
         let output = tempfile::tempdir().expect("output temp dir");
@@ -403,8 +540,8 @@ mod tests {
         write_source_file(
             &source.path().join("unet/model.safetensors"),
             &[
-                ("conv_in.weight", vec![1, 1, 1, 1]),
-                ("time_embedding.linear_1.weight", vec![1, 1]),
+                ("model.diffusion.conv_in.weight", vec![320, 4, 3, 3]),
+                ("model.diffusion.conv_in.bias", vec![320]),
                 ("surprise.block.weight", vec![1]),
             ],
         );
@@ -461,7 +598,10 @@ mod tests {
         write_complete_split_source(source.path());
         write_source_file(
             &source.path().join("unet/model.safetensors"),
-            &[("conv_in.weight", vec![1, 1, 1, 1])],
+            &[
+                ("model.diffusion.conv_in.weight", vec![320, 4, 3, 3]),
+                ("model.diffusion.conv_in.bias", vec![320]),
+            ],
         );
         let source_set =
             BurnSdxlSourceSet::diffusers_style_split_safetensors(source.path().to_path_buf());
@@ -469,7 +609,10 @@ mod tests {
         let err = map_diffusers_style_split_source(&source_set, output.path())
             .expect_err("missing representative tensor should fail");
 
-        assert!(err.to_string().contains("time_embedding.linear_1.weight"));
+        assert!(
+            err.to_string()
+                .contains("model.diffusion.time_embed.0.weight")
+        );
         assert_eq!(fs::read_dir(output.path()).unwrap().count(), 0);
     }
 

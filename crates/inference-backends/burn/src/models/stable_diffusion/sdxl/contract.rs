@@ -116,14 +116,14 @@ impl BurnSdxlComponentContract {
 
 const DIFFUSION_SPECS: &[BurnTensorSpec] = &[
     BurnTensorSpec::required_rank(
-        "model.diffusion.input_blocks.0.0.weight",
+        "conv_in.weight",
         4,
         "representative first convolution weight",
     ),
     BurnTensorSpec::required_rank(
-        "model.diffusion.time_embed.0.weight",
-        2,
-        "representative timestep projection weight",
+        "conv_out.weight",
+        4,
+        "representative output convolution weight",
     ),
 ];
 
