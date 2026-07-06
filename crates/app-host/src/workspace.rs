@@ -126,6 +126,8 @@ impl WorkspaceHost {
         ))
     }
 
+    /// Bootstrap asynchronously with a run event sink but the default
+    /// [`VecAgentEventSink`] for agent events.
     pub async fn try_with_defaults_and_event_sink(
         workspace_scope: WorkspaceScope,
         base_path: impl Into<std::path::PathBuf>,
@@ -591,6 +593,18 @@ mod tests {
             .is_ok()
     }
 
+    fn expected_burn_instance() -> reimagine_inference::BackendInstance {
+        let backend = reimagine_inference_burn::BurnBackend::new(
+            reimagine_inference_burn::BurnBackendConfig::new("/models", "/output"),
+        )
+        .expect("burn backend");
+        backend.backend_instance()
+    }
+
+    fn expected_burn_instance_label() -> String {
+        expected_burn_instance().as_str().to_owned()
+    }
+
     #[test]
     fn compute_profile_contains_available_cpu_instance() {
         let base = temp_dir("profile-cpu");
@@ -698,7 +712,7 @@ mod tests {
     fn burn_selected_instance_is_resolved_without_candle_fallback_diagnostic() {
         let base = temp_dir("profile-burn-selected");
         let backend_config = InferenceBackendConfig {
-            selected_instance: Some("burn:cpu".to_string()),
+            selected_instance: Some(expected_burn_instance_label()),
             ..InferenceBackendConfig::default()
         };
         let workspace = WorkspaceHost::with_backend_config(
@@ -710,7 +724,7 @@ mod tests {
 
         assert_eq!(
             workspace.resolved_backend_instance(),
-            &BackendInstance::new("burn:cpu")
+            &expected_burn_instance()
         );
         let profile = workspace.compute_profile();
         assert!(
@@ -725,18 +739,18 @@ mod tests {
             .iter()
             .find(|backend| backend.backend.as_str() == "burn")
             .expect("burn backend profile");
-        let burn_cpu = burn
+        let default_burn = burn
             .instances
             .iter()
-            .find(|instance| instance.instance == BackendInstance::new("burn:cpu"))
-            .expect("burn:cpu profile");
+            .find(|instance| instance.instance == expected_burn_instance())
+            .expect("default burn profile");
         assert_eq!(
-            burn_cpu.status,
+            default_burn.status,
             reimagine_inference::BackendInstanceStatus::Available
         );
         assert!(
             profile.diagnostics.is_empty(),
-            "known burn:cpu selection should not emit fallback diagnostics: {:?}",
+            "known Burn selection should not emit fallback diagnostics: {:?}",
             profile.diagnostics
         );
         let _ = fs::remove_dir_all(&base);

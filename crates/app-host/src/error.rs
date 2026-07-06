@@ -64,7 +64,7 @@ impl std::fmt::Display for AppHostError {
             Self::UnknownAgentProvider { provider } => {
                 write!(f, "unknown agent provider `{provider}`")
             }
-        Self::UnknownAgentMode { mode } => {
+            Self::UnknownAgentMode { mode } => {
                 write!(f, "unknown agent mode `{mode}`")
             }
             Self::UnknownRun { run_id } => {

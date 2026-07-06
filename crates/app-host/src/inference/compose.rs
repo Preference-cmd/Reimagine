@@ -262,6 +262,26 @@ mod tests {
         std::env::temp_dir().join(format!("reimagine-app-host-compose-{prefix}-{nonce}"))
     }
 
+    fn expected_burn_instance() -> BackendInstance {
+        let backend = reimagine_inference_burn::BurnBackend::new(
+            reimagine_inference_burn::BurnBackendConfig::new("/models", "/output"),
+        )
+        .expect("burn backend");
+        backend.backend_instance()
+    }
+
+    fn expected_burn_instance_label() -> String {
+        expected_burn_instance().as_str().to_owned()
+    }
+
+    fn expected_burn_device_label() -> String {
+        let backend = reimagine_inference_burn::BurnBackend::new(
+            reimagine_inference_burn::BurnBackendConfig::new("/models", "/output"),
+        )
+        .expect("burn backend");
+        backend.device_label().to_owned()
+    }
+
     #[test]
     fn compose_backends_registers_cpu_instance_for_resolved_cpu_instance() {
         let base = temp_dir("resolved-cpu");
@@ -326,7 +346,7 @@ mod tests {
     }
 
     #[test]
-    fn builtin_compute_profile_includes_burn_load_bundle_capability() {
+    fn builtin_compute_profile_includes_default_burn_capabilities() {
         let profile = collect_compute_profile(&builtin_backend_candidates());
 
         let burn = profile
@@ -342,23 +362,22 @@ mod tests {
             burn.extension.as_ref().map(|extension| extension.as_str()),
             Some("backend.burn")
         );
-        let cpu = burn
+        let default_burn = burn
             .instances
             .iter()
-            .find(|instance| instance.instance == BackendInstance::new("burn:cpu"))
-            .expect("burn:cpu instance profile");
-        assert_eq!(cpu.status, BackendInstanceStatus::Available);
-        assert_eq!(cpu.device.kind, DeviceKind::Cpu);
+            .find(|instance| instance.instance == expected_burn_instance())
+            .expect("default burn instance profile");
+        assert_eq!(default_burn.status, BackendInstanceStatus::Available);
         assert_eq!(
-            cpu.capabilities,
+            default_burn.capabilities,
             vec![
                 reimagine_inference::InferenceCapability::LoadBundle,
                 reimagine_inference::InferenceCapability::CreateEmptyLatent,
                 reimagine_inference::InferenceCapability::TextEncode,
             ]
         );
-        assert!(cpu.operation_options.is_empty());
-        assert!(cpu.diagnostics.is_empty());
+        assert!(default_burn.operation_options.is_empty());
+        assert!(default_burn.diagnostics.is_empty());
     }
 
     #[tokio::test]
@@ -367,7 +386,7 @@ mod tests {
         let config = AppConfig::new(AppPaths::new(&base));
         let model_service = Arc::new(ModelService::new(config.paths().clone()));
         let backend_config = InferenceBackendConfig {
-            selected_instance: Some("burn:cpu".to_string()),
+            selected_instance: Some(expected_burn_instance_label()),
             ..InferenceBackendConfig::default()
         };
 
@@ -381,7 +400,7 @@ mod tests {
 
         assert_eq!(
             bootstrapped.runtime.selected_instance,
-            BackendInstance::new("burn:cpu")
+            expected_burn_instance()
         );
         let snapshots = reimagine_inference::BackendInstanceObservation::snapshots(
             bootstrapped.runtime.runtime_hooks.as_ref(),
@@ -392,10 +411,7 @@ mod tests {
             1,
             "selected Burn should not add Candle fallback hooks"
         );
-        assert_eq!(
-            snapshots[0].backend_instance,
-            BackendInstance::new("burn:cpu")
-        );
+        assert_eq!(snapshots[0].backend_instance, expected_burn_instance());
         assert_eq!(
             snapshots[0].plugin.as_ref().map(|plugin| plugin.as_str()),
             Some("builtin.burn")
@@ -412,7 +428,7 @@ mod tests {
                 .device
                 .as_ref()
                 .map(|device| device.label.as_str()),
-            Some("cpu")
+            Some(expected_burn_device_label().as_str())
         );
         let _ = std::fs::remove_dir_all(&base);
     }
@@ -423,7 +439,7 @@ mod tests {
         let config = AppConfig::new(AppPaths::new(&base));
         let model_service = Arc::new(ModelService::new(config.paths().clone()));
         let backend_config = InferenceBackendConfig {
-            selected_instance: Some("burn:cpu".to_string()),
+            selected_instance: Some(expected_burn_instance_label()),
             ..InferenceBackendConfig::default()
         };
 
@@ -453,7 +469,10 @@ mod tests {
 
         let latent = response.into_latent();
         assert_eq!(latent.payload().backend().as_str(), "burn");
-        assert_eq!(latent.payload().backend_instance().as_str(), "burn:cpu");
+        assert_eq!(
+            latent.payload().backend_instance().as_str(),
+            expected_burn_instance_label().as_str()
+        );
         assert_eq!(
             latent.latent_space().id().as_str(),
             "stable_diffusion/sdxl/base"
