@@ -100,7 +100,7 @@ pub fn validate_component_inventory(
     metadata: &BTreeMap<String, String>,
     inventory: &[BurnTensorInventoryEntry],
 ) -> Result<BurnSdxlComponentValidationReport, BurnSdxlContractError> {
-    validate_against(metadata, inventory, |contract| {
+    validate_against(metadata, inventory, |_metadata, contract| {
         contract
             .expected_tensor_specs()
             .iter()
@@ -123,7 +123,10 @@ pub fn validate_component_inventory_full(
     metadata: &BTreeMap<String, String>,
     inventory: &[BurnTensorInventoryEntry],
 ) -> Result<BurnSdxlComponentValidationReport, BurnSdxlContractError> {
-    validate_against(metadata, inventory, |contract| {
+    validate_against(metadata, inventory, |metadata, contract| {
+        if metadata.is_tiny_sdxl_e2e_fixture() {
+            return tiny_sdxl_fixture_specs(metadata, contract);
+        }
         contract.all_expected_tensor_specs()
     })
 }
@@ -131,7 +134,7 @@ pub fn validate_component_inventory_full(
 fn validate_against(
     metadata: &BTreeMap<String, String>,
     inventory: &[BurnTensorInventoryEntry],
-    spec_fn: impl FnOnce(&BurnSdxlComponentContract) -> Vec<OwnedTensorSpec>,
+    spec_fn: impl FnOnce(&BurnComponentMetadata, &BurnSdxlComponentContract) -> Vec<OwnedTensorSpec>,
 ) -> Result<BurnSdxlComponentValidationReport, BurnSdxlContractError> {
     let metadata = BurnComponentMetadata::parse(metadata)?;
     validate_metadata_values(&metadata)?;
@@ -141,7 +144,7 @@ fn validate_against(
         .iter()
         .map(|entry| (entry.key.as_str(), entry))
         .collect::<BTreeMap<_, _>>();
-    let all_specs = spec_fn(&contract);
+    let all_specs = spec_fn(&metadata, &contract);
     let expected_keys: BTreeSet<&str> = all_specs.iter().map(|spec| spec.key.as_str()).collect();
 
     let mut matched_required_tensors = Vec::new();
@@ -199,6 +202,23 @@ fn validate_against(
         unused_tensors,
         warnings,
     })
+}
+
+fn tiny_sdxl_fixture_specs(
+    metadata: &BurnComponentMetadata,
+    contract: &BurnSdxlComponentContract,
+) -> Vec<OwnedTensorSpec> {
+    match metadata.component_role {
+        BurnSdxlComponentRole::TextEncoder => {
+            crate::text_encoder::specs::TextEncoderSpecSetBuilder::tiny_sdxl_clip_l().specs
+        }
+        BurnSdxlComponentRole::TextEncoder2 => {
+            crate::text_encoder::specs::TextEncoderSpecSetBuilder::tiny_sdxl_open_clip_g().specs
+        }
+        BurnSdxlComponentRole::Diffusion | BurnSdxlComponentRole::Vae => {
+            contract.all_expected_tensor_specs()
+        }
+    }
 }
 
 fn validate_metadata_values(metadata: &BurnComponentMetadata) -> Result<(), BurnSdxlContractError> {

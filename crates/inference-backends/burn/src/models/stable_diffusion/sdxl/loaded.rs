@@ -164,6 +164,24 @@ impl BurnLoadedSdxlBundle {
         Ok((primary.source_path.clone(), secondary.source_path.clone()))
     }
 
+    pub(crate) fn uses_tiny_sdxl_e2e_text_profiles(&self) -> bool {
+        let primary = self
+            .components
+            .iter()
+            .find(|c| c.component_role == BurnSdxlComponentRole::TextEncoder);
+        let secondary = self
+            .components
+            .iter()
+            .find(|c| c.component_role == BurnSdxlComponentRole::TextEncoder2);
+
+        matches!(
+            (primary, secondary),
+            (Some(primary), Some(secondary))
+                if primary.is_tiny_sdxl_e2e_fixture()
+                    && secondary.is_tiny_sdxl_e2e_fixture()
+        )
+    }
+
     /// Test-only constructor that builds a minimal bundle for
     /// the cross-run cache without going through the file-system
     /// resolver. Real production code must use
@@ -179,6 +197,26 @@ impl BurnLoadedSdxlBundle {
             vae_payload_key: BackendPayloadKey::new(format!("{key_prefix}:vae")),
             components: Vec::new(),
         }
+    }
+
+    #[cfg(test)]
+    pub(crate) fn with_test_components(
+        mut self,
+        components: Vec<(BurnSdxlComponentRole, PathBuf)>,
+    ) -> Self {
+        self.components = components
+            .into_iter()
+            .map(|(component_role, source_path)| {
+                BurnLoadedSdxlComponent::for_test_only(component_role, source_path)
+            })
+            .collect();
+        self.source_signature = BurnSdxlSourceSignature::new(
+            self.components
+                .iter()
+                .map(|component| component.source_signature.clone())
+                .collect(),
+        );
+        self
     }
 
     fn load_bundle_response(
@@ -225,6 +263,47 @@ pub struct BurnLoadedSdxlComponent {
     #[allow(dead_code)]
     inventory: Vec<BurnTensorInventoryEntry>,
     source_signature: BurnSdxlComponentSourceSignature,
+}
+
+impl BurnLoadedSdxlComponent {
+    #[cfg(test)]
+    fn for_test_only(component_role: BurnSdxlComponentRole, source_path: PathBuf) -> Self {
+        let metadata = BurnComponentMetadata {
+            contract: super::contract::CONTRACT_NAME.to_owned(),
+            component_role,
+            contract_version: 1,
+            backend: super::contract::BACKEND_NAME.to_owned(),
+            model_series: super::contract::MODEL_SERIES.to_owned(),
+            variant: super::contract::VARIANT.to_owned(),
+            tensor_layout: super::contract::TENSOR_LAYOUT.to_owned(),
+            dtype_policy: super::contract::BurnDTypePolicy::Fp32,
+            fixture_profile: None,
+        };
+        Self {
+            component_role,
+            source_path: source_path.clone(),
+            metadata,
+            validation_report: BurnSdxlComponentValidationReport {
+                component_role,
+                matched_required_tensors: Vec::new(),
+                missing_required_tensors: Vec::new(),
+                unused_tensors: Vec::new(),
+                warnings: Vec::new(),
+            },
+            inventory: Vec::new(),
+            source_signature: BurnSdxlComponentSourceSignature {
+                role: component_role,
+                path: source_path,
+                size: 0,
+                modified_unix_seconds: None,
+                contract_version: 1,
+            },
+        }
+    }
+
+    pub(crate) fn is_tiny_sdxl_e2e_fixture(&self) -> bool {
+        self.metadata.is_tiny_sdxl_e2e_fixture()
+    }
 }
 
 fn resolve_components(

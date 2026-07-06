@@ -22,6 +22,7 @@ pub use validation::{
 
 mod component;
 mod contract;
+mod load_diagnostics;
 mod loaded;
 // Offline conversion scaffolding is exercised by module tests and consumed by later Burn slices.
 #[allow(dead_code)]

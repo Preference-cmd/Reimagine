@@ -13,6 +13,8 @@ pub mod metadata_keys {
     pub const COMPONENT_ROLE: &str = "reimagine.component_role";
     pub const TENSOR_LAYOUT: &str = "reimagine.tensor_layout";
     pub const DTYPE_POLICY: &str = "reimagine.dtype_policy";
+    pub const FIXTURE_PROFILE: &str = "reimagine.fixture_profile";
+    pub const TINY_SDXL_E2E_PROFILE: &str = "tiny_sdxl_e2e";
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -25,6 +27,7 @@ pub struct BurnComponentMetadata {
     pub component_role: BurnSdxlComponentRole,
     pub tensor_layout: String,
     pub dtype_policy: BurnDTypePolicy,
+    pub fixture_profile: Option<String>,
 }
 
 impl BurnComponentMetadata {
@@ -38,6 +41,7 @@ impl BurnComponentMetadata {
         let component_role = parse_component_role(required(raw, metadata_keys::COMPONENT_ROLE)?)?;
         let tensor_layout = required(raw, metadata_keys::TENSOR_LAYOUT)?;
         let dtype_policy = parse_dtype_policy(required(raw, metadata_keys::DTYPE_POLICY)?)?;
+        let fixture_profile = raw.get(metadata_keys::FIXTURE_PROFILE).cloned();
 
         Ok(Self {
             contract: contract.to_owned(),
@@ -48,7 +52,12 @@ impl BurnComponentMetadata {
             component_role,
             tensor_layout: tensor_layout.to_owned(),
             dtype_policy,
+            fixture_profile,
         })
+    }
+
+    pub fn is_tiny_sdxl_e2e_fixture(&self) -> bool {
+        self.fixture_profile.as_deref() == Some(metadata_keys::TINY_SDXL_E2E_PROFILE)
     }
 }
 
