@@ -54,11 +54,12 @@ rig-core = { version = "0.31", default-features = false, features = ["reqwest-mi
 candle-core = { version = "0.10", default-features = false }
 candle-nn = { version = "0.10", default-features = false }
 candle-transformers = { version = "0.10", default-features = false }
-burn-ndarray = { version = "0.21", default-features = false, features = ["std"] }
+burn-nn = { version = "0.21", default-features = false, features = ["std"] }
 burn-flex = { version = "0.21", default-features = false, features = ["std"] }
 burn-wgpu = { version = "0.21", default-features = false, features = ["std"] }
 burn-tensor = { version = "0.21", default-features = false, features = ["std"] }
 burn-core = { version = "0.21", default-features = false, features = ["std"] }
+burn-store = { version = "0.21", default-features = false, features = ["std", "safetensors"] }
 tokenizers = "0.21"
 image = "0.25"
 tempfile = "3"

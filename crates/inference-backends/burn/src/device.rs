@@ -8,48 +8,26 @@
 //!
 //! | Feature  | Variant         | Label        |
 //! |----------|-----------------|--------------|
-//! | always   | `NdarrayCpu`    | `cpu`        |
-//! | `wgpu`   | `Wgpu(_)`       | `wgpu:metal`, `wgpu:vulkan`, `wgpu:cpu` |
+//! | `wgpu`   | `Wgpu(_)`       | `wgpu:default`, `wgpu:metal`, `wgpu:vulkan` |
 //! | `flex`   | `Flex`          | `flex:cpu`   |
 //!
-//! The legacy `NdarrayCpu` variant is always present because
-//! `burn-ndarray` remains the compile-time base layer used by
-//! the V1 operations (`latent.create_empty`, `text.encode`
-//! preflight). Real neural-network forward passes arriving in
-//! burn/08f+, burn/10, and burn/11 will route through the
-//! GPU/Flex backends.
-//!
 //! The `wgpu` and `flex` features are mutually exclusive at the
-//! crate level because the Burn `Backend` trait has concrete
-//! types per feature (`burn-wgpu::WgpuBackend` vs.
-//! `burn-flex::FlexBackend`); only one can be the live compute
-//! backend. The V1 ndarray path remains as a compile-time
-//! compatibility shim.
+//! crate level; only one can be the live production compute backend.
 
 use crate::error::BurnBackendError;
 
 /// Feature-gated device variant.
 ///
-/// Always carries the legacy `NdarrayCpu` variant because
-/// `burn-ndarray` is the V1 compile-time base; the
-/// `Wgpu`/`Flex` variants are added by their respective
-/// features.
+/// Carries only the active production backend variant for the current
+/// feature matrix.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum BurnDevice {
-    /// Legacy burn-ndarray CPU backend.
-    ///
-    /// Always available — V1 operations execute tensors
-    /// through `burn-ndarray` even under the `wgpu`/`flex`
-    /// features. The wgpu/flex instances are advertised in
-    /// the profile and are usable for real forward-pass
-    /// execution once burn/08f+, burn/10, and burn/11 land.
-    NdarrayCpu,
     /// GPU backend via burn-wgpu
     /// (`burn_wgpu::WgpuDevice` — Metal/Vulkan/CubeCL CPU).
     #[cfg(feature = "wgpu")]
     Wgpu(burn_wgpu::WgpuDevice),
     /// CPU backend via burn-flex (SIMD + rayon).
-    #[cfg(feature = "flex")]
+    #[cfg(all(not(feature = "wgpu"), feature = "flex"))]
     Flex,
 }
 
@@ -57,29 +35,28 @@ impl BurnDevice {
     /// Construct a [`BurnDevice`] from a textual label.
     ///
     /// `new` is **infallible**: unknown labels fall back to
-    /// [`BurnDevice::NdarrayCpu`] so configuration stays valid
+    /// the active feature's default device so configuration stays valid
     /// even when callers pass an unrecognized device. The
     /// validating resolver is [`try_build_device`](Self::try_build_device).
     ///
     /// Under each feature, `new` maps labels to the canonical
     /// variant for the active feature:
     ///
-    /// - Under `wgpu` (default): `"cpu"` -> `NdarrayCpu`,
+    /// - Under `wgpu` (default): `"default"` -> `Wgpu(DefaultDevice)`,
     ///   `"metal"` -> `Wgpu(IntegratedGpu(0))`,
     ///   `"vulkan"` -> `Wgpu(DiscreteGpu(0))`.
     /// - Under `flex`: `"cpu"` -> `Flex`, `"flex:cpu"` -> `Flex`.
-    /// - With neither: `"cpu"` -> `NdarrayCpu`.
     pub fn new(label: impl Into<String>) -> Self {
         match label.into().as_str() {
+            #[cfg(feature = "wgpu")]
+            "default" | "wgpu:default" => Self::Wgpu(burn_wgpu::WgpuDevice::DefaultDevice),
             #[cfg(feature = "wgpu")]
             "metal" => Self::Wgpu(burn_wgpu::WgpuDevice::IntegratedGpu(0)),
             #[cfg(feature = "wgpu")]
             "vulkan" => Self::Wgpu(burn_wgpu::WgpuDevice::DiscreteGpu(0)),
             #[cfg(all(not(feature = "wgpu"), feature = "flex"))]
             "cpu" | "flex:cpu" => Self::Flex,
-            // Default / fallback — captures the wgpu "cpu" path
-            // (legacy ndarray) and any unknown label.
-            _ => Self::NdarrayCpu,
+            _ => Self::active_cpu(),
         }
     }
 
@@ -92,10 +69,9 @@ impl BurnDevice {
     /// `"burn:wgpu:metal"`).
     pub fn label(&self) -> &str {
         match self {
-            Self::NdarrayCpu => "cpu",
             #[cfg(feature = "wgpu")]
             Self::Wgpu(device) => wgpu_device_label(device),
-            #[cfg(feature = "flex")]
+            #[cfg(all(not(feature = "wgpu"), feature = "flex"))]
             Self::Flex => "flex:cpu",
         }
     }
@@ -108,13 +84,13 @@ impl BurnDevice {
     #[cfg(feature = "wgpu")]
     pub fn try_build_device(label: &str) -> Result<Self, BurnBackendError> {
         match label {
-            "cpu" => Ok(Self::NdarrayCpu),
+            "default" | "wgpu:default" => Ok(Self::Wgpu(burn_wgpu::WgpuDevice::DefaultDevice)),
             "metal" => Ok(Self::Wgpu(burn_wgpu::WgpuDevice::IntegratedGpu(0))),
             "vulkan" => Ok(Self::Wgpu(burn_wgpu::WgpuDevice::DiscreteGpu(0))),
             other => Err(BurnBackendError::DeviceUnavailable {
                 requested: other.to_owned(),
                 reason: format!(
-                    "unknown Burn device label `{other}`; supported under wgpu feature: cpu, metal, vulkan"
+                    "unknown Burn device label `{other}`; supported under wgpu feature: default, metal, vulkan"
                 ),
             }),
         }
@@ -133,31 +109,18 @@ impl BurnDevice {
         }
     }
 
-    #[cfg(not(any(feature = "wgpu", feature = "flex")))]
-    pub fn try_build_device(label: &str) -> Result<Self, BurnBackendError> {
-        match label {
-            "cpu" => Ok(Self::NdarrayCpu),
-            other => Err(BurnBackendError::DeviceUnavailable {
-                requested: other.to_owned(),
-                reason: format!(
-                    "unknown Burn device label `{other}`; supported: cpu. \
-                     Enable `wgpu` or `flex` feature for GPU/Flex backends."
-                ),
-            }),
-        }
+    #[cfg(feature = "wgpu")]
+    fn active_cpu() -> Self {
+        Self::Wgpu(burn_wgpu::WgpuDevice::DefaultDevice)
     }
 
-    /// Concrete `burn-ndarray` CPU device used by the V1
-    /// operations.
-    ///
-    /// `latent.create_empty` and the `text.encode` preflight
-    /// allocate burn-ndarray tensors regardless of the active
-    /// feature; the real GPU/Flex forward passes arrive in
-    /// burn/08f+, burn/10, and burn/11. Exposing this helper
-    /// lets the V1 operations stay on the legacy backend
-    /// without changing the `BurnBackend::device` public type.
-    pub fn ndarray_device(&self) -> burn_ndarray::NdArrayDevice {
-        burn_ndarray::NdArrayDevice::Cpu
+    #[cfg(all(not(feature = "wgpu"), feature = "flex"))]
+    fn active_cpu() -> Self {
+        Self::Flex
+    }
+
+    pub fn default_device() -> Self {
+        Self::active_cpu()
     }
 }
 
@@ -189,16 +152,14 @@ mod tests {
     use super::*;
 
     #[test]
-    fn new_cpu_label_maps_to_feature_default_variant() {
-        let device = BurnDevice::new("cpu");
+    fn new_default_label_maps_to_feature_default_variant() {
+        let device = BurnDevice::default_device();
         // The label returned here must match the backend
         // instance suffix used by `BurnBackend::backend_instance`.
         #[cfg(feature = "wgpu")]
-        assert_eq!(device.label(), "cpu");
+        assert_eq!(device.label(), "wgpu:default");
         #[cfg(all(not(feature = "wgpu"), feature = "flex"))]
         assert_eq!(device.label(), "flex:cpu");
-        #[cfg(not(any(feature = "wgpu", feature = "flex")))]
-        assert_eq!(device.label(), "cpu");
     }
 
     #[cfg(feature = "wgpu")]
@@ -206,10 +167,14 @@ mod tests {
     fn wgpu_label_mappings_match_issue_spec() {
         assert_eq!(BurnDevice::new("metal").label(), "wgpu:metal");
         assert_eq!(BurnDevice::new("vulkan").label(), "wgpu:vulkan");
+        assert_eq!(BurnDevice::new("default").label(), "wgpu:default");
     }
 
     #[test]
     fn try_build_device_accepts_known_label_and_rejects_unknown() {
+        #[cfg(feature = "wgpu")]
+        assert!(BurnDevice::try_build_device("default").is_ok());
+        #[cfg(all(not(feature = "wgpu"), feature = "flex"))]
         assert!(BurnDevice::try_build_device("cpu").is_ok());
 
         let err = BurnDevice::try_build_device("gpu").unwrap_err();
@@ -222,6 +187,13 @@ mod tests {
     fn try_build_device_accepts_metal_and_vulkan_labels() {
         assert!(BurnDevice::try_build_device("metal").is_ok());
         assert!(BurnDevice::try_build_device("vulkan").is_ok());
+    }
+
+    #[cfg(feature = "wgpu")]
+    #[test]
+    fn try_build_device_rejects_cpu_label_under_wgpu() {
+        let err = BurnDevice::try_build_device("cpu").unwrap_err();
+        assert!(err.to_string().contains("cpu"));
     }
 
     #[cfg(all(not(feature = "wgpu"), feature = "flex"))]

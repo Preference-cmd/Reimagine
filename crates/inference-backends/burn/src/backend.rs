@@ -10,9 +10,11 @@ use reimagine_inference::{
     TextEncodeRequest, TextEncodeResponse,
 };
 
+use crate::active_backend::{ActiveBurnBackend, active_device};
 use crate::config::BurnBackendConfig;
 use crate::device::BurnDevice;
 use crate::error::BurnBackendError;
+use crate::models::stable_diffusion::sdxl::text_conditioning::cache::SdxlTextEncoderCache;
 use crate::operation::{
     execute_diffusion_sample, execute_image_preview, execute_image_save,
     execute_latent_create_empty, execute_latent_decode, execute_model_load_bundle,
@@ -20,6 +22,7 @@ use crate::operation::{
 };
 use crate::profile::{BACKEND_LABEL, BurnProfileProvider};
 use crate::resource::BurnBackendInstanceRuntimeHooks;
+use crate::runtime::BurnRuntime;
 use crate::store::{BurnModelCache, BurnStore};
 
 #[derive(Debug, Clone)]
@@ -28,6 +31,8 @@ pub struct BurnBackend {
     device: BurnDevice,
     store: Arc<BurnStore>,
     model_cache: Arc<BurnModelCache>,
+    active_runtime: Arc<BurnRuntime<ActiveBurnBackend>>,
+    text_encoder_cache: Arc<SdxlTextEncoderCache<ActiveBurnBackend>>,
 }
 
 impl BurnBackend {
@@ -40,11 +45,14 @@ impl BurnBackend {
         // unknown labels — config validation runs through the
         // `new` constructor and a generic `cpu` fallback.
         let device = config.device().clone();
+        let active_device = active_device(&device);
         Ok(Self {
             config,
             device,
             store: Arc::new(BurnStore::new()),
             model_cache: Arc::new(BurnModelCache::new()),
+            active_runtime: Arc::new(BurnRuntime::new(active_device)),
+            text_encoder_cache: Arc::new(SdxlTextEncoderCache::new()),
         })
     }
 
@@ -56,33 +64,12 @@ impl BurnBackend {
         &self.device
     }
 
-    /// Concrete `burn-ndarray` device used by the V1 operations.
-    ///
-    /// `latent.create_empty` and the `text.encode` preflight
-    /// allocate burn-ndarray tensors regardless of the active
-    /// feature; the real GPU/Flex forward passes arrive in
-    /// burn/08f+, burn/10, and burn/11. Exposing this helper
-    /// keeps the V1 tensor work on the legacy backend without
-    /// changing the `BurnBackend::device` public type from a
-    /// concrete `NdArrayDevice`.
-    pub fn ndarray_device(&self) -> burn_ndarray::NdArrayDevice {
-        // burn/13: the V1 build layer is always ndarray CPU.
-        // Future deepening may switch this to a wgpu/flex path
-        // based on `self.device`, gated by the active feature.
-        let _ = &self.device;
-        burn_ndarray::NdArrayDevice::Cpu
-    }
-
     pub fn device_label(&self) -> &str {
         // The profile advertises one backend instance per
-        // feature-device combination (e.g., `burn:cpu`,
-        // `burn:wgpu:metal`, `burn:flex:cpu`). `device_label`
-        // returns the *short* label used to construct the
-        // `burn:<label>` instance — under wgpu it's `"cpu"`
-        // (legacy ndarray path) for the V1 defaults; under
-        // flex it's `"flex:cpu"`. The legacy CPU label is
-        // preserved so the axum-host router assertions on
-        // `burn:cpu` continue to hold.
+        // active feature-device combination (e.g.,
+        // `burn:wgpu:default`, `burn:flex:cpu`). `device_label`
+        // returns the short suffix used to construct the
+        // `burn:<label>` instance.
         self.device.label()
     }
 
@@ -96,6 +83,15 @@ impl BurnBackend {
 
     pub fn model_cache(&self) -> &Arc<BurnModelCache> {
         &self.model_cache
+    }
+
+    #[allow(dead_code)]
+    pub(crate) fn active_runtime(&self) -> &Arc<BurnRuntime<ActiveBurnBackend>> {
+        &self.active_runtime
+    }
+
+    pub(crate) fn text_encoder_cache(&self) -> &Arc<SdxlTextEncoderCache<ActiveBurnBackend>> {
+        &self.text_encoder_cache
     }
 
     pub fn runtime_hooks(

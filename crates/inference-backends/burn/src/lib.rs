@@ -7,6 +7,7 @@ pub use error::BurnBackendError;
 pub use profile::BurnProfileProvider;
 pub use resource::BurnBackendInstanceRuntimeHooks;
 
+mod active_backend;
 mod backend;
 mod config;
 mod device;
@@ -15,6 +16,6 @@ pub mod models;
 mod operation;
 mod profile;
 mod resource;
+mod runtime;
 mod store;
-pub mod tensor;
 pub mod text_encoder;

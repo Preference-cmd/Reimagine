@@ -15,7 +15,7 @@ impl BurnBackendConfig {
         Self {
             models_dir: models_dir.into(),
             output_dir: output_dir.into(),
-            device: BurnDevice::new("cpu"),
+            device: BurnDevice::default_device(),
             tokenizer_root: None,
         }
     }

@@ -174,12 +174,12 @@ mod tests {
             })
             .await
             .expect("cleanup_run");
-        // burn/13: under `flex` the default instance is
-        // `burn:flex:cpu`; under wgpu it's `burn:cpu`.
-        let expected_instance = if cfg!(all(not(feature = "wgpu"), feature = "flex")) {
+        let expected_instance = if cfg!(feature = "wgpu") {
+            "burn:wgpu:default"
+        } else if cfg!(all(not(feature = "wgpu"), feature = "flex")) {
             "burn:flex:cpu"
         } else {
-            "burn:cpu"
+            unreachable!("Burn backend requires either wgpu or flex feature")
         };
         assert_eq!(cleanup.backend_instance.as_str(), expected_instance);
         assert!(cleanup.diagnostics.is_empty());

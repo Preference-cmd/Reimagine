@@ -9,7 +9,7 @@
 use std::borrow::Cow;
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
-use std::sync::Mutex;
+use std::sync::{Arc, Mutex};
 
 use reimagine_core::model::{
     ModelId, ModelRole, NodeId, ParamValue, RunId, TensorDType, TensorShape, WorkflowId,
@@ -22,7 +22,8 @@ use reimagine_inference::{
     ResolvedInferenceModelSourceSet, RuntimeClipHandle, RuntimeLatent, TextEncodeRequest,
 };
 use reimagine_inference_burn::models::stable_diffusion::sdxl::{
-    BurnSdxlComponentRole, metadata_keys,
+    BurnLoadedModelBundle, BurnLoadedSdxlBundle, BurnSdxlComponentRole, BurnSdxlSourceSignature,
+    metadata_keys,
 };
 use reimagine_inference_burn::{BurnBackend, BurnBackendConfig};
 use safetensors::tensor::{Dtype, View, serialize_to_file};
@@ -208,6 +209,23 @@ async fn seed_bundle_via_load(backend: &BurnBackend) {
         .push(temp);
 }
 
+fn seed_synthetic_bundle_without_components(backend: &BurnBackend) {
+    let model_id = ModelId::new("sdxl-base-burn");
+    let key_prefix = format!("burn:model:{model_id}");
+    let bundle = BurnLoadedSdxlBundle {
+        model_id: model_id.clone(),
+        source_signature: BurnSdxlSourceSignature::empty(),
+        diffusion_payload_key: BackendPayloadKey::new(format!("{key_prefix}:diffusion")),
+        clip_payload_key: BackendPayloadKey::new(format!("{key_prefix}:clip")),
+        vae_payload_key: BackendPayloadKey::new(format!("{key_prefix}:vae")),
+        components: Vec::new(),
+    };
+    backend.model_cache().insert_bundle(
+        model_id,
+        Arc::new(BurnLoadedModelBundle::StableDiffusionSdxl(Arc::new(bundle))),
+    );
+}
+
 // ---------------------------------------------------------------------------
 // Adapter test fixtures
 // ---------------------------------------------------------------------------
@@ -346,7 +364,7 @@ async fn text_encode_non_string_prompt_is_backend_execution_failed() {
 #[tokio::test]
 async fn text_encode_succeeds_and_stores_conditioning() {
     let backend = backend();
-    seed_bundle_via_load(&backend).await;
+    seed_synthetic_bundle_without_components(&backend);
     let clip = burn_clip(&backend, backend.backend_instance());
     let request = build_text_request(clip, string_prompt("hello"));
 

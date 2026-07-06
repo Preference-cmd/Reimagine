@@ -13,33 +13,39 @@ fn backend() -> BurnBackend {
 }
 
 /// Expected short device label for the default
-/// `BurnBackendConfig::new(...)` configuration. burn/13 maps
-/// `"cpu"` differently depending on the active Cargo feature:
-///
-/// - Under `wgpu`: the legacy burn-ndarray CPU path. Label
-///   remains `"cpu"` so the axum-host router assertion on
-///   `burn:cpu` continues to hold.
-/// - Under `flex`: the burn-flex backend. Label is
-///   `"flex:cpu"`.
-/// - With neither: legacy burn-ndarray CPU path.
+/// `BurnBackendConfig::new(...)` configuration.
 fn expected_cpu_label() -> &'static str {
+    #[cfg(feature = "wgpu")]
+    {
+        "wgpu:default"
+    }
     #[cfg(all(not(feature = "wgpu"), feature = "flex"))]
     {
         "flex:cpu"
-    }
-    #[cfg(not(all(not(feature = "wgpu"), feature = "flex")))]
-    {
-        "cpu"
     }
 }
 
 /// Expected full backend instance label for the default CPU
 /// configuration under each feature.
 fn expected_cpu_instance() -> &'static str {
-    if cfg!(all(not(feature = "wgpu"), feature = "flex")) {
+    #[cfg(feature = "wgpu")]
+    {
+        "burn:wgpu:default"
+    }
+    #[cfg(all(not(feature = "wgpu"), feature = "flex"))]
+    {
         "burn:flex:cpu"
-    } else {
-        "burn:cpu"
+    }
+}
+
+fn expected_device_kind() -> DeviceKind {
+    #[cfg(feature = "wgpu")]
+    {
+        DeviceKind::Gpu
+    }
+    #[cfg(all(not(feature = "wgpu"), feature = "flex"))]
+    {
+        DeviceKind::Cpu
     }
 }
 
@@ -56,7 +62,7 @@ fn config_defaults_to_cpu_device_and_stores_paths() {
 #[test]
 fn device_resolves_feature_default_and_rejects_unknown_labels() {
     let expected_label = expected_cpu_label();
-    let built = BurnDevice::try_build_device("cpu").expect("cpu resolves");
+    let built = BurnDevice::default_device();
     assert_eq!(built.label(), expected_label);
 
     let err = BurnDevice::try_build_device("gpu").unwrap_err();
@@ -64,7 +70,7 @@ fn device_resolves_feature_default_and_rejects_unknown_labels() {
 }
 
 #[tokio::test]
-async fn profile_reports_builtin_burn_cpu_with_load_bundle_capability() {
+async fn profile_reports_builtin_burn_default_instance_with_capabilities() {
     let profile = BurnProfileProvider::new().backend_profile().await;
 
     assert_eq!(profile.backend.as_str(), "burn");
@@ -80,16 +86,12 @@ async fn profile_reports_builtin_burn_cpu_with_load_bundle_capability() {
     let cpu = profile
         .instances
         .iter()
-        .find(|instance| instance.instance.as_str() == "burn:cpu")
-        .expect("burn:cpu profile");
+        .find(|instance| instance.instance.as_str() == expected_cpu_instance())
+        .expect("default burn profile");
     assert_eq!(cpu.status, BackendInstanceStatus::Available);
     assert_eq!(cpu.backend.as_str(), "burn");
-    assert_eq!(cpu.device.label, "cpu");
-    assert_eq!(cpu.device.kind, DeviceKind::Cpu);
-    // burn/05 advertised LoadBundle; burn/09 extends the CPU
-    // instance profile with CreateEmptyLatent. burn/08f adds
-    // TextEncode. burn/13 keeps this stack on the legacy
-    // ndarray CPU instance for backward compatibility.
+    assert_eq!(cpu.device.label, expected_cpu_label());
+    assert_eq!(cpu.device.kind, expected_device_kind());
     assert_eq!(
         cpu.capabilities,
         vec![

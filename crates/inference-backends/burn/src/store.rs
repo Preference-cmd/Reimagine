@@ -1,42 +1,39 @@
 use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
 
-use burn_tensor::TensorData;
+use burn_tensor::{Tensor, TensorData};
 use reimagine_core::model::{ModelId, RunId};
 use reimagine_inference::{BackendPayloadKey, LatentSpaceMetadata};
 
+use crate::active_backend::ActiveBurnBackend;
 use crate::models::stable_diffusion::sdxl::{
     BurnLoadedModelBundle, BurnSdxlSourceSignature, BurnSdxlTokenizedPromptPair,
 };
-use crate::tensor::BurnTensor;
 
 /// Backend-owned latent payload wrapper.
-///
-/// V1 only carries the burn-ndarray CPU tensor variant. The payload
-/// holds the latent-space metadata the tensor was allocated for so
-/// the store can validate that a stored latent matches the metadata
-/// the caller requested. Later issues (burn/13 wgpu, etc.) can
-/// extend this enum without changing the operation/store seams.
 #[derive(Debug, Clone)]
 pub struct BurnLatentPayload {
-    tensor: BurnTensor<4>,
+    tensor: BurnLatentTensor,
     latent_space: LatentSpaceMetadata,
     width: u32,
     height: u32,
     batch: u32,
 }
 
+#[derive(Debug, Clone)]
+pub struct BurnLatentTensor(Box<Tensor<ActiveBurnBackend, 4>>);
+
 impl BurnLatentPayload {
-    /// Build a backend-owned latent payload from a `BurnTensor<4>`.
-    pub fn new_burn(
-        tensor: BurnTensor<4>,
+    /// Build a backend-owned latent payload from an active WGPU/Flex tensor.
+    pub fn new_active(
+        tensor: Tensor<ActiveBurnBackend, 4>,
         latent_space: LatentSpaceMetadata,
         width: u32,
         height: u32,
         batch: u32,
     ) -> Self {
         Self {
-            tensor,
+            tensor: BurnLatentTensor(Box::new(tensor)),
             latent_space,
             width,
             height,
@@ -44,19 +41,24 @@ impl BurnLatentPayload {
         }
     }
 
-    /// Borrow the underlying Burn tensor.
-    pub fn tensor(&self) -> &BurnTensor<4> {
-        &self.tensor
+    pub fn into_active_tensor(
+        self,
+    ) -> Result<Tensor<ActiveBurnBackend, 4>, crate::error::BurnBackendError> {
+        Ok(*self.tensor.0)
     }
 
-    /// Consume the payload and return the underlying tensor.
-    pub fn into_tensor(self) -> BurnTensor<4> {
-        self.tensor
+    pub fn active_tensor(&self) -> Option<&Tensor<ActiveBurnBackend, 4>> {
+        Some(self.tensor.0.as_ref())
+    }
+
+    #[cfg(test)]
+    pub(crate) fn is_active_backend(&self) -> bool {
+        true
     }
 
     /// Shape of the stored tensor as a `[batch, channels, h, w]` slice.
     pub fn dims(&self) -> [usize; 4] {
-        self.tensor.dims()
+        self.tensor.0.shape().dims()
     }
 
     /// Latent-space metadata this payload belongs to.
@@ -81,12 +83,12 @@ impl BurnLatentPayload {
 
     /// Approximate byte size of the payload.
     pub fn byte_size(&self) -> usize {
-        self.tensor.byte_size()
+        self.dims().iter().product::<usize>() * std::mem::size_of::<f32>()
     }
 
     /// Pull the data buffer out of the tensor.
     pub fn to_data(&self) -> TensorData {
-        self.tensor.to_data()
+        self.tensor.0.to_data()
     }
 }
 
@@ -192,11 +194,65 @@ impl BurnConditioningMetadata {
 
 /// Output from a CLIP text encoder forward pass.
 #[derive(Debug, Clone)]
-pub struct ClipOutputs {
-    /// Text embeddings tensor of shape [1, sequence_length, width].
-    pub text_embeddings: BurnTensor<3>,
-    /// Pooled embedding for CLIP-G: [1, 1280]; absent for CLIP-L.
-    pub pooled_embeddings: Option<BurnTensor<2>>,
+pub enum ClipOutputs {
+    /// Active WGPU/Flex backend path for Burn-native Module graph outputs.
+    Active {
+        text_embeddings: Box<burn_tensor::Tensor<ActiveBurnBackend, 3>>,
+        pooled_embeddings: Option<Box<burn_tensor::Tensor<ActiveBurnBackend, 2>>>,
+    },
+}
+
+impl ClipOutputs {
+    pub(crate) fn active(
+        text_embeddings: burn_tensor::Tensor<ActiveBurnBackend, 3>,
+        pooled_embeddings: Option<burn_tensor::Tensor<ActiveBurnBackend, 2>>,
+    ) -> Self {
+        Self::Active {
+            text_embeddings: Box::new(text_embeddings),
+            pooled_embeddings: pooled_embeddings.map(Box::new),
+        }
+    }
+
+    #[cfg(test)]
+    pub(crate) fn is_active_backend(&self) -> bool {
+        matches!(self, Self::Active { .. })
+    }
+
+    pub(crate) fn text_dims(&self) -> [usize; 3] {
+        match self {
+            Self::Active {
+                text_embeddings, ..
+            } => text_embeddings.shape().dims(),
+        }
+    }
+
+    pub(crate) fn active_text_embeddings(
+        &self,
+    ) -> Result<Tensor<ActiveBurnBackend, 3>, crate::error::BurnBackendError> {
+        match self {
+            Self::Active {
+                text_embeddings, ..
+            } => Ok(text_embeddings.as_ref().clone()),
+        }
+    }
+
+    pub(crate) fn pooled_dims(&self) -> Option<[usize; 2]> {
+        match self {
+            Self::Active {
+                pooled_embeddings, ..
+            } => pooled_embeddings
+                .as_ref()
+                .map(|tensor| tensor.shape().dims()),
+        }
+    }
+
+    pub(crate) fn byte_size(&self) -> usize {
+        let text_bytes = self.text_dims().iter().product::<usize>() * std::mem::size_of::<f32>();
+        let pooled_bytes = self.pooled_dims().map_or(0, |dims| {
+            dims.iter().product::<usize>() * std::mem::size_of::<f32>()
+        });
+        text_bytes + pooled_bytes
+    }
 }
 
 /// Backend-owned conditioning payload wrapper.
@@ -257,6 +313,11 @@ impl BurnConditioningPayload {
         &self.tokenized_prompts
     }
 
+    #[cfg(test)]
+    pub(crate) fn embeddings(&self) -> Option<&ClipOutputs> {
+        self.embeddings.as_ref()
+    }
+
     /// Approximate byte size of the payload: tokenized prompts plus
     /// any stored embedding tensors.
     pub fn byte_size(&self) -> usize {
@@ -265,11 +326,21 @@ impl BurnConditioningPayload {
         let masks = self.tokenized_prompts.clip_l.attention_mask.len()
             + self.tokenized_prompts.clip_g.attention_mask.len();
         let token_size = (tokens + masks) * std::mem::size_of::<u32>();
-        let embed_size = self.embeddings.as_ref().map_or(0, |emb| {
-            emb.text_embeddings.byte_size()
-                + emb.pooled_embeddings.as_ref().map_or(0, |p| p.byte_size())
-        });
+        let embed_size = self.embeddings.as_ref().map_or(0, ClipOutputs::byte_size);
         token_size + embed_size
+    }
+
+    pub(crate) fn active_text_embeddings(
+        &self,
+    ) -> Result<Tensor<ActiveBurnBackend, 3>, crate::error::BurnBackendError> {
+        self.embeddings
+            .as_ref()
+            .ok_or_else(|| {
+                crate::error::BurnBackendError::InvalidRequest(
+                    "diffusion.sample requires stored text encoder embeddings".to_owned(),
+                )
+            })?
+            .active_text_embeddings()
     }
 }
 
@@ -279,23 +350,26 @@ impl BurnConditioningPayload {
 /// metadata about the image dimensions and color space.
 #[derive(Debug, Clone)]
 pub struct BurnImagePayload {
-    tensor: BurnTensor<4>,
+    tensor: BurnImageTensor,
     width: u32,
     height: u32,
     batch: u32,
     color_space: String,
 }
 
+#[derive(Debug, Clone)]
+pub struct BurnImageTensor(Box<Tensor<ActiveBurnBackend, 4>>);
+
 impl BurnImagePayload {
-    pub fn new(
-        tensor: BurnTensor<4>,
+    pub fn new_active(
+        tensor: Tensor<ActiveBurnBackend, 4>,
         width: u32,
         height: u32,
         batch: u32,
         color_space: impl Into<String>,
     ) -> Self {
         Self {
-            tensor,
+            tensor: BurnImageTensor(Box::new(tensor)),
             width,
             height,
             batch,
@@ -303,16 +377,8 @@ impl BurnImagePayload {
         }
     }
 
-    pub fn tensor(&self) -> &BurnTensor<4> {
-        &self.tensor
-    }
-
-    pub fn into_tensor(self) -> BurnTensor<4> {
-        self.tensor
-    }
-
     pub fn dims(&self) -> [usize; 4] {
-        self.tensor.dims()
+        self.tensor.0.shape().dims()
     }
 
     pub fn width(&self) -> u32 {
@@ -332,7 +398,16 @@ impl BurnImagePayload {
     }
 
     pub fn byte_size(&self) -> usize {
-        self.tensor.byte_size()
+        self.dims().iter().product::<usize>() * std::mem::size_of::<f32>()
+    }
+
+    pub fn to_data(&self) -> TensorData {
+        self.tensor.0.to_data()
+    }
+
+    #[cfg(test)]
+    pub(crate) fn is_active_backend(&self) -> bool {
+        true
     }
 }
 
@@ -736,24 +811,31 @@ impl BurnModelCache {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::tensor::BurnTensor;
-    use burn_ndarray::NdArrayDevice;
+    use crate::active_backend::{ActiveBurnBackend, active_device};
+    use crate::config::BurnBackendConfig;
     use burn_tensor::Tensor;
 
     fn sdxl_latent_space() -> LatentSpaceMetadata {
         LatentSpaceMetadata::sdxl_base()
     }
 
-    fn burn_zero_tensor(batch: usize, channels: usize, h: usize, w: usize) -> BurnTensor<4> {
-        BurnTensor::Ndarray(Tensor::<burn_ndarray::NdArray, 4>::zeros(
-            [batch, channels, h, w],
-            &NdArrayDevice::Cpu,
-        ))
+    fn active_device_for_test() -> burn_tensor::Device<ActiveBurnBackend> {
+        let config = BurnBackendConfig::new("/models", "/output");
+        active_device(config.device())
+    }
+
+    fn active_zero_tensor(
+        batch: usize,
+        channels: usize,
+        h: usize,
+        w: usize,
+    ) -> Tensor<ActiveBurnBackend, 4> {
+        Tensor::<ActiveBurnBackend, 4>::zeros([batch, channels, h, w], &active_device_for_test())
     }
 
     fn build_payload(batch: u32, h: u32, w: u32) -> BurnLatentPayload {
-        BurnLatentPayload::new_burn(
-            burn_zero_tensor(batch as usize, 4, (h / 8) as usize, (w / 8) as usize),
+        BurnLatentPayload::new_active(
+            active_zero_tensor(batch as usize, 4, (h / 8) as usize, (w / 8) as usize),
             sdxl_latent_space(),
             w,
             h,
@@ -952,10 +1034,32 @@ mod tests {
             reimagine_core::model::TensorDType::F32,
             reimagine_inference::TensorLayout::Nchw,
         );
-        let tensor = burn_zero_tensor(1, 4, 8, 8);
-        let payload = BurnLatentPayload::new_burn(tensor, custom.clone(), 64, 64, 1);
+        let tensor = active_zero_tensor(1, 4, 8, 8);
+        let payload = BurnLatentPayload::new_active(tensor, custom.clone(), 64, 64, 1);
         assert_eq!(payload.latent_space(), &custom);
         assert_eq!(payload.latent_space().id().as_str(), "custom/test");
+    }
+
+    #[test]
+    fn burn_latent_payload_can_store_active_backend_tensor() {
+        let tensor = Tensor::<ActiveBurnBackend, 4>::zeros([1, 4, 8, 8], &active_device_for_test());
+        let payload =
+            BurnLatentPayload::new_active(tensor, LatentSpaceMetadata::sdxl_base(), 64, 64, 1);
+
+        assert!(payload.is_active_backend());
+        assert_eq!(payload.dims(), [1, 4, 8, 8]);
+        assert_eq!(payload.byte_size(), 1024);
+    }
+
+    #[test]
+    fn burn_image_payload_can_store_active_backend_tensor() {
+        let tensor =
+            Tensor::<ActiveBurnBackend, 4>::zeros([1, 3, 64, 64], &active_device_for_test());
+        let payload = BurnImagePayload::new_active(tensor, 64, 64, 1, "rgb");
+
+        assert!(payload.is_active_backend());
+        assert_eq!(payload.dims(), [1, 3, 64, 64]);
+        assert_eq!(payload.byte_size(), 3 * 64 * 64 * 4);
     }
 
     fn build_conditioning(model_id: &str, primary: u32, secondary: u32) -> BurnConditioningPayload {
@@ -1007,6 +1111,21 @@ mod tests {
         assert_eq!(got.tokenized_prompts().clip_l.token_ids[0], 11);
         assert_eq!(got.tokenized_prompts().clip_g.token_ids[0], 22);
         assert_eq!(got.byte_size(), 4 * 77 * std::mem::size_of::<u32>());
+    }
+
+    #[test]
+    fn conditioning_payload_can_store_active_backend_embeddings() {
+        let device = active_device_for_test();
+        let text = Tensor::<ActiveBurnBackend, 3>::zeros([1, 77, 2048], &device);
+        let pooled = Tensor::<ActiveBurnBackend, 2>::zeros([1, 1280], &device);
+        let payload = build_conditioning("sdxl-base", 11, 22)
+            .with_embeddings(ClipOutputs::active(text, Some(pooled)));
+
+        let embeddings = payload.embeddings().expect("active embeddings");
+
+        assert!(embeddings.is_active_backend());
+        assert_eq!(embeddings.text_dims(), [1, 77, 2048]);
+        assert_eq!(embeddings.pooled_dims(), Some([1, 1280]));
     }
 
     #[test]

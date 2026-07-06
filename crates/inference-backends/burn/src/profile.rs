@@ -7,7 +7,6 @@ use reimagine_plugin::{Extension, Plugin};
 pub(crate) const BACKEND_LABEL: &str = "burn";
 pub(crate) const PLUGIN_LABEL: &str = "builtin.burn";
 pub(crate) const EXTENSION_LABEL: &str = "backend.burn";
-pub(crate) const CPU_INSTANCE: &str = "burn:cpu";
 
 #[derive(Debug, Clone, Default)]
 pub struct BurnProfileProvider;
@@ -21,10 +20,6 @@ impl BurnProfileProvider {
         Backend::new(BACKEND_LABEL)
     }
 
-    pub fn cpu_instance() -> BackendInstance {
-        BackendInstance::new(CPU_INSTANCE)
-    }
-
     pub fn plugin_provenance() -> (Plugin, Extension) {
         let plugin = Plugin::try_from(PLUGIN_LABEL).expect("valid built-in Burn plugin id");
         let extension =
@@ -34,34 +29,13 @@ impl BurnProfileProvider {
 
     /// Advertise backend instances matching the active feature.
     ///
-    /// burn/13 keeps the legacy `burn:cpu` ndarray instance
-    /// alongside the new `burn:wgpu:*` / `burn:flex:*`
-    /// instances. The legacy instance keeps its full
-    /// capability stack (`LoadBundle + CreateEmptyLatent +
-    /// TextEncode`) so downstream callers depending on the
-    /// CPU instance's capabilities (load_bundle, burn/09
-    /// latent creation, burn/08f text.encode) keep working.
-    /// Each new wgpu/flex instance advertises only
-    /// [`InferenceCapability::LoadBundle`] for V1 — real
-    /// forward-pass capability parity lands in burn/08f+,
-    /// burn/10, and burn/11.
+    /// V1 production instances follow the active feature:
+    /// WGPU by default and Flex for CPU fallback builds.
     pub fn probe(&self) -> BackendProfile {
         let backend = Self::backend_kind();
         let (plugin, extension) = Self::plugin_provenance();
 
-        let ndarray_cpu = BackendInstanceProfile::new(
-            Self::cpu_instance(),
-            backend.clone(),
-            DeviceProfile::new("cpu").with_kind(DeviceKind::Cpu),
-            BackendInstanceStatus::Available,
-        )
-        .with_capability(InferenceCapability::LoadBundle)
-        .with_capability(InferenceCapability::CreateEmptyLatent)
-        .with_capability(InferenceCapability::TextEncode);
-
-        let mut profile = BackendProfile::new(backend)
-            .with_plugin(plugin, extension)
-            .with_instance(ndarray_cpu);
+        let mut profile = BackendProfile::new(backend).with_plugin(plugin, extension);
 
         // Under `wgpu` (default), advertise synthesized instances
         // per graphics API. Real adapter enumeration at runtime
@@ -89,12 +63,12 @@ fn add_wgpu_instances(profile: BackendProfile) -> BackendProfile {
 
     // Synthesized adapter enumerations for the static label
     // space. Each entry corresponds to the canonical
-    // `burn:wgpu:<label>` instance advertised in the burn/13
-    // issue (D3).
+    // `burn:wgpu:<label>` instance. CPU fallback is represented
+    // by `burn:flex:cpu`, not by WGPU's internal CPU adapter.
     let adapters: [(&'static str, WgpuDevice, DeviceKind); 3] = [
+        ("wgpu:default", WgpuDevice::DefaultDevice, DeviceKind::Gpu),
         ("wgpu:metal", WgpuDevice::IntegratedGpu(0), DeviceKind::Gpu),
         ("wgpu:vulkan", WgpuDevice::DiscreteGpu(0), DeviceKind::Gpu),
-        ("wgpu:cpu", WgpuDevice::Cpu, DeviceKind::Cpu),
     ];
 
     let mut next = profile;
@@ -107,7 +81,9 @@ fn add_wgpu_instances(profile: BackendProfile) -> BackendProfile {
             device_profile,
             BackendInstanceStatus::Available,
         )
-        .with_capability(InferenceCapability::LoadBundle);
+        .with_capability(InferenceCapability::LoadBundle)
+        .with_capability(InferenceCapability::CreateEmptyLatent)
+        .with_capability(InferenceCapability::TextEncode);
         next = next.with_instance(instance_profile);
     }
     next
@@ -137,7 +113,9 @@ fn add_flex_instance(profile: BackendProfile) -> BackendProfile {
         device_profile,
         BackendInstanceStatus::Available,
     )
-    .with_capability(InferenceCapability::LoadBundle);
+    .with_capability(InferenceCapability::LoadBundle)
+    .with_capability(InferenceCapability::CreateEmptyLatent)
+    .with_capability(InferenceCapability::TextEncode);
     profile.with_instance(instance_profile)
 }
 

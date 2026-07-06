@@ -18,18 +18,11 @@ flex = ["dep:burn-flex"]
 # GPU compute via burn-wgpu (wgpu + CubeCL).
 wgpu = ["dep:burn-wgpu"]
 
-# Note: `burn-ndarray` remains a non-optional dependency because it
-# is the legacy compile-time base used by the V1 operation/store
-# layer. Real tensor execution in V1 still goes through burn-ndarray
-# because GPU/Flex forward passes (CLIP, diffusion, VAE) are
-# delivered in later issues (burn/08f, burn/10, burn/11). burn/13
-# only adds the feature gates, the device enum, and the profile
-# probing path; it does not migrate any concrete operation to the
-# GPU/Flex path.
 [dependencies]
 async-trait = { workspace = true }
 burn-core = { workspace = true }
-burn-ndarray = { workspace = true }
+burn-nn = { workspace = true }
+burn-store = { workspace = true }
 burn-tensor = { workspace = true }
 burn-flex = { workspace = true, optional = true }
 burn-wgpu = { workspace = true, optional = true }

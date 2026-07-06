@@ -46,26 +46,30 @@ fn backend() -> BurnBackend {
 }
 
 /// Default `burn:<label>` backend instance label expected for the
-/// test backend under the active feature. burn/13 maps the
-/// default `cpu` config to:
+/// test backend under the active feature.
 ///
-/// - `burn:cpu` under `wgpu` (or with neither feature) —
-///   legacy burn-ndarray path.
+/// - `burn:wgpu:default` under `wgpu`.
 /// - `burn:flex:cpu` under `flex`.
 fn expected_default_instance() -> &'static str {
-    if cfg!(all(not(feature = "wgpu"), feature = "flex")) {
+    #[cfg(feature = "wgpu")]
+    {
+        "burn:wgpu:default"
+    }
+    #[cfg(all(not(feature = "wgpu"), feature = "flex"))]
+    {
         "burn:flex:cpu"
-    } else {
-        "burn:cpu"
     }
 }
 
-/// Default device short label (`"cpu"` or `"flex:cpu"`).
+/// Default device short label.
 fn expected_default_device_label() -> &'static str {
-    if cfg!(all(not(feature = "wgpu"), feature = "flex")) {
+    #[cfg(feature = "wgpu")]
+    {
+        "wgpu:default"
+    }
+    #[cfg(all(not(feature = "wgpu"), feature = "flex"))]
+    {
         "flex:cpu"
-    } else {
-        "cpu"
     }
 }
 
