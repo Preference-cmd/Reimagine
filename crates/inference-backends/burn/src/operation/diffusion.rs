@@ -177,7 +177,7 @@ pub fn execute_diffusion_sample(
     let seed = request.seed();
 
     // 6. Run euler/normal denoise loop (SDXL-specific)
-    let latent_tensor = latent_payload.into_tensor();
+    let latent_tensor = latent_payload.into_active_tensor()?;
     let sampled = crate::models::stable_diffusion::sdxl::diffusion::sample_sdxl(
         &bundle,
         latent_tensor,
@@ -191,7 +191,7 @@ pub fn execute_diffusion_sample(
 
     // 7. Store sampled latent
     let output_key = sampled_latent_key(request.run_id(), request.node_id());
-    let output_payload = BurnLatentPayload::new_burn(
+    let output_payload = BurnLatentPayload::new_active(
         sampled,
         LatentSpaceMetadata::sdxl_base(),
         latent_handle.width(),
@@ -285,8 +285,12 @@ fn validate_store_payload(
 mod tests {
     use super::*;
     use crate::config::BurnBackendConfig;
-    use crate::models::stable_diffusion::sdxl::{BurnLoadedModelBundle, BurnLoadedSdxlBundle};
+    use crate::models::stable_diffusion::sdxl::{
+        BurnLoadedModelBundle, BurnLoadedSdxlBundle, BurnSdxlTokenizedPrompt,
+        BurnSdxlTokenizedPromptPair,
+    };
     use crate::profile::BACKEND_LABEL;
+    use crate::store::{BurnConditioningMetadata, BurnConditioningPayload};
     use reimagine_core::model::{ModelId, NodeId, RunId, WorkflowId, WorkflowVersion};
     use reimagine_inference::{
         Backend, BackendInstance, BackendPayloadKey, ExecutionConditioning, RuntimeClipHandle,
@@ -379,6 +383,26 @@ mod tests {
             WorkflowVersion::new(1),
             NodeId::new("node-sample"),
         )
+    }
+
+    fn conditioning_payload_without_embeddings(model_id: &str) -> BurnConditioningPayload {
+        let metadata = BurnConditioningMetadata::test_only(
+            ModelId::new(model_id),
+            77,
+            "primary://test".to_owned(),
+            "secondary://test".to_owned(),
+        );
+        let tokenized = BurnSdxlTokenizedPromptPair {
+            clip_l: BurnSdxlTokenizedPrompt {
+                token_ids: vec![0; 77],
+                attention_mask: vec![1; 77],
+            },
+            clip_g: BurnSdxlTokenizedPrompt {
+                token_ids: vec![0; 77],
+                attention_mask: vec![1; 77],
+            },
+        };
+        BurnConditioningPayload::test_only(metadata, tokenized)
     }
 
     #[test]
@@ -590,7 +614,26 @@ mod tests {
             .store()
             .get_latent(latent.payload().payload_key())
             .expect("stored sampled latent");
+        assert!(stored.is_active_backend());
         assert_eq!(stored.dims(), [1, 4, 8, 8]);
+    }
+
+    #[test]
+    fn diffusion_sample_rejects_conditioning_without_embeddings() {
+        let backend = test_backend();
+        seed_bundle(&backend, "sdxl-base");
+        let request = build_request(&backend, "sdxl-base");
+        let key = request.positive().text_embedding().payload_key().clone();
+        backend.store().insert_conditioning(
+            RunId::new("run-test"),
+            key,
+            conditioning_payload_without_embeddings("sdxl-base"),
+        );
+
+        let err = execute_diffusion_sample(&backend, request).unwrap_err();
+        let msg = err.to_string();
+
+        assert!(msg.contains("stored text encoder embeddings"), "msg: {msg}");
     }
 
     #[test]

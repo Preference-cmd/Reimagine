@@ -1,52 +1,84 @@
-//! Euler/normal denoise loop for SDXL diffusion sampling.
-//!
-//! V1 implements a minimal euler-method denoise loop operating on
-//! the loaded weight structs. The actual tensor math is a placeholder
-//! that produces deterministic seed-dependent output from the input
-//! latent; real weight-driven denoising is a follow-up deepening.
+//! CFG denoise loop for SDXL diffusion sampling over active Burn tensors.
 
-use burn_ndarray::{NdArray, NdArrayDevice};
 use burn_tensor::{Tensor, TensorData};
 
-use crate::backend::BurnBackend;
+use crate::active_backend::ActiveBurnBackend;
 use crate::error::BurnBackendError;
-use crate::tensor::BurnTensor;
 
-/// Run the euler/normal denoise loop.
-///
-/// V1 applies a seed-dependent noise pattern to the latent and
-/// returns the result. The real weight-driven UNet forward
-/// pass is a follow-up deepening.
-pub fn euler_normal_sample(
-    latent: BurnTensor<4>,
-    _steps: u32,
+use super::module::SdxlUnet;
+use super::scheduler::EulerNormalScheduler;
+
+/// Run the euler/normal classifier-free guidance loop over the Burn-native
+/// UNet Module graph.
+pub fn euler_normal_cfg_sample(
+    unet: &SdxlUnet<ActiveBurnBackend>,
+    latent: Tensor<ActiveBurnBackend, 4>,
+    positive_conditioning: Tensor<ActiveBurnBackend, 3>,
+    negative_conditioning: Tensor<ActiveBurnBackend, 3>,
+    steps: u32,
+    cfg: f32,
     seed: u64,
-    backend: &BurnBackend,
-) -> Result<BurnTensor<4>, BurnBackendError> {
-    let device = backend.ndarray_device();
-    let dims = latent.dims();
+) -> Result<Tensor<ActiveBurnBackend, 4>, BurnBackendError> {
+    let scheduler = EulerNormalScheduler::new(steps)?;
+    let device = latent.device();
+    let dims = latent.shape().dims();
+    let mut latent = latent + seeded_noise(dims, seed, &device) * scheduler.init_noise_sigma as f32;
 
-    // V1: apply seed-dependent noise and return a modified latent.
-    // The noise is deterministic from the seed so tests can verify
-    // seed reproducibility.
-    let noise = seeded_noise(dims, seed, &device);
-    let result = latent.map(move |t| t + noise);
+    for step in 0..steps as usize {
+        let timestep = Tensor::<ActiveBurnBackend, 1>::from_data(
+            TensorData::new(vec![scheduler.timesteps[step] as f32], [1]),
+            &device,
+        );
+        let noise_uncond = unet.forward(
+            latent.clone(),
+            timestep.clone(),
+            negative_conditioning.clone(),
+        );
+        let noise_text = unet.forward(latent.clone(), timestep, positive_conditioning.clone());
+        let guided = noise_uncond.clone() + (noise_text - noise_uncond) * cfg;
+        latent = scheduler.step_tensor(latent, guided, step)?;
+    }
 
-    Ok(result)
+    Ok(latent)
 }
 
-/// Generate a deterministic noise tensor from a seed, matching the
-/// latent shape.
-fn seeded_noise(shape: [usize; 4], seed: u64, device: &NdArrayDevice) -> Tensor<NdArray, 4> {
-    // Use a simple deterministic noise pattern based on the seed
-    let total = shape[0] * shape[1] * shape[2] * shape[3];
+fn seeded_noise(
+    shape: [usize; 4],
+    seed: u64,
+    device: &burn_tensor::Device<ActiveBurnBackend>,
+) -> Tensor<ActiveBurnBackend, 4> {
+    let total = shape.iter().product::<usize>();
     let mut data = Vec::with_capacity(total);
-    // Simple LCG-style noise for reproducibility
     let mut state = seed.wrapping_add(1);
     for _ in 0..total {
         state = state.wrapping_mul(6364136223846793005).wrapping_add(1);
         let val = (state >> 32) as f32 / u32::MAX as f32 * 2.0 - 1.0;
-        data.push(val * 0.1); // scale noise to 0.1 magnitude
+        data.push(val * 0.1);
     }
     Tensor::from_data(TensorData::new(data, shape), device)
+}
+
+#[cfg(test)]
+mod tests {
+    use burn_tensor::Tensor;
+
+    use super::*;
+    use crate::active_backend::{ActiveBurnBackend, active_device};
+    use crate::config::BurnBackendConfig;
+    use crate::models::stable_diffusion::sdxl::diffusion::module::SdxlUnet;
+
+    #[test]
+    fn cfg_sampler_runs_over_active_unet_module_and_preserves_shape() {
+        let config = BurnBackendConfig::new("/models", "/output");
+        let device = active_device(config.device());
+        let unet = SdxlUnet::<ActiveBurnBackend>::init(&device);
+        let latent = Tensor::<ActiveBurnBackend, 4>::zeros([1, 4, 8, 8], &device);
+        let positive = Tensor::<ActiveBurnBackend, 3>::ones([1, 77, 16], &device);
+        let negative = Tensor::<ActiveBurnBackend, 3>::zeros([1, 77, 16], &device);
+
+        let sampled = euler_normal_cfg_sample(&unet, latent, positive, negative, 1, 7.5, 42)
+            .expect("active cfg sample");
+
+        assert_eq!(sampled.shape().dims(), [1, 4, 8, 8]);
+    }
 }

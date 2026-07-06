@@ -13,8 +13,9 @@
 //!           (x_t - sigma_t * noise_pred) + sigma_prev * noise_pred
 //! ```
 
+use burn_tensor::{Tensor, backend::Backend};
+
 use crate::error::BurnBackendError;
-use crate::tensor::BurnTensor;
 
 // ---------------------------------------------------------------------------
 // Constants
@@ -124,29 +125,13 @@ impl EulerNormalScheduler {
     // Single sampling step
     // -----------------------------------------------------------------------
 
-    /// Apply one Euler normal step.
-    ///
-    /// Formula:
-    ///
-    /// ```text
-    /// x_{t-1} = sqrt(alpha_bar_prev / alpha_bar_t) *
-    ///           (x_t - sigma_t * noise_pred) + sigma_prev * noise_pred
-    /// ```
-    ///
-    /// At the last timestep index the previous values are treated as
-    /// `sigma_prev = 0.0` and `alpha_bar_prev = 1.0`.
-    ///
-    /// # Arguments
-    ///
-    /// * `x` — current latent `x_t`
-    /// * `noise_pred` — UNet noise prediction for `x_t`
-    /// * `t` — current timestep index (0-based)
-    pub fn step(
+    /// Apply one Euler normal step over an active Burn backend tensor.
+    pub fn step_tensor<B: Backend>(
         &self,
-        x: &BurnTensor<4>,
-        noise_pred: &BurnTensor<4>,
+        x: Tensor<B, 4>,
+        noise_pred: Tensor<B, 4>,
         t: usize,
-    ) -> Result<BurnTensor<4>, BurnBackendError> {
+    ) -> Result<Tensor<B, 4>, BurnBackendError> {
         if t >= self.sigmas.len() {
             return Err(BurnBackendError::InvalidRequest(format!(
                 "timestep index {t} out of range (len={})",
@@ -167,24 +152,12 @@ impl EulerNormalScheduler {
             1.0
         };
 
-        let x_nd = match x {
-            BurnTensor::Ndarray(t) => t,
-        };
-        let pred_nd = match noise_pred {
-            BurnTensor::Ndarray(t) => t,
-        };
-
         let sigma_t_s = sigma_t as f32;
         let sigma_prev_s = sigma_prev as f32;
         let sqrt_ratio = (alpha_bar_prev / alpha_bar_t).sqrt() as f32;
 
-        // denoised = x_t - sigma_t * noise_pred
-        let denoised = x_nd.clone() - pred_nd.clone() * sigma_t_s;
-
-        // x_{t-1} = sqrt(alpha_bar_prev/alpha_bar_t) * denoised + sigma_prev * pred
-        let result = denoised * sqrt_ratio + pred_nd.clone() * sigma_prev_s;
-
-        Ok(BurnTensor::Ndarray(result))
+        let denoised = x - noise_pred.clone() * sigma_t_s;
+        Ok(denoised * sqrt_ratio + noise_pred * sigma_prev_s)
     }
 }
 
@@ -221,9 +194,10 @@ fn cumprod(v: &[f64]) -> Vec<f64> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use burn_ndarray::NdArray;
-    use burn_ndarray::NdArrayDevice;
     use burn_tensor::{Tensor, TensorData};
+
+    use crate::active_backend::{ActiveBurnBackend, active_device};
+    use crate::config::BurnBackendConfig;
 
     // -----------------------------------------------------------------------
     // Schedule construction
@@ -285,8 +259,7 @@ mod tests {
             .collect();
         full_indices.reverse();
 
-        for i in 0..20usize {
-            let full_idx = full_indices[i];
+        for (i, full_idx) in full_indices.iter().copied().enumerate().take(20usize) {
             let expected = expected_ac[full_idx];
             assert!(
                 (s.alphas_cumprod[i] - expected).abs() < 1e-6,
@@ -313,8 +286,7 @@ mod tests {
             .collect();
         full_indices.reverse();
 
-        for i in 0..20usize {
-            let full_idx = full_indices[i];
+        for (i, full_idx) in full_indices.iter().copied().enumerate().take(20usize) {
             let expected = expected_full[full_idx];
             assert!(
                 (s.alphas_cumprod[i] - expected).abs() < 1e-6,
@@ -376,6 +348,11 @@ mod tests {
             .collect()
     }
 
+    fn test_device() -> burn_tensor::Device<ActiveBurnBackend> {
+        let config = BurnBackendConfig::new("/models", "/output");
+        active_device(config.device())
+    }
+
     #[test]
     fn step_matches_hand_computed_example() {
         let s = EulerNormalScheduler::new(20).unwrap();
@@ -387,19 +364,18 @@ mod tests {
         let x_vals = vec![1.0f32, 2.0, 3.0, 4.0];
         let pred_vals = vec![0.1f32, 0.2, 0.3, 0.4];
 
-        let x = BurnTensor::Ndarray(Tensor::<NdArray, 4>::from_data(
+        let device = test_device();
+        let x = Tensor::<ActiveBurnBackend, 4>::from_data(
             TensorData::new(x_vals.clone(), burn_tensor::Shape::new([1, 1, 2, 2])),
-            &NdArrayDevice::Cpu,
-        ));
-        let pred = BurnTensor::Ndarray(Tensor::<NdArray, 4>::from_data(
+            &device,
+        );
+        let pred = Tensor::<ActiveBurnBackend, 4>::from_data(
             TensorData::new(pred_vals.clone(), burn_tensor::Shape::new([1, 1, 2, 2])),
-            &NdArrayDevice::Cpu,
-        ));
+            &device,
+        );
 
-        let result = s.step(&x, &pred, 0).unwrap();
-        let out_vals = match result {
-            BurnTensor::Ndarray(t) => t.to_data().to_vec::<f32>().unwrap(),
-        };
+        let result = s.step_tensor(x, pred, 0).unwrap();
+        let out_vals = result.to_data().to_vec::<f32>().unwrap();
 
         let expected = hand_compute_step(
             &x_vals,
@@ -420,18 +396,20 @@ mod tests {
     #[test]
     fn step_preserves_shape() {
         let s = EulerNormalScheduler::new(10).unwrap();
-        let x = BurnTensor::zeros([2, 4, 8, 8]);
-        let pred = BurnTensor::zeros([2, 4, 8, 8]);
-        let result = s.step(&x, &pred, 0).unwrap();
-        assert_eq!(result.dims(), [2, 4, 8, 8]);
+        let device = test_device();
+        let x = Tensor::<ActiveBurnBackend, 4>::zeros([2, 4, 8, 8], &device);
+        let pred = Tensor::<ActiveBurnBackend, 4>::zeros([2, 4, 8, 8], &device);
+        let result = s.step_tensor(x, pred, 0).unwrap();
+        assert_eq!(result.shape().dims(), [2, 4, 8, 8]);
     }
 
     #[test]
     fn step_out_of_range_index_returns_error() {
         let s = EulerNormalScheduler::new(5).unwrap();
-        let x = BurnTensor::zeros([1, 1, 2, 2]);
-        let pred = BurnTensor::zeros([1, 1, 2, 2]);
-        let err = s.step(&x, &pred, 5).unwrap_err();
+        let device = test_device();
+        let x = Tensor::<ActiveBurnBackend, 4>::zeros([1, 1, 2, 2], &device);
+        let pred = Tensor::<ActiveBurnBackend, 4>::zeros([1, 1, 2, 2], &device);
+        let err = s.step_tensor(x, pred, 5).unwrap_err();
         match err {
             BurnBackendError::InvalidRequest(_) => {}
             other => panic!("expected InvalidRequest, got {other:?}"),
@@ -445,19 +423,18 @@ mod tests {
         let pred_vals = vec![0.0f32; 4];
         let x_vals = vec![1.0f32, -1.0, 0.5, -0.5];
 
-        let x = BurnTensor::Ndarray(Tensor::<NdArray, 4>::from_data(
+        let device = test_device();
+        let x = Tensor::<ActiveBurnBackend, 4>::from_data(
             TensorData::new(x_vals.clone(), burn_tensor::Shape::new([1, 1, 2, 2])),
-            &NdArrayDevice::Cpu,
-        ));
-        let pred = BurnTensor::Ndarray(Tensor::<NdArray, 4>::from_data(
+            &device,
+        );
+        let pred = Tensor::<ActiveBurnBackend, 4>::from_data(
             TensorData::new(pred_vals.clone(), burn_tensor::Shape::new([1, 1, 2, 2])),
-            &NdArrayDevice::Cpu,
-        ));
+            &device,
+        );
 
-        let result = s.step(&x, &pred, last).unwrap();
-        let out_vals = match result {
-            BurnTensor::Ndarray(t) => t.to_data().to_vec::<f32>().unwrap(),
-        };
+        let result = s.step_tensor(x, pred, last).unwrap();
+        let out_vals = result.to_data().to_vec::<f32>().unwrap();
 
         // At last step: alpha_bar_prev=1.0, sigma_prev=0.0, pred=0 => x_{t-1} = sqrt(1/alpha_bar_t) * x
         let sqrt_ratio = (1.0 / s.alphas_cumprod[last]).sqrt() as f32;

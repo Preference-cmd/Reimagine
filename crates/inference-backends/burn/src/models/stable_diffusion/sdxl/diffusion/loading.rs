@@ -3,12 +3,73 @@
 
 use std::fs;
 
+use burn_store::{ApplyResult, KeyRemapper, PyTorchToBurnAdapter, SafetensorsStore};
+use burn_tensor::backend::Backend;
 use safetensors::tensor::SafeTensors;
 
 use crate::error::BurnBackendError;
+use crate::models::stable_diffusion::sdxl::load_diagnostics::{
+    SdxlLoadPolicy, validate_apply_result as validate_sdxl_apply_result,
+};
 use crate::models::stable_diffusion::sdxl::{BurnLoadedModelBundle, BurnSdxlComponentRole};
+use crate::runtime::BurnRuntime;
 
-use super::module::{DiffusionBlockWeights, DiffusionUNetWeights, DiffusionWeightData};
+use super::module::{DiffusionBlockWeights, DiffusionUNetWeights, DiffusionWeightData, SdxlUnet};
+
+/// Load an SDXL UNet Module from a diffusion component through burn-store.
+#[allow(dead_code)]
+pub(crate) fn load_unet_module_from_path<B: Backend>(
+    runtime: &BurnRuntime<B>,
+    module: &mut SdxlUnet<B>,
+    path: impl Into<std::path::PathBuf>,
+) -> Result<ApplyResult, BurnBackendError> {
+    let mut store = sdxl_unet_store_from_path(path);
+    let result = runtime
+        .load_module_store(module, &mut store)
+        .map_err(|source| BurnBackendError::InvalidRequest(source.to_string()))?;
+    validate_apply_result("diffusion", &result)?;
+    Ok(result)
+}
+
+#[allow(dead_code)]
+fn sdxl_unet_store_from_path(path: impl Into<std::path::PathBuf>) -> SafetensorsStore {
+    SafetensorsStore::from_file(path)
+        .remap(sdxl_unet_key_remapper())
+        .with_from_adapter(PyTorchToBurnAdapter)
+        .allow_partial(true)
+        .validate(true)
+}
+
+#[allow(dead_code)]
+fn sdxl_unet_key_remapper() -> KeyRemapper {
+    KeyRemapper::new()
+        .add_pattern(r"^model\.diffusion\.conv_in\.", "conv_in.")
+        .expect("static diffusion conv_in remapping regex should compile")
+        .add_pattern(r"^model\.diffusion\.out\.0\.", "conv_out.")
+        .expect("static diffusion output conv remapping regex should compile")
+}
+
+#[allow(dead_code)]
+fn validate_apply_result(component: &str, result: &ApplyResult) -> Result<(), BurnBackendError> {
+    validate_sdxl_apply_result(diffusion_load_policy(component), result)
+}
+
+fn diffusion_load_policy(component: &str) -> SdxlLoadPolicy {
+    match component {
+        "diffusion" => SdxlLoadPolicy::new("diffusion")
+            .with_required_snapshots(&[
+                "conv_in.weight",
+                "conv_in.bias",
+                "conv_out.weight",
+                "conv_out.bias",
+            ])
+            .with_remapped_key_patterns(&[
+                "model.diffusion.conv_in -> conv_in",
+                "model.diffusion.out.0 -> conv_out",
+            ]),
+        _ => SdxlLoadPolicy::new("diffusion"),
+    }
+}
 
 /// Load diffusion UNet weights from the bundle's diffusion component
 /// file. The bundle owns the resolved component path; this loader
@@ -119,4 +180,168 @@ fn load_tensor_opt(
     key: &str,
 ) -> Result<DiffusionWeightData, BurnBackendError> {
     load_tensor(safetensors, key)
+}
+
+#[cfg(test)]
+mod tests {
+    use std::borrow::Cow;
+
+    use burn_tensor::Tensor;
+
+    use crate::active_backend::{ActiveBurnBackend, active_device};
+    use crate::config::BurnBackendConfig;
+    use crate::models::stable_diffusion::sdxl::diffusion::module::{SdxlUnet, SdxlUnetTopology};
+    use crate::runtime::BurnRuntime;
+
+    #[test]
+    fn load_unet_module_from_path_applies_diffusion_snapshots_through_burn_store() {
+        let temp = tempfile::tempdir().expect("temp dir");
+        let diffusion_path = temp.path().join("diffusion.safetensors");
+        write_tiny_diffusion_component(&diffusion_path);
+        let config = BurnBackendConfig::new("/models", "/output");
+        let runtime = BurnRuntime::<ActiveBurnBackend>::new(active_device(config.device()));
+        let mut module = SdxlUnet::<ActiveBurnBackend>::init_from_topology(
+            &SdxlUnetTopology::tiny(),
+            runtime.device(),
+        );
+
+        let result = super::load_unet_module_from_path(&runtime, &mut module, &diffusion_path)
+            .expect("tiny diffusion module should load through burn-store");
+
+        assert!(result.errors.is_empty(), "unexpected load errors: {result}");
+        assert!(result.applied.contains(&"conv_in.weight".to_string()));
+        let output = module.forward(
+            Tensor::<ActiveBurnBackend, 4>::zeros([1, 4, 4, 4], runtime.device()),
+            Tensor::<ActiveBurnBackend, 1>::zeros([1], runtime.device()),
+            Tensor::<ActiveBurnBackend, 3>::zeros([1, 3, 16], runtime.device()),
+        );
+        assert_eq!(output.dims(), [1, 4, 4, 4]);
+    }
+
+    #[test]
+    fn load_unet_module_from_path_rejects_shape_incompatible_snapshots() {
+        let temp = tempfile::tempdir().expect("temp dir");
+        let diffusion_path = temp.path().join("bad-diffusion.safetensors");
+        write_shape_incompatible_diffusion_component(&diffusion_path);
+        let config = BurnBackendConfig::new("/models", "/output");
+        let runtime = BurnRuntime::<ActiveBurnBackend>::new(active_device(config.device()));
+        let mut module = SdxlUnet::<ActiveBurnBackend>::init_from_topology(
+            &SdxlUnetTopology::tiny(),
+            runtime.device(),
+        );
+
+        let err = super::load_unet_module_from_path(&runtime, &mut module, &diffusion_path)
+            .expect_err("shape-incompatible diffusion snapshots should fail validation");
+        let message = err.to_string();
+
+        assert!(
+            message.contains("ShapeMismatch") && message.contains("conv_in.weight"),
+            "unexpected error: {err}"
+        );
+    }
+
+    #[test]
+    fn load_unet_module_from_path_rejects_missing_required_snapshots() {
+        let temp = tempfile::tempdir().expect("temp dir");
+        let diffusion_path = temp.path().join("missing-diffusion.safetensors");
+        write_missing_required_diffusion_component(&diffusion_path);
+        let config = BurnBackendConfig::new("/models", "/output");
+        let runtime = BurnRuntime::<ActiveBurnBackend>::new(active_device(config.device()));
+        let mut module = SdxlUnet::<ActiveBurnBackend>::init_from_topology(
+            &SdxlUnetTopology::tiny(),
+            runtime.device(),
+        );
+
+        let err = super::load_unet_module_from_path(&runtime, &mut module, &diffusion_path)
+            .expect_err("missing diffusion snapshots should fail validation");
+        let message = err.to_string();
+
+        assert!(
+            message.contains("required snapshot missing")
+                && message.contains("component_role=diffusion")
+                && message.contains("conv_out.weight")
+                && message.contains("unexpected source snapshot")
+                && message.contains("model.diffusion.extra.weight")
+                && message.contains("partial load policy"),
+            "unexpected error: {err}"
+        );
+    }
+
+    fn write_tiny_diffusion_component(path: &std::path::Path) {
+        let tensors = vec![
+            tensor_view(
+                "model.diffusion.conv_in.weight",
+                vec![4, 4, 3, 3],
+                vec![0.01; 4 * 4 * 3 * 3],
+            ),
+            tensor_view("model.diffusion.conv_in.bias", vec![4], vec![0.0; 4]),
+            tensor_view(
+                "model.diffusion.out.0.weight",
+                vec![4, 4, 3, 3],
+                vec![0.01; 4 * 4 * 3 * 3],
+            ),
+            tensor_view("model.diffusion.out.0.bias", vec![4], vec![0.0; 4]),
+        ];
+        safetensors::tensor::serialize_to_file(tensors, None, path)
+            .expect("serialize tiny diffusion safetensors");
+    }
+
+    fn write_shape_incompatible_diffusion_component(path: &std::path::Path) {
+        let tensors = vec![
+            tensor_view(
+                "model.diffusion.conv_in.weight",
+                vec![4, 4],
+                vec![0.01; 4 * 4],
+            ),
+            tensor_view("model.diffusion.conv_in.bias", vec![4], vec![0.0; 4]),
+        ];
+        safetensors::tensor::serialize_to_file(tensors, None, path)
+            .expect("serialize invalid diffusion safetensors");
+    }
+
+    fn write_missing_required_diffusion_component(path: &std::path::Path) {
+        let tensors = vec![
+            tensor_view(
+                "model.diffusion.conv_in.weight",
+                vec![4, 4, 3, 3],
+                vec![0.01; 4 * 4 * 3 * 3],
+            ),
+            tensor_view("model.diffusion.conv_in.bias", vec![4], vec![0.0; 4]),
+            tensor_view("model.diffusion.extra.weight", vec![1], vec![1.0]),
+        ];
+        safetensors::tensor::serialize_to_file(tensors, None, path)
+            .expect("serialize incomplete diffusion safetensors");
+    }
+
+    fn tensor_view(path: &str, shape: Vec<usize>, values: Vec<f32>) -> (String, TestTensorView) {
+        let data = values
+            .iter()
+            .flat_map(|value| value.to_le_bytes())
+            .collect();
+        (path.to_string(), TestTensorView { shape, data })
+    }
+
+    #[derive(Debug, Clone)]
+    struct TestTensorView {
+        shape: Vec<usize>,
+        data: Vec<u8>,
+    }
+
+    impl safetensors::tensor::View for TestTensorView {
+        fn dtype(&self) -> safetensors::tensor::Dtype {
+            safetensors::tensor::Dtype::F32
+        }
+
+        fn shape(&self) -> &[usize] {
+            &self.shape
+        }
+
+        fn data(&self) -> Cow<'_, [u8]> {
+            Cow::Borrowed(&self.data)
+        }
+
+        fn data_len(&self) -> usize {
+            self.data.len()
+        }
+    }
 }
