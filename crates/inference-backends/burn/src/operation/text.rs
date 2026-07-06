@@ -530,11 +530,9 @@ mod tests {
             )),
         );
 
-        // burn/08f: production text.encode runs the full preflight,
-        // persists the preconditioned tokenization as a conditioning
-        // payload, and returns backend-affine handles with the
-        // expected SDXL output shapes. Real CLIP tensor forward is
-        // a follow-up deepening.
+        // With no test components attached, this exercises the
+        // synthetic fallback path that keeps validation and store
+        // plumbing covered without claiming component-backed CLIP.
         let response = execute_text_encode(&backend, request).expect("text.encode succeeds");
         let conditioning = response.conditioning();
         assert_eq!(conditioning.text_embedding().backend().as_str(), "burn");
@@ -580,12 +578,8 @@ mod tests {
 
     #[test]
     fn preflight_tokenizes_with_both_tokenizers_via_build_helper() {
-        // `build_preflight` is the seam future burn/08f will
-        // reuse to obtain the preconditioned record before
-        // running the CLIP forward pass. The preflight itself
-        // does not expose the record through the production
-        // text.encode entry point, so we exercise it directly
-        // here.
+        // `build_preflight` is still useful to isolate validation
+        // and tokenization from the Module forward and store path.
         let backend = backend();
         seed_bundle(&backend, "sdxl-base");
         let clip = burn_clip(&backend, "sdxl-base", backend.backend_instance());

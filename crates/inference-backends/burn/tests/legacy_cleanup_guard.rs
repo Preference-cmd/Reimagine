@@ -1,10 +1,20 @@
 use std::fs;
 use std::path::{Path, PathBuf};
 
-const LEGACY_PATTERNS: &[&str] = &["burn_ndarray", "NdArray", "BurnTensor::Ndarray"];
+const LEGACY_PATTERNS: &[&str] = &[
+    "burn_ndarray",
+    "NdArray",
+    "BurnTensor::Ndarray",
+    "ClipTextEncoderWeights",
+    "ClipTransformerWeights",
+    "ClipWeightData",
+    "load_clip_l",
+    "load_clip_g",
+    "load_from_path(",
+];
 
 #[test]
-fn production_sources_do_not_reference_legacy_ndarray_paths() {
+fn production_sources_do_not_reference_legacy_burn_paths() {
     let crate_root = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
     let src_root = crate_root.join("src");
     let mut violations = Vec::new();
@@ -12,7 +22,7 @@ fn production_sources_do_not_reference_legacy_ndarray_paths() {
 
     assert!(
         violations.is_empty(),
-        "legacy Burn NdArray references remain in production sources:\n{}",
+        "legacy Burn references remain in production sources:\n{}",
         violations.join("\n")
     );
 }

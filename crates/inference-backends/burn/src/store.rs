@@ -99,9 +99,8 @@ impl BurnLatentPayload {
 /// store must also remember facts that are only relevant inside
 /// Burn (per-role tokenizer identity, source signature, model
 /// series/variant, and the requested sequence length). Keeping this
-/// metadata attached to the payload lets the future burn/08f and
-/// burn/10 operations resolve the conditioning without having to
-/// re-run the preflight.
+/// metadata attached to the payload lets downstream Burn operations
+/// resolve the conditioning without having to re-run the preflight.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct BurnConditioningMetadata {
     model_id: ModelId,
@@ -257,12 +256,10 @@ impl ClipOutputs {
 
 /// Backend-owned conditioning payload wrapper.
 ///
-/// V1 carries only the deterministic tokenization output. The
-/// payload exists so the future burn/08f CLIP forward pass can
-/// store the produced `[1,77,768]` / `[1,77,1280]` embeddings and
-/// the `[1,768]` / `[1,1280]` pooled embeddings under the same
-/// store seam; that extension is intentionally out of scope for
-/// burn/08a, which only defines the shape.
+/// V1 carries deterministic tokenization output plus optional CLIP
+/// embeddings from the active Burn backend. Component-backed
+/// `text.encode` fills the embeddings; no-component test bundles may
+/// use synthetic shape-correct placeholders.
 #[derive(Debug, Clone)]
 pub struct BurnConditioningPayload {
     pub(crate) metadata: BurnConditioningMetadata,
