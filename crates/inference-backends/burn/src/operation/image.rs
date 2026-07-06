@@ -202,8 +202,7 @@ fn encode_image_to_png(
         )));
     }
 
-    // Extract raw f32 data from the BurnTensor.
-    let data = image.tensor().to_data();
+    let data = image.to_data();
     let f32_data: Vec<f32> = data.to_vec::<f32>().map_err(|e| {
         BurnBackendError::InvalidRequest(format!("image.save failed to extract tensor data: {e}"))
     })?;

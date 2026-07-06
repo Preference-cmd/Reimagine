@@ -3,7 +3,7 @@
 //! ## What this module owns
 //!
 //! The narrow V1 capability required by `burn/09`: build a real
-//! Burn-private latent payload (a zero burn-ndarray tensor) sized
+//! Burn-private latent payload (currently a compatibility zero tensor) sized
 //! for the requested pixel dimensions, store it in the shared
 //! [`BurnStore`](crate::store::BurnStore), and return a
 //! [`RuntimeLatent`](reimagine_inference::RuntimeLatent) with
@@ -21,7 +21,6 @@
 //! - Allocation is the only state mutation; no model cache, no
 //!   runtime hooks.
 
-use burn_ndarray::NdArray;
 use burn_tensor::Tensor;
 use reimagine_core::model::{NodeId, RunId, TensorShape};
 use reimagine_inference::latent_space::validate_pixel_dimensions_against;
@@ -34,7 +33,6 @@ use reimagine_inference::{
 use crate::backend::BurnBackend;
 use crate::error::BurnBackendError;
 use crate::store::{BurnImagePayload, BurnLatentPayload};
-use crate::tensor::BurnTensor;
 
 fn map_latent_space_error(label: &'static str, err: LatentSpaceError) -> BurnBackendError {
     BurnBackendError::InvalidRequest(format!("{label} {err}"))
@@ -77,24 +75,19 @@ struct LatentAllocationSpec {
     latent_space: LatentSpaceMetadata,
 }
 
-/// Allocate a real Burn-private latent payload (zero burn-ndarray
-/// tensor) for the requested shape.
-///
-/// The tensor is allocated on the backend's concrete device (V1 is
-/// always CPU via burn-ndarray). The function never panics; Burn
-/// tensor construction is infallible for valid shapes.
+/// Allocate a Burn-private latent payload for the requested shape.
 fn allocate_zero_latent(backend: &BurnBackend, spec: &LatentAllocationSpec) -> BurnLatentPayload {
-    let tensor = Tensor::<NdArray, 4>::zeros(
+    let tensor = Tensor::<crate::active_backend::ActiveBurnBackend, 4>::zeros(
         [
             spec.batch as usize,
             spec.channels as usize,
             spec.latent_height as usize,
             spec.latent_width as usize,
         ],
-        &backend.ndarray_device(),
+        backend.active_runtime().device(),
     );
-    BurnLatentPayload::new_burn(
-        BurnTensor::Ndarray(tensor),
+    BurnLatentPayload::new_active(
+        tensor,
         spec.latent_space.clone(),
         spec.width,
         spec.height,
@@ -274,7 +267,7 @@ pub fn execute_latent_decode(
     let dims: [usize; 4] = decoded.dims();
     let height = dims[2] as u32;
     let width = dims[3] as u32;
-    let image_payload = BurnImagePayload::new(decoded, width, height, 1, "rgb");
+    let image_payload = BurnImagePayload::new_active(decoded, width, height, 1, "rgb");
 
     let image_key = reimagine_inference::BackendPayloadKey::new(format!(
         "image:{}:{}",
@@ -307,8 +300,12 @@ pub fn execute_latent_decode(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::models::stable_diffusion::sdxl::{BurnLoadedModelBundle, BurnLoadedSdxlBundle};
     use reimagine_core::model::{NodeId, RunId, WorkflowId, WorkflowVersion};
-    use reimagine_inference::{LatentSpaceId, TensorLayout};
+    use reimagine_inference::{
+        Backend, BackendPayloadKey, LatentSpaceId, RuntimeVaeHandle, TensorLayout,
+    };
+    use std::sync::Arc;
 
     fn test_backend() -> BurnBackend {
         // Unit tests exercise the operation boundary and the
@@ -326,6 +323,42 @@ mod tests {
             WorkflowId::new("wf-test"),
             WorkflowVersion::new(1),
             NodeId::new("node-test"),
+        )
+    }
+
+    fn seed_bundle(backend: &BurnBackend, model_id: &str) {
+        let key_prefix = format!("burn:model:{model_id}");
+        let bundle = BurnLoadedSdxlBundle::for_test_only(
+            reimagine_core::model::ModelId::new(model_id),
+            BackendPayloadKey::new(format!("{key_prefix}:clip")),
+        );
+        backend.model_cache().insert_bundle(
+            reimagine_core::model::ModelId::new(model_id),
+            Arc::new(BurnLoadedModelBundle::StableDiffusionSdxl(Arc::new(bundle))),
+        );
+    }
+
+    fn burn_vae(backend: &BurnBackend, model_id: &str) -> RuntimeVaeHandle {
+        RuntimeVaeHandle::with_instance(
+            reimagine_core::model::ModelId::new(model_id),
+            Backend::new(crate::profile::BACKEND_LABEL),
+            backend.backend_instance(),
+            BackendPayloadKey::new(format!("burn:model:{model_id}:vae")),
+        )
+        .with_device(backend.device_label())
+    }
+
+    fn sampled_latent(backend: &BurnBackend) -> RuntimeLatent {
+        let response = execute_latent_create_empty(backend, build_request(1)).expect("create");
+        let empty = response.into_latent();
+        RuntimeLatent::new(
+            empty.payload().clone(),
+            empty.width(),
+            empty.height(),
+            empty.batch(),
+            empty.channels(),
+            empty.latent_space().clone(),
+            LatentContent::Sampled,
         )
     }
 
@@ -370,13 +403,12 @@ mod tests {
         let response = execute_latent_create_empty(&backend, build_request(1)).expect("create");
         let latent = response.into_latent();
         assert_eq!(latent.payload().backend().as_str(), "burn");
-        // burn/13: under the `flex` feature the default backend
-        // instance is `burn:flex:cpu`; under wgpu (or neither)
-        // it's `burn:cpu`.
-        let expected_instance = if cfg!(all(not(feature = "wgpu"), feature = "flex")) {
+        let expected_instance = if cfg!(feature = "wgpu") {
+            "burn:wgpu:default"
+        } else if cfg!(all(not(feature = "wgpu"), feature = "flex")) {
             "burn:flex:cpu"
         } else {
-            "burn:cpu"
+            unreachable!("Burn backend requires either wgpu or flex feature")
         };
         assert_eq!(
             latent.payload().backend_instance().as_str(),
@@ -502,5 +534,31 @@ mod tests {
             latent.payload().payload_key().as_str(),
             "latent:run-test:node-test"
         );
+    }
+
+    #[test]
+    fn latent_decode_stores_active_backend_image_payload() {
+        let backend = test_backend();
+        seed_bundle(&backend, "sdxl-base");
+        let latent = sampled_latent(&backend);
+        let request = LatentDecodeRequest::new(
+            burn_vae(&backend, "sdxl-base"),
+            latent,
+            RunId::new("run-test"),
+            WorkflowId::new("wf-test"),
+            WorkflowVersion::new(1),
+            NodeId::new("node-decode"),
+        );
+
+        let response = execute_latent_decode(&backend, request).expect("latent.decode");
+        let image = response.into_image();
+        let stored = backend
+            .store()
+            .get_image(image.payload().payload_key())
+            .expect("stored decoded image");
+
+        assert!(stored.is_active_backend());
+        assert_eq!(stored.dims(), [1, 3, 64, 64]);
+        assert_eq!(stored.color_space(), "rgb");
     }
 }
