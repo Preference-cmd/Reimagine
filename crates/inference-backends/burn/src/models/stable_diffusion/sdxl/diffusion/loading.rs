@@ -14,7 +14,10 @@ use crate::models::stable_diffusion::sdxl::load_diagnostics::{
 use crate::models::stable_diffusion::sdxl::{BurnLoadedModelBundle, BurnSdxlComponentRole};
 use crate::runtime::BurnRuntime;
 
-use super::module::{DiffusionBlockWeights, DiffusionUNetWeights, DiffusionWeightData, SdxlUnet};
+use super::module::{
+    DiffusionBlockWeights, DiffusionUNetWeights, DiffusionWeightData, SdxlUnet,
+    SdxlUnetTopologyProfile,
+};
 
 /// Load an SDXL UNet Module from a diffusion component through burn-store.
 #[allow(dead_code)]
@@ -23,11 +26,25 @@ pub(crate) fn load_unet_module_from_path<B: Backend>(
     module: &mut SdxlUnet<B>,
     path: impl Into<std::path::PathBuf>,
 ) -> Result<ApplyResult, BurnBackendError> {
+    load_unet_module_from_path_with_profile(
+        runtime,
+        module,
+        path,
+        SdxlUnetTopologyProfile::TinySdxlE2e,
+    )
+}
+
+pub(crate) fn load_unet_module_from_path_with_profile<B: Backend>(
+    runtime: &BurnRuntime<B>,
+    module: &mut SdxlUnet<B>,
+    path: impl Into<std::path::PathBuf>,
+    profile: SdxlUnetTopologyProfile,
+) -> Result<ApplyResult, BurnBackendError> {
     let mut store = sdxl_unet_store_from_path(path);
     let result = runtime
         .load_module_store(module, &mut store)
         .map_err(|source| BurnBackendError::InvalidRequest(source.to_string()))?;
-    validate_apply_result("diffusion", &result)?;
+    validate_apply_result(profile, &result)?;
     Ok(result)
 }
 
@@ -50,25 +67,81 @@ fn sdxl_unet_key_remapper() -> KeyRemapper {
 }
 
 #[allow(dead_code)]
-fn validate_apply_result(component: &str, result: &ApplyResult) -> Result<(), BurnBackendError> {
-    validate_sdxl_apply_result(diffusion_load_policy(component), result)
+fn validate_apply_result(
+    profile: SdxlUnetTopologyProfile,
+    result: &ApplyResult,
+) -> Result<(), BurnBackendError> {
+    validate_sdxl_apply_result(diffusion_load_policy_for_profile(profile), result)
 }
 
-fn diffusion_load_policy(component: &str) -> SdxlLoadPolicy {
+fn diffusion_load_policy_for_profile(profile: SdxlUnetTopologyProfile) -> SdxlLoadPolicy {
+    diffusion_load_policy_for_component("diffusion", profile)
+}
+
+fn diffusion_load_policy_for_component(
+    component: &str,
+    profile: SdxlUnetTopologyProfile,
+) -> SdxlLoadPolicy {
     match component {
-        "diffusion" => SdxlLoadPolicy::new("diffusion")
-            .with_required_snapshots(&[
-                "conv_in.weight",
-                "conv_in.bias",
-                "conv_out.weight",
-                "conv_out.bias",
-            ])
-            .with_remapped_key_patterns(&[
-                "model.diffusion.conv_in -> conv_in",
-                "model.diffusion.out.0 -> conv_out",
-            ]),
+        "diffusion" => match profile {
+            SdxlUnetTopologyProfile::TinySdxlE2e => tiny_diffusion_load_policy(),
+            SdxlUnetTopologyProfile::SdxlBase => sdxl_base_diffusion_load_policy(),
+        },
         _ => SdxlLoadPolicy::new("diffusion"),
     }
+}
+
+fn tiny_diffusion_load_policy() -> SdxlLoadPolicy {
+    SdxlLoadPolicy::new("diffusion")
+        .with_required_snapshots(&[
+            "conv_in.weight",
+            "conv_in.bias",
+            "conv_out.weight",
+            "conv_out.bias",
+        ])
+        .with_remapped_key_patterns(&[
+            "model.diffusion.conv_in -> conv_in",
+            "model.diffusion.out.0 -> conv_out",
+        ])
+}
+
+fn sdxl_base_diffusion_load_policy() -> SdxlLoadPolicy {
+    SdxlLoadPolicy::new("diffusion")
+        .with_required_snapshots(&[
+            "conv_in.weight",
+            "conv_in.bias",
+            "time_embedding.linear_1.weight",
+            "time_embedding.linear_1.bias",
+            "time_embedding.linear_2.weight",
+            "time_embedding.linear_2.bias",
+            "down_blocks.0.res_blocks.0.conv_1.weight",
+            "down_blocks.0.res_blocks.0.conv_1.bias",
+            "down_blocks.0.res_blocks.0.conv_2.weight",
+            "down_blocks.0.res_blocks.0.conv_2.bias",
+            "conv_out.weight",
+            "conv_out.bias",
+        ])
+        .with_optional_snapshots(&[
+            "down_blocks.0.res_blocks.0.skip.weight",
+            "down_blocks.0.res_blocks.0.skip.bias",
+        ])
+        .with_generated_snapshot_contains(&[
+            ".attention.query.",
+            ".attention.key.",
+            ".attention.value.",
+        ])
+        .with_deferred_snapshot_families(&[
+            "full UNet self-attention snapshots",
+            "full UNet cross-attention snapshots",
+            "full UNet up/downsample and skip topology snapshots",
+        ])
+        .with_remapped_key_patterns(&[
+            "model.diffusion.conv_in -> conv_in",
+            "model.diffusion.time_embed.0 -> time_embedding.linear_1",
+            "model.diffusion.time_embed.2 -> time_embedding.linear_2",
+            "model.diffusion.input_blocks -> down_blocks",
+            "model.diffusion.out.0 -> conv_out",
+        ])
 }
 
 /// Load diffusion UNet weights from the bundle's diffusion component
@@ -186,11 +259,15 @@ fn load_tensor_opt(
 mod tests {
     use std::borrow::Cow;
 
+    use burn_store::ApplyResult;
     use burn_tensor::Tensor;
 
     use crate::active_backend::{ActiveBurnBackend, active_device};
     use crate::config::BurnBackendConfig;
-    use crate::models::stable_diffusion::sdxl::diffusion::module::{SdxlUnet, SdxlUnetTopology};
+    use crate::models::stable_diffusion::sdxl::diffusion::module::{
+        SdxlUnet, SdxlUnetTopology, SdxlUnetTopologyProfile,
+    };
+    use crate::models::stable_diffusion::sdxl::load_diagnostics::format_apply_report;
     use crate::runtime::BurnRuntime;
 
     #[test]
@@ -265,6 +342,122 @@ mod tests {
                 && message.contains("partial load policy"),
             "unexpected error: {err}"
         );
+    }
+
+    #[test]
+    fn full_sdxl_unet_loader_uses_profile_policy_report() {
+        let temp = tempfile::tempdir().expect("temp dir");
+        let diffusion_path = temp.path().join("tiny-source-full-policy.safetensors");
+        write_tiny_diffusion_component(&diffusion_path);
+        let config = BurnBackendConfig::new("/models", "/output");
+        let runtime = BurnRuntime::<ActiveBurnBackend>::new(active_device(config.device()));
+        let mut module = SdxlUnet::<ActiveBurnBackend>::init_from_topology(
+            &SdxlUnetTopology::tiny(),
+            runtime.device(),
+        );
+
+        let err = super::load_unet_module_from_path_with_profile(
+            &runtime,
+            &mut module,
+            &diffusion_path,
+            SdxlUnetTopologyProfile::SdxlBase,
+        )
+        .expect_err("full profile policy should reject tiny-only snapshots");
+        let message = err.to_string();
+
+        for expected in [
+            "required snapshot missing: time_embedding.linear_1.weight",
+            "required snapshot missing: down_blocks.0.res_blocks.0.conv_1.weight",
+            "deferred snapshot family: full UNet cross-attention snapshots",
+        ] {
+            assert!(
+                message.contains(expected),
+                "missing `{expected}` in:\n{message}"
+            );
+        }
+    }
+
+    #[test]
+    fn full_sdxl_unet_policy_reports_deferred_block_families() {
+        let report = format_apply_report(
+            super::diffusion_load_policy_for_profile(SdxlUnetTopologyProfile::SdxlBase),
+            &ApplyResult {
+                applied: Vec::new(),
+                skipped: Vec::new(),
+                missing: Vec::new(),
+                unused: Vec::new(),
+                errors: Vec::new(),
+            },
+        );
+
+        for expected in [
+            "required snapshot missing: time_embedding.linear_1.weight",
+            "required snapshot missing: down_blocks.0.res_blocks.0.conv_1.weight",
+            "deferred snapshot family: full UNet self-attention snapshots",
+            "deferred snapshot family: full UNet cross-attention snapshots",
+            "deferred snapshot family: full UNet up/downsample and skip topology snapshots",
+        ] {
+            assert!(
+                report.contains(expected),
+                "missing `{expected}` in:\n{report}"
+            );
+        }
+    }
+
+    #[test]
+    fn tiny_unet_policy_keeps_scaffold_only_required_snapshots() {
+        let report = format_apply_report(
+            super::diffusion_load_policy_for_profile(SdxlUnetTopologyProfile::TinySdxlE2e),
+            &ApplyResult {
+                applied: vec![
+                    "conv_in.weight".to_owned(),
+                    "conv_in.bias".to_owned(),
+                    "conv_out.weight".to_owned(),
+                    "conv_out.bias".to_owned(),
+                ],
+                skipped: Vec::new(),
+                missing: Vec::new(),
+                unused: Vec::new(),
+                errors: Vec::new(),
+            },
+        );
+
+        assert!(
+            !report.contains("time_embedding.linear_1.weight"),
+            "{report}"
+        );
+        assert!(!report.contains("deferred snapshot family"), "{report}");
+    }
+
+    #[test]
+    fn full_sdxl_unet_policy_classifies_optional_and_generated_snapshots() {
+        let report = format_apply_report(
+            super::diffusion_load_policy_for_profile(SdxlUnetTopologyProfile::SdxlBase),
+            &ApplyResult {
+                applied: vec![
+                    "down_blocks.0.self_attention_blocks.0.attention.query.weight".to_owned(),
+                    "down_blocks.0.self_attention_blocks.0.attention.key.weight".to_owned(),
+                    "down_blocks.0.self_attention_blocks.0.attention.value.weight".to_owned(),
+                ],
+                skipped: Vec::new(),
+                missing: Vec::new(),
+                unused: Vec::new(),
+                errors: Vec::new(),
+            },
+        );
+
+        for expected in [
+            "optional snapshot missing: down_blocks.0.res_blocks.0.skip.weight",
+            "generated snapshot: down_blocks.0.self_attention_blocks.0.attention.query.weight",
+            "generated snapshot: down_blocks.0.self_attention_blocks.0.attention.key.weight",
+            "generated snapshot: down_blocks.0.self_attention_blocks.0.attention.value.weight",
+            "remapped source key pattern: model.diffusion.input_blocks -> down_blocks",
+        ] {
+            assert!(
+                report.contains(expected),
+                "missing `{expected}` in:\n{report}"
+            );
+        }
     }
 
     fn write_tiny_diffusion_component(path: &std::path::Path) {

@@ -10,6 +10,7 @@ pub(crate) struct SdxlLoadPolicy {
     required_prefixes: &'static [&'static str],
     optional_snapshots: &'static [&'static str],
     generated_snapshot_contains: &'static [&'static str],
+    deferred_snapshot_families: &'static [&'static str],
     remapped_key_patterns: &'static [&'static str],
 }
 
@@ -22,6 +23,7 @@ impl SdxlLoadPolicy {
             required_prefixes: &[],
             optional_snapshots: &[],
             generated_snapshot_contains: &[],
+            deferred_snapshot_families: &[],
             remapped_key_patterns: &[],
         }
     }
@@ -55,6 +57,14 @@ impl SdxlLoadPolicy {
         generated_snapshot_contains: &'static [&'static str],
     ) -> Self {
         self.generated_snapshot_contains = generated_snapshot_contains;
+        self
+    }
+
+    pub(crate) const fn with_deferred_snapshot_families(
+        mut self,
+        deferred_snapshot_families: &'static [&'static str],
+    ) -> Self {
+        self.deferred_snapshot_families = deferred_snapshot_families;
         self
     }
 
@@ -174,6 +184,9 @@ impl std::fmt::Display for SdxlLoadReport {
         }
         for missing in &self.optional_missing {
             writeln!(f, "optional snapshot missing: {missing}")?;
+        }
+        for family in self.policy.deferred_snapshot_families {
+            writeln!(f, "deferred snapshot family: {family}")?;
         }
         for unexpected in &self.unexpected_source {
             writeln!(f, "unexpected source snapshot: {unexpected}")?;

@@ -61,7 +61,12 @@ fn load_or_init_unet(
         .iter()
         .find(|component| component.component_role == BurnSdxlComponentRole::Diffusion)
     {
-        loading::load_unet_module_from_path(runtime, &mut unet, &component.source_path)?;
+        loading::load_unet_module_from_path_with_profile(
+            runtime,
+            &mut unet,
+            &component.source_path,
+            profile,
+        )?;
     }
     Ok(unet)
 }
