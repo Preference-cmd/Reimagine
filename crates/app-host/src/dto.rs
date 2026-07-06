@@ -17,6 +17,7 @@
 //!    re-serializing the underlying structs: any future host-side
 //!    transformation belongs here, with a test.
 
+mod agent;
 mod artifacts;
 mod compute_profile;
 mod health;
@@ -25,6 +26,10 @@ mod nodes;
 mod runs;
 mod workflows;
 
+pub use agent::{
+    AgentEventPayload, AgentMessageDto, AgentSessionInfo, AgentToolCallDto, AgentTurnResponse,
+    AgentUsageDto,
+};
 pub use artifacts::{ArtifactDto, ArtifactMetadataDto};
 pub use compute_profile::{
     BackendInstanceProfileDto, BackendProfileDto, ComputeProfileDto, DTypeProfileDto,
@@ -33,6 +38,7 @@ pub use compute_profile::{
 pub use health::HealthResponse;
 pub use models::ModelInfoDto;
 pub use nodes::{NodeCatalogResponse, NodeDefDto, ParamSpecDto, SocketSpecDto};
+pub use reimagine_core::command::{CommandResult, CommandResultStatus};
 pub use runs::{
     DiagnosticDto, NodeStateDto, RunDto, RunEventDto, RunEventsResponse, RunSnapshotDto,
     RunSummaryDto,

@@ -20,6 +20,9 @@ pub enum AppHostError {
     UnknownAgentProvider {
         provider: reimagine_agent::ProviderName,
     },
+    UnknownAgentMode {
+        mode: String,
+    },
     UnknownRun {
         run_id: RunId,
     },
@@ -60,6 +63,9 @@ impl std::fmt::Display for AppHostError {
             }
             Self::UnknownAgentProvider { provider } => {
                 write!(f, "unknown agent provider `{provider}`")
+            }
+        Self::UnknownAgentMode { mode } => {
+                write!(f, "unknown agent mode `{mode}`")
             }
             Self::UnknownRun { run_id } => {
                 write!(f, "unknown run `{run_id}`")

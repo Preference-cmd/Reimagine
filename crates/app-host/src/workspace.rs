@@ -1,7 +1,7 @@
 use std::path::Path;
 use std::sync::Arc;
 
-use reimagine_agent::{AgentToolRegistry, WorkspaceScope};
+use reimagine_agent::{AgentEventSink, AgentToolRegistry, WorkspaceScope};
 use reimagine_config::{AppConfig, AppPaths, ConfigDocument, InferenceBackendConfig};
 use reimagine_core::model::NodeDef;
 use reimagine_inference::WorkspaceComputeProfile;
@@ -106,10 +106,13 @@ impl WorkspaceHost {
         .await
     }
 
-    pub async fn try_with_defaults_and_event_sink(
+    /// Same as [`try_with_defaults_and_event_sink`] but also injects an
+    /// `AgentEventSink` into the agent service.
+    pub async fn try_with_defaults_and_event_sinks(
         workspace_scope: WorkspaceScope,
         base_path: impl Into<std::path::PathBuf>,
         event_sink: BoxedRunEventSink,
+        agent_event_sink: Arc<dyn AgentEventSink>,
     ) -> Result<Self, AppHostError> {
         let base_path = base_path.into();
         let config = AppConfig::new(AppPaths::new(&base_path));
@@ -119,7 +122,22 @@ impl WorkspaceHost {
             config,
             backend_config,
             event_sink,
+            agent_event_sink,
         ))
+    }
+
+    pub async fn try_with_defaults_and_event_sink(
+        workspace_scope: WorkspaceScope,
+        base_path: impl Into<std::path::PathBuf>,
+        event_sink: BoxedRunEventSink,
+    ) -> Result<Self, AppHostError> {
+        Self::try_with_defaults_and_event_sinks(
+            workspace_scope,
+            base_path,
+            event_sink,
+            Arc::new(reimagine_agent::VecAgentEventSink::new()),
+        )
+        .await
     }
 
     pub fn with_defaults_and_event_sink(
@@ -143,7 +161,13 @@ impl WorkspaceHost {
     ) -> Self {
         let config = AppConfig::new(AppPaths::new(base_path));
         let backend_config = load_backend_config(&config);
-        Self::with_backend_config_inner(workspace_scope, config, backend_config, event_sink)
+        Self::with_backend_config_inner(
+            workspace_scope,
+            config,
+            backend_config,
+            event_sink,
+            Arc::new(reimagine_agent::VecAgentEventSink::new()) as Arc<dyn AgentEventSink>,
+        )
     }
 
     pub fn with_backend_config(
@@ -153,7 +177,13 @@ impl WorkspaceHost {
         event_sink: BoxedRunEventSink,
     ) -> Self {
         let config = AppConfig::new(AppPaths::new(base_path));
-        Self::with_backend_config_inner(workspace_scope, config, backend_config, event_sink)
+        Self::with_backend_config_inner(
+            workspace_scope,
+            config,
+            backend_config,
+            event_sink,
+            Arc::new(reimagine_agent::VecAgentEventSink::new()) as Arc<dyn AgentEventSink>,
+        )
     }
 
     fn with_backend_config_inner(
@@ -161,6 +191,7 @@ impl WorkspaceHost {
         config: AppConfig,
         backend_config: InferenceBackendConfig,
         event_sink: BoxedRunEventSink,
+        agent_event_sink: Arc<dyn AgentEventSink>,
     ) -> Self {
         let model_service = Arc::new(ModelService::new(config.paths().clone()));
 
@@ -173,7 +204,7 @@ impl WorkspaceHost {
             Arc::new(reimagine_runtime::SystemClock),
         ));
         let builtin_catalog = Arc::new(BuiltinNodeCatalog::v1());
-        Self::new(
+        let mut host = Self::new(
             workspace_scope,
             config,
             backend_config,
@@ -181,7 +212,32 @@ impl WorkspaceHost {
             builtin_catalog,
             Arc::new(bootstrapped.compute_profile),
             bootstrapped.runtime.selected_instance,
-        )
+        );
+        // Replace the default AgentService with one that uses the injected event sink
+        let registry = host.agent_service.registry().clone();
+        let providers = host.agent_service.providers().clone();
+        host.agent_service = Arc::new(AgentService::with_registry_providers_and_sink(
+            host.workspace_scope.clone(),
+            registry,
+            providers,
+            agent_event_sink,
+        ));
+        host
+    }
+
+    pub fn with_agent_event_sink(
+        self,
+        event_sink: Arc<dyn AgentEventSink>,
+    ) -> Self {
+        let registry = self.agent_service.registry().clone();
+        let providers = self.agent_service.providers().clone();
+        let agent_service = Arc::new(AgentService::with_registry_providers_and_sink(
+            self.workspace_scope.clone(),
+            registry,
+            providers,
+            event_sink,
+        ));
+        Self { agent_service, ..self }
     }
 
     pub fn workspace_scope(&self) -> &WorkspaceScope {

@@ -1,12 +1,14 @@
 mod desktop_host;
+mod agent_event_hub;
 mod event_hub;
 
 use desktop_host::{DesktopHostState, default_workspace_path};
 use event_hub::RunEventPayload;
-use reimagine_app_host::dto::{
-    ArtifactMetadataDto, ComputeProfileDto, HealthResponse, ModelInfoDto, NodeDefDto,
-    RunWorkflowResponse,
-};
+use reimagine_app_host::{AppHostError, dto::{
+    AgentEventPayload, AgentSessionInfo, AgentTurnResponse, ArtifactMetadataDto,
+    ComputeProfileDto, HealthResponse, ModelInfoDto, NodeDefDto, RunWorkflowResponse,
+}};
+use reimagine_core::command::CommandResult;
 use serde::Serialize;
 use tauri::{Manager, ipc::Channel};
 
@@ -30,6 +32,13 @@ impl TauriCommandError {
             message: message.into(),
         }
     }
+
+    fn unknown_provider(provider: impl Into<String>) -> Self {
+        Self {
+            code: "unknown_provider",
+            message: format!("Provider '{}' is not configured. Add a provider in Settings.", provider.into()),
+        }
+    }
 }
 
 impl std::fmt::Display for TauriCommandError {
@@ -39,6 +48,8 @@ impl std::fmt::Display for TauriCommandError {
 }
 
 impl std::error::Error for TauriCommandError {}
+
+// ─── Existing commands ───────────────────────────────────────────
 
 #[tauri::command]
 fn health(state: tauri::State<'_, DesktopHostState>) -> Result<HealthResponse, TauriCommandError> {
@@ -112,6 +123,100 @@ async fn open_artifact(
         .map_err(|e| TauriCommandError::command(e.to_string()))
 }
 
+// ─── Agent commands ──────────────────────────────────────────────
+
+/// Create a new agent session.
+///
+/// `mode` must be "Agent" or "Build".
+/// `provider` must match a registered provider in the catalog.
+#[tauri::command]
+fn create_agent_session(
+    state: tauri::State<'_, DesktopHostState>,
+    mode: String,
+    provider: String,
+) -> Result<AgentSessionInfo, TauriCommandError> {
+    state
+        .create_agent_session(mode, provider)
+        .map_err(|e| match e {
+            AppHostError::UnknownAgentProvider { provider } => {
+                TauriCommandError::unknown_provider(provider.to_string())
+            }
+            AppHostError::UnknownAgentMode { mode } => {
+                TauriCommandError::command(format!("unknown agent mode: {mode}"))
+            }
+            _ => TauriCommandError::command(e.to_string()),
+        })
+}
+
+/// Execute a single agent turn with live event streaming.
+///
+/// `session_id` must be a valid existing session.
+/// `turn_id` is a caller-generated id for this turn (idempotent retries).
+/// `model` is the model name string for the registered provider.
+/// `input` is a JSON array of `{ role, content }` message objects.
+#[tauri::command]
+async fn agent_turn(
+    state: tauri::State<'_, DesktopHostState>,
+    session_id: String,
+    turn_id: String,
+    model: String,
+    input: serde_json::Value,
+    channel: Channel<AgentEventPayload>,
+) -> Result<AgentTurnResponse, TauriCommandError> {
+    state
+        .agent_turn(session_id, turn_id, model, input, channel)
+        .await
+        .map_err(|e| TauriCommandError::command(e.to_string()))
+}
+
+/// List available agent providers for the UI selector.
+#[tauri::command]
+fn list_agent_providers(
+    state: tauri::State<'_, DesktopHostState>,
+) -> Result<Vec<String>, TauriCommandError> {
+    state
+        .list_agent_providers()
+        .map_err(|e| TauriCommandError::command(e.to_string()))
+}
+
+// ─── Workflow command commands ───────────────────────────────────
+
+/// Preview a command batch (dry-run). Returns diagnostics without mutating.
+#[tauri::command]
+fn preview_workflow_commands(
+    state: tauri::State<'_, DesktopHostState>,
+    workflow_id: String,
+    command_batch: serde_json::Value,
+) -> Result<CommandResult, TauriCommandError> {
+    state
+        .preview_workflow_commands(workflow_id, command_batch)
+        .map_err(|e| TauriCommandError::command(e.to_string()))
+}
+
+/// Apply a command batch directly.
+#[tauri::command]
+fn apply_workflow_commands(
+    state: tauri::State<'_, DesktopHostState>,
+    workflow_id: String,
+    command_batch: serde_json::Value,
+    _approved_by: Option<serde_json::Value>,
+) -> Result<CommandResult, TauriCommandError> {
+    state
+        .apply_workflow_commands(workflow_id, command_batch, _approved_by)
+        .map_err(|e| TauriCommandError::command(e.to_string()))
+}
+
+/// Approve a pending workflow proposal (human approval of build-mode output).
+#[tauri::command]
+fn approve_proposal(
+    state: tauri::State<'_, DesktopHostState>,
+    workflow_id: String,
+) -> Result<CommandResult, TauriCommandError> {
+    state
+        .approve_proposal(workflow_id)
+        .map_err(|e| TauriCommandError::command(e.to_string()))
+}
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     tauri::Builder::default()
@@ -129,6 +234,7 @@ pub fn run() {
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![
+            // Existing commands
             health,
             get_compute_profile,
             get_node_defs,
@@ -137,6 +243,14 @@ pub fn run() {
             cancel_run,
             resolve_artifact,
             open_artifact,
+            // Agent commands
+            create_agent_session,
+            agent_turn,
+            list_agent_providers,
+            // Workflow command commands
+            preview_workflow_commands,
+            apply_workflow_commands,
+            approve_proposal,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
