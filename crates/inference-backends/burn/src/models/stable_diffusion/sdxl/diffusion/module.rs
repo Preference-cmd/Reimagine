@@ -16,6 +16,7 @@ use burn_tensor::{Tensor, activation, backend::Backend};
 /// Reimagine-owned SDXL UNet topology facts.
 #[derive(Debug, Clone)]
 pub struct SdxlUnetTopology {
+    profile: SdxlUnetTopologyProfile,
     pub latent_channels: usize,
     pub model_channels: usize,
     pub time_input_dim: usize,
@@ -26,9 +27,37 @@ pub struct SdxlUnetTopology {
     pub up_blocks: Vec<SdxlStageSpec>,
 }
 
+/// Stable topology names used by loaders, diagnostics, and follow-up issues.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SdxlUnetTopologyProfile {
+    TinySdxlE2e,
+    SdxlBase,
+}
+
+impl SdxlUnetTopologyProfile {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::TinySdxlE2e => "tiny_sdxl_e2e",
+            Self::SdxlBase => "sdxl_base",
+        }
+    }
+
+    pub fn topology(self) -> SdxlUnetTopology {
+        match self {
+            Self::TinySdxlE2e => SdxlUnetTopology::tiny(),
+            Self::SdxlBase => SdxlUnetTopology::sdxl_base(),
+        }
+    }
+
+    pub fn is_module_graph_supported(self) -> bool {
+        matches!(self, Self::TinySdxlE2e)
+    }
+}
+
 impl SdxlUnetTopology {
     pub fn tiny() -> Self {
         Self {
+            profile: SdxlUnetTopologyProfile::TinySdxlE2e,
             latent_channels: 4,
             model_channels: 4,
             time_input_dim: 4,
@@ -85,6 +114,7 @@ impl SdxlUnetTopology {
         };
 
         Self {
+            profile: SdxlUnetTopologyProfile::SdxlBase,
             latent_channels: 4,
             model_channels: 320,
             time_input_dim: 320,
@@ -94,6 +124,14 @@ impl SdxlUnetTopology {
             middle_blocks: vec![stage(1280, 20)],
             up_blocks: vec![stage(1280, 20), stage(640, 10), stage(320, 5)],
         }
+    }
+
+    pub fn profile(&self) -> SdxlUnetTopologyProfile {
+        self.profile
+    }
+
+    pub fn name(&self) -> &'static str {
+        self.profile.as_str()
     }
 
     pub fn res_block_count(&self) -> usize {
@@ -166,7 +204,11 @@ pub struct SdxlUnet<B: Backend> {
 
 impl<B: Backend> SdxlUnet<B> {
     pub fn init(device: &B::Device) -> Self {
-        Self::init_from_topology(&SdxlUnetTopology::tiny(), device)
+        Self::init_from_profile(SdxlUnetTopologyProfile::TinySdxlE2e, device)
+    }
+
+    pub fn init_from_profile(profile: SdxlUnetTopologyProfile, device: &B::Device) -> Self {
+        Self::init_from_topology(&profile.topology(), device)
     }
 
     pub fn init_from_topology(topology: &SdxlUnetTopology, device: &B::Device) -> Self {
@@ -769,9 +811,32 @@ mod tests {
     }
 
     #[test]
+    fn sdxl_unet_topology_profiles_have_stable_names() {
+        assert_eq!(
+            super::SdxlUnetTopologyProfile::TinySdxlE2e.as_str(),
+            "tiny_sdxl_e2e"
+        );
+        assert_eq!(
+            super::SdxlUnetTopologyProfile::SdxlBase.as_str(),
+            "sdxl_base"
+        );
+        assert!(super::SdxlUnetTopologyProfile::TinySdxlE2e.is_module_graph_supported());
+        assert!(!super::SdxlUnetTopologyProfile::SdxlBase.is_module_graph_supported());
+
+        let tiny = super::SdxlUnetTopologyProfile::TinySdxlE2e.topology();
+        assert_eq!(tiny.name(), "tiny_sdxl_e2e");
+        assert_eq!(tiny.conditioning_dim, 16);
+
+        let full = super::SdxlUnetTopologyProfile::SdxlBase.topology();
+        assert_eq!(full.name(), "sdxl_base");
+        assert_eq!(full.conditioning_dim, 2048);
+    }
+
+    #[test]
     fn sdxl_base_topology_records_down_middle_up_stage_shape() {
         let topology = super::SdxlUnetTopology::sdxl_base();
 
+        assert_eq!(topology.name(), "sdxl_base");
         assert_eq!(topology.latent_channels, 4);
         assert_eq!(topology.model_channels, 320);
         assert_eq!(topology.time_hidden_dim, 1280);

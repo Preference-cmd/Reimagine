@@ -182,6 +182,13 @@ impl BurnLoadedSdxlBundle {
         )
     }
 
+    pub(crate) fn uses_tiny_sdxl_e2e_diffusion_profile(&self) -> bool {
+        self.components
+            .iter()
+            .find(|c| c.component_role == BurnSdxlComponentRole::Diffusion)
+            .is_some_and(BurnLoadedSdxlComponent::is_tiny_sdxl_e2e_fixture)
+    }
+
     /// Test-only constructor that builds a minimal bundle for
     /// the cross-run cache without going through the file-system
     /// resolver. Real production code must use
@@ -208,6 +215,26 @@ impl BurnLoadedSdxlBundle {
             .into_iter()
             .map(|(component_role, source_path)| {
                 BurnLoadedSdxlComponent::for_test_only(component_role, source_path)
+            })
+            .collect();
+        self.source_signature = BurnSdxlSourceSignature::new(
+            self.components
+                .iter()
+                .map(|component| component.source_signature.clone())
+                .collect(),
+        );
+        self
+    }
+
+    #[cfg(test)]
+    pub(crate) fn with_test_tiny_fixture_components(
+        mut self,
+        components: Vec<(BurnSdxlComponentRole, PathBuf)>,
+    ) -> Self {
+        self.components = components
+            .into_iter()
+            .map(|(component_role, source_path)| {
+                BurnLoadedSdxlComponent::for_test_only_tiny_fixture(component_role, source_path)
             })
             .collect();
         self.source_signature = BurnSdxlSourceSignature::new(
@@ -299,6 +326,17 @@ impl BurnLoadedSdxlComponent {
                 contract_version: 1,
             },
         }
+    }
+
+    #[cfg(test)]
+    fn for_test_only_tiny_fixture(
+        component_role: BurnSdxlComponentRole,
+        source_path: PathBuf,
+    ) -> Self {
+        let mut component = Self::for_test_only(component_role, source_path);
+        component.metadata.fixture_profile =
+            Some(super::metadata::metadata_keys::TINY_SDXL_E2E_PROFILE.to_owned());
+        component
     }
 
     pub(crate) fn is_tiny_sdxl_e2e_fixture(&self) -> bool {
