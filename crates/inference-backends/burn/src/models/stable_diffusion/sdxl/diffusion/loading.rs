@@ -62,6 +62,31 @@ fn sdxl_unet_key_remapper() -> KeyRemapper {
     KeyRemapper::new()
         .add_pattern(r"^model\.diffusion\.conv_in\.", "conv_in.")
         .expect("static diffusion conv_in remapping regex should compile")
+        .add_pattern(
+            r"^model\.diffusion\.time_embed\.0\.",
+            "time_embedding.linear_1.",
+        )
+        .expect("static diffusion time embedding linear_1 regex should compile")
+        .add_pattern(
+            r"^model\.diffusion\.time_embed\.2\.",
+            "time_embedding.linear_2.",
+        )
+        .expect("static diffusion time embedding linear_2 regex should compile")
+        .add_pattern(
+            r"^model\.diffusion\.input_blocks\.1\.0\.in_layers\.2\.",
+            "down_blocks.0.res_blocks.0.conv_1.",
+        )
+        .expect("static diffusion first resblock conv_1 regex should compile")
+        .add_pattern(
+            r"^model\.diffusion\.input_blocks\.1\.0\.emb_layers\.1\.",
+            "down_blocks.0.res_blocks.0.time_projection.",
+        )
+        .expect("static diffusion first resblock time projection regex should compile")
+        .add_pattern(
+            r"^model\.diffusion\.input_blocks\.1\.0\.out_layers\.3\.",
+            "down_blocks.0.res_blocks.0.conv_2.",
+        )
+        .expect("static diffusion first resblock conv_2 regex should compile")
         .add_pattern(r"^model\.diffusion\.out\.0\.", "conv_out.")
         .expect("static diffusion output conv remapping regex should compile")
 }
@@ -116,6 +141,8 @@ fn sdxl_base_diffusion_load_policy() -> SdxlLoadPolicy {
             "time_embedding.linear_2.bias",
             "down_blocks.0.res_blocks.0.conv_1.weight",
             "down_blocks.0.res_blocks.0.conv_1.bias",
+            "down_blocks.0.res_blocks.0.time_projection.weight",
+            "down_blocks.0.res_blocks.0.time_projection.bias",
             "down_blocks.0.res_blocks.0.conv_2.weight",
             "down_blocks.0.res_blocks.0.conv_2.bias",
             "conv_out.weight",
@@ -378,6 +405,45 @@ mod tests {
     }
 
     #[test]
+    fn full_sdxl_unet_loader_applies_first_resblock_time_tranche() {
+        let temp = tempfile::tempdir().expect("temp dir");
+        let diffusion_path = temp.path().join("first-resblock-time.safetensors");
+        write_first_resblock_time_diffusion_component(&diffusion_path);
+        let config = BurnBackendConfig::new("/models", "/output");
+        let runtime = BurnRuntime::<ActiveBurnBackend>::new(active_device(config.device()));
+        let mut module = SdxlUnet::<ActiveBurnBackend>::init_from_topology(
+            &SdxlUnetTopology::sdxl_base(),
+            runtime.device(),
+        );
+
+        let result = super::load_unet_module_from_path_with_profile(
+            &runtime,
+            &mut module,
+            &diffusion_path,
+            SdxlUnetTopologyProfile::SdxlBase,
+        )
+        .expect("first full-profile resblock/time tranche should load through burn-store");
+
+        for expected in [
+            "time_embedding.linear_1.weight",
+            "time_embedding.linear_1.bias",
+            "time_embedding.linear_2.weight",
+            "time_embedding.linear_2.bias",
+            "down_blocks.0.res_blocks.0.conv_1.weight",
+            "down_blocks.0.res_blocks.0.conv_1.bias",
+            "down_blocks.0.res_blocks.0.time_projection.weight",
+            "down_blocks.0.res_blocks.0.time_projection.bias",
+            "down_blocks.0.res_blocks.0.conv_2.weight",
+            "down_blocks.0.res_blocks.0.conv_2.bias",
+        ] {
+            assert!(
+                result.applied.contains(&expected.to_owned()),
+                "missing applied snapshot `{expected}` in: {result}"
+            );
+        }
+    }
+
+    #[test]
     fn full_sdxl_unet_policy_reports_deferred_block_families() {
         let report = format_apply_report(
             super::diffusion_load_policy_for_profile(SdxlUnetTopologyProfile::SdxlBase),
@@ -477,6 +543,75 @@ mod tests {
         ];
         safetensors::tensor::serialize_to_file(tensors, None, path)
             .expect("serialize tiny diffusion safetensors");
+    }
+
+    fn write_first_resblock_time_diffusion_component(path: &std::path::Path) {
+        let tensors = vec![
+            tensor_view(
+                "model.diffusion.conv_in.weight",
+                vec![320, 4, 3, 3],
+                vec![0.01; 320 * 4 * 3 * 3],
+            ),
+            tensor_view("model.diffusion.conv_in.bias", vec![320], vec![0.0; 320]),
+            tensor_view(
+                "model.diffusion.time_embed.0.weight",
+                vec![1280, 320],
+                vec![0.01; 1280 * 320],
+            ),
+            tensor_view(
+                "model.diffusion.time_embed.0.bias",
+                vec![1280],
+                vec![0.0; 1280],
+            ),
+            tensor_view(
+                "model.diffusion.time_embed.2.weight",
+                vec![1280, 1280],
+                vec![0.01; 1280 * 1280],
+            ),
+            tensor_view(
+                "model.diffusion.time_embed.2.bias",
+                vec![1280],
+                vec![0.0; 1280],
+            ),
+            tensor_view(
+                "model.diffusion.input_blocks.1.0.in_layers.2.weight",
+                vec![320, 320, 3, 3],
+                vec![0.01; 320 * 320 * 3 * 3],
+            ),
+            tensor_view(
+                "model.diffusion.input_blocks.1.0.in_layers.2.bias",
+                vec![320],
+                vec![0.0; 320],
+            ),
+            tensor_view(
+                "model.diffusion.input_blocks.1.0.emb_layers.1.weight",
+                vec![320, 1280],
+                vec![0.01; 320 * 1280],
+            ),
+            tensor_view(
+                "model.diffusion.input_blocks.1.0.emb_layers.1.bias",
+                vec![320],
+                vec![0.0; 320],
+            ),
+            tensor_view(
+                "model.diffusion.input_blocks.1.0.out_layers.3.weight",
+                vec![320, 320, 3, 3],
+                vec![0.01; 320 * 320 * 3 * 3],
+            ),
+            tensor_view(
+                "model.diffusion.input_blocks.1.0.out_layers.3.bias",
+                vec![320],
+                vec![0.0; 320],
+            ),
+            tensor_view(
+                "model.diffusion.out.0.weight",
+                vec![4, 320, 3, 3],
+                vec![0.01; 4 * 320 * 3 * 3],
+            ),
+            tensor_view("model.diffusion.out.0.bias", vec![4], vec![0.0; 4]),
+        ];
+        safetensors::tensor::serialize_to_file(tensors, None, path)
+            .expect("serialize first resblock/time diffusion safetensors");
     }
 
     fn write_shape_incompatible_diffusion_component(path: &std::path::Path) {

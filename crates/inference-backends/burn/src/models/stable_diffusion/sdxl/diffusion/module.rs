@@ -213,12 +213,9 @@ impl<B: Backend> SdxlUnet<B> {
 
     pub fn init_from_topology(topology: &SdxlUnetTopology, device: &B::Device) -> Self {
         Self {
-            conv_in: Conv2dConfig::new(
-                [topology.latent_channels, topology.latent_channels],
-                [3, 3],
-            )
-            .with_padding(PaddingConfig2d::Explicit(1, 1, 1, 1))
-            .init(device),
+            conv_in: Conv2dConfig::new([topology.latent_channels, topology.model_channels], [3, 3])
+                .with_padding(PaddingConfig2d::Explicit(1, 1, 1, 1))
+                .init(device),
             time_embedding: SdxlTimeEmbedding::init(
                 topology.time_input_dim,
                 topology.time_hidden_dim,
@@ -240,7 +237,7 @@ impl<B: Backend> SdxlUnet<B> {
                 .map(|spec| SdxlUnetStage::init(spec, topology.time_hidden_dim, device))
                 .collect(),
             conv_out: Conv2dConfig::new(
-                [topology.latent_channels, topology.latent_channels],
+                [topology.model_channels, topology.latent_channels],
                 [3, 3],
             )
             .with_padding(PaddingConfig2d::Explicit(1, 1, 1, 1))
