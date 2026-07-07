@@ -92,11 +92,8 @@ const DIFFUSION_MAPPINGS: &[TensorMapping] = &[
     TensorMapping::new("model.diffusion.out.0.bias", "conv_out.bias"),
 ];
 const VAE_MAPPINGS: &[TensorMapping] = &[
-    TensorMapping::new("encoder.conv_in.weight", "model.vae.encoder.conv_in.weight"),
-    TensorMapping::new(
-        "decoder.conv_out.weight",
-        "model.vae.decoder.conv_out.weight",
-    ),
+    TensorMapping::new("decoder.conv_out.weight", "conv_out.weight"),
+    TensorMapping::new("decoder.conv_out.bias", "conv_out.bias"),
 ];
 const TEXT_ENCODER_MAPPINGS: &[TensorMapping] = &[
     TensorMapping::new(
@@ -391,8 +388,8 @@ pub(crate) mod tests {
         write_source_file(
             &root.join("vae/model.safetensors"),
             &[
-                ("encoder.conv_in.weight", vec![1, 1, 1, 1]),
                 ("decoder.conv_out.weight", vec![1, 1, 1, 1]),
+                ("decoder.conv_out.bias", vec![1]),
             ],
         );
         for role_dir in ["text_encoder", "text_encoder_2"] {
@@ -586,6 +583,37 @@ pub(crate) mod tests {
             !keys.contains("model.diffusion.time_embed.0.weight"),
             "source-style keys should not be written into mapped components"
         );
+    }
+
+    #[test]
+    fn mapped_vae_component_uses_runtime_loader_snapshot_names() {
+        let source = tempfile::tempdir().expect("source temp dir");
+        let output = tempfile::tempdir().expect("output temp dir");
+        write_complete_split_source(source.path());
+        let source_set =
+            BurnSdxlSourceSet::diffusers_style_split_safetensors(source.path().to_path_buf());
+        map_diffusers_style_split_source(&source_set, output.path()).expect("map source");
+        let inspected = inspect_component_safetensors(output.path().join("vae/model.safetensors"))
+            .expect("inspect mapped VAE");
+        let keys = inspected
+            .inventory
+            .iter()
+            .map(|entry| entry.key.as_str())
+            .collect::<std::collections::BTreeSet<_>>();
+
+        for expected in ["conv_out.weight", "conv_out.bias"] {
+            assert!(keys.contains(expected), "missing mapped key `{expected}`");
+        }
+        for source_style in [
+            "model.vae.decoder.conv_out.weight",
+            "model.vae.decoder.conv_out.bias",
+            "model.vae.encoder.conv_in.weight",
+        ] {
+            assert!(
+                !keys.contains(source_style),
+                "source-style key `{source_style}` should not be written into mapped components"
+            );
+        }
     }
 
     #[test]

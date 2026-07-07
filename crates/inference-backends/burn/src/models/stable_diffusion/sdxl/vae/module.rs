@@ -1,4 +1,4 @@
-//! Burn-native SDXL VAE decoder Module scaffold and legacy weight buffers.
+//! Burn-native SDXL VAE decoder Module scaffold.
 
 use burn::module::Module;
 use burn_core as burn;
@@ -34,34 +34,6 @@ impl<B: Backend> SdxlVaeDecoder<B> {
         let image = image.repeat_dim(2, 8).repeat_dim(3, 8);
         activation::sigmoid(image)
     }
-}
-
-/// Weight data buffer.
-#[derive(Debug, Clone)]
-#[allow(dead_code)]
-pub struct VaeWeightData {
-    pub data: Vec<f32>,
-    pub shape: Vec<usize>,
-}
-
-/// VAE decoder weights loaded from the VAE component safetensors.
-#[derive(Debug, Clone)]
-#[allow(dead_code)]
-pub struct SdxlVaeDecoderWeights {
-    pub conv_in_weight: VaeWeightData,
-    pub conv_in_bias: VaeWeightData,
-    pub decoder_mid_block: Vec<VaeWeightData>,
-    pub decoder_up_blocks: Vec<VaeBlockWeights>,
-    pub conv_out_weight: VaeWeightData,
-    pub conv_out_bias: VaeWeightData,
-}
-
-/// Weights for one VAE decoder up-block.
-#[derive(Debug, Clone)]
-#[allow(dead_code)]
-pub struct VaeBlockWeights {
-    pub conv_weight: VaeWeightData,
-    pub conv_bias: VaeWeightData,
 }
 
 #[cfg(test)]

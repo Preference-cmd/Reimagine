@@ -406,17 +406,8 @@ fn write_vae_component(path: &Path) {
         path,
         BurnSdxlComponentRole::Vae,
         vec![
-            tensor(
-                "model.vae.encoder.conv_in.weight",
-                vec![4, 3, 3, 3],
-                zeros(4 * 3 * 3 * 3),
-            ),
-            tensor(
-                "model.vae.decoder.conv_out.weight",
-                vec![3, 4, 3, 3],
-                zeros(3 * 4 * 3 * 3),
-            ),
-            tensor("model.vae.decoder.conv_out.bias", vec![3], vec![0.0; 3]),
+            tensor("conv_out.weight", vec![3, 4, 3, 3], zeros(3 * 4 * 3 * 3)),
+            tensor("conv_out.bias", vec![3], vec![0.0; 3]),
         ],
     );
 }

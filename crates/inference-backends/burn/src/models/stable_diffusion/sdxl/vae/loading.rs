@@ -107,6 +107,27 @@ mod tests {
         );
     }
 
+    #[test]
+    fn load_vae_decoder_module_from_path_accepts_mapped_runtime_snapshot_names() {
+        let temp = tempfile::tempdir().expect("temp dir");
+        let vae_path = temp.path().join("mapped-vae.safetensors");
+        write_mapped_vae_component(&vae_path);
+        let config = BurnBackendConfig::new("/models", "/output");
+        let runtime = BurnRuntime::<ActiveBurnBackend>::new(active_device(config.device()));
+        let mut module = SdxlVaeDecoder::<ActiveBurnBackend>::init(runtime.device());
+
+        let result = super::load_vae_decoder_module_from_path(&runtime, &mut module, &vae_path)
+            .expect("mapped VAE decoder snapshots should load through burn-store");
+
+        assert!(result.errors.is_empty(), "unexpected load errors: {result}");
+        for expected in ["conv_out.weight", "conv_out.bias"] {
+            assert!(
+                result.applied.contains(&expected.to_owned()),
+                "missing applied VAE snapshot `{expected}` in: {result}"
+            );
+        }
+    }
+
     fn write_tiny_vae_component(path: &std::path::Path) {
         let tensors = vec![
             tensor_view(
@@ -122,6 +143,19 @@ mod tests {
         ];
         safetensors::tensor::serialize_to_file(tensors, None, path)
             .expect("write tiny VAE safetensors");
+    }
+
+    fn write_mapped_vae_component(path: &std::path::Path) {
+        let tensors = vec![
+            tensor_view(
+                "conv_out.weight",
+                vec![3usize, 4, 3, 3],
+                vec![0.0f32; 3 * 4 * 3 * 3],
+            ),
+            tensor_view("conv_out.bias", vec![3usize], vec![0.0f32; 3]),
+        ];
+        safetensors::tensor::serialize_to_file(tensors, None, path)
+            .expect("write mapped VAE safetensors");
     }
 
     fn write_missing_required_vae_component(path: &std::path::Path) {
