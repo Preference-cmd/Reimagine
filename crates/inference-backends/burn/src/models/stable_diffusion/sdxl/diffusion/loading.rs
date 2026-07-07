@@ -87,6 +87,46 @@ fn sdxl_unet_key_remapper() -> KeyRemapper {
             "down_blocks.0.res_blocks.0.conv_2.",
         )
         .expect("static diffusion first resblock conv_2 regex should compile")
+        .add_pattern(
+            r"^model\.diffusion\.input_blocks\.1\.1\.transformer_blocks\.0\.attn1\.to_q\.",
+            "down_blocks.0.self_attention_blocks.0.attention.query.",
+        )
+        .expect("static diffusion first self-attention query regex should compile")
+        .add_pattern(
+            r"^model\.diffusion\.input_blocks\.1\.1\.transformer_blocks\.0\.attn1\.to_k\.",
+            "down_blocks.0.self_attention_blocks.0.attention.key.",
+        )
+        .expect("static diffusion first self-attention key regex should compile")
+        .add_pattern(
+            r"^model\.diffusion\.input_blocks\.1\.1\.transformer_blocks\.0\.attn1\.to_v\.",
+            "down_blocks.0.self_attention_blocks.0.attention.value.",
+        )
+        .expect("static diffusion first self-attention value regex should compile")
+        .add_pattern(
+            r"^model\.diffusion\.input_blocks\.1\.1\.transformer_blocks\.0\.attn1\.to_out\.0\.",
+            "down_blocks.0.self_attention_blocks.0.attention.output.",
+        )
+        .expect("static diffusion first self-attention output regex should compile")
+        .add_pattern(
+            r"^model\.diffusion\.input_blocks\.1\.1\.transformer_blocks\.0\.attn2\.to_q\.",
+            "down_blocks.0.cross_attention_blocks.0.attention.query.",
+        )
+        .expect("static diffusion first cross-attention query regex should compile")
+        .add_pattern(
+            r"^model\.diffusion\.input_blocks\.1\.1\.transformer_blocks\.0\.attn2\.to_k\.",
+            "down_blocks.0.cross_attention_blocks.0.context_key.",
+        )
+        .expect("static diffusion first cross-attention key regex should compile")
+        .add_pattern(
+            r"^model\.diffusion\.input_blocks\.1\.1\.transformer_blocks\.0\.attn2\.to_v\.",
+            "down_blocks.0.cross_attention_blocks.0.context_value.",
+        )
+        .expect("static diffusion first cross-attention value regex should compile")
+        .add_pattern(
+            r"^model\.diffusion\.input_blocks\.1\.1\.transformer_blocks\.0\.attn2\.to_out\.0\.",
+            "down_blocks.0.cross_attention_blocks.0.attention.output.",
+        )
+        .expect("static diffusion first cross-attention output regex should compile")
         .add_pattern(r"^model\.diffusion\.out\.0\.", "conv_out.")
         .expect("static diffusion output conv remapping regex should compile")
 }
@@ -151,6 +191,26 @@ fn sdxl_base_diffusion_load_policy() -> SdxlLoadPolicy {
         .with_optional_snapshots(&[
             "down_blocks.0.res_blocks.0.skip.weight",
             "down_blocks.0.res_blocks.0.skip.bias",
+            "down_blocks.0.self_attention_blocks.0.attention.query.weight",
+            "down_blocks.0.self_attention_blocks.0.attention.key.weight",
+            "down_blocks.0.self_attention_blocks.0.attention.value.weight",
+            "down_blocks.0.self_attention_blocks.0.attention.output.weight",
+            "down_blocks.0.self_attention_blocks.0.norm.gamma",
+            "down_blocks.0.self_attention_blocks.0.norm.beta",
+            "down_blocks.0.self_attention_blocks.0.attention.query.bias",
+            "down_blocks.0.self_attention_blocks.0.attention.key.bias",
+            "down_blocks.0.self_attention_blocks.0.attention.value.bias",
+            "down_blocks.0.self_attention_blocks.0.attention.output.bias",
+            "down_blocks.0.cross_attention_blocks.0.attention.query.weight",
+            "down_blocks.0.cross_attention_blocks.0.context_key.weight",
+            "down_blocks.0.cross_attention_blocks.0.context_value.weight",
+            "down_blocks.0.cross_attention_blocks.0.attention.output.weight",
+            "down_blocks.0.cross_attention_blocks.0.norm.gamma",
+            "down_blocks.0.cross_attention_blocks.0.norm.beta",
+            "down_blocks.0.cross_attention_blocks.0.attention.query.bias",
+            "down_blocks.0.cross_attention_blocks.0.context_key.bias",
+            "down_blocks.0.cross_attention_blocks.0.context_value.bias",
+            "down_blocks.0.cross_attention_blocks.0.attention.output.bias",
         ])
         .with_generated_snapshot_contains(&[
             ".attention.query.",
@@ -158,8 +218,8 @@ fn sdxl_base_diffusion_load_policy() -> SdxlLoadPolicy {
             ".attention.value.",
         ])
         .with_deferred_snapshot_families(&[
-            "full UNet self-attention snapshots",
-            "full UNet cross-attention snapshots",
+            "remaining UNet self-attention snapshots beyond first down-block projection weights",
+            "remaining UNet cross-attention snapshots beyond first down-block projection weights",
             "full UNet up/downsample and skip topology snapshots",
         ])
         .with_remapped_key_patterns(&[
@@ -397,7 +457,7 @@ mod tests {
         for expected in [
             "required snapshot missing: time_embedding.linear_1.weight",
             "required snapshot missing: down_blocks.0.res_blocks.0.conv_1.weight",
-            "deferred snapshot family: full UNet cross-attention snapshots",
+            "deferred snapshot family: remaining UNet cross-attention snapshots beyond first down-block projection weights",
         ] {
             assert!(
                 message.contains(expected),
@@ -446,6 +506,43 @@ mod tests {
     }
 
     #[test]
+    fn full_sdxl_unet_loader_applies_first_attention_tranche() {
+        let temp = tempfile::tempdir().expect("temp dir");
+        let diffusion_path = temp.path().join("first-attention.safetensors");
+        write_first_attention_diffusion_component(&diffusion_path);
+        let config = BurnBackendConfig::new("/models", "/output");
+        let runtime = BurnRuntime::<ActiveBurnBackend>::new(active_device(config.device()));
+        let mut module = SdxlUnet::<ActiveBurnBackend>::init_from_topology(
+            &SdxlUnetTopology::sdxl_base(),
+            runtime.device(),
+        );
+
+        let result = super::load_unet_module_from_path_with_profile(
+            &runtime,
+            &mut module,
+            &diffusion_path,
+            SdxlUnetTopologyProfile::SdxlBase,
+        )
+        .expect("first full-profile attention tranche should load through burn-store");
+
+        for expected in [
+            "down_blocks.0.self_attention_blocks.0.attention.query.weight",
+            "down_blocks.0.self_attention_blocks.0.attention.key.weight",
+            "down_blocks.0.self_attention_blocks.0.attention.value.weight",
+            "down_blocks.0.self_attention_blocks.0.attention.output.weight",
+            "down_blocks.0.cross_attention_blocks.0.attention.query.weight",
+            "down_blocks.0.cross_attention_blocks.0.context_key.weight",
+            "down_blocks.0.cross_attention_blocks.0.context_value.weight",
+            "down_blocks.0.cross_attention_blocks.0.attention.output.weight",
+        ] {
+            assert!(
+                result.applied.contains(&expected.to_owned()),
+                "missing applied snapshot `{expected}` in: {result}"
+            );
+        }
+    }
+
+    #[test]
     fn mapped_diffusion_component_loads_through_full_profile_unet_loader() {
         let source = tempfile::tempdir().expect("source temp dir");
         let output = tempfile::tempdir().expect("output temp dir");
@@ -477,6 +574,8 @@ mod tests {
             "down_blocks.0.res_blocks.0.conv_1.weight",
             "down_blocks.0.res_blocks.0.time_projection.weight",
             "down_blocks.0.res_blocks.0.conv_2.weight",
+            "down_blocks.0.self_attention_blocks.0.attention.query.weight",
+            "down_blocks.0.cross_attention_blocks.0.context_key.weight",
         ] {
             assert!(
                 result.applied.contains(&expected.to_owned()),
@@ -501,8 +600,8 @@ mod tests {
         for expected in [
             "required snapshot missing: time_embedding.linear_1.weight",
             "required snapshot missing: down_blocks.0.res_blocks.0.conv_1.weight",
-            "deferred snapshot family: full UNet self-attention snapshots",
-            "deferred snapshot family: full UNet cross-attention snapshots",
+            "deferred snapshot family: remaining UNet self-attention snapshots beyond first down-block projection weights",
+            "deferred snapshot family: remaining UNet cross-attention snapshots beyond first down-block projection weights",
             "deferred snapshot family: full UNet up/downsample and skip topology snapshots",
         ] {
             assert!(
@@ -588,7 +687,12 @@ mod tests {
     }
 
     fn write_first_resblock_time_diffusion_component(path: &std::path::Path) {
-        let tensors = vec![
+        safetensors::tensor::serialize_to_file(first_resblock_time_diffusion_tensors(), None, path)
+            .expect("serialize first resblock/time diffusion safetensors");
+    }
+
+    fn first_resblock_time_diffusion_tensors() -> Vec<(String, TestTensorView)> {
+        vec![
             tensor_view(
                 "model.diffusion.conv_in.weight",
                 vec![320, 4, 3, 3],
@@ -651,9 +755,55 @@ mod tests {
                 vec![0.01; 4 * 320 * 3 * 3],
             ),
             tensor_view("model.diffusion.out.0.bias", vec![4], vec![0.0; 4]),
-        ];
+        ]
+    }
+
+    fn write_first_attention_diffusion_component(path: &std::path::Path) {
+        let mut tensors = first_resblock_time_diffusion_tensors();
+        tensors.extend([
+            tensor_view(
+                "model.diffusion.input_blocks.1.1.transformer_blocks.0.attn1.to_q.weight",
+                vec![320, 320],
+                vec![0.01; 320 * 320],
+            ),
+            tensor_view(
+                "model.diffusion.input_blocks.1.1.transformer_blocks.0.attn1.to_k.weight",
+                vec![320, 320],
+                vec![0.01; 320 * 320],
+            ),
+            tensor_view(
+                "model.diffusion.input_blocks.1.1.transformer_blocks.0.attn1.to_v.weight",
+                vec![320, 320],
+                vec![0.01; 320 * 320],
+            ),
+            tensor_view(
+                "model.diffusion.input_blocks.1.1.transformer_blocks.0.attn1.to_out.0.weight",
+                vec![320, 320],
+                vec![0.01; 320 * 320],
+            ),
+            tensor_view(
+                "model.diffusion.input_blocks.1.1.transformer_blocks.0.attn2.to_q.weight",
+                vec![320, 320],
+                vec![0.01; 320 * 320],
+            ),
+            tensor_view(
+                "model.diffusion.input_blocks.1.1.transformer_blocks.0.attn2.to_k.weight",
+                vec![320, 2048],
+                vec![0.01; 320 * 2048],
+            ),
+            tensor_view(
+                "model.diffusion.input_blocks.1.1.transformer_blocks.0.attn2.to_v.weight",
+                vec![320, 2048],
+                vec![0.01; 320 * 2048],
+            ),
+            tensor_view(
+                "model.diffusion.input_blocks.1.1.transformer_blocks.0.attn2.to_out.0.weight",
+                vec![320, 320],
+                vec![0.01; 320 * 320],
+            ),
+        ]);
         safetensors::tensor::serialize_to_file(tensors, None, path)
-            .expect("serialize first resblock/time diffusion safetensors");
+            .expect("serialize first attention diffusion safetensors");
     }
 
     fn write_shape_incompatible_diffusion_component(path: &std::path::Path) {
