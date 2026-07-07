@@ -56,6 +56,38 @@ const DIFFUSION_MAPPINGS: &[TensorMapping] = &[
         "model.diffusion.input_blocks.1.0.out_layers.3.bias",
         "down_blocks.0.res_blocks.0.conv_2.bias",
     ),
+    TensorMapping::new(
+        "model.diffusion.input_blocks.1.1.transformer_blocks.0.attn1.to_q.weight",
+        "down_blocks.0.self_attention_blocks.0.attention.query.weight",
+    ),
+    TensorMapping::new(
+        "model.diffusion.input_blocks.1.1.transformer_blocks.0.attn1.to_k.weight",
+        "down_blocks.0.self_attention_blocks.0.attention.key.weight",
+    ),
+    TensorMapping::new(
+        "model.diffusion.input_blocks.1.1.transformer_blocks.0.attn1.to_v.weight",
+        "down_blocks.0.self_attention_blocks.0.attention.value.weight",
+    ),
+    TensorMapping::new(
+        "model.diffusion.input_blocks.1.1.transformer_blocks.0.attn1.to_out.0.weight",
+        "down_blocks.0.self_attention_blocks.0.attention.output.weight",
+    ),
+    TensorMapping::new(
+        "model.diffusion.input_blocks.1.1.transformer_blocks.0.attn2.to_q.weight",
+        "down_blocks.0.cross_attention_blocks.0.attention.query.weight",
+    ),
+    TensorMapping::new(
+        "model.diffusion.input_blocks.1.1.transformer_blocks.0.attn2.to_k.weight",
+        "down_blocks.0.cross_attention_blocks.0.context_key.weight",
+    ),
+    TensorMapping::new(
+        "model.diffusion.input_blocks.1.1.transformer_blocks.0.attn2.to_v.weight",
+        "down_blocks.0.cross_attention_blocks.0.context_value.weight",
+    ),
+    TensorMapping::new(
+        "model.diffusion.input_blocks.1.1.transformer_blocks.0.attn2.to_out.0.weight",
+        "down_blocks.0.cross_attention_blocks.0.attention.output.weight",
+    ),
     TensorMapping::new("model.diffusion.out.0.weight", "conv_out.weight"),
     TensorMapping::new("model.diffusion.out.0.bias", "conv_out.bias"),
 ];
@@ -422,6 +454,38 @@ pub(crate) mod tests {
                     "model.diffusion.input_blocks.1.0.out_layers.3.bias",
                     vec![320],
                 ),
+                (
+                    "model.diffusion.input_blocks.1.1.transformer_blocks.0.attn1.to_q.weight",
+                    vec![320, 320],
+                ),
+                (
+                    "model.diffusion.input_blocks.1.1.transformer_blocks.0.attn1.to_k.weight",
+                    vec![320, 320],
+                ),
+                (
+                    "model.diffusion.input_blocks.1.1.transformer_blocks.0.attn1.to_v.weight",
+                    vec![320, 320],
+                ),
+                (
+                    "model.diffusion.input_blocks.1.1.transformer_blocks.0.attn1.to_out.0.weight",
+                    vec![320, 320],
+                ),
+                (
+                    "model.diffusion.input_blocks.1.1.transformer_blocks.0.attn2.to_q.weight",
+                    vec![320, 320],
+                ),
+                (
+                    "model.diffusion.input_blocks.1.1.transformer_blocks.0.attn2.to_k.weight",
+                    vec![320, 2048],
+                ),
+                (
+                    "model.diffusion.input_blocks.1.1.transformer_blocks.0.attn2.to_v.weight",
+                    vec![320, 2048],
+                ),
+                (
+                    "model.diffusion.input_blocks.1.1.transformer_blocks.0.attn2.to_out.0.weight",
+                    vec![320, 320],
+                ),
                 ("model.diffusion.out.0.weight", vec![4, 320, 3, 3]),
                 ("model.diffusion.out.0.bias", vec![4]),
             ],
@@ -456,7 +520,7 @@ pub(crate) mod tests {
 
         assert_eq!(report.source_layout, "diffusers_style_split_safetensors");
         assert_eq!(report.output_components.len(), 4);
-        assert_eq!(report.mapped_tensor_count, 20);
+        assert_eq!(report.mapped_tensor_count, 28);
         assert!(report.diagnostics.is_empty());
         let report_json = fs::read_to_string(output.path().join("conversion-report.json"))
             .expect("conversion report");
@@ -506,6 +570,14 @@ pub(crate) mod tests {
             "down_blocks.0.res_blocks.0.conv_1.weight",
             "down_blocks.0.res_blocks.0.time_projection.weight",
             "down_blocks.0.res_blocks.0.conv_2.weight",
+            "down_blocks.0.self_attention_blocks.0.attention.query.weight",
+            "down_blocks.0.self_attention_blocks.0.attention.key.weight",
+            "down_blocks.0.self_attention_blocks.0.attention.value.weight",
+            "down_blocks.0.self_attention_blocks.0.attention.output.weight",
+            "down_blocks.0.cross_attention_blocks.0.attention.query.weight",
+            "down_blocks.0.cross_attention_blocks.0.context_key.weight",
+            "down_blocks.0.cross_attention_blocks.0.context_value.weight",
+            "down_blocks.0.cross_attention_blocks.0.attention.output.weight",
             "conv_out.weight",
         ] {
             assert!(keys.contains(expected), "missing mapped key `{expected}`");

@@ -634,6 +634,38 @@ mod tests {
                     "model.diffusion.input_blocks.1.0.out_layers.3.bias",
                     vec![320],
                 ),
+                (
+                    "model.diffusion.input_blocks.1.1.transformer_blocks.0.attn1.to_q.weight",
+                    vec![320, 320],
+                ),
+                (
+                    "model.diffusion.input_blocks.1.1.transformer_blocks.0.attn1.to_k.weight",
+                    vec![320, 320],
+                ),
+                (
+                    "model.diffusion.input_blocks.1.1.transformer_blocks.0.attn1.to_v.weight",
+                    vec![320, 320],
+                ),
+                (
+                    "model.diffusion.input_blocks.1.1.transformer_blocks.0.attn1.to_out.0.weight",
+                    vec![320, 320],
+                ),
+                (
+                    "model.diffusion.input_blocks.1.1.transformer_blocks.0.attn2.to_q.weight",
+                    vec![320, 320],
+                ),
+                (
+                    "model.diffusion.input_blocks.1.1.transformer_blocks.0.attn2.to_k.weight",
+                    vec![320, 2048],
+                ),
+                (
+                    "model.diffusion.input_blocks.1.1.transformer_blocks.0.attn2.to_v.weight",
+                    vec![320, 2048],
+                ),
+                (
+                    "model.diffusion.input_blocks.1.1.transformer_blocks.0.attn2.to_out.0.weight",
+                    vec![320, 320],
+                ),
                 ("model.diffusion.out.0.weight", vec![4, 320, 3, 3]),
                 ("model.diffusion.out.0.bias", vec![4]),
             ],
@@ -708,7 +740,7 @@ mod tests {
             report_from_disk.source_layout,
             "diffusers_style_split_safetensors"
         );
-        assert_eq!(report_from_disk.mapped_tensor_count, 20);
+        assert_eq!(report_from_disk.mapped_tensor_count, 28);
 
         let package = report_from_disk.package.expect("package report");
         assert_eq!(package.schema_version, 1);
