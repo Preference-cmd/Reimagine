@@ -376,6 +376,10 @@ impl<B: Backend> SdxlAddedConditioning<B> {
             time_ids,
         }
     }
+
+    pub(crate) fn shapes(&self) -> [[usize; 2]; 2] {
+        [self.pooled_text.dims(), self.time_ids.dims()]
+    }
 }
 
 /// Burn-native projection from SDXL added-conditioning into time hidden width.
