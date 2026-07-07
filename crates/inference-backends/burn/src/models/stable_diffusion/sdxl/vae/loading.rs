@@ -11,17 +11,38 @@ use crate::runtime::BurnRuntime;
 
 use super::module::SdxlVaeDecoder;
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum SdxlVaeDecoderLoadProfile {
+    TinySdxlE2e,
+    SdxlBase,
+}
+
 /// Load an SDXL VAE decoder Module from a VAE component through burn-store.
+#[cfg(test)]
 pub(crate) fn load_vae_decoder_module_from_path<B: Backend>(
     runtime: &BurnRuntime<B>,
     module: &mut SdxlVaeDecoder<B>,
     path: impl Into<std::path::PathBuf>,
 ) -> Result<ApplyResult, BurnBackendError> {
+    load_vae_decoder_module_from_path_with_profile(
+        runtime,
+        module,
+        path,
+        SdxlVaeDecoderLoadProfile::SdxlBase,
+    )
+}
+
+pub(crate) fn load_vae_decoder_module_from_path_with_profile<B: Backend>(
+    runtime: &BurnRuntime<B>,
+    module: &mut SdxlVaeDecoder<B>,
+    path: impl Into<std::path::PathBuf>,
+    profile: SdxlVaeDecoderLoadProfile,
+) -> Result<ApplyResult, BurnBackendError> {
     let mut store = sdxl_vae_store_from_path(path);
     let result = runtime
         .load_module_store(module, &mut store)
         .map_err(|source| BurnBackendError::InvalidRequest(source.to_string()))?;
-    validate_apply_result("vae", &result)?;
+    validate_apply_result(profile, &result)?;
     Ok(result)
 }
 
@@ -35,20 +56,57 @@ fn sdxl_vae_store_from_path(path: impl Into<std::path::PathBuf>) -> SafetensorsS
 
 fn sdxl_vae_key_remapper() -> KeyRemapper {
     KeyRemapper::new()
+        .add_pattern(r"^model\.vae\.decoder\.conv_in\.", "latent_projection.")
+        .expect("static VAE decoder conv_in remapping regex should compile")
+        .add_pattern(
+            r"^model\.vae\.decoder\.residual_blocks\.",
+            "residual_blocks.",
+        )
+        .expect("static VAE decoder residual remapping regex should compile")
         .add_pattern(r"^model\.vae\.decoder\.conv_out\.", "conv_out.")
         .expect("static VAE decoder conv_out remapping regex should compile")
 }
 
-fn validate_apply_result(component: &str, result: &ApplyResult) -> Result<(), BurnBackendError> {
-    validate_sdxl_apply_result(vae_load_policy(component), result)
+fn validate_apply_result(
+    profile: SdxlVaeDecoderLoadProfile,
+    result: &ApplyResult,
+) -> Result<(), BurnBackendError> {
+    validate_sdxl_apply_result(vae_load_policy(profile), result)
 }
 
-fn vae_load_policy(component: &str) -> SdxlLoadPolicy {
-    match component {
-        "vae" => SdxlLoadPolicy::new("vae")
+fn vae_load_policy(profile: SdxlVaeDecoderLoadProfile) -> SdxlLoadPolicy {
+    match profile {
+        SdxlVaeDecoderLoadProfile::TinySdxlE2e => SdxlLoadPolicy::new("vae")
             .with_required_snapshots(&["conv_out.weight", "conv_out.bias"])
             .with_remapped_key_patterns(&["model.vae.decoder.conv_out -> conv_out"]),
-        _ => SdxlLoadPolicy::new("vae"),
+        SdxlVaeDecoderLoadProfile::SdxlBase => SdxlLoadPolicy::new("vae")
+            .with_required_snapshots(&[
+                "latent_projection.weight",
+                "latent_projection.bias",
+                "residual_blocks.0.norm_1.gamma",
+                "residual_blocks.0.norm_1.beta",
+                "residual_blocks.0.conv_1.weight",
+                "residual_blocks.0.conv_1.bias",
+                "residual_blocks.0.norm_2.gamma",
+                "residual_blocks.0.norm_2.beta",
+                "residual_blocks.0.conv_2.weight",
+                "residual_blocks.0.conv_2.bias",
+                "residual_blocks.1.norm_1.gamma",
+                "residual_blocks.1.norm_1.beta",
+                "residual_blocks.1.conv_1.weight",
+                "residual_blocks.1.conv_1.bias",
+                "residual_blocks.1.norm_2.gamma",
+                "residual_blocks.1.norm_2.beta",
+                "residual_blocks.1.conv_2.weight",
+                "residual_blocks.1.conv_2.bias",
+                "conv_out.weight",
+                "conv_out.bias",
+            ])
+            .with_remapped_key_patterns(&[
+                "model.vae.decoder.conv_in -> latent_projection",
+                "model.vae.decoder.residual_blocks -> residual_blocks",
+                "model.vae.decoder.conv_out -> conv_out",
+            ]),
     }
 }
 
@@ -56,10 +114,12 @@ fn vae_load_policy(component: &str) -> SdxlLoadPolicy {
 mod tests {
     use std::borrow::Cow;
 
+    use burn_store::ApplyResult;
     use burn_tensor::Tensor;
 
     use crate::active_backend::{ActiveBurnBackend, active_device};
     use crate::config::BurnBackendConfig;
+    use crate::models::stable_diffusion::sdxl::load_diagnostics::format_apply_report;
     use crate::runtime::BurnRuntime;
 
     use super::SdxlVaeDecoder;
@@ -128,8 +188,54 @@ mod tests {
         }
     }
 
+    #[test]
+    fn full_vae_decoder_policy_rejects_15d6_conv_out_only_components() {
+        let report = format_apply_report(
+            super::vae_load_policy(super::SdxlVaeDecoderLoadProfile::SdxlBase),
+            &ApplyResult {
+                applied: vec!["conv_out.weight".to_owned(), "conv_out.bias".to_owned()],
+                skipped: Vec::new(),
+                missing: Vec::new(),
+                unused: Vec::new(),
+                errors: Vec::new(),
+            },
+        );
+
+        for expected in [
+            "required snapshot missing: latent_projection.weight",
+            "required snapshot missing: residual_blocks.0.conv_1.weight",
+            "required snapshot missing: residual_blocks.1.conv_2.weight",
+        ] {
+            assert!(
+                report.contains(expected),
+                "missing `{expected}` in:\n{report}"
+            );
+        }
+    }
+
+    #[test]
+    fn tiny_vae_decoder_policy_accepts_conv_out_only_fixture_components() {
+        let report = format_apply_report(
+            super::vae_load_policy(super::SdxlVaeDecoderLoadProfile::TinySdxlE2e),
+            &ApplyResult {
+                applied: vec!["conv_out.weight".to_owned(), "conv_out.bias".to_owned()],
+                skipped: Vec::new(),
+                missing: Vec::new(),
+                unused: Vec::new(),
+                errors: Vec::new(),
+            },
+        );
+
+        assert!(!report.contains("required snapshot missing"), "{report}");
+        assert!(
+            !report.contains("latent_projection"),
+            "tiny fixture policy should not require full-profile decoder snapshots:\n{report}"
+        );
+    }
+
     fn write_tiny_vae_component(path: &std::path::Path) {
-        let tensors = vec![
+        let mut tensors = full_vae_decoder_tensors("model.vae.decoder.");
+        tensors.extend([
             tensor_view(
                 "model.vae.decoder.conv_out.weight",
                 vec![3usize, 4, 3, 3],
@@ -140,20 +246,21 @@ mod tests {
                 vec![3usize],
                 vec![0.0f32; 3],
             ),
-        ];
+        ]);
         safetensors::tensor::serialize_to_file(tensors, None, path)
             .expect("write tiny VAE safetensors");
     }
 
     fn write_mapped_vae_component(path: &std::path::Path) {
-        let tensors = vec![
+        let mut tensors = full_vae_decoder_tensors("");
+        tensors.extend([
             tensor_view(
                 "conv_out.weight",
                 vec![3usize, 4, 3, 3],
                 vec![0.0f32; 3 * 4 * 3 * 3],
             ),
             tensor_view("conv_out.bias", vec![3usize], vec![0.0f32; 3]),
-        ];
+        ]);
         safetensors::tensor::serialize_to_file(tensors, None, path)
             .expect("write mapped VAE safetensors");
     }
@@ -166,6 +273,53 @@ mod tests {
         )];
         safetensors::tensor::serialize_to_file(tensors, None, path)
             .expect("write incomplete VAE safetensors");
+    }
+
+    fn full_vae_decoder_tensors(prefix: &str) -> Vec<(String, TestTensorView)> {
+        let latent_projection_prefix = if prefix.is_empty() {
+            "latent_projection".to_owned()
+        } else {
+            format!("{prefix}conv_in")
+        };
+        let mut tensors = vec![
+            tensor_view(
+                &format!("{latent_projection_prefix}.weight"),
+                vec![4usize, 4, 3, 3],
+                vec![0.0f32; 4 * 4 * 3 * 3],
+            ),
+            tensor_view(
+                &format!("{latent_projection_prefix}.bias"),
+                vec![4usize],
+                vec![0.0f32; 4],
+            ),
+        ];
+        for index in 0..2 {
+            for norm in ["norm_1", "norm_2"] {
+                tensors.push(tensor_view(
+                    &format!("{prefix}residual_blocks.{index}.{norm}.gamma"),
+                    vec![4usize],
+                    vec![1.0f32; 4],
+                ));
+                tensors.push(tensor_view(
+                    &format!("{prefix}residual_blocks.{index}.{norm}.beta"),
+                    vec![4usize],
+                    vec![0.0f32; 4],
+                ));
+            }
+            for conv in ["conv_1", "conv_2"] {
+                tensors.push(tensor_view(
+                    &format!("{prefix}residual_blocks.{index}.{conv}.weight"),
+                    vec![4usize, 4, 3, 3],
+                    vec![0.0f32; 4 * 4 * 3 * 3],
+                ));
+                tensors.push(tensor_view(
+                    &format!("{prefix}residual_blocks.{index}.{conv}.bias"),
+                    vec![4usize],
+                    vec![0.0f32; 4],
+                ));
+            }
+        }
+        tensors
     }
 
     fn tensor_view(path: &str, shape: Vec<usize>, values: Vec<f32>) -> (String, TestTensorView) {

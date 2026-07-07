@@ -415,6 +415,7 @@ mod tests {
             let expected_tensor_count: usize = match role {
                 BurnSdxlComponentRole::TextEncoder => 148,
                 BurnSdxlComponentRole::TextEncoder2 => 390,
+                BurnSdxlComponentRole::Vae => 20,
                 _ => 2,
             };
             assert_eq!(
@@ -431,13 +432,16 @@ mod tests {
                     .expect("read-back inventory validates");
 
             assert_eq!(validation.component_role, role);
-            // validate_component_inventory (the rep validator) checks
-            // 2 representative specs for each role including text
-            // encoders. The full spec check (all_expected_tensor_specs)
-            // belongs in the runtime loading path.
+            // validate_component_inventory checks the static contract
+            // specs. Text encoders still use representative specs here;
+            // VAE uses the 15f decoder key-space.
+            let expected_matched_required_tensors = match role {
+                BurnSdxlComponentRole::Vae => 20,
+                _ => 2,
+            };
             assert_eq!(
                 validation.matched_required_tensors.len(),
-                2,
+                expected_matched_required_tensors,
                 "matched tensor count mismatch for role {role}"
             );
             assert_eq!(

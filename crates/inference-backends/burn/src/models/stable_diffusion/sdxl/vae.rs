@@ -48,7 +48,17 @@ fn load_or_init_sdxl_decoder(
         .iter()
         .find(|component| component.component_role == BurnSdxlComponentRole::Vae)
     {
-        loading::load_vae_decoder_module_from_path(runtime, &mut decoder, &component.source_path)?;
+        let profile = if bundle.uses_tiny_sdxl_e2e_vae_profile() {
+            loading::SdxlVaeDecoderLoadProfile::TinySdxlE2e
+        } else {
+            loading::SdxlVaeDecoderLoadProfile::SdxlBase
+        };
+        loading::load_vae_decoder_module_from_path_with_profile(
+            runtime,
+            &mut decoder,
+            &component.source_path,
+            profile,
+        )?;
     }
     Ok(decoder)
 }
