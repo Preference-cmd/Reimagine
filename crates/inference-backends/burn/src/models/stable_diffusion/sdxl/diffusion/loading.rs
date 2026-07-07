@@ -217,11 +217,6 @@ fn sdxl_base_diffusion_load_policy() -> SdxlLoadPolicy {
             ".attention.key.",
             ".attention.value.",
         ])
-        .with_deferred_snapshot_families(&[
-            "remaining UNet self-attention snapshots beyond first down-block projection weights",
-            "remaining UNet cross-attention snapshots beyond first down-block projection weights",
-            "full UNet up/downsample and skip topology snapshots",
-        ])
         .with_remapped_key_patterns(&[
             "model.diffusion.conv_in -> conv_in",
             "model.diffusion.time_embed.0 -> time_embedding.linear_1",
@@ -457,7 +452,7 @@ mod tests {
         for expected in [
             "required snapshot missing: time_embedding.linear_1.weight",
             "required snapshot missing: down_blocks.0.res_blocks.0.conv_1.weight",
-            "deferred snapshot family: remaining UNet cross-attention snapshots beyond first down-block projection weights",
+            "remapped source key pattern: model.diffusion.input_blocks -> down_blocks",
         ] {
             assert!(
                 message.contains(expected),
@@ -585,7 +580,7 @@ mod tests {
     }
 
     #[test]
-    fn full_sdxl_unet_policy_reports_deferred_block_families() {
+    fn full_sdxl_unet_policy_reports_required_block_families_without_deferred_topology() {
         let report = format_apply_report(
             super::diffusion_load_policy_for_profile(SdxlUnetTopologyProfile::SdxlBase),
             &ApplyResult {
@@ -600,15 +595,33 @@ mod tests {
         for expected in [
             "required snapshot missing: time_embedding.linear_1.weight",
             "required snapshot missing: down_blocks.0.res_blocks.0.conv_1.weight",
-            "deferred snapshot family: remaining UNet self-attention snapshots beyond first down-block projection weights",
-            "deferred snapshot family: remaining UNet cross-attention snapshots beyond first down-block projection weights",
-            "deferred snapshot family: full UNet up/downsample and skip topology snapshots",
+            "remapped source key pattern: model.diffusion.input_blocks -> down_blocks",
         ] {
             assert!(
                 report.contains(expected),
                 "missing `{expected}` in:\n{report}"
             );
         }
+        assert!(!report.contains("deferred snapshot family"), "{report}");
+    }
+
+    #[test]
+    fn full_sdxl_unet_policy_has_no_deferred_topology_families_after_15e() {
+        let report = format_apply_report(
+            super::diffusion_load_policy_for_profile(SdxlUnetTopologyProfile::SdxlBase),
+            &ApplyResult {
+                applied: Vec::new(),
+                skipped: Vec::new(),
+                missing: Vec::new(),
+                unused: Vec::new(),
+                errors: Vec::new(),
+            },
+        );
+
+        assert!(
+            !report.contains("deferred snapshot family"),
+            "full-profile UNet policy must not report deferred topology families once 15e enables the graph:\n{report}"
+        );
     }
 
     #[test]

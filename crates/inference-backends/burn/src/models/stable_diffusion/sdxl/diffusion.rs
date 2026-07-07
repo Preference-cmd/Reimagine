@@ -192,7 +192,7 @@ mod tests {
     use crate::models::stable_diffusion::sdxl::BurnSdxlComponentRole;
 
     #[test]
-    fn load_or_init_unet_rejects_full_sdxl_topology_until_graph_supported() {
+    fn load_or_init_unet_initializes_full_sdxl_topology_after_graph_support() {
         let backend =
             BurnBackend::new(BurnBackendConfig::new("/models", "/output")).expect("burn backend");
         let bundle = BurnLoadedSdxlBundle::for_test_only(
@@ -200,19 +200,19 @@ mod tests {
             BackendPayloadKey::new("clip"),
         )
         .with_test_components(vec![(
-            BurnSdxlComponentRole::Diffusion,
-            PathBuf::from("/tmp/full-sdxl-diffusion.safetensors"),
+            BurnSdxlComponentRole::Vae,
+            PathBuf::from("/tmp/full-sdxl-vae.safetensors"),
         )]);
 
-        let err = load_or_init_unet(&bundle, &backend)
-            .expect_err("full SDXL topology should be explicitly rejected");
-        let message = err.to_string();
+        let unet = load_or_init_unet(&bundle, &backend)
+            .expect("full SDXL topology should initialize once the Module graph is supported");
 
-        assert!(message.contains("UNet topology `sdxl_base`"), "{message}");
-        assert!(
-            message.contains("not yet supported by the current Module graph"),
-            "{message}"
+        assert_eq!(
+            unet.topology_profile(),
+            module::SdxlUnetTopologyProfile::SdxlBase
         );
+        assert!(unet.down_path_pushes_skip());
+        assert!(unet.up_path_pops_skip());
     }
 
     #[test]

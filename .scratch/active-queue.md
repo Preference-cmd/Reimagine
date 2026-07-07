@@ -28,21 +28,20 @@ Current policy:
   backend tensors, and burn-store loading seams.
 - Do not expand old handwritten tensor helpers; treat them as historical
   context only.
-- Keep full SDXL graph execution disabled until the relevant topology and
-  loader tranches are explicitly landed.
+- Keep full SDXL graph execution scoped to landed Module topology and loader
+  tranches; real-package image smoke remains the 15g proof point.
 
 ### Now
 
 | Issue | Status | Notes |
 | --- | --- | --- |
-| [15e: Burn full SDXL UNet executable topology](inference-backends/burn/issues/15e-burn-full-sdxl-unet-executable-topology.md) | ready-for-agent | Implement against the accepted full SDXL execution architecture; make full-profile UNet topology executable on WGPU/Flex without claiming sampler parity. |
 | [15f: Burn full SDXL VAE decoder fidelity](inference-backends/burn/issues/15f-burn-full-sdxl-vae-decoder-fidelity.md) | ready-for-agent | Implement against the accepted full SDXL execution architecture; replace the full-profile decoder scaffold while keeping `latent.decode` decode-only. |
 
 ### Next
 
 | Issue | Status | Notes |
 | --- | --- | --- |
-| [15g: Burn real SDXL package smoke to image artifact](inference-backends/burn/issues/15g-burn-real-sdxl-package-smoke-to-image.md) | blocked | Wait for 15e and 15f; proves the public Burn chain can produce an image artifact from a converted real SDXL package. |
+| [15g: Burn real SDXL package smoke to image artifact](inference-backends/burn/issues/15g-burn-real-sdxl-package-smoke-to-image.md) | blocked | Wait for 15f; proves the public Burn chain can produce an image artifact from a converted real SDXL package. |
 | [15d9: Burn full-topology sampler parity](inference-backends/burn/issues/15d9-burn-full-topology-sampler-parity.md) | blocked | Wait for 15e and 15g before claiming numeric sampler parity against a trusted reference. |
 
 ### Design Gates
@@ -55,6 +54,7 @@ Current policy:
 
 | Issue | Status | Notes |
 | --- | --- | --- |
+| [15e: Burn full SDXL UNet executable topology](inference-backends/burn/issues/15e-burn-full-sdxl-unet-executable-topology.md) | done | Full-profile UNet Module graph guard is open with skip-stack traversal, downsample/upsample stages, added-conditioning path, burn-store load policy without deferred topology families, and WGPU/Flex-safe Burn crate verification; sampler parity remains 15d9 and real-package image smoke remains 15g. |
 | [15e0: Burn full SDXL execution architecture](inference-backends/burn/issues/15e0-burn-full-sdxl-execution-architecture.md) | done | Accepted design in `docs/architecture/modules/burn-full-sdxl-execution.md`; defines full UNet/VAE Module boundaries, burn-store key-space policy, guard-removal conditions, real-package smoke boundary, sampler parity boundary, and LoRA/training attachment vocabulary. |
 | [15d8: Burn WGPU/Flex performance envelope](inference-backends/burn/issues/15d8-burn-wgpu-flex-performance-envelope.md) | done | Landed on main (`654d4bc`); adds deterministic Burn performance envelope probes for WGPU/Flex, scenario catalog, store/cache byte/count observations, and repeated model.load_bundle cache reuse coverage without threshold-based timing. |
 | [15d7: Burn sampler fidelity audit](inference-backends/burn/issues/15d7-burn-sampler-fidelity-audit.md) | done | Added sampler-to-UNet forward evidence for scheduler timestep, CFG branch order, and branch-specific conditioning shapes; full-topology numeric parity split to 15d9. |

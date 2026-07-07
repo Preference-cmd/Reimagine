@@ -8,6 +8,7 @@ use burn_core as burn;
 use burn_nn::{
     Linear, LinearConfig, PaddingConfig2d,
     conv::{Conv2d, Conv2dConfig},
+    interpolate::{Interpolate2d, Interpolate2dConfig},
     modules::attention::{MhaInput, MultiHeadAttention, MultiHeadAttentionConfig},
     norm::{GroupNorm, GroupNormConfig},
 };
@@ -52,7 +53,7 @@ impl SdxlUnetTopologyProfile {
     }
 
     pub fn is_module_graph_supported(self) -> bool {
-        matches!(self, Self::TinySdxlE2e)
+        matches!(self, Self::TinySdxlE2e | Self::SdxlBase)
     }
 }
 
@@ -68,6 +69,7 @@ impl SdxlUnetTopology {
             pooled_conditioning_dim: 8,
             time_ids_dim: 6,
             down_blocks: vec![SdxlStageSpec {
+                role: SdxlStageRole::Down,
                 res_blocks: vec![SdxlResBlockSpec {
                     in_channels: 4,
                     out_channels: 4,
@@ -84,6 +86,8 @@ impl SdxlUnetTopology {
                     num_heads: 2,
                     num_groups: 2,
                 }],
+                skip_policy: SdxlSkipPolicy::None,
+                sampling: SdxlSamplingOp::None,
             }],
             middle_blocks: Vec::new(),
             up_blocks: Vec::new(),
@@ -91,30 +95,38 @@ impl SdxlUnetTopology {
     }
 
     pub fn sdxl_base() -> Self {
-        let stage = |channels: usize, heads: usize| SdxlStageSpec {
+        let stage = |role: SdxlStageRole,
+                     in_channels: usize,
+                     out_channels: usize,
+                     heads: usize,
+                     skip_policy: SdxlSkipPolicy,
+                     sampling: SdxlSamplingOp| SdxlStageSpec {
+            role,
             res_blocks: vec![
                 SdxlResBlockSpec {
-                    in_channels: channels,
-                    out_channels: channels,
+                    in_channels,
+                    out_channels,
                     num_groups: 32,
                 },
                 SdxlResBlockSpec {
-                    in_channels: channels,
-                    out_channels: channels,
+                    in_channels: out_channels,
+                    out_channels,
                     num_groups: 32,
                 },
             ],
             self_attention_blocks: vec![SdxlAttentionBlockSpec {
-                channels,
+                channels: out_channels,
                 num_heads: heads,
                 num_groups: 32,
             }],
             cross_attention_blocks: vec![SdxlCrossAttentionBlockSpec {
-                channels,
+                channels: out_channels,
                 context_dim: 2048,
                 num_heads: heads,
                 num_groups: 32,
             }],
+            skip_policy,
+            sampling,
         };
 
         Self {
@@ -126,9 +138,66 @@ impl SdxlUnetTopology {
             conditioning_dim: 2048,
             pooled_conditioning_dim: 1280,
             time_ids_dim: 6,
-            down_blocks: vec![stage(320, 5), stage(640, 10), stage(1280, 20)],
-            middle_blocks: vec![stage(1280, 20)],
-            up_blocks: vec![stage(1280, 20), stage(640, 10), stage(320, 5)],
+            down_blocks: vec![
+                stage(
+                    SdxlStageRole::Down,
+                    320,
+                    320,
+                    5,
+                    SdxlSkipPolicy::Push,
+                    SdxlSamplingOp::Downsample2d,
+                ),
+                stage(
+                    SdxlStageRole::Down,
+                    320,
+                    640,
+                    10,
+                    SdxlSkipPolicy::Push,
+                    SdxlSamplingOp::Downsample2d,
+                ),
+                stage(
+                    SdxlStageRole::Down,
+                    640,
+                    1280,
+                    20,
+                    SdxlSkipPolicy::Push,
+                    SdxlSamplingOp::None,
+                ),
+            ],
+            middle_blocks: vec![stage(
+                SdxlStageRole::Middle,
+                1280,
+                1280,
+                20,
+                SdxlSkipPolicy::None,
+                SdxlSamplingOp::None,
+            )],
+            up_blocks: vec![
+                stage(
+                    SdxlStageRole::Up,
+                    2560,
+                    1280,
+                    20,
+                    SdxlSkipPolicy::Pop,
+                    SdxlSamplingOp::Upsample2d,
+                ),
+                stage(
+                    SdxlStageRole::Up,
+                    1920,
+                    640,
+                    10,
+                    SdxlSkipPolicy::Pop,
+                    SdxlSamplingOp::Upsample2d,
+                ),
+                stage(
+                    SdxlStageRole::Up,
+                    960,
+                    320,
+                    5,
+                    SdxlSkipPolicy::Pop,
+                    SdxlSamplingOp::None,
+                ),
+            ],
         }
     }
 
@@ -166,9 +235,55 @@ impl SdxlUnetTopology {
 
 #[derive(Debug, Clone)]
 pub struct SdxlStageSpec {
+    pub role: SdxlStageRole,
     pub res_blocks: Vec<SdxlResBlockSpec>,
     pub self_attention_blocks: Vec<SdxlAttentionBlockSpec>,
     pub cross_attention_blocks: Vec<SdxlCrossAttentionBlockSpec>,
+    pub skip_policy: SdxlSkipPolicy,
+    pub sampling: SdxlSamplingOp,
+}
+
+impl SdxlStageSpec {
+    pub fn role(&self) -> SdxlStageRole {
+        self.role
+    }
+
+    pub fn pushes_skip(&self) -> bool {
+        matches!(self.skip_policy, SdxlSkipPolicy::Push)
+    }
+
+    pub fn pops_skip(&self) -> bool {
+        matches!(self.skip_policy, SdxlSkipPolicy::Pop)
+    }
+
+    pub fn has_downsample(&self) -> bool {
+        matches!(self.sampling, SdxlSamplingOp::Downsample2d)
+    }
+
+    pub fn has_upsample(&self) -> bool {
+        matches!(self.sampling, SdxlSamplingOp::Upsample2d)
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SdxlStageRole {
+    Down,
+    Middle,
+    Up,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SdxlSkipPolicy {
+    None,
+    Push,
+    Pop,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SdxlSamplingOp {
+    None,
+    Downsample2d,
+    Upsample2d,
 }
 
 #[derive(Debug, Clone)]
@@ -259,6 +374,16 @@ impl<B: Backend> SdxlUnet<B> {
     }
 
     #[cfg(test)]
+    pub(crate) fn topology_profile(&self) -> SdxlUnetTopologyProfile {
+        if self.down_blocks.len() == 3 && self.middle_blocks.len() == 1 && self.up_blocks.len() == 3
+        {
+            SdxlUnetTopologyProfile::SdxlBase
+        } else {
+            SdxlUnetTopologyProfile::TinySdxlE2e
+        }
+    }
+
+    #[cfg(test)]
     pub(crate) fn init_tiny(device: &B::Device) -> Self {
         Self::init(device)
     }
@@ -295,14 +420,26 @@ impl<B: Backend> SdxlUnet<B> {
         let time_hidden = self.time_embedding.forward(timestep_embedding)
             + self.added_conditioning.forward(added_conditioning);
         let mut hidden = self.conv_in.forward(latent);
+        let mut skip_stack = Vec::new();
         for stage in &self.down_blocks {
-            hidden = stage.forward(hidden, time_hidden.clone(), conditioning.clone());
+            let output = stage.forward(hidden, time_hidden.clone(), conditioning.clone());
+            hidden = output.hidden;
+            if let Some(skip) = output.skip {
+                skip_stack.push(skip);
+            }
         }
         for stage in &self.middle_blocks {
-            hidden = stage.forward(hidden, time_hidden.clone(), conditioning.clone());
+            hidden = stage
+                .forward(hidden, time_hidden.clone(), conditioning.clone())
+                .hidden;
         }
         for stage in &self.up_blocks {
-            hidden = stage.forward(hidden, time_hidden.clone(), conditioning.clone());
+            hidden = stage.forward_up(
+                hidden,
+                time_hidden.clone(),
+                conditioning.clone(),
+                &mut skip_stack,
+            );
         }
         self.conv_out.forward(hidden)
     }
@@ -348,6 +485,28 @@ impl<B: Backend> SdxlUnet<B> {
 
     pub fn up_block_count(&self) -> usize {
         self.up_blocks.len()
+    }
+
+    pub fn down_path_pushes_skip(&self) -> bool {
+        self.down_blocks.iter().any(SdxlUnetStage::pushes_skip)
+    }
+
+    pub fn down_path_has_downsample(&self) -> bool {
+        self.down_blocks.iter().any(SdxlUnetStage::has_downsample)
+    }
+
+    pub fn middle_path_has_no_skip_mutation(&self) -> bool {
+        self.middle_blocks
+            .iter()
+            .all(|stage| !stage.pushes_skip() && !stage.pops_skip())
+    }
+
+    pub fn up_path_pops_skip(&self) -> bool {
+        self.up_blocks.iter().any(SdxlUnetStage::pops_skip)
+    }
+
+    pub fn up_path_has_upsample(&self) -> bool {
+        self.up_blocks.iter().any(SdxlUnetStage::has_upsample)
     }
 
     fn stage_iter(&self) -> impl Iterator<Item = &SdxlUnetStage<B>> {
@@ -459,14 +618,32 @@ fn sinusoidal_timestep_embedding<B: Backend>(
 /// Burn-native SDXL UNet stage scaffold.
 #[derive(Module, Debug)]
 pub struct SdxlUnetStage<B: Backend> {
+    role: SdxlStageRole,
     res_blocks: Vec<SdxlResBlock<B>>,
     self_attention_blocks: Vec<SdxlSelfAttentionBlock<B>>,
     cross_attention_blocks: Vec<SdxlCrossAttentionBlock<B>>,
+    skip_policy: SdxlSkipPolicy,
+    sampling: SdxlSamplingOp,
+    downsample: Option<Conv2d<B>>,
+    upsample: Option<SdxlUpsampleBlock>,
 }
 
 impl<B: Backend> SdxlUnetStage<B> {
     pub fn init(spec: &SdxlStageSpec, time_hidden_dim: usize, device: &B::Device) -> Self {
+        let output_channels = spec
+            .res_blocks
+            .last()
+            .map(|block| block.out_channels)
+            .expect("SDXL UNet stage requires at least one residual block");
+        let downsample = spec.has_downsample().then(|| {
+            Conv2dConfig::new([output_channels, output_channels], [3, 3])
+                .with_stride([2, 2])
+                .with_padding(PaddingConfig2d::Explicit(1, 1, 1, 1))
+                .init(device)
+        });
+        let upsample = spec.has_upsample().then(SdxlUpsampleBlock::new);
         Self {
+            role: spec.role,
             res_blocks: spec
                 .res_blocks
                 .iter()
@@ -505,15 +682,19 @@ impl<B: Backend> SdxlUnetStage<B> {
                     )
                 })
                 .collect(),
+            skip_policy: spec.skip_policy,
+            sampling: spec.sampling,
+            downsample,
+            upsample,
         }
     }
 
-    pub fn forward(
+    fn forward(
         &self,
         mut hidden: Tensor<B, 4>,
         time_hidden: Tensor<B, 2>,
         conditioning: Tensor<B, 3>,
-    ) -> Tensor<B, 4> {
+    ) -> SdxlStageOutput<B> {
         for block in &self.res_blocks {
             hidden = block.forward_with_time(hidden, time_hidden.clone());
         }
@@ -523,7 +704,78 @@ impl<B: Backend> SdxlUnetStage<B> {
         for block in &self.cross_attention_blocks {
             hidden = block.forward(hidden, conditioning.clone());
         }
-        hidden
+        let skip = self.pushes_skip().then(|| hidden.clone());
+        let hidden = match &self.downsample {
+            Some(downsample) => downsample.forward(hidden),
+            None => hidden,
+        };
+        SdxlStageOutput { hidden, skip }
+    }
+
+    pub fn forward_up(
+        &self,
+        hidden: Tensor<B, 4>,
+        time_hidden: Tensor<B, 2>,
+        conditioning: Tensor<B, 3>,
+        skip_stack: &mut Vec<Tensor<B, 4>>,
+    ) -> Tensor<B, 4> {
+        let hidden = if self.pops_skip() {
+            let skip = skip_stack
+                .pop()
+                .expect("SDXL UNet up stage expected a skip tensor");
+            Tensor::cat(vec![hidden, skip], 1)
+        } else {
+            hidden
+        };
+        let hidden = self.forward(hidden, time_hidden, conditioning).hidden;
+        match &self.upsample {
+            Some(upsample) => upsample.forward(hidden),
+            None => hidden,
+        }
+    }
+
+    pub fn pushes_skip(&self) -> bool {
+        matches!(self.skip_policy, SdxlSkipPolicy::Push)
+    }
+
+    pub fn role(&self) -> SdxlStageRole {
+        self.role
+    }
+
+    pub fn pops_skip(&self) -> bool {
+        matches!(self.skip_policy, SdxlSkipPolicy::Pop)
+    }
+
+    pub fn has_downsample(&self) -> bool {
+        matches!(self.sampling, SdxlSamplingOp::Downsample2d)
+    }
+
+    pub fn has_upsample(&self) -> bool {
+        matches!(self.sampling, SdxlSamplingOp::Upsample2d)
+    }
+}
+
+struct SdxlStageOutput<B: Backend> {
+    hidden: Tensor<B, 4>,
+    skip: Option<Tensor<B, 4>>,
+}
+
+#[derive(Clone, Module, Debug)]
+pub struct SdxlUpsampleBlock {
+    interpolate: Interpolate2d,
+}
+
+impl SdxlUpsampleBlock {
+    fn new() -> Self {
+        Self {
+            interpolate: Interpolate2dConfig::new()
+                .with_scale_factor(Some([2.0, 2.0]))
+                .init(),
+        }
+    }
+
+    fn forward<B: Backend>(&self, hidden: Tensor<B, 4>) -> Tensor<B, 4> {
+        self.interpolate.forward(hidden)
     }
 }
 
@@ -1001,6 +1253,42 @@ mod tests {
     }
 
     #[test]
+    fn sdxl_unet_module_keeps_full_profile_stage_execution_plan() {
+        let config = BurnBackendConfig::new("/models", "/output");
+        let runtime = BurnRuntime::<ActiveBurnBackend>::new(active_device(config.device()));
+        let module = super::SdxlUnet::<ActiveBurnBackend>::init_from_profile(
+            super::SdxlUnetTopologyProfile::SdxlBase,
+            runtime.device(),
+        );
+
+        assert!(module.down_path_pushes_skip());
+        assert!(module.down_path_has_downsample());
+        assert!(module.middle_path_has_no_skip_mutation());
+        assert!(module.up_path_pops_skip());
+        assert!(module.up_path_has_upsample());
+    }
+
+    #[test]
+    fn sdxl_unet_forward_uses_skip_stack_and_sampling_plan() {
+        let config = BurnBackendConfig::new("/models", "/output");
+        let runtime = BurnRuntime::<ActiveBurnBackend>::new(active_device(config.device()));
+        let topology = full_style_small_topology();
+        let module =
+            super::SdxlUnet::<ActiveBurnBackend>::init_from_topology(&topology, runtime.device());
+        let latent = Tensor::<ActiveBurnBackend, 4>::zeros([1, 4, 8, 8], runtime.device());
+        let timestep = Tensor::<ActiveBurnBackend, 1>::ones([1], runtime.device());
+        let conditioning = Tensor::<ActiveBurnBackend, 3>::zeros([1, 4, 8], runtime.device());
+        let added = super::SdxlAddedConditioning::new(
+            Tensor::<ActiveBurnBackend, 2>::zeros([1, 8], runtime.device()),
+            Tensor::<ActiveBurnBackend, 2>::zeros([1, 6], runtime.device()),
+        );
+
+        let output = module.forward_with_added_conditioning(latent, timestep, conditioning, added);
+
+        assert_eq!(output.dims(), [1, 4, 8, 8]);
+    }
+
+    #[test]
     fn sdxl_unet_topology_profiles_have_stable_names() {
         assert_eq!(
             super::SdxlUnetTopologyProfile::TinySdxlE2e.as_str(),
@@ -1011,7 +1299,7 @@ mod tests {
             "sdxl_base"
         );
         assert!(super::SdxlUnetTopologyProfile::TinySdxlE2e.is_module_graph_supported());
-        assert!(!super::SdxlUnetTopologyProfile::SdxlBase.is_module_graph_supported());
+        assert!(super::SdxlUnetTopologyProfile::SdxlBase.is_module_graph_supported());
 
         let tiny = super::SdxlUnetTopologyProfile::TinySdxlE2e.topology();
         assert_eq!(tiny.name(), "tiny_sdxl_e2e");
@@ -1045,6 +1333,97 @@ mod tests {
     }
 
     #[test]
+    fn sdxl_base_topology_records_executable_skip_and_sampling_semantics() {
+        let topology = super::SdxlUnetTopology::sdxl_base();
+
+        assert!(
+            topology
+                .down_blocks
+                .iter()
+                .any(super::SdxlStageSpec::pushes_skip),
+            "full UNet down path must own skip production before the guard can be removed"
+        );
+        assert!(
+            topology
+                .down_blocks
+                .iter()
+                .any(super::SdxlStageSpec::has_downsample),
+            "full UNet down path must record downsample stages before the guard can be removed"
+        );
+        assert!(
+            topology
+                .middle_blocks
+                .iter()
+                .all(|stage| !stage.pushes_skip() && !stage.pops_skip()),
+            "middle block must not own skip stack mutation"
+        );
+        assert!(
+            topology
+                .up_blocks
+                .iter()
+                .any(super::SdxlStageSpec::pops_skip),
+            "full UNet up path must own skip consumption before the guard can be removed"
+        );
+        assert!(
+            topology
+                .up_blocks
+                .iter()
+                .any(super::SdxlStageSpec::has_upsample),
+            "full UNet up path must record upsample stages before the guard can be removed"
+        );
+        assert!(
+            super::SdxlUnetTopologyProfile::SdxlBase.is_module_graph_supported(),
+            "15e requires the full-profile Module graph guard to be open"
+        );
+    }
+
+    #[test]
+    fn sdxl_base_topology_channel_plan_balances_skip_stack() {
+        let topology = super::SdxlUnetTopology::sdxl_base();
+        let mut hidden_channels = topology.model_channels;
+        let mut skip_channels = Vec::new();
+
+        for stage in &topology.down_blocks {
+            assert_eq!(stage.role(), super::SdxlStageRole::Down);
+            assert_eq!(stage.res_blocks[0].in_channels, hidden_channels);
+            hidden_channels = stage
+                .res_blocks
+                .last()
+                .expect("down stage should have resblocks")
+                .out_channels;
+            if stage.pushes_skip() {
+                skip_channels.push(hidden_channels);
+            }
+        }
+
+        for stage in &topology.middle_blocks {
+            assert_eq!(stage.role(), super::SdxlStageRole::Middle);
+            assert_eq!(stage.res_blocks[0].in_channels, hidden_channels);
+            hidden_channels = stage
+                .res_blocks
+                .last()
+                .expect("middle stage should have resblocks")
+                .out_channels;
+        }
+
+        for stage in &topology.up_blocks {
+            assert_eq!(stage.role(), super::SdxlStageRole::Up);
+            let skip = skip_channels
+                .pop()
+                .expect("up stage should have a matching down-path skip");
+            assert_eq!(stage.res_blocks[0].in_channels, hidden_channels + skip);
+            hidden_channels = stage
+                .res_blocks
+                .last()
+                .expect("up stage should have resblocks")
+                .out_channels;
+        }
+
+        assert!(skip_channels.is_empty());
+        assert_eq!(hidden_channels, topology.model_channels);
+    }
+
+    #[test]
     fn sdxl_time_embedding_projects_to_hidden_width() {
         let config = BurnBackendConfig::new("/models", "/output");
         let runtime = BurnRuntime::<ActiveBurnBackend>::new(active_device(config.device()));
@@ -1054,6 +1433,83 @@ mod tests {
         let output = module.forward(embedding);
 
         assert_eq!(output.dims(), [2, 8]);
+    }
+
+    fn full_style_small_topology() -> super::SdxlUnetTopology {
+        let res = |in_channels, out_channels| super::SdxlResBlockSpec {
+            in_channels,
+            out_channels,
+            num_groups: 2,
+        };
+        let attn = |channels| super::SdxlAttentionBlockSpec {
+            channels,
+            num_heads: 2,
+            num_groups: 2,
+        };
+        let cross = |channels| super::SdxlCrossAttentionBlockSpec {
+            channels,
+            context_dim: 8,
+            num_heads: 2,
+            num_groups: 2,
+        };
+        let stage = |role, res_blocks, channels, skip_policy, sampling| super::SdxlStageSpec {
+            role,
+            res_blocks,
+            self_attention_blocks: vec![attn(channels)],
+            cross_attention_blocks: vec![cross(channels)],
+            skip_policy,
+            sampling,
+        };
+
+        super::SdxlUnetTopology {
+            profile: super::SdxlUnetTopologyProfile::SdxlBase,
+            latent_channels: 4,
+            model_channels: 4,
+            time_input_dim: 4,
+            time_hidden_dim: 8,
+            conditioning_dim: 8,
+            pooled_conditioning_dim: 8,
+            time_ids_dim: 6,
+            down_blocks: vec![
+                stage(
+                    super::SdxlStageRole::Down,
+                    vec![res(4, 4)],
+                    4,
+                    super::SdxlSkipPolicy::Push,
+                    super::SdxlSamplingOp::Downsample2d,
+                ),
+                stage(
+                    super::SdxlStageRole::Down,
+                    vec![res(4, 8)],
+                    8,
+                    super::SdxlSkipPolicy::Push,
+                    super::SdxlSamplingOp::None,
+                ),
+            ],
+            middle_blocks: vec![stage(
+                super::SdxlStageRole::Middle,
+                vec![res(8, 8)],
+                8,
+                super::SdxlSkipPolicy::None,
+                super::SdxlSamplingOp::None,
+            )],
+            up_blocks: vec![
+                stage(
+                    super::SdxlStageRole::Up,
+                    vec![res(16, 8)],
+                    8,
+                    super::SdxlSkipPolicy::Pop,
+                    super::SdxlSamplingOp::Upsample2d,
+                ),
+                stage(
+                    super::SdxlStageRole::Up,
+                    vec![res(12, 4)],
+                    4,
+                    super::SdxlSkipPolicy::Pop,
+                    super::SdxlSamplingOp::None,
+                ),
+            ],
+        }
     }
 
     #[test]

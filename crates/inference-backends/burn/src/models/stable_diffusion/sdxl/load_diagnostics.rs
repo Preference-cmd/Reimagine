@@ -60,14 +60,6 @@ impl SdxlLoadPolicy {
         self
     }
 
-    pub(crate) const fn with_deferred_snapshot_families(
-        mut self,
-        deferred_snapshot_families: &'static [&'static str],
-    ) -> Self {
-        self.deferred_snapshot_families = deferred_snapshot_families;
-        self
-    }
-
     pub(crate) const fn with_remapped_key_patterns(
         mut self,
         remapped_key_patterns: &'static [&'static str],
