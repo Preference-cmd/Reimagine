@@ -5,6 +5,7 @@ members = [
     "crates/core",
     "crates/config",
     "crates/model-manager",
+    "crates/model-acquisition",
     "crates/nodes",
     "crates/runtime",
     "crates/agent",
@@ -63,3 +64,4 @@ burn-store = { version = "0.21", default-features = false, features = ["std", "s
 tokenizers = "0.21"
 image = "0.25"
 tempfile = "3"
+hf-hub = { version = "1.0.0-rc.1", default-features = false, features = ["rustls-tls"] }

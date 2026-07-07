@@ -11,6 +11,7 @@ pub const DEFAULT_EXCLUDE_PATTERNS: &[&str] = &[
     "**/cache/**",
     "**/build/**",
     "**/dist/**",
+    "**/.staging/**",
     "models/converted/**",
     "**/models/converted/**",
 ];
