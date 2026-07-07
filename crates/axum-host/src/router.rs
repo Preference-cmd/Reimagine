@@ -8,7 +8,7 @@ use axum::Router;
 use axum::routing::{get, post};
 use tower_http::trace::TraceLayer;
 
-use crate::api::{artifacts, compute_profile, health, nodes, runs, workflows};
+use crate::api::{artifacts, compute_profile, health, models, nodes, runs, workflows};
 use crate::state::AxumHostState;
 
 /// Build the V1 HTTP router. The router is stateless — every
@@ -24,6 +24,7 @@ pub fn build_router() -> Router<AxumHostState> {
         .route("/runs/{id}", get(runs::get))
         .route("/runs/{id}/events", get(runs::events))
         .route("/artifacts/{artifact_id}", get(artifacts::get))
+        .route("/models/download", post(models::download))
         .layer(TraceLayer::new_for_http().make_span_with(request_span))
 }
 

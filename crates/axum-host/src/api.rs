@@ -7,6 +7,7 @@
 pub mod artifacts;
 pub mod compute_profile;
 pub mod health;
+pub mod models;
 pub mod nodes;
 pub mod runs;
 pub mod workflows;
