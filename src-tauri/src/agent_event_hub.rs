@@ -25,7 +25,10 @@ struct HubInner {
 impl fmt::Debug for HubInner {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.debug_struct("HubInner")
-            .field("subscribers", &format_args!("{} channels", self.subscribers.len()))
+            .field(
+                "subscribers",
+                &format_args!("{} channels", self.subscribers.len()),
+            )
             .finish()
     }
 }
@@ -70,9 +73,7 @@ impl AgentEventSink for TauriAgentEventHub {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use reimagine_agent::{
-        AgentEvent, AgentMode, AgentSessionId, ProviderName, ToolName,
-    };
+    use reimagine_agent::{AgentEvent, AgentMode, AgentSessionId, ProviderName, ToolName};
 
     fn make_session_event(kind: &str, session_id: &AgentSessionId) -> AgentEvent {
         match kind {

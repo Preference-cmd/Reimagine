@@ -54,7 +54,7 @@ impl ModelAcquisitionService {
     pub fn acquire(
         self: Arc<Self>,
         request: ModelAcquisitionRequest,
-        _progress_sink: Option<Arc<dyn AcquisitionProgressSink>>,
+        progress_sink: Option<Arc<dyn AcquisitionProgressSink>>,
     ) -> Pin<Box<dyn Future<Output = AppHostResult<AcquisitionReport>> + Send>> {
         let models_dir = self.models_dir.clone();
         let cfg = match load_config_sync(&self.config_handle) {
@@ -93,6 +93,14 @@ impl ModelAcquisitionService {
                         message: e.to_string(),
                     }
                 })?;
+
+                // Wrap the progress sink as an hf-hub ProgressHandler.
+                let progress: Option<hf_hub::progress::Progress> = progress_sink.map(|sink| {
+                    hf_hub::progress::Progress::new(
+                        reimagine_model_acquisition::ProgressSinkBridge::new(sink),
+                    )
+                });
+
                 let repo = sync_client.model(request.repo_id.namespace(), request.repo_id.name());
                 let allow_patterns: Option<Vec<String>> = if request.allow_patterns.is_empty() {
                     None
@@ -109,6 +117,7 @@ impl ModelAcquisitionService {
                         reimagine_model_acquisition::OverwritePolicy::Overwrite
                     ))
                     .max_workers(8)
+                    .maybe_progress(progress)
                     .send()
                     .map_err(
                         |e| reimagine_model_acquisition::ModelAcquisitionError::Hub {

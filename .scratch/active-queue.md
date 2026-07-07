@@ -33,24 +33,29 @@ Current policy:
 
 ### Now
 
-(empty)
+| Issue | Status | Notes |
+| --- | --- | --- |
+| [15e: Burn full SDXL UNet executable topology](inference-backends/burn/issues/15e-burn-full-sdxl-unet-executable-topology.md) | ready-for-agent | Implement against the accepted full SDXL execution architecture; make full-profile UNet topology executable on WGPU/Flex without claiming sampler parity. |
+| [15f: Burn full SDXL VAE decoder fidelity](inference-backends/burn/issues/15f-burn-full-sdxl-vae-decoder-fidelity.md) | ready-for-agent | Implement against the accepted full SDXL execution architecture; replace the full-profile decoder scaffold while keeping `latent.decode` decode-only. |
 
 ### Next
 
 | Issue | Status | Notes |
 | --- | --- | --- |
-| [15d9: Burn full-topology sampler parity](inference-backends/burn/issues/15d9-burn-full-topology-sampler-parity.md) | blocked | Wait for executable full SDXL UNet topology and loader coverage before claiming sampler numeric parity. |
+| [15g: Burn real SDXL package smoke to image artifact](inference-backends/burn/issues/15g-burn-real-sdxl-package-smoke-to-image.md) | blocked | Wait for 15e and 15f; proves the public Burn chain can produce an image artifact from a converted real SDXL package. |
+| [15d9: Burn full-topology sampler parity](inference-backends/burn/issues/15d9-burn-full-topology-sampler-parity.md) | blocked | Wait for 15e and 15g before claiming numeric sampler parity against a trusted reference. |
 
 ### Design Gates
 
 | Issue | Status | Notes |
 | --- | --- | --- |
-| [16a: Burn LoRA and training readiness design gate](inference-backends/burn/issues/16a-burn-lora-training-readiness-design-gate.md) | blocked | Depends on stable CLIP/UNet/VAE attachment points from the fidelity map, especially 15d5b and 15d6. |
+| [16a: Burn LoRA and training readiness design gate](inference-backends/burn/issues/16a-burn-lora-training-readiness-design-gate.md) | blocked | Wait for executable full UNet/VAE topology and real-package image smoke so adapter attachment points are stable. |
 
 ### Recently Landed
 
 | Issue | Status | Notes |
 | --- | --- | --- |
+| [15e0: Burn full SDXL execution architecture](inference-backends/burn/issues/15e0-burn-full-sdxl-execution-architecture.md) | done | Accepted design in `docs/architecture/modules/burn-full-sdxl-execution.md`; defines full UNet/VAE Module boundaries, burn-store key-space policy, guard-removal conditions, real-package smoke boundary, sampler parity boundary, and LoRA/training attachment vocabulary. |
 | [15d8: Burn WGPU/Flex performance envelope](inference-backends/burn/issues/15d8-burn-wgpu-flex-performance-envelope.md) | done | Landed on main (`654d4bc`); adds deterministic Burn performance envelope probes for WGPU/Flex, scenario catalog, store/cache byte/count observations, and repeated model.load_bundle cache reuse coverage without threshold-based timing. |
 | [15d7: Burn sampler fidelity audit](inference-backends/burn/issues/15d7-burn-sampler-fidelity-audit.md) | done | Added sampler-to-UNet forward evidence for scheduler timestep, CFG branch order, and branch-specific conditioning shapes; full-topology numeric parity split to 15d9. |
 | [15d6: Burn VAE decoder topology and key-space](inference-backends/burn/issues/15d6-burn-vae-decoder-topology-and-keyspace.md) | done | First VAE key-space tranche landed: converted VAE packages now use `conv_out.*` Burn Module snapshot names, stale package reuse is blocked by converter-version bump, dead VAE raw weight buffers are removed, and full decoder residual/attention/upsample fidelity remains deferred. |
@@ -68,7 +73,7 @@ Burn package import, but should not be folded into backend runtime work.
 
 | Issue | Status | Notes |
 | --- | --- | --- |
-| [MA-03: Tauri IPC commands](model-acquisition/issues/MA-03-tauri-ipc-commands.md) | ready-for-agent | Add Tauri IPC command `download_huggingface_model` with progress streaming; keep Tauri transport-thin. |
+| [MA-04: Axum IPC commands](model-acquisition/issues/MA-04-axum-ipc-commands.md) | ready-for-agent | Add Axum HTTP endpoint for model download (mirror of MA-03 Tauri command). |
 
 ### Next
 
@@ -82,6 +87,7 @@ Burn package import, but should not be folded into backend runtime work.
 
 | Issue | Status | Notes |
 | --- | --- | --- |
+| [MA-03: Tauri IPC commands](model-acquisition/issues/MA-03-tauri-ipc-commands.md) | done | Landed on main. `download_huggingface_model` Tauri command with progress streaming via `TauriDownloadEventHub`, 67+30+12+21 tests passing. |
 | [MA-02: app-host integration](model-acquisition/issues/MA-02-app-host-integration.md) | done | Landed on main (`3932b0b`). ModelAcquisitionService with config load/save, acquire() via spawn_blocking, model.download Agent tool, IPC DTO, 67+30 tests passing. |
 | [MA-01: model-acquisition crate](model-acquisition/issues/MA-01-model-acquisition-crate.md) | done | Landed on main (`659c762`). Backend-neutral model-acquisition library crate; wraps hf-hub, ConfigDocument (model_acquisition.json), staging/promote with atomic rename + backup rollback, path safety validation, AcquisitionReport JSON, progress sink trait. 30 unit tests passing, 4 #[ignore] integration tests. |
 

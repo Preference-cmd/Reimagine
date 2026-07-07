@@ -6329,6 +6329,7 @@ dependencies = [
  "reimagine-app-host",
  "reimagine-config",
  "reimagine-core",
+ "reimagine-model-acquisition",
  "reimagine-runtime",
  "serde",
  "serde_json",

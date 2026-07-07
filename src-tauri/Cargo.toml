@@ -24,6 +24,7 @@ reimagine-agent = { path = "../crates/agent" }
 reimagine-app-host = { path = "../crates/app-host" }
 reimagine-config = { path = "../crates/config" }
 reimagine-core = { path = "../crates/core" }
+reimagine-model-acquisition = { path = "../crates/model-acquisition" }
 reimagine-runtime = { path = "../crates/runtime" }
 tauri = { workspace = true }
 tauri-plugin-opener = { workspace = true }

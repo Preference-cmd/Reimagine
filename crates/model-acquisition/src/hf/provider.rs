@@ -9,6 +9,8 @@ use crate::staging::{self, staging_dir};
 
 /// A progress callback that the app-host can implement to receive progress updates.
 pub trait AcquisitionProgressSink: Send + Sync {
+    /// Called when the download begins.
+    fn started(&self, _repo_id: &str, _revision: &str) {}
     /// Called per-file as each file download completes or is skipped.
     fn file_done(&self, relative_path: &str, bytes: u64, outcome: &str);
     /// Called once when the acquisition finishes.
@@ -16,8 +18,14 @@ pub trait AcquisitionProgressSink: Send + Sync {
 }
 
 /// Bridges an `AcquisitionProgressSink` to hf-hub's `ProgressHandler` trait.
-pub(crate) struct ProgressSinkBridge {
+pub struct ProgressSinkBridge {
     sink: Arc<dyn AcquisitionProgressSink>,
+}
+
+impl ProgressSinkBridge {
+    pub fn new(sink: Arc<dyn AcquisitionProgressSink>) -> Self {
+        Self { sink }
+    }
 }
 
 impl ProgressHandler for ProgressSinkBridge {

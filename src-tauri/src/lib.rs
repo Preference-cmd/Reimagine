@@ -1,13 +1,18 @@
-mod desktop_host;
 mod agent_event_hub;
+mod desktop_host;
+mod download_event_hub;
 mod event_hub;
 
 use desktop_host::{DesktopHostState, default_workspace_path};
 use event_hub::RunEventPayload;
-use reimagine_app_host::{AppHostError, dto::{
-    AgentEventPayload, AgentSessionInfo, AgentTurnResponse, ArtifactMetadataDto,
-    ComputeProfileDto, HealthResponse, ModelInfoDto, NodeDefDto, RunWorkflowResponse,
-}};
+use reimagine_app_host::{
+    AppHostError,
+    dto::{
+        AgentEventPayload, AgentSessionInfo, AgentTurnResponse, ArtifactMetadataDto,
+        ComputeProfileDto, DownloadEventPayload, HealthResponse, ModelInfoDto, NodeDefDto,
+        RunWorkflowResponse,
+    },
+};
 use reimagine_core::command::CommandResult;
 use serde::Serialize;
 use tauri::{Manager, ipc::Channel};
@@ -36,7 +41,10 @@ impl TauriCommandError {
     fn unknown_provider(provider: impl Into<String>) -> Self {
         Self {
             code: "unknown_provider",
-            message: format!("Provider '{}' is not configured. Add a provider in Settings.", provider.into()),
+            message: format!(
+                "Provider '{}' is not configured. Add a provider in Settings.",
+                provider.into()
+            ),
         }
     }
 }
@@ -179,6 +187,34 @@ fn list_agent_providers(
         .map_err(|e| TauriCommandError::command(e.to_string()))
 }
 
+// ─── Model download commands ───────────────────────────────────────
+
+/// Download a HuggingFace model with progress streaming.
+///
+/// Streams `DownloadEventPayload` events through the provided channel.
+#[tauri::command]
+async fn download_huggingface_model(
+    state: tauri::State<'_, DesktopHostState>,
+    repo_id: String,
+    revision: Option<String>,
+    allow_patterns: Option<Vec<String>>,
+    target_relative_dir: String,
+    overwrite: Option<String>,
+    channel: tauri::ipc::Channel<DownloadEventPayload>,
+) -> Result<reimagine_app_host::dto::ModelDownloadOutput, TauriCommandError> {
+    state
+        .download_huggingface_model(
+            repo_id,
+            revision,
+            allow_patterns,
+            target_relative_dir,
+            overwrite,
+            channel,
+        )
+        .await
+        .map_err(|e| TauriCommandError::command(e.to_string()))
+}
+
 // ─── Workflow command commands ───────────────────────────────────
 
 /// Preview a command batch (dry-run). Returns diagnostics without mutating.
@@ -251,6 +287,8 @@ pub fn run() {
             preview_workflow_commands,
             apply_workflow_commands,
             approve_proposal,
+            // Model download commands
+            download_huggingface_model,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

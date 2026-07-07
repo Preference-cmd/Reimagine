@@ -12,6 +12,7 @@ pub mod timestamp;
 pub use config::ModelAcquisitionConfig;
 pub use error::{ModelAcquisitionError, ModelAcquisitionResult};
 pub use hf::client::build_hf_client;
+pub use hf::provider::{AcquisitionProgressSink, ProgressSinkBridge};
 pub use report::{AcquisitionFileEntry, AcquisitionOutcome, AcquisitionReport};
 pub use request::{
     AcquireProvider, AllowPatterns, ModelAcquisitionRequest, OverwritePolicy, RepoId, Revision,

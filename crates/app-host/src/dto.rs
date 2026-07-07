@@ -37,7 +37,9 @@ pub use compute_profile::{
     DeviceProfileDto, MemoryProfileDto,
 };
 pub use health::HealthResponse;
-pub use model_acquisition::{FileEntryDto, ModelDownloadInput, ModelDownloadOutput};
+pub use model_acquisition::{
+    DownloadEventPayload, FileEntryDto, ModelDownloadInput, ModelDownloadOutput,
+};
 pub use models::ModelInfoDto;
 pub use nodes::{NodeCatalogResponse, NodeDefDto, ParamSpecDto, SocketSpecDto};
 pub use reimagine_core::command::{CommandResult, CommandResultStatus};

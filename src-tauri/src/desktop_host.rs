@@ -3,18 +3,18 @@ use std::sync::Arc;
 
 use reimagine_agent::{AgentEventSink, WorkspaceScope};
 use reimagine_app_host::dto::{
-    AgentEventPayload, AgentSessionInfo, AgentTurnResponse, ArtifactMetadataDto,
-    ComputeProfileDto, HealthResponse, ModelInfoDto, NodeCatalogResponse,
-    RunWorkflowResponse,
+    AgentEventPayload, AgentSessionInfo, AgentTurnResponse, ArtifactMetadataDto, ComputeProfileDto,
+    HealthResponse, ModelInfoDto, NodeCatalogResponse, RunWorkflowResponse,
 };
 use reimagine_app_host::{AgentServiceTurnRequest, AppHost, AppHostError, WorkspaceHost};
 use reimagine_config::AppPaths;
+use reimagine_core::command::CommandResult;
 use reimagine_core::workflow::Workflow;
 use reimagine_runtime::BoxedRunEventSink;
-use reimagine_core::command::CommandResult;
 use tauri::ipc::Channel;
 
 use crate::agent_event_hub::TauriAgentEventHub;
+use crate::download_event_hub::TauriDownloadEventHub;
 use crate::event_hub::{RunEventPayload, TauriRunEventHub};
 
 const WORKSPACE_SCOPE: &str = "reimagine-tauri-host";
@@ -24,6 +24,7 @@ pub struct DesktopHostState {
     app_host: AppHost,
     event_hub: Arc<TauriRunEventHub>,
     agent_event_hub: Arc<TauriAgentEventHub>,
+    download_event_hub: Arc<TauriDownloadEventHub>,
 }
 
 impl DesktopHostState {
@@ -42,10 +43,13 @@ impl DesktopHostState {
         )
         .await?;
 
+        let download_event_hub = Arc::new(TauriDownloadEventHub::new());
+
         Ok(Self {
             app_host: AppHost::new(workspace),
             event_hub,
             agent_event_hub,
+            download_event_hub,
         })
     }
 
@@ -195,7 +199,11 @@ impl DesktopHostState {
         let agent_mode = match mode.as_str() {
             "Agent" => reimagine_agent::AgentMode::Agent,
             "Build" => reimagine_agent::AgentMode::Build,
-            other => return Err(AppHostError::UnknownAgentMode { mode: other.to_string() }),
+            other => {
+                return Err(AppHostError::UnknownAgentMode {
+                    mode: other.to_string(),
+                });
+            }
         };
 
         // Validate provider exists in catalog before creating session
@@ -222,12 +230,8 @@ impl DesktopHostState {
             .as_millis()
             .to_string();
 
-        let session = agent_service.create_session(
-            session_id.clone(),
-            agent_mode,
-            provider_name,
-            started_at,
-        );
+        let session =
+            agent_service.create_session(session_id.clone(), agent_mode, provider_name, started_at);
 
         Ok(Dto::from(session))
     }
@@ -255,9 +259,8 @@ impl DesktopHostState {
         let agent_service = self.app_host.workspace().agent_service();
 
         // Validate session exists (fail-fast before subscription)
-        let _session = agent_service.get_session(
-            &reimagine_agent::AgentSessionId::new(&session_id),
-        )?;
+        let _session =
+            agent_service.get_session(&reimagine_agent::AgentSessionId::new(&session_id))?;
 
         // Subscribe the channel before starting the turn (no replay needed)
         self.agent_event_hub.subscribe(&session_id, channel);
@@ -269,9 +272,7 @@ impl DesktopHostState {
             messages,
         );
 
-        let result = agent_service
-            .run_turn(turn_request)
-            .await?;
+        let result = agent_service.run_turn(turn_request).await?;
 
         Ok(AgentTurnResponse::from(result))
     }
@@ -286,8 +287,8 @@ impl DesktopHostState {
     ) -> Result<CommandResult, AppHostError> {
         use reimagine_core::command::CommandBatch;
 
-        let batch: CommandBatch = serde_json::from_value(command_batch)
-            .map_err(|e| AppHostError::WorkflowJson {
+        let batch: CommandBatch =
+            serde_json::from_value(command_batch).map_err(|e| AppHostError::WorkflowJson {
                 path: std::path::PathBuf::new(),
                 message: format!("invalid command batch: {e}"),
             })?;
@@ -315,8 +316,8 @@ impl DesktopHostState {
     ) -> Result<CommandResult, AppHostError> {
         use reimagine_core::command::CommandBatch;
 
-        let batch: CommandBatch = serde_json::from_value(command_batch)
-            .map_err(|e| AppHostError::WorkflowJson {
+        let batch: CommandBatch =
+            serde_json::from_value(command_batch).map_err(|e| AppHostError::WorkflowJson {
                 path: std::path::PathBuf::new(),
                 message: format!("invalid command batch: {e}"),
             })?;
@@ -338,10 +339,7 @@ impl DesktopHostState {
     /// Calls `WorkflowService::apply_pending_proposal()` and returns the
     /// resulting `CommandResult`. Returns an error if no pending proposal
     /// exists for the workflow.
-    pub fn approve_proposal(
-        &self,
-        workflow_id: String,
-    ) -> Result<CommandResult, AppHostError> {
+    pub fn approve_proposal(&self, workflow_id: String) -> Result<CommandResult, AppHostError> {
         let node_catalog = self.app_host.workspace().node_catalog();
         let workflow_service = self.app_host.workspace().workflow_service();
 
@@ -361,17 +359,96 @@ impl DesktopHostState {
         let proposals = workflow_service.list_proposals();
         proposals
             .into_iter()
-            .map(|p| serde_json::to_value(p).map_err(|e| AppHostError::WorkflowJson {
-                path: std::path::PathBuf::new(),
-                message: format!("failed to serialize proposal: {e}"),
-            }))
+            .map(|p| {
+                serde_json::to_value(p).map_err(|e| AppHostError::WorkflowJson {
+                    path: std::path::PathBuf::new(),
+                    message: format!("failed to serialize proposal: {e}"),
+                })
+            })
             .collect()
     }
 
     /// List available provider names for the agent UI selector.
     pub fn list_agent_providers(&self) -> Result<Vec<String>, AppHostError> {
         let catalog = self.app_host.workspace().agent_service().providers();
-        Ok(catalog.provider_names().into_iter().map(|p| p.to_string()).collect())
+        Ok(catalog
+            .provider_names()
+            .into_iter()
+            .map(|p| p.to_string())
+            .collect())
+    }
+
+    /// Download a HuggingFace model with progress streaming.
+    ///
+    /// Returns an `AcquisitionReportDto` through the Tauri IPC channel.
+    pub async fn download_huggingface_model(
+        &self,
+        repo_id: String,
+        revision: Option<String>,
+        allow_patterns: Option<Vec<String>>,
+        target_relative_dir: String,
+        overwrite: Option<String>,
+        channel: Channel<reimagine_app_host::dto::DownloadEventPayload>,
+    ) -> Result<reimagine_app_host::dto::ModelDownloadOutput, AppHostError> {
+        use reimagine_model_acquisition::{
+            AcquireProvider, AllowPatterns, ModelAcquisitionRequest, OverwritePolicy, RepoId,
+            Revision, TargetRelativeDir,
+        };
+
+        let download_id = format!(
+            "dl-{}",
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap_or_default()
+                .as_nanos()
+        );
+
+        // Subscribe the channel for progress events.
+        self.download_event_hub.subscribe(&download_id, channel);
+
+        let repo_id = RepoId::new(&repo_id).ok_or_else(|| AppHostError::Io {
+            path: std::path::PathBuf::new(),
+            message: format!("invalid repo_id: expected `namespace/name` format, got `{repo_id}`"),
+        })?;
+
+        let revision = revision.map(Revision::new).unwrap_or_default();
+        let allow_patterns = allow_patterns.map(AllowPatterns::new).unwrap_or_default();
+
+        let target_relative_dir =
+            TargetRelativeDir::new(target_relative_dir.into()).map_err(|e| AppHostError::Io {
+                path: std::path::PathBuf::new(),
+                message: format!("invalid target_relative_dir: {e}"),
+            })?;
+
+        let overwrite_policy = match overwrite.as_deref() {
+            Some("overwrite") => OverwritePolicy::Overwrite,
+            Some("fail") => OverwritePolicy::Fail,
+            _ => OverwritePolicy::Skip,
+        };
+
+        let request = ModelAcquisitionRequest {
+            provider: AcquireProvider::HuggingFace,
+            repo_id,
+            revision,
+            allow_patterns,
+            target_relative_dir,
+            overwrite_policy,
+        };
+
+        let acq = self
+            .app_host
+            .workspace()
+            .services()
+            .model_acquisition_service()
+            .clone();
+        let progress_sink = self.download_event_hub.sink_for(&download_id);
+
+        // Notify started.
+        progress_sink.started(request.repo_id.as_str(), request.revision.as_str());
+
+        let report = acq.acquire(request, Some(progress_sink)).await?;
+
+        Ok(reimagine_app_host::dto::ModelDownloadOutput::from(report))
     }
 }
 
