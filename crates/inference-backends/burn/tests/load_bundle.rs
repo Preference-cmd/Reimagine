@@ -485,6 +485,36 @@ async fn runtime_hooks_snapshot_reports_cached_model_count_after_load() {
 }
 
 #[tokio::test]
+async fn performance_envelope_reports_model_cache_reuse_after_repeated_load() {
+    let temp = tempfile::tempdir().expect("tempdir");
+    let backend = backend();
+
+    let before = backend.performance_envelope();
+    backend
+        .load_bundle(load_request(temp.path()))
+        .await
+        .expect("initial load");
+    let after_first_load = backend.performance_envelope();
+    backend
+        .load_bundle(load_request(temp.path()))
+        .await
+        .expect("cached load");
+    let after_cached_load = backend.performance_envelope();
+
+    assert_eq!(before.observation("model_cache_bundles"), Some(0));
+    assert_eq!(after_first_load.observation("model_cache_bundles"), Some(1));
+    assert_eq!(
+        after_cached_load.observation("model_cache_bundles"),
+        Some(1)
+    );
+    assert_eq!(after_cached_load.observation("store_payloads"), Some(0));
+    assert_eq!(
+        after_cached_load.observation("store_bytes_approximate"),
+        Some(0)
+    );
+}
+
+#[tokio::test]
 async fn downstream_capabilities_remain_not_implemented_except_create_empty_latent() {
     // burn/05 originally asserted every downstream capability
     // (including CreateEmptyLatent) was BackendNotImplemented.

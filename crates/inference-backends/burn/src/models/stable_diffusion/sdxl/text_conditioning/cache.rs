@@ -45,6 +45,13 @@ impl<B: Backend> SdxlTextEncoderCache<B> {
         self.get_or_load_with(bundle, || load_text_encoder_modules(runtime, bundle))
     }
 
+    pub(crate) fn entry_count(&self) -> usize {
+        self.entries
+            .lock()
+            .expect("text encoder cache poisoned")
+            .len()
+    }
+
     fn get_or_load_with(
         &self,
         bundle: &BurnLoadedSdxlBundle,
