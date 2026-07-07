@@ -17,7 +17,7 @@ use super::writer::{inspect_component_safetensors, write_conversion_report};
 
 const PACKAGE_SCHEMA_VERSION: u32 = 1;
 const PACKAGE_LAYOUT: &str = "burn_native_component_package";
-const CONVERTER_VERSION: &str = "burn-sdxl-package-15d6-v1";
+const CONVERTER_VERSION: &str = "burn-sdxl-package-15f-v1";
 const FINGERPRINT_KIND_SUPPLIED: &str = "supplied";
 const FINGERPRINT_KIND_STAT: &str = "stat-v1";
 const PORTABLE_PACKAGE_ROOT: &str = ".";
@@ -582,6 +582,24 @@ mod tests {
         write_source_file(
             &root.join("vae/model.safetensors"),
             &[
+                ("decoder.conv_in.weight", vec![4, 4, 3, 3]),
+                ("decoder.conv_in.bias", vec![4]),
+                ("decoder.residual_blocks.0.norm_1.weight", vec![4]),
+                ("decoder.residual_blocks.0.norm_1.bias", vec![4]),
+                ("decoder.residual_blocks.0.conv_1.weight", vec![4, 4, 3, 3]),
+                ("decoder.residual_blocks.0.conv_1.bias", vec![4]),
+                ("decoder.residual_blocks.0.norm_2.weight", vec![4]),
+                ("decoder.residual_blocks.0.norm_2.bias", vec![4]),
+                ("decoder.residual_blocks.0.conv_2.weight", vec![4, 4, 3, 3]),
+                ("decoder.residual_blocks.0.conv_2.bias", vec![4]),
+                ("decoder.residual_blocks.1.norm_1.weight", vec![4]),
+                ("decoder.residual_blocks.1.norm_1.bias", vec![4]),
+                ("decoder.residual_blocks.1.conv_1.weight", vec![4, 4, 3, 3]),
+                ("decoder.residual_blocks.1.conv_1.bias", vec![4]),
+                ("decoder.residual_blocks.1.norm_2.weight", vec![4]),
+                ("decoder.residual_blocks.1.norm_2.bias", vec![4]),
+                ("decoder.residual_blocks.1.conv_2.weight", vec![4, 4, 3, 3]),
+                ("decoder.residual_blocks.1.conv_2.bias", vec![4]),
                 ("decoder.conv_out.weight", vec![1, 1, 1, 1]),
                 ("decoder.conv_out.bias", vec![1]),
             ],
@@ -740,12 +758,12 @@ mod tests {
             report_from_disk.source_layout,
             "diffusers_style_split_safetensors"
         );
-        assert_eq!(report_from_disk.mapped_tensor_count, 28);
+        assert_eq!(report_from_disk.mapped_tensor_count, 46);
 
         let package = report_from_disk.package.expect("package report");
         assert_eq!(package.schema_version, 1);
         assert_eq!(package.layout, "burn_native_component_package");
-        assert_eq!(package.converter_version, "burn-sdxl-package-15d6-v1");
+        assert_eq!(package.converter_version, "burn-sdxl-package-15f-v1");
         assert!(package.created_at.is_some());
         assert_eq!(package.package_root, ".");
         assert_eq!(package.source.source_model_id, "sdxl-base-1.0");

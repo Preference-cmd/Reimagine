@@ -189,6 +189,13 @@ impl BurnLoadedSdxlBundle {
             .is_some_and(BurnLoadedSdxlComponent::is_tiny_sdxl_e2e_fixture)
     }
 
+    pub(crate) fn uses_tiny_sdxl_e2e_vae_profile(&self) -> bool {
+        self.components
+            .iter()
+            .find(|c| c.component_role == BurnSdxlComponentRole::Vae)
+            .is_some_and(BurnLoadedSdxlComponent::is_tiny_sdxl_e2e_fixture)
+    }
+
     /// Test-only constructor that builds a minimal bundle for
     /// the cross-run cache without going through the file-system
     /// resolver. Real production code must use

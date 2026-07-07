@@ -92,6 +92,72 @@ const DIFFUSION_MAPPINGS: &[TensorMapping] = &[
     TensorMapping::new("model.diffusion.out.0.bias", "conv_out.bias"),
 ];
 const VAE_MAPPINGS: &[TensorMapping] = &[
+    TensorMapping::new("decoder.conv_in.weight", "latent_projection.weight"),
+    TensorMapping::new("decoder.conv_in.bias", "latent_projection.bias"),
+    TensorMapping::new(
+        "decoder.residual_blocks.0.norm_1.weight",
+        "residual_blocks.0.norm_1.gamma",
+    ),
+    TensorMapping::new(
+        "decoder.residual_blocks.0.norm_1.bias",
+        "residual_blocks.0.norm_1.beta",
+    ),
+    TensorMapping::new(
+        "decoder.residual_blocks.0.conv_1.weight",
+        "residual_blocks.0.conv_1.weight",
+    ),
+    TensorMapping::new(
+        "decoder.residual_blocks.0.conv_1.bias",
+        "residual_blocks.0.conv_1.bias",
+    ),
+    TensorMapping::new(
+        "decoder.residual_blocks.0.norm_2.weight",
+        "residual_blocks.0.norm_2.gamma",
+    ),
+    TensorMapping::new(
+        "decoder.residual_blocks.0.norm_2.bias",
+        "residual_blocks.0.norm_2.beta",
+    ),
+    TensorMapping::new(
+        "decoder.residual_blocks.0.conv_2.weight",
+        "residual_blocks.0.conv_2.weight",
+    ),
+    TensorMapping::new(
+        "decoder.residual_blocks.0.conv_2.bias",
+        "residual_blocks.0.conv_2.bias",
+    ),
+    TensorMapping::new(
+        "decoder.residual_blocks.1.norm_1.weight",
+        "residual_blocks.1.norm_1.gamma",
+    ),
+    TensorMapping::new(
+        "decoder.residual_blocks.1.norm_1.bias",
+        "residual_blocks.1.norm_1.beta",
+    ),
+    TensorMapping::new(
+        "decoder.residual_blocks.1.conv_1.weight",
+        "residual_blocks.1.conv_1.weight",
+    ),
+    TensorMapping::new(
+        "decoder.residual_blocks.1.conv_1.bias",
+        "residual_blocks.1.conv_1.bias",
+    ),
+    TensorMapping::new(
+        "decoder.residual_blocks.1.norm_2.weight",
+        "residual_blocks.1.norm_2.gamma",
+    ),
+    TensorMapping::new(
+        "decoder.residual_blocks.1.norm_2.bias",
+        "residual_blocks.1.norm_2.beta",
+    ),
+    TensorMapping::new(
+        "decoder.residual_blocks.1.conv_2.weight",
+        "residual_blocks.1.conv_2.weight",
+    ),
+    TensorMapping::new(
+        "decoder.residual_blocks.1.conv_2.bias",
+        "residual_blocks.1.conv_2.bias",
+    ),
     TensorMapping::new("decoder.conv_out.weight", "conv_out.weight"),
     TensorMapping::new("decoder.conv_out.bias", "conv_out.bias"),
 ];
@@ -388,6 +454,24 @@ pub(crate) mod tests {
         write_source_file(
             &root.join("vae/model.safetensors"),
             &[
+                ("decoder.conv_in.weight", vec![4, 4, 3, 3]),
+                ("decoder.conv_in.bias", vec![4]),
+                ("decoder.residual_blocks.0.norm_1.weight", vec![4]),
+                ("decoder.residual_blocks.0.norm_1.bias", vec![4]),
+                ("decoder.residual_blocks.0.conv_1.weight", vec![4, 4, 3, 3]),
+                ("decoder.residual_blocks.0.conv_1.bias", vec![4]),
+                ("decoder.residual_blocks.0.norm_2.weight", vec![4]),
+                ("decoder.residual_blocks.0.norm_2.bias", vec![4]),
+                ("decoder.residual_blocks.0.conv_2.weight", vec![4, 4, 3, 3]),
+                ("decoder.residual_blocks.0.conv_2.bias", vec![4]),
+                ("decoder.residual_blocks.1.norm_1.weight", vec![4]),
+                ("decoder.residual_blocks.1.norm_1.bias", vec![4]),
+                ("decoder.residual_blocks.1.conv_1.weight", vec![4, 4, 3, 3]),
+                ("decoder.residual_blocks.1.conv_1.bias", vec![4]),
+                ("decoder.residual_blocks.1.norm_2.weight", vec![4]),
+                ("decoder.residual_blocks.1.norm_2.bias", vec![4]),
+                ("decoder.residual_blocks.1.conv_2.weight", vec![4, 4, 3, 3]),
+                ("decoder.residual_blocks.1.conv_2.bias", vec![4]),
                 ("decoder.conv_out.weight", vec![1, 1, 1, 1]),
                 ("decoder.conv_out.bias", vec![1]),
             ],
@@ -517,7 +601,7 @@ pub(crate) mod tests {
 
         assert_eq!(report.source_layout, "diffusers_style_split_safetensors");
         assert_eq!(report.output_components.len(), 4);
-        assert_eq!(report.mapped_tensor_count, 28);
+        assert_eq!(report.mapped_tensor_count, 46);
         assert!(report.diagnostics.is_empty());
         let report_json = fs::read_to_string(output.path().join("conversion-report.json"))
             .expect("conversion report");
@@ -533,7 +617,14 @@ pub(crate) mod tests {
                 validate_component_inventory(&inspected.metadata, &inspected.inventory)
                     .expect("mapped output validates");
             assert_eq!(validation.component_role, role);
-            assert_eq!(validation.matched_required_tensors.len(), 2);
+            let expected_matched_required_tensors = match role {
+                BurnSdxlComponentRole::Vae => 20,
+                _ => 2,
+            };
+            assert_eq!(
+                validation.matched_required_tensors.len(),
+                expected_matched_required_tensors
+            );
             assert!(
                 inspected
                     .inventory
@@ -601,10 +692,19 @@ pub(crate) mod tests {
             .map(|entry| entry.key.as_str())
             .collect::<std::collections::BTreeSet<_>>();
 
-        for expected in ["conv_out.weight", "conv_out.bias"] {
+        for expected in [
+            "latent_projection.weight",
+            "latent_projection.bias",
+            "residual_blocks.0.conv_1.weight",
+            "residual_blocks.1.conv_2.weight",
+            "conv_out.weight",
+            "conv_out.bias",
+        ] {
             assert!(keys.contains(expected), "missing mapped key `{expected}`");
         }
         for source_style in [
+            "decoder.conv_in.weight",
+            "decoder.residual_blocks.0.conv_1.weight",
             "model.vae.decoder.conv_out.weight",
             "model.vae.decoder.conv_out.bias",
             "model.vae.encoder.conv_in.weight",

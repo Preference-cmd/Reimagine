@@ -1,6 +1,6 @@
 use std::collections::{BTreeMap, BTreeSet};
 
-use super::component::{BurnSdxlComponentRole, BurnTensorInventoryEntry};
+use super::component::{BurnSdxlComponentRole, BurnTensorInventoryEntry, BurnTensorShapeSpec};
 use super::contract::{
     BACKEND_NAME, BurnSdxlComponentContract, CONTRACT_NAME, MODEL_SERIES, TENSOR_LAYOUT, VARIANT,
 };
@@ -215,10 +215,26 @@ fn tiny_sdxl_fixture_specs(
         BurnSdxlComponentRole::TextEncoder2 => {
             crate::text_encoder::specs::TextEncoderSpecSetBuilder::tiny_sdxl_open_clip_g().specs
         }
-        BurnSdxlComponentRole::Diffusion | BurnSdxlComponentRole::Vae => {
-            contract.all_expected_tensor_specs()
-        }
+        BurnSdxlComponentRole::Vae => tiny_sdxl_vae_specs(),
+        BurnSdxlComponentRole::Diffusion => contract.all_expected_tensor_specs(),
     }
+}
+
+fn tiny_sdxl_vae_specs() -> Vec<OwnedTensorSpec> {
+    vec![
+        OwnedTensorSpec {
+            key: "conv_out.weight".to_owned(),
+            shape: BurnTensorShapeSpec::Rank(4),
+            required: true,
+            notes: "tiny fixture decoder output convolution weight".to_owned(),
+        },
+        OwnedTensorSpec {
+            key: "conv_out.bias".to_owned(),
+            shape: BurnTensorShapeSpec::Rank(1),
+            required: true,
+            notes: "tiny fixture decoder output convolution bias".to_owned(),
+        },
+    ]
 }
 
 fn validate_metadata_values(metadata: &BurnComponentMetadata) -> Result<(), BurnSdxlContractError> {

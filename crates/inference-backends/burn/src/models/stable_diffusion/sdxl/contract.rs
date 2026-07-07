@@ -129,11 +129,97 @@ const DIFFUSION_SPECS: &[BurnTensorSpec] = &[
 
 const VAE_SPECS: &[BurnTensorSpec] = &[
     BurnTensorSpec::required_rank(
-        "conv_out.weight",
+        "latent_projection.weight",
         4,
-        "representative decoder output convolution weight",
+        "decoder latent projection weight",
     ),
-    BurnTensorSpec::required_rank("conv_out.bias", 1, "representative decoder output bias"),
+    BurnTensorSpec::required_rank(
+        "latent_projection.bias",
+        1,
+        "decoder latent projection bias",
+    ),
+    BurnTensorSpec::required_rank(
+        "residual_blocks.0.norm_1.gamma",
+        1,
+        "decoder first residual norm gamma",
+    ),
+    BurnTensorSpec::required_rank(
+        "residual_blocks.0.norm_1.beta",
+        1,
+        "decoder first residual norm beta",
+    ),
+    BurnTensorSpec::required_rank(
+        "residual_blocks.0.conv_1.weight",
+        4,
+        "decoder first residual conv_1 weight",
+    ),
+    BurnTensorSpec::required_rank(
+        "residual_blocks.0.conv_1.bias",
+        1,
+        "decoder first residual conv_1 bias",
+    ),
+    BurnTensorSpec::required_rank(
+        "residual_blocks.0.norm_2.gamma",
+        1,
+        "decoder first residual norm_2 gamma",
+    ),
+    BurnTensorSpec::required_rank(
+        "residual_blocks.0.norm_2.beta",
+        1,
+        "decoder first residual norm_2 beta",
+    ),
+    BurnTensorSpec::required_rank(
+        "residual_blocks.0.conv_2.weight",
+        4,
+        "decoder first residual conv_2 weight",
+    ),
+    BurnTensorSpec::required_rank(
+        "residual_blocks.0.conv_2.bias",
+        1,
+        "decoder first residual conv_2 bias",
+    ),
+    BurnTensorSpec::required_rank(
+        "residual_blocks.1.norm_1.gamma",
+        1,
+        "decoder second residual norm gamma",
+    ),
+    BurnTensorSpec::required_rank(
+        "residual_blocks.1.norm_1.beta",
+        1,
+        "decoder second residual norm beta",
+    ),
+    BurnTensorSpec::required_rank(
+        "residual_blocks.1.conv_1.weight",
+        4,
+        "decoder second residual conv_1 weight",
+    ),
+    BurnTensorSpec::required_rank(
+        "residual_blocks.1.conv_1.bias",
+        1,
+        "decoder second residual conv_1 bias",
+    ),
+    BurnTensorSpec::required_rank(
+        "residual_blocks.1.norm_2.gamma",
+        1,
+        "decoder second residual norm_2 gamma",
+    ),
+    BurnTensorSpec::required_rank(
+        "residual_blocks.1.norm_2.beta",
+        1,
+        "decoder second residual norm_2 beta",
+    ),
+    BurnTensorSpec::required_rank(
+        "residual_blocks.1.conv_2.weight",
+        4,
+        "decoder second residual conv_2 weight",
+    ),
+    BurnTensorSpec::required_rank(
+        "residual_blocks.1.conv_2.bias",
+        1,
+        "decoder second residual conv_2 bias",
+    ),
+    BurnTensorSpec::required_rank("conv_out.weight", 4, "decoder output convolution weight"),
+    BurnTensorSpec::required_rank("conv_out.bias", 1, "decoder output bias"),
 ];
 
 const TEXT_ENCODER_SPECS: &[BurnTensorSpec] = &[
