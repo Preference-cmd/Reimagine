@@ -35,7 +35,7 @@ Current policy:
 
 | Issue | Status | Notes |
 | --- | --- | --- |
-| [15g: Burn real SDXL package smoke to image artifact](inference-backends/burn/issues/15g-burn-real-sdxl-package-smoke-to-image.md) | ready-for-agent | Prove the public Burn chain can produce an image artifact from a converted real SDXL package now that full-profile UNet and VAE topology tranches are in place. |
+| [15g: Burn real SDXL package smoke to image artifact](inference-backends/burn/issues/15g-burn-real-sdxl-package-smoke-to-image.md) | in-progress | CI-safe opt-in smoke harness is being added; actual real-package run still requires `REIMAGINE_BURN_REAL_SDXL_PACKAGE` pointing at a converted 15f package. |
 
 ### Next
 
