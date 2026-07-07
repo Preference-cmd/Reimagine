@@ -21,6 +21,7 @@ mod agent;
 mod artifacts;
 mod compute_profile;
 mod health;
+pub mod model_acquisition;
 mod models;
 mod nodes;
 mod runs;
@@ -36,6 +37,7 @@ pub use compute_profile::{
     DeviceProfileDto, MemoryProfileDto,
 };
 pub use health::HealthResponse;
+pub use model_acquisition::{FileEntryDto, ModelDownloadInput, ModelDownloadOutput};
 pub use models::ModelInfoDto;
 pub use nodes::{NodeCatalogResponse, NodeDefDto, ParamSpecDto, SocketSpecDto};
 pub use reimagine_core::command::{CommandResult, CommandResultStatus};

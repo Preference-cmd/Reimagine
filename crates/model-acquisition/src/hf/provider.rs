@@ -46,15 +46,19 @@ impl HuggingFaceProvider {
     }
 
     /// Download a HuggingFace model according to the request.
+    ///
+    /// Takes ownership of `self`, `base_models_dir`, and `request` so the
+    /// returned future is unconditionally `Send` (no borrowed references
+    /// captured across `.await` points).
     pub async fn download(
-        &self,
-        base_models_dir: &std::path::Path,
-        request: &ModelAcquisitionRequest,
+        self,
+        base_models_dir: std::path::PathBuf,
+        request: ModelAcquisitionRequest,
         sink: Option<Arc<dyn AcquisitionProgressSink>>,
     ) -> ModelAcquisitionResult<AcquisitionReport> {
         let target_dir = base_models_dir.join(request.target_relative_dir.as_path());
         let stg_dir = staging_dir(
-            base_models_dir,
+            &base_models_dir,
             &request.provider,
             &request.repo_id,
             &request.revision,
@@ -143,7 +147,7 @@ impl HuggingFaceProvider {
         }
 
         report
-            .write(target_dir.parent().unwrap_or(base_models_dir))
+            .write(target_dir.parent().unwrap_or(&base_models_dir))
             .await?;
 
         if let Some(s) = sink {

@@ -6383,12 +6383,14 @@ name = "reimagine-app-host"
 version = "0.1.0"
 dependencies = [
  "async-trait",
+ "hf-hub",
  "reimagine-agent",
  "reimagine-config",
  "reimagine-core",
  "reimagine-inference",
  "reimagine-inference-burn",
  "reimagine-inference-candle",
+ "reimagine-model-acquisition",
  "reimagine-model-manager",
  "reimagine-nodes",
  "reimagine-plugin",

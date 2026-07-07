@@ -45,6 +45,7 @@ pub enum AppHostError {
     BootstrapConfig(ConfigError),
     Runtime(RuntimeServiceError),
     ModelManager(reimagine_model_manager::ModelManagerError),
+    ModelAcquisition(reimagine_model_acquisition::ModelAcquisitionError),
     CandleCheckpointImport(reimagine_inference_candle::SdxlCheckpointImportError),
     ArtifactAccess(ArtifactAccessError),
 }
@@ -90,6 +91,13 @@ impl std::fmt::Display for AppHostError {
             Self::BootstrapConfig(error) => write!(f, "config bootstrap failed: {error}"),
             Self::Runtime(error) => write!(f, "{error}"),
             Self::ModelManager(error) => write!(f, "{error}"),
+            Self::ModelAcquisition(error) => {
+                write!(
+                    f,
+                    "{}",
+                    reimagine_core::diagnostic::DiagnosticError::user_message(error)
+                )
+            }
             Self::CandleCheckpointImport(error) => write!(f, "{error}"),
             Self::ArtifactAccess(error) => write!(f, "artifact access error: {error}"),
         }
@@ -97,6 +105,12 @@ impl std::fmt::Display for AppHostError {
 }
 
 impl std::error::Error for AppHostError {}
+
+impl From<reimagine_model_acquisition::ModelAcquisitionError> for AppHostError {
+    fn from(value: reimagine_model_acquisition::ModelAcquisitionError) -> Self {
+        Self::ModelAcquisition(value)
+    }
+}
 
 impl From<reimagine_model_manager::ModelManagerError> for AppHostError {
     fn from(value: reimagine_model_manager::ModelManagerError) -> Self {

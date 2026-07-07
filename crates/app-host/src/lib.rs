@@ -14,6 +14,7 @@ pub mod dto;
 mod error;
 mod inference;
 mod inference_backend;
+mod model_acquisition_service;
 mod model_service;
 mod node_catalog;
 mod policy;
@@ -34,6 +35,7 @@ pub use artifact_access::{
 };
 pub use error::{AppHostError, AppHostResult};
 pub use inference_backend::BackendSelection;
+pub use model_acquisition_service::ModelAcquisitionService;
 pub use model_service::ModelService;
 pub use node_catalog::{NodeCatalogAlignment, NodeCatalogService};
 pub use policy::WorkflowCommandPolicy;

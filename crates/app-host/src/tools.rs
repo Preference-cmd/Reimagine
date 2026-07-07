@@ -13,6 +13,7 @@ use reimagine_core::command::{
 use reimagine_core::model::{ProposalId, WorkflowId};
 
 use crate::AppHostError;
+use crate::dto::model_acquisition::{ModelDownloadInput, ModelDownloadOutput};
 use crate::policy::WorkflowCommandPolicy;
 use crate::proposal::{ProposalReceipt, ProposalStatus};
 use crate::services::WorkspaceServices;
@@ -110,6 +111,18 @@ pub fn register_app_tools(registry: &mut AgentToolRegistry, services: Arc<Worksp
             ToolRiskLevel::Read,
         ),
         diagnostics_for_workflow,
+    );
+    register_workspace_tool(
+        registry,
+        services,
+        WorkspaceToolSpec::new(
+            "model.download",
+            "Download a HuggingFace model into the workspace models directory.",
+            &[AgentMode::Agent, AgentMode::Build],
+            "model.write",
+            ToolRiskLevel::Editor,
+        ),
+        model_download,
     );
 }
 
@@ -509,4 +522,69 @@ fn policy_rejection_diagnostic(
         DiagnosticTarget::new(DiagnosticTargetDomain::new("agent.tool"))
             .with_id("workflow.apply_commands"),
     )
+}
+
+// ------------------------------------------------------------------
+// model.download
+// ------------------------------------------------------------------
+
+async fn model_download(
+    services: Arc<WorkspaceServices>,
+    _ctx: ToolContext,
+    input: ModelDownloadInput,
+) -> ToolResult<ModelDownloadOutput> {
+    use reimagine_model_acquisition::{
+        AcquireProvider, AllowPatterns, ModelAcquisitionRequest, OverwritePolicy, RepoId, Revision,
+        TargetRelativeDir,
+    };
+
+    let repo_id = RepoId::new(&input.repo_id).ok_or_else(|| {
+        ToolError::new(
+            ToolErrorCode::InvalidInput,
+            format!(
+                "invalid repo_id `{}`: expected `namespace/name` format",
+                input.repo_id
+            ),
+        )
+        .with_tool(ToolName::new("model.download"))
+    })?;
+
+    let revision = input.revision.map(Revision::new).unwrap_or_default();
+
+    let allow_patterns = input
+        .allow_patterns
+        .map(AllowPatterns::new)
+        .unwrap_or_default();
+
+    let target_relative_dir =
+        TargetRelativeDir::new(input.target_relative_dir.into()).map_err(|e| {
+            ToolError::new(
+                ToolErrorCode::InvalidInput,
+                format!("invalid target_relative_dir: {e}"),
+            )
+            .with_tool(ToolName::new("model.download"))
+        })?;
+
+    let overwrite_policy = match input.overwrite.as_deref() {
+        Some("overwrite") => OverwritePolicy::Overwrite,
+        Some("fail") => OverwritePolicy::Fail,
+        _ => OverwritePolicy::Skip,
+    };
+
+    let request = ModelAcquisitionRequest {
+        provider: AcquireProvider::HuggingFace,
+        repo_id,
+        revision,
+        allow_patterns,
+        target_relative_dir,
+        overwrite_policy,
+    };
+
+    let acq = Arc::clone(services.model_acquisition_service());
+    let report = acq
+        .acquire(request, None)
+        .await
+        .map_err(|e| tool_error_from_app_host(e, "model.download"))?;
+
+    Ok(ModelDownloadOutput::from(report))
 }

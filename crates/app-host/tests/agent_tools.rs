@@ -101,7 +101,8 @@ fn workspace_host_registers_all_v1_tools() {
     assert!(names.contains(&"model.list".to_owned()));
     assert!(names.contains(&"model.resolve_ref".to_owned()));
     assert!(names.contains(&"diagnostics.for_workflow".to_owned()));
-    assert_eq!(names.len(), 7);
+    assert!(names.contains(&"model.download".to_owned()));
+    assert_eq!(names.len(), 8);
 
     for spec in registry.list() {
         assert!(

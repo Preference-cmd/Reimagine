@@ -15,6 +15,7 @@ reimagine-core = { path = "../core" }
 reimagine-inference = { path = "../inference" }
 reimagine-inference-burn = { path = "../inference-backends/burn" }
 reimagine-inference-candle = { path = "../inference-backends/candle" }
+reimagine-model-acquisition = { path = "../model-acquisition" }
 reimagine-model-manager = { path = "../model-manager" }
 reimagine-nodes = { path = "../nodes" }
 reimagine-plugin = { path = "../plugin" }
@@ -22,6 +23,7 @@ reimagine-runtime = { path = "../runtime" }
 serde = { workspace = true }
 serde_json = { workspace = true }
 tokio = { workspace = true, features = ["fs", "io-util"] }
+hf-hub = { workspace = true }
 
 [dev-dependencies]
 tokio = { workspace = true, features = ["macros", "rt", "rt-multi-thread"] }

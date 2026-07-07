@@ -5,9 +5,7 @@
 //! backend-internal types and private fields so frontends never see
 //! agent-crate internals.
 
-use reimagine_agent::{
-    AgentEvent, AgentSession, AgentTurnResult, Message, ToolCallResult, Usage,
-};
+use reimagine_agent::{AgentEvent, AgentSession, AgentTurnResult, Message, ToolCallResult, Usage};
 use serde::{Deserialize, Serialize};
 
 use super::runs::DiagnosticDto;
@@ -40,8 +38,14 @@ impl From<AgentTurnResult> for AgentTurnResponse {
             model: value.model().to_string(),
             status: format!("{:?}", value.status()),
             stop_reason: format!("{:?}", value.stop_reason()),
-            final_response: value.final_response().map(|m| AgentMessageDto::from(m.clone())),
-            tool_calls: value.tool_calls().iter().map(|tc| tc.clone().into()).collect(),
+            final_response: value
+                .final_response()
+                .map(|m| AgentMessageDto::from(m.clone())),
+            tool_calls: value
+                .tool_calls()
+                .iter()
+                .map(|tc| tc.clone().into())
+                .collect(),
             diagnostics: value
                 .diagnostics()
                 .iter()
@@ -115,7 +119,11 @@ pub struct AgentEventPayload {
 impl From<&AgentEvent> for AgentEventPayload {
     fn from(event: &AgentEvent) -> Self {
         match event {
-            AgentEvent::SessionStarted { session_id, provider, mode } => Self {
+            AgentEvent::SessionStarted {
+                session_id,
+                provider,
+                mode,
+            } => Self {
                 session_id: session_id.to_string(),
                 kind: "session_started".to_string(),
                 tool_name: None,
@@ -131,7 +139,11 @@ impl From<&AgentEvent> for AgentEventPayload {
                 code: None,
                 message: Some(reason.clone()),
             },
-            AgentEvent::ToolInvoked { session_id, tool, id } => Self {
+            AgentEvent::ToolInvoked {
+                session_id,
+                tool,
+                id,
+            } => Self {
                 session_id: session_id.to_string(),
                 kind: "tool_invoked".to_string(),
                 tool_name: Some(tool.to_string()),
@@ -139,7 +151,11 @@ impl From<&AgentEvent> for AgentEventPayload {
                 code: None,
                 message: None,
             },
-            AgentEvent::ToolCompleted { session_id, tool, id } => Self {
+            AgentEvent::ToolCompleted {
+                session_id,
+                tool,
+                id,
+            } => Self {
                 session_id: session_id.to_string(),
                 kind: "tool_completed".to_string(),
                 tool_name: Some(tool.to_string()),
@@ -147,7 +163,13 @@ impl From<&AgentEvent> for AgentEventPayload {
                 code: None,
                 message: None,
             },
-            AgentEvent::ToolFailed { session_id, tool, id, code, message } => Self {
+            AgentEvent::ToolFailed {
+                session_id,
+                tool,
+                id,
+                code,
+                message,
+            } => Self {
                 session_id: session_id.to_string(),
                 kind: "tool_failed".to_string(),
                 tool_name: Some(tool.to_string()),
@@ -155,7 +177,12 @@ impl From<&AgentEvent> for AgentEventPayload {
                 code: Some(format!("{:?}", code)),
                 message: Some(message.clone()),
             },
-            AgentEvent::ProviderError { session_id, provider: _, code, message } => Self {
+            AgentEvent::ProviderError {
+                session_id,
+                provider: _,
+                code,
+                message,
+            } => Self {
                 session_id: session_id.to_string(),
                 kind: "provider_error".to_string(),
                 tool_name: None,
@@ -163,7 +190,10 @@ impl From<&AgentEvent> for AgentEventPayload {
                 code: Some(code.clone()),
                 message: Some(message.clone()),
             },
-            AgentEvent::ProposalReady { session_id, proposal_id } => Self {
+            AgentEvent::ProposalReady {
+                session_id,
+                proposal_id,
+            } => Self {
                 session_id: session_id.to_string(),
                 kind: "proposal_ready".to_string(),
                 tool_name: None,

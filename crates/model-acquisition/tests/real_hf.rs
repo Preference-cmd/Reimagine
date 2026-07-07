@@ -75,7 +75,7 @@ async fn test_snapshot_download_small_model() {
     let sink: Option<Arc<dyn AcquisitionProgressSink>> = Some(Arc::new(TestSink));
 
     let report = provider
-        .download(tmp.path(), &request, sink)
+        .download(tmp.path().to_path_buf(), request, sink)
         .await
         .expect("snapshot download should succeed");
 
@@ -105,20 +105,21 @@ async fn test_snapshot_download_small_model() {
 #[ignore = "requires network access to HuggingFace Hub"]
 #[tokio::test]
 async fn test_overwrite_skips_existing() {
-    let config = ModelAcquisitionConfig::default();
-    let provider = HuggingFaceProvider::new(&config);
-
     let tmp = tempfile::tempdir().unwrap();
 
     // First download.
+    let config = ModelAcquisitionConfig::default();
     let request = tiny_model_request(OverwritePolicy::Skip);
-    let report1 = provider
-        .download(tmp.path(), &request, None)
+    HuggingFaceProvider::new(&config)
+        .download(tmp.path().to_path_buf(), request, None)
         .await
         .expect("first download should succeed");
 
     // Second download — with Skip policy, if target exists it should fail.
-    let result = provider.download(tmp.path(), &request, None).await;
+    let request2 = tiny_model_request(OverwritePolicy::Skip);
+    let result = HuggingFaceProvider::new(&config)
+        .download(tmp.path().to_path_buf(), request2, None)
+        .await;
 
     // The TargetExists error is expected.
     assert!(
@@ -130,22 +131,20 @@ async fn test_overwrite_skips_existing() {
 #[ignore = "requires network access to HuggingFace Hub"]
 #[tokio::test]
 async fn test_overwrite_replaces() {
-    let config = ModelAcquisitionConfig::default();
-    let provider = HuggingFaceProvider::new(&config);
-
     let tmp = tempfile::tempdir().unwrap();
 
     // First download with Overwrite policy.
+    let config = ModelAcquisitionConfig::default();
     let request1 = tiny_model_request(OverwritePolicy::Overwrite);
-    provider
-        .download(tmp.path(), &request1, None)
+    HuggingFaceProvider::new(&config)
+        .download(tmp.path().to_path_buf(), request1, None)
         .await
         .expect("first download should succeed");
 
     // Second download — overwrite should succeed.
     let request2 = tokenizer_request();
-    let report2 = provider
-        .download(tmp.path(), &request2, None)
+    HuggingFaceProvider::new(&config)
+        .download(tmp.path().to_path_buf(), request2, None)
         .await
         .expect("overwrite download should succeed");
 
@@ -179,7 +178,7 @@ async fn test_download_with_revision() {
     };
 
     let report = provider
-        .download(tmp.path(), &request, None)
+        .download(tmp.path().to_path_buf(), request, None)
         .await
         .expect("download with explicit revision should succeed");
 

@@ -4,6 +4,7 @@ use reimagine_agent::WorkspaceScope;
 use reimagine_config::AppConfig;
 use reimagine_runtime::RuntimeService;
 
+use crate::model_acquisition_service::ModelAcquisitionService;
 use crate::node_catalog::NodeCatalogService;
 use crate::{ModelService, WorkflowService};
 
@@ -18,6 +19,7 @@ pub struct WorkspaceServices {
     config: Arc<AppConfig>,
     workflow_service: Arc<WorkflowService>,
     model_service: Arc<ModelService>,
+    model_acquisition_service: Arc<ModelAcquisitionService>,
     runtime_service: Arc<RuntimeService>,
     node_catalog: Arc<NodeCatalogService>,
 }
@@ -28,6 +30,7 @@ impl WorkspaceServices {
         config: Arc<AppConfig>,
         workflow_service: Arc<WorkflowService>,
         model_service: Arc<ModelService>,
+        model_acquisition_service: Arc<ModelAcquisitionService>,
         runtime_service: Arc<RuntimeService>,
         node_catalog: Arc<NodeCatalogService>,
     ) -> Self {
@@ -36,6 +39,7 @@ impl WorkspaceServices {
             config,
             workflow_service,
             model_service,
+            model_acquisition_service,
             runtime_service,
             node_catalog,
         }
@@ -55,6 +59,10 @@ impl WorkspaceServices {
 
     pub fn model_service(&self) -> &Arc<ModelService> {
         &self.model_service
+    }
+
+    pub fn model_acquisition_service(&self) -> &Arc<ModelAcquisitionService> {
+        &self.model_acquisition_service
     }
 
     pub fn runtime_service(&self) -> &Arc<RuntimeService> {

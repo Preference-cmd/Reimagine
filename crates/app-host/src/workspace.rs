@@ -12,6 +12,7 @@ use crate::inference::compose::bootstrap_inference;
 #[cfg(test)]
 use crate::inference::compose::compose_inference_runtime;
 use crate::inference::selection::resolved_candle_device_label;
+use crate::model_acquisition_service::ModelAcquisitionService;
 use crate::node_catalog::{NodeCatalogAlignment, NodeCatalogService};
 use crate::services::WorkspaceServices;
 use crate::tools::register_app_tools;
@@ -56,6 +57,10 @@ impl WorkspaceHost {
             Arc::clone(&config),
             Arc::clone(&workflow_service),
             Arc::clone(&model_service),
+            Arc::new(ModelAcquisitionService::new(
+                config.paths().clone(),
+                &config,
+            )),
             Arc::clone(&runtime_service),
             Arc::clone(&node_catalog),
         ));
@@ -227,10 +232,7 @@ impl WorkspaceHost {
         host
     }
 
-    pub fn with_agent_event_sink(
-        self,
-        event_sink: Arc<dyn AgentEventSink>,
-    ) -> Self {
+    pub fn with_agent_event_sink(self, event_sink: Arc<dyn AgentEventSink>) -> Self {
         let registry = self.agent_service.registry().clone();
         let providers = self.agent_service.providers().clone();
         let agent_service = Arc::new(AgentService::with_registry_providers_and_sink(
@@ -239,7 +241,10 @@ impl WorkspaceHost {
             providers,
             event_sink,
         ));
-        Self { agent_service, ..self }
+        Self {
+            agent_service,
+            ..self
+        }
     }
 
     pub fn workspace_scope(&self) -> &WorkspaceScope {
