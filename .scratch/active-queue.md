@@ -33,9 +33,7 @@ Current policy:
 
 ### Now
 
-| Issue | Status | Notes |
-| --- | --- | --- |
-| [15d8: Burn WGPU/Flex performance envelope](inference-backends/burn/issues/15d8-burn-wgpu-flex-performance-envelope.md) | ready-for-agent | Performance/evidence lane unlocked by 15d2; keep separate from correctness/fidelity implementation work. |
+(empty)
 
 ### Next
 
@@ -53,6 +51,7 @@ Current policy:
 
 | Issue | Status | Notes |
 | --- | --- | --- |
+| [15d8: Burn WGPU/Flex performance envelope](inference-backends/burn/issues/15d8-burn-wgpu-flex-performance-envelope.md) | done | Landed on main (`654d4bc`); adds deterministic Burn performance envelope probes for WGPU/Flex, scenario catalog, store/cache byte/count observations, and repeated model.load_bundle cache reuse coverage without threshold-based timing. |
 | [15d7: Burn sampler fidelity audit](inference-backends/burn/issues/15d7-burn-sampler-fidelity-audit.md) | done | Added sampler-to-UNet forward evidence for scheduler timestep, CFG branch order, and branch-specific conditioning shapes; full-topology numeric parity split to 15d9. |
 | [15d6: Burn VAE decoder topology and key-space](inference-backends/burn/issues/15d6-burn-vae-decoder-topology-and-keyspace.md) | done | First VAE key-space tranche landed: converted VAE packages now use `conv_out.*` Burn Module snapshot names, stale package reuse is blocked by converter-version bump, dead VAE raw weight buffers are removed, and full decoder residual/attention/upsample fidelity remains deferred. |
 | [15d5b: Burn UNet attention and stage fidelity tranche](inference-backends/burn/issues/15d5b-burn-unet-attention-stage-fidelity.md) | done | First down-block attention projection tranche landed: maps `attn1/attn2` source projection weights into Burn MHA/context snapshots, loader applies them through burn-store, and remaining attention/stage/topology families stay deferred. |
