@@ -129,15 +129,11 @@ const DIFFUSION_SPECS: &[BurnTensorSpec] = &[
 
 const VAE_SPECS: &[BurnTensorSpec] = &[
     BurnTensorSpec::required_rank(
-        "model.vae.encoder.conv_in.weight",
-        4,
-        "representative encoder input convolution weight",
-    ),
-    BurnTensorSpec::required_rank(
-        "model.vae.decoder.conv_out.weight",
+        "conv_out.weight",
         4,
         "representative decoder output convolution weight",
     ),
+    BurnTensorSpec::required_rank("conv_out.bias", 1, "representative decoder output bias"),
 ];
 
 const TEXT_ENCODER_SPECS: &[BurnTensorSpec] = &[
