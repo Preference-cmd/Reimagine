@@ -35,19 +35,20 @@ Current policy:
 
 | Issue | Status | Notes |
 | --- | --- | --- |
-| [15g: Burn real SDXL package smoke to image artifact](inference-backends/burn/issues/15g-burn-real-sdxl-package-smoke-to-image.md) | in-progress | CI-safe opt-in smoke harness can package a local `workspace/` split source and run the public chain through `load_bundle`, real CLIP text encode, and diffusion sampling. Current real smoke stops at `latent.decode`: the Burn VAE decoder Module still has scaffold channel shapes (`4 -> 4 -> 3`) while real SDXL VAE weights require the full decoder channel topology (`4 -> 512 -> ... -> 128 -> 3`). |
+| [15h: Burn align Module snapshot keys to diffusers](inference-backends/burn/issues/15h-burn-align-module-snapshot-keys-to-diffusers.md) | ready-for-agent | Align Burn `#[derive(Module)]` snapshot field names with diffusers/Candle target key space. Phases: 15h1 UNet rename, 15h2 VAE rename, 15h3 source_mapping simplification, 15h4 loading/contract/tests update. Unblocks 15g once done. |
 
 ### Next
 
 | Issue | Status | Notes |
 | --- | --- | --- |
-| [15d9: Burn full-topology sampler parity](inference-backends/burn/issues/15d9-burn-full-topology-sampler-parity.md) | blocked | Wait for 15e and 15g before claiming numeric sampler parity against a trusted reference. |
+| [15g: Burn real SDXL package smoke to image artifact](inference-backends/burn/issues/15g-burn-real-sdxl-package-smoke-to-image.md) | blocked | Waits for 15e, 15f, and 15h. Has two blockers: (1) VAE channel shape mismatch (scaffold `4→4→3` vs full-profile `4→512→…→128→3`), and (2) Burn Module key naming must align to diffusers before real-package smoke can be trusted. |
+| [15d9: Burn full-topology sampler parity](inference-backends/burn/issues/15d9-burn-full-topology-sampler-parity.md) | blocked | Wait for 15e, 15g, and 15h before claiming numeric sampler parity against a trusted reference. |
 
 ### Design Gates
 
 | Issue | Status | Notes |
 | --- | --- | --- |
-| [16a: Burn LoRA and training readiness design gate](inference-backends/burn/issues/16a-burn-lora-training-readiness-design-gate.md) | blocked | Wait for executable full UNet/VAE topology and real-package image smoke so adapter attachment points are stable. |
+| [16a: Burn LoRA and training readiness design gate](inference-backends/burn/issues/16a-burn-lora-training-readiness-design-gate.md) | blocked | Wait for 15e, 15g, and 15h — stable UNet/VAE Module naming is required before adapter attachment points are stable. |
 
 ### Recently Landed
 
@@ -73,7 +74,7 @@ Burn package import, but should not be folded into backend runtime work.
 
 | Issue | Status | Notes |
 | --- | --- | --- |
-| [MA-04: Axum IPC commands](model-acquisition/issues/MA-04-axum-ipc-commands.md) | ready-for-agent | Add Axum HTTP endpoint for model download (mirror of MA-03 Tauri command). |
+| (empty) — MA line complete | — | All sub-issues from parent [`01-huggingface-download-to-workspace`](model-acquisition/issues/01-huggingface-download-to-workspace.md) are landed. |
 
 ### Next
 
@@ -87,7 +88,8 @@ Burn package import, but should not be folded into backend runtime work.
 
 | Issue | Status | Notes |
 | --- | --- | --- |
-| [MA-03: Tauri IPC commands](model-acquisition/issues/MA-03-tauri-ipc-commands.md) | done | Landed on main. `download_huggingface_model` Tauri command with progress streaming via `TauriDownloadEventHub`, 67+30+12+21 tests passing. |
+| [MA-04: Axum IPC commands](model-acquisition/issues/MA-04-axum-ipc-commands.md) | done | Landed on main (`e4f2d3e`). `POST /models/download` Axum endpoint, `models.rs` handler with 400 validation + 200 response, `reimagine-model-acquisition` dep added to axum-host. |
+| [MA-03: Tauri IPC commands](model-acquisition/issues/MA-03-tauri-ipc-commands.md) | done | Landed on main (`fb08bc6`). `download_huggingface_model` Tauri command with progress streaming via `TauriDownloadEventHub`, 67+30+12+21 tests passing. |
 | [MA-02: app-host integration](model-acquisition/issues/MA-02-app-host-integration.md) | done | Landed on main (`3932b0b`). ModelAcquisitionService with config load/save, acquire() via spawn_blocking, model.download Agent tool, IPC DTO, 67+30 tests passing. |
 | [MA-01: model-acquisition crate](model-acquisition/issues/MA-01-model-acquisition-crate.md) | done | Landed on main (`659c762`). Backend-neutral model-acquisition library crate; wraps hf-hub, ConfigDocument (model_acquisition.json), staging/promote with atomic rename + backup rollback, path safety validation, AcquisitionReport JSON, progress sink trait. 30 unit tests passing, 4 #[ignore] integration tests. |
 
