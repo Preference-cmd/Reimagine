@@ -7,7 +7,7 @@ use burn_store::{
     ApplyResult, KeyRemapper, ModuleAdapter, ModuleSnapshot, ModuleStore, PyTorchToBurnAdapter,
     SafetensorsStore, TensorSnapshot,
 };
-use burn_tensor::{Shape, TensorData, backend::Backend};
+use burn_tensor::{DType, Shape, TensorData, backend::Backend};
 
 /// Build a burn-store loader for one SDXL CLIP component safetensors file.
 #[allow(dead_code)]
@@ -185,16 +185,11 @@ fn split_snapshot_2d(
     TensorSnapshot::from_closure(
         std::rc::Rc::new(move || {
             let data = data_snapshot.to_data()?;
-            let values = data.to_vec::<f32>().map_err(|err| {
-                burn_store::TensorSnapshotError::DataError(format!(
-                    "fused qkv weight must be f32: {err:?}"
-                ))
-            })?;
-            let start = row_offset * cols;
-            let end = start + row_count * cols;
-            Ok(TensorData::new(
-                values[start..end].to_vec(),
-                [row_count, cols],
+            let values = slice_tensor_data_rows(&data, row_offset, row_count, cols)?;
+            Ok(TensorData::from_bytes_vec(
+                values,
+                vec![row_count, cols],
+                data.dtype,
             ))
         }),
         dtype,
@@ -222,15 +217,8 @@ fn split_snapshot_1d(
     TensorSnapshot::from_closure(
         std::rc::Rc::new(move || {
             let data = data_snapshot.to_data()?;
-            let values = data.to_vec::<f32>().map_err(|err| {
-                burn_store::TensorSnapshotError::DataError(format!(
-                    "fused qkv bias must be f32: {err:?}"
-                ))
-            })?;
-            Ok(TensorData::new(
-                values[offset..offset + len].to_vec(),
-                [len],
-            ))
+            let values = slice_tensor_data_rows(&data, offset, len, 1)?;
+            Ok(TensorData::from_bytes_vec(values, vec![len], data.dtype))
         }),
         dtype,
         Shape::new([len]),
@@ -238,6 +226,53 @@ fn split_snapshot_1d(
         container_stack,
         tensor_id,
     )
+}
+
+#[allow(dead_code)]
+fn slice_tensor_data_rows(
+    data: &TensorData,
+    row_offset: usize,
+    row_count: usize,
+    cols: usize,
+) -> Result<Vec<u8>, burn_store::TensorSnapshotError> {
+    let element_size = dtype_size(data.dtype)?;
+    let row_size = cols.checked_mul(element_size).ok_or_else(|| {
+        burn_store::TensorSnapshotError::DataError("row byte size overflow".into())
+    })?;
+    let start = row_offset.checked_mul(row_size).ok_or_else(|| {
+        burn_store::TensorSnapshotError::DataError("row offset byte size overflow".into())
+    })?;
+    let len = row_count.checked_mul(row_size).ok_or_else(|| {
+        burn_store::TensorSnapshotError::DataError("row count byte size overflow".into())
+    })?;
+    let end = start.checked_add(len).ok_or_else(|| {
+        burn_store::TensorSnapshotError::DataError("row slice byte range overflow".into())
+    })?;
+    let bytes = data.as_bytes();
+    if end > bytes.len() {
+        return Err(burn_store::TensorSnapshotError::DataError(format!(
+            "row slice byte range {start}..{end} exceeds tensor byte length {}",
+            bytes.len()
+        )));
+    }
+    Ok(bytes[start..end].to_vec())
+}
+
+#[allow(dead_code)]
+fn dtype_size(dtype: DType) -> Result<usize, burn_store::TensorSnapshotError> {
+    match dtype {
+        DType::F64 => Ok(8),
+        DType::F32 => Ok(4),
+        DType::F16 | DType::BF16 => Ok(2),
+        DType::I64 | DType::U64 => Ok(8),
+        DType::I32 | DType::U32 => Ok(4),
+        DType::I16 | DType::U16 => Ok(2),
+        DType::I8 | DType::U8 => Ok(1),
+        DType::Bool(_) => Ok(1),
+        other => Err(burn_store::TensorSnapshotError::DataError(format!(
+            "unsupported fused qkv dtype {other:?}"
+        ))),
+    }
 }
 
 #[cfg(test)]
@@ -423,6 +458,25 @@ mod tests {
             &module.clip_l.blocks()[0].attention.output.weight,
             [201.0, 203.0, 202.0, 204.0],
         );
+    }
+
+    #[test]
+    fn fused_qkv_split_preserves_f16_tensor_bytes() {
+        let values = (0_u16..12_u16)
+            .flat_map(u16::to_le_bytes)
+            .collect::<Vec<_>>();
+        let data = TensorData::from_bytes_vec(values.clone(), vec![6, 2], burn_tensor::DType::F16);
+
+        let slice = super::slice_tensor_data_rows(&data, 2, 2, 2).expect("slice f16 rows");
+
+        assert_eq!(
+            slice,
+            values[2 * 2 * 2..4 * 2 * 2],
+            "row slice should preserve raw f16 bytes"
+        );
+        let tensor = TensorData::from_bytes_vec(slice, vec![2, 2], burn_tensor::DType::F16);
+        assert_eq!(tensor.dtype, burn_tensor::DType::F16);
+        assert_eq!(tensor.shape.dims(), [2, 2]);
     }
 
     struct SnapshotStore {

@@ -890,6 +890,11 @@ mod tests {
             &[1280usize],
         ));
         all_tensors.push((
+            "conditioner.embedders.1.model.text_projection",
+            vec![0.0f32; 1280 * 1280],
+            &[1280usize, 1280],
+        ));
+        all_tensors.push((
             "conditioner.embedders.1.model.transformer.resblocks.0.attn.in_proj_weight",
             vec![0.0f32; 3840 * 1280],
             &[3840usize, 1280],
@@ -956,10 +961,20 @@ mod tests {
         // For 2 layers with both in_proj_weight and in_proj_bias:
         // layer 0: 3 (weight) + 3 (bias) + out_proj.weight + out_proj.bias + ln_1.weight + ln_1.bias + mlp.c_fc.weight + mlp.c_proj.weight = 12
         // layer 10: 3 (weight) + out_proj.weight + ln_1.weight = 5
-        // top-level: token_embedding (1) + positional_embedding (1) + ln_final.weight (1) = 3
-        // Total ClipG = 12 + 5 + 3 = 20
-        assert_eq!(plan.tensor_count(SdxlConvertedComponent::ClipG), 20);
+        // top-level: token_embedding (1) + positional_embedding (1)
+        // + ln_final.weight (1) + text_projection.weight (1) = 4
+        // Total ClipG = 12 + 5 + 4 = 21
+        assert_eq!(plan.tensor_count(SdxlConvertedComponent::ClipG), 21);
         assert!(output.join("text_encoder_2/model.safetensors").is_file());
+        let clip_g = candle_core::safetensors::load(
+            output.join("text_encoder_2/model.safetensors"),
+            &Device::Cpu,
+        )
+        .unwrap();
+        assert!(
+            clip_g.contains_key("text_projection.weight"),
+            "OpenCLIP-G text_projection should be preserved for Burn packaging"
+        );
 
         let _ = fs::remove_dir_all(dir);
     }

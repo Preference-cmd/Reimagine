@@ -112,16 +112,6 @@ pub fn text_encoder_spec_set(profile: &ClipTextEncoderProfile) -> TextEncoderSpe
             "OpenCLIP-G text projection weight".into(),
         );
     }
-    if let Some(b) = keys.text_projection_bias() {
-        push_spec(
-            &mut specs,
-            b,
-            1,
-            profile.produces_pooled_output,
-            "OpenCLIP-G text projection bias".into(),
-        );
-    }
-
     // Per-layer block specs.
     for layer in 0..profile.num_layers {
         push_spec(
@@ -267,9 +257,22 @@ mod tests {
     fn open_clip_g_specs_include_text_projection() {
         let profile = ClipTextEncoderProfile::sdxl_open_clip_g();
         let specs = text_encoder_spec_set(&profile);
-        // 6 static specs (same 4 + text_projection weight+bias)
+        // 5 static specs (same 4 + text_projection weight). Real
+        // OpenCLIP-G SDXL checkpoints do not contain projection bias.
         // + 32 layers × 12 per-layer specs = 384
-        assert_eq!(specs.len(), 6 + 32 * 12);
+        assert_eq!(specs.len(), 5 + 32 * 12);
+        assert!(
+            specs
+                .specs
+                .iter()
+                .any(|spec| spec.key == "model.text_encoder_2.text_projection.weight")
+        );
+        assert!(
+            !specs
+                .specs
+                .iter()
+                .any(|spec| spec.key == "model.text_encoder_2.text_projection.bias")
+        );
     }
 
     #[test]

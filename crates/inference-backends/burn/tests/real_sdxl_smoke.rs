@@ -11,10 +11,14 @@ use reimagine_inference::{
     ModelSourceKind, ResolvedInferenceModel, ResolvedInferenceModelSource,
     ResolvedInferenceModelSourceSet, SamplerName, SchedulerName, TextEncodeRequest,
 };
-use reimagine_inference_burn::models::stable_diffusion::sdxl::BurnSdxlComponentRole;
+use reimagine_inference_burn::models::stable_diffusion::sdxl::{
+    BurnSdxlComponentRole, BurnSdxlDiffusersSplitPackageRequest,
+    package_diffusers_style_split_sdxl_source,
+};
 use reimagine_inference_burn::{BurnBackend, BurnBackendConfig, BurnDevice};
 
 const PACKAGE_ROOT_ENV: &str = "REIMAGINE_BURN_REAL_SDXL_PACKAGE";
+const SPLIT_SOURCE_ROOT_ENV: &str = "REIMAGINE_BURN_REAL_SDXL_SPLIT_SOURCE";
 const MODEL_ID_ENV: &str = "REIMAGINE_BURN_REAL_SDXL_MODEL_ID";
 const STEPS_ENV: &str = "REIMAGINE_BURN_REAL_SDXL_STEPS";
 const SEED_ENV: &str = "REIMAGINE_BURN_REAL_SDXL_SEED";
@@ -32,12 +36,22 @@ enum RealSdxlSmokeConfig {
     },
     Enabled {
         package_root: PathBuf,
+        package_origin: RealSdxlPackageOrigin,
         model_id: String,
         steps: u32,
         seed: u64,
         device_label: Option<String>,
         prompt: String,
         negative_prompt: String,
+    },
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+enum RealSdxlPackageOrigin {
+    ExistingPackage,
+    DiffusersSplitSource {
+        source_root: PathBuf,
+        converted_models_root: PathBuf,
     },
 }
 
@@ -53,9 +67,13 @@ struct PackageReportView {
 
 impl RealSdxlSmokeConfig {
     fn from_env_getter(get: impl Fn(&str) -> Option<String>) -> Self {
-        match get(PACKAGE_ROOT_ENV).filter(|value| !value.trim().is_empty()) {
-            Some(package_root) => Self::Enabled {
+        match (
+            get(PACKAGE_ROOT_ENV).filter(|value| !value.trim().is_empty()),
+            get(SPLIT_SOURCE_ROOT_ENV).filter(|value| !value.trim().is_empty()),
+        ) {
+            (Some(package_root), _) => Self::Enabled {
                 package_root: PathBuf::from(package_root),
+                package_origin: RealSdxlPackageOrigin::ExistingPackage,
                 model_id: get(MODEL_ID_ENV)
                     .filter(|value| !value.trim().is_empty())
                     .unwrap_or_else(|| "burn-real-sdxl-smoke".to_owned()),
@@ -74,8 +92,41 @@ impl RealSdxlSmokeConfig {
                     .filter(|value| !value.trim().is_empty())
                     .unwrap_or_else(|| "low quality blur".to_owned()),
             },
-            None => Self::Skipped {
-                reason: format!("set {PACKAGE_ROOT_ENV} to a converted Burn SDXL package root"),
+            (None, Some(split_source_root)) => {
+                let source_root = PathBuf::from(split_source_root);
+                let converted_models_root = infer_converted_models_root(&source_root);
+                Self::Enabled {
+                    package_root: converted_models_root
+                        .join("burn")
+                        .join("burn-real-sdxl-smoke")
+                        .join("pending"),
+                    package_origin: RealSdxlPackageOrigin::DiffusersSplitSource {
+                        source_root,
+                        converted_models_root,
+                    },
+                    model_id: get(MODEL_ID_ENV)
+                        .filter(|value| !value.trim().is_empty())
+                        .unwrap_or_else(|| "burn-real-sdxl-smoke".to_owned()),
+                    steps: get(STEPS_ENV)
+                        .and_then(|value| value.parse::<u32>().ok())
+                        .filter(|steps| *steps > 0)
+                        .unwrap_or(1),
+                    seed: get(SEED_ENV)
+                        .and_then(|value| value.parse::<u64>().ok())
+                        .unwrap_or(1234),
+                    device_label: get(DEVICE_ENV).filter(|value| !value.trim().is_empty()),
+                    prompt: get(PROMPT_ENV)
+                        .filter(|value| !value.trim().is_empty())
+                        .unwrap_or_else(|| "small bright city at sunrise".to_owned()),
+                    negative_prompt: get(NEGATIVE_PROMPT_ENV)
+                        .filter(|value| !value.trim().is_empty())
+                        .unwrap_or_else(|| "low quality blur".to_owned()),
+                }
+            }
+            (None, None) => Self::Skipped {
+                reason: format!(
+                    "set {PACKAGE_ROOT_ENV} to a converted Burn SDXL package root or {SPLIT_SOURCE_ROOT_ENV} to a local diffusers-style split source"
+                ),
             },
         }
     }
@@ -88,7 +139,37 @@ fn real_sdxl_smoke_is_explicitly_gated_by_package_env() {
     assert_eq!(
         config,
         RealSdxlSmokeConfig::Skipped {
-            reason: format!("set {PACKAGE_ROOT_ENV} to a converted Burn SDXL package root")
+            reason: format!(
+                "set {PACKAGE_ROOT_ENV} to a converted Burn SDXL package root or {SPLIT_SOURCE_ROOT_ENV} to a local diffusers-style split source"
+            )
+        }
+    );
+}
+
+#[test]
+fn real_sdxl_smoke_can_bootstrap_package_from_local_split_source() {
+    let source_root = PathBuf::from("/workspace/models/converted/sd_xl_base_1.0/size-6938078334");
+    let config = RealSdxlSmokeConfig::from_env_getter(|key| match key {
+        SPLIT_SOURCE_ROOT_ENV => Some(source_root.display().to_string()),
+        _ => None,
+    });
+
+    assert_eq!(
+        config,
+        RealSdxlSmokeConfig::Enabled {
+            package_root: PathBuf::from(
+                "/workspace/models/converted/burn/burn-real-sdxl-smoke/pending"
+            ),
+            package_origin: RealSdxlPackageOrigin::DiffusersSplitSource {
+                source_root,
+                converted_models_root: PathBuf::from("/workspace/models/converted"),
+            },
+            model_id: "burn-real-sdxl-smoke".to_owned(),
+            steps: 1,
+            seed: 1234,
+            device_label: None,
+            prompt: "small bright city at sunrise".to_owned(),
+            negative_prompt: "low quality blur".to_owned(),
         }
     );
 }
@@ -103,11 +184,13 @@ fn real_sdxl_smoke_builds_split_component_model_from_package_root() {
     let RealSdxlSmokeConfig::Enabled {
         package_root,
         model_id,
+        package_origin,
         ..
     } = config
     else {
         panic!("expected enabled smoke config");
     };
+    assert_eq!(package_origin, RealSdxlPackageOrigin::ExistingPackage);
 
     let model = resolved_model_from_package(&package_root, &model_id);
 
@@ -208,7 +291,8 @@ fn real_sdxl_smoke_rejects_stale_package_converter_version() {
 async fn real_sdxl_component_package_runs_public_burn_capability_chain_when_enabled() {
     let config = RealSdxlSmokeConfig::from_env_getter(|key| std::env::var(key).ok());
     let RealSdxlSmokeConfig::Enabled {
-        package_root,
+        package_root: configured_package_root,
+        package_origin,
         model_id,
         steps,
         seed,
@@ -218,9 +302,21 @@ async fn real_sdxl_component_package_runs_public_burn_capability_chain_when_enab
     } = config
     else {
         eprintln!(
-            "skipping real SDXL Burn smoke: set {PACKAGE_ROOT_ENV} to a converted Burn SDXL package root"
+            "skipping real SDXL Burn smoke: set {PACKAGE_ROOT_ENV} to a converted Burn SDXL package root or {SPLIT_SOURCE_ROOT_ENV} to a local diffusers-style split source"
         );
         return;
+    };
+
+    let package_root = match package_origin {
+        RealSdxlPackageOrigin::ExistingPackage => configured_package_root,
+        RealSdxlPackageOrigin::DiffusersSplitSource {
+            source_root,
+            converted_models_root,
+        } => stage_context(
+            RealSdxlSmokeStage::PackageValidation,
+            package_split_source(&source_root, &converted_models_root, &model_id),
+        )
+        .expect("package split source"),
     };
 
     let output = tempfile::tempdir().expect("smoke output dir");
@@ -455,6 +551,58 @@ fn validate_package_root(package_root: &std::path::Path) -> Result<(), String> {
         }
     }
     Ok(())
+}
+
+fn package_split_source(
+    source_root: &std::path::Path,
+    converted_models_root: &std::path::Path,
+    model_id: &str,
+) -> Result<PathBuf, String> {
+    validate_split_source_root(source_root)?;
+    let result = package_diffusers_style_split_sdxl_source(&BurnSdxlDiffusersSplitPackageRequest {
+        source_root: source_root.to_path_buf(),
+        source_model_id: model_id.to_owned(),
+        source_fingerprint: None,
+        converted_models_root: converted_models_root.to_path_buf(),
+        overwrite: false,
+    })
+    .map_err(|err| err.to_string())?;
+    validate_package_root(&result.package_root)?;
+    eprintln!(
+        "real SDXL Burn smoke packaged split source: source_root={}, package_root={}, report={}, reused_existing={}",
+        source_root.display(),
+        result.package_root.display(),
+        result.report_path.display(),
+        result.reused_existing
+    );
+    Ok(result.package_root)
+}
+
+fn validate_split_source_root(source_root: &std::path::Path) -> Result<(), String> {
+    if !source_root.is_dir() {
+        return Err(format!(
+            "split source root `{}` is not a directory",
+            source_root.display()
+        ));
+    }
+    for role_dir in ["unet", "vae", "text_encoder", "text_encoder_2"] {
+        let component = source_root.join(role_dir).join("model.safetensors");
+        if !component.is_file() {
+            return Err(format!(
+                "missing split source component `{}`",
+                component.display()
+            ));
+        }
+    }
+    Ok(())
+}
+
+fn infer_converted_models_root(source_root: &std::path::Path) -> PathBuf {
+    source_root
+        .parent()
+        .and_then(std::path::Path::parent)
+        .map(std::path::Path::to_path_buf)
+        .unwrap_or_else(|| source_root.join("converted"))
 }
 
 fn assert_png_artifact(output_root: &std::path::Path, artifact: &str) {

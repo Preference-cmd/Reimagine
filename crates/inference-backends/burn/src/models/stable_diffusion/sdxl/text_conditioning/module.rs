@@ -68,9 +68,11 @@ impl<B: Backend> ClipTextEncoderModule<B> {
         let blocks = (0..profile.num_layers)
             .map(|_| ClipTransformerBlockModule::init(profile, device))
             .collect();
-        let text_projection = profile
-            .produces_pooled_output
-            .then(|| LinearConfig::new(width, width).init(device));
+        let text_projection = profile.produces_pooled_output.then(|| {
+            LinearConfig::new(width, width)
+                .with_bias(false)
+                .init(device)
+        });
 
         Self {
             token_embedding: EmbeddingConfig::new(profile.vocab_size as usize, width).init(device),

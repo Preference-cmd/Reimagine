@@ -20,6 +20,44 @@ pub use validation::{
     validate_component_inventory, validate_component_inventory_full,
 };
 
+pub use conversion::BurnSdxlConversionError;
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct BurnSdxlDiffusersSplitPackageRequest {
+    pub source_root: std::path::PathBuf,
+    pub source_model_id: String,
+    pub source_fingerprint: Option<String>,
+    pub converted_models_root: std::path::PathBuf,
+    pub overwrite: bool,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct BurnSdxlDiffusersSplitPackageResult {
+    pub package_root: std::path::PathBuf,
+    pub report_path: std::path::PathBuf,
+    pub reused_existing: bool,
+}
+
+pub fn package_diffusers_style_split_sdxl_source(
+    request: &BurnSdxlDiffusersSplitPackageRequest,
+) -> Result<BurnSdxlDiffusersSplitPackageResult, BurnSdxlConversionError> {
+    let result = package::package_diffusers_style_split_source(&package::BurnSdxlPackageRequest {
+        source_set: source_layout::BurnSdxlSourceSet::diffusers_style_split_safetensors(
+            request.source_root.clone(),
+        ),
+        source_model_id: request.source_model_id.clone(),
+        source_fingerprint: request.source_fingerprint.clone(),
+        converted_models_root: request.converted_models_root.clone(),
+        overwrite: request.overwrite,
+    })?;
+
+    Ok(BurnSdxlDiffusersSplitPackageResult {
+        package_root: result.package_root,
+        report_path: result.report_path,
+        reused_existing: result.reused_existing,
+    })
+}
+
 mod component;
 mod contract;
 mod load_diagnostics;

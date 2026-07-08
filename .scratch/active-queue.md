@@ -35,7 +35,7 @@ Current policy:
 
 | Issue | Status | Notes |
 | --- | --- | --- |
-| [15g: Burn real SDXL package smoke to image artifact](inference-backends/burn/issues/15g-burn-real-sdxl-package-smoke-to-image.md) | in-progress | CI-safe opt-in smoke harness is being added; actual real-package run still requires `REIMAGINE_BURN_REAL_SDXL_PACKAGE` pointing at a converted 15f package. |
+| [15g: Burn real SDXL package smoke to image artifact](inference-backends/burn/issues/15g-burn-real-sdxl-package-smoke-to-image.md) | in-progress | CI-safe opt-in smoke harness can package a local `workspace/` split source and run the public chain through `load_bundle`, real CLIP text encode, and diffusion sampling. Current real smoke stops at `latent.decode`: the Burn VAE decoder Module still has scaffold channel shapes (`4 -> 4 -> 3`) while real SDXL VAE weights require the full decoder channel topology (`4 -> 512 -> ... -> 128 -> 3`). |
 
 ### Next
 

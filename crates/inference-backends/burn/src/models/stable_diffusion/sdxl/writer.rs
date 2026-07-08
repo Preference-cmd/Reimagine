@@ -414,7 +414,7 @@ mod tests {
                 .expect("role output report");
             let expected_tensor_count: usize = match role {
                 BurnSdxlComponentRole::TextEncoder => 148,
-                BurnSdxlComponentRole::TextEncoder2 => 390,
+                BurnSdxlComponentRole::TextEncoder2 => 389,
                 BurnSdxlComponentRole::Vae => 20,
                 _ => 2,
             };

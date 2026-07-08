@@ -14,7 +14,7 @@ use super::checkpoint_writer::{SdxlCheckpointWriterError, write_sdxl_checkpoint_
 
 pub const CANDLE_EXAMPLE_SPLIT_LAYOUT: &str = "candle_example_split";
 pub const SDXL_CHECKPOINT_IMPORT_CONVERTER_VERSION: &str =
-    "reimagine.candle.sdxl_checkpoint_import.v1";
+    "reimagine.candle.sdxl_checkpoint_import.v2";
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct SdxlCheckpointImportRequest {
@@ -791,6 +791,48 @@ mod tests {
 
         assert!(result.reused_existing());
         assert_eq!(result.conversion_dir(), conversion_dir);
+
+        let _ = tokio::fs::remove_dir_all(base).await;
+    }
+
+    #[tokio::test]
+    async fn existing_v1_conversion_is_rejected_as_stale() {
+        let base = temp_dir("existing-v1");
+        let source = base.join("models/checkpoints/sdxl.safetensors");
+        let request = request(&base, &source);
+        let conversion_dir = request.conversion_dir();
+        tokio::fs::create_dir_all(&conversion_dir).await.unwrap();
+        let mut manifest = SdxlCheckpointConversionManifest::for_request(&request);
+        manifest.converter_version = "reimagine.candle.sdxl_checkpoint_import.v1".to_owned();
+        for component in SdxlConvertedComponent::all() {
+            let path = conversion_dir.join(manifest.component_path(component));
+            tokio::fs::create_dir_all(path.parent().unwrap())
+                .await
+                .unwrap();
+            tokio::fs::write(path, b"component").await.unwrap();
+        }
+        tokio::fs::write(
+            conversion_dir.join("conversion.json"),
+            serde_json::to_vec_pretty(&manifest).unwrap(),
+        )
+        .await
+        .unwrap();
+
+        let error = import_sdxl_checkpoint_to_candle_example_split(request)
+            .await
+            .unwrap_err();
+
+        assert!(
+            matches!(
+                error,
+                SdxlCheckpointImportError::ConversionManifestInvalid { .. }
+            ),
+            "{error:?}"
+        );
+        assert!(
+            error.to_string().contains("converter"),
+            "expected stale converter diagnostic, got: {error}"
+        );
 
         let _ = tokio::fs::remove_dir_all(base).await;
     }

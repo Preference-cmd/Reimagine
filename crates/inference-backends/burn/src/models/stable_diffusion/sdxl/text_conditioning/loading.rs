@@ -94,10 +94,7 @@ fn clip_load_policy(component: &str) -> SdxlLoadPolicy {
             ]),
         "text_encoder_2" => SdxlLoadPolicy::new("text_encoder_2")
             .with_required_prefixes(&["open_clip_g."])
-            .with_optional_snapshots(&[
-                "open_clip_g.text_projection.weight",
-                "open_clip_g.text_projection.bias",
-            ])
+            .with_optional_snapshots(&["open_clip_g.text_projection.weight"])
             .with_generated_snapshot_contains(&[
                 ".attention.query.",
                 ".attention.key.",
@@ -272,11 +269,6 @@ mod tests {
                 &format!("{prefix}.text_projection.weight"),
                 vec![2, 2],
                 vec![1.0, 0.0, 0.0, 1.0],
-            ),
-            tensor_view(
-                &format!("{prefix}.text_projection.bias"),
-                vec![2],
-                vec![0.0, 0.0],
             ),
             tensor_view(
                 &format!("{prefix}.transformer.resblocks.0.ln_1.weight"),

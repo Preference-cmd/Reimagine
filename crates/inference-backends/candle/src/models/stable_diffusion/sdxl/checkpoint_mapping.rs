@@ -173,7 +173,7 @@ fn map_openclipg_top_level(
         ),
         "ln_final.weight" => ("transformer.text_model.final_layer_norm.weight", false),
         "ln_final.bias" => ("transformer.text_model.final_layer_norm.bias", false),
-        "text_projection" => ("text_projection", true),
+        "text_projection" => ("text_projection.weight", false),
         "logit_scale" => ("logit_scale", true),
         _ => {
             return Err(SdxlTensorMappingError::UnknownRequiredFamily {
@@ -561,13 +561,17 @@ mod tests {
     }
 
     #[test]
-    fn ignores_openclipg_text_projection_and_logit_scale() {
-        let err = map_sdxl_checkpoint_tensor("conditioner.embedders.1.model.text_projection")
-            .unwrap_err();
-        assert!(matches!(err, SdxlTensorMappingError::Ignored { .. }));
-        let msg = err.to_string();
-        assert!(msg.contains("text_projection"), "{msg}");
+    fn maps_openclipg_text_projection_to_weight_tensor() {
+        let mapped =
+            map_sdxl_checkpoint_tensor("conditioner.embedders.1.model.text_projection").unwrap();
+        assert_eq!(mapped.len(), 1);
+        assert_eq!(mapped[0].component, SdxlConvertedComponent::ClipG);
+        assert_eq!(mapped[0].target_name, "text_projection.weight");
+        assert_eq!(mapped[0].source_row_range, None);
+    }
 
+    #[test]
+    fn ignores_openclipg_logit_scale() {
         let err =
             map_sdxl_checkpoint_tensor("conditioner.embedders.1.model.logit_scale").unwrap_err();
         assert!(matches!(err, SdxlTensorMappingError::Ignored { .. }));
