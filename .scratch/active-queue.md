@@ -2,7 +2,7 @@
 
 | Issue | Status | Notes |
 | --- | --- | --- |
-| [15d9: Burn full-topology sampler parity](inference-backends/burn/issues/15d9-burn-full-topology-sampler-parity.md) | ready-for-agent | Unblocked by 15g image smoke. Compare full-topology Euler/normal against a trusted reference; do not re-open package dialect work unless evidence requires it. |
+| [15d9: Burn full-topology sampler parity](inference-backends/burn/issues/15d9-burn-full-topology-sampler-parity.md) | in_progress | 15e/15g done. Add deterministic sampler evidence against full-profile Euler/normal path. |
 
 ### Next
 
