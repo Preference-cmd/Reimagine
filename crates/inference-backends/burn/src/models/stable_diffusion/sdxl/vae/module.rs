@@ -1,4 +1,7 @@
-//! Burn-native SDXL VAE decoder Module scaffold.
+//! Burn-native SDXL VAE decoder Module.
+//!
+//! Snapshot keyspace follows the diffusers AutoencoderKL decoder dialect
+//! (`mid_block.attentions.0`, `up_blocks.N.upsamplers.0`, `to_out.0`).
 
 use burn::module::Module;
 use burn_core as burn;
@@ -144,15 +147,15 @@ impl SdxlVaeUpBlockSpec {
             current_channels = out_channels;
         }
 
-        let upsampler = if self.has_upsampler {
+        let upsamplers = if self.has_upsampler {
             let upsample_out = self.out_channels;
-            Some(SdxlVaeUpsampleConv {
+            vec![SdxlVaeUpsampleConv {
                 conv: Conv2dConfig::new([upsample_out, upsample_out], [3, 3])
                     .with_padding(PaddingConfig2d::Explicit(1, 1, 1, 1))
                     .init(device),
-            })
+            }]
         } else {
-            None
+            Vec::new()
         };
 
         SdxlVaeUpBlock {
@@ -160,7 +163,7 @@ impl SdxlVaeUpBlockSpec {
             interpolate: Interpolate2dConfig::new()
                 .with_scale_factor(Some([2.0, 2.0]))
                 .init(),
-            upsampler,
+            upsamplers,
         }
     }
 }
@@ -218,12 +221,14 @@ impl<B: Backend> SdxlVaeResidualBlock<B> {
     }
 }
 
-/// Mid-block for the SDXL VAE decoder: 2×residual blocks at the
-/// decoder's full channel count followed by a single attention block.
+/// Mid-block for the SDXL VAE decoder.
+///
+/// Diffusers order: resnet[0] → attentions[0] → resnet[1].
+/// Field names match the package dialect: `attentions.0.*`.
 #[derive(Module, Debug)]
 pub struct SdxlVaeMidBlock<B: Backend> {
     resnets: [SdxlVaeResidualBlock<B>; 2],
-    attention: SdxlVaeAttentionBlock<B>,
+    attentions: Vec<SdxlVaeAttentionBlock<B>>,
 }
 
 impl<B: Backend> SdxlVaeMidBlock<B> {
@@ -234,14 +239,18 @@ impl<B: Backend> SdxlVaeMidBlock<B> {
                 SdxlVaeResidualBlock::<B>::init(channels, channels, device),
                 SdxlVaeResidualBlock::<B>::init(channels, channels, device),
             ],
-            attention: SdxlVaeAttentionBlock::<B>::init(channels, device),
+            attentions: vec![SdxlVaeAttentionBlock::<B>::init(channels, device)],
         }
     }
 
     pub fn forward(&self, hidden: Tensor<B, 4>) -> Tensor<B, 4> {
-        let mut hidden = self.resnets[0].forward(hidden);
-        hidden = self.resnets[1].forward(hidden);
-        self.attention.forward(hidden)
+        let hidden = self.resnets[0].forward(hidden);
+        let hidden = self
+            .attentions
+            .first()
+            .expect("diffusers VAE mid_block requires attentions.0")
+            .forward(hidden);
+        self.resnets[1].forward(hidden)
     }
 
     #[cfg(test)]
@@ -250,17 +259,16 @@ impl<B: Backend> SdxlVaeMidBlock<B> {
     }
 }
 
-/// Single un-padded spatial-attention block at fixed channel count.
+/// Diffusers-shaped spatial attention block for the VAE mid-block.
 ///
-/// Used only inside the mid-block of the SDXL VAE decoder; it has no
-/// self-attention bias and the output projection is a 1×1 convolution.
+/// Snapshot path ends with `to_out.0.{weight,bias}` via a length-1 `Vec`.
 #[derive(Module, Debug)]
 pub struct SdxlVaeAttentionBlock<B: Backend> {
     group_norm: GroupNorm<B>,
     to_q: Conv2d<B>,
     to_k: Conv2d<B>,
     to_v: Conv2d<B>,
-    to_out: Conv2d<B>,
+    to_out: Vec<Conv2d<B>>,
 }
 
 impl<B: Backend> SdxlVaeAttentionBlock<B> {
@@ -270,7 +278,7 @@ impl<B: Backend> SdxlVaeAttentionBlock<B> {
             to_q: Conv2dConfig::new([channels, channels], [1, 1]).init(device),
             to_k: Conv2dConfig::new([channels, channels], [1, 1]).init(device),
             to_v: Conv2dConfig::new([channels, channels], [1, 1]).init(device),
-            to_out: Conv2dConfig::new([channels, channels], [1, 1]).init(device),
+            to_out: vec![Conv2dConfig::new([channels, channels], [1, 1]).init(device)],
         }
     }
 
@@ -281,39 +289,35 @@ impl<B: Backend> SdxlVaeAttentionBlock<B> {
         let k = self.to_k.forward(normalized.clone());
         let v = self.to_v.forward(normalized);
 
-        // Collapse H×W into a single sequence dimension.
         let [b, c, h, w] = q.shape().dims();
         let seq = h * w;
-        // Reshape [B, C, H, W] → [B, C, H*W] then transpose last two dims
-        // to get [B, H*W, C] which is the standard sequence layout for matmul.
-        let q = q.reshape([b, c, seq]).swap_dims(1, 2); // [B, H*W, C]
-        let k = k.reshape([b, c, seq]).swap_dims(1, 2); // [B, H*W, C]
-        let v = v.reshape([b, c, seq]).swap_dims(1, 2); // [B, H*W, C]
+        let q = q.reshape([b, c, seq]).swap_dims(1, 2);
+        let k = k.reshape([b, c, seq]).swap_dims(1, 2);
+        let v = v.reshape([b, c, seq]).swap_dims(1, 2);
 
-        // scaled dot-product attention over the spatial sequence.
         let scale = (c as f64).sqrt().recip();
-        // q @ k^T: [B, H*W, C] @ [B, C, H*W] → [B, H*W, H*W]
         let attn_weights = Tensor::matmul(q, k.transpose()) * scale;
         let attn_weights = activation::softmax(attn_weights, 2);
-        // attn @ v: [B, H*W, H*W] @ [B, H*W, C] → [B, H*W, C]
         let attn_out = Tensor::matmul(attn_weights, v)
-            .swap_dims(1, 2) // [B, C, H*W]
+            .swap_dims(1, 2)
             .reshape([b, c, h, w]);
 
-        self.to_out.forward(hidden + attn_out)
+        self.to_out
+            .first()
+            .expect("diffusers VAE attention requires to_out.0")
+            .forward(hidden + attn_out)
     }
 }
 
 /// One of the four up_blocks in the SDXL VAE decoder.
 ///
-/// Each block contains 3 residual blocks at potentially changing
-/// channel counts, an optional Nearest-neighbor (scale=2) upsampling,
-/// and an optional post-convolution to match the target channel count.
+/// Diffusers packages use `upsamplers.0.conv.*` when present; empty
+/// `upsamplers` means no spatial upsample in this block.
 #[derive(Module, Debug)]
 pub struct SdxlVaeUpBlock<B: Backend> {
     resnets: Vec<SdxlVaeResidualBlock<B>>,
     interpolate: Interpolate2d,
-    upsampler: Option<SdxlVaeUpsampleConv<B>>,
+    upsamplers: Vec<SdxlVaeUpsampleConv<B>>,
 }
 
 impl<B: Backend> SdxlVaeUpBlock<B> {
@@ -322,12 +326,9 @@ impl<B: Backend> SdxlVaeUpBlock<B> {
         for resnet in &self.resnets {
             hidden = resnet.forward(hidden);
         }
-        if self.upsampler.is_some() {
+        if let Some(upsampler) = self.upsamplers.first() {
             hidden = self.interpolate.forward(hidden);
-            hidden = match &self.upsampler {
-                Some(upsampler) => upsampler.forward(hidden),
-                None => hidden,
-            };
+            hidden = upsampler.forward(hidden);
         }
         hidden
     }

@@ -55,11 +55,10 @@ fn sdxl_vae_store_from_path(path: impl Into<std::path::PathBuf>) -> SafetensorsS
 }
 
 fn sdxl_vae_key_remapper() -> KeyRemapper {
-    // Converted packages may already store decoder tensors under Burn-ish roots
-    // (`conv_in`, `mid_block`, `up_blocks`, ...). Real split/diffusers packages
-    // still use plural attention/upsampler containers (`attentions.0`,
-    // `upsamplers.0`) and a nested `to_out.0` Linear. Map those into the
-    // Burn Module field names before burn-store apply.
+    // Package dialect is diffusers AutoencoderKL decoder keys. Loader remapper
+    // is only a compatibility layer:
+    // - strip optional `model.vae.decoder.` prefixes
+    // - accept pre-diffusers-unification Burn singular field names
     //
     // GroupNorm weight/bias → gamma/beta is handled by PyTorchToBurnAdapter.
     KeyRemapper::new()
@@ -73,18 +72,16 @@ fn sdxl_vae_key_remapper() -> KeyRemapper {
         .expect("static VAE decoder conv_norm_out remapping regex should compile")
         .add_pattern(r"^model\.vae\.decoder\.conv_out\.", "conv_out.")
         .expect("static VAE decoder conv_out remapping regex should compile")
-        // Diffusers VAE mid attention is `mid_block.attentions.0.*`.
-        .add_pattern(r"^mid_block\.attentions\.0\.", "mid_block.attention.")
-        .expect("static VAE mid attention remapping regex should compile")
-        // Diffusers upsamplers are nested as `up_blocks.N.upsamplers.0.conv.*`.
+        // Legacy Burn-singular dialect (pre package-dialect unification).
+        .add_pattern(r"^mid_block\.attention\.", "mid_block.attentions.0.")
+        .expect("static legacy VAE mid attention remapping regex should compile")
         .add_pattern(
-            r"^up_blocks\.([0-9]+)\.upsamplers\.0\.",
-            "up_blocks.$1.upsampler.",
+            r"^up_blocks\.([0-9]+)\.upsampler\.",
+            "up_blocks.$1.upsamplers.0.",
         )
-        .expect("static VAE upsampler remapping regex should compile")
-        // Diffusers attention out-proj is often `to_out.0.{weight,bias}`.
-        .add_pattern(r"\.to_out\.0\.", ".to_out.")
-        .expect("static VAE attention to_out remapping regex should compile")
+        .expect("static legacy VAE upsampler remapping regex should compile")
+        .add_pattern(r"\.to_out\.(weight|bias)$", ".to_out.0.$1")
+        .expect("static legacy VAE to_out remapping regex should compile")
 }
 
 fn validate_apply_result(
@@ -119,16 +116,16 @@ fn vae_load_policy(profile: SdxlVaeDecoderLoadProfile) -> SdxlLoadPolicy {
                 "mid_block.resnets.1.norm2.beta",
                 "mid_block.resnets.1.conv2.weight",
                 "mid_block.resnets.1.conv2.bias",
-                "mid_block.attention.group_norm.gamma",
-                "mid_block.attention.group_norm.beta",
-                "mid_block.attention.to_q.weight",
-                "mid_block.attention.to_q.bias",
-                "mid_block.attention.to_k.weight",
-                "mid_block.attention.to_k.bias",
-                "mid_block.attention.to_v.weight",
-                "mid_block.attention.to_v.bias",
-                "mid_block.attention.to_out.weight",
-                "mid_block.attention.to_out.bias",
+                "mid_block.attentions.0.group_norm.gamma",
+                "mid_block.attentions.0.group_norm.beta",
+                "mid_block.attentions.0.to_q.weight",
+                "mid_block.attentions.0.to_q.bias",
+                "mid_block.attentions.0.to_k.weight",
+                "mid_block.attentions.0.to_k.bias",
+                "mid_block.attentions.0.to_v.weight",
+                "mid_block.attentions.0.to_v.bias",
+                "mid_block.attentions.0.to_out.0.weight",
+                "mid_block.attentions.0.to_out.0.bias",
                 // up_blocks.0: 3 resnets @ 512, upsampler
                 "up_blocks.0.resnets.0.conv1.weight",
                 "up_blocks.0.resnets.0.conv1.bias",
@@ -154,8 +151,8 @@ fn vae_load_policy(profile: SdxlVaeDecoderLoadProfile) -> SdxlLoadPolicy {
                 "up_blocks.0.resnets.2.norm2.beta",
                 "up_blocks.0.resnets.2.conv2.weight",
                 "up_blocks.0.resnets.2.conv2.bias",
-                "up_blocks.0.upsampler.conv.weight",
-                "up_blocks.0.upsampler.conv.bias",
+                "up_blocks.0.upsamplers.0.conv.weight",
+                "up_blocks.0.upsamplers.0.conv.bias",
                 // up_blocks.1: 3 resnets @ 512, upsampler
                 "up_blocks.1.resnets.0.conv1.weight",
                 "up_blocks.1.resnets.0.conv1.bias",
@@ -181,8 +178,8 @@ fn vae_load_policy(profile: SdxlVaeDecoderLoadProfile) -> SdxlLoadPolicy {
                 "up_blocks.1.resnets.2.norm2.beta",
                 "up_blocks.1.resnets.2.conv2.weight",
                 "up_blocks.1.resnets.2.conv2.bias",
-                "up_blocks.1.upsampler.conv.weight",
-                "up_blocks.1.upsampler.conv.bias",
+                "up_blocks.1.upsamplers.0.conv.weight",
+                "up_blocks.1.upsamplers.0.conv.bias",
                 // up_blocks.2: 3 resnets, first has skip 512→256, upsampler
                 "up_blocks.2.resnets.0.conv1.weight",
                 "up_blocks.2.resnets.0.conv1.bias",
@@ -210,8 +207,8 @@ fn vae_load_policy(profile: SdxlVaeDecoderLoadProfile) -> SdxlLoadPolicy {
                 "up_blocks.2.resnets.2.norm2.beta",
                 "up_blocks.2.resnets.2.conv2.weight",
                 "up_blocks.2.resnets.2.conv2.bias",
-                "up_blocks.2.upsampler.conv.weight",
-                "up_blocks.2.upsampler.conv.bias",
+                "up_blocks.2.upsamplers.0.conv.weight",
+                "up_blocks.2.upsamplers.0.conv.bias",
                 // up_blocks.3: 3 resnets, first has skip 256→128, NO upsampler
                 "up_blocks.3.resnets.0.conv1.weight",
                 "up_blocks.3.resnets.0.conv1.bias",
@@ -250,9 +247,9 @@ fn vae_load_policy(profile: SdxlVaeDecoderLoadProfile) -> SdxlLoadPolicy {
                 "model.vae.decoder.up_blocks -> up_blocks",
                 "model.vae.decoder.conv_norm_out -> conv_norm_out",
                 "model.vae.decoder.conv_out -> conv_out",
-                "mid_block.attentions.0 -> mid_block.attention",
-                "up_blocks.N.upsamplers.0 -> up_blocks.N.upsampler",
-                "to_out.0 -> to_out",
+                "legacy mid_block.attention -> mid_block.attentions.0",
+                "legacy up_blocks.N.upsampler -> up_blocks.N.upsamplers.0",
+                "legacy to_out -> to_out.0",
             ]),
     }
 }
@@ -526,16 +523,16 @@ mod tests {
         let mut tensors = full_vae_decoder_tensors(prefix);
         // mid_block attention
         for key in [
-            &format!("{prefix}mid_block.attention.group_norm.gamma"),
-            &format!("{prefix}mid_block.attention.group_norm.beta"),
-            &format!("{prefix}mid_block.attention.to_q.weight"),
-            &format!("{prefix}mid_block.attention.to_q.bias"),
-            &format!("{prefix}mid_block.attention.to_k.weight"),
-            &format!("{prefix}mid_block.attention.to_k.bias"),
-            &format!("{prefix}mid_block.attention.to_v.weight"),
-            &format!("{prefix}mid_block.attention.to_v.bias"),
-            &format!("{prefix}mid_block.attention.to_out.weight"),
-            &format!("{prefix}mid_block.attention.to_out.bias"),
+            &format!("{prefix}mid_block.attentions.0.group_norm.gamma"),
+            &format!("{prefix}mid_block.attentions.0.group_norm.beta"),
+            &format!("{prefix}mid_block.attentions.0.to_q.weight"),
+            &format!("{prefix}mid_block.attentions.0.to_q.bias"),
+            &format!("{prefix}mid_block.attentions.0.to_k.weight"),
+            &format!("{prefix}mid_block.attentions.0.to_k.bias"),
+            &format!("{prefix}mid_block.attentions.0.to_v.weight"),
+            &format!("{prefix}mid_block.attentions.0.to_v.bias"),
+            &format!("{prefix}mid_block.attentions.0.to_out.0.weight"),
+            &format!("{prefix}mid_block.attentions.0.to_out.0.bias"),
         ] {
             if key.contains("weight") {
                 tensors.push(tensor_view(key, vec![512, 512, 1, 1], vec![0.0f32; 512 * 512]));
@@ -565,9 +562,9 @@ mod tests {
                     tensors.push(tensor_view(k, vec![512], vec![0.0f32; 512]));
                 }
             }
-            let k = &format!("{prefix}up_blocks.{block}.upsampler.conv.weight");
+            let k = &format!("{prefix}up_blocks.{block}.upsamplers.0.conv.weight");
             tensors.push(tensor_view(k, vec![512, 512, 3, 3], vec![0.0f32; 512 * 512 * 3 * 3]));
-            let k = &format!("{prefix}up_blocks.{block}.upsampler.conv.bias");
+            let k = &format!("{prefix}up_blocks.{block}.upsamplers.0.conv.bias");
             tensors.push(tensor_view(k, vec![512], vec![0.0f32; 512]));
         }
         // up_blocks.2: 512→256 transition, first resnet has conv_shortcut
@@ -641,12 +638,12 @@ mod tests {
         }
         // up_blocks.2 upsampler: out=256 (write Burn [256, 256, 3, 3])
         tensors.push(tensor_view(
-            &format!("{prefix}up_blocks.2.upsampler.conv.weight"),
+            &format!("{prefix}up_blocks.2.upsamplers.0.conv.weight"),
             vec![256, 256, 3, 3],
             vec![0.0f32; 256 * 256 * 3 * 3],
         ));
         tensors.push(tensor_view(
-            &format!("{prefix}up_blocks.2.upsampler.conv.bias"),
+            &format!("{prefix}up_blocks.2.upsamplers.0.conv.bias"),
             vec![256],
             vec![0.0f32; 256],
         ));

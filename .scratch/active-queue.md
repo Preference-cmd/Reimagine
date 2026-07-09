@@ -2,7 +2,7 @@
 
 | Issue | Status | Notes |
 | --- | --- | --- |
-| [15g: Burn real SDXL package smoke to image artifact](inference-backends/burn/issues/15g-burn-real-sdxl-package-smoke-to-image.md) | ready-for-agent | UNet skip/up-block channel plan + `source_mapping` pass-through dedupe + VAE loader remapper (`attentions.0`→`attention`, `upsamplers.0`→`upsampler`, `to_out.0`→`to_out`) landed on main. Local `15h-v1` package under `workspace/models/converted/burn/burn-real-sdxl-smoke/`. Remaining: first image artifact via opt-in smoke (`REIMAGINE_BURN_REAL_SDXL_PACKAGE` / `SPLIT_SOURCE`); WGPU ~5GiB pressure observed — prefer Flex rebuild or reduced steps/resolution for the finish worktree. |
+| [15g: Burn real SDXL package smoke to image artifact](inference-backends/burn/issues/15g-burn-real-sdxl-package-smoke-to-image.md) | ready-for-agent | **Decision:** package+Module keyspace = **diffusers** (VAE done this branch; UNet Module topology still stage-shaped). VAE mid uses `attentions.0`/`to_out.0`, up uses `upsamplers.0`. See `.scratch/inference-backends/burn/package-dialect-diffusers.md`. Remaining: UNet diffusers topology, converter cleanup, real image smoke. |
 
 ### Next
 

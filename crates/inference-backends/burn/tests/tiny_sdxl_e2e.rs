@@ -429,19 +429,27 @@ fn write_vae_component(path: &Path) {
             ));
         }
     }
-    // mid_block.attention: 512→512
-    for tk in ["to_q", "to_k", "to_v", "to_out"] {
+    // mid_block.attentions.0: 512→512 (diffusers dialect)
+    for tk in ["to_q", "to_k", "to_v"] {
         tensors.push(tensor(
-            &format!("mid_block.attention.{tk}.weight"),
+            &format!("mid_block.attentions.0.{tk}.weight"),
             vec![512, 512, 1, 1], zeros(512 * 512),
         ));
         tensors.push(tensor(
-            &format!("mid_block.attention.{tk}.bias"),
+            &format!("mid_block.attentions.0.{tk}.bias"),
             vec![512], vec![0.0; 512],
         ));
     }
-    tensors.push(tensor("mid_block.attention.group_norm.weight", vec![512], vec![1.0; 512]));
-    tensors.push(tensor("mid_block.attention.group_norm.bias", vec![512], vec![0.0; 512]));
+    tensors.push(tensor(
+        "mid_block.attentions.0.to_out.0.weight",
+        vec![512, 512, 1, 1], zeros(512 * 512),
+    ));
+    tensors.push(tensor(
+        "mid_block.attentions.0.to_out.0.bias",
+        vec![512], vec![0.0; 512],
+    ));
+    tensors.push(tensor("mid_block.attentions.0.group_norm.weight", vec![512], vec![1.0; 512]));
+    tensors.push(tensor("mid_block.attentions.0.group_norm.bias", vec![512], vec![0.0; 512]));
     // up_blocks: build 4 blocks (omitting detailed fixture for now; use minimal but size-compatible)
     // Since the test only needs to produce image output, add stubs for all up block resnets.
     let up_block_channels: [(usize, usize, bool); 4] = [
@@ -497,11 +505,11 @@ fn write_vae_component(path: &Path) {
         }
         if *has_up {
             tensors.push(tensor(
-                &format!("up_blocks.{block_idx}.upsampler.conv.weight"),
+                &format!("up_blocks.{block_idx}.upsamplers.0.conv.weight"),
                 vec![*out_ch, *out_ch, 3, 3], zeros(out_ch * out_ch * 3 * 3),
             ));
             tensors.push(tensor(
-                &format!("up_blocks.{block_idx}.upsampler.conv.bias"),
+                &format!("up_blocks.{block_idx}.upsamplers.0.conv.bias"),
                 vec![*out_ch], vec![0.0; *out_ch],
             ));
         }
