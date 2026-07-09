@@ -17,7 +17,7 @@ use super::writer::{inspect_component_safetensors, write_conversion_report};
 
 const PACKAGE_SCHEMA_VERSION: u32 = 1;
 const PACKAGE_LAYOUT: &str = "burn_native_component_package";
-const CONVERTER_VERSION: &str = "burn-sdxl-package-15f-v1";
+const CONVERTER_VERSION: &str = "burn-sdxl-package-15h-v1";
 const FINGERPRINT_KIND_SUPPLIED: &str = "supplied";
 const FINGERPRINT_KIND_STAT: &str = "stat-v1";
 const PORTABLE_PACKAGE_ROOT: &str = ".";
@@ -763,7 +763,7 @@ mod tests {
         let package = report_from_disk.package.expect("package report");
         assert_eq!(package.schema_version, 1);
         assert_eq!(package.layout, "burn_native_component_package");
-        assert_eq!(package.converter_version, "burn-sdxl-package-15f-v1");
+        assert_eq!(package.converter_version, "burn-sdxl-package-15h-v1");
         assert!(package.created_at.is_some());
         assert_eq!(package.package_root, ".");
         assert_eq!(package.source.source_model_id, "sdxl-base-1.0");

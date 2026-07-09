@@ -25,7 +25,7 @@ const SEED_ENV: &str = "REIMAGINE_BURN_REAL_SDXL_SEED";
 const DEVICE_ENV: &str = "REIMAGINE_BURN_REAL_SDXL_DEVICE";
 const PROMPT_ENV: &str = "REIMAGINE_BURN_REAL_SDXL_PROMPT";
 const NEGATIVE_PROMPT_ENV: &str = "REIMAGINE_BURN_REAL_SDXL_NEGATIVE_PROMPT";
-const CONVERTER_VERSION_MARKER: &str = "burn-sdxl-package-15f-v1";
+const CONVERTER_VERSION_MARKER: &str = "burn-sdxl-package-15h-v1";
 const RUN_ID: &str = "run-burn-real-sdxl-smoke";
 const WORKFLOW_ID: &str = "wf-burn-real-sdxl-smoke";
 
@@ -282,7 +282,7 @@ fn real_sdxl_smoke_rejects_stale_package_converter_version() {
     let err = validate_package_root(root.path()).expect_err("stale package should fail");
 
     assert!(
-        err.contains("expected converter version `burn-sdxl-package-15f-v1`"),
+        err.contains("expected converter version `burn-sdxl-package-15h-v1`"),
         "{err}"
     );
 }
