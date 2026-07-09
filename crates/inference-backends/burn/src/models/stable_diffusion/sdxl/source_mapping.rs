@@ -357,11 +357,14 @@ fn map_source_component(
         .filter(|key| !expected_keys.contains(**key))
         .map(|key| (*key).to_owned())
         .collect::<Vec<_>>();
-    let unsupported_keys = unknown_keys
+    let unsupported_keys: Vec<&str> = unknown_keys
         .iter()
-        .filter(|key| !is_known_extra_source_tensor(source.role, key))
-        .cloned()
-        .collect::<Vec<_>>();
+        .filter(|key| {
+            !is_known_extra_source_tensor(source.role, key)
+                && pass_through_target(source.role, key).is_none()
+        })
+        .map(|key| key.as_str())
+        .collect();
     if !unsupported_keys.is_empty() {
         return Err(BurnSdxlConversionError::InvalidComponentSet {
             reason: format!(
@@ -458,16 +461,77 @@ fn map_source_component(
         })
         .collect::<Result<Vec<_>, BurnSdxlConversionError>>()?;
 
+    let mapped_tensors: Vec<BurnSyntheticTensor> = tensors;
+
+    // Pass-through known extra source tensors as optional output entries.
+    // This bridges the gap between the representative mapping table and the
+    // full topology that the runtime loader policy checks.
+    //
+    // For VAE: strip the leading role segment (`decoder.` / `encoder.` /
+    // `quant_conv.` / `post_quant_conv.`) so the target key matches the
+    // module's snapshot key space.
+    //
+    // For Diffusion: pass through `down_blocks.*`, `mid_block.*`,
+    // `up_blocks.*`, `conv_norm_out.*` unchanged — the source already uses
+    // the diffusers naming that aligns with the module snapshot key space.
+    fn pass_through_target(source_role: BurnSdxlComponentRole, key: &str) -> Option<String> {
+        match source_role {
+            BurnSdxlComponentRole::Vae => {
+                if key.starts_with("decoder.") {
+                    Some(key.strip_prefix("decoder.").unwrap_or(key).to_owned())
+                } else if key.starts_with("encoder.") {
+                    Some(key.strip_prefix("encoder.").unwrap_or(key).to_owned())
+                } else if key.starts_with("quant_conv.")
+                    || key.starts_with("post_quant_conv.")
+                {
+                    Some(key.to_owned())
+                } else {
+                    None
+                }
+            }
+            BurnSdxlComponentRole::Diffusion => {
+                if key.starts_with("down_blocks.")
+                    || key.starts_with("mid_block.")
+                    || key.starts_with("up_blocks.")
+                    || key.starts_with("conv_norm_out.")
+                    || key.starts_with("add_embedding.")
+                {
+                    Some(key.to_owned())
+                } else {
+                    None
+                }
+            }
+            _ => None,
+        }
+    }
+
+    let mut all_tensors: Vec<BurnSyntheticTensor> = mapped_tensors;
+    for key in &unknown_keys {
+        if let Some(target_key) = pass_through_target(source.role, key) {
+            if let Some(tensor) = source_by_key.get(key) {
+                all_tensors.push(BurnSyntheticTensor {
+                    key: target_key,
+                    shape: tensor.shape.clone(),
+                    dtype: tensor.dtype.clone(),
+                    source: BurnTensorSource::Data(tensor.data.clone()),
+                });
+            }
+        }
+    }
+
+    let ignored: Vec<String> = unknown_keys
+        .into_iter()
+        .filter(|key| pass_through_target(source.role, key).is_none())
+        .map(|key| format!("{}:{key}", source.role.as_str()))
+        .collect();
+
     Ok(MappedSourceComponent {
         component: BurnSdxlSyntheticComponent {
             role: source.role,
             dtype_policy: BurnDTypePolicy::Fp32,
-            tensors,
+            tensors: all_tensors,
         },
-        ignored_tensor_families: unknown_keys
-            .into_iter()
-            .map(|key| format!("{}:{key}", source.role.as_str()))
-            .collect(),
+        ignored_tensor_families: ignored,
     })
 }
 
@@ -1052,23 +1116,21 @@ pub(crate) mod tests {
             map_diffusers_style_split_source(&source_set, output.path()).expect("map source");
 
         assert_eq!(report.output_components.len(), 4);
+        // With pass-through enabled, `down_blocks.*` and `decoder.*` keys are
+        // now passed through to the output component rather than ignored.
+        // The ignored list still contains text-encoder layer keys because those
+        // are not mapped or passed through (they're consumed by the text-encoder
+        // component handler).
         assert!(
             report
                 .ignored_tensor_families
                 .iter()
-                .any(|family| family.contains("down_blocks.0.resnets.1.conv1.weight")),
-            "{:?}",
+                .any(|family| family.starts_with("text_encoder:transformer.")),
+            "text encoder keys should be ignored when using hf_native split source:\n{:?}",
             report.ignored_tensor_families
         );
-        assert!(
-            report
-                .ignored_tensor_families
-                .iter()
-                .any(|family| family.contains("decoder.up_blocks.0.resnets.0.conv1.weight")),
-            "{:?}",
-            report.ignored_tensor_families
-        );
-
+        // Pass-through means diffusion `down_blocks.*` and VAE `decoder.*` keys
+        // are no longer ignored — verify they appear in the output instead.
         let diffusion =
             inspect_component_safetensors(output.path().join("diffusion/model.safetensors"))
                 .expect("inspect mapped diffusion");
