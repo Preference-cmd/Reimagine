@@ -55,26 +55,36 @@ fn sdxl_vae_store_from_path(path: impl Into<std::path::PathBuf>) -> SafetensorsS
 }
 
 fn sdxl_vae_key_remapper() -> KeyRemapper {
+    // Converted packages may already store decoder tensors under Burn-ish roots
+    // (`conv_in`, `mid_block`, `up_blocks`, ...). Real split/diffusers packages
+    // still use plural attention/upsampler containers (`attentions.0`,
+    // `upsamplers.0`) and a nested `to_out.0` Linear. Map those into the
+    // Burn Module field names before burn-store apply.
+    //
+    // GroupNorm weight/bias → gamma/beta is handled by PyTorchToBurnAdapter.
     KeyRemapper::new()
         .add_pattern(r"^model\.vae\.decoder\.conv_in\.", "conv_in.")
         .expect("static VAE decoder conv_in remapping regex should compile")
-        .add_pattern(
-            r"^model\.vae\.decoder\.mid_block\.",
-            "mid_block.",
-        )
+        .add_pattern(r"^model\.vae\.decoder\.mid_block\.", "mid_block.")
         .expect("static VAE decoder mid_block remapping regex should compile")
-        .add_pattern(
-            r"^model\.vae\.decoder\.up_blocks\.",
-            "up_blocks.",
-        )
+        .add_pattern(r"^model\.vae\.decoder\.up_blocks\.", "up_blocks.")
         .expect("static VAE decoder up_blocks remapping regex should compile")
-        .add_pattern(
-            r"^model\.vae\.decoder\.conv_norm_out\.",
-            "conv_norm_out.",
-        )
+        .add_pattern(r"^model\.vae\.decoder\.conv_norm_out\.", "conv_norm_out.")
         .expect("static VAE decoder conv_norm_out remapping regex should compile")
         .add_pattern(r"^model\.vae\.decoder\.conv_out\.", "conv_out.")
         .expect("static VAE decoder conv_out remapping regex should compile")
+        // Diffusers VAE mid attention is `mid_block.attentions.0.*`.
+        .add_pattern(r"^mid_block\.attentions\.0\.", "mid_block.attention.")
+        .expect("static VAE mid attention remapping regex should compile")
+        // Diffusers upsamplers are nested as `up_blocks.N.upsamplers.0.conv.*`.
+        .add_pattern(
+            r"^up_blocks\.([0-9]+)\.upsamplers\.0\.",
+            "up_blocks.$1.upsampler.",
+        )
+        .expect("static VAE upsampler remapping regex should compile")
+        // Diffusers attention out-proj is often `to_out.0.{weight,bias}`.
+        .add_pattern(r"\.to_out\.0\.", ".to_out.")
+        .expect("static VAE attention to_out remapping regex should compile")
 }
 
 fn validate_apply_result(
@@ -240,6 +250,9 @@ fn vae_load_policy(profile: SdxlVaeDecoderLoadProfile) -> SdxlLoadPolicy {
                 "model.vae.decoder.up_blocks -> up_blocks",
                 "model.vae.decoder.conv_norm_out -> conv_norm_out",
                 "model.vae.decoder.conv_out -> conv_out",
+                "mid_block.attentions.0 -> mid_block.attention",
+                "up_blocks.N.upsamplers.0 -> up_blocks.N.upsampler",
+                "to_out.0 -> to_out",
             ]),
     }
 }

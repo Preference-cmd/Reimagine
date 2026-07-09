@@ -506,16 +506,28 @@ fn map_source_component(
     }
 
     let mut all_tensors: Vec<BurnSyntheticTensor> = mapped_tensors;
+    let mut seen_targets: std::collections::BTreeSet<String> =
+        all_tensors.iter().map(|t| t.key.clone()).collect();
     for key in &unknown_keys {
-        if let Some(target_key) = pass_through_target(source.role, key) {
-            if let Some(tensor) = source_by_key.get(key) {
-                all_tensors.push(BurnSyntheticTensor {
-                    key: target_key,
-                    shape: tensor.shape.clone(),
-                    dtype: tensor.dtype.clone(),
-                    source: BurnTensorSource::Data(tensor.data.clone()),
-                });
-            }
+        let Some(target_key) = pass_through_target(source.role, key) else {
+            continue;
+        };
+        // Skip keys that were already mapped by the explicit mapping table
+        // (pass_through_target accepts them but the mapping table already
+        // handled the key-to-key rename).
+        if expected_keys.contains(key.as_str()) {
+            continue;
+        }
+        if !seen_targets.insert(target_key.clone()) {
+            continue;
+        }
+        if let Some(tensor) = source_by_key.get(key) {
+            all_tensors.push(BurnSyntheticTensor {
+                key: target_key,
+                shape: tensor.shape.clone(),
+                dtype: tensor.dtype.clone(),
+                source: BurnTensorSource::Data(tensor.data.clone()),
+            });
         }
     }
 
