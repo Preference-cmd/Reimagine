@@ -2,7 +2,7 @@
 
 | Issue | Status | Notes |
 | --- | --- | --- |
-| [15g: Burn real SDXL package smoke to image artifact](inference-backends/burn/issues/15g-burn-real-sdxl-package-smoke-to-image.md) | ready-for-agent | **Decision:** package+Module keyspace = **diffusers** (VAE done this branch; UNet Module topology still stage-shaped). VAE mid uses `attentions.0`/`to_out.0`, up uses `upsamplers.0`. See `.scratch/inference-backends/burn/package-dialect-diffusers.md`. Remaining: UNet diffusers topology, converter cleanup, real image smoke. |
+| [15g: Burn real SDXL package smoke to image artifact](inference-backends/burn/issues/15g-burn-real-sdxl-package-smoke-to-image.md) | ready-for-agent | Package dialect=diffusers. VAE Module aligned. UNet now hosts `attentions.N` spatial transformers + `downsamplers`/`upsamplers` on full topology (tiny path keeps legacy blocks). Next: load-policy/full forward weight bind + converter cleanup + smoke. |
 
 ### Next
 

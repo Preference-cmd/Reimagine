@@ -14,6 +14,8 @@ use burn_nn::{
 };
 use burn_tensor::{Int, Tensor, activation, backend::Backend};
 
+use super::diffusers_blocks::SdxlSpatialTransformer;
+
 /// Reimagine-owned SDXL UNet topology facts.
 #[derive(Debug, Clone)]
 pub struct SdxlUnetTopology {
@@ -86,6 +88,7 @@ impl SdxlUnetTopology {
                     num_heads: 2,
                     num_groups: 2,
                 }],
+                attentions: Vec::new(),
                 skip_policy: SdxlSkipPolicy::None,
                 sampling: SdxlSamplingOp::None,
             }],
@@ -95,94 +98,72 @@ impl SdxlUnetTopology {
     }
 
     pub fn sdxl_base() -> Self {
-        let down_stage = |role: SdxlStageRole,
-                          in_channels: usize,
-                          out_channels: usize,
-                          heads: usize,
-                          skip_policy: SdxlSkipPolicy,
-                          sampling: SdxlSamplingOp| SdxlStageSpec {
-            role,
-            resnets: vec![
-                SdxlResBlockSpec {
-                    in_channels,
-                    out_channels,
-                    num_groups: 32,
-                },
-                SdxlResBlockSpec {
-                    in_channels: out_channels,
-                    out_channels,
-                    num_groups: 32,
-                },
-            ],
-            self_attn_blocks: vec![SdxlSelfAttentionBlockSpec {
-                channels: out_channels,
-                num_heads: heads,
-                num_groups: 32,
-            }],
-            cross_attn_blocks: vec![SdxlCrossAttentionBlockSpec {
-                channels: out_channels,
-                context_dim: 2048,
-                num_heads: heads,
-                num_groups: 32,
-            }],
-            skip_policy,
-            sampling,
+        let res = |in_channels, out_channels| SdxlResBlockSpec {
+            in_channels,
+            out_channels,
+            num_groups: 32,
         };
-
-        // Diffusers/SGM SDXL skip ownership:
-        // - conv_in plus every down residual (and downsample) pushes one skip
-        // - each up residual pops one skip before the residual
-        // First up residual of a stage uses prev stage channels + skip; later
-        // residuals use hidden_out + skip.
-        //
-        //   up0 (prev=1280, out=1280): 2560, 2560, 1920  skips [1280,1280,640]
-        //   up1 (prev=1280, out=640):  1920, 1280, 960   skips [640,640,320]
-        //   up2 (prev=640,  out=320):  960,  640,  640   skips [320,320,320]
-        fn up_block(
-            role: SdxlStageRole,
-            prev_channels: usize,
-            hidden_out: usize,
-            skip_consumptions: &[usize],
-            heads: usize,
-            has_upsample: bool,
-        ) -> SdxlStageSpec {
-            SdxlStageSpec {
-                role,
-                resnets: skip_consumptions
-                    .iter()
-                    .enumerate()
-                    .map(|(index, &skip_ch)| {
-                        let base_channels = if index == 0 {
-                            prev_channels
-                        } else {
-                            hidden_out
-                        };
-                        SdxlResBlockSpec {
-                            in_channels: base_channels + skip_ch,
-                            out_channels: hidden_out,
-                            num_groups: 32,
-                        }
-                    })
-                    .collect(),
-                self_attn_blocks: vec![SdxlSelfAttentionBlockSpec {
-                    channels: hidden_out,
-                    num_heads: heads,
-                    num_groups: 32,
-                }],
-                cross_attn_blocks: vec![SdxlCrossAttentionBlockSpec {
-                    channels: hidden_out,
-                    context_dim: 2048,
-                    num_heads: heads,
-                    num_groups: 32,
-                }],
-                skip_policy: SdxlSkipPolicy::Pop,
-                sampling: if has_upsample {
-                    SdxlSamplingOp::Upsample2d
-                } else {
-                    SdxlSamplingOp::None
-                },
-            }
-        }
+        let attn = |channels, heads, layers| SdxlSpatialTransformerSpec {
+            channels,
+            context_dim: 2048,
+            num_heads: heads,
+            num_layers: layers,
+            num_groups: 32,
+        };
+        let down = |in_ch, out_ch, heads, layers, has_ds| SdxlStageSpec {
+            role: SdxlStageRole::Down,
+            resnets: vec![res(in_ch, out_ch), res(out_ch, out_ch)],
+            self_attn_blocks: Vec::new(),
+            cross_attn_blocks: Vec::new(),
+            attentions: if layers == 0 {
+                Vec::new()
+            } else {
+                vec![attn(out_ch, heads, layers), attn(out_ch, heads, layers)]
+            },
+            skip_policy: SdxlSkipPolicy::Push,
+            sampling: if has_ds {
+                SdxlSamplingOp::Downsample2d
+            } else {
+                SdxlSamplingOp::None
+            },
+        };
+        let mid = SdxlStageSpec {
+            role: SdxlStageRole::Middle,
+            resnets: vec![res(1280, 1280), res(1280, 1280)],
+            self_attn_blocks: Vec::new(),
+            cross_attn_blocks: Vec::new(),
+            attentions: vec![attn(1280, 20, 10)],
+            skip_policy: SdxlSkipPolicy::None,
+            sampling: SdxlSamplingOp::None,
+        };
+        let up = |prev, out, skip_chs: &[usize], heads, layers, has_us| SdxlStageSpec {
+            role: SdxlStageRole::Up,
+            resnets: skip_chs
+                .iter()
+                .enumerate()
+                .map(|(index, &sk)| {
+                    let base = if index == 0 { prev } else { out };
+                    res(base + sk, out)
+                })
+                .collect(),
+            self_attn_blocks: Vec::new(),
+            cross_attn_blocks: Vec::new(),
+            attentions: if layers == 0 {
+                Vec::new()
+            } else {
+                vec![
+                    attn(out, heads, layers),
+                    attn(out, heads, layers),
+                    attn(out, heads, layers),
+                ]
+            },
+            skip_policy: SdxlSkipPolicy::Pop,
+            sampling: if has_us {
+                SdxlSamplingOp::Upsample2d
+            } else {
+                SdxlSamplingOp::None
+            },
+        };
 
         Self {
             profile: SdxlUnetTopologyProfile::SdxlBase,
@@ -194,64 +175,15 @@ impl SdxlUnetTopology {
             pooled_conditioning_dim: 1280,
             time_ids_dim: 6,
             down_blocks: vec![
-                down_stage(
-                    SdxlStageRole::Down,
-                    320,
-                    320,
-                    5,
-                    SdxlSkipPolicy::Push,
-                    SdxlSamplingOp::Downsample2d,
-                ),
-                down_stage(
-                    SdxlStageRole::Down,
-                    320,
-                    640,
-                    10,
-                    SdxlSkipPolicy::Push,
-                    SdxlSamplingOp::Downsample2d,
-                ),
-                down_stage(
-                    SdxlStageRole::Down,
-                    640,
-                    1280,
-                    20,
-                    SdxlSkipPolicy::Push,
-                    SdxlSamplingOp::None,
-                ),
+                down(320, 320, 5, 0, true),
+                down(320, 640, 10, 2, true),
+                down(640, 1280, 20, 10, false),
             ],
-            middle_blocks: vec![down_stage(
-                SdxlStageRole::Middle,
-                1280,
-                1280,
-                20,
-                SdxlSkipPolicy::None,
-                SdxlSamplingOp::None,
-            )],
+            middle_blocks: vec![mid],
             up_blocks: vec![
-                up_block(
-                    SdxlStageRole::Up,
-                    1280,
-                    1280,
-                    &[1280, 1280, 640],
-                    20,
-                    true,
-                ),
-                up_block(
-                    SdxlStageRole::Up,
-                    1280,
-                    640,
-                    &[640, 640, 320],
-                    10,
-                    true,
-                ),
-                up_block(
-                    SdxlStageRole::Up,
-                    640,
-                    320,
-                    &[320, 320, 320],
-                    5,
-                    false,
-                ),
+                up(1280, 1280, &[1280, 1280, 640], 20, 10, true),
+                up(1280, 640, &[640, 640, 320], 10, 2, true),
+                up(640, 320, &[320, 320, 320], 5, 0, false),
             ],
         }
     }
@@ -270,14 +202,33 @@ impl SdxlUnetTopology {
 
     pub fn self_attention_block_count(&self) -> usize {
         self.stages()
-            .map(|stage| stage.self_attn_blocks.len())
+            .map(|stage| {
+                stage.self_attn_blocks.len()
+                    + stage
+                        .attentions
+                        .iter()
+                        .map(|a| a.num_layers)
+                        .sum::<usize>()
+            })
             .sum()
     }
 
     pub fn cross_attention_block_count(&self) -> usize {
+        // Diffusers spatial transformers each contain cross-attn (attn2).
         self.stages()
-            .map(|stage| stage.cross_attn_blocks.len())
+            .map(|stage| {
+                stage.cross_attn_blocks.len()
+                    + stage
+                        .attentions
+                        .iter()
+                        .map(|a| a.num_layers)
+                        .sum::<usize>()
+            })
             .sum()
+    }
+
+    pub fn spatial_transformer_count(&self) -> usize {
+        self.stages().map(|stage| stage.attentions.len()).sum()
     }
 
     fn stages(&self) -> impl Iterator<Item = &SdxlStageSpec> {
@@ -292,10 +243,22 @@ impl SdxlUnetTopology {
 pub struct SdxlStageSpec {
     pub role: SdxlStageRole,
     pub resnets: Vec<SdxlResBlockSpec>,
+    /// Legacy tiny path (non-diffusers). Empty when `attentions` is used.
     pub self_attn_blocks: Vec<SdxlSelfAttentionBlockSpec>,
     pub cross_attn_blocks: Vec<SdxlCrossAttentionBlockSpec>,
+    /// Diffusers `attentions.N` spatial transformers.
+    pub attentions: Vec<SdxlSpatialTransformerSpec>,
     pub skip_policy: SdxlSkipPolicy,
     pub sampling: SdxlSamplingOp,
+}
+
+#[derive(Debug, Clone)]
+pub struct SdxlSpatialTransformerSpec {
+    pub channels: usize,
+    pub context_dim: usize,
+    pub num_heads: usize,
+    pub num_layers: usize,
+    pub num_groups: usize,
 }
 
 impl SdxlStageSpec {
@@ -677,10 +640,11 @@ pub struct SdxlUnetStage<B: Backend> {
     resnets: Vec<SdxlResBlock<B>>,
     self_attn_blocks: Vec<SdxlSelfAttentionBlock<B>>,
     cross_attn_blocks: Vec<SdxlCrossAttentionBlock<B>>,
+    attentions: Vec<SdxlSpatialTransformer<B>>,
     skip_policy: SdxlSkipPolicy,
     sampling: SdxlSamplingOp,
-    downsample: Option<Conv2d<B>>,
-    upsample: Option<SdxlUpsampleBlock>,
+    downsamplers: Vec<Conv2d<B>>,
+    upsamplers: Vec<SdxlUpsampleBlock>,
 }
 
 impl<B: Backend> SdxlUnetStage<B> {
@@ -690,13 +654,19 @@ impl<B: Backend> SdxlUnetStage<B> {
             .last()
             .map(|block| block.out_channels)
             .expect("SDXL UNet stage requires at least one residual block");
-        let downsample = spec.has_downsample().then(|| {
-            Conv2dConfig::new([output_channels, output_channels], [3, 3])
+        let downsamplers = if spec.has_downsample() {
+            vec![Conv2dConfig::new([output_channels, output_channels], [3, 3])
                 .with_stride([2, 2])
                 .with_padding(PaddingConfig2d::Explicit(1, 1, 1, 1))
-                .init(device)
-        });
-        let upsample = spec.has_upsample().then(SdxlUpsampleBlock::new);
+                .init(device)]
+        } else {
+            Vec::new()
+        };
+        let upsamplers = if spec.has_upsample() {
+            vec![SdxlUpsampleBlock::new()]
+        } else {
+            Vec::new()
+        };
         Self {
             role: spec.role,
             resnets: spec
@@ -737,10 +707,24 @@ impl<B: Backend> SdxlUnetStage<B> {
                     )
                 })
                 .collect(),
+            attentions: spec
+                .attentions
+                .iter()
+                .map(|spec| {
+                    SdxlSpatialTransformer::init(
+                        spec.channels,
+                        spec.context_dim,
+                        spec.num_heads,
+                        spec.num_layers,
+                        spec.num_groups,
+                        device,
+                    )
+                })
+                .collect(),
             skip_policy: spec.skip_policy,
             sampling: spec.sampling,
-            downsample,
-            upsample,
+            downsamplers,
+            upsamplers,
         }
     }
 
@@ -759,22 +743,26 @@ impl<B: Backend> SdxlUnetStage<B> {
                 skips.push(hidden.clone());
             }
         }
-        for block in &self.self_attn_blocks {
-            hidden = block.forward(hidden);
-        }
-        for block in &self.cross_attn_blocks {
-            hidden = block.forward(hidden, conditioning.clone());
-        }
-        let hidden = match &self.downsample {
-            Some(downsample) => {
-                let hidden = downsample.forward(hidden);
-                if self.pushes_skip() {
-                    // Downsample output is also a skip source in SGM/diffusers.
-                    skips.push(hidden.clone());
-                }
-                hidden
+        if self.attentions.is_empty() {
+            for block in &self.self_attn_blocks {
+                hidden = block.forward(hidden);
             }
-            None => hidden,
+            for block in &self.cross_attn_blocks {
+                hidden = block.forward(hidden, conditioning.clone());
+            }
+        } else {
+            for block in &self.attentions {
+                hidden = block.forward(hidden, conditioning.clone());
+            }
+        }
+        let hidden = if let Some(downsample) = self.downsamplers.first() {
+            let hidden = downsample.forward(hidden);
+            if self.pushes_skip() {
+                skips.push(hidden.clone());
+            }
+            hidden
+        } else {
+            hidden
         };
         SdxlStageOutput { hidden, skips }
     }
@@ -796,15 +784,22 @@ impl<B: Backend> SdxlUnetStage<B> {
             }
             hidden = resnet.forward_with_time(hidden, time_hidden.clone());
         }
-        for block in &self.self_attn_blocks {
-            hidden = block.forward(hidden);
+        if self.attentions.is_empty() {
+            for block in &self.self_attn_blocks {
+                hidden = block.forward(hidden);
+            }
+            for block in &self.cross_attn_blocks {
+                hidden = block.forward(hidden, conditioning.clone());
+            }
+        } else {
+            for block in &self.attentions {
+                hidden = block.forward(hidden, conditioning.clone());
+            }
         }
-        for block in &self.cross_attn_blocks {
-            hidden = block.forward(hidden, conditioning.clone());
-        }
-        match &self.upsample {
-            Some(upsample) => upsample.forward(hidden),
-            None => hidden,
+        if let Some(upsample) = self.upsamplers.first() {
+            upsample.forward(hidden)
+        } else {
+            hidden
         }
     }
 
@@ -1403,6 +1398,7 @@ mod tests {
         assert_eq!(topology.middle_blocks.len(), 1);
         assert_eq!(topology.up_blocks.len(), 3);
         assert!(topology.res_block_count() > 0);
+        assert!(topology.spatial_transformer_count() > 0);
         assert!(topology.cross_attention_block_count() > 0);
     }
 
@@ -1543,6 +1539,7 @@ mod tests {
             resnets,
             self_attn_blocks: vec![attn(channels)],
             cross_attn_blocks: vec![cross(channels)],
+            attentions: Vec::new(),
             skip_policy,
             sampling,
         };
@@ -1568,6 +1565,7 @@ mod tests {
                 .collect(),
             self_attn_blocks: vec![attn(hidden_out)],
             cross_attn_blocks: vec![cross(hidden_out)],
+            attentions: Vec::new(),
             skip_policy: super::SdxlSkipPolicy::Pop,
             sampling,
         };

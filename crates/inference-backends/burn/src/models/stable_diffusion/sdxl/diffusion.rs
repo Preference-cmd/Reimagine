@@ -1,6 +1,7 @@
 //! SDXL diffusion sampling — routine definitions and module-level
 //! re-exports for the SDXL diffusion path.
 
+mod diffusers_blocks;
 mod loading;
 pub mod module;
 mod sampler;
