@@ -8,13 +8,12 @@ use burn_core as burn;
 use burn_nn::{
     Linear, LinearConfig, PaddingConfig2d,
     conv::{Conv2d, Conv2dConfig},
-    interpolate::{Interpolate2d, Interpolate2dConfig},
     modules::attention::{MhaInput, MultiHeadAttention, MultiHeadAttentionConfig},
     norm::{GroupNorm, GroupNormConfig},
 };
 use burn_tensor::{Int, Tensor, activation, backend::Backend};
 
-use super::diffusers_blocks::SdxlSpatialTransformer;
+use super::diffusers_blocks::{SdxlDownsample2d, SdxlSpatialTransformer, SdxlUpsample2d};
 
 /// Reimagine-owned SDXL UNet topology facts.
 #[derive(Debug, Clone)]
@@ -28,7 +27,8 @@ pub struct SdxlUnetTopology {
     pub pooled_conditioning_dim: usize,
     pub time_ids_dim: usize,
     pub down_blocks: Vec<SdxlStageSpec>,
-    pub middle_blocks: Vec<SdxlStageSpec>,
+    /// Diffusers `mid_block` (single object, not a list).
+    pub mid_block: Option<SdxlMidBlockSpec>,
     pub up_blocks: Vec<SdxlStageSpec>,
 }
 
@@ -92,7 +92,7 @@ impl SdxlUnetTopology {
                 skip_policy: SdxlSkipPolicy::None,
                 sampling: SdxlSamplingOp::None,
             }],
-            middle_blocks: Vec::new(),
+            mid_block: None,
             up_blocks: Vec::new(),
         }
     }
@@ -127,14 +127,9 @@ impl SdxlUnetTopology {
                 SdxlSamplingOp::None
             },
         };
-        let mid = SdxlStageSpec {
-            role: SdxlStageRole::Middle,
+        let mid = SdxlMidBlockSpec {
             resnets: vec![res(1280, 1280), res(1280, 1280)],
-            self_attn_blocks: Vec::new(),
-            cross_attn_blocks: Vec::new(),
             attentions: vec![attn(1280, 20, 10)],
-            skip_policy: SdxlSkipPolicy::None,
-            sampling: SdxlSamplingOp::None,
         };
         let up = |prev, out, skip_chs: &[usize], heads, layers, has_us| SdxlStageSpec {
             role: SdxlStageRole::Up,
@@ -179,7 +174,7 @@ impl SdxlUnetTopology {
                 down(320, 640, 10, 2, true),
                 down(640, 1280, 20, 10, false),
             ],
-            middle_blocks: vec![mid],
+            mid_block: Some(mid),
             up_blocks: vec![
                 up(1280, 1280, &[1280, 1280, 640], 20, 10, true),
                 up(1280, 640, &[640, 640, 320], 10, 2, true),
@@ -197,11 +192,22 @@ impl SdxlUnetTopology {
     }
 
     pub fn res_block_count(&self) -> usize {
-        self.stages().map(|stage| stage.resnets.len()).sum()
+        self.down_blocks
+            .iter()
+            .map(|stage| stage.resnets.len())
+            .chain(
+                self.mid_block
+                    .iter()
+                    .map(|mid| mid.resnets.len()),
+            )
+            .chain(self.up_blocks.iter().map(|stage| stage.resnets.len()))
+            .sum()
     }
 
     pub fn self_attention_block_count(&self) -> usize {
-        self.stages()
+        self.down_blocks
+            .iter()
+            .chain(self.up_blocks.iter())
             .map(|stage| {
                 stage.self_attn_blocks.len()
                     + stage
@@ -210,12 +216,24 @@ impl SdxlUnetTopology {
                         .map(|a| a.num_layers)
                         .sum::<usize>()
             })
-            .sum()
+            .sum::<usize>()
+            + self
+                .mid_block
+                .as_ref()
+                .map(|mid| {
+                    mid.attentions
+                        .iter()
+                        .map(|a| a.num_layers)
+                        .sum::<usize>()
+                })
+                .unwrap_or(0)
     }
 
     pub fn cross_attention_block_count(&self) -> usize {
         // Diffusers spatial transformers each contain cross-attn (attn2).
-        self.stages()
+        self.down_blocks
+            .iter()
+            .chain(self.up_blocks.iter())
             .map(|stage| {
                 stage.cross_attn_blocks.len()
                     + stage
@@ -224,18 +242,30 @@ impl SdxlUnetTopology {
                         .map(|a| a.num_layers)
                         .sum::<usize>()
             })
-            .sum()
+            .sum::<usize>()
+            + self
+                .mid_block
+                .as_ref()
+                .map(|mid| {
+                    mid.attentions
+                        .iter()
+                        .map(|a| a.num_layers)
+                        .sum::<usize>()
+                })
+                .unwrap_or(0)
     }
 
     pub fn spatial_transformer_count(&self) -> usize {
-        self.stages().map(|stage| stage.attentions.len()).sum()
-    }
-
-    fn stages(&self) -> impl Iterator<Item = &SdxlStageSpec> {
         self.down_blocks
             .iter()
-            .chain(self.middle_blocks.iter())
-            .chain(self.up_blocks.iter())
+            .map(|stage| stage.attentions.len())
+            .chain(
+                self.mid_block
+                    .iter()
+                    .map(|mid| mid.attentions.len()),
+            )
+            .chain(self.up_blocks.iter().map(|stage| stage.attentions.len()))
+            .sum()
     }
 }
 
@@ -250,6 +280,13 @@ pub struct SdxlStageSpec {
     pub attentions: Vec<SdxlSpatialTransformerSpec>,
     pub skip_policy: SdxlSkipPolicy,
     pub sampling: SdxlSamplingOp,
+}
+
+/// Diffusers `mid_block` (resnets + attentions, no skip/sampling).
+#[derive(Debug, Clone)]
+pub struct SdxlMidBlockSpec {
+    pub resnets: Vec<SdxlResBlockSpec>,
+    pub attentions: Vec<SdxlSpatialTransformerSpec>,
 }
 
 #[derive(Debug, Clone)]
@@ -328,17 +365,17 @@ pub struct SdxlCrossAttentionBlockSpec {
 
 /// Minimal Burn-native SDXL UNet graph.
 ///
-/// This is the first 14j scaffold: it is intentionally small, but already uses
-/// Burn `Module<B>` members and active-backend tensors. Later 14j slices expand
-/// this into the full SDXL topology and delete the old ndarray helpers.
+/// Snapshot keyspace follows the package/diffusers dialect:
+/// `down_blocks`, `mid_block`, `up_blocks`, `time_embedding`, `conv_norm_out`.
 #[derive(Module, Debug)]
 pub struct SdxlUnet<B: Backend> {
     pub conv_in: Conv2d<B>,
     time_embedding: SdxlTimeEmbedding<B>,
     added_conditioning: SdxlAddedConditioningProjection<B>,
     down_blocks: Vec<SdxlUnetStage<B>>,
-    middle_blocks: Vec<SdxlUnetStage<B>>,
+    mid_block: Option<SdxlMidBlock<B>>,
     up_blocks: Vec<SdxlUnetStage<B>>,
+    conv_norm_out: GroupNorm<B>,
     pub conv_out: Conv2d<B>,
 }
 
@@ -372,16 +409,16 @@ impl<B: Backend> SdxlUnet<B> {
                 .iter()
                 .map(|spec| SdxlUnetStage::init(spec, topology.time_hidden_dim, device))
                 .collect(),
-            middle_blocks: topology
-                .middle_blocks
-                .iter()
-                .map(|spec| SdxlUnetStage::init(spec, topology.time_hidden_dim, device))
-                .collect(),
+            mid_block: topology.mid_block.as_ref().map(|spec| {
+                SdxlMidBlock::init(spec, topology.time_hidden_dim, device)
+            }),
             up_blocks: topology
                 .up_blocks
                 .iter()
                 .map(|spec| SdxlUnetStage::init(spec, topology.time_hidden_dim, device))
                 .collect(),
+            conv_norm_out: GroupNormConfig::new(32.min(topology.model_channels), topology.model_channels)
+                .init(device),
             conv_out: Conv2dConfig::new(
                 [topology.model_channels, topology.latent_channels],
                 [3, 3],
@@ -393,7 +430,7 @@ impl<B: Backend> SdxlUnet<B> {
 
     #[cfg(test)]
     pub(crate) fn topology_profile(&self) -> SdxlUnetTopologyProfile {
-        if self.down_blocks.len() == 3 && self.middle_blocks.len() == 1 && self.up_blocks.len() == 3
+        if self.down_blocks.len() == 3 && self.mid_block.is_some() && self.up_blocks.len() == 3
         {
             SdxlUnetTopologyProfile::SdxlBase
         } else {
@@ -446,10 +483,8 @@ impl<B: Backend> SdxlUnet<B> {
             hidden = output.hidden;
             skip_stack.extend(output.skips);
         }
-        for stage in &self.middle_blocks {
-            hidden = stage
-                .forward(hidden, time_hidden.clone(), conditioning.clone())
-                .hidden;
+        if let Some(mid) = &self.mid_block {
+            hidden = mid.forward(hidden, time_hidden.clone(), conditioning.clone());
         }
         for stage in &self.up_blocks {
             hidden = stage.forward_up(
@@ -459,11 +494,17 @@ impl<B: Backend> SdxlUnet<B> {
                 &mut skip_stack,
             );
         }
+        let hidden = activation::silu(self.conv_norm_out.forward(hidden));
         self.conv_out.forward(hidden)
     }
 
     pub fn input_block_count(&self) -> usize {
-        self.stage_iter().map(|stage| stage.resnets.len()).sum()
+        self.stage_iter().map(|stage| stage.resnets.len()).sum::<usize>()
+            + self
+                .mid_block
+                .as_ref()
+                .map(|mid| mid.resnets.len())
+                .unwrap_or(0)
     }
 
     pub fn attention_block_count(&self) -> usize {
@@ -483,6 +524,18 @@ impl<B: Backend> SdxlUnet<B> {
             .flat_map(|stage| stage.cross_attn_blocks.iter())
             .next()
             .map(SdxlCrossAttentionBlock::context_dim)
+            .or_else(|| {
+                self.stage_iter()
+                    .flat_map(|stage| stage.attentions.iter())
+                    .next()
+                    .map(SdxlSpatialTransformer::context_dim)
+            })
+            .or_else(|| {
+                self.mid_block
+                    .as_ref()
+                    .and_then(|mid| mid.attentions.first())
+                    .map(SdxlSpatialTransformer::context_dim)
+            })
     }
 
     pub fn time_embedding_dims(&self) -> [usize; 2] {
@@ -498,7 +551,7 @@ impl<B: Backend> SdxlUnet<B> {
     }
 
     pub fn middle_block_count(&self) -> usize {
-        self.middle_blocks.len()
+        usize::from(self.mid_block.is_some())
     }
 
     pub fn up_block_count(&self) -> usize {
@@ -514,9 +567,7 @@ impl<B: Backend> SdxlUnet<B> {
     }
 
     pub fn middle_path_has_no_skip_mutation(&self) -> bool {
-        self.middle_blocks
-            .iter()
-            .all(|stage| !stage.pushes_skip() && !stage.pops_skip())
+        true
     }
 
     pub fn up_path_pops_skip(&self) -> bool {
@@ -528,10 +579,7 @@ impl<B: Backend> SdxlUnet<B> {
     }
 
     fn stage_iter(&self) -> impl Iterator<Item = &SdxlUnetStage<B>> {
-        self.down_blocks
-            .iter()
-            .chain(self.middle_blocks.iter())
-            .chain(self.up_blocks.iter())
+        self.down_blocks.iter().chain(self.up_blocks.iter())
     }
 }
 
@@ -643,8 +691,8 @@ pub struct SdxlUnetStage<B: Backend> {
     attentions: Vec<SdxlSpatialTransformer<B>>,
     skip_policy: SdxlSkipPolicy,
     sampling: SdxlSamplingOp,
-    downsamplers: Vec<Conv2d<B>>,
-    upsamplers: Vec<SdxlUpsampleBlock>,
+    downsamplers: Vec<SdxlDownsample2d<B>>,
+    upsamplers: Vec<SdxlUpsample2d<B>>,
 }
 
 impl<B: Backend> SdxlUnetStage<B> {
@@ -655,15 +703,12 @@ impl<B: Backend> SdxlUnetStage<B> {
             .map(|block| block.out_channels)
             .expect("SDXL UNet stage requires at least one residual block");
         let downsamplers = if spec.has_downsample() {
-            vec![Conv2dConfig::new([output_channels, output_channels], [3, 3])
-                .with_stride([2, 2])
-                .with_padding(PaddingConfig2d::Explicit(1, 1, 1, 1))
-                .init(device)]
+            vec![SdxlDownsample2d::init(output_channels, device)]
         } else {
             Vec::new()
         };
         let upsamplers = if spec.has_upsample() {
-            vec![SdxlUpsampleBlock::new()]
+            vec![SdxlUpsample2d::init(output_channels, device)]
         } else {
             Vec::new()
         };
@@ -735,15 +780,15 @@ impl<B: Backend> SdxlUnetStage<B> {
         conditioning: Tensor<B, 3>,
     ) -> SdxlStageOutput<B> {
         let mut skips = Vec::new();
-        for block in &self.resnets {
-            hidden = block.forward_with_time(hidden, time_hidden.clone());
-            if self.pushes_skip() {
-                // Push after each residual so up stages can consume one skip per
-                // residual, matching SGM/diffusers skip cardinality.
-                skips.push(hidden.clone());
-            }
-        }
+        // Diffusers CrossAttnDownBlock2D interleaves resnet[i] then attention[i]
+        // before optional downsample. When attentions is empty, only resnets run.
         if self.attentions.is_empty() {
+            for block in &self.resnets {
+                hidden = block.forward_with_time(hidden, time_hidden.clone());
+                if self.pushes_skip() {
+                    skips.push(hidden.clone());
+                }
+            }
             for block in &self.self_attn_blocks {
                 hidden = block.forward(hidden);
             }
@@ -751,8 +796,18 @@ impl<B: Backend> SdxlUnetStage<B> {
                 hidden = block.forward(hidden, conditioning.clone());
             }
         } else {
-            for block in &self.attentions {
-                hidden = block.forward(hidden, conditioning.clone());
+            assert_eq!(
+                self.resnets.len(),
+                self.attentions.len(),
+                "diffusers down/up stage resnets and attentions must align"
+            );
+            for (resnet, attention) in self.resnets.iter().zip(self.attentions.iter()) {
+                hidden = resnet.forward_with_time(hidden, time_hidden.clone());
+                hidden = attention.forward(hidden, conditioning.clone());
+                // Diffusers emits skip after resnet+attention pair.
+                if self.pushes_skip() {
+                    skips.push(hidden.clone());
+                }
             }
         }
         let hidden = if let Some(downsample) = self.downsamplers.first() {
@@ -775,16 +830,22 @@ impl<B: Backend> SdxlUnetStage<B> {
         skip_stack: &mut Vec<Tensor<B, 4>>,
     ) -> Tensor<B, 4> {
         let mut hidden = hidden;
-        for resnet in &self.resnets {
-            if self.pops_skip() {
-                hidden = Tensor::cat(
-                    vec![hidden, skip_stack.pop().expect("SDXL UNet up stage expected a skip tensor")],
-                    1,
-                );
-            }
-            hidden = resnet.forward_with_time(hidden, time_hidden.clone());
-        }
+        // Diffusers CrossAttnUpBlock2D: for each resnet, cat skip then resnet then attention.
         if self.attentions.is_empty() {
+            for resnet in &self.resnets {
+                if self.pops_skip() {
+                    hidden = Tensor::cat(
+                        vec![
+                            hidden,
+                            skip_stack
+                                .pop()
+                                .expect("SDXL UNet up stage expected a skip tensor"),
+                        ],
+                        1,
+                    );
+                }
+                hidden = resnet.forward_with_time(hidden, time_hidden.clone());
+            }
             for block in &self.self_attn_blocks {
                 hidden = block.forward(hidden);
             }
@@ -792,8 +853,25 @@ impl<B: Backend> SdxlUnetStage<B> {
                 hidden = block.forward(hidden, conditioning.clone());
             }
         } else {
-            for block in &self.attentions {
-                hidden = block.forward(hidden, conditioning.clone());
+            assert_eq!(
+                self.resnets.len(),
+                self.attentions.len(),
+                "diffusers up stage resnets and attentions must align"
+            );
+            for (resnet, attention) in self.resnets.iter().zip(self.attentions.iter()) {
+                if self.pops_skip() {
+                    hidden = Tensor::cat(
+                        vec![
+                            hidden,
+                            skip_stack
+                                .pop()
+                                .expect("SDXL UNet up stage expected a skip tensor"),
+                        ],
+                        1,
+                    );
+                }
+                hidden = resnet.forward_with_time(hidden, time_hidden.clone());
+                hidden = attention.forward(hidden, conditioning.clone());
             }
         }
         if let Some(upsample) = self.upsamplers.first() {
@@ -824,28 +902,66 @@ impl<B: Backend> SdxlUnetStage<B> {
     }
 }
 
-struct SdxlStageOutput<B: Backend> {
-    hidden: Tensor<B, 4>,
-    skips: Vec<Tensor<B, 4>>,
+/// Diffusers `mid_block`: resnet0 → attention → resnet1.
+#[derive(Module, Debug)]
+pub struct SdxlMidBlock<B: Backend> {
+    resnets: Vec<SdxlResBlock<B>>,
+    attentions: Vec<SdxlSpatialTransformer<B>>,
 }
 
-#[derive(Clone, Module, Debug)]
-pub struct SdxlUpsampleBlock {
-    interpolate: Interpolate2d,
-}
-
-impl SdxlUpsampleBlock {
-    fn new() -> Self {
+impl<B: Backend> SdxlMidBlock<B> {
+    pub fn init(spec: &SdxlMidBlockSpec, time_hidden_dim: usize, device: &B::Device) -> Self {
         Self {
-            interpolate: Interpolate2dConfig::new()
-                .with_scale_factor(Some([2.0, 2.0]))
-                .init(),
+            resnets: spec
+                .resnets
+                .iter()
+                .map(|spec| {
+                    SdxlResBlock::init_with_time_dim(
+                        spec.in_channels,
+                        spec.out_channels,
+                        time_hidden_dim,
+                        spec.num_groups,
+                        device,
+                    )
+                })
+                .collect(),
+            attentions: spec
+                .attentions
+                .iter()
+                .map(|spec| {
+                    SdxlSpatialTransformer::init(
+                        spec.channels,
+                        spec.context_dim,
+                        spec.num_heads,
+                        spec.num_layers,
+                        spec.num_groups,
+                        device,
+                    )
+                })
+                .collect(),
         }
     }
 
-    fn forward<B: Backend>(&self, hidden: Tensor<B, 4>) -> Tensor<B, 4> {
-        self.interpolate.forward(hidden)
+    pub fn forward(
+        &self,
+        hidden: Tensor<B, 4>,
+        time_hidden: Tensor<B, 2>,
+        conditioning: Tensor<B, 3>,
+    ) -> Tensor<B, 4> {
+        let mut hidden = self.resnets[0].forward_with_time(hidden, time_hidden.clone());
+        for attention in &self.attentions {
+            hidden = attention.forward(hidden, conditioning.clone());
+        }
+        for resnet in self.resnets.iter().skip(1) {
+            hidden = resnet.forward_with_time(hidden, time_hidden.clone());
+        }
+        hidden
     }
+}
+
+struct SdxlStageOutput<B: Backend> {
+    hidden: Tensor<B, 4>,
+    skips: Vec<Tensor<B, 4>>,
 }
 
 /// Burn-native SDXL time embedding MLP scaffold.
@@ -1395,7 +1511,7 @@ mod tests {
         assert_eq!(topology.pooled_conditioning_dim, 1280);
         assert_eq!(topology.time_ids_dim, 6);
         assert_eq!(topology.down_blocks.len(), 3);
-        assert_eq!(topology.middle_blocks.len(), 1);
+        assert!(topology.mid_block.is_some());
         assert_eq!(topology.up_blocks.len(), 3);
         assert!(topology.res_block_count() > 0);
         assert!(topology.spatial_transformer_count() > 0);
@@ -1422,10 +1538,9 @@ mod tests {
         );
         assert!(
             topology
-                .middle_blocks
-                .iter()
-                .all(|stage| !stage.pushes_skip() && !stage.pops_skip()),
-            "middle block must not own skip stack mutation"
+                .mid_block
+                .is_some(),
+            "middle block must exist for full SDXL base"
         );
         assert!(
             topology
@@ -1468,10 +1583,9 @@ mod tests {
             }
         }
 
-        for stage in &topology.middle_blocks {
-            assert_eq!(stage.role(), super::SdxlStageRole::Middle);
-            assert_eq!(stage.resnets[0].in_channels, hidden_channels);
-            hidden_channels = stage
+        if let Some(mid) = &topology.mid_block {
+            assert_eq!(mid.resnets[0].in_channels, hidden_channels);
+            hidden_channels = mid
                 .resnets
                 .last()
                 .expect("middle stage should have resblocks")
@@ -1595,13 +1709,10 @@ mod tests {
                     super::SdxlSamplingOp::None,
                 ),
             ],
-            middle_blocks: vec![stage(
-                super::SdxlStageRole::Middle,
-                vec![res(8, 8)],
-                8,
-                super::SdxlSkipPolicy::None,
-                super::SdxlSamplingOp::None,
-            )],
+            mid_block: Some(super::SdxlMidBlockSpec {
+                resnets: vec![res(8, 8)],
+                attentions: Vec::new(),
+            }),
             up_blocks: vec![
                 // skips produced: conv_in(4), down0 res(4), down0 ds(4), down1 res(8)
                 up_block(

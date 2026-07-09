@@ -57,78 +57,46 @@ fn sdxl_unet_store_from_path(path: impl Into<std::path::PathBuf>) -> Safetensors
         .validate(true)
 }
 
+/// Package dialect is identity-first for diffusers UNet2DConditionModel keys.
+/// Remapper is only a compatibility layer for:
+/// - optional `model.diffusion.` prefixes
+/// - legacy SGM-style `input_blocks` / `time_embed` / `out.0`
+/// - Burn Module leaf `ff.net.2.linear.*` vs package `ff.net.2.*`
+///
+/// GroupNorm weight/bias → gamma/beta is handled by PyTorchToBurnAdapter.
 #[allow(dead_code)]
 fn sdxl_unet_key_remapper() -> KeyRemapper {
     KeyRemapper::new()
-        .add_pattern(r"^model\.diffusion\.conv_in\.", "conv_in.")
-        .expect("static diffusion conv_in remapping regex should compile")
+        // Strip optional package/source prefixes so bare module paths load identity-first.
+        .add_pattern(r"^model\.diffusion\.", "")
+        .expect("static diffusion model.diffusion prefix regex should compile")
+        // Legacy SGM-style dialect → package/module paths.
+        .add_pattern(r"^time_embed\.0\.", "time_embedding.linear_1.")
+        .expect("static diffusion time_embed.0 remapping regex should compile")
+        .add_pattern(r"^time_embed\.2\.", "time_embedding.linear_2.")
+        .expect("static diffusion time_embed.2 remapping regex should compile")
+        .add_pattern(r"^out\.0\.", "conv_out.")
+        .expect("static diffusion out.0 remapping regex should compile")
+        // Minimal first-tranche SGM residual paths used by unit fixtures.
         .add_pattern(
-            r"^model\.diffusion\.time_embed\.0\.",
-            "time_embedding.linear_1.",
-        )
-        .expect("static diffusion time embedding linear_1 regex should compile")
-        .add_pattern(
-            r"^model\.diffusion\.time_embed\.2\.",
-            "time_embedding.linear_2.",
-        )
-        .expect("static diffusion time embedding linear_2 regex should compile")
-        .add_pattern(
-            r"^model\.diffusion\.input_blocks\.1\.0\.in_layers\.2\.",
+            r"^input_blocks\.1\.0\.in_layers\.2\.",
             "down_blocks.0.resnets.0.conv1.",
         )
         .expect("static diffusion first resblock conv1 regex should compile")
         .add_pattern(
-            r"^model\.diffusion\.input_blocks\.1\.0\.emb_layers\.1\.",
+            r"^input_blocks\.1\.0\.emb_layers\.1\.",
             "down_blocks.0.resnets.0.time_emb_proj.",
         )
         .expect("static diffusion first resblock time emb proj regex should compile")
         .add_pattern(
-            r"^model\.diffusion\.input_blocks\.1\.0\.out_layers\.3\.",
+            r"^input_blocks\.1\.0\.out_layers\.3\.",
             "down_blocks.0.resnets.0.conv2.",
         )
         .expect("static diffusion first resblock conv2 regex should compile")
-        .add_pattern(
-            r"^model\.diffusion\.input_blocks\.1\.1\.transformer_blocks\.0\.attn1\.to_q\.",
-            "down_blocks.0.self_attn_blocks.0.attention.query.",
-        )
-        .expect("static diffusion first self-attention query regex should compile")
-        .add_pattern(
-            r"^model\.diffusion\.input_blocks\.1\.1\.transformer_blocks\.0\.attn1\.to_k\.",
-            "down_blocks.0.self_attn_blocks.0.attention.key.",
-        )
-        .expect("static diffusion first self-attention key regex should compile")
-        .add_pattern(
-            r"^model\.diffusion\.input_blocks\.1\.1\.transformer_blocks\.0\.attn1\.to_v\.",
-            "down_blocks.0.self_attn_blocks.0.attention.value.",
-        )
-        .expect("static diffusion first self-attention value regex should compile")
-        .add_pattern(
-            r"^model\.diffusion\.input_blocks\.1\.1\.transformer_blocks\.0\.attn1\.to_out\.0\.",
-            "down_blocks.0.self_attn_blocks.0.attention.output.",
-        )
-        .expect("static diffusion first self-attention output regex should compile")
-        .add_pattern(
-            r"^model\.diffusion\.input_blocks\.1\.1\.transformer_blocks\.0\.attn2\.to_q\.",
-            "down_blocks.0.cross_attn_blocks.0.attention.query.",
-        )
-        .expect("static diffusion first cross-attention query regex should compile")
-        .add_pattern(
-            r"^model\.diffusion\.input_blocks\.1\.1\.transformer_blocks\.0\.attn2\.to_k\.",
-            "down_blocks.0.cross_attn_blocks.0.to_k.",
-        )
-        .expect("static diffusion first cross-attention key regex should compile")
-        .add_pattern(
-            r"^model\.diffusion\.input_blocks\.1\.1\.transformer_blocks\.0\.attn2\.to_v\.",
-            "down_blocks.0.cross_attn_blocks.0.to_v.",
-        )
-        .expect("static diffusion first cross-attention value regex should compile")
-        .add_pattern(
-            r"^model\.diffusion\.input_blocks\.1\.1\.transformer_blocks\.0\.attn2\.to_out\.0\.",
-            "down_blocks.0.cross_attn_blocks.0.attention.output.",
-        )
-        .expect("static diffusion first cross-attention output regex should compile")
-        .add_pattern(r"^model\.diffusion\.out\.0\.", "conv_out.")
-        .expect("static diffusion output conv remapping regex should compile")
+        // Package stores final FF linear at `ff.net.2.{weight,bias}`; Module uses
+        // `ff.net.2.linear.{weight,bias}` because net entries are homogeneous wrappers.
+        .add_pattern(r"(\.ff\.net\.2)\.(weight|bias)$", "$1.linear.$2")
+        .expect("static diffusion ff.net.2 remapping regex should compile")
 }
 
 #[allow(dead_code)]
@@ -165,8 +133,8 @@ fn tiny_diffusion_load_policy() -> SdxlLoadPolicy {
             "conv_out.bias",
         ])
         .with_remapped_key_patterns(&[
-            "model.diffusion.conv_in -> conv_in",
-            "model.diffusion.out.0 -> conv_out",
+            "model.diffusion.* -> *",
+            "out.0 -> conv_out",
         ])
 }
 
@@ -185,6 +153,8 @@ fn sdxl_base_diffusion_load_policy() -> SdxlLoadPolicy {
             "down_blocks.0.resnets.0.time_emb_proj.bias",
             "down_blocks.0.resnets.0.conv2.weight",
             "down_blocks.0.resnets.0.conv2.bias",
+            "conv_norm_out.gamma",
+            "conv_norm_out.beta",
             "conv_out.weight",
             "conv_out.bias",
         ])
@@ -197,20 +167,26 @@ fn sdxl_base_diffusion_load_policy() -> SdxlLoadPolicy {
             "down_blocks.1.attentions.0.transformer_blocks.0.attn1.to_q.weight",
             "down_blocks.1.attentions.0.transformer_blocks.0.attn2.to_k.weight",
             "down_blocks.1.attentions.0.transformer_blocks.0.ff.net.0.proj.weight",
+            "down_blocks.1.attentions.0.transformer_blocks.0.ff.net.2.linear.weight",
             "down_blocks.1.attentions.0.proj_out.weight",
             "down_blocks.1.downsamplers.0.conv.weight",
+            "mid_block.resnets.0.conv1.weight",
+            "mid_block.attentions.0.proj_in.weight",
+            "up_blocks.0.upsamplers.0.conv.weight",
         ])
         .with_generated_snapshot_contains(&[
             ".attn1.to_q.",
             ".attn2.to_q.",
             ".transformer_blocks.",
+            "mid_block.",
         ])
         .with_remapped_key_patterns(&[
-            "model.diffusion.conv_in -> conv_in",
-            "model.diffusion.time_embed.0 -> time_embedding.linear_1",
-            "model.diffusion.time_embed.2 -> time_embedding.linear_2",
-            "model.diffusion.input_blocks -> down_blocks",
-            "model.diffusion.out.0 -> conv_out",
+            "model.diffusion.* -> *",
+            "time_embed.0 -> time_embedding.linear_1",
+            "time_embed.2 -> time_embedding.linear_2",
+            "input_blocks.1.0 -> down_blocks.0.resnets.0",
+            "out.0 -> conv_out",
+            "ff.net.2.{weight,bias} -> ff.net.2.linear.{weight,bias}",
         ])
 }
 
@@ -328,6 +304,7 @@ fn load_tensor_opt(
 #[cfg(test)]
 mod tests {
     use std::borrow::Cow;
+    use std::path::PathBuf;
 
     use burn_store::ApplyResult;
     use burn_tensor::Tensor;
@@ -410,7 +387,7 @@ mod tests {
                 && message.contains("component_role=diffusion")
                 && message.contains("conv_out.weight")
                 && message.contains("unexpected source snapshot")
-                && message.contains("model.diffusion.extra.weight")
+                && message.contains("extra.weight")
                 && message.contains("partial load policy"),
             "unexpected error: {err}"
         );
@@ -440,7 +417,7 @@ mod tests {
         for expected in [
             "required snapshot missing: time_embedding.linear_1.weight",
             "required snapshot missing: down_blocks.0.resnets.0.conv1.weight",
-            "remapped source key pattern: model.diffusion.input_blocks -> down_blocks",
+            "remapped source key pattern: model.diffusion.* -> *",
         ] {
             assert!(
                 message.contains(expected),
@@ -509,14 +486,19 @@ mod tests {
         .expect("first full-profile attention tranche should load through burn-store");
 
         for expected in [
-            "down_blocks.0.self_attn_blocks.0.attention.query.weight",
-            "down_blocks.0.self_attn_blocks.0.attention.key.weight",
-            "down_blocks.0.self_attn_blocks.0.attention.value.weight",
-            "down_blocks.0.self_attn_blocks.0.attention.output.weight",
-            "down_blocks.0.cross_attn_blocks.0.attention.query.weight",
-            "down_blocks.0.cross_attn_blocks.0.to_k.weight",
-            "down_blocks.0.cross_attn_blocks.0.to_v.weight",
-            "down_blocks.0.cross_attn_blocks.0.attention.output.weight",
+            "down_blocks.1.attentions.0.norm.gamma",
+            "down_blocks.1.attentions.0.proj_in.weight",
+            "down_blocks.1.attentions.0.transformer_blocks.0.attn1.to_q.weight",
+            "down_blocks.1.attentions.0.transformer_blocks.0.attn1.to_k.weight",
+            "down_blocks.1.attentions.0.transformer_blocks.0.attn1.to_v.weight",
+            "down_blocks.1.attentions.0.transformer_blocks.0.attn1.to_out.0.weight",
+            "down_blocks.1.attentions.0.transformer_blocks.0.attn2.to_q.weight",
+            "down_blocks.1.attentions.0.transformer_blocks.0.attn2.to_k.weight",
+            "down_blocks.1.attentions.0.transformer_blocks.0.attn2.to_v.weight",
+            "down_blocks.1.attentions.0.transformer_blocks.0.attn2.to_out.0.weight",
+            "down_blocks.1.attentions.0.transformer_blocks.0.ff.net.0.proj.weight",
+            "down_blocks.1.attentions.0.transformer_blocks.0.ff.net.2.linear.weight",
+            "down_blocks.1.attentions.0.proj_out.weight",
         ] {
             assert!(
                 result.applied.contains(&expected.to_owned()),
@@ -557,8 +539,6 @@ mod tests {
             "down_blocks.0.resnets.0.conv1.weight",
             "down_blocks.0.resnets.0.time_emb_proj.weight",
             "down_blocks.0.resnets.0.conv2.weight",
-            "down_blocks.0.self_attn_blocks.0.attention.query.weight",
-            "down_blocks.0.cross_attn_blocks.0.to_k.weight",
         ] {
             assert!(
                 result.applied.contains(&expected.to_owned()),
@@ -583,7 +563,7 @@ mod tests {
         for expected in [
             "required snapshot missing: time_embedding.linear_1.weight",
             "required snapshot missing: down_blocks.0.resnets.0.conv1.weight",
-            "remapped source key pattern: model.diffusion.input_blocks -> down_blocks",
+            "remapped source key pattern: model.diffusion.* -> *",
         ] {
             assert!(
                 report.contains(expected),
@@ -643,9 +623,9 @@ mod tests {
             super::diffusion_load_policy_for_profile(SdxlUnetTopologyProfile::SdxlBase),
             &ApplyResult {
                 applied: vec![
-            "down_blocks.0.self_attn_blocks.0.attention.query.weight".to_owned(),
-            "down_blocks.0.self_attn_blocks.0.attention.key.weight".to_owned(),
-            "down_blocks.0.self_attn_blocks.0.attention.value.weight".to_owned(),
+                    "down_blocks.1.attentions.0.transformer_blocks.0.attn1.to_q.weight".to_owned(),
+                    "down_blocks.1.attentions.0.transformer_blocks.0.attn2.to_q.weight".to_owned(),
+                    "mid_block.attentions.0.proj_in.weight".to_owned(),
                 ],
                 skipped: Vec::new(),
                 missing: Vec::new(),
@@ -656,16 +636,72 @@ mod tests {
 
         for expected in [
             "optional snapshot missing: down_blocks.0.resnets.0.conv_shortcut.weight",
-            "generated snapshot: down_blocks.0.self_attn_blocks.0.attention.query.weight",
-            "generated snapshot: down_blocks.0.self_attn_blocks.0.attention.key.weight",
-            "generated snapshot: down_blocks.0.self_attn_blocks.0.attention.value.weight",
-            "remapped source key pattern: model.diffusion.input_blocks -> down_blocks",
+            "generated snapshot: down_blocks.1.attentions.0.transformer_blocks.0.attn1.to_q.weight",
+            "generated snapshot: down_blocks.1.attentions.0.transformer_blocks.0.attn2.to_q.weight",
+            "generated snapshot: mid_block.attentions.0.proj_in.weight",
+            "remapped source key pattern: model.diffusion.* -> *",
         ] {
             assert!(
                 report.contains(expected),
                 "missing `{expected}` in:\n{report}"
             );
         }
+    }
+
+    #[test]
+    fn real_package_diffusion_binds_through_full_profile_unet_when_env_set() {
+        let Ok(package_root) = std::env::var("REIMAGINE_BURN_REAL_SDXL_PACKAGE") else {
+            eprintln!("skip real package bind check: REIMAGINE_BURN_REAL_SDXL_PACKAGE unset");
+            return;
+        };
+        let diffusion_path = PathBuf::from(package_root).join("diffusion/model.safetensors");
+        if !diffusion_path.is_file() {
+            eprintln!("skip real package bind check: missing {}", diffusion_path.display());
+            return;
+        }
+        let config = BurnBackendConfig::new("/models", "/output");
+        let runtime = BurnRuntime::<ActiveBurnBackend>::new(active_device(config.device()));
+        let mut module = SdxlUnet::<ActiveBurnBackend>::init_from_topology(
+            &SdxlUnetTopology::sdxl_base(),
+            runtime.device(),
+        );
+        let result = super::load_unet_module_from_path_with_profile(
+            &runtime,
+            &mut module,
+            &diffusion_path,
+            SdxlUnetTopologyProfile::SdxlBase,
+        )
+        .expect("real package diffusion should bind through full-profile UNet loader");
+
+        let applied = result.applied.len();
+        let missing = result.missing.len();
+        let unused = result.unused.len();
+        eprintln!(
+            "real package UNet bind: applied={applied} missing={missing} unused={unused}"
+        );
+        for key in [
+            "conv_in.weight",
+            "time_embedding.linear_1.weight",
+            "down_blocks.0.resnets.0.conv1.weight",
+            "down_blocks.1.attentions.0.transformer_blocks.0.attn1.to_q.weight",
+            "down_blocks.1.attentions.0.transformer_blocks.0.ff.net.2.linear.weight",
+            "mid_block.attentions.0.proj_in.weight",
+            "up_blocks.0.upsamplers.0.conv.weight",
+            "conv_norm_out.gamma",
+            "conv_out.weight",
+        ] {
+            assert!(
+                result.applied.iter().any(|k| k == key),
+                "missing applied key {key}; applied sample: {:?}",
+                result.applied.iter().take(20).collect::<Vec<_>>()
+            );
+        }
+        // Package has 1676 tensors; allow residual unused for encoder-only/add_embedding-less package
+        // and generated Module-only leaves (added_conditioning, empty attention dropout slots).
+        assert!(
+            applied >= 1500,
+            "expected most package tensors applied, got applied={applied} missing={missing} unused={unused}"
+        );
     }
 
     fn write_tiny_diffusion_component(path: &std::path::Path) {
@@ -751,6 +787,16 @@ mod tests {
                 vec![0.0; 320],
             ),
             tensor_view(
+                "model.diffusion.conv_norm_out.weight",
+                vec![320],
+                vec![1.0; 320],
+            ),
+            tensor_view(
+                "model.diffusion.conv_norm_out.bias",
+                vec![320],
+                vec![0.0; 320],
+            ),
+            tensor_view(
                 "model.diffusion.out.0.weight",
                 vec![4, 320, 3, 3],
                 vec![0.01; 4 * 320 * 3 * 3],
@@ -761,46 +807,107 @@ mod tests {
 
     fn write_first_attention_diffusion_component(path: &std::path::Path) {
         let mut tensors = first_resblock_time_diffusion_tensors();
+        // Diffusers-native attention tranche at down_blocks.1 (block 0 has no attentions).
         tensors.extend([
             tensor_view(
-                "model.diffusion.input_blocks.1.1.transformer_blocks.0.attn1.to_q.weight",
-                vec![320, 320],
-                vec![0.01; 320 * 320],
+                "down_blocks.1.attentions.0.norm.weight",
+                vec![640],
+                vec![1.0; 640],
             ),
             tensor_view(
-                "model.diffusion.input_blocks.1.1.transformer_blocks.0.attn1.to_k.weight",
-                vec![320, 320],
-                vec![0.01; 320 * 320],
+                "down_blocks.1.attentions.0.norm.bias",
+                vec![640],
+                vec![0.0; 640],
             ),
             tensor_view(
-                "model.diffusion.input_blocks.1.1.transformer_blocks.0.attn1.to_v.weight",
-                vec![320, 320],
-                vec![0.01; 320 * 320],
+                "down_blocks.1.attentions.0.proj_in.weight",
+                vec![640, 640],
+                vec![0.01; 640 * 640],
             ),
             tensor_view(
-                "model.diffusion.input_blocks.1.1.transformer_blocks.0.attn1.to_out.0.weight",
-                vec![320, 320],
-                vec![0.01; 320 * 320],
+                "down_blocks.1.attentions.0.proj_in.bias",
+                vec![640],
+                vec![0.0; 640],
             ),
             tensor_view(
-                "model.diffusion.input_blocks.1.1.transformer_blocks.0.attn2.to_q.weight",
-                vec![320, 320],
-                vec![0.01; 320 * 320],
+                "down_blocks.1.attentions.0.transformer_blocks.0.attn1.to_q.weight",
+                vec![640, 640],
+                vec![0.01; 640 * 640],
             ),
             tensor_view(
-                "model.diffusion.input_blocks.1.1.transformer_blocks.0.attn2.to_k.weight",
-                vec![320, 2048],
-                vec![0.01; 320 * 2048],
+                "down_blocks.1.attentions.0.transformer_blocks.0.attn1.to_k.weight",
+                vec![640, 640],
+                vec![0.01; 640 * 640],
             ),
             tensor_view(
-                "model.diffusion.input_blocks.1.1.transformer_blocks.0.attn2.to_v.weight",
-                vec![320, 2048],
-                vec![0.01; 320 * 2048],
+                "down_blocks.1.attentions.0.transformer_blocks.0.attn1.to_v.weight",
+                vec![640, 640],
+                vec![0.01; 640 * 640],
             ),
             tensor_view(
-                "model.diffusion.input_blocks.1.1.transformer_blocks.0.attn2.to_out.0.weight",
-                vec![320, 320],
-                vec![0.01; 320 * 320],
+                "down_blocks.1.attentions.0.transformer_blocks.0.attn1.to_out.0.weight",
+                vec![640, 640],
+                vec![0.01; 640 * 640],
+            ),
+            tensor_view(
+                "down_blocks.1.attentions.0.transformer_blocks.0.attn1.to_out.0.bias",
+                vec![640],
+                vec![0.0; 640],
+            ),
+            tensor_view(
+                "down_blocks.1.attentions.0.transformer_blocks.0.attn2.to_q.weight",
+                vec![640, 640],
+                vec![0.01; 640 * 640],
+            ),
+            tensor_view(
+                "down_blocks.1.attentions.0.transformer_blocks.0.attn2.to_k.weight",
+                vec![640, 2048],
+                vec![0.01; 640 * 2048],
+            ),
+            tensor_view(
+                "down_blocks.1.attentions.0.transformer_blocks.0.attn2.to_v.weight",
+                vec![640, 2048],
+                vec![0.01; 640 * 2048],
+            ),
+            tensor_view(
+                "down_blocks.1.attentions.0.transformer_blocks.0.attn2.to_out.0.weight",
+                vec![640, 640],
+                vec![0.01; 640 * 640],
+            ),
+            tensor_view(
+                "down_blocks.1.attentions.0.transformer_blocks.0.attn2.to_out.0.bias",
+                vec![640],
+                vec![0.0; 640],
+            ),
+            tensor_view(
+                "down_blocks.1.attentions.0.transformer_blocks.0.ff.net.0.proj.weight",
+                vec![5120, 640],
+                vec![0.01; 5120 * 640],
+            ),
+            tensor_view(
+                "down_blocks.1.attentions.0.transformer_blocks.0.ff.net.0.proj.bias",
+                vec![5120],
+                vec![0.0; 5120],
+            ),
+            tensor_view(
+                "down_blocks.1.attentions.0.transformer_blocks.0.ff.net.2.weight",
+                vec![640, 2560],
+                vec![0.01; 640 * 2560],
+            ),
+            tensor_view(
+                "down_blocks.1.attentions.0.transformer_blocks.0.ff.net.2.bias",
+                vec![640],
+                vec![0.0; 640],
+            ),
+            tensor_view(
+                "down_blocks.1.attentions.0.proj_out.weight",
+                vec![640, 640],
+                vec![0.01; 640 * 640],
+            ),
+            tensor_view(
+                "down_blocks.1.attentions.0.proj_out.bias",
+                vec![640],
+                vec![0.0; 640],
             ),
         ]);
         safetensors::tensor::serialize_to_file(tensors, None, path)

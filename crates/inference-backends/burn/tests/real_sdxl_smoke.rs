@@ -25,9 +25,14 @@ const SEED_ENV: &str = "REIMAGINE_BURN_REAL_SDXL_SEED";
 const DEVICE_ENV: &str = "REIMAGINE_BURN_REAL_SDXL_DEVICE";
 const PROMPT_ENV: &str = "REIMAGINE_BURN_REAL_SDXL_PROMPT";
 const NEGATIVE_PROMPT_ENV: &str = "REIMAGINE_BURN_REAL_SDXL_NEGATIVE_PROMPT";
+const WIDTH_ENV: &str = "REIMAGINE_BURN_REAL_SDXL_WIDTH";
+const HEIGHT_ENV: &str = "REIMAGINE_BURN_REAL_SDXL_HEIGHT";
+const STOP_AFTER_ENV: &str = "REIMAGINE_BURN_REAL_SDXL_STOP_AFTER";
 const CONVERTER_VERSION_MARKER: &str = "burn-sdxl-package-15h-v1";
 const RUN_ID: &str = "run-burn-real-sdxl-smoke";
 const WORKFLOW_ID: &str = "wf-burn-real-sdxl-smoke";
+const DEFAULT_LATENT_SIZE: u32 = 1024;
+const LATENT_SCALE: u32 = 8;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 enum RealSdxlSmokeConfig {
@@ -40,6 +45,9 @@ enum RealSdxlSmokeConfig {
         model_id: String,
         steps: u32,
         seed: u64,
+        width: u32,
+        height: u32,
+        stop_after: Option<RealSdxlSmokeStage>,
         device_label: Option<String>,
         prompt: String,
         negative_prompt: String,
@@ -55,6 +63,33 @@ enum RealSdxlPackageOrigin {
     },
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum RealSdxlSmokeStage {
+    PackageValidation,
+    LoadBundle,
+    TextEncode,
+    LatentCreate,
+    Sampler,
+    VaeDecode,
+    Preview,
+    Save,
+}
+
+impl RealSdxlSmokeStage {
+    const fn as_str(self) -> &'static str {
+        match self {
+            Self::PackageValidation => "package_validation",
+            Self::LoadBundle => "load_bundle",
+            Self::TextEncode => "text_encode",
+            Self::LatentCreate => "latent_create",
+            Self::Sampler => "sampler",
+            Self::VaeDecode => "vae_decode",
+            Self::Preview => "preview",
+            Self::Save => "save",
+        }
+    }
+}
+
 #[derive(serde::Deserialize)]
 struct ConversionReportView {
     package: Option<PackageReportView>,
@@ -65,8 +100,62 @@ struct PackageReportView {
     converter_version: String,
 }
 
+fn parse_positive_u32(value: &str) -> Option<u32> {
+    value.parse::<u32>().ok().filter(|n| *n > 0)
+}
+
+fn parse_latent_dim(value: &str, axis: &str) -> Result<u32, String> {
+    let dim = parse_positive_u32(value).ok_or_else(|| {
+        format!("{axis} must be a positive integer multiple of {LATENT_SCALE}, got `{value}`")
+    })?;
+    if !dim.is_multiple_of(LATENT_SCALE) {
+        return Err(format!(
+            "{axis} must be a multiple of {LATENT_SCALE}, got {dim}"
+        ));
+    }
+    Ok(dim)
+}
+
+fn parse_stop_after(value: &str) -> Result<RealSdxlSmokeStage, String> {
+    match value.trim() {
+        "package_validation" => Ok(RealSdxlSmokeStage::PackageValidation),
+        "load_bundle" => Ok(RealSdxlSmokeStage::LoadBundle),
+        "text_encode" => Ok(RealSdxlSmokeStage::TextEncode),
+        "latent_create" => Ok(RealSdxlSmokeStage::LatentCreate),
+        "sampler" => Ok(RealSdxlSmokeStage::Sampler),
+        "vae_decode" => Ok(RealSdxlSmokeStage::VaeDecode),
+        "preview" => Ok(RealSdxlSmokeStage::Preview),
+        "save" => Ok(RealSdxlSmokeStage::Save),
+        other => Err(format!(
+            "unknown {STOP_AFTER_ENV}={other}; expected package_validation|load_bundle|text_encode|latent_create|sampler|vae_decode|preview|save"
+        )),
+    }
+}
+
 impl RealSdxlSmokeConfig {
     fn from_env_getter(get: impl Fn(&str) -> Option<String>) -> Self {
+        let width = match get(WIDTH_ENV).filter(|value| !value.trim().is_empty()) {
+            Some(raw) => match parse_latent_dim(&raw, "width") {
+                Ok(width) => width,
+                Err(reason) => return Self::Skipped { reason },
+            },
+            None => DEFAULT_LATENT_SIZE,
+        };
+        let height = match get(HEIGHT_ENV).filter(|value| !value.trim().is_empty()) {
+            Some(raw) => match parse_latent_dim(&raw, "height") {
+                Ok(height) => height,
+                Err(reason) => return Self::Skipped { reason },
+            },
+            None => DEFAULT_LATENT_SIZE,
+        };
+        let stop_after = match get(STOP_AFTER_ENV).filter(|value| !value.trim().is_empty()) {
+            Some(raw) => match parse_stop_after(&raw) {
+                Ok(stage) => Some(stage),
+                Err(reason) => return Self::Skipped { reason },
+            },
+            None => None,
+        };
+
         match (
             get(PACKAGE_ROOT_ENV).filter(|value| !value.trim().is_empty()),
             get(SPLIT_SOURCE_ROOT_ENV).filter(|value| !value.trim().is_empty()),
@@ -84,6 +173,9 @@ impl RealSdxlSmokeConfig {
                 seed: get(SEED_ENV)
                     .and_then(|value| value.parse::<u64>().ok())
                     .unwrap_or(1234),
+                width,
+                height,
+                stop_after,
                 device_label: get(DEVICE_ENV).filter(|value| !value.trim().is_empty()),
                 prompt: get(PROMPT_ENV)
                     .filter(|value| !value.trim().is_empty())
@@ -114,6 +206,9 @@ impl RealSdxlSmokeConfig {
                     seed: get(SEED_ENV)
                         .and_then(|value| value.parse::<u64>().ok())
                         .unwrap_or(1234),
+                    width,
+                    height,
+                    stop_after,
                     device_label: get(DEVICE_ENV).filter(|value| !value.trim().is_empty()),
                     prompt: get(PROMPT_ENV)
                         .filter(|value| !value.trim().is_empty())
@@ -167,6 +262,9 @@ fn real_sdxl_smoke_can_bootstrap_package_from_local_split_source() {
             model_id: "burn-real-sdxl-smoke".to_owned(),
             steps: 1,
             seed: 1234,
+            width: DEFAULT_LATENT_SIZE,
+            height: DEFAULT_LATENT_SIZE,
+            stop_after: None,
             device_label: None,
             prompt: "small bright city at sunrise".to_owned(),
             negative_prompt: "low quality blur".to_owned(),
@@ -222,33 +320,6 @@ fn real_sdxl_smoke_builds_split_component_model_from_package_root() {
     }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum RealSdxlSmokeStage {
-    PackageValidation,
-    LoadBundle,
-    TextEncode,
-    LatentCreate,
-    Sampler,
-    VaeDecode,
-    Preview,
-    Save,
-}
-
-impl RealSdxlSmokeStage {
-    const fn as_str(self) -> &'static str {
-        match self {
-            Self::PackageValidation => "package_validation",
-            Self::LoadBundle => "load_bundle",
-            Self::TextEncode => "text_encode",
-            Self::LatentCreate => "latent_create",
-            Self::Sampler => "sampler",
-            Self::VaeDecode => "vae_decode",
-            Self::Preview => "preview",
-            Self::Save => "save",
-        }
-    }
-}
-
 fn stage_context<T, E: std::fmt::Display>(
     stage: RealSdxlSmokeStage,
     result: Result<T, E>,
@@ -296,6 +367,9 @@ async fn real_sdxl_component_package_runs_public_burn_capability_chain_when_enab
         model_id,
         steps,
         seed,
+        width,
+        height,
+        stop_after,
         device_label,
         prompt,
         negative_prompt,
@@ -333,15 +407,24 @@ async fn real_sdxl_component_package_runs_public_burn_capability_chain_when_enab
         validate_package_root(&package_root),
     )
     .expect("real package validation");
+    if stop_after == Some(RealSdxlSmokeStage::PackageValidation) {
+        eprintln!("real SDXL Burn smoke stopped after package_validation");
+        return;
+    }
 
     let model = resolved_model_from_package(&package_root, &model_id);
     eprintln!(
-        "real SDXL Burn smoke: package_root={}, backend_device={}, converter_marker={}, steps={}, seed={}, sampler=euler, scheduler=normal",
+        "real SDXL Burn smoke: package_root={}, backend_device={}, converter_marker={}, size={}x{}, steps={}, seed={}, stop_after={}, sampler=euler, scheduler=normal",
         package_root.display(),
         backend.config().device_label(),
         CONVERTER_VERSION_MARKER,
+        width,
+        height,
         steps,
-        seed
+        seed,
+        stop_after
+            .map(RealSdxlSmokeStage::as_str)
+            .unwrap_or("none")
     );
 
     let loaded = stage_context(
@@ -349,6 +432,17 @@ async fn real_sdxl_component_package_runs_public_burn_capability_chain_when_enab
         backend.load_bundle(load_request(model)).await,
     )
     .expect("load_bundle");
+    eprintln!(
+        "real SDXL Burn smoke load_bundle ok: model={}, clip={}, vae={}",
+        loaded.model().payload_key().as_str(),
+        loaded.clip().payload_key().as_str(),
+        loaded.vae().payload_key().as_str()
+    );
+    if stop_after == Some(RealSdxlSmokeStage::LoadBundle) {
+        eprintln!("real SDXL Burn smoke stopped after load_bundle");
+        return;
+    }
+
     let positive = stage_context(
         RealSdxlSmokeStage::TextEncode,
         backend
@@ -373,13 +467,17 @@ async fn real_sdxl_component_package_runs_public_burn_capability_chain_when_enab
     )
     .expect("negative text.encode")
     .into_conditioning();
+    if stop_after == Some(RealSdxlSmokeStage::TextEncode) {
+        eprintln!("real SDXL Burn smoke stopped after text_encode");
+        return;
+    }
 
     let latent = stage_context(
         RealSdxlSmokeStage::LatentCreate,
         backend
             .create_empty_latent(CreateEmptyLatentRequest::new(
-                1024,
-                1024,
+                width,
+                height,
                 1,
                 run_id(),
                 workflow_id(),
@@ -390,6 +488,11 @@ async fn real_sdxl_component_package_runs_public_burn_capability_chain_when_enab
     )
     .expect("latent.create_empty")
     .into_latent();
+    if stop_after == Some(RealSdxlSmokeStage::LatentCreate) {
+        eprintln!("real SDXL Burn smoke stopped after latent_create");
+        return;
+    }
+
     let sampled = stage_context(
         RealSdxlSmokeStage::Sampler,
         backend
@@ -413,6 +516,11 @@ async fn real_sdxl_component_package_runs_public_burn_capability_chain_when_enab
     )
     .expect("diffusion.sample")
     .into_latent();
+    if stop_after == Some(RealSdxlSmokeStage::Sampler) {
+        eprintln!("real SDXL Burn smoke stopped after sampler");
+        return;
+    }
+
     let image = stage_context(
         RealSdxlSmokeStage::VaeDecode,
         backend
@@ -428,6 +536,10 @@ async fn real_sdxl_component_package_runs_public_burn_capability_chain_when_enab
     )
     .expect("latent.decode")
     .into_image();
+    if stop_after == Some(RealSdxlSmokeStage::VaeDecode) {
+        eprintln!("real SDXL Burn smoke stopped after vae_decode");
+        return;
+    }
 
     let preview = stage_context(
         RealSdxlSmokeStage::Preview,
@@ -443,6 +555,15 @@ async fn real_sdxl_component_package_runs_public_burn_capability_chain_when_enab
     )
     .expect("image.preview")
     .into_artifact();
+    if stop_after == Some(RealSdxlSmokeStage::Preview) {
+        assert_png_artifact(output.path(), preview.as_str());
+        eprintln!(
+            "real SDXL Burn smoke stopped after preview: {}",
+            preview.as_str()
+        );
+        return;
+    }
+
     let saved = stage_context(
         RealSdxlSmokeStage::Save,
         backend
@@ -610,9 +731,19 @@ fn assert_png_artifact(output_root: &std::path::Path, artifact: &str) {
         artifact.ends_with(".png"),
         "artifact should be png: {artifact}"
     );
-    let path = output_root.join(artifact);
+    // Runtime artifact refs are usually `output/<filename>` relative to workspace;
+    // smoke output_root is already the backend output_dir, so strip that prefix.
+    let relative = artifact
+        .strip_prefix("output/")
+        .or_else(|| artifact.strip_prefix("output\\"))
+        .unwrap_or(artifact);
+    let path = if std::path::Path::new(artifact).is_absolute() {
+        std::path::PathBuf::from(artifact)
+    } else {
+        output_root.join(relative)
+    };
     assert!(path.is_file(), "artifact file exists: {}", path.display());
-    let bytes = std::fs::read(path).expect("read artifact");
+    let bytes = std::fs::read(&path).expect("read artifact");
     assert!(
         bytes.starts_with(b"\x89PNG\r\n\x1a\n"),
         "artifact has PNG signature"

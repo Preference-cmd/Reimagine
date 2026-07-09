@@ -135,6 +135,16 @@ const DIFFUSION_MAPPINGS: &[TensorMapping] = &[
     TensorMapping::new("model.diffusion.out.0.bias", "conv_out.bias"),
     TensorMapping::new("conv_out.weight", "conv_out.weight"),
     TensorMapping::new("conv_out.bias", "conv_out.bias"),
+    TensorMapping::new(
+        "model.diffusion.conv_norm_out.weight",
+        "conv_norm_out.weight",
+    ),
+    TensorMapping::new(
+        "model.diffusion.conv_norm_out.bias",
+        "conv_norm_out.bias",
+    ),
+    TensorMapping::new("conv_norm_out.weight", "conv_norm_out.weight"),
+    TensorMapping::new("conv_norm_out.bias", "conv_norm_out.bias"),
 ];
 const VAE_MAPPINGS: &[TensorMapping] = &[
     // decoder.conv_in → conv_in
@@ -995,6 +1005,14 @@ pub(crate) mod tests {
                     "model.diffusion.input_blocks.1.1.transformer_blocks.0.attn2.to_out.0.weight",
                     vec![320, 320],
                 ),
+                (
+                    "model.diffusion.conv_norm_out.weight",
+                    vec![320],
+                ),
+                (
+                    "model.diffusion.conv_norm_out.bias",
+                    vec![320],
+                ),
                 ("model.diffusion.out.0.weight", vec![4, 320, 3, 3]),
                 ("model.diffusion.out.0.bias", vec![4]),
             ],
@@ -1020,6 +1038,8 @@ pub(crate) mod tests {
                 ("down_blocks.0.resnets.0.time_emb_proj.bias", vec![320]),
                 ("down_blocks.0.resnets.0.conv2.weight", vec![320, 320, 3, 3]),
                 ("down_blocks.0.resnets.0.conv2.bias", vec![320]),
+                ("conv_norm_out.weight", vec![320]),
+                ("conv_norm_out.bias", vec![320]),
                 ("conv_out.weight", vec![4, 320, 3, 3]),
                 ("conv_out.bias", vec![4]),
                 ("down_blocks.0.resnets.1.conv1.weight", vec![320, 320, 3, 3]),
@@ -1230,7 +1250,7 @@ pub(crate) mod tests {
 
         assert_eq!(report.source_layout, "diffusers_style_split_safetensors");
         assert_eq!(report.output_components.len(), 4);
-        assert_eq!(report.mapped_tensor_count, 46);
+        assert_eq!(report.mapped_tensor_count, 48);
         assert!(report.diagnostics.is_empty());
         let report_json = fs::read_to_string(output.path().join("conversion-report.json"))
             .expect("conversion report");
@@ -1287,14 +1307,7 @@ pub(crate) mod tests {
             "down_blocks.0.resnets.0.conv1.weight",
             "down_blocks.0.resnets.0.time_emb_proj.weight",
             "down_blocks.0.resnets.0.conv2.weight",
-            "down_blocks.0.self_attn_blocks.0.attention.query.weight",
-            "down_blocks.0.self_attn_blocks.0.attention.key.weight",
-            "down_blocks.0.self_attn_blocks.0.attention.value.weight",
-            "down_blocks.0.self_attn_blocks.0.attention.output.weight",
-            "down_blocks.0.cross_attn_blocks.0.attention.query.weight",
-            "down_blocks.0.cross_attn_blocks.0.to_k.weight",
-            "down_blocks.0.cross_attn_blocks.0.to_v.weight",
-            "down_blocks.0.cross_attn_blocks.0.attention.output.weight",
+            "conv_norm_out.weight",
             "conv_out.weight",
         ] {
             assert!(keys.contains(expected), "missing mapped key `{expected}`");

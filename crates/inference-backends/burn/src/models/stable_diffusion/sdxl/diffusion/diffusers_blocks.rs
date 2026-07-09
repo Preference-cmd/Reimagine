@@ -6,7 +6,9 @@
 use burn::module::Module;
 use burn_core as burn;
 use burn_nn::{
-    Linear, LinearConfig,
+    Linear, LinearConfig, PaddingConfig2d,
+    conv::{Conv2d, Conv2dConfig},
+    interpolate::{Interpolate2d, Interpolate2dConfig},
     norm::{GroupNorm, GroupNormConfig, LayerNorm, LayerNormConfig},
 };
 use burn_tensor::{Tensor, activation, backend::Backend};
@@ -81,26 +83,19 @@ impl<B: Backend> SdxlDiffusersAttention<B> {
     }
 }
 
-/// Package: `ff` with nested `net.0.proj` + `net.2` via length-3 vec of wrappers.
+/// Package: `ff.net.0.proj` + remapped `ff.net.2` → `ff.net.2.linear`.
 #[derive(Module, Debug)]
 pub struct SdxlDiffusersFeedForward<B: Backend> {
     pub net: Vec<SdxlDiffusersFfNetEntry<B>>,
 }
 
 /// Homogeneous slot so `net.{i}` indices match ModuleList.
+///
+/// Package stores final Linear at `ff.net.2.{weight,bias}`; Burn Module path is
+/// `ff.net.2.linear.{weight,bias}` and the loader remaps that one leaf.
 #[derive(Module, Debug)]
 pub struct SdxlDiffusersFfNetEntry<B: Backend> {
-    /// Present on GEGLU slot (index 0).
     pub proj: Option<Linear<B>>,
-    /// Present on final Linear slot (index 2) — stored as nested linear module
-    /// fields by flattening: when only `linear` is set, keys are `net.2.weight`.
-    /// Use a dedicated Linear module field named to match... Linear's own weight
-    /// is at entry path + weight if we use Linear as the entry type only.
-    ///
-    /// For index 2 we need `net.2.weight`. That means net[2] itself is Linear.
-    /// Heterogeneous lists force a remapper for FF; keep GEGLU keys perfect and
-    /// map `ff.net.2` via a sibling Linear field `net2` with remapper, OR accept
-    /// `net.2.linear.weight` temporarily.
     pub linear: Option<Linear<B>>,
 }
 
@@ -241,6 +236,59 @@ impl<B: Backend> SdxlSpatialTransformer<B> {
             .swap_dims(2, 3)
             .swap_dims(1, 2);
         hidden + residual
+    }
+
+    pub fn context_dim(&self) -> usize {
+        self.transformer_blocks
+            .first()
+            .map(|block| block.attn2.to_k.weight.dims()[0])
+            .unwrap_or(0)
+    }
+}
+
+/// Package: `downsamplers.0.conv.*`
+#[derive(Module, Debug)]
+pub struct SdxlDownsample2d<B: Backend> {
+    pub conv: Conv2d<B>,
+}
+
+impl<B: Backend> SdxlDownsample2d<B> {
+    pub fn init(channels: usize, device: &B::Device) -> Self {
+        Self {
+            conv: Conv2dConfig::new([channels, channels], [3, 3])
+                .with_stride([2, 2])
+                .with_padding(PaddingConfig2d::Explicit(1, 1, 1, 1))
+                .init(device),
+        }
+    }
+
+    pub fn forward(&self, hidden: Tensor<B, 4>) -> Tensor<B, 4> {
+        self.conv.forward(hidden)
+    }
+}
+
+/// Package: `upsamplers.0.conv.*` (nearest upsample then 3×3 conv).
+#[derive(Module, Debug)]
+pub struct SdxlUpsample2d<B: Backend> {
+    interpolate: Interpolate2d,
+    pub conv: Conv2d<B>,
+}
+
+impl<B: Backend> SdxlUpsample2d<B> {
+    pub fn init(channels: usize, device: &B::Device) -> Self {
+        Self {
+            interpolate: Interpolate2dConfig::new()
+                .with_scale_factor(Some([2.0, 2.0]))
+                .init(),
+            conv: Conv2dConfig::new([channels, channels], [3, 3])
+                .with_padding(PaddingConfig2d::Explicit(1, 1, 1, 1))
+                .init(device),
+        }
+    }
+
+    pub fn forward(&self, hidden: Tensor<B, 4>) -> Tensor<B, 4> {
+        let hidden = self.interpolate.forward(hidden);
+        self.conv.forward(hidden)
     }
 }
 
