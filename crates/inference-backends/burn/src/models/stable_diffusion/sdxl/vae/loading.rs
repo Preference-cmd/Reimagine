@@ -56,7 +56,7 @@ fn sdxl_vae_store_from_path(path: impl Into<std::path::PathBuf>) -> SafetensorsS
 
 fn sdxl_vae_key_remapper() -> KeyRemapper {
     KeyRemapper::new()
-        .add_pattern(r"^model\.vae\.decoder\.conv_in\.", "latent_projection.")
+        .add_pattern(r"^model\.vae\.decoder\.conv_in\.", "conv_in.")
         .expect("static VAE decoder conv_in remapping regex should compile")
         .add_pattern(
             r"^model\.vae\.decoder\.mid_block\.",
@@ -91,24 +91,24 @@ fn vae_load_policy(profile: SdxlVaeDecoderLoadProfile) -> SdxlLoadPolicy {
             .with_remapped_key_patterns(&["model.vae.decoder.conv_out -> conv_out"]),
         SdxlVaeDecoderLoadProfile::SdxlBase => SdxlLoadPolicy::new("vae")
             .with_required_snapshots(&[
-                "latent_projection.weight",
-                "latent_projection.bias",
-                "mid_block.resnets.0.conv_1.weight",
-                "mid_block.resnets.0.conv_1.bias",
-                "mid_block.resnets.0.norm_1.gamma",
-                "mid_block.resnets.0.norm_1.beta",
-                "mid_block.resnets.0.norm_2.gamma",
-                "mid_block.resnets.0.norm_2.beta",
-                "mid_block.resnets.0.conv_2.weight",
-                "mid_block.resnets.0.conv_2.bias",
-                "mid_block.resnets.1.conv_1.weight",
-                "mid_block.resnets.1.conv_1.bias",
-                "mid_block.resnets.1.norm_1.gamma",
-                "mid_block.resnets.1.norm_1.beta",
-                "mid_block.resnets.1.norm_2.gamma",
-                "mid_block.resnets.1.norm_2.beta",
-                "mid_block.resnets.1.conv_2.weight",
-                "mid_block.resnets.1.conv_2.bias",
+                "conv_in.weight",
+                "conv_in.bias",
+                "mid_block.resnets.0.conv1.weight",
+                "mid_block.resnets.0.conv1.bias",
+                "mid_block.resnets.0.norm1.gamma",
+                "mid_block.resnets.0.norm1.beta",
+                "mid_block.resnets.0.norm2.gamma",
+                "mid_block.resnets.0.norm2.beta",
+                "mid_block.resnets.0.conv2.weight",
+                "mid_block.resnets.0.conv2.bias",
+                "mid_block.resnets.1.conv1.weight",
+                "mid_block.resnets.1.conv1.bias",
+                "mid_block.resnets.1.norm1.gamma",
+                "mid_block.resnets.1.norm1.beta",
+                "mid_block.resnets.1.norm2.gamma",
+                "mid_block.resnets.1.norm2.beta",
+                "mid_block.resnets.1.conv2.weight",
+                "mid_block.resnets.1.conv2.bias",
                 "mid_block.attention.group_norm.gamma",
                 "mid_block.attention.group_norm.beta",
                 "mid_block.attention.to_q.weight",
@@ -120,122 +120,122 @@ fn vae_load_policy(profile: SdxlVaeDecoderLoadProfile) -> SdxlLoadPolicy {
                 "mid_block.attention.to_out.weight",
                 "mid_block.attention.to_out.bias",
                 // up_blocks.0: 3 resnets @ 512, upsampler
-                "up_blocks.0.resnets.0.conv_1.weight",
-                "up_blocks.0.resnets.0.conv_1.bias",
-                "up_blocks.0.resnets.0.norm_1.gamma",
-                "up_blocks.0.resnets.0.norm_1.beta",
-                "up_blocks.0.resnets.0.norm_2.gamma",
-                "up_blocks.0.resnets.0.norm_2.beta",
-                "up_blocks.0.resnets.0.conv_2.weight",
-                "up_blocks.0.resnets.0.conv_2.bias",
-                "up_blocks.0.resnets.1.conv_1.weight",
-                "up_blocks.0.resnets.1.conv_1.bias",
-                "up_blocks.0.resnets.1.norm_1.gamma",
-                "up_blocks.0.resnets.1.norm_1.beta",
-                "up_blocks.0.resnets.1.norm_2.gamma",
-                "up_blocks.0.resnets.1.norm_2.beta",
-                "up_blocks.0.resnets.1.conv_2.weight",
-                "up_blocks.0.resnets.1.conv_2.bias",
-                "up_blocks.0.resnets.2.conv_1.weight",
-                "up_blocks.0.resnets.2.conv_1.bias",
-                "up_blocks.0.resnets.2.norm_1.gamma",
-                "up_blocks.0.resnets.2.norm_1.beta",
-                "up_blocks.0.resnets.2.norm_2.gamma",
-                "up_blocks.0.resnets.2.norm_2.beta",
-                "up_blocks.0.resnets.2.conv_2.weight",
-                "up_blocks.0.resnets.2.conv_2.bias",
+                "up_blocks.0.resnets.0.conv1.weight",
+                "up_blocks.0.resnets.0.conv1.bias",
+                "up_blocks.0.resnets.0.norm1.gamma",
+                "up_blocks.0.resnets.0.norm1.beta",
+                "up_blocks.0.resnets.0.norm2.gamma",
+                "up_blocks.0.resnets.0.norm2.beta",
+                "up_blocks.0.resnets.0.conv2.weight",
+                "up_blocks.0.resnets.0.conv2.bias",
+                "up_blocks.0.resnets.1.conv1.weight",
+                "up_blocks.0.resnets.1.conv1.bias",
+                "up_blocks.0.resnets.1.norm1.gamma",
+                "up_blocks.0.resnets.1.norm1.beta",
+                "up_blocks.0.resnets.1.norm2.gamma",
+                "up_blocks.0.resnets.1.norm2.beta",
+                "up_blocks.0.resnets.1.conv2.weight",
+                "up_blocks.0.resnets.1.conv2.bias",
+                "up_blocks.0.resnets.2.conv1.weight",
+                "up_blocks.0.resnets.2.conv1.bias",
+                "up_blocks.0.resnets.2.norm1.gamma",
+                "up_blocks.0.resnets.2.norm1.beta",
+                "up_blocks.0.resnets.2.norm2.gamma",
+                "up_blocks.0.resnets.2.norm2.beta",
+                "up_blocks.0.resnets.2.conv2.weight",
+                "up_blocks.0.resnets.2.conv2.bias",
                 "up_blocks.0.upsampler.conv.weight",
                 "up_blocks.0.upsampler.conv.bias",
                 // up_blocks.1: 3 resnets @ 512, upsampler
-                "up_blocks.1.resnets.0.conv_1.weight",
-                "up_blocks.1.resnets.0.conv_1.bias",
-                "up_blocks.1.resnets.0.norm_1.gamma",
-                "up_blocks.1.resnets.0.norm_1.beta",
-                "up_blocks.1.resnets.0.norm_2.gamma",
-                "up_blocks.1.resnets.0.norm_2.beta",
-                "up_blocks.1.resnets.0.conv_2.weight",
-                "up_blocks.1.resnets.0.conv_2.bias",
-                "up_blocks.1.resnets.1.conv_1.weight",
-                "up_blocks.1.resnets.1.conv_1.bias",
-                "up_blocks.1.resnets.1.norm_1.gamma",
-                "up_blocks.1.resnets.1.norm_1.beta",
-                "up_blocks.1.resnets.1.norm_2.gamma",
-                "up_blocks.1.resnets.1.norm_2.beta",
-                "up_blocks.1.resnets.1.conv_2.weight",
-                "up_blocks.1.resnets.1.conv_2.bias",
-                "up_blocks.1.resnets.2.conv_1.weight",
-                "up_blocks.1.resnets.2.conv_1.bias",
-                "up_blocks.1.resnets.2.norm_1.gamma",
-                "up_blocks.1.resnets.2.norm_1.beta",
-                "up_blocks.1.resnets.2.norm_2.gamma",
-                "up_blocks.1.resnets.2.norm_2.beta",
-                "up_blocks.1.resnets.2.conv_2.weight",
-                "up_blocks.1.resnets.2.conv_2.bias",
+                "up_blocks.1.resnets.0.conv1.weight",
+                "up_blocks.1.resnets.0.conv1.bias",
+                "up_blocks.1.resnets.0.norm1.gamma",
+                "up_blocks.1.resnets.0.norm1.beta",
+                "up_blocks.1.resnets.0.norm2.gamma",
+                "up_blocks.1.resnets.0.norm2.beta",
+                "up_blocks.1.resnets.0.conv2.weight",
+                "up_blocks.1.resnets.0.conv2.bias",
+                "up_blocks.1.resnets.1.conv1.weight",
+                "up_blocks.1.resnets.1.conv1.bias",
+                "up_blocks.1.resnets.1.norm1.gamma",
+                "up_blocks.1.resnets.1.norm1.beta",
+                "up_blocks.1.resnets.1.norm2.gamma",
+                "up_blocks.1.resnets.1.norm2.beta",
+                "up_blocks.1.resnets.1.conv2.weight",
+                "up_blocks.1.resnets.1.conv2.bias",
+                "up_blocks.1.resnets.2.conv1.weight",
+                "up_blocks.1.resnets.2.conv1.bias",
+                "up_blocks.1.resnets.2.norm1.gamma",
+                "up_blocks.1.resnets.2.norm1.beta",
+                "up_blocks.1.resnets.2.norm2.gamma",
+                "up_blocks.1.resnets.2.norm2.beta",
+                "up_blocks.1.resnets.2.conv2.weight",
+                "up_blocks.1.resnets.2.conv2.bias",
                 "up_blocks.1.upsampler.conv.weight",
                 "up_blocks.1.upsampler.conv.bias",
                 // up_blocks.2: 3 resnets, first has skip 512→256, upsampler
-                "up_blocks.2.resnets.0.conv_1.weight",
-                "up_blocks.2.resnets.0.conv_1.bias",
-                "up_blocks.2.resnets.0.norm_1.gamma",
-                "up_blocks.2.resnets.0.norm_1.beta",
-                "up_blocks.2.resnets.0.norm_2.gamma",
-                "up_blocks.2.resnets.0.norm_2.beta",
-                "up_blocks.2.resnets.0.conv_2.weight",
-                "up_blocks.2.resnets.0.conv_2.bias",
-                "up_blocks.2.resnets.0.skip_conv.weight",
-                "up_blocks.2.resnets.0.skip_conv.bias",
-                "up_blocks.2.resnets.1.conv_1.weight",
-                "up_blocks.2.resnets.1.conv_1.bias",
-                "up_blocks.2.resnets.1.norm_1.gamma",
-                "up_blocks.2.resnets.1.norm_1.beta",
-                "up_blocks.2.resnets.1.norm_2.gamma",
-                "up_blocks.2.resnets.1.norm_2.beta",
-                "up_blocks.2.resnets.1.conv_2.weight",
-                "up_blocks.2.resnets.1.conv_2.bias",
-                "up_blocks.2.resnets.2.conv_1.weight",
-                "up_blocks.2.resnets.2.conv_1.bias",
-                "up_blocks.2.resnets.2.norm_1.gamma",
-                "up_blocks.2.resnets.2.norm_1.beta",
-                "up_blocks.2.resnets.2.norm_2.gamma",
-                "up_blocks.2.resnets.2.norm_2.beta",
-                "up_blocks.2.resnets.2.conv_2.weight",
-                "up_blocks.2.resnets.2.conv_2.bias",
+                "up_blocks.2.resnets.0.conv1.weight",
+                "up_blocks.2.resnets.0.conv1.bias",
+                "up_blocks.2.resnets.0.norm1.gamma",
+                "up_blocks.2.resnets.0.norm1.beta",
+                "up_blocks.2.resnets.0.norm2.gamma",
+                "up_blocks.2.resnets.0.norm2.beta",
+                "up_blocks.2.resnets.0.conv2.weight",
+                "up_blocks.2.resnets.0.conv2.bias",
+                "up_blocks.2.resnets.0.conv_shortcut.weight",
+                "up_blocks.2.resnets.0.conv_shortcut.bias",
+                "up_blocks.2.resnets.1.conv1.weight",
+                "up_blocks.2.resnets.1.conv1.bias",
+                "up_blocks.2.resnets.1.norm1.gamma",
+                "up_blocks.2.resnets.1.norm1.beta",
+                "up_blocks.2.resnets.1.norm2.gamma",
+                "up_blocks.2.resnets.1.norm2.beta",
+                "up_blocks.2.resnets.1.conv2.weight",
+                "up_blocks.2.resnets.1.conv2.bias",
+                "up_blocks.2.resnets.2.conv1.weight",
+                "up_blocks.2.resnets.2.conv1.bias",
+                "up_blocks.2.resnets.2.norm1.gamma",
+                "up_blocks.2.resnets.2.norm1.beta",
+                "up_blocks.2.resnets.2.norm2.gamma",
+                "up_blocks.2.resnets.2.norm2.beta",
+                "up_blocks.2.resnets.2.conv2.weight",
+                "up_blocks.2.resnets.2.conv2.bias",
                 "up_blocks.2.upsampler.conv.weight",
                 "up_blocks.2.upsampler.conv.bias",
                 // up_blocks.3: 3 resnets, first has skip 256→128, NO upsampler
-                "up_blocks.3.resnets.0.conv_1.weight",
-                "up_blocks.3.resnets.0.conv_1.bias",
-                "up_blocks.3.resnets.0.norm_1.gamma",
-                "up_blocks.3.resnets.0.norm_1.beta",
-                "up_blocks.3.resnets.0.norm_2.gamma",
-                "up_blocks.3.resnets.0.norm_2.beta",
-                "up_blocks.3.resnets.0.conv_2.weight",
-                "up_blocks.3.resnets.0.conv_2.bias",
-                "up_blocks.3.resnets.0.skip_conv.weight",
-                "up_blocks.3.resnets.0.skip_conv.bias",
-                "up_blocks.3.resnets.1.conv_1.weight",
-                "up_blocks.3.resnets.1.conv_1.bias",
-                "up_blocks.3.resnets.1.norm_1.gamma",
-                "up_blocks.3.resnets.1.norm_1.beta",
-                "up_blocks.3.resnets.1.norm_2.gamma",
-                "up_blocks.3.resnets.1.norm_2.beta",
-                "up_blocks.3.resnets.1.conv_2.weight",
-                "up_blocks.3.resnets.1.conv_2.bias",
-                "up_blocks.3.resnets.2.conv_1.weight",
-                "up_blocks.3.resnets.2.conv_1.bias",
-                "up_blocks.3.resnets.2.norm_1.gamma",
-                "up_blocks.3.resnets.2.norm_1.beta",
-                "up_blocks.3.resnets.2.norm_2.gamma",
-                "up_blocks.3.resnets.2.norm_2.beta",
-                "up_blocks.3.resnets.2.conv_2.weight",
-                "up_blocks.3.resnets.2.conv_2.bias",
+                "up_blocks.3.resnets.0.conv1.weight",
+                "up_blocks.3.resnets.0.conv1.bias",
+                "up_blocks.3.resnets.0.norm1.gamma",
+                "up_blocks.3.resnets.0.norm1.beta",
+                "up_blocks.3.resnets.0.norm2.gamma",
+                "up_blocks.3.resnets.0.norm2.beta",
+                "up_blocks.3.resnets.0.conv2.weight",
+                "up_blocks.3.resnets.0.conv2.bias",
+                "up_blocks.3.resnets.0.conv_shortcut.weight",
+                "up_blocks.3.resnets.0.conv_shortcut.bias",
+                "up_blocks.3.resnets.1.conv1.weight",
+                "up_blocks.3.resnets.1.conv1.bias",
+                "up_blocks.3.resnets.1.norm1.gamma",
+                "up_blocks.3.resnets.1.norm1.beta",
+                "up_blocks.3.resnets.1.norm2.gamma",
+                "up_blocks.3.resnets.1.norm2.beta",
+                "up_blocks.3.resnets.1.conv2.weight",
+                "up_blocks.3.resnets.1.conv2.bias",
+                "up_blocks.3.resnets.2.conv1.weight",
+                "up_blocks.3.resnets.2.conv1.bias",
+                "up_blocks.3.resnets.2.norm1.gamma",
+                "up_blocks.3.resnets.2.norm1.beta",
+                "up_blocks.3.resnets.2.norm2.gamma",
+                "up_blocks.3.resnets.2.norm2.beta",
+                "up_blocks.3.resnets.2.conv2.weight",
+                "up_blocks.3.resnets.2.conv2.bias",
                 "conv_norm_out.gamma",
                 "conv_norm_out.beta",
                 "conv_out.weight",
                 "conv_out.bias",
             ])
             .with_remapped_key_patterns(&[
-                "model.vae.decoder.conv_in -> latent_projection",
+                "model.vae.decoder.conv_in -> conv_in",
                 "model.vae.decoder.mid_block -> mid_block",
                 "model.vae.decoder.up_blocks -> up_blocks",
                 "model.vae.decoder.conv_norm_out -> conv_norm_out",
@@ -346,9 +346,9 @@ mod tests {
         );
 
         for expected in [
-            "required snapshot missing: latent_projection.weight",
-            "required snapshot missing: up_blocks.0.resnets.0.conv_1.weight",
-            "required snapshot missing: up_blocks.2.resnets.0.skip_conv.bias",
+            "required snapshot missing: conv_in.weight",
+            "required snapshot missing: up_blocks.0.resnets.0.conv1.weight",
+            "required snapshot missing: up_blocks.2.resnets.0.conv_shortcut.bias",
         ] {
             assert!(
                 report.contains(expected),
@@ -372,7 +372,7 @@ mod tests {
 
         assert!(!report.contains("required snapshot missing"), "{report}");
         assert!(
-            !report.contains("latent_projection"),
+            !report.contains("conv_in"),
             "tiny fixture policy should not require full-profile decoder snapshots:\n{report}"
         );
     }
@@ -383,9 +383,9 @@ mod tests {
         tensors.extend([
             tensor_view(
                 "model.vae.decoder.conv_out.weight",
-                // Burn: in=128, out=3 → weight [3, 128, 3, 3]; write Burn layout [128, 3, 3, 3]
-                vec![128usize, 3, 3, 3],
-                vec![0.0f32; 128 * 3 * 3 * 3],
+                // Conv2d weight: [out_channels=3, in_channels=128, 3, 3]
+                vec![3usize, 128, 3, 3],
+                vec![0.0f32; 3 * 128 * 3 * 3],
             ),
             tensor_view(
                 "model.vae.decoder.conv_out.bias",
@@ -403,8 +403,8 @@ mod tests {
         tensors.extend([
             tensor_view(
                 "conv_out.weight",
-                vec![128usize, 3, 3, 3],
-                vec![0.0f32; 128 * 3 * 3 * 3],
+                vec![3usize, 128, 3, 3],
+                vec![0.0f32; 3 * 128 * 3 * 3],
             ),
             tensor_view("conv_out.bias", vec![3usize], vec![0.0f32; 3]),
         ]);
@@ -423,30 +423,27 @@ mod tests {
     }
 
     fn full_vae_decoder_tensors(prefix: &str) -> Vec<(String, TestTensorView)> {
-        // Write conv weights in Burn's internal layout [in, out, H, W] so that
-        // PyTorchToBurnAdapter's transpose [0,1] produces Burn's expected weight
-        // shape [out, in, H, W].
-        let latent_projection_prefix = if prefix.is_empty() {
-            "latent_projection".to_owned()
+        let conv_in_prefix = if prefix.is_empty() {
+            "conv_in".to_owned()
         } else {
             format!("{prefix}conv_in")
         };
         let mut tensors = vec![
-            // Burn: in=4, out=512 → weight [512, 4, 3, 3]; write Burn layout [4, 512, 3, 3]
+            // Conv2d weight: Burn layout [out_channels, in_channels, H, W] = [512, 4, 3, 3]
             tensor_view(
-                &format!("{latent_projection_prefix}.weight"),
-                vec![4usize, 512, 3, 3],
-                vec![0.0f32; 4 * 512 * 3 * 3],
+                &format!("{conv_in_prefix}.weight"),
+                vec![512usize, 4, 3, 3],
+                vec![0.0f32; 512 * 4 * 3 * 3],
             ),
-            // bias shape: [out=512]
+            // bias shape: [out_channels=512]
             tensor_view(
-                &format!("{latent_projection_prefix}.bias"),
+                &format!("{conv_in_prefix}.bias"),
                 vec![512usize],
                 vec![0.0f32; 512],
             ),
         ];
         for index in 0..2 {
-            for norm in ["norm_1", "norm_2"] {
+            for norm in ["norm1", "norm2"] {
                 tensors.push(tensor_view(
                     &format!("{prefix}mid_block.resnets.{index}.{norm}.gamma"),
                     vec![512usize],
@@ -458,8 +455,8 @@ mod tests {
                     vec![0.0f32; 512],
                 ));
             }
-            for conv in ["conv_1", "conv_2"] {
-                // Burn: in=512, out=512 → weight [512, 512, 3, 3]; write Burn layout [512, 512, 3, 3]
+            for conv in ["conv1", "conv2"] {
+                // Conv2d weight: [out_channels, in_channels, 3, 3] = [512, 512, 3, 3]
                 tensors.push(tensor_view(
                     &format!("{prefix}mid_block.resnets.{index}.{conv}.weight"),
                     vec![512usize, 512, 3, 3],
@@ -538,13 +535,13 @@ mod tests {
         // up_blocks.0 and .1: all 512 channels, 3 resnets each, upsampler
         for block in 0..=1 {
             for resnet in 0..3 {
-                for norm in ["norm_1", "norm_2"] {
+                for norm in ["norm1", "norm2"] {
                     let k = &format!("{prefix}up_blocks.{block}.resnets.{resnet}.{norm}.gamma");
                     tensors.push(tensor_view(k, vec![512], vec![1.0f32; 512]));
                     let k = &format!("{prefix}up_blocks.{block}.resnets.{resnet}.{norm}.beta");
                     tensors.push(tensor_view(k, vec![512], vec![0.0f32; 512]));
                 }
-                for conv in ["conv_1", "conv_2"] {
+                for conv in ["conv1", "conv2"] {
                     let k = &format!("{prefix}up_blocks.{block}.resnets.{resnet}.{conv}.weight");
                     tensors.push(tensor_view(
                         k,
@@ -560,65 +557,65 @@ mod tests {
             let k = &format!("{prefix}up_blocks.{block}.upsampler.conv.bias");
             tensors.push(tensor_view(k, vec![512], vec![0.0f32; 512]));
         }
-        // up_blocks.2: 512→256 transition, first resnet has skip_conv
+        // up_blocks.2: 512→256 transition, first resnet has conv_shortcut
         let res0 = 0;
-        for norm in ["norm_1", "norm_2"] {
+        for norm in ["norm1", "norm2"] {
             let k = &format!("{prefix}up_blocks.2.resnets.{res0}.{norm}.gamma");
-            // first resnet: norm_1 at 512, norm_2 at 256
+            // first resnet: norm1 at 512, norm2 at 256
             tensors.push(tensor_view(
                 k,
-                if norm == "norm_1" { vec![512] } else { vec![256] },
-                if norm == "norm_1" { vec![1.0f32; 512] } else { vec![1.0f32; 256] },
+                if norm == "norm1" { vec![512] } else { vec![256] },
+                if norm == "norm1" { vec![1.0f32; 512] } else { vec![1.0f32; 256] },
             ));
             let k = &format!("{prefix}up_blocks.2.resnets.{res0}.{norm}.beta");
             tensors.push(tensor_view(
                 k,
-                if norm == "norm_1" { vec![512] } else { vec![256] },
-                if norm == "norm_1" { vec![0.0f32; 512] } else { vec![0.0f32; 256] },
+                if norm == "norm1" { vec![512] } else { vec![256] },
+                if norm == "norm1" { vec![0.0f32; 512] } else { vec![0.0f32; 256] },
             ));
         }
-        // conv_1: in=512, out=256 (Burn: weight [256, 512, 3, 3]; write Burn [512, 256, 3, 3])
+        // conv1: [out=256, in=512, 3, 3]
         tensors.push(tensor_view(
-            &format!("{prefix}up_blocks.2.resnets.{res0}.conv_1.weight"),
-            vec![512, 256, 3, 3],
-            vec![0.0f32; 512 * 256 * 3 * 3],
+            &format!("{prefix}up_blocks.2.resnets.{res0}.conv1.weight"),
+            vec![256, 512, 3, 3],
+            vec![0.0f32; 256 * 512 * 3 * 3],
         ));
         tensors.push(tensor_view(
-            &format!("{prefix}up_blocks.2.resnets.{res0}.conv_1.bias"),
+            &format!("{prefix}up_blocks.2.resnets.{res0}.conv1.bias"),
             vec![256],
             vec![0.0f32; 256],
         ));
-        // conv_2: in=256, out=256
+        // conv2: [out=256, in=256, 3, 3]
         tensors.push(tensor_view(
-            &format!("{prefix}up_blocks.2.resnets.{res0}.conv_2.weight"),
+            &format!("{prefix}up_blocks.2.resnets.{res0}.conv2.weight"),
             vec![256, 256, 3, 3],
             vec![0.0f32; 256 * 256 * 3 * 3],
         ));
         tensors.push(tensor_view(
-            &format!("{prefix}up_blocks.2.resnets.{res0}.conv_2.bias"),
+            &format!("{prefix}up_blocks.2.resnets.{res0}.conv2.bias"),
             vec![256],
             vec![0.0f32; 256],
         ));
-        // skip_conv: in=512, out=256 (1x1)
+        // conv_shortcut: [out=256, in=512, 1, 1]
         tensors.push(tensor_view(
-            &format!("{prefix}up_blocks.2.resnets.{res0}.skip_conv.weight"),
-            vec![512, 256, 1, 1],
-            vec![0.0f32; 512 * 256],
+            &format!("{prefix}up_blocks.2.resnets.{res0}.conv_shortcut.weight"),
+            vec![256, 512, 1, 1],
+            vec![0.0f32; 256 * 512],
         ));
         tensors.push(tensor_view(
-            &format!("{prefix}up_blocks.2.resnets.{res0}.skip_conv.bias"),
+            &format!("{prefix}up_blocks.2.resnets.{res0}.conv_shortcut.bias"),
             vec![256],
             vec![0.0f32; 256],
         ));
         // resnets 1 and 2: all 256
         for resnet in 1..3 {
-            for norm in ["norm_1", "norm_2"] {
+            for norm in ["norm1", "norm2"] {
                 let k = &format!("{prefix}up_blocks.2.resnets.{resnet}.{norm}.gamma");
                 tensors.push(tensor_view(k, vec![256], vec![1.0f32; 256]));
                 let k = &format!("{prefix}up_blocks.2.resnets.{resnet}.{norm}.beta");
                 tensors.push(tensor_view(k, vec![256], vec![0.0f32; 256]));
             }
-            for conv in ["conv_1", "conv_2"] {
+            for conv in ["conv1", "conv2"] {
                 let k = &format!("{prefix}up_blocks.2.resnets.{resnet}.{conv}.weight");
                 tensors.push(tensor_view(
                     k,
@@ -640,62 +637,62 @@ mod tests {
             vec![256],
             vec![0.0f32; 256],
         ));
-        // up_blocks.3: 256→128 transition, first resnet has skip_conv
-        // resnet 0: norm_1 at 256, norm_2 at 128; conv_1: in=256, out=128; conv_2: 128→128; skip: 256→128
+        // up_blocks.3: 256→128 transition, first resnet has conv_shortcut
+        // resnet 0: norm1 at 256, norm2 at 128; conv1: in=256, out=128; conv2: 128→128; skip: 256→128
         let res0 = 0;
-        for norm in ["norm_1", "norm_2"] {
+        for norm in ["norm1", "norm2"] {
             let k = &format!("{prefix}up_blocks.3.resnets.{res0}.{norm}.gamma");
             tensors.push(tensor_view(
                 k,
-                if norm == "norm_1" { vec![256] } else { vec![128] },
-                if norm == "norm_1" { vec![1.0f32; 256] } else { vec![1.0f32; 128] },
+                if norm == "norm1" { vec![256] } else { vec![128] },
+                if norm == "norm1" { vec![1.0f32; 256] } else { vec![1.0f32; 128] },
             ));
             let k = &format!("{prefix}up_blocks.3.resnets.{res0}.{norm}.beta");
             tensors.push(tensor_view(
                 k,
-                if norm == "norm_1" { vec![256] } else { vec![128] },
-                if norm == "norm_1" { vec![0.0f32; 256] } else { vec![0.0f32; 128] },
+                if norm == "norm1" { vec![256] } else { vec![128] },
+                if norm == "norm1" { vec![0.0f32; 256] } else { vec![0.0f32; 128] },
             ));
         }
+	        tensors.push(tensor_view(
+	            &format!("{prefix}up_blocks.3.resnets.{res0}.conv1.weight"),
+	            vec![128, 256, 3, 3],
+	            vec![0.0f32; 128 * 256 * 3 * 3],
+	        ));
+	        tensors.push(tensor_view(
+	            &format!("{prefix}up_blocks.3.resnets.{res0}.conv1.bias"),
+	            vec![128],
+	            vec![0.0f32; 128],
+	        ));
+	        tensors.push(tensor_view(
+	            &format!("{prefix}up_blocks.3.resnets.{res0}.conv2.weight"),
+	            vec![128, 128, 3, 3],
+	            vec![0.0f32; 128 * 128 * 3 * 3],
+	        ));
+	        tensors.push(tensor_view(
+	            &format!("{prefix}up_blocks.3.resnets.{res0}.conv2.bias"),
+	            vec![128],
+	            vec![0.0f32; 128],
+	        ));
+	        tensors.push(tensor_view(
+	            &format!("{prefix}up_blocks.3.resnets.{res0}.conv_shortcut.weight"),
+	            vec![128, 256, 1, 1],
+	            vec![0.0f32; 128 * 256],
+	        ));
         tensors.push(tensor_view(
-            &format!("{prefix}up_blocks.3.resnets.{res0}.conv_1.weight"),
-            vec![256, 128, 3, 3],
-            vec![0.0f32; 256 * 128 * 3 * 3],
-        ));
-        tensors.push(tensor_view(
-            &format!("{prefix}up_blocks.3.resnets.{res0}.conv_1.bias"),
-            vec![128],
-            vec![0.0f32; 128],
-        ));
-        tensors.push(tensor_view(
-            &format!("{prefix}up_blocks.3.resnets.{res0}.conv_2.weight"),
-            vec![128, 128, 3, 3],
-            vec![0.0f32; 128 * 128 * 3 * 3],
-        ));
-        tensors.push(tensor_view(
-            &format!("{prefix}up_blocks.3.resnets.{res0}.conv_2.bias"),
-            vec![128],
-            vec![0.0f32; 128],
-        ));
-        tensors.push(tensor_view(
-            &format!("{prefix}up_blocks.3.resnets.{res0}.skip_conv.weight"),
-            vec![256, 128, 1, 1],
-            vec![0.0f32; 256 * 128],
-        ));
-        tensors.push(tensor_view(
-            &format!("{prefix}up_blocks.3.resnets.{res0}.skip_conv.bias"),
+            &format!("{prefix}up_blocks.3.resnets.{res0}.conv_shortcut.bias"),
             vec![128],
             vec![0.0f32; 128],
         ));
         // resnets 1, 2: all 128
         for resnet in 1..3 {
-            for norm in ["norm_1", "norm_2"] {
+            for norm in ["norm1", "norm2"] {
                 let k = &format!("{prefix}up_blocks.3.resnets.{resnet}.{norm}.gamma");
                 tensors.push(tensor_view(k, vec![128], vec![1.0f32; 128]));
                 let k = &format!("{prefix}up_blocks.3.resnets.{resnet}.{norm}.beta");
                 tensors.push(tensor_view(k, vec![128], vec![0.0f32; 128]));
             }
-            for conv in ["conv_1", "conv_2"] {
+            for conv in ["conv1", "conv2"] {
                 let k = &format!("{prefix}up_blocks.3.resnets.{resnet}.{conv}.weight");
                 tensors.push(tensor_view(
                     k,

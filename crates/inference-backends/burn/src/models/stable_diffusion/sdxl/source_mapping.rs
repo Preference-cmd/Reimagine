@@ -53,83 +53,83 @@ const DIFFUSION_MAPPINGS: &[TensorMapping] = &[
     ),
     TensorMapping::new(
         "model.diffusion.input_blocks.1.0.in_layers.2.weight",
-        "down_blocks.0.res_blocks.0.conv_1.weight",
+        "down_blocks.0.resnets.0.conv1.weight",
     ),
     TensorMapping::new(
         "down_blocks.0.resnets.0.conv1.weight",
-        "down_blocks.0.res_blocks.0.conv_1.weight",
+        "down_blocks.0.resnets.0.conv1.weight",
     ),
     TensorMapping::new(
         "model.diffusion.input_blocks.1.0.in_layers.2.bias",
-        "down_blocks.0.res_blocks.0.conv_1.bias",
+        "down_blocks.0.resnets.0.conv1.bias",
     ),
     TensorMapping::new(
         "down_blocks.0.resnets.0.conv1.bias",
-        "down_blocks.0.res_blocks.0.conv_1.bias",
+        "down_blocks.0.resnets.0.conv1.bias",
     ),
     TensorMapping::new(
         "model.diffusion.input_blocks.1.0.emb_layers.1.weight",
-        "down_blocks.0.res_blocks.0.time_projection.weight",
+        "down_blocks.0.resnets.0.time_emb_proj.weight",
     ),
     TensorMapping::new(
         "down_blocks.0.resnets.0.time_emb_proj.weight",
-        "down_blocks.0.res_blocks.0.time_projection.weight",
+        "down_blocks.0.resnets.0.time_emb_proj.weight",
     ),
     TensorMapping::new(
         "model.diffusion.input_blocks.1.0.emb_layers.1.bias",
-        "down_blocks.0.res_blocks.0.time_projection.bias",
+        "down_blocks.0.resnets.0.time_emb_proj.bias",
     ),
     TensorMapping::new(
         "down_blocks.0.resnets.0.time_emb_proj.bias",
-        "down_blocks.0.res_blocks.0.time_projection.bias",
+        "down_blocks.0.resnets.0.time_emb_proj.bias",
     ),
     TensorMapping::new(
         "model.diffusion.input_blocks.1.0.out_layers.3.weight",
-        "down_blocks.0.res_blocks.0.conv_2.weight",
+        "down_blocks.0.resnets.0.conv2.weight",
     ),
     TensorMapping::new(
         "down_blocks.0.resnets.0.conv2.weight",
-        "down_blocks.0.res_blocks.0.conv_2.weight",
+        "down_blocks.0.resnets.0.conv2.weight",
     ),
     TensorMapping::new(
         "model.diffusion.input_blocks.1.0.out_layers.3.bias",
-        "down_blocks.0.res_blocks.0.conv_2.bias",
+        "down_blocks.0.resnets.0.conv2.bias",
     ),
     TensorMapping::new(
         "down_blocks.0.resnets.0.conv2.bias",
-        "down_blocks.0.res_blocks.0.conv_2.bias",
+        "down_blocks.0.resnets.0.conv2.bias",
     ),
     TensorMapping::optional(
         "model.diffusion.input_blocks.1.1.transformer_blocks.0.attn1.to_q.weight",
-        "down_blocks.0.self_attention_blocks.0.attention.query.weight",
+        "down_blocks.0.self_attn_blocks.0.attention.query.weight",
     ),
     TensorMapping::optional(
         "model.diffusion.input_blocks.1.1.transformer_blocks.0.attn1.to_k.weight",
-        "down_blocks.0.self_attention_blocks.0.attention.key.weight",
+        "down_blocks.0.self_attn_blocks.0.attention.key.weight",
     ),
     TensorMapping::optional(
         "model.diffusion.input_blocks.1.1.transformer_blocks.0.attn1.to_v.weight",
-        "down_blocks.0.self_attention_blocks.0.attention.value.weight",
+        "down_blocks.0.self_attn_blocks.0.attention.value.weight",
     ),
     TensorMapping::optional(
         "model.diffusion.input_blocks.1.1.transformer_blocks.0.attn1.to_out.0.weight",
-        "down_blocks.0.self_attention_blocks.0.attention.output.weight",
+        "down_blocks.0.self_attn_blocks.0.attention.output.weight",
     ),
     TensorMapping::optional(
         "model.diffusion.input_blocks.1.1.transformer_blocks.0.attn2.to_q.weight",
-        "down_blocks.0.cross_attention_blocks.0.attention.query.weight",
+        "down_blocks.0.cross_attn_blocks.0.attention.query.weight",
     ),
     TensorMapping::optional(
         "model.diffusion.input_blocks.1.1.transformer_blocks.0.attn2.to_k.weight",
-        "down_blocks.0.cross_attention_blocks.0.context_key.weight",
+        "down_blocks.0.cross_attn_blocks.0.to_k.weight",
     ),
     TensorMapping::optional(
         "model.diffusion.input_blocks.1.1.transformer_blocks.0.attn2.to_v.weight",
-        "down_blocks.0.cross_attention_blocks.0.context_value.weight",
+        "down_blocks.0.cross_attn_blocks.0.to_v.weight",
     ),
     TensorMapping::optional(
         "model.diffusion.input_blocks.1.1.transformer_blocks.0.attn2.to_out.0.weight",
-        "down_blocks.0.cross_attention_blocks.0.attention.output.weight",
+        "down_blocks.0.cross_attn_blocks.0.attention.output.weight",
     ),
     TensorMapping::new("model.diffusion.out.0.weight", "conv_out.weight"),
     TensorMapping::new("model.diffusion.out.0.bias", "conv_out.bias"),
@@ -137,74 +137,53 @@ const DIFFUSION_MAPPINGS: &[TensorMapping] = &[
     TensorMapping::new("conv_out.bias", "conv_out.bias"),
 ];
 const VAE_MAPPINGS: &[TensorMapping] = &[
-    // conv_in → latent_projection
-    TensorMapping::new("decoder.conv_in.weight", "latent_projection.weight"),
-    TensorMapping::new("decoder.conv_in.bias", "latent_projection.bias"),
-    // mid_block resnets (old decoder.residual_blocks.* → mid_block.resnets.*)
-    TensorMapping::new(
-        "decoder.residual_blocks.0.norm_1.weight",
-        "mid_block.resnets.0.norm_1.gamma",
-    ),
-    TensorMapping::new(
-        "decoder.residual_blocks.0.norm_1.bias",
-        "mid_block.resnets.0.norm_1.beta",
-    ),
-    TensorMapping::new(
-        "decoder.residual_blocks.0.conv_1.weight",
-        "mid_block.resnets.0.conv_1.weight",
-    ),
-    TensorMapping::new(
-        "decoder.residual_blocks.0.conv_1.bias",
-        "mid_block.resnets.0.conv_1.bias",
-    ),
-    TensorMapping::new(
-        "decoder.residual_blocks.0.norm_2.weight",
-        "mid_block.resnets.0.norm_2.gamma",
-    ),
-    TensorMapping::new(
-        "decoder.residual_blocks.0.norm_2.bias",
-        "mid_block.resnets.0.norm_2.beta",
-    ),
-    TensorMapping::new(
-        "decoder.residual_blocks.0.conv_2.weight",
-        "mid_block.resnets.0.conv_2.weight",
-    ),
-    TensorMapping::new(
-        "decoder.residual_blocks.0.conv_2.bias",
-        "mid_block.resnets.0.conv_2.bias",
-    ),
-    TensorMapping::new(
-        "decoder.residual_blocks.1.norm_1.weight",
-        "mid_block.resnets.1.norm_1.gamma",
-    ),
-    TensorMapping::new(
-        "decoder.residual_blocks.1.norm_1.bias",
-        "mid_block.resnets.1.norm_1.beta",
-    ),
-    TensorMapping::new(
-        "decoder.residual_blocks.1.conv_1.weight",
-        "mid_block.resnets.1.conv_1.weight",
-    ),
-    TensorMapping::new(
-        "decoder.residual_blocks.1.conv_1.bias",
-        "mid_block.resnets.1.conv_1.bias",
-    ),
-    TensorMapping::new(
-        "decoder.residual_blocks.1.norm_2.weight",
-        "mid_block.resnets.1.norm_2.gamma",
-    ),
-    TensorMapping::new(
-        "decoder.residual_blocks.1.norm_2.bias",
-        "mid_block.resnets.1.norm_2.beta",
-    ),
-    TensorMapping::new(
-        "decoder.residual_blocks.1.conv_2.weight",
-        "mid_block.resnets.1.conv_2.weight",
-    ),
-    TensorMapping::new(
-        "decoder.residual_blocks.1.conv_2.bias",
-        "mid_block.resnets.1.conv_2.bias",
-    ),
+    // decoder.conv_in → conv_in
+    TensorMapping::new("decoder.conv_in.weight", "conv_in.weight"),
+    TensorMapping::new("decoder.conv_in.bias", "conv_in.bias"),
+    // mid_block resnets — accept two source layouts:
+    //
+    // 1. Old converter: decoder.residual_blocks.N.norm_1 / conv_1 / norm_2 / conv_2
+    // 2. Diffusers-native: decoder.mid_block.resnets.N.norm1 / conv1 / norm2 / conv2
+    //
+    // Both map to the same diffusers target key in the target.
+    // --------------------------
+    // decoder.residual_blocks.0
+    TensorMapping::new("decoder.residual_blocks.0.norm_1.weight", "mid_block.resnets.0.norm1.weight"),
+    TensorMapping::new("decoder.residual_blocks.0.norm_1.bias", "mid_block.resnets.0.norm1.bias"),
+    TensorMapping::new("decoder.residual_blocks.0.conv_1.weight", "mid_block.resnets.0.conv1.weight"),
+    TensorMapping::new("decoder.residual_blocks.0.conv_1.bias", "mid_block.resnets.0.conv1.bias"),
+    TensorMapping::new("decoder.residual_blocks.0.norm_2.weight", "mid_block.resnets.0.norm2.weight"),
+    TensorMapping::new("decoder.residual_blocks.0.norm_2.bias", "mid_block.resnets.0.norm2.bias"),
+    TensorMapping::new("decoder.residual_blocks.0.conv_2.weight", "mid_block.resnets.0.conv2.weight"),
+    TensorMapping::new("decoder.residual_blocks.0.conv_2.bias", "mid_block.resnets.0.conv2.bias"),
+    // decoder.residual_blocks.1
+    TensorMapping::new("decoder.residual_blocks.1.norm_1.weight", "mid_block.resnets.1.norm1.weight"),
+    TensorMapping::new("decoder.residual_blocks.1.norm_1.bias", "mid_block.resnets.1.norm1.bias"),
+    TensorMapping::new("decoder.residual_blocks.1.conv_1.weight", "mid_block.resnets.1.conv1.weight"),
+    TensorMapping::new("decoder.residual_blocks.1.conv_1.bias", "mid_block.resnets.1.conv1.bias"),
+    TensorMapping::new("decoder.residual_blocks.1.norm_2.weight", "mid_block.resnets.1.norm2.weight"),
+    TensorMapping::new("decoder.residual_blocks.1.norm_2.bias", "mid_block.resnets.1.norm2.bias"),
+    TensorMapping::new("decoder.residual_blocks.1.conv_2.weight", "mid_block.resnets.1.conv2.weight"),
+    TensorMapping::new("decoder.residual_blocks.1.conv_2.bias", "mid_block.resnets.1.conv2.bias"),
+    // --------------------------
+    // decoder.mid_block.resnets.0 (diffusers-native source)
+    TensorMapping::new("decoder.mid_block.resnets.0.norm1.weight", "mid_block.resnets.0.norm1.weight"),
+    TensorMapping::new("decoder.mid_block.resnets.0.norm1.bias", "mid_block.resnets.0.norm1.bias"),
+    TensorMapping::new("decoder.mid_block.resnets.0.conv1.weight", "mid_block.resnets.0.conv1.weight"),
+    TensorMapping::new("decoder.mid_block.resnets.0.conv1.bias", "mid_block.resnets.0.conv1.bias"),
+    TensorMapping::new("decoder.mid_block.resnets.0.norm2.weight", "mid_block.resnets.0.norm2.weight"),
+    TensorMapping::new("decoder.mid_block.resnets.0.norm2.bias", "mid_block.resnets.0.norm2.bias"),
+    TensorMapping::new("decoder.mid_block.resnets.0.conv2.weight", "mid_block.resnets.0.conv2.weight"),
+    TensorMapping::new("decoder.mid_block.resnets.0.conv2.bias", "mid_block.resnets.0.conv2.bias"),
+    // decoder.mid_block.resnets.1
+    TensorMapping::new("decoder.mid_block.resnets.1.norm1.weight", "mid_block.resnets.1.norm1.weight"),
+    TensorMapping::new("decoder.mid_block.resnets.1.norm1.bias", "mid_block.resnets.1.norm1.bias"),
+    TensorMapping::new("decoder.mid_block.resnets.1.conv1.weight", "mid_block.resnets.1.conv1.weight"),
+    TensorMapping::new("decoder.mid_block.resnets.1.conv1.bias", "mid_block.resnets.1.conv1.bias"),
+    TensorMapping::new("decoder.mid_block.resnets.1.norm2.weight", "mid_block.resnets.1.norm2.weight"),
+    TensorMapping::new("decoder.mid_block.resnets.1.norm2.bias", "mid_block.resnets.1.norm2.bias"),
+    TensorMapping::new("decoder.mid_block.resnets.1.conv2.weight", "mid_block.resnets.1.conv2.weight"),
+    TensorMapping::new("decoder.mid_block.resnets.1.conv2.bias", "mid_block.resnets.1.conv2.bias"),
     // conv_out
     TensorMapping::new("decoder.conv_out.weight", "conv_out.weight"),
     TensorMapping::new("decoder.conv_out.bias", "conv_out.bias"),
@@ -1101,9 +1080,9 @@ pub(crate) mod tests {
         for expected in [
             "conv_in.weight",
             "time_embedding.linear_1.weight",
-            "down_blocks.0.res_blocks.0.conv_1.weight",
-            "down_blocks.0.res_blocks.0.time_projection.weight",
-            "down_blocks.0.res_blocks.0.conv_2.weight",
+            "down_blocks.0.resnets.0.conv1.weight",
+            "down_blocks.0.resnets.0.time_emb_proj.weight",
+            "down_blocks.0.resnets.0.conv2.weight",
             "conv_out.weight",
         ] {
             assert!(diffusion_keys.contains(expected), "missing `{expected}`");
@@ -1117,9 +1096,9 @@ pub(crate) mod tests {
             .map(|entry| entry.key.as_str())
             .collect::<std::collections::BTreeSet<_>>();
         for expected in [
-            "latent_projection.weight",
-            "residual_blocks.0.conv_1.weight",
-            "residual_blocks.1.conv_2.weight",
+            "conv_in.weight",
+            "mid_block.resnets.0.conv1.weight",
+            "mid_block.resnets.1.conv2.weight",
             "conv_out.weight",
         ] {
             assert!(vae_keys.contains(expected), "missing `{expected}`");
@@ -1231,17 +1210,17 @@ pub(crate) mod tests {
             "conv_in.weight",
             "time_embedding.linear_1.weight",
             "time_embedding.linear_2.weight",
-            "down_blocks.0.res_blocks.0.conv_1.weight",
-            "down_blocks.0.res_blocks.0.time_projection.weight",
-            "down_blocks.0.res_blocks.0.conv_2.weight",
-            "down_blocks.0.self_attention_blocks.0.attention.query.weight",
-            "down_blocks.0.self_attention_blocks.0.attention.key.weight",
-            "down_blocks.0.self_attention_blocks.0.attention.value.weight",
-            "down_blocks.0.self_attention_blocks.0.attention.output.weight",
-            "down_blocks.0.cross_attention_blocks.0.attention.query.weight",
-            "down_blocks.0.cross_attention_blocks.0.context_key.weight",
-            "down_blocks.0.cross_attention_blocks.0.context_value.weight",
-            "down_blocks.0.cross_attention_blocks.0.attention.output.weight",
+            "down_blocks.0.resnets.0.conv1.weight",
+            "down_blocks.0.resnets.0.time_emb_proj.weight",
+            "down_blocks.0.resnets.0.conv2.weight",
+            "down_blocks.0.self_attn_blocks.0.attention.query.weight",
+            "down_blocks.0.self_attn_blocks.0.attention.key.weight",
+            "down_blocks.0.self_attn_blocks.0.attention.value.weight",
+            "down_blocks.0.self_attn_blocks.0.attention.output.weight",
+            "down_blocks.0.cross_attn_blocks.0.attention.query.weight",
+            "down_blocks.0.cross_attn_blocks.0.to_k.weight",
+            "down_blocks.0.cross_attn_blocks.0.to_v.weight",
+            "down_blocks.0.cross_attn_blocks.0.attention.output.weight",
             "conv_out.weight",
         ] {
             assert!(keys.contains(expected), "missing mapped key `{expected}`");
@@ -1269,10 +1248,10 @@ pub(crate) mod tests {
             .collect::<std::collections::BTreeSet<_>>();
 
         for expected in [
-            "latent_projection.weight",
-            "latent_projection.bias",
-            "mid_block.resnets.0.conv_1.weight",
-            "mid_block.resnets.1.conv_2.weight",
+            "conv_in.weight",
+            "conv_in.bias",
+            "mid_block.resnets.0.conv1.weight",
+            "mid_block.resnets.1.conv2.weight",
             "conv_out.weight",
             "conv_out.bias",
         ] {

@@ -74,57 +74,57 @@ fn sdxl_unet_key_remapper() -> KeyRemapper {
         .expect("static diffusion time embedding linear_2 regex should compile")
         .add_pattern(
             r"^model\.diffusion\.input_blocks\.1\.0\.in_layers\.2\.",
-            "down_blocks.0.res_blocks.0.conv_1.",
+            "down_blocks.0.resnets.0.conv1.",
         )
-        .expect("static diffusion first resblock conv_1 regex should compile")
+        .expect("static diffusion first resblock conv1 regex should compile")
         .add_pattern(
             r"^model\.diffusion\.input_blocks\.1\.0\.emb_layers\.1\.",
-            "down_blocks.0.res_blocks.0.time_projection.",
+            "down_blocks.0.resnets.0.time_emb_proj.",
         )
-        .expect("static diffusion first resblock time projection regex should compile")
+        .expect("static diffusion first resblock time emb proj regex should compile")
         .add_pattern(
             r"^model\.diffusion\.input_blocks\.1\.0\.out_layers\.3\.",
-            "down_blocks.0.res_blocks.0.conv_2.",
+            "down_blocks.0.resnets.0.conv2.",
         )
-        .expect("static diffusion first resblock conv_2 regex should compile")
+        .expect("static diffusion first resblock conv2 regex should compile")
         .add_pattern(
             r"^model\.diffusion\.input_blocks\.1\.1\.transformer_blocks\.0\.attn1\.to_q\.",
-            "down_blocks.0.self_attention_blocks.0.attention.query.",
+            "down_blocks.0.self_attn_blocks.0.attention.query.",
         )
         .expect("static diffusion first self-attention query regex should compile")
         .add_pattern(
             r"^model\.diffusion\.input_blocks\.1\.1\.transformer_blocks\.0\.attn1\.to_k\.",
-            "down_blocks.0.self_attention_blocks.0.attention.key.",
+            "down_blocks.0.self_attn_blocks.0.attention.key.",
         )
         .expect("static diffusion first self-attention key regex should compile")
         .add_pattern(
             r"^model\.diffusion\.input_blocks\.1\.1\.transformer_blocks\.0\.attn1\.to_v\.",
-            "down_blocks.0.self_attention_blocks.0.attention.value.",
+            "down_blocks.0.self_attn_blocks.0.attention.value.",
         )
         .expect("static diffusion first self-attention value regex should compile")
         .add_pattern(
             r"^model\.diffusion\.input_blocks\.1\.1\.transformer_blocks\.0\.attn1\.to_out\.0\.",
-            "down_blocks.0.self_attention_blocks.0.attention.output.",
+            "down_blocks.0.self_attn_blocks.0.attention.output.",
         )
         .expect("static diffusion first self-attention output regex should compile")
         .add_pattern(
             r"^model\.diffusion\.input_blocks\.1\.1\.transformer_blocks\.0\.attn2\.to_q\.",
-            "down_blocks.0.cross_attention_blocks.0.attention.query.",
+            "down_blocks.0.cross_attn_blocks.0.attention.query.",
         )
         .expect("static diffusion first cross-attention query regex should compile")
         .add_pattern(
             r"^model\.diffusion\.input_blocks\.1\.1\.transformer_blocks\.0\.attn2\.to_k\.",
-            "down_blocks.0.cross_attention_blocks.0.context_key.",
+            "down_blocks.0.cross_attn_blocks.0.to_k.",
         )
         .expect("static diffusion first cross-attention key regex should compile")
         .add_pattern(
             r"^model\.diffusion\.input_blocks\.1\.1\.transformer_blocks\.0\.attn2\.to_v\.",
-            "down_blocks.0.cross_attention_blocks.0.context_value.",
+            "down_blocks.0.cross_attn_blocks.0.to_v.",
         )
         .expect("static diffusion first cross-attention value regex should compile")
         .add_pattern(
             r"^model\.diffusion\.input_blocks\.1\.1\.transformer_blocks\.0\.attn2\.to_out\.0\.",
-            "down_blocks.0.cross_attention_blocks.0.attention.output.",
+            "down_blocks.0.cross_attn_blocks.0.attention.output.",
         )
         .expect("static diffusion first cross-attention output regex should compile")
         .add_pattern(r"^model\.diffusion\.out\.0\.", "conv_out.")
@@ -179,38 +179,38 @@ fn sdxl_base_diffusion_load_policy() -> SdxlLoadPolicy {
             "time_embedding.linear_1.bias",
             "time_embedding.linear_2.weight",
             "time_embedding.linear_2.bias",
-            "down_blocks.0.res_blocks.0.conv_1.weight",
-            "down_blocks.0.res_blocks.0.conv_1.bias",
-            "down_blocks.0.res_blocks.0.time_projection.weight",
-            "down_blocks.0.res_blocks.0.time_projection.bias",
-            "down_blocks.0.res_blocks.0.conv_2.weight",
-            "down_blocks.0.res_blocks.0.conv_2.bias",
+            "down_blocks.0.resnets.0.conv1.weight",
+            "down_blocks.0.resnets.0.conv1.bias",
+            "down_blocks.0.resnets.0.time_emb_proj.weight",
+            "down_blocks.0.resnets.0.time_emb_proj.bias",
+            "down_blocks.0.resnets.0.conv2.weight",
+            "down_blocks.0.resnets.0.conv2.bias",
             "conv_out.weight",
             "conv_out.bias",
         ])
         .with_optional_snapshots(&[
-            "down_blocks.0.res_blocks.0.skip.weight",
-            "down_blocks.0.res_blocks.0.skip.bias",
-            "down_blocks.0.self_attention_blocks.0.attention.query.weight",
-            "down_blocks.0.self_attention_blocks.0.attention.key.weight",
-            "down_blocks.0.self_attention_blocks.0.attention.value.weight",
-            "down_blocks.0.self_attention_blocks.0.attention.output.weight",
-            "down_blocks.0.self_attention_blocks.0.norm.gamma",
-            "down_blocks.0.self_attention_blocks.0.norm.beta",
-            "down_blocks.0.self_attention_blocks.0.attention.query.bias",
-            "down_blocks.0.self_attention_blocks.0.attention.key.bias",
-            "down_blocks.0.self_attention_blocks.0.attention.value.bias",
-            "down_blocks.0.self_attention_blocks.0.attention.output.bias",
-            "down_blocks.0.cross_attention_blocks.0.attention.query.weight",
-            "down_blocks.0.cross_attention_blocks.0.context_key.weight",
-            "down_blocks.0.cross_attention_blocks.0.context_value.weight",
-            "down_blocks.0.cross_attention_blocks.0.attention.output.weight",
-            "down_blocks.0.cross_attention_blocks.0.norm.gamma",
-            "down_blocks.0.cross_attention_blocks.0.norm.beta",
-            "down_blocks.0.cross_attention_blocks.0.attention.query.bias",
-            "down_blocks.0.cross_attention_blocks.0.context_key.bias",
-            "down_blocks.0.cross_attention_blocks.0.context_value.bias",
-            "down_blocks.0.cross_attention_blocks.0.attention.output.bias",
+            "down_blocks.0.resnets.0.conv_shortcut.weight",
+            "down_blocks.0.resnets.0.conv_shortcut.bias",
+            "down_blocks.0.self_attn_blocks.0.attention.query.weight",
+            "down_blocks.0.self_attn_blocks.0.attention.key.weight",
+            "down_blocks.0.self_attn_blocks.0.attention.value.weight",
+            "down_blocks.0.self_attn_blocks.0.attention.output.weight",
+            "down_blocks.0.self_attn_blocks.0.norm.gamma",
+            "down_blocks.0.self_attn_blocks.0.norm.beta",
+            "down_blocks.0.self_attn_blocks.0.attention.query.bias",
+            "down_blocks.0.self_attn_blocks.0.attention.key.bias",
+            "down_blocks.0.self_attn_blocks.0.attention.value.bias",
+            "down_blocks.0.self_attn_blocks.0.attention.output.bias",
+            "down_blocks.0.cross_attn_blocks.0.attention.query.weight",
+            "down_blocks.0.cross_attn_blocks.0.to_k.weight",
+            "down_blocks.0.cross_attn_blocks.0.to_v.weight",
+            "down_blocks.0.cross_attn_blocks.0.attention.output.weight",
+            "down_blocks.0.cross_attn_blocks.0.norm.gamma",
+            "down_blocks.0.cross_attn_blocks.0.norm.beta",
+            "down_blocks.0.cross_attn_blocks.0.attention.query.bias",
+            "down_blocks.0.cross_attn_blocks.0.to_k.bias",
+            "down_blocks.0.cross_attn_blocks.0.to_v.bias",
+            "down_blocks.0.cross_attn_blocks.0.attention.output.bias",
         ])
         .with_generated_snapshot_contains(&[
             ".attention.query.",
@@ -451,7 +451,7 @@ mod tests {
 
         for expected in [
             "required snapshot missing: time_embedding.linear_1.weight",
-            "required snapshot missing: down_blocks.0.res_blocks.0.conv_1.weight",
+            "required snapshot missing: down_blocks.0.resnets.0.conv1.weight",
             "remapped source key pattern: model.diffusion.input_blocks -> down_blocks",
         ] {
             assert!(
@@ -486,12 +486,12 @@ mod tests {
             "time_embedding.linear_1.bias",
             "time_embedding.linear_2.weight",
             "time_embedding.linear_2.bias",
-            "down_blocks.0.res_blocks.0.conv_1.weight",
-            "down_blocks.0.res_blocks.0.conv_1.bias",
-            "down_blocks.0.res_blocks.0.time_projection.weight",
-            "down_blocks.0.res_blocks.0.time_projection.bias",
-            "down_blocks.0.res_blocks.0.conv_2.weight",
-            "down_blocks.0.res_blocks.0.conv_2.bias",
+            "down_blocks.0.resnets.0.conv1.weight",
+            "down_blocks.0.resnets.0.conv1.bias",
+            "down_blocks.0.resnets.0.time_emb_proj.weight",
+            "down_blocks.0.resnets.0.time_emb_proj.bias",
+            "down_blocks.0.resnets.0.conv2.weight",
+            "down_blocks.0.resnets.0.conv2.bias",
         ] {
             assert!(
                 result.applied.contains(&expected.to_owned()),
@@ -521,14 +521,14 @@ mod tests {
         .expect("first full-profile attention tranche should load through burn-store");
 
         for expected in [
-            "down_blocks.0.self_attention_blocks.0.attention.query.weight",
-            "down_blocks.0.self_attention_blocks.0.attention.key.weight",
-            "down_blocks.0.self_attention_blocks.0.attention.value.weight",
-            "down_blocks.0.self_attention_blocks.0.attention.output.weight",
-            "down_blocks.0.cross_attention_blocks.0.attention.query.weight",
-            "down_blocks.0.cross_attention_blocks.0.context_key.weight",
-            "down_blocks.0.cross_attention_blocks.0.context_value.weight",
-            "down_blocks.0.cross_attention_blocks.0.attention.output.weight",
+            "down_blocks.0.self_attn_blocks.0.attention.query.weight",
+            "down_blocks.0.self_attn_blocks.0.attention.key.weight",
+            "down_blocks.0.self_attn_blocks.0.attention.value.weight",
+            "down_blocks.0.self_attn_blocks.0.attention.output.weight",
+            "down_blocks.0.cross_attn_blocks.0.attention.query.weight",
+            "down_blocks.0.cross_attn_blocks.0.to_k.weight",
+            "down_blocks.0.cross_attn_blocks.0.to_v.weight",
+            "down_blocks.0.cross_attn_blocks.0.attention.output.weight",
         ] {
             assert!(
                 result.applied.contains(&expected.to_owned()),
@@ -566,11 +566,11 @@ mod tests {
         for expected in [
             "time_embedding.linear_1.weight",
             "time_embedding.linear_2.weight",
-            "down_blocks.0.res_blocks.0.conv_1.weight",
-            "down_blocks.0.res_blocks.0.time_projection.weight",
-            "down_blocks.0.res_blocks.0.conv_2.weight",
-            "down_blocks.0.self_attention_blocks.0.attention.query.weight",
-            "down_blocks.0.cross_attention_blocks.0.context_key.weight",
+            "down_blocks.0.resnets.0.conv1.weight",
+            "down_blocks.0.resnets.0.time_emb_proj.weight",
+            "down_blocks.0.resnets.0.conv2.weight",
+            "down_blocks.0.self_attn_blocks.0.attention.query.weight",
+            "down_blocks.0.cross_attn_blocks.0.to_k.weight",
         ] {
             assert!(
                 result.applied.contains(&expected.to_owned()),
@@ -594,7 +594,7 @@ mod tests {
 
         for expected in [
             "required snapshot missing: time_embedding.linear_1.weight",
-            "required snapshot missing: down_blocks.0.res_blocks.0.conv_1.weight",
+            "required snapshot missing: down_blocks.0.resnets.0.conv1.weight",
             "remapped source key pattern: model.diffusion.input_blocks -> down_blocks",
         ] {
             assert!(
@@ -655,9 +655,9 @@ mod tests {
             super::diffusion_load_policy_for_profile(SdxlUnetTopologyProfile::SdxlBase),
             &ApplyResult {
                 applied: vec![
-                    "down_blocks.0.self_attention_blocks.0.attention.query.weight".to_owned(),
-                    "down_blocks.0.self_attention_blocks.0.attention.key.weight".to_owned(),
-                    "down_blocks.0.self_attention_blocks.0.attention.value.weight".to_owned(),
+            "down_blocks.0.self_attn_blocks.0.attention.query.weight".to_owned(),
+            "down_blocks.0.self_attn_blocks.0.attention.key.weight".to_owned(),
+            "down_blocks.0.self_attn_blocks.0.attention.value.weight".to_owned(),
                 ],
                 skipped: Vec::new(),
                 missing: Vec::new(),
@@ -667,10 +667,10 @@ mod tests {
         );
 
         for expected in [
-            "optional snapshot missing: down_blocks.0.res_blocks.0.skip.weight",
-            "generated snapshot: down_blocks.0.self_attention_blocks.0.attention.query.weight",
-            "generated snapshot: down_blocks.0.self_attention_blocks.0.attention.key.weight",
-            "generated snapshot: down_blocks.0.self_attention_blocks.0.attention.value.weight",
+            "optional snapshot missing: down_blocks.0.resnets.0.conv_shortcut.weight",
+            "generated snapshot: down_blocks.0.self_attn_blocks.0.attention.query.weight",
+            "generated snapshot: down_blocks.0.self_attn_blocks.0.attention.key.weight",
+            "generated snapshot: down_blocks.0.self_attn_blocks.0.attention.value.weight",
             "remapped source key pattern: model.diffusion.input_blocks -> down_blocks",
         ] {
             assert!(

@@ -13,7 +13,7 @@ use burn_tensor::{Tensor, activation, backend::Backend};
 /// Full-profile SDXL VAE decoder graph.
 #[derive(Module, Debug)]
 pub struct SdxlVaeDecoder<B: Backend> {
-    latent_projection: Conv2d<B>,
+    conv_in: Conv2d<B>,
     mid_block: SdxlVaeMidBlock<B>,
     up_blocks: Vec<SdxlVaeUpBlock<B>>,
     conv_norm_out: GroupNorm<B>,
@@ -54,7 +54,7 @@ impl<B: Backend> SdxlVaeDecoder<B> {
         ];
 
         Self {
-            latent_projection: Conv2dConfig::new([4, 512], [3, 3])
+            conv_in: Conv2dConfig::new([4, 512], [3, 3])
                 .with_padding(PaddingConfig2d::Explicit(1, 1, 1, 1))
                 .init(device),
             mid_block: SdxlVaeMidBlock::<B>::init(device),
@@ -70,7 +70,7 @@ impl<B: Backend> SdxlVaeDecoder<B> {
     }
 
     pub fn forward(&self, latent: Tensor<B, 4>) -> Tensor<B, 4> {
-        let mut hidden = self.latent_projection.forward(latent);
+        let mut hidden = self.conv_in.forward(latent);
         hidden = self.mid_block.forward(hidden);
         for block in &self.up_blocks {
             hidden = block.forward(hidden);
@@ -80,7 +80,7 @@ impl<B: Backend> SdxlVaeDecoder<B> {
     }
 
     #[cfg(test)]
-    pub fn has_latent_projection(&self) -> bool {
+    pub fn has_conv_in(&self) -> bool {
         true
     }
 
@@ -172,16 +172,16 @@ impl SdxlVaeUpBlockSpec {
 /// the output channel count before the skip addition.
 #[derive(Module, Debug)]
 pub struct SdxlVaeResidualBlock<B: Backend> {
-    norm_1: GroupNorm<B>,
-    conv_1: Conv2d<B>,
-    norm_2: GroupNorm<B>,
-    conv_2: Conv2d<B>,
-    skip_conv: Option<Conv2d<B>>,
+    norm1: GroupNorm<B>,
+    conv1: Conv2d<B>,
+    norm2: GroupNorm<B>,
+    conv2: Conv2d<B>,
+    conv_shortcut: Option<Conv2d<B>>,
 }
 
 impl<B: Backend> SdxlVaeResidualBlock<B> {
     pub fn init(in_channels: usize, out_channels: usize, device: &B::Device) -> Self {
-        let skip_conv = if in_channels != out_channels {
+        let conv_shortcut = if in_channels != out_channels {
             Some(
                 Conv2dConfig::new([in_channels, out_channels], [1, 1])
                     .init(device),
@@ -191,29 +191,29 @@ impl<B: Backend> SdxlVaeResidualBlock<B> {
         };
 
         Self {
-            norm_1: GroupNormConfig::new(32, in_channels).init(device),
-            conv_1: Conv2dConfig::new([in_channels, out_channels], [3, 3])
+            norm1: GroupNormConfig::new(32, in_channels).init(device),
+            conv1: Conv2dConfig::new([in_channels, out_channels], [3, 3])
                 .with_padding(PaddingConfig2d::Explicit(1, 1, 1, 1))
                 .init(device),
-            norm_2: GroupNormConfig::new(32, out_channels).init(device),
-            conv_2: Conv2dConfig::new([out_channels, out_channels], [3, 3])
+            norm2: GroupNormConfig::new(32, out_channels).init(device),
+            conv2: Conv2dConfig::new([out_channels, out_channels], [3, 3])
                 .with_padding(PaddingConfig2d::Explicit(1, 1, 1, 1))
                 .init(device),
-            skip_conv,
+            conv_shortcut,
         }
     }
 
     pub fn forward(&self, hidden: Tensor<B, 4>) -> Tensor<B, 4> {
-        let residual = match &self.skip_conv {
+        let residual = match &self.conv_shortcut {
             Some(conv) => conv.forward(hidden.clone()),
             None => hidden.clone(),
         };
         let hidden = self
-            .conv_1
-            .forward(activation::silu(self.norm_1.forward(hidden)));
+            .conv1
+            .forward(activation::silu(self.norm1.forward(hidden)));
         let hidden = self
-            .conv_2
-            .forward(activation::silu(self.norm_2.forward(hidden)));
+            .conv2
+            .forward(activation::silu(self.norm2.forward(hidden)));
         hidden + residual
     }
 }
@@ -375,7 +375,7 @@ mod tests {
         let device = active_device(config.device());
         let decoder = super::SdxlVaeDecoder::<ActiveBurnBackend>::init(&device);
 
-        assert!(decoder.has_latent_projection());
+        assert!(decoder.has_conv_in());
         assert!(decoder.has_mid_block());
         assert_eq!(decoder.mid_block_resnet_count(), 2);
         assert!(decoder.mid_block_has_attention());

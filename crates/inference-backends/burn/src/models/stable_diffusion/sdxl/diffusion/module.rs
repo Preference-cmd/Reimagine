@@ -70,17 +70,17 @@ impl SdxlUnetTopology {
             time_ids_dim: 6,
             down_blocks: vec![SdxlStageSpec {
                 role: SdxlStageRole::Down,
-                res_blocks: vec![SdxlResBlockSpec {
+                resnets: vec![SdxlResBlockSpec {
                     in_channels: 4,
                     out_channels: 4,
                     num_groups: 2,
                 }],
-                self_attention_blocks: vec![SdxlAttentionBlockSpec {
+                self_attn_blocks: vec![SdxlSelfAttentionBlockSpec {
                     channels: 4,
                     num_heads: 2,
                     num_groups: 2,
                 }],
-                cross_attention_blocks: vec![SdxlCrossAttentionBlockSpec {
+                cross_attn_blocks: vec![SdxlCrossAttentionBlockSpec {
                     channels: 4,
                     context_dim: 16,
                     num_heads: 2,
@@ -102,7 +102,7 @@ impl SdxlUnetTopology {
                      skip_policy: SdxlSkipPolicy,
                      sampling: SdxlSamplingOp| SdxlStageSpec {
             role,
-            res_blocks: vec![
+            resnets: vec![
                 SdxlResBlockSpec {
                     in_channels,
                     out_channels,
@@ -114,12 +114,12 @@ impl SdxlUnetTopology {
                     num_groups: 32,
                 },
             ],
-            self_attention_blocks: vec![SdxlAttentionBlockSpec {
+            self_attn_blocks: vec![SdxlSelfAttentionBlockSpec {
                 channels: out_channels,
                 num_heads: heads,
                 num_groups: 32,
             }],
-            cross_attention_blocks: vec![SdxlCrossAttentionBlockSpec {
+            cross_attn_blocks: vec![SdxlCrossAttentionBlockSpec {
                 channels: out_channels,
                 context_dim: 2048,
                 num_heads: heads,
@@ -210,18 +210,18 @@ impl SdxlUnetTopology {
     }
 
     pub fn res_block_count(&self) -> usize {
-        self.stages().map(|stage| stage.res_blocks.len()).sum()
+        self.stages().map(|stage| stage.resnets.len()).sum()
     }
 
     pub fn self_attention_block_count(&self) -> usize {
         self.stages()
-            .map(|stage| stage.self_attention_blocks.len())
+            .map(|stage| stage.self_attn_blocks.len())
             .sum()
     }
 
     pub fn cross_attention_block_count(&self) -> usize {
         self.stages()
-            .map(|stage| stage.cross_attention_blocks.len())
+            .map(|stage| stage.cross_attn_blocks.len())
             .sum()
     }
 
@@ -236,9 +236,9 @@ impl SdxlUnetTopology {
 #[derive(Debug, Clone)]
 pub struct SdxlStageSpec {
     pub role: SdxlStageRole,
-    pub res_blocks: Vec<SdxlResBlockSpec>,
-    pub self_attention_blocks: Vec<SdxlAttentionBlockSpec>,
-    pub cross_attention_blocks: Vec<SdxlCrossAttentionBlockSpec>,
+    pub resnets: Vec<SdxlResBlockSpec>,
+    pub self_attn_blocks: Vec<SdxlSelfAttentionBlockSpec>,
+    pub cross_attn_blocks: Vec<SdxlCrossAttentionBlockSpec>,
     pub skip_policy: SdxlSkipPolicy,
     pub sampling: SdxlSamplingOp,
 }
@@ -294,7 +294,7 @@ pub struct SdxlResBlockSpec {
 }
 
 #[derive(Debug, Clone)]
-pub struct SdxlAttentionBlockSpec {
+pub struct SdxlSelfAttentionBlockSpec {
     pub channels: usize,
     pub num_heads: usize,
     pub num_groups: usize,
@@ -445,24 +445,24 @@ impl<B: Backend> SdxlUnet<B> {
     }
 
     pub fn input_block_count(&self) -> usize {
-        self.stage_iter().map(|stage| stage.res_blocks.len()).sum()
+        self.stage_iter().map(|stage| stage.resnets.len()).sum()
     }
 
     pub fn attention_block_count(&self) -> usize {
         self.stage_iter()
-            .map(|stage| stage.self_attention_blocks.len())
+            .map(|stage| stage.self_attn_blocks.len())
             .sum()
     }
 
     pub fn cross_attention_block_count(&self) -> usize {
         self.stage_iter()
-            .map(|stage| stage.cross_attention_blocks.len())
+            .map(|stage| stage.cross_attn_blocks.len())
             .sum()
     }
 
     pub fn cross_attention_context_dim(&self) -> Option<usize> {
         self.stage_iter()
-            .flat_map(|stage| stage.cross_attention_blocks.iter())
+            .flat_map(|stage| stage.cross_attn_blocks.iter())
             .next()
             .map(SdxlCrossAttentionBlock::context_dim)
     }
@@ -619,9 +619,9 @@ fn sinusoidal_timestep_embedding<B: Backend>(
 #[derive(Module, Debug)]
 pub struct SdxlUnetStage<B: Backend> {
     role: SdxlStageRole,
-    res_blocks: Vec<SdxlResBlock<B>>,
-    self_attention_blocks: Vec<SdxlSelfAttentionBlock<B>>,
-    cross_attention_blocks: Vec<SdxlCrossAttentionBlock<B>>,
+    resnets: Vec<SdxlResBlock<B>>,
+    self_attn_blocks: Vec<SdxlSelfAttentionBlock<B>>,
+    cross_attn_blocks: Vec<SdxlCrossAttentionBlock<B>>,
     skip_policy: SdxlSkipPolicy,
     sampling: SdxlSamplingOp,
     downsample: Option<Conv2d<B>>,
@@ -631,7 +631,7 @@ pub struct SdxlUnetStage<B: Backend> {
 impl<B: Backend> SdxlUnetStage<B> {
     pub fn init(spec: &SdxlStageSpec, time_hidden_dim: usize, device: &B::Device) -> Self {
         let output_channels = spec
-            .res_blocks
+            .resnets
             .last()
             .map(|block| block.out_channels)
             .expect("SDXL UNet stage requires at least one residual block");
@@ -644,8 +644,8 @@ impl<B: Backend> SdxlUnetStage<B> {
         let upsample = spec.has_upsample().then(SdxlUpsampleBlock::new);
         Self {
             role: spec.role,
-            res_blocks: spec
-                .res_blocks
+            resnets: spec
+                .resnets
                 .iter()
                 .map(|spec| {
                     SdxlResBlock::init_with_time_dim(
@@ -657,8 +657,8 @@ impl<B: Backend> SdxlUnetStage<B> {
                     )
                 })
                 .collect(),
-            self_attention_blocks: spec
-                .self_attention_blocks
+            self_attn_blocks: spec
+                .self_attn_blocks
                 .iter()
                 .map(|spec| {
                     SdxlSelfAttentionBlock::init(
@@ -669,8 +669,8 @@ impl<B: Backend> SdxlUnetStage<B> {
                     )
                 })
                 .collect(),
-            cross_attention_blocks: spec
-                .cross_attention_blocks
+            cross_attn_blocks: spec
+                .cross_attn_blocks
                 .iter()
                 .map(|spec| {
                     SdxlCrossAttentionBlock::init(
@@ -695,13 +695,13 @@ impl<B: Backend> SdxlUnetStage<B> {
         time_hidden: Tensor<B, 2>,
         conditioning: Tensor<B, 3>,
     ) -> SdxlStageOutput<B> {
-        for block in &self.res_blocks {
+        for block in &self.resnets {
             hidden = block.forward_with_time(hidden, time_hidden.clone());
         }
-        for block in &self.self_attention_blocks {
+        for block in &self.self_attn_blocks {
             hidden = block.forward(hidden);
         }
-        for block in &self.cross_attention_blocks {
+        for block in &self.cross_attn_blocks {
             hidden = block.forward(hidden, conditioning.clone());
         }
         let skip = self.pushes_skip().then(|| hidden.clone());
@@ -815,12 +815,12 @@ impl<B: Backend> SdxlTimeEmbedding<B> {
 /// Burn-native SDXL residual block scaffold.
 #[derive(Module, Debug)]
 pub struct SdxlResBlock<B: Backend> {
-    pub norm_1: GroupNorm<B>,
-    pub conv_1: Conv2d<B>,
-    pub time_projection: Linear<B>,
-    pub norm_2: GroupNorm<B>,
-    pub conv_2: Conv2d<B>,
-    skip: Option<Conv2d<B>>,
+    pub norm1: GroupNorm<B>,
+    pub conv1: Conv2d<B>,
+    pub time_emb_proj: Linear<B>,
+    pub norm2: GroupNorm<B>,
+    pub conv2: Conv2d<B>,
+    conv_shortcut: Option<Conv2d<B>>,
 }
 
 impl<B: Backend> SdxlResBlock<B> {
@@ -845,16 +845,16 @@ impl<B: Backend> SdxlResBlock<B> {
                 .with_padding(PaddingConfig2d::Explicit(1, 1, 1, 1))
                 .init(device)
         };
-        let skip = (in_channels != out_channels)
+        let conv_shortcut = (in_channels != out_channels)
             .then(|| Conv2dConfig::new([in_channels, out_channels], [1, 1]).init(device));
 
         Self {
-            norm_1: GroupNormConfig::new(num_groups, in_channels).init(device),
-            conv_1: conv3([in_channels, out_channels]),
-            time_projection: LinearConfig::new(time_dim, out_channels).init(device),
-            norm_2: GroupNormConfig::new(num_groups, out_channels).init(device),
-            conv_2: conv3([out_channels, out_channels]),
-            skip,
+            norm1: GroupNormConfig::new(num_groups, in_channels).init(device),
+            conv1: conv3([in_channels, out_channels]),
+            time_emb_proj: LinearConfig::new(time_dim, out_channels).init(device),
+            norm2: GroupNormConfig::new(num_groups, out_channels).init(device),
+            conv2: conv3([out_channels, out_channels]),
+            conv_shortcut,
         }
     }
 
@@ -869,27 +869,27 @@ impl<B: Backend> SdxlResBlock<B> {
         hidden: Tensor<B, 4>,
         time_hidden: Tensor<B, 2>,
     ) -> Tensor<B, 4> {
-        let residual = match &self.skip {
-            Some(skip) => skip.forward(hidden.clone()),
+        let residual = match &self.conv_shortcut {
+            Some(conv) => conv.forward(hidden.clone()),
             None => hidden.clone(),
         };
         let hidden = self
-            .conv_1
-            .forward(activation::silu(self.norm_1.forward(hidden)));
+            .conv1
+            .forward(activation::silu(self.norm1.forward(hidden)));
         let [batch, channels, _, _] = hidden.dims();
         let time_hidden = self
-            .time_projection
+            .time_emb_proj
             .forward(activation::silu(time_hidden))
             .reshape([batch, channels, 1, 1]);
         let hidden = hidden + time_hidden;
         let hidden = self
-            .conv_2
-            .forward(activation::silu(self.norm_2.forward(hidden)));
+            .conv2
+            .forward(activation::silu(self.norm2.forward(hidden)));
         hidden + residual
     }
 
     pub fn uses_skip_projection(&self) -> bool {
-        self.skip.is_some()
+        self.conv_shortcut.is_some()
     }
 
     pub fn uses_time_projection(&self) -> bool {
@@ -897,7 +897,7 @@ impl<B: Backend> SdxlResBlock<B> {
     }
 
     fn time_dim(&self) -> usize {
-        self.time_projection.weight.dims()[0]
+        self.time_emb_proj.weight.dims()[0]
     }
 }
 
@@ -947,8 +947,8 @@ impl<B: Backend> SdxlSelfAttentionBlock<B> {
 #[derive(Module, Debug)]
 pub struct SdxlCrossAttentionBlock<B: Backend> {
     pub norm: GroupNorm<B>,
-    pub context_key: Linear<B>,
-    pub context_value: Linear<B>,
+    pub to_k: Linear<B>,
+    pub to_v: Linear<B>,
     pub attention: MultiHeadAttention<B>,
 }
 
@@ -962,8 +962,8 @@ impl<B: Backend> SdxlCrossAttentionBlock<B> {
     ) -> Self {
         Self {
             norm: GroupNormConfig::new(num_groups, channels).init(device),
-            context_key: LinearConfig::new(context_dim, channels).init(device),
-            context_value: LinearConfig::new(context_dim, channels).init(device),
+            to_k: LinearConfig::new(context_dim, channels).init(device),
+            to_v: LinearConfig::new(context_dim, channels).init(device),
             attention: MultiHeadAttentionConfig::new(channels, num_heads)
                 .with_dropout(0.0)
                 .init(device),
@@ -979,8 +979,8 @@ impl<B: Backend> SdxlCrossAttentionBlock<B> {
             .swap_dims(1, 2)
             .swap_dims(2, 3)
             .reshape([batch, height * width, channels]);
-        let key = self.context_key.forward(context.clone());
-        let value = self.context_value.forward(context);
+        let key = self.to_k.forward(context.clone());
+        let value = self.to_v.forward(context);
         let hidden = self
             .attention
             .forward(MhaInput::new(query, key, value))
@@ -993,7 +993,7 @@ impl<B: Backend> SdxlCrossAttentionBlock<B> {
     }
 
     pub fn context_dim(&self) -> usize {
-        self.context_key.weight.dims()[0]
+        self.to_k.weight.dims()[0]
     }
 }
 
@@ -1385,9 +1385,9 @@ mod tests {
 
         for stage in &topology.down_blocks {
             assert_eq!(stage.role(), super::SdxlStageRole::Down);
-            assert_eq!(stage.res_blocks[0].in_channels, hidden_channels);
+            assert_eq!(stage.resnets[0].in_channels, hidden_channels);
             hidden_channels = stage
-                .res_blocks
+                .resnets
                 .last()
                 .expect("down stage should have resblocks")
                 .out_channels;
@@ -1398,9 +1398,9 @@ mod tests {
 
         for stage in &topology.middle_blocks {
             assert_eq!(stage.role(), super::SdxlStageRole::Middle);
-            assert_eq!(stage.res_blocks[0].in_channels, hidden_channels);
+            assert_eq!(stage.resnets[0].in_channels, hidden_channels);
             hidden_channels = stage
-                .res_blocks
+                .resnets
                 .last()
                 .expect("middle stage should have resblocks")
                 .out_channels;
@@ -1411,9 +1411,9 @@ mod tests {
             let skip = skip_channels
                 .pop()
                 .expect("up stage should have a matching down-path skip");
-            assert_eq!(stage.res_blocks[0].in_channels, hidden_channels + skip);
+            assert_eq!(stage.resnets[0].in_channels, hidden_channels + skip);
             hidden_channels = stage
-                .res_blocks
+                .resnets
                 .last()
                 .expect("up stage should have resblocks")
                 .out_channels;
@@ -1441,7 +1441,7 @@ mod tests {
             out_channels,
             num_groups: 2,
         };
-        let attn = |channels| super::SdxlAttentionBlockSpec {
+        let attn = |channels| super::SdxlSelfAttentionBlockSpec {
             channels,
             num_heads: 2,
             num_groups: 2,
@@ -1452,11 +1452,11 @@ mod tests {
             num_heads: 2,
             num_groups: 2,
         };
-        let stage = |role, res_blocks, channels, skip_policy, sampling| super::SdxlStageSpec {
+        let stage = |role, resnets, channels, skip_policy, sampling| super::SdxlStageSpec {
             role,
-            res_blocks,
-            self_attention_blocks: vec![attn(channels)],
-            cross_attention_blocks: vec![cross(channels)],
+            resnets,
+            self_attn_blocks: vec![attn(channels)],
+            cross_attn_blocks: vec![cross(channels)],
             skip_policy,
             sampling,
         };
