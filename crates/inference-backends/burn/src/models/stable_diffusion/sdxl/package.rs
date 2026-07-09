@@ -685,6 +685,8 @@ mod tests {
                     vec![320, 320],
                 ),
                 ("model.diffusion.out.0.weight", vec![4, 320, 3, 3]),
+                ("model.diffusion.conv_norm_out.weight", vec![320]),
+                ("model.diffusion.conv_norm_out.bias", vec![320]),
                 ("model.diffusion.out.0.bias", vec![4]),
             ],
         );
@@ -758,7 +760,7 @@ mod tests {
             report_from_disk.source_layout,
             "diffusers_style_split_safetensors"
         );
-        assert_eq!(report_from_disk.mapped_tensor_count, 46);
+        assert_eq!(report_from_disk.mapped_tensor_count, 48);
 
         let package = report_from_disk.package.expect("package report");
         assert_eq!(package.schema_version, 1);
