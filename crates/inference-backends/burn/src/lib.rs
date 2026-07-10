@@ -24,3 +24,4 @@ mod resource;
 mod runtime;
 mod store;
 pub mod text_encoder;
+mod wgpu_guard;

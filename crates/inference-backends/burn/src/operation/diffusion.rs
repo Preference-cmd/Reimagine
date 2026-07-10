@@ -178,6 +178,7 @@ pub fn execute_diffusion_sample(
 
     // 6. Run euler/normal denoise loop (SDXL-specific)
     let latent_tensor = latent_payload.into_active_tensor()?;
+    let mut wgpu_guard = crate::wgpu_guard::WgpuErrorGuard::new();
     let sampled = crate::models::stable_diffusion::sdxl::diffusion::sample_sdxl(
         &bundle,
         latent_tensor,
@@ -190,6 +191,11 @@ pub fn execute_diffusion_sample(
         seed,
         backend,
     )?;
+    wgpu_guard.check().map_err(|_| {
+        BurnBackendError::InvalidRequest(
+            "WGPU validation error during diffusion sample; GPU commands may not have executed correctly".to_string(),
+        )
+    })?;
 
     // 7. Store sampled latent
     let output_key = sampled_latent_key(request.run_id(), request.node_id());

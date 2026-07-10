@@ -263,6 +263,13 @@ pub fn execute_latent_decode(
         backend,
     )?;
 
+    // Check for WGPU validation errors that may have occurred during VAE decode
+    crate::wgpu_guard::check_global().map_err(|_| {
+        BurnBackendError::InvalidRequest(
+            "WGPU validation error during latent decode; GPU commands may not have executed correctly".to_string(),
+        )
+    })?;
+
     // Store image payload
     let dims: [usize; 4] = decoded.dims();
     let height = dims[2] as u32;
