@@ -154,9 +154,6 @@ impl InferenceBackend for BurnBackend {
                 InferenceCapability::LatentDecode,
             ))
             .with_support(InferenceCapabilitySupport::new(
-                InferenceCapability::ImageImport,
-            ))
-            .with_support(InferenceCapabilitySupport::new(
                 InferenceCapability::ImageSave,
             ))
             .with_support(InferenceCapabilitySupport::new(

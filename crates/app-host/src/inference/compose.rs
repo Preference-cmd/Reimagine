@@ -374,6 +374,10 @@ mod tests {
                 reimagine_inference::InferenceCapability::LoadBundle,
                 reimagine_inference::InferenceCapability::CreateEmptyLatent,
                 reimagine_inference::InferenceCapability::TextEncode,
+                reimagine_inference::InferenceCapability::DiffusionSample,
+                reimagine_inference::InferenceCapability::LatentDecode,
+                reimagine_inference::InferenceCapability::ImageSave,
+                reimagine_inference::InferenceCapability::ImagePreview,
             ]
         );
         assert!(default_burn.operation_options.is_empty());

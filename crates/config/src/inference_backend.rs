@@ -9,6 +9,7 @@ use crate::{ConfigDocument, ConfigValidationContext};
 pub enum InferenceBackendKind {
     #[default]
     Candle,
+    Burn,
 }
 
 /// Persisted inference backend configuration.
