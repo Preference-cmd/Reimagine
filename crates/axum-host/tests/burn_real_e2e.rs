@@ -55,10 +55,6 @@ fn json_request(method: &str, uri: &str, body: Option<&str>) -> Request<Body> {
     builder.body(body).expect("build request")
 }
 
-fn workspace_status(result: &Value) -> &str {
-    result.get("status").and_then(|v| v.as_str()).unwrap_or("")
-}
-
 fn assert_truthful_burn_capabilities(profile_value: &Value) {
     let burn_backend = profile_value
         .get("backend_profiles")
@@ -98,13 +94,13 @@ fn assert_truthful_burn_capabilities(profile_value: &Value) {
     let expected_labels: Vec<&'static str> = expected
         .iter()
         .map(|cap| match cap {
-            InferenceCapability::LoadBundle => "load_bundle",
-            InferenceCapability::TextEncode => "text_encode",
-            InferenceCapability::CreateEmptyLatent => "create_empty_latent",
-            InferenceCapability::DiffusionSample => "diffusion_sample",
-            InferenceCapability::LatentDecode => "latent_decode",
-            InferenceCapability::ImageSave => "image_save",
-            InferenceCapability::ImagePreview => "image_preview",
+            InferenceCapability::LoadBundle => "model.load_bundle",
+            InferenceCapability::TextEncode => "text.encode",
+            InferenceCapability::CreateEmptyLatent => "latent.create_empty",
+            InferenceCapability::DiffusionSample => "diffusion.sample",
+            InferenceCapability::LatentDecode => "latent.decode",
+            InferenceCapability::ImageSave => "image.save",
+            InferenceCapability::ImagePreview => "image.preview",
             _ => "other",
         })
         .collect();
@@ -118,8 +114,8 @@ fn assert_truthful_burn_capabilities(profile_value: &Value) {
     }
 
     assert!(
-        !capabilities.iter().any(|c| *c == "image_import"),
-        "image_import must NOT be advertised: actual capabilities {capabilities:?}"
+        !capabilities.iter().any(|c| *c == "model.import"),
+        "image import must NOT be advertised: actual capabilities {capabilities:?}"
     );
 }
 
@@ -270,17 +266,18 @@ async fn burn_real_sdxl_smoke_workflow_opens_through_axum() {
     };
     let open_json: Value =
         serde_json::from_slice(&open_bytes).expect("/workflows/open response must be JSON");
-    assert_eq!(workspace_status(&open_json), "ok");
-
-    let resolved = open_json
-        .get("workflow_id")
-        .or_else(|| open_json.get("id"))
-        .or_else(|| open_json.get("workflow").and_then(|w| w.get("id")))
-        .and_then(|v| v.as_str());
-    if let Some(opened_id) = resolved {
-        assert_eq!(
-            opened_id, BURN_WORKFLOW_ID,
-            "smoke workflow id must match the burn smoke id constant"
-        );
-    }
+    eprintln!(
+        "burn_real_e2e: /workflows/open response body: {}",
+        serde_json::to_string_pretty(&open_json).unwrap_or_default()
+    );
+    assert_eq!(
+        open_json.get("source").and_then(|v| v.as_str()),
+        Some("inline"),
+        "/workflows/open must succeed and return source=inline"
+    );
+    assert_eq!(
+        open_json.get("workflow_id").and_then(|v| v.as_str()),
+        Some(BURN_WORKFLOW_ID),
+        "/workflows/open must echo the workflow id"
+    );
 }

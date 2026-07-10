@@ -522,28 +522,28 @@ impl ExpectedBurnComponent {
     fn all() -> &'static [Self; 4] {
         &[
             Self {
-                component_role: "Diffusion",
+                component_role: "diffusion",
                 component: "diffusion",
                 model_role: "DiffusionModel",
                 model_role_enum: ModelRole::DiffusionModel,
                 relative_path: "diffusion/model.safetensors",
             },
             Self {
-                component_role: "Vae",
+                component_role: "vae",
                 component: "vae",
                 model_role: "Vae",
                 model_role_enum: ModelRole::Vae,
                 relative_path: "vae/model.safetensors",
             },
             Self {
-                component_role: "TextEncoder",
+                component_role: "text_encoder",
                 component: "text_encoder",
                 model_role: "TextEncoder",
                 model_role_enum: ModelRole::TextEncoder,
                 relative_path: "text_encoder/model.safetensors",
             },
             Self {
-                component_role: "TextEncoder2",
+                component_role: "text_encoder_2",
                 component: "text_encoder_2",
                 model_role: "TextEncoder",
                 model_role_enum: ModelRole::TextEncoder,
