@@ -2,8 +2,7 @@
 
 | Issue | Status | Notes |
 | --- | --- | --- |
-| [15j: Burn WGPU validation error elimination and propagation](inference-backends/burn/issues/15j-burn-wgpu-validation-error-elimination-and-propagation.md) | ready-for-agent | Fix the 8-byte/16-byte WGPU binding mismatch; make async validation fail the operation/test. |
-| [05a: Burn package workspace bootstrap](e2e-workflow/issues/05a-burn-package-workspace-and-smoke-workflow.md) | ready-for-agent | 15i done. Import Burn package via ModelService, open 256x256 smoke workflow through Axum. |
+| [05a: Burn package workspace bootstrap](e2e-workflow/issues/05a-burn-package-workspace-and-smoke-workflow.md) | ready-for-agent | Import Burn package via ModelService, select burn:wgpu:default, open 256x256 smoke workflow through Axum. |
 
 ### Next (blocked)
 
