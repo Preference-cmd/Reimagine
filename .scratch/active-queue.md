@@ -2,14 +2,13 @@
 
 | Issue | Status | Notes |
 | --- | --- | --- |
-| [15i: Burn capability and compute-profile truth alignment](inference-backends/burn/issues/15i-burn-capability-and-compute-profile-truth.md) | ready-for-agent | Align Burn runtime/profile capabilities, remove false image.import advertisement, prove explicit Burn selection has no Candle fallback. |
 | [15j: Burn WGPU validation error elimination and propagation](inference-backends/burn/issues/15j-burn-wgpu-validation-error-elimination-and-propagation.md) | ready-for-agent | Fix the 8-byte/16-byte WGPU binding mismatch; make async validation fail the operation/test. |
+| [05a: Burn package workspace bootstrap](e2e-workflow/issues/05a-burn-package-workspace-and-smoke-workflow.md) | ready-for-agent | 15i done. Import Burn package via ModelService, open 256x256 smoke workflow through Axum. |
 
 ### Next (blocked)
 
 | Issue | Status | Blocked by |
 | --- | --- | --- |
-| [05a: Burn package workspace bootstrap](e2e-workflow/issues/05a-burn-package-workspace-and-smoke-workflow.md) | blocked | 15i |
 | [05b: Burn Axum HTTP workflow-to-PNG E2E](e2e-workflow/issues/05b-burn-axum-http-workflow-to-png-e2e.md) | blocked | 05a + 15j |
 
 ### After Burn Axum E2E
@@ -23,6 +22,7 @@
 
 | Issue | Notes |
 | --- | --- |
+| 15i: Burn capability and compute-profile truth alignment | Capability set now LoadBundle/TextEncode/CreateEmptyLatent/DiffusionSample/LatentDecode/ImageSave/ImagePreview. ImageImport dropped. Burn variant added to BackendSelection + InferenceBackendKind. No Candle fallback. |
 | 15g: Burn real SDXL smoke to image artifact | Backend-direct proof. UNet 1676/1676, 256×256 PNG. WGPU noise → 15j. |
 | 15h: Module snapshot keys → diffusers/Candle | All Module fields aligned. |
 | 15f, 15e, 15e0 | Full-profile VAE/UNet + architecture doc. |
