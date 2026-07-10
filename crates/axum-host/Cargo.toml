@@ -32,5 +32,6 @@ http-body-util = "0.1"
 image = { workspace = true }
 reimagine-agent = { path = "../agent" }
 reimagine-config = { path = "../config" }
+reimagine-inference = { path = "../inference" }
 reimagine-model-manager = { path = "../model-manager" }
 reimagine-nodes = { path = "../nodes" }
