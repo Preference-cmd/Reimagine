@@ -6414,6 +6414,7 @@ dependencies = [
  "reimagine-app-host",
  "reimagine-config",
  "reimagine-core",
+ "reimagine-inference",
  "reimagine-model-acquisition",
  "reimagine-model-manager",
  "reimagine-nodes",
