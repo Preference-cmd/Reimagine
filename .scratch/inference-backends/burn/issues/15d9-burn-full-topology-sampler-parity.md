@@ -32,13 +32,13 @@ area instead of broadening this issue.
 
 ## Acceptance criteria
 
-- [ ] Run sampler parity against an executable full-profile UNet Module path.
-- [ ] Verify timestep scaling, sigma update, CFG ordering, and positive/negative
+- [x] Run sampler parity against an executable full-profile UNet Module path.
+- [x] Verify timestep scaling, sigma update, CFG ordering, and positive/negative
       conditioning provenance against the reference.
 - [ ] Define acceptable numeric tolerances separately for WGPU and Flex.
 - [ ] Publish follow-up issues for any mismatch with clear ownership: scheduler,
       sampler, conditioning projection, or UNet block fidelity.
-- [ ] Do not enable full SDXL graph execution unless the required topology and
+- [x] Do not enable full SDXL graph execution unless the required topology and
       loader tranches have landed.
 
 ## Blocked by

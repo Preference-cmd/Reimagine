@@ -2,25 +2,33 @@
 
 | Issue | Status | Notes |
 | --- | --- | --- |
-| [15d9: Burn full-topology sampler parity](inference-backends/burn/issues/15d9-burn-full-topology-sampler-parity.md) | in_progress | 15e/15g done. Add deterministic sampler evidence against full-profile Euler/normal path. |
+| [15i: Burn capability and compute-profile truth alignment](inference-backends/burn/issues/15i-burn-capability-and-compute-profile-truth.md) | ready-for-agent | Align Burn runtime/profile capabilities, remove false image.import advertisement, and prove explicit Burn selection has no Candle fallback route. |
+| [15j: Burn WGPU validation error elimination and propagation](inference-backends/burn/issues/15j-burn-wgpu-validation-error-elimination-and-propagation.md) | ready-for-agent | Eliminate the real-smoke 8-byte/16-byte binding error and make asynchronous WGPU validation fail the operation/run/test. |
 
 ### Next
 
 | Issue | Status | Notes |
 | --- | --- | --- |
-| [16a: Burn LoRA and training readiness design gate](inference-backends/burn/issues/16a-burn-lora-training-readiness-design-gate.md) | blocked | Wait for stable full-topology numeric evidence (15d9) before freezing adapter attachment points. |
+| [05a: Burn package workspace bootstrap and smoke workflow](e2e-workflow/issues/05a-burn-package-workspace-and-smoke-workflow.md) | blocked | Starts after 15i. Import an existing Burn package through ModelService, select Burn WGPU, and open the 256x256 one-step example through Axum. |
+| [05b: Burn Axum HTTP workflow-to-PNG E2E](e2e-workflow/issues/05b-burn-axum-http-workflow-to-png-e2e.md) | blocked | Starts after 05a and 15j. HTTP open/run/poll/events/artifact must return a valid 256x256 PNG with no WGPU validation failure. |
+
+### After Burn Axum E2E
+
+| Issue | Status | Notes |
+| --- | --- | --- |
+| [15d9: Burn full-topology sampler parity](inference-backends/burn/issues/15d9-burn-full-topology-sampler-parity.md) | in_progress | Preserve current parity work, but remove it from the HTTP-to-PNG critical path. Resume numeric tolerance/reference closure after e2e-workflow/05. |
 
 ### Design Gates
 
 | Issue | Status | Notes |
 | --- | --- | --- |
-| [16a: Burn LoRA and training readiness design gate](inference-backends/burn/issues/16a-burn-lora-training-readiness-design-gate.md) | blocked | UNet/VAE Module naming is package/diffusers-shaped; remaining gate is parity/runtime confidence. |
+| [16a: Burn LoRA and training readiness design gate](inference-backends/burn/issues/16a-burn-lora-training-readiness-design-gate.md) | blocked | Wait for Burn Axum E2E plus stable full-topology numeric evidence (15d9) before freezing adapter attachment points. |
 
 ### Recently Landed
 
 | Issue | Status | Notes |
 | --- | --- | --- |
-| [15g: Burn real SDXL package smoke to image artifact](inference-backends/burn/issues/15g-burn-real-sdxl-package-smoke-to-image.md) | done | Real `15h-v1` package: UNet bind 1676/1676; 256×256×1-step public chain wrote preview/save PNGs. Residual wgpu buffer-size noise is non-fatal. |
+| [15g: Burn real SDXL package smoke to image artifact](inference-backends/burn/issues/15g-burn-real-sdxl-package-smoke-to-image.md) | done | Backend-direct only: real `15h-v1` package bound UNet 1676/1676 and wrote 256x256 one-step PNGs. The observed WGPU validation error is a false-green blocker tracked by 15j. |
 | [15g tranche: UNet up-block skip fidelity + VAE loader remapper](inference-backends/burn/issues/15g-burn-real-sdxl-package-smoke-to-image.md) | done | Absorbed into full 15g close-out. |
 | [15h: Burn align Module snapshot keys to diffusers](inference-backends/burn/issues/15h-burn-align-module-snapshot-keys-to-diffusers.md) | done | Merged to main (`c766f3d`). UNet/VAE Module fields renamed to match diffusers/Candle target key space. Package converter version `burn-sdxl-package-15h-v1`. |
 | [15f: Burn full SDXL VAE decoder fidelity](inference-backends/burn/issues/15f-burn-full-sdxl-vae-decoder-fidelity.md) | done | Full-profile VAE decoder Module residual/upsample path. |
