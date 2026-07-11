@@ -38,7 +38,9 @@ pub use compute_profile::{
 };
 pub use health::HealthResponse;
 pub use model_acquisition::{
-    DownloadEventPayload, FileEntryDto, ModelDownloadInput, ModelDownloadOutput,
+    DownloadEventPayload, FileEntryDto, ModelAcquireConversionReport,
+    ModelAcquireDownloadReport, ModelAcquireInput, ModelAcquireOutput, ModelDownloadInput,
+    ModelDownloadOutput,
 };
 pub use models::ModelInfoDto;
 pub use nodes::{NodeCatalogResponse, NodeDefDto, ParamSpecDto, SocketSpecDto};

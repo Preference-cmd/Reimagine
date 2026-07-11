@@ -25,6 +25,7 @@ pub fn build_router() -> Router<AxumHostState> {
         .route("/runs/{id}/events", get(runs::events))
         .route("/artifacts/{artifact_id}", get(artifacts::get))
         .route("/models/download", post(models::download))
+        .route("/models/acquire", post(models::acquire))
         .layer(TraceLayer::new_for_http().make_span_with(request_span))
 }
 

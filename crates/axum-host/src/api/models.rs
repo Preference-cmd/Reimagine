@@ -1,12 +1,10 @@
-//! `POST /models/download` route for downloading HuggingFace models.
-//!
-//! Bridges to `WorkspaceHost::services().model_acquisition_service().acquire()`
-//! and returns the acquisition report as `ModelDownloadOutput`.
-//!
-//! This is the Axum HTTP counterpart to MA-03's Tauri IPC command.
+//! Model download, acquire, and management routes.
 
 use axum::{Json, extract::State};
-use reimagine_app_host::dto::ModelDownloadInput;
+use reimagine_app_host::dto::{
+    ModelAcquireConversionReport, ModelAcquireDownloadReport, ModelAcquireInput,
+    ModelAcquireOutput, ModelDownloadInput,
+};
 use reimagine_model_acquisition::{
     AcquireProvider, AllowPatterns, ModelAcquisitionRequest, OverwritePolicy, RepoId, Revision,
     TargetRelativeDir,
@@ -77,6 +75,65 @@ pub async fn download(
     Ok(Json(reimagine_app_host::dto::ModelDownloadOutput::from(
         report,
     )))
+}
+
+/// `POST /models/acquire`.
+///
+/// Downloads a HuggingFace model, converts it to a backend-native
+/// component layout, and registers the result in the workspace manifest.
+pub async fn acquire(
+    State(state): State<AxumHostState>,
+    Json(body): Json<ModelAcquireInput>,
+) -> AxumHostResult<Json<ModelAcquireOutput>> {
+    let target_backend = body.target_backend.as_deref().unwrap_or("burn");
+    let overwrite_policy = match body.overwrite.as_deref() {
+        Some("overwrite") => OverwritePolicy::Overwrite,
+        Some("fail") => OverwritePolicy::Fail,
+        _ => OverwritePolicy::Skip,
+    };
+
+    // RepoId::new validates the repo_id format; we use name() as model_id.
+    let repo = RepoId::new(&body.repo_id).ok_or_else(|| AxumHostError::BadRequest {
+        message: format!(
+            "invalid repo_id: expected `namespace/name` format, got `{}`",
+            body.repo_id
+        ),
+    })?;
+    let model_id = repo.name().to_string();
+
+    let model_service = state.workspace().services().model_service();
+    let acq_service = state.workspace().services().model_acquisition_service().clone();
+
+    let result = model_service
+        .acquire_and_convert(
+            &body.repo_id,
+            &model_id,
+            body.revision.as_deref(),
+            target_backend,
+            overwrite_policy,
+            &acq_service,
+        )
+        .await?;
+
+    let backend = result.backend.clone();
+
+    Ok(Json(ModelAcquireOutput {
+        outcome: result.outcome,
+        model_id: result.model_id,
+        imported_model_id: result.imported_model_id.unwrap_or_default(),
+        acquisition: ModelAcquireDownloadReport {
+            repo_id: result.acquisition_report,
+            revision: String::new(),
+            file_count: result.acquisition_file_count,
+            total_bytes: result.acquisition_total_bytes,
+        },
+        conversion: ModelAcquireConversionReport {
+            backend,
+            mapped_tensor_count: result.mapped_tensor_count,
+            component_count: result.component_count,
+            source_layout: result.source_layout,
+        },
+    }))
 }
 
 #[cfg(test)]

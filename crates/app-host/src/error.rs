@@ -47,6 +47,7 @@ pub enum AppHostError {
     ModelManager(reimagine_model_manager::ModelManagerError),
     ModelAcquisition(reimagine_model_acquisition::ModelAcquisitionError),
     CandleCheckpointImport(reimagine_inference_candle::SdxlCheckpointImportError),
+    BurnCheckpointImport(reimagine_inference_burn::models::stable_diffusion::sdxl::BurnSdxlConversionError),
     ArtifactAccess(ArtifactAccessError),
 }
 
@@ -99,6 +100,7 @@ impl std::fmt::Display for AppHostError {
                 )
             }
             Self::CandleCheckpointImport(error) => write!(f, "{error}"),
+            Self::BurnCheckpointImport(error) => write!(f, "Burn checkpoint import error: {error}"),
             Self::ArtifactAccess(error) => write!(f, "artifact access error: {error}"),
         }
     }
@@ -133,6 +135,12 @@ impl From<RuntimeServiceError> for AppHostError {
 impl From<reimagine_inference_candle::SdxlCheckpointImportError> for AppHostError {
     fn from(value: reimagine_inference_candle::SdxlCheckpointImportError) -> Self {
         Self::CandleCheckpointImport(value)
+    }
+}
+
+impl From<reimagine_inference_burn::models::stable_diffusion::sdxl::BurnSdxlConversionError> for AppHostError {
+    fn from(value: reimagine_inference_burn::models::stable_diffusion::sdxl::BurnSdxlConversionError) -> Self {
+        Self::BurnCheckpointImport(value)
     }
 }
 

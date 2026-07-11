@@ -93,3 +93,67 @@ impl From<reimagine_model_acquisition::AcquisitionReport> for ModelDownloadOutpu
         }
     }
 }
+
+	/// Input to the `POST /models/acquire` endpoint.
+///
+/// Downloads a HuggingFace model, converts it to Burn-native
+/// components, and registers it in the manifest.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ModelAcquireInput {
+    /// HuggingFace repo ID (e.g. `stabilityai/stable-diffusion-xl-base-1.0`).
+    pub repo_id: String,
+    /// Git revision (defaults to `"main"`).
+    #[serde(default)]
+    pub revision: Option<String>,
+    /// Target backend: `"burn"` or `"candle"`. Defaults to `"burn"`.
+    #[serde(default)]
+    pub target_backend: Option<String>,
+    /// Overwrite policy: `"skip"`, `"overwrite"`, `"fail"`. Defaults to `"skip"`.
+    #[serde(default)]
+    pub overwrite: Option<String>,
+}
+
+/// Summary of the download step.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ModelAcquireDownloadReport {
+    /// The HuggingFace repo identifier.
+    pub repo_id: String,
+    /// The git revision fetched.
+    pub revision: String,
+    /// Number of downloaded files.
+    pub file_count: usize,
+    /// Total bytes transferred.
+    pub total_bytes: u64,
+}
+
+/// Output of `POST /models/acquire`.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ModelAcquireOutput {
+    /// The outcome: `"acquired"` on success.
+    pub outcome: String,
+    /// The source model ID (derived from repo_id).
+    pub model_id: String,
+    /// The import result model ID (e.g. `<model_id>-burn`).
+    pub imported_model_id: String,
+    /// Download step summary.
+    pub acquisition: ModelAcquireDownloadReport,
+    /// Conversion report summary.
+    pub conversion: ModelAcquireConversionReport,
+}
+
+/// Summary of the conversion step.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ModelAcquireConversionReport {
+    /// Target backend (`"burn"` or `"candle"`).
+    pub backend: String,
+    /// Number of tensors mapped.
+    pub mapped_tensor_count: usize,
+    /// Number of output components written.
+    pub component_count: usize,
+    /// Source layout detected.
+    pub source_layout: String,
+}
