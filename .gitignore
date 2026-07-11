@@ -46,6 +46,7 @@ src-tauri/WixTools/
 workspace/
 
 # ----- Local planning / agent scratch -----
+.zcode/
 .scratch/
 .sc/
 .claude/
