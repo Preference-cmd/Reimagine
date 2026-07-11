@@ -1,5 +1,11 @@
+use std::collections::BTreeMap;
+
 use reimagine_model_manager::ModelDescriptor;
 use serde::{Deserialize, Serialize};
+
+// ------------------------------------------------------------------
+//  ModelInfoDto — existing host-neutral projection for Tauri + Axum
+// ------------------------------------------------------------------
 
 /// Host-neutral projection of a model suitable for both Tauri and Axum.
 ///
@@ -86,7 +92,7 @@ fn format_role(role: &reimagine_core::model::ModelRole) -> String {
     }
 }
 
-fn format_status(status: reimagine_model_manager::ModelSourceStatus) -> String {
+pub fn format_status(status: reimagine_model_manager::ModelSourceStatus) -> String {
     use reimagine_model_manager::ModelSourceStatus;
     match status {
         ModelSourceStatus::Available => "available".to_owned(),
@@ -94,6 +100,111 @@ fn format_status(status: reimagine_model_manager::ModelSourceStatus) -> String {
         ModelSourceStatus::Stale => "stale".to_owned(),
         ModelSourceStatus::Unverified => "unverified".to_owned(),
     }
+}
+
+// ------------------------------------------------------------------
+//  03: Model management API DTOs
+// ------------------------------------------------------------------
+
+/// A single model entry in the `GET /models` listing.
+///
+/// Mirrors the shape from the issue spec but reuses the existing
+/// backbone (`ModelInfoDto` fields) because the wire requirements
+/// are identical.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ModelListEntry {
+    pub id: String,
+    pub model_series: String,
+    pub variant: String,
+    pub roles: Vec<String>,
+    pub source_status: String,
+    pub backend: String,
+    pub format: String,
+}
+
+impl From<ModelDescriptor> for ModelListEntry {
+    fn from(d: ModelDescriptor) -> Self {
+        let backend = d
+            .metadata()
+            .get("backend")
+            .cloned()
+            .unwrap_or_else(|| "unknown".to_string());
+        Self {
+            id: d.id().as_str().to_owned(),
+            model_series: d.model_series().as_str().to_owned(),
+            variant: d.variant().as_str().to_owned(),
+            roles: d.roles().iter().map(format_role).collect(),
+            source_status: format_status(d.source_status()),
+            backend,
+            format: format!("{:?}", d.format()).to_ascii_lowercase(),
+        }
+    }
+}
+
+/// Response for `GET /models`.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ModelListOutput {
+    pub models: Vec<ModelListEntry>,
+}
+
+/// A single component within a model detail.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ModelComponentDto {
+    pub role: String,
+    pub path: String,
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub metadata: BTreeMap<String, String>,
+}
+
+/// Detailed model view returned by `GET /models/:id`.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ModelDetailDto {
+    pub id: String,
+    pub model_series: String,
+    pub variant: String,
+    pub source_status: String,
+    pub backend: String,
+    pub format: String,
+    pub components: Vec<ModelComponentDto>,
+}
+
+/// Response for `DELETE /models/:id`.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ModelRemoveOutput {
+    pub outcome: String,
+    pub model_id: String,
+}
+
+/// Input for `POST /models/convert`.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ModelConvertInput {
+    pub model_id: String,
+    pub target_backend: String,
+}
+
+/// Summary of a conversion result for the wire.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ModelConvertConversionReport {
+    pub mapped_tensor_count: usize,
+    pub component_count: usize,
+    pub source_layout: String,
+}
+
+/// Response for `POST /models/convert`.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ModelConvertOutput {
+    pub outcome: String,
+    pub model_id: String,
+    pub backend: String,
+    pub report: ModelConvertConversionReport,
 }
 
 #[cfg(test)]

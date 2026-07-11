@@ -42,7 +42,11 @@ pub use model_acquisition::{
     ModelAcquireDownloadReport, ModelAcquireInput, ModelAcquireOutput, ModelDownloadInput,
     ModelDownloadOutput,
 };
-pub use models::ModelInfoDto;
+pub use models::{
+    format_status, ModelComponentDto, ModelConvertConversionReport, ModelConvertInput,
+    ModelConvertOutput, ModelDetailDto, ModelInfoDto, ModelListEntry, ModelListOutput,
+    ModelRemoveOutput,
+};
 pub use nodes::{NodeCatalogResponse, NodeDefDto, ParamSpecDto, SocketSpecDto};
 pub use reimagine_core::command::{CommandResult, CommandResultStatus};
 pub use runs::{

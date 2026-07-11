@@ -26,6 +26,10 @@ pub fn build_router() -> Router<AxumHostState> {
         .route("/artifacts/{artifact_id}", get(artifacts::get))
         .route("/models/download", post(models::download))
         .route("/models/acquire", post(models::acquire))
+        .route("/models", get(models::list_models))
+        .route("/models/{id}", get(models::get_model))
+        .route("/models/{id}", axum::routing::delete(models::remove_model))
+        .route("/models/convert", post(models::convert_checkpoint))
         .layer(TraceLayer::new_for_http().make_span_with(request_span))
 }
 

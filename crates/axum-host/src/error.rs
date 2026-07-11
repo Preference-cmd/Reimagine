@@ -27,6 +27,8 @@ pub enum AxumHostError {
     UnknownWorkflow { workflow_id: WorkflowId },
     /// The requested run id is not known to the runtime store.
     UnknownRun { run_id: RunId },
+    /// The requested model id is not registered in the manifest.
+    UnknownModel { model_id: String },
     /// The requested artifact id is not known to any run.
     UnknownArtifact,
     /// The artifact reference failed path safety validation.
@@ -49,6 +51,7 @@ impl std::fmt::Display for AxumHostError {
                 write!(f, "unknown workflow `{workflow_id}`")
             }
             Self::UnknownRun { run_id } => write!(f, "unknown run `{run_id}`"),
+            Self::UnknownModel { model_id } => write!(f, "unknown model `{model_id}`"),
             Self::UnknownArtifact => write!(f, "unknown artifact"),
             Self::UnsafeArtifactReference => write!(f, "unsafe artifact reference"),
             Self::ArtifactFileGone => write!(f, "artifact file gone"),
@@ -75,6 +78,20 @@ impl From<AppHostError> for AxumHostError {
             AppHostError::UnknownRun { run_id } => Self::UnknownRun { run_id },
             other => Self::AppHost(other),
         }
+    }
+}
+
+impl From<&str> for AxumHostError {
+    fn from(model_id: &str) -> Self {
+        Self::UnknownModel {
+            model_id: model_id.to_owned(),
+        }
+    }
+}
+
+impl From<String> for AxumHostError {
+    fn from(model_id: String) -> Self {
+        Self::UnknownModel { model_id }
     }
 }
 
@@ -115,6 +132,11 @@ impl IntoResponse for AxumHostError {
                 StatusCode::NOT_FOUND,
                 "unknown_run",
                 format!("unknown run `{run_id}`"),
+            ),
+            Self::UnknownModel { model_id } => (
+                StatusCode::NOT_FOUND,
+                "unknown_model",
+                format!("unknown model `{model_id}`"),
             ),
             Self::UnknownArtifact => (
                 StatusCode::NOT_FOUND,
