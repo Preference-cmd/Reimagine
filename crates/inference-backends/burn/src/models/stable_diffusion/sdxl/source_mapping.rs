@@ -14,7 +14,7 @@ use super::source_layout::{BurnSdxlSourceSet, DIFFUSERS_STYLE_SPLIT_SAFETENSORS}
 use super::writer::{write_conversion_report, write_synthetic_sdxl_components};
 use crate::text_encoder::clip::ClipTextEncoderProfile;
 
-const DIFFUSION_MAPPINGS: &[TensorMapping] = &[
+pub(crate) const DIFFUSION_MAPPINGS: &[TensorMapping] = &[
     TensorMapping::new("model.diffusion.conv_in.weight", "conv_in.weight"),
     TensorMapping::new("model.diffusion.conv_in.bias", "conv_in.bias"),
     TensorMapping::new("conv_in.weight", "conv_in.weight"),
@@ -146,7 +146,7 @@ const DIFFUSION_MAPPINGS: &[TensorMapping] = &[
     TensorMapping::new("conv_norm_out.weight", "conv_norm_out.weight"),
     TensorMapping::new("conv_norm_out.bias", "conv_norm_out.bias"),
 ];
-const VAE_MAPPINGS: &[TensorMapping] = &[
+pub(crate) const VAE_MAPPINGS: &[TensorMapping] = &[
     // decoder.conv_in → conv_in
     TensorMapping::new("decoder.conv_in.weight", "conv_in.weight"),
     TensorMapping::new("decoder.conv_in.bias", "conv_in.bias"),
@@ -281,10 +281,10 @@ fn map_split_source_to_components(
 }
 
 #[derive(Debug, Clone, Copy)]
-struct TensorMapping {
-    source_key: &'static str,
-    target_key: &'static str,
-    required: bool,
+pub(crate) struct TensorMapping {
+    pub(crate) source_key: &'static str,
+    pub(crate) target_key: &'static str,
+    pub(crate) required: bool,
 }
 
 impl TensorMapping {

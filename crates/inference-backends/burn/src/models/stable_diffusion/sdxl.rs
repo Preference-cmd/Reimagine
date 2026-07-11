@@ -5,6 +5,7 @@ pub use component::{
 pub use contract::{
     BURN_SDXL_COMPONENT_CONTRACT_VERSION, BurnDTypePolicy, BurnSdxlComponentContract,
 };
+pub use conversion::BurnSdxlConversionError;
 pub use loaded::{BurnLoadedModelBundle, BurnLoadedSdxlBundle, BurnSdxlSourceSignature};
 pub use metadata::{BurnComponentMetadata, metadata_keys};
 pub use text::{BurnSdxlTextEncoderResources, load_sdxl_tokenizer};
@@ -20,7 +21,11 @@ pub use validation::{
     validate_component_inventory, validate_component_inventory_full,
 };
 
-pub use conversion::BurnSdxlConversionError;
+// New checkpoint import pipeline (model-pipeline/01)
+pub mod checkpoint_import;
+mod checkpoint_inventory;
+mod checkpoint_projection;
+mod checkpoint_writer;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct BurnSdxlDiffusersSplitPackageRequest {
