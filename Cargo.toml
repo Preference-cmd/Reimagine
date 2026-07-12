@@ -17,6 +17,7 @@ members = [
     "crates/inference-backends/candle",
     "crates/inference-backends/burn",
     "crates/plugin",
+    "crates/backend-worker-protocol",
 ]
 
 [workspace.package]

@@ -6431,6 +6431,14 @@ dependencies = [
 ]
 
 [[package]]
+name = "reimagine-backend-worker-protocol"
+version = "0.1.0"
+dependencies = [
+ "serde",
+ "serde_json",
+]
+
+[[package]]
 name = "reimagine-config"
 version = "0.1.0"
 dependencies = [
