@@ -123,32 +123,32 @@ mod tests {
             .as_array()
             .expect("burn instances is an array")
             .iter()
-            .find(|inst| inst["instance"].as_str() == Some("burn:cpu"))
-            .expect("burn:cpu instance is serialized");
+            .find(|inst| inst["instance"].as_str() == Some("burn:wgpu:default"))
+            .expect("burn:wgpu:default instance is serialized");
         assert_eq!(burn_cpu["status"].as_str(), Some("Available"));
-        assert_eq!(burn_cpu["device"]["kind"].as_str(), Some("Cpu"));
+        assert_eq!(burn_cpu["device"]["kind"].as_str(), Some("Gpu"));
         let caps = burn_cpu["capabilities"]
             .as_array()
             .expect("capabilities is an array");
         assert_eq!(
             caps.len(),
-            3,
-            "burn/08f adds TextEncode; burn:cpu should have 3 capabilities, got: {burn_cpu}"
+            7,
+            "burn/15i aligns 7 capabilities for burn:wgpu:default, got: {burn_cpu}"
         );
         assert_eq!(
             caps[0].as_str(),
             Some("model.load_bundle"),
-            "burn:cpu capability[0] should be load_bundle, got: {burn_cpu}"
+            "burn:wgpu:default capability[0] should be load_bundle, got: {burn_cpu}"
         );
         assert_eq!(
             caps[1].as_str(),
             Some("latent.create_empty"),
-            "burn:cpu capability[1] should be create_empty_latent, got: {burn_cpu}"
+            "burn:wgpu:default capability[1] should be create_empty_latent, got: {burn_cpu}"
         );
         assert_eq!(
             caps[2].as_str(),
             Some("text.encode"),
-            "burn:cpu capability[2] should be text.encode, got: {burn_cpu}"
+            "burn:wgpu:default capability[2] should be text.encode, got: {burn_cpu}"
         );
 
         // V1 must always include a `candle:cpu` instance, regardless
