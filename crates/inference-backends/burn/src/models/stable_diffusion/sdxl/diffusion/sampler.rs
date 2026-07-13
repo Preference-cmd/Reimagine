@@ -552,10 +552,7 @@ mod tests {
         // Sanity: with seed=42, steps=2, cfg=7.5 on the zero-initialized tiny UNet,
         // the output latent elements stay within a reasonable range.
         for &v in &vals {
-            assert!(
-                v.is_finite(),
-                "all latent elements must be finite, got {v}"
-            );
+            assert!(v.is_finite(), "all latent elements must be finite, got {v}");
         }
     }
 }

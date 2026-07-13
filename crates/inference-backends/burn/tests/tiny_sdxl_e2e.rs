@@ -404,28 +404,36 @@ fn write_diffusion_component(path: &Path) {
 fn write_vae_component(path: &Path) {
     let mut tensors = Vec::new();
     // conv_in: [out=512, in=4, 3, 3]
-    tensors.push(tensor("conv_in.weight", vec![512, 4, 3, 3], zeros(512 * 4 * 3 * 3)));
+    tensors.push(tensor(
+        "conv_in.weight",
+        vec![512, 4, 3, 3],
+        zeros(512 * 4 * 3 * 3),
+    ));
     tensors.push(tensor("conv_in.bias", vec![512], vec![0.0; 512]));
     // mid_block.resnets.0: 512→512
     for rn in 0..2 {
         for nm in ["norm1", "norm2"] {
             tensors.push(tensor(
                 &format!("mid_block.resnets.{rn}.{nm}.weight"),
-                vec![512], vec![1.0; 512],
+                vec![512],
+                vec![1.0; 512],
             ));
             tensors.push(tensor(
                 &format!("mid_block.resnets.{rn}.{nm}.bias"),
-                vec![512], vec![0.0; 512],
+                vec![512],
+                vec![0.0; 512],
             ));
         }
         for cv in ["conv1", "conv2"] {
             tensors.push(tensor(
                 &format!("mid_block.resnets.{rn}.{cv}.weight"),
-                vec![512, 512, 3, 3], zeros(512 * 512 * 3 * 3),
+                vec![512, 512, 3, 3],
+                zeros(512 * 512 * 3 * 3),
             ));
             tensors.push(tensor(
                 &format!("mid_block.resnets.{rn}.{cv}.bias"),
-                vec![512], vec![0.0; 512],
+                vec![512],
+                vec![0.0; 512],
             ));
         }
     }
@@ -433,23 +441,35 @@ fn write_vae_component(path: &Path) {
     for tk in ["to_q", "to_k", "to_v"] {
         tensors.push(tensor(
             &format!("mid_block.attentions.0.{tk}.weight"),
-            vec![512, 512, 1, 1], zeros(512 * 512),
+            vec![512, 512, 1, 1],
+            zeros(512 * 512),
         ));
         tensors.push(tensor(
             &format!("mid_block.attentions.0.{tk}.bias"),
-            vec![512], vec![0.0; 512],
+            vec![512],
+            vec![0.0; 512],
         ));
     }
     tensors.push(tensor(
         "mid_block.attentions.0.to_out.0.weight",
-        vec![512, 512, 1, 1], zeros(512 * 512),
+        vec![512, 512, 1, 1],
+        zeros(512 * 512),
     ));
     tensors.push(tensor(
         "mid_block.attentions.0.to_out.0.bias",
-        vec![512], vec![0.0; 512],
+        vec![512],
+        vec![0.0; 512],
     ));
-    tensors.push(tensor("mid_block.attentions.0.group_norm.weight", vec![512], vec![1.0; 512]));
-    tensors.push(tensor("mid_block.attentions.0.group_norm.bias", vec![512], vec![0.0; 512]));
+    tensors.push(tensor(
+        "mid_block.attentions.0.group_norm.weight",
+        vec![512],
+        vec![1.0; 512],
+    ));
+    tensors.push(tensor(
+        "mid_block.attentions.0.group_norm.bias",
+        vec![512],
+        vec![0.0; 512],
+    ));
     // up_blocks: build 4 blocks (omitting detailed fixture for now; use minimal but size-compatible)
     // Since the test only needs to produce image output, add stubs for all up block resnets.
     let up_block_channels: [(usize, usize, bool); 4] = [
@@ -467,50 +487,60 @@ fn write_vae_component(path: &Path) {
                 let ch = if nm == "norm1" { res_in_ch } else { *out_ch };
                 tensors.push(tensor(
                     &format!("up_blocks.{block_idx}.resnets.{rn}.{nm}.weight"),
-                    vec![ch], vec![1.0; ch],
+                    vec![ch],
+                    vec![1.0; ch],
                 ));
                 tensors.push(tensor(
                     &format!("up_blocks.{block_idx}.resnets.{rn}.{nm}.bias"),
-                    vec![ch], vec![0.0; ch],
+                    vec![ch],
+                    vec![0.0; ch],
                 ));
             }
             // conv1: [res_in_ch → out_ch]
             tensors.push(tensor(
                 &format!("up_blocks.{block_idx}.resnets.{rn}.conv1.weight"),
-                vec![*out_ch, res_in_ch, 3, 3], zeros(out_ch * res_in_ch * 3 * 3),
+                vec![*out_ch, res_in_ch, 3, 3],
+                zeros(out_ch * res_in_ch * 3 * 3),
             ));
             tensors.push(tensor(
                 &format!("up_blocks.{block_idx}.resnets.{rn}.conv1.bias"),
-                vec![*out_ch], vec![0.0; *out_ch],
+                vec![*out_ch],
+                vec![0.0; *out_ch],
             ));
             // conv2: out_ch → out_ch
             tensors.push(tensor(
                 &format!("up_blocks.{block_idx}.resnets.{rn}.conv2.weight"),
-                vec![*out_ch, *out_ch, 3, 3], zeros(out_ch * out_ch * 3 * 3),
+                vec![*out_ch, *out_ch, 3, 3],
+                zeros(out_ch * out_ch * 3 * 3),
             ));
             tensors.push(tensor(
                 &format!("up_blocks.{block_idx}.resnets.{rn}.conv2.bias"),
-                vec![*out_ch], vec![0.0; *out_ch],
+                vec![*out_ch],
+                vec![0.0; *out_ch],
             ));
             if is_first_with_skip {
                 tensors.push(tensor(
                     &format!("up_blocks.{block_idx}.resnets.{rn}.conv_shortcut.weight"),
-                    vec![*out_ch, *in_ch, 1, 1], zeros(out_ch * in_ch),
+                    vec![*out_ch, *in_ch, 1, 1],
+                    zeros(out_ch * in_ch),
                 ));
                 tensors.push(tensor(
                     &format!("up_blocks.{block_idx}.resnets.{rn}.conv_shortcut.bias"),
-                    vec![*out_ch], vec![0.0; *out_ch],
+                    vec![*out_ch],
+                    vec![0.0; *out_ch],
                 ));
             }
         }
         if *has_up {
             tensors.push(tensor(
                 &format!("up_blocks.{block_idx}.upsamplers.0.conv.weight"),
-                vec![*out_ch, *out_ch, 3, 3], zeros(out_ch * out_ch * 3 * 3),
+                vec![*out_ch, *out_ch, 3, 3],
+                zeros(out_ch * out_ch * 3 * 3),
             ));
             tensors.push(tensor(
                 &format!("up_blocks.{block_idx}.upsamplers.0.conv.bias"),
-                vec![*out_ch], vec![0.0; *out_ch],
+                vec![*out_ch],
+                vec![0.0; *out_ch],
             ));
         }
     }
@@ -518,7 +548,11 @@ fn write_vae_component(path: &Path) {
     tensors.push(tensor("conv_norm_out.weight", vec![128], vec![1.0; 128]));
     tensors.push(tensor("conv_norm_out.bias", vec![128], vec![0.0; 128]));
     // conv_out: [out=3, in=128, 3, 3]
-    tensors.push(tensor("conv_out.weight", vec![3, 128, 3, 3], zeros(3 * 128 * 3 * 3)));
+    tensors.push(tensor(
+        "conv_out.weight",
+        vec![3, 128, 3, 3],
+        zeros(3 * 128 * 3 * 3),
+    ));
     tensors.push(tensor("conv_out.bias", vec![3], vec![0.0; 3]));
     write_tensors(path, BurnSdxlComponentRole::Vae, tensors);
 }

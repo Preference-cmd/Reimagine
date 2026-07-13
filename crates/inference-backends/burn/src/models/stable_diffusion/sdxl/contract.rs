@@ -128,16 +128,8 @@ const DIFFUSION_SPECS: &[BurnTensorSpec] = &[
 ];
 
 const VAE_SPECS: &[BurnTensorSpec] = &[
-    BurnTensorSpec::required_rank(
-        "conv_in.weight",
-        4,
-        "decoder latent projection weight",
-    ),
-    BurnTensorSpec::required_rank(
-        "conv_in.bias",
-        1,
-        "decoder latent projection bias",
-    ),
+    BurnTensorSpec::required_rank("conv_in.weight", 4, "decoder latent projection weight"),
+    BurnTensorSpec::required_rank("conv_in.bias", 1, "decoder latent projection bias"),
     BurnTensorSpec::required_rank(
         "mid_block.resnets.0.norm1.weight",
         1,

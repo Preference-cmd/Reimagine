@@ -132,10 +132,7 @@ fn tiny_diffusion_load_policy() -> SdxlLoadPolicy {
             "conv_out.weight",
             "conv_out.bias",
         ])
-        .with_remapped_key_patterns(&[
-            "model.diffusion.* -> *",
-            "out.0 -> conv_out",
-        ])
+        .with_remapped_key_patterns(&["model.diffusion.* -> *", "out.0 -> conv_out"])
 }
 
 fn sdxl_base_diffusion_load_policy() -> SdxlLoadPolicy {
@@ -656,7 +653,10 @@ mod tests {
         };
         let diffusion_path = PathBuf::from(package_root).join("diffusion/model.safetensors");
         if !diffusion_path.is_file() {
-            eprintln!("skip real package bind check: missing {}", diffusion_path.display());
+            eprintln!(
+                "skip real package bind check: missing {}",
+                diffusion_path.display()
+            );
             return;
         }
         let config = BurnBackendConfig::new("/models", "/output");
@@ -676,9 +676,7 @@ mod tests {
         let applied = result.applied.len();
         let missing = result.missing.len();
         let unused = result.unused.len();
-        eprintln!(
-            "real package UNet bind: applied={applied} missing={missing} unused={unused}"
-        );
+        eprintln!("real package UNet bind: applied={applied} missing={missing} unused={unused}");
         for key in [
             "conv_in.weight",
             "time_embedding.linear_1.weight",

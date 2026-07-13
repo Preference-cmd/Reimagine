@@ -2,10 +2,10 @@
 
 use axum::{Json, extract::Path, extract::State};
 use reimagine_app_host::dto::{
-    format_status, ModelAcquireConversionReport, ModelAcquireDownloadReport, ModelAcquireInput,
+    ModelAcquireConversionReport, ModelAcquireDownloadReport, ModelAcquireInput,
     ModelAcquireOutput, ModelComponentDto, ModelConvertConversionReport, ModelConvertInput,
     ModelConvertOutput, ModelDetailDto, ModelDownloadInput, ModelListEntry, ModelListOutput,
-    ModelRemoveOutput,
+    ModelRemoveOutput, format_status,
 };
 use reimagine_core::model::ModelId;
 use reimagine_model_acquisition::{
@@ -105,7 +105,11 @@ pub async fn acquire(
     let model_id = repo.name().to_string();
 
     let model_service = state.workspace().services().model_service();
-    let acq_service = state.workspace().services().model_acquisition_service().clone();
+    let acq_service = state
+        .workspace()
+        .services()
+        .model_acquisition_service()
+        .clone();
 
     let result = model_service
         .acquire_and_convert(
@@ -165,7 +169,9 @@ pub async fn get_model(
         .iter()
         .find(|d| d.id().as_str() == model_id)
         .cloned()
-        .ok_or_else(|| AxumHostError::UnknownModel { model_id: model_id.clone() })?;
+        .ok_or_else(|| AxumHostError::UnknownModel {
+            model_id: model_id.clone(),
+        })?;
 
     let components = descriptor
         .components()
@@ -211,7 +217,9 @@ pub async fn remove_model(
     // Verify the model exists before attempting removal.
     let descriptors = model_service.list_models().await?;
     if !descriptors.iter().any(|d| d.id() == &core_id) {
-        return Err(AxumHostError::UnknownModel { model_id: model_id.clone() });
+        return Err(AxumHostError::UnknownModel {
+            model_id: model_id.clone(),
+        });
     }
 
     let (_, _report) = model_service.remove_model(&core_id).await?;
@@ -273,9 +281,7 @@ pub async fn convert_checkpoint(
             }))
         }
         other => Err(AxumHostError::BadRequest {
-            message: format!(
-                "unsupported target_backend `{other}`; expected `burn` or `candle`"
-            ),
+            message: format!("unsupported target_backend `{other}`; expected `burn` or `candle`"),
         }),
     }
 }
@@ -323,7 +329,11 @@ mod tests {
             ModelId::new("test-model-01"),
             ModelSeries::new("stable_diffusion"),
             ModelVariant::new("sdxl"),
-            vec![ModelRole::DiffusionModel, ModelRole::TextEncoder, ModelRole::Vae],
+            vec![
+                ModelRole::DiffusionModel,
+                ModelRole::TextEncoder,
+                ModelRole::Vae,
+            ],
             ModelSource::relative(ModelRootId::new("base"), "test/model.safetensors"),
             ModelFormat::Safetensors,
         )
@@ -500,7 +510,10 @@ mod tests {
             .unwrap();
         let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
         assert_eq!(json["id"], "test-model-01");
-        assert!(json["components"].is_array(), "components should be an array");
+        assert!(
+            json["components"].is_array(),
+            "components should be an array"
+        );
     }
 
     #[tokio::test]

@@ -16,7 +16,7 @@ use std::path::Path;
 use safetensors::tensor::{Dtype, SafeTensors, View, serialize_to_file};
 
 use super::checkpoint_projection::{
-    BurnCheckpointRole, BurnCheckpointProjection, TextEncoderCount, text_encoder_count,
+    BurnCheckpointProjection, BurnCheckpointRole, TextEncoderCount, text_encoder_count,
 };
 use super::conversion::{
     BurnSdxlConversionError, BurnSdxlConversionReport, BurnSdxlOutputComponentReport,
@@ -36,6 +36,8 @@ struct OwnedTensorView {
     shape: Vec<usize>,
     data: Vec<u8>,
 }
+
+type SerializedTensor = (String, Vec<usize>, Vec<u8>);
 
 impl View for OwnedTensorView {
     fn dtype(&self) -> Dtype {
@@ -77,8 +79,7 @@ pub(crate) fn write_real_checkpoint_components(
     let mut ignored: Vec<String> = Vec::new();
 
     // Group tensors by role: (target_key, shape, data)
-    let mut role_tensors: BTreeMap<BurnCheckpointRole, Vec<(String, Vec<usize>, Vec<u8>)>> =
-        BTreeMap::new();
+    let mut role_tensors: BTreeMap<BurnCheckpointRole, Vec<SerializedTensor>> = BTreeMap::new();
 
     for key in safetensors.names() {
         if key == "__metadata__" {
@@ -112,43 +113,43 @@ pub(crate) fn write_real_checkpoint_components(
     }
 
     // Write diffusion
-    if let Some(tensors) = role_tensors.remove(&BurnCheckpointRole::Diffusion) {
-        if !tensors.is_empty() {
-            let dir = model_root.join(DIFFUSION_DIR);
-            fs::create_dir_all(&dir).map_err(|e| BurnSdxlConversionError::Io {
-                path: dir.clone(),
-                source: e,
-            })?;
-            let path = dir.join(format!("{model_id}.safetensors"));
-            let count = tensors.len();
-            write_component_file(&path, "diffusion", &tensors)?;
-            out_components.push(BurnSdxlOutputComponentReport {
-                role: super::component::BurnSdxlComponentRole::Diffusion,
-                path: format!("{DIFFUSION_DIR}/{model_id}.safetensors"),
-                tensor_count: count,
-                validated_required_tensor_count: count,
-            });
-        }
+    if let Some(tensors) = role_tensors.remove(&BurnCheckpointRole::Diffusion)
+        && !tensors.is_empty()
+    {
+        let dir = model_root.join(DIFFUSION_DIR);
+        fs::create_dir_all(&dir).map_err(|e| BurnSdxlConversionError::Io {
+            path: dir.clone(),
+            source: e,
+        })?;
+        let path = dir.join(format!("{model_id}.safetensors"));
+        let count = tensors.len();
+        write_component_file(&path, "diffusion", &tensors)?;
+        out_components.push(BurnSdxlOutputComponentReport {
+            role: super::component::BurnSdxlComponentRole::Diffusion,
+            path: format!("{DIFFUSION_DIR}/{model_id}.safetensors"),
+            tensor_count: count,
+            validated_required_tensor_count: count,
+        });
     }
 
     // Write VAE
-    if let Some(tensors) = role_tensors.remove(&BurnCheckpointRole::Vae) {
-        if !tensors.is_empty() {
-            let dir = model_root.join(VAE_DIR);
-            fs::create_dir_all(&dir).map_err(|e| BurnSdxlConversionError::Io {
-                path: dir.clone(),
-                source: e,
-            })?;
-            let path = dir.join(format!("{model_id}.safetensors"));
-            let count = tensors.len();
-            write_component_file(&path, "vae", &tensors)?;
-            out_components.push(BurnSdxlOutputComponentReport {
-                role: super::component::BurnSdxlComponentRole::Vae,
-                path: format!("{VAE_DIR}/{model_id}.safetensors"),
-                tensor_count: count,
-                validated_required_tensor_count: count,
-            });
-        }
+    if let Some(tensors) = role_tensors.remove(&BurnCheckpointRole::Vae)
+        && !tensors.is_empty()
+    {
+        let dir = model_root.join(VAE_DIR);
+        fs::create_dir_all(&dir).map_err(|e| BurnSdxlConversionError::Io {
+            path: dir.clone(),
+            source: e,
+        })?;
+        let path = dir.join(format!("{model_id}.safetensors"));
+        let count = tensors.len();
+        write_component_file(&path, "vae", &tensors)?;
+        out_components.push(BurnSdxlOutputComponentReport {
+            role: super::component::BurnSdxlComponentRole::Vae,
+            path: format!("{VAE_DIR}/{model_id}.safetensors"),
+            tensor_count: count,
+            validated_required_tensor_count: count,
+        });
     }
 
     // Write clip
@@ -355,13 +356,13 @@ fn classify_checkpoint_tensor(
             target_key: format!("model.text_encoder_2.transformer.text_model.{inner}"),
         });
     }
-    if let Some(inner) = key.strip_prefix("conditioner.embedders.1.model.") {
-        if inner.starts_with("text_projection.") {
-            return Some(Classification {
-                role: BurnCheckpointRole::TextEncoder2,
-                target_key: format!("model.text_encoder_2.{inner}"),
-            });
-        }
+    if let Some(inner) = key.strip_prefix("conditioner.embedders.1.model.")
+        && inner.starts_with("text_projection.")
+    {
+        return Some(Classification {
+            role: BurnCheckpointRole::TextEncoder2,
+            target_key: format!("model.text_encoder_2.{inner}"),
+        });
     }
     if let Some(inner) = key.strip_prefix("conditioner.embedders.1.transformer.text_model.") {
         return Some(Classification {
@@ -371,13 +372,13 @@ fn classify_checkpoint_tensor(
     }
 
     // VAE
-    if let Some(inner) = key.strip_prefix("first_stage_model.") {
-        if let Some(m) = VAE_MAPPINGS.iter().find(|m| m.source_key == inner) {
-            return Some(Classification {
-                role: BurnCheckpointRole::Vae,
-                target_key: m.target_key.to_string(),
-            });
-        }
+    if let Some(inner) = key.strip_prefix("first_stage_model.")
+        && let Some(m) = VAE_MAPPINGS.iter().find(|m| m.source_key == inner)
+    {
+        return Some(Classification {
+            role: BurnCheckpointRole::Vae,
+            target_key: m.target_key.to_string(),
+        });
     }
 
     None
@@ -474,7 +475,11 @@ mod tests {
             write_real_checkpoint_components(&ckpt, "test-model", &model_root, &projection)
                 .unwrap();
 
-        assert!(model_root.join("diffusion_model/test-model.safetensors").is_file());
+        assert!(
+            model_root
+                .join("diffusion_model/test-model.safetensors")
+                .is_file()
+        );
         assert!(model_root.join("vae/test-model.safetensors").is_file());
         assert!(model_root.join("clip/test-model.safetensors").is_file());
         assert_eq!(report.output_components.len(), 3);
@@ -482,9 +487,15 @@ mod tests {
         // AC6: output files must pass inspect_component_safetensors() read-back
         // and satisfy the Burn component contract.
         for (role, file) in [
-            (BurnSdxlComponentRole::Diffusion, "diffusion_model/test-model.safetensors"),
+            (
+                BurnSdxlComponentRole::Diffusion,
+                "diffusion_model/test-model.safetensors",
+            ),
             (BurnSdxlComponentRole::Vae, "vae/test-model.safetensors"),
-            (BurnSdxlComponentRole::TextEncoder, "clip/test-model.safetensors"),
+            (
+                BurnSdxlComponentRole::TextEncoder,
+                "clip/test-model.safetensors",
+            ),
         ] {
             let path = model_root.join(file);
             let inspected = inspect_component_safetensors(&path).unwrap();
@@ -493,10 +504,7 @@ mod tests {
                 "inventory must not be empty for {role:?}",
             );
             assert!(
-                inspected
-                    .metadata
-                    .values()
-                    .all(|v| !v.is_empty()),
+                inspected.metadata.values().all(|v| !v.is_empty()),
                 "metadata must not contain empty values for {role:?}",
             );
         }
@@ -524,13 +532,24 @@ mod tests {
         let projection = project_from_inventory(&inv).unwrap();
         let model_root = dir.join("models");
         let report =
-            write_real_checkpoint_components(&ckpt, "sdxl-test", &model_root, &projection)
-                .unwrap();
+            write_real_checkpoint_components(&ckpt, "sdxl-test", &model_root, &projection).unwrap();
 
-        assert!(model_root.join("diffusion_model/sdxl-test.safetensors").is_file());
+        assert!(
+            model_root
+                .join("diffusion_model/sdxl-test.safetensors")
+                .is_file()
+        );
         assert!(model_root.join("vae/sdxl-test.safetensors").is_file());
-        assert!(model_root.join("clip/sdxl-test/clip-l.safetensors").is_file());
-        assert!(model_root.join("clip/sdxl-test/clip-g.safetensors").is_file());
+        assert!(
+            model_root
+                .join("clip/sdxl-test/clip-l.safetensors")
+                .is_file()
+        );
+        assert!(
+            model_root
+                .join("clip/sdxl-test/clip-g.safetensors")
+                .is_file()
+        );
         assert_eq!(report.output_components.len(), 4);
 
         fs::remove_dir_all(&dir).unwrap();

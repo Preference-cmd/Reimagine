@@ -20,8 +20,8 @@
 //! check_global()?;
 //! ```
 
-use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::OnceLock;
+use std::sync::atomic::{AtomicBool, Ordering};
 
 use crate::error::BurnBackendError;
 

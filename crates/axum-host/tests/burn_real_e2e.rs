@@ -69,8 +69,9 @@ fn assert_truthful_burn_capabilities(profile_value: &Value) {
         .get("instances")
         .and_then(|v| v.as_array())
         .and_then(|arr| {
-            arr.iter()
-                .find(|inst| inst.get("instance").and_then(|i| i.as_str()) == Some("burn:wgpu:default"))
+            arr.iter().find(|inst| {
+                inst.get("instance").and_then(|i| i.as_str()) == Some("burn:wgpu:default")
+            })
         })
         .expect("burn:wgpu:default instance profile must be present");
 
@@ -107,14 +108,14 @@ fn assert_truthful_burn_capabilities(profile_value: &Value) {
 
     for label in expected_labels {
         assert!(
-            capabilities.iter().any(|c| *c == label),
+            capabilities.contains(&label),
             "burn:wgpu:default capability list {:?} must include `{label}`",
             capabilities,
         );
     }
 
     assert!(
-        !capabilities.iter().any(|c| *c == "model.import"),
+        !capabilities.contains(&"model.import"),
         "image import must NOT be advertised: actual capabilities {capabilities:?}"
     );
 }
@@ -224,8 +225,8 @@ async fn burn_real_sdxl_smoke_workflow_opens_through_axum() {
             .to_bytes()
             .to_vec()
     };
-    let profile_json: Value = serde_json::from_slice(&profile_bytes)
-        .expect("/compute-profile body must be JSON");
+    let profile_json: Value =
+        serde_json::from_slice(&profile_bytes).expect("/compute-profile body must be JSON");
     assert_truthful_burn_capabilities(&profile_json);
 
     let workflow_path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
@@ -351,8 +352,8 @@ async fn burn_real_sdxl_smoke_workflow_runs_through_axum_to_png_artifact() {
     let workflow_raw = tokio::fs::read_to_string(&workflow_path)
         .await
         .expect("smoke workflow json must be readable");
-    let workflow_json: Value = serde_json::from_str(&workflow_raw)
-        .expect("smoke workflow json must be valid JSON");
+    let workflow_json: Value =
+        serde_json::from_str(&workflow_raw).expect("smoke workflow json must be valid JSON");
     let open_response = app
         .clone()
         .oneshot(json_request(
@@ -373,9 +374,12 @@ async fn burn_real_sdxl_smoke_workflow_runs_through_axum_to_png_artifact() {
             .to_bytes()
             .to_vec()
     };
-    let open_json: Value = serde_json::from_slice(&open_bytes)
-        .expect("/workflows/open response must be JSON");
-    assert_eq!(open_json.get("source").and_then(|v| v.as_str()), Some("inline"));
+    let open_json: Value =
+        serde_json::from_slice(&open_bytes).expect("/workflows/open response must be JSON");
+    assert_eq!(
+        open_json.get("source").and_then(|v| v.as_str()),
+        Some("inline")
+    );
     assert_eq!(
         open_json.get("workflow_id").and_then(|v| v.as_str()),
         Some(BURN_WORKFLOW_ID)
@@ -416,7 +420,10 @@ async fn burn_real_sdxl_smoke_workflow_runs_through_axum_to_png_artifact() {
         .get("run_id")
         .and_then(|v| v.as_str())
         .expect("/workflows/.../run must return a run_id");
-    assert_eq!(run_json.get("outcome").and_then(|v| v.as_str()), Some("started"));
+    assert_eq!(
+        run_json.get("outcome").and_then(|v| v.as_str()),
+        Some("started")
+    );
 
     // 3. Poll the run summary via GET /runs/{id}, asserting a terminal state
     //    within 300s. The Burn real-package UNet forward is currently blocked
@@ -451,7 +458,7 @@ async fn burn_real_sdxl_smoke_workflow_runs_through_axum_to_png_artifact() {
             .or_else(|| poll_json.pointer("/snapshot/state"))
             .or_else(|| poll_json.get("state"))
             .and_then(|v| v.as_str())
-	            .map(|s| s.to_lowercase());
+            .map(|s| s.to_lowercase());
         match state.as_deref() {
             Some("completed") => break poll_json,
             Some("failed") | Some("cancelled") => break poll_json,
@@ -465,7 +472,8 @@ async fn burn_real_sdxl_smoke_workflow_runs_through_axum_to_png_artifact() {
         }
         tokio::time::sleep(Duration::from_millis(200)).await;
     };
-    let terminal_state = summary.get("state")
+    let terminal_state = summary
+        .get("state")
         .or_else(|| summary.pointer("/summary/state"))
         .and_then(|v| v.as_str())
         .unwrap_or("unknown")
@@ -624,8 +632,7 @@ async fn burn_real_sdxl_smoke_workflow_runs_through_axum_to_png_artifact() {
     assert!(
         diagnostics.iter().any(|d| {
             let msg = d.get("message").and_then(|v| v.as_str()).unwrap_or("");
-            msg.contains("WGPU validation error")
-                || msg.contains("buffer bound at binding index")
+            msg.contains("WGPU validation error") || msg.contains("buffer bound at binding index")
         }),
         "failed run must surface the CubeCL WGPU validation diagnostic through the WGPU guard; \
          observed diagnostics: [{diagnostics_text}]"

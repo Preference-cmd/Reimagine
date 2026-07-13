@@ -109,10 +109,7 @@ impl<B: Backend> SdxlVaeDecoder<B> {
 
     #[cfg(test)]
     pub fn total_up_block_resnet_count(&self) -> usize {
-        self.up_blocks
-            .iter()
-            .map(|b| b.resnet_count())
-            .sum()
+        self.up_blocks.iter().map(|b| b.resnet_count()).sum()
     }
 
     #[cfg(test)]
@@ -185,10 +182,7 @@ pub struct SdxlVaeResidualBlock<B: Backend> {
 impl<B: Backend> SdxlVaeResidualBlock<B> {
     pub fn init(in_channels: usize, out_channels: usize, device: &B::Device) -> Self {
         let conv_shortcut = if in_channels != out_channels {
-            Some(
-                Conv2dConfig::new([in_channels, out_channels], [1, 1])
-                    .init(device),
-            )
+            Some(Conv2dConfig::new([in_channels, out_channels], [1, 1]).init(device))
         } else {
             None
         };

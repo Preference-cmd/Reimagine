@@ -13,7 +13,7 @@ use std::sync::Arc;
 use reimagine_model_acquisition::hf::provider::{AcquisitionProgressSink, HuggingFaceProvider};
 use reimagine_model_acquisition::{
     AcquireProvider, AcquisitionReport, AllowPatterns, ModelAcquisitionConfig,
-    ModelAcquisitionRequest, OverwritePolicy, RepoId, Revision, TargetRelativeDir, build_hf_client,
+    ModelAcquisitionRequest, OverwritePolicy, RepoId, Revision, TargetRelativeDir,
 };
 
 struct TestSink;
@@ -65,9 +65,8 @@ fn tokenizer_request() -> ModelAcquisitionRequest {
 #[ignore = "requires network access to HuggingFace Hub"]
 #[tokio::test]
 async fn test_snapshot_download_small_model() {
-    // Set up a client using public repo (no token needed).
+    // Set up a provider using a public repo (no token needed).
     let config = ModelAcquisitionConfig::default();
-    let client = build_hf_client(&config);
     let provider = HuggingFaceProvider::new(&config);
 
     let tmp = tempfile::tempdir().unwrap();

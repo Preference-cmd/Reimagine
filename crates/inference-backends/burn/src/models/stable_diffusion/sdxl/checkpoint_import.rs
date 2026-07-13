@@ -6,7 +6,7 @@
 use std::path::Path;
 
 use super::checkpoint_inventory::BurnCheckpointInventory;
-use super::checkpoint_projection::{project_from_inventory, BurnCheckpointProjection};
+use super::checkpoint_projection::{BurnCheckpointProjection, project_from_inventory};
 use super::checkpoint_writer::write_real_checkpoint_components;
 use super::conversion::{BurnSdxlConversionError, BurnSdxlConversionReport};
 
@@ -38,18 +38,20 @@ pub(crate) fn validate_checkpoint_for_import(
 // Error conversions
 // ---------------------------------------------------------------------------
 
-impl From<super::checkpoint_inventory::BurnCheckpointInventoryError>
-    for BurnSdxlConversionError
-{
+impl From<super::checkpoint_inventory::BurnCheckpointInventoryError> for BurnSdxlConversionError {
     fn from(err: super::checkpoint_inventory::BurnCheckpointInventoryError) -> Self {
         use super::checkpoint_inventory::BurnCheckpointInventoryError;
         match err {
-            BurnCheckpointInventoryError::Io { path, reason } => BurnSdxlConversionError::InvalidComponentSet {
-                reason: format!("I/O error at `{}`: {reason}", path.display()),
-            },
-            BurnCheckpointInventoryError::InvalidHeader { path, reason } => BurnSdxlConversionError::InvalidComponentSet {
-                reason: format!("invalid header at `{}`: {reason}", path.display()),
-            },
+            BurnCheckpointInventoryError::Io { path, reason } => {
+                BurnSdxlConversionError::InvalidComponentSet {
+                    reason: format!("I/O error at `{}`: {reason}", path.display()),
+                }
+            }
+            BurnCheckpointInventoryError::InvalidHeader { path, reason } => {
+                BurnSdxlConversionError::InvalidComponentSet {
+                    reason: format!("invalid header at `{}`: {reason}", path.display()),
+                }
+            }
         }
     }
 }
@@ -59,9 +61,14 @@ impl From<super::checkpoint_projection::BurnProjectionError> for BurnSdxlConvers
         use super::checkpoint_projection::BurnProjectionError;
         match err {
             BurnProjectionError::Inventory(inv_err) => inv_err.into(),
-            BurnProjectionError::MissingRoles(missing) => BurnSdxlConversionError::InvalidComponentSet {
-                reason: format!("checkpoint is missing required roles: {}", missing.join(", ")),
-            },
+            BurnProjectionError::MissingRoles(missing) => {
+                BurnSdxlConversionError::InvalidComponentSet {
+                    reason: format!(
+                        "checkpoint is missing required roles: {}",
+                        missing.join(", ")
+                    ),
+                }
+            }
         }
     }
 }
@@ -130,12 +137,15 @@ mod tests {
         let dir = temp_dir();
         fs::create_dir_all(&dir).unwrap();
         let ckpt = dir.join("m.safetensors");
-        make_ckpt(&ckpt, &[
-            "model.diffusion_model.time_embed.0.weight",
-            "model.diffusion_model.out.2.weight",
-            "conditioner.embedders.0.transformer.text_model.embeddings.token_embedding.weight",
-            "first_stage_model.decoder.conv_in.weight",
-        ]);
+        make_ckpt(
+            &ckpt,
+            &[
+                "model.diffusion_model.time_embed.0.weight",
+                "model.diffusion_model.out.2.weight",
+                "conditioner.embedders.0.transformer.text_model.embeddings.token_embedding.weight",
+                "first_stage_model.decoder.conv_in.weight",
+            ],
+        );
 
         let mr = dir.join("models");
         let report = execute_real_burn_sdxl_checkpoint_import(&ckpt, "tm", &mr).unwrap();
@@ -153,14 +163,17 @@ mod tests {
         let dir = temp_dir();
         fs::create_dir_all(&dir).unwrap();
         let ckpt = dir.join("sdxl.safetensors");
-        make_ckpt(&ckpt, &[
-            "model.diffusion_model.input_blocks.0.0.weight",
-            "model.diffusion_model.out.2.weight",
-            "model.diffusion_model.time_embed.0.weight",
-            "conditioner.embedders.0.transformer.text_model.embeddings.token_embedding.weight",
-            "conditioner.embedders.1.model.text_projection.weight",
-            "first_stage_model.decoder.conv_in.weight",
-        ]);
+        make_ckpt(
+            &ckpt,
+            &[
+                "model.diffusion_model.input_blocks.0.0.weight",
+                "model.diffusion_model.out.2.weight",
+                "model.diffusion_model.time_embed.0.weight",
+                "conditioner.embedders.0.transformer.text_model.embeddings.token_embedding.weight",
+                "conditioner.embedders.1.model.text_projection.weight",
+                "first_stage_model.decoder.conv_in.weight",
+            ],
+        );
 
         let mr = dir.join("models");
         let report = execute_real_burn_sdxl_checkpoint_import(&ckpt, "sdxl-t", &mr).unwrap();
@@ -178,13 +191,14 @@ mod tests {
         let dir = temp_dir();
         fs::create_dir_all(&dir).unwrap();
         let ckpt = dir.join("partial.safetensors");
-        make_ckpt(&ckpt, &[
-            "model.diffusion_model.time_embed.0.weight",
-        ]);
+        make_ckpt(&ckpt, &["model.diffusion_model.time_embed.0.weight"]);
 
         let err = validate_checkpoint_for_import(&ckpt).unwrap_err();
         let msg = err.to_string();
-        assert!(msg.contains("vae") || msg.contains("text_encoder"), "error: {msg}");
+        assert!(
+            msg.contains("vae") || msg.contains("text_encoder"),
+            "error: {msg}"
+        );
 
         fs::remove_dir_all(&dir).unwrap();
     }

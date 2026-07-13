@@ -114,7 +114,11 @@ impl std::fmt::Display for BurnProjectionError {
         match self {
             Self::Inventory(err) => write!(f, "{err}"),
             Self::MissingRoles(missing) => {
-                write!(f, "checkpoint is missing required roles: {}", missing.join(", "))
+                write!(
+                    f,
+                    "checkpoint is missing required roles: {}",
+                    missing.join(", ")
+                )
             }
         }
     }

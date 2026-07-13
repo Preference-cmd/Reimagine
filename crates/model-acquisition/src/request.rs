@@ -94,20 +94,15 @@ impl From<Vec<String>> for AllowPatterns {
 }
 
 /// Controls what happens when the target directory already exists.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub enum OverwritePolicy {
     /// Leave existing files and skip the acquisition.
+    #[default]
     Skip,
     /// Overwrite existing files.
     Overwrite,
     /// Report an error if the target exists.
     Fail,
-}
-
-impl Default for OverwritePolicy {
-    fn default() -> Self {
-        Self::Skip
-    }
 }
 
 /// A validated relative path under `<base_path>/models/`.
@@ -135,7 +130,7 @@ impl TargetRelativeDir {
         if path.has_root() {
             return Err("target relative dir must be relative".to_owned());
         }
-        for component in path.components() {
+        for (index, component) in path.components().enumerate() {
             match component {
                 std::path::Component::ParentDir => {
                     return Err("target relative dir must not contain `..`".to_owned());
@@ -143,13 +138,9 @@ impl TargetRelativeDir {
                 std::path::Component::CurDir => {
                     return Err("target relative dir must not contain `.`".to_owned());
                 }
-                std::path::Component::Normal(seg) => {
-                    // Prevent `converted/` as the first segment.
-                    if seg == "converted" && path.components().next() == Some(component) {
-                        return Err(
-                            "target relative dir must not start with `converted/`".to_owned()
-                        );
-                    }
+                // Prevent `converted/` as the first segment.
+                std::path::Component::Normal(seg) if index == 0 && seg == "converted" => {
+                    return Err("target relative dir must not start with `converted/`".to_owned());
                 }
                 _ => {}
             }

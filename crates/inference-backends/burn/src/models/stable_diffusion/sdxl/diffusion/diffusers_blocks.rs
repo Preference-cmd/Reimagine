@@ -122,10 +122,7 @@ impl<B: Backend> SdxlDiffusersFeedForward<B> {
     }
 
     pub fn forward(&self, hidden: Tensor<B, 3>) -> Tensor<B, 3> {
-        let proj = self.net[0]
-            .proj
-            .as_ref()
-            .expect("ff.net.0.proj required");
+        let proj = self.net[0].proj.as_ref().expect("ff.net.0.proj required");
         let projected = proj.forward(hidden);
         let [batch, seq, dual] = projected.dims();
         let half = dual / 2;
@@ -152,12 +149,7 @@ pub struct SdxlBasicTransformerBlock<B: Backend> {
 }
 
 impl<B: Backend> SdxlBasicTransformerBlock<B> {
-    pub fn init(
-        channels: usize,
-        context_dim: usize,
-        num_heads: usize,
-        device: &B::Device,
-    ) -> Self {
+    pub fn init(channels: usize, context_dim: usize, num_heads: usize, device: &B::Device) -> Self {
         Self {
             norm1: LayerNormConfig::new(channels).init(device),
             attn1: SdxlDiffusersAttention::init(channels, channels, num_heads, device),
@@ -176,10 +168,7 @@ impl<B: Backend> SdxlBasicTransformerBlock<B> {
                 .forward(self.norm1.forward(hidden), residual.clone());
 
         let residual = hidden.clone();
-        let hidden = residual.clone()
-            + self
-                .attn2
-                .forward(self.norm2.forward(hidden), context);
+        let hidden = residual.clone() + self.attn2.forward(self.norm2.forward(hidden), context);
 
         let residual = hidden.clone();
         residual + self.ff.forward(self.norm3.forward(hidden))
@@ -303,9 +292,8 @@ mod tests {
     fn spatial_transformer_preserves_nchw_shape() {
         let config = BurnBackendConfig::new("/models", "/output");
         let device = active_device(config.device());
-        let block = super::SdxlSpatialTransformer::<ActiveBurnBackend>::init(
-            8, 16, 2, 1, 2, &device,
-        );
+        let block =
+            super::SdxlSpatialTransformer::<ActiveBurnBackend>::init(8, 16, 2, 1, 2, &device);
         let hidden = Tensor::<ActiveBurnBackend, 4>::zeros([1, 8, 4, 4], &device);
         let context = Tensor::<ActiveBurnBackend, 3>::zeros([1, 3, 16], &device);
         let out = block.forward(hidden, context);

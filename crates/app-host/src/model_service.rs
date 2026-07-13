@@ -19,8 +19,8 @@ use reimagine_model_manager::{
 };
 use sha2::{Digest, Sha256};
 
-use crate::model_acquisition_service::ModelAcquisitionService;
 use crate::AppHostResult;
+use crate::model_acquisition_service::ModelAcquisitionService;
 
 pub struct ModelService {
     app_paths: AppPaths,
@@ -162,7 +162,9 @@ impl ModelService {
     pub async fn convert_checkpoint_to_burn(
         &self,
         model_id: &str,
-    ) -> AppHostResult<reimagine_inference_burn::models::stable_diffusion::sdxl::BurnSdxlConversionReport> {
+    ) -> AppHostResult<
+        reimagine_inference_burn::models::stable_diffusion::sdxl::BurnSdxlConversionReport,
+    > {
         let (manifest, _) = self.load_manifest().await?;
         let model_id_core = reimagine_core::model::ModelId::new(model_id);
         let descriptor = manifest
@@ -194,7 +196,10 @@ impl ModelService {
         &self,
         source_path: &std::path::Path,
         model_id: &str,
-    ) -> Result<reimagine_inference_burn::models::stable_diffusion::sdxl::BurnSdxlConversionReport, crate::AppHostError> {
+    ) -> Result<
+        reimagine_inference_burn::models::stable_diffusion::sdxl::BurnSdxlConversionReport,
+        crate::AppHostError,
+    > {
         let model_root = self.app_paths.models_dir();
         let report = execute_real_burn_sdxl_checkpoint_import(source_path, model_id, model_root)
             .map_err(|e| crate::AppHostError::Io {
@@ -326,13 +331,12 @@ impl ModelService {
         acquisition_service: &ModelAcquisitionService,
     ) -> AppHostResult<AcquireAndConvertReport> {
         // ---- Step 1: download ----
-        let target_relative_dir = TargetRelativeDir::new(
-            std::path::PathBuf::from(format!("checkpoints/{model_id}")),
-        )
-        .map_err(|msg| crate::AppHostError::Io {
-            path: self.app_paths.models_dir().to_path_buf(),
-            message: format!("invalid target dir: {msg}"),
-        })?;
+        let target_relative_dir =
+            TargetRelativeDir::new(std::path::PathBuf::from(format!("checkpoints/{model_id}")))
+                .map_err(|msg| crate::AppHostError::Io {
+                    path: self.app_paths.models_dir().to_path_buf(),
+                    message: format!("invalid target dir: {msg}"),
+                })?;
 
         let repo = RepoId::new(repo_id).ok_or_else(|| crate::AppHostError::Io {
             path: self.app_paths.models_dir().to_path_buf(),
@@ -353,13 +357,16 @@ impl ModelService {
         let acquisition_report = acq_arc.acquire(download_request, None).await?;
 
         // ---- Step 2: locate the safetensors file ----
-        let checkpoint_dir = self.app_paths.models_dir().join("checkpoints").join(model_id);
-        let source_path = find_first_safetensors(&checkpoint_dir).ok_or_else(|| {
-            crate::AppHostError::Io {
+        let checkpoint_dir = self
+            .app_paths
+            .models_dir()
+            .join("checkpoints")
+            .join(model_id);
+        let source_path =
+            find_first_safetensors(&checkpoint_dir).ok_or_else(|| crate::AppHostError::Io {
                 path: checkpoint_dir,
                 message: format!("no .safetensors file found in checkpoints/{model_id}"),
-            }
-        })?;
+            })?;
 
         // Prepare a cleanup guard that removes the downloaded checkpoint
         // directory if conversion fails before importing.
@@ -369,12 +376,17 @@ impl ModelService {
             "candle" => {
                 // Candle path: register checkpoint in manifest, then call
                 // import pipeline which does conversion + manifest upsert.
-                self.register_checkpoint_descriptor(Some(&acquisition_report), &source_path, model_id)
-                    .await?;
+                self.register_checkpoint_descriptor(
+                    Some(&acquisition_report),
+                    &source_path,
+                    model_id,
+                )
+                .await?;
 
                 let model_id_core = ModelId::new(model_id);
-                let (manifest, _report, _import_result) =
-                    self.import_sdxl_checkpoint_to_candle_split(&model_id_core).await?;
+                let (manifest, _report, _import_result) = self
+                    .import_sdxl_checkpoint_to_candle_split(&model_id_core)
+                    .await?;
 
                 cleanup.disarm();
                 let desc = manifest.models().iter().find(|d| d.id() == &model_id_core);
@@ -399,7 +411,7 @@ impl ModelService {
                     model_id,
                     self.app_paths.models_dir(),
                 )
-                .map_err(|e| crate::AppHostError::BurnCheckpointImport(e))?;
+                .map_err(crate::AppHostError::BurnCheckpointImport)?;
 
                 let imported_model_id = format!("{model_id}-burn");
                 let burn_desc = build_burn_component_descriptor(
@@ -442,10 +454,8 @@ impl ModelService {
     ) -> AppHostResult<ModelDescriptor> {
         let fingerprint = compute_file_sha256(source_path)?;
 
-        let source = ModelSource::relative(
-            ModelRootId::new("base"),
-            format!("checkpoints/{model_id}"),
-        );
+        let source =
+            ModelSource::relative(ModelRootId::new("base"), format!("checkpoints/{model_id}"));
 
         let descriptor = ModelDescriptor::new(
             ModelId::new(model_id),
@@ -488,7 +498,10 @@ struct CleanupGuard {
 impl CleanupGuard {
     #[allow(dead_code)]
     fn new(paths: Vec<std::path::PathBuf>) -> Self {
-        Self { paths, active: true }
+        Self {
+            paths,
+            active: true,
+        }
     }
 
     /// Create a cleanup guard that removes the checkpoint directory.
@@ -547,7 +560,11 @@ pub(crate) fn find_first_safetensors(dir: &std::path::Path) -> Option<std::path:
     for entry in std::fs::read_dir(dir).ok()? {
         let entry = entry.ok()?;
         let path = entry.path();
-        if path.extension().map(|e| e == "safetensors").unwrap_or(false) {
+        if path
+            .extension()
+            .map(|e| e == "safetensors")
+            .unwrap_or(false)
+        {
             return Some(path);
         }
     }
@@ -620,7 +637,7 @@ pub struct AcquireAndConvertReport {
     pub mapped_tensor_count: usize,
     pub component_count: usize,
     pub source_layout: String,
-    pub acquisition_report: String,         // serialized repo_id for the downloaded model
+    pub acquisition_report: String, // serialized repo_id for the downloaded model
     pub acquisition_file_count: usize,
     pub acquisition_total_bytes: u64,
 }

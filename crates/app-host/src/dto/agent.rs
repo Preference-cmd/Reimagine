@@ -253,17 +253,10 @@ pub use reimagine_core::command::CommandResult;
 #[cfg(test)]
 mod tests {
     use super::*;
-    use reimagine_agent::{AgentMode, AgentSession, AgentSessionId, AgentTurnResult, ProviderName};
+    use reimagine_agent::{AgentMode, AgentSessionId, AgentTurnResult, ProviderName};
 
     #[test]
     fn agent_turn_projects_from_result() {
-        let session = AgentSession::new(
-            AgentSessionId::new("sess-1"),
-            reimagine_agent::WorkspaceScope::new("test"),
-            AgentMode::Agent,
-            ProviderName::new("openai"),
-            std::sync::Arc::new(reimagine_agent::AgentToolRegistry::new()),
-        );
         let result = AgentTurnResult::new()
             .with_turn_id(reimagine_agent::AgentTurnId::new("turn-1"))
             .with_session_id(AgentSessionId::new("sess-1"))

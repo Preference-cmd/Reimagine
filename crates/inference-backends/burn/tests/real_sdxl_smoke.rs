@@ -422,9 +422,7 @@ async fn real_sdxl_component_package_runs_public_burn_capability_chain_when_enab
         height,
         steps,
         seed,
-        stop_after
-            .map(RealSdxlSmokeStage::as_str)
-            .unwrap_or("none")
+        stop_after.map(RealSdxlSmokeStage::as_str).unwrap_or("none")
     );
 
     let loaded = stage_context(

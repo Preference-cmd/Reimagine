@@ -195,11 +195,7 @@ impl SdxlUnetTopology {
         self.down_blocks
             .iter()
             .map(|stage| stage.resnets.len())
-            .chain(
-                self.mid_block
-                    .iter()
-                    .map(|mid| mid.resnets.len()),
-            )
+            .chain(self.mid_block.iter().map(|mid| mid.resnets.len()))
             .chain(self.up_blocks.iter().map(|stage| stage.resnets.len()))
             .sum()
     }
@@ -210,22 +206,13 @@ impl SdxlUnetTopology {
             .chain(self.up_blocks.iter())
             .map(|stage| {
                 stage.self_attn_blocks.len()
-                    + stage
-                        .attentions
-                        .iter()
-                        .map(|a| a.num_layers)
-                        .sum::<usize>()
+                    + stage.attentions.iter().map(|a| a.num_layers).sum::<usize>()
             })
             .sum::<usize>()
             + self
                 .mid_block
                 .as_ref()
-                .map(|mid| {
-                    mid.attentions
-                        .iter()
-                        .map(|a| a.num_layers)
-                        .sum::<usize>()
-                })
+                .map(|mid| mid.attentions.iter().map(|a| a.num_layers).sum::<usize>())
                 .unwrap_or(0)
     }
 
@@ -236,22 +223,13 @@ impl SdxlUnetTopology {
             .chain(self.up_blocks.iter())
             .map(|stage| {
                 stage.cross_attn_blocks.len()
-                    + stage
-                        .attentions
-                        .iter()
-                        .map(|a| a.num_layers)
-                        .sum::<usize>()
+                    + stage.attentions.iter().map(|a| a.num_layers).sum::<usize>()
             })
             .sum::<usize>()
             + self
                 .mid_block
                 .as_ref()
-                .map(|mid| {
-                    mid.attentions
-                        .iter()
-                        .map(|a| a.num_layers)
-                        .sum::<usize>()
-                })
+                .map(|mid| mid.attentions.iter().map(|a| a.num_layers).sum::<usize>())
                 .unwrap_or(0)
     }
 
@@ -259,11 +237,7 @@ impl SdxlUnetTopology {
         self.down_blocks
             .iter()
             .map(|stage| stage.attentions.len())
-            .chain(
-                self.mid_block
-                    .iter()
-                    .map(|mid| mid.attentions.len()),
-            )
+            .chain(self.mid_block.iter().map(|mid| mid.attentions.len()))
             .chain(self.up_blocks.iter().map(|stage| stage.attentions.len()))
             .sum()
     }
@@ -409,16 +383,20 @@ impl<B: Backend> SdxlUnet<B> {
                 .iter()
                 .map(|spec| SdxlUnetStage::init(spec, topology.time_hidden_dim, device))
                 .collect(),
-            mid_block: topology.mid_block.as_ref().map(|spec| {
-                SdxlMidBlock::init(spec, topology.time_hidden_dim, device)
-            }),
+            mid_block: topology
+                .mid_block
+                .as_ref()
+                .map(|spec| SdxlMidBlock::init(spec, topology.time_hidden_dim, device)),
             up_blocks: topology
                 .up_blocks
                 .iter()
                 .map(|spec| SdxlUnetStage::init(spec, topology.time_hidden_dim, device))
                 .collect(),
-            conv_norm_out: GroupNormConfig::new(32.min(topology.model_channels), topology.model_channels)
-                .init(device),
+            conv_norm_out: GroupNormConfig::new(
+                32.min(topology.model_channels),
+                topology.model_channels,
+            )
+            .init(device),
             conv_out: Conv2dConfig::new(
                 [topology.model_channels, topology.latent_channels],
                 [3, 3],
@@ -430,8 +408,7 @@ impl<B: Backend> SdxlUnet<B> {
 
     #[cfg(test)]
     pub(crate) fn topology_profile(&self) -> SdxlUnetTopologyProfile {
-        if self.down_blocks.len() == 3 && self.mid_block.is_some() && self.up_blocks.len() == 3
-        {
+        if self.down_blocks.len() == 3 && self.mid_block.is_some() && self.up_blocks.len() == 3 {
             SdxlUnetTopologyProfile::SdxlBase
         } else {
             SdxlUnetTopologyProfile::TinySdxlE2e
@@ -499,7 +476,9 @@ impl<B: Backend> SdxlUnet<B> {
     }
 
     pub fn input_block_count(&self) -> usize {
-        self.stage_iter().map(|stage| stage.resnets.len()).sum::<usize>()
+        self.stage_iter()
+            .map(|stage| stage.resnets.len())
+            .sum::<usize>()
             + self
                 .mid_block
                 .as_ref()
@@ -1537,9 +1516,7 @@ mod tests {
             "full UNet down path must record downsample stages before the guard can be removed"
         );
         assert!(
-            topology
-                .mid_block
-                .is_some(),
+            topology.mid_block.is_some(),
             "middle block must exist for full SDXL base"
         );
         assert!(
@@ -1659,30 +1636,29 @@ mod tests {
         };
         // Up block helper: first residual uses prev_channels + skip, later use
         // hidden_out + skip — matching SGM/diffusers stage transitions.
-        let up_block = |role,
-                        prev_channels: usize,
-                        hidden_out: usize,
-                        skip_chs: &[usize],
-                        sampling| super::SdxlStageSpec {
-            role,
-            resnets: skip_chs
-                .iter()
-                .enumerate()
-                .map(|(index, &sk)| {
-                    let base = if index == 0 {
-                        prev_channels
-                    } else {
-                        hidden_out
-                    };
-                    res(base + sk, hidden_out)
-                })
-                .collect(),
-            self_attn_blocks: vec![attn(hidden_out)],
-            cross_attn_blocks: vec![cross(hidden_out)],
-            attentions: Vec::new(),
-            skip_policy: super::SdxlSkipPolicy::Pop,
-            sampling,
-        };
+        let up_block =
+            |role, prev_channels: usize, hidden_out: usize, skip_chs: &[usize], sampling| {
+                super::SdxlStageSpec {
+                    role,
+                    resnets: skip_chs
+                        .iter()
+                        .enumerate()
+                        .map(|(index, &sk)| {
+                            let base = if index == 0 {
+                                prev_channels
+                            } else {
+                                hidden_out
+                            };
+                            res(base + sk, hidden_out)
+                        })
+                        .collect(),
+                    self_attn_blocks: vec![attn(hidden_out)],
+                    cross_attn_blocks: vec![cross(hidden_out)],
+                    attentions: Vec::new(),
+                    skip_policy: super::SdxlSkipPolicy::Pop,
+                    sampling,
+                }
+            };
 
         super::SdxlUnetTopology {
             profile: super::SdxlUnetTopologyProfile::SdxlBase,

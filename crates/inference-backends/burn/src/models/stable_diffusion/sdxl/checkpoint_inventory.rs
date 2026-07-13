@@ -132,7 +132,11 @@ impl std::fmt::Display for BurnCheckpointInventoryError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
             Self::Io { path, reason } => {
-                write!(f, "failed to read checkpoint inventory from {}: {reason}", path.display())
+                write!(
+                    f,
+                    "failed to read checkpoint inventory from {}: {reason}",
+                    path.display()
+                )
             }
             Self::InvalidHeader { path, reason } => {
                 write!(
@@ -275,12 +279,12 @@ fn read_safetensors_header_names(path: &Path) -> Result<Vec<String>, BurnCheckpo
         }
     })?;
 
-    let object = value.as_object().ok_or_else(|| {
-        BurnCheckpointInventoryError::InvalidHeader {
+    let object = value
+        .as_object()
+        .ok_or_else(|| BurnCheckpointInventoryError::InvalidHeader {
             path: path.to_path_buf(),
             reason: "header is not a JSON object".to_string(),
-        }
-    })?;
+        })?;
 
     Ok(object
         .keys()
@@ -408,14 +412,8 @@ mod tests {
             inv.count(BurnCheckpointFamily::OriginalDiffusionInputBlocks),
             1
         );
-        assert_eq!(
-            inv.count(BurnCheckpointFamily::OriginalTextEmbedders0),
-            1
-        );
-        assert_eq!(
-            inv.count(BurnCheckpointFamily::OriginalTextEmbedders1),
-            1
-        );
+        assert_eq!(inv.count(BurnCheckpointFamily::OriginalTextEmbedders0), 1);
+        assert_eq!(inv.count(BurnCheckpointFamily::OriginalTextEmbedders1), 1);
         assert_eq!(
             inv.count(BurnCheckpointFamily::OriginalVaeFirstStageModel),
             1

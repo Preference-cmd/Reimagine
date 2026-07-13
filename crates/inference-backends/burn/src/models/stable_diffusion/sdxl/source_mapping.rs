@@ -139,10 +139,7 @@ pub(crate) const DIFFUSION_MAPPINGS: &[TensorMapping] = &[
         "model.diffusion.conv_norm_out.weight",
         "conv_norm_out.weight",
     ),
-    TensorMapping::new(
-        "model.diffusion.conv_norm_out.bias",
-        "conv_norm_out.bias",
-    ),
+    TensorMapping::new("model.diffusion.conv_norm_out.bias", "conv_norm_out.bias"),
     TensorMapping::new("conv_norm_out.weight", "conv_norm_out.weight"),
     TensorMapping::new("conv_norm_out.bias", "conv_norm_out.bias"),
 ];
@@ -158,42 +155,138 @@ pub(crate) const VAE_MAPPINGS: &[TensorMapping] = &[
     // Both map to the same diffusers target key in the target.
     // --------------------------
     // decoder.residual_blocks.0
-    TensorMapping::new("decoder.residual_blocks.0.norm_1.weight", "mid_block.resnets.0.norm1.weight"),
-    TensorMapping::new("decoder.residual_blocks.0.norm_1.bias", "mid_block.resnets.0.norm1.bias"),
-    TensorMapping::new("decoder.residual_blocks.0.conv_1.weight", "mid_block.resnets.0.conv1.weight"),
-    TensorMapping::new("decoder.residual_blocks.0.conv_1.bias", "mid_block.resnets.0.conv1.bias"),
-    TensorMapping::new("decoder.residual_blocks.0.norm_2.weight", "mid_block.resnets.0.norm2.weight"),
-    TensorMapping::new("decoder.residual_blocks.0.norm_2.bias", "mid_block.resnets.0.norm2.bias"),
-    TensorMapping::new("decoder.residual_blocks.0.conv_2.weight", "mid_block.resnets.0.conv2.weight"),
-    TensorMapping::new("decoder.residual_blocks.0.conv_2.bias", "mid_block.resnets.0.conv2.bias"),
+    TensorMapping::new(
+        "decoder.residual_blocks.0.norm_1.weight",
+        "mid_block.resnets.0.norm1.weight",
+    ),
+    TensorMapping::new(
+        "decoder.residual_blocks.0.norm_1.bias",
+        "mid_block.resnets.0.norm1.bias",
+    ),
+    TensorMapping::new(
+        "decoder.residual_blocks.0.conv_1.weight",
+        "mid_block.resnets.0.conv1.weight",
+    ),
+    TensorMapping::new(
+        "decoder.residual_blocks.0.conv_1.bias",
+        "mid_block.resnets.0.conv1.bias",
+    ),
+    TensorMapping::new(
+        "decoder.residual_blocks.0.norm_2.weight",
+        "mid_block.resnets.0.norm2.weight",
+    ),
+    TensorMapping::new(
+        "decoder.residual_blocks.0.norm_2.bias",
+        "mid_block.resnets.0.norm2.bias",
+    ),
+    TensorMapping::new(
+        "decoder.residual_blocks.0.conv_2.weight",
+        "mid_block.resnets.0.conv2.weight",
+    ),
+    TensorMapping::new(
+        "decoder.residual_blocks.0.conv_2.bias",
+        "mid_block.resnets.0.conv2.bias",
+    ),
     // decoder.residual_blocks.1
-    TensorMapping::new("decoder.residual_blocks.1.norm_1.weight", "mid_block.resnets.1.norm1.weight"),
-    TensorMapping::new("decoder.residual_blocks.1.norm_1.bias", "mid_block.resnets.1.norm1.bias"),
-    TensorMapping::new("decoder.residual_blocks.1.conv_1.weight", "mid_block.resnets.1.conv1.weight"),
-    TensorMapping::new("decoder.residual_blocks.1.conv_1.bias", "mid_block.resnets.1.conv1.bias"),
-    TensorMapping::new("decoder.residual_blocks.1.norm_2.weight", "mid_block.resnets.1.norm2.weight"),
-    TensorMapping::new("decoder.residual_blocks.1.norm_2.bias", "mid_block.resnets.1.norm2.bias"),
-    TensorMapping::new("decoder.residual_blocks.1.conv_2.weight", "mid_block.resnets.1.conv2.weight"),
-    TensorMapping::new("decoder.residual_blocks.1.conv_2.bias", "mid_block.resnets.1.conv2.bias"),
+    TensorMapping::new(
+        "decoder.residual_blocks.1.norm_1.weight",
+        "mid_block.resnets.1.norm1.weight",
+    ),
+    TensorMapping::new(
+        "decoder.residual_blocks.1.norm_1.bias",
+        "mid_block.resnets.1.norm1.bias",
+    ),
+    TensorMapping::new(
+        "decoder.residual_blocks.1.conv_1.weight",
+        "mid_block.resnets.1.conv1.weight",
+    ),
+    TensorMapping::new(
+        "decoder.residual_blocks.1.conv_1.bias",
+        "mid_block.resnets.1.conv1.bias",
+    ),
+    TensorMapping::new(
+        "decoder.residual_blocks.1.norm_2.weight",
+        "mid_block.resnets.1.norm2.weight",
+    ),
+    TensorMapping::new(
+        "decoder.residual_blocks.1.norm_2.bias",
+        "mid_block.resnets.1.norm2.bias",
+    ),
+    TensorMapping::new(
+        "decoder.residual_blocks.1.conv_2.weight",
+        "mid_block.resnets.1.conv2.weight",
+    ),
+    TensorMapping::new(
+        "decoder.residual_blocks.1.conv_2.bias",
+        "mid_block.resnets.1.conv2.bias",
+    ),
     // --------------------------
     // decoder.mid_block.resnets.0 (diffusers-native source)
-    TensorMapping::new("decoder.mid_block.resnets.0.norm1.weight", "mid_block.resnets.0.norm1.weight"),
-    TensorMapping::new("decoder.mid_block.resnets.0.norm1.bias", "mid_block.resnets.0.norm1.bias"),
-    TensorMapping::new("decoder.mid_block.resnets.0.conv1.weight", "mid_block.resnets.0.conv1.weight"),
-    TensorMapping::new("decoder.mid_block.resnets.0.conv1.bias", "mid_block.resnets.0.conv1.bias"),
-    TensorMapping::new("decoder.mid_block.resnets.0.norm2.weight", "mid_block.resnets.0.norm2.weight"),
-    TensorMapping::new("decoder.mid_block.resnets.0.norm2.bias", "mid_block.resnets.0.norm2.bias"),
-    TensorMapping::new("decoder.mid_block.resnets.0.conv2.weight", "mid_block.resnets.0.conv2.weight"),
-    TensorMapping::new("decoder.mid_block.resnets.0.conv2.bias", "mid_block.resnets.0.conv2.bias"),
+    TensorMapping::new(
+        "decoder.mid_block.resnets.0.norm1.weight",
+        "mid_block.resnets.0.norm1.weight",
+    ),
+    TensorMapping::new(
+        "decoder.mid_block.resnets.0.norm1.bias",
+        "mid_block.resnets.0.norm1.bias",
+    ),
+    TensorMapping::new(
+        "decoder.mid_block.resnets.0.conv1.weight",
+        "mid_block.resnets.0.conv1.weight",
+    ),
+    TensorMapping::new(
+        "decoder.mid_block.resnets.0.conv1.bias",
+        "mid_block.resnets.0.conv1.bias",
+    ),
+    TensorMapping::new(
+        "decoder.mid_block.resnets.0.norm2.weight",
+        "mid_block.resnets.0.norm2.weight",
+    ),
+    TensorMapping::new(
+        "decoder.mid_block.resnets.0.norm2.bias",
+        "mid_block.resnets.0.norm2.bias",
+    ),
+    TensorMapping::new(
+        "decoder.mid_block.resnets.0.conv2.weight",
+        "mid_block.resnets.0.conv2.weight",
+    ),
+    TensorMapping::new(
+        "decoder.mid_block.resnets.0.conv2.bias",
+        "mid_block.resnets.0.conv2.bias",
+    ),
     // decoder.mid_block.resnets.1
-    TensorMapping::new("decoder.mid_block.resnets.1.norm1.weight", "mid_block.resnets.1.norm1.weight"),
-    TensorMapping::new("decoder.mid_block.resnets.1.norm1.bias", "mid_block.resnets.1.norm1.bias"),
-    TensorMapping::new("decoder.mid_block.resnets.1.conv1.weight", "mid_block.resnets.1.conv1.weight"),
-    TensorMapping::new("decoder.mid_block.resnets.1.conv1.bias", "mid_block.resnets.1.conv1.bias"),
-    TensorMapping::new("decoder.mid_block.resnets.1.norm2.weight", "mid_block.resnets.1.norm2.weight"),
-    TensorMapping::new("decoder.mid_block.resnets.1.norm2.bias", "mid_block.resnets.1.norm2.bias"),
-    TensorMapping::new("decoder.mid_block.resnets.1.conv2.weight", "mid_block.resnets.1.conv2.weight"),
-    TensorMapping::new("decoder.mid_block.resnets.1.conv2.bias", "mid_block.resnets.1.conv2.bias"),
+    TensorMapping::new(
+        "decoder.mid_block.resnets.1.norm1.weight",
+        "mid_block.resnets.1.norm1.weight",
+    ),
+    TensorMapping::new(
+        "decoder.mid_block.resnets.1.norm1.bias",
+        "mid_block.resnets.1.norm1.bias",
+    ),
+    TensorMapping::new(
+        "decoder.mid_block.resnets.1.conv1.weight",
+        "mid_block.resnets.1.conv1.weight",
+    ),
+    TensorMapping::new(
+        "decoder.mid_block.resnets.1.conv1.bias",
+        "mid_block.resnets.1.conv1.bias",
+    ),
+    TensorMapping::new(
+        "decoder.mid_block.resnets.1.norm2.weight",
+        "mid_block.resnets.1.norm2.weight",
+    ),
+    TensorMapping::new(
+        "decoder.mid_block.resnets.1.norm2.bias",
+        "mid_block.resnets.1.norm2.bias",
+    ),
+    TensorMapping::new(
+        "decoder.mid_block.resnets.1.conv2.weight",
+        "mid_block.resnets.1.conv2.weight",
+    ),
+    TensorMapping::new(
+        "decoder.mid_block.resnets.1.conv2.bias",
+        "mid_block.resnets.1.conv2.bias",
+    ),
     // conv_out
     TensorMapping::new("decoder.conv_out.weight", "conv_out.weight"),
     TensorMapping::new("decoder.conv_out.bias", "conv_out.bias"),
@@ -491,9 +584,7 @@ fn map_source_component(
                     Some(key.strip_prefix("decoder.").unwrap_or(key).to_owned())
                 } else if key.starts_with("encoder.") {
                     Some(key.strip_prefix("encoder.").unwrap_or(key).to_owned())
-                } else if key.starts_with("quant_conv.")
-                    || key.starts_with("post_quant_conv.")
-                {
+                } else if key.starts_with("quant_conv.") || key.starts_with("post_quant_conv.") {
                     Some(key.to_owned())
                 } else {
                     None
@@ -1005,14 +1096,8 @@ pub(crate) mod tests {
                     "model.diffusion.input_blocks.1.1.transformer_blocks.0.attn2.to_out.0.weight",
                     vec![320, 320],
                 ),
-                (
-                    "model.diffusion.conv_norm_out.weight",
-                    vec![320],
-                ),
-                (
-                    "model.diffusion.conv_norm_out.bias",
-                    vec![320],
-                ),
+                ("model.diffusion.conv_norm_out.weight", vec![320]),
+                ("model.diffusion.conv_norm_out.bias", vec![320]),
                 ("model.diffusion.out.0.weight", vec![4, 320, 3, 3]),
                 ("model.diffusion.out.0.bias", vec![4]),
             ],

@@ -94,7 +94,7 @@ impl From<reimagine_model_acquisition::AcquisitionReport> for ModelDownloadOutpu
     }
 }
 
-	/// Input to the `POST /models/acquire` endpoint.
+/// Input to the `POST /models/acquire` endpoint.
 ///
 /// Downloads a HuggingFace model, converts it to Burn-native
 /// components, and registers it in the manifest.

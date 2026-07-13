@@ -535,7 +535,11 @@ mod tests {
             &format!("{prefix}mid_block.attentions.0.to_out.0.bias"),
         ] {
             if key.contains("weight") {
-                tensors.push(tensor_view(key, vec![512, 512, 1, 1], vec![0.0f32; 512 * 512]));
+                tensors.push(tensor_view(
+                    key,
+                    vec![512, 512, 1, 1],
+                    vec![0.0f32; 512 * 512],
+                ));
             } else if key.contains(".bias") {
                 tensors.push(tensor_view(key, vec![512], vec![0.0f32; 512]));
             } else {
@@ -563,7 +567,11 @@ mod tests {
                 }
             }
             let k = &format!("{prefix}up_blocks.{block}.upsamplers.0.conv.weight");
-            tensors.push(tensor_view(k, vec![512, 512, 3, 3], vec![0.0f32; 512 * 512 * 3 * 3]));
+            tensors.push(tensor_view(
+                k,
+                vec![512, 512, 3, 3],
+                vec![0.0f32; 512 * 512 * 3 * 3],
+            ));
             let k = &format!("{prefix}up_blocks.{block}.upsamplers.0.conv.bias");
             tensors.push(tensor_view(k, vec![512], vec![0.0f32; 512]));
         }
@@ -574,14 +582,30 @@ mod tests {
             // first resnet: norm1 at 512, norm2 at 256
             tensors.push(tensor_view(
                 k,
-                if norm == "norm1" { vec![512] } else { vec![256] },
-                if norm == "norm1" { vec![1.0f32; 512] } else { vec![1.0f32; 256] },
+                if norm == "norm1" {
+                    vec![512]
+                } else {
+                    vec![256]
+                },
+                if norm == "norm1" {
+                    vec![1.0f32; 512]
+                } else {
+                    vec![1.0f32; 256]
+                },
             ));
             let k = &format!("{prefix}up_blocks.2.resnets.{res0}.{norm}.beta");
             tensors.push(tensor_view(
                 k,
-                if norm == "norm1" { vec![512] } else { vec![256] },
-                if norm == "norm1" { vec![0.0f32; 512] } else { vec![0.0f32; 256] },
+                if norm == "norm1" {
+                    vec![512]
+                } else {
+                    vec![256]
+                },
+                if norm == "norm1" {
+                    vec![0.0f32; 512]
+                } else {
+                    vec![0.0f32; 256]
+                },
             ));
         }
         // conv1: [out=256, in=512, 3, 3]
@@ -654,41 +678,57 @@ mod tests {
             let k = &format!("{prefix}up_blocks.3.resnets.{res0}.{norm}.gamma");
             tensors.push(tensor_view(
                 k,
-                if norm == "norm1" { vec![256] } else { vec![128] },
-                if norm == "norm1" { vec![1.0f32; 256] } else { vec![1.0f32; 128] },
+                if norm == "norm1" {
+                    vec![256]
+                } else {
+                    vec![128]
+                },
+                if norm == "norm1" {
+                    vec![1.0f32; 256]
+                } else {
+                    vec![1.0f32; 128]
+                },
             ));
             let k = &format!("{prefix}up_blocks.3.resnets.{res0}.{norm}.beta");
             tensors.push(tensor_view(
                 k,
-                if norm == "norm1" { vec![256] } else { vec![128] },
-                if norm == "norm1" { vec![0.0f32; 256] } else { vec![0.0f32; 128] },
+                if norm == "norm1" {
+                    vec![256]
+                } else {
+                    vec![128]
+                },
+                if norm == "norm1" {
+                    vec![0.0f32; 256]
+                } else {
+                    vec![0.0f32; 128]
+                },
             ));
         }
-	        tensors.push(tensor_view(
-	            &format!("{prefix}up_blocks.3.resnets.{res0}.conv1.weight"),
-	            vec![128, 256, 3, 3],
-	            vec![0.0f32; 128 * 256 * 3 * 3],
-	        ));
-	        tensors.push(tensor_view(
-	            &format!("{prefix}up_blocks.3.resnets.{res0}.conv1.bias"),
-	            vec![128],
-	            vec![0.0f32; 128],
-	        ));
-	        tensors.push(tensor_view(
-	            &format!("{prefix}up_blocks.3.resnets.{res0}.conv2.weight"),
-	            vec![128, 128, 3, 3],
-	            vec![0.0f32; 128 * 128 * 3 * 3],
-	        ));
-	        tensors.push(tensor_view(
-	            &format!("{prefix}up_blocks.3.resnets.{res0}.conv2.bias"),
-	            vec![128],
-	            vec![0.0f32; 128],
-	        ));
-	        tensors.push(tensor_view(
-	            &format!("{prefix}up_blocks.3.resnets.{res0}.conv_shortcut.weight"),
-	            vec![128, 256, 1, 1],
-	            vec![0.0f32; 128 * 256],
-	        ));
+        tensors.push(tensor_view(
+            &format!("{prefix}up_blocks.3.resnets.{res0}.conv1.weight"),
+            vec![128, 256, 3, 3],
+            vec![0.0f32; 128 * 256 * 3 * 3],
+        ));
+        tensors.push(tensor_view(
+            &format!("{prefix}up_blocks.3.resnets.{res0}.conv1.bias"),
+            vec![128],
+            vec![0.0f32; 128],
+        ));
+        tensors.push(tensor_view(
+            &format!("{prefix}up_blocks.3.resnets.{res0}.conv2.weight"),
+            vec![128, 128, 3, 3],
+            vec![0.0f32; 128 * 128 * 3 * 3],
+        ));
+        tensors.push(tensor_view(
+            &format!("{prefix}up_blocks.3.resnets.{res0}.conv2.bias"),
+            vec![128],
+            vec![0.0f32; 128],
+        ));
+        tensors.push(tensor_view(
+            &format!("{prefix}up_blocks.3.resnets.{res0}.conv_shortcut.weight"),
+            vec![128, 256, 1, 1],
+            vec![0.0f32; 128 * 256],
+        ));
         tensors.push(tensor_view(
             &format!("{prefix}up_blocks.3.resnets.{res0}.conv_shortcut.bias"),
             vec![128],
