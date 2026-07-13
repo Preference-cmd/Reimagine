@@ -55,14 +55,8 @@ impl FrameCodec {
     }
 
     pub fn write(&self, writer: &mut impl Write, message: &WireMessage) -> Result<(), CodecError> {
-        let payload = serde_json::to_vec(message).map_err(CodecError::MalformedJson)?;
+        let payload = self.encode_payload(message)?;
         let declared = checked_payload_length(payload.len())?;
-        if declared > self.maximum_frame_bytes {
-            return Err(CodecError::FrameTooLarge {
-                declared,
-                maximum: self.maximum_frame_bytes,
-            });
-        }
         writer.write_all(&declared.to_be_bytes())?;
         writer.write_all(&payload)?;
         writer.flush()?;
@@ -81,14 +75,42 @@ impl FrameCodec {
         }
         let mut payload = vec![0_u8; declared as usize];
         reader.read_exact(&mut payload)?;
+        self.decode_payload(&payload)
+    }
+
+    pub fn encode_payload(&self, message: &WireMessage) -> Result<Vec<u8>, CodecError> {
+        let payload = serde_json::to_vec(message).map_err(CodecError::MalformedJson)?;
+        let declared = checked_payload_length(payload.len())?;
+        if declared > self.maximum_frame_bytes {
+            return Err(CodecError::FrameTooLarge {
+                declared,
+                maximum: self.maximum_frame_bytes,
+            });
+        }
+        Ok(payload)
+    }
+
+    pub fn decode_payload(&self, payload: &[u8]) -> Result<WireMessage, CodecError> {
+        let declared = checked_payload_length(payload.len())?;
+        if declared > self.maximum_frame_bytes {
+            return Err(CodecError::FrameTooLarge {
+                declared,
+                maximum: self.maximum_frame_bytes,
+            });
+        }
         let value: serde_json::Value =
-            serde_json::from_slice(&payload).map_err(CodecError::MalformedJson)?;
+            serde_json::from_slice(payload).map_err(CodecError::MalformedJson)?;
         if let Some(kind) = value.get("kind").and_then(serde_json::Value::as_str)
             && !WireMessage::is_known_kind(kind)
         {
             return Err(CodecError::UnknownMessageKind(kind.to_owned()));
         }
         serde_json::from_value(value).map_err(CodecError::MalformedJson)
+    }
+
+    #[must_use]
+    pub const fn maximum_frame_bytes(&self) -> u32 {
+        self.maximum_frame_bytes
     }
 }
 

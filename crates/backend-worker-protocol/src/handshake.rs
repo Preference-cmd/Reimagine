@@ -2,7 +2,7 @@ use std::fmt;
 
 use serde::{Deserialize, Serialize};
 
-use crate::WorkerIdentity;
+use crate::{WorkerIdentity, WorkerProfile};
 
 #[derive(Clone, Copy, Debug, Eq, Ord, PartialEq, PartialOrd, Serialize, Deserialize)]
 #[serde(transparent)]
@@ -23,6 +23,7 @@ pub struct HostHello {
 pub struct WorkerHello {
     pub selected_protocol: ProtocolVersion,
     pub identity: WorkerIdentity,
+    pub profile: WorkerProfile,
 }
 
 impl ProtocolRange {

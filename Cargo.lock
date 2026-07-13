@@ -6431,6 +6431,18 @@ dependencies = [
 ]
 
 [[package]]
+name = "reimagine-backend-worker-host"
+version = "0.1.0"
+dependencies = [
+ "async-trait",
+ "reimagine-backend-worker-protocol",
+ "reimagine-core",
+ "reimagine-inference",
+ "serde_json",
+ "tokio",
+]
+
+[[package]]
 name = "reimagine-backend-worker-protocol"
 version = "0.1.0"
 dependencies = [

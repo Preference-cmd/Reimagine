@@ -58,6 +58,7 @@ impl WorkerProcess {
                 &mut self.stdin,
                 &WireMessage::Request(RequestFrame {
                     protocol_version: ProtocolVersion(1),
+                    incarnation_id: self.hello.identity.incarnation_id.clone(),
                     request_id: RequestId::from(request),
                     correlation_id: CorrelationId::from(correlation),
                     operation: operation.to_owned(),
@@ -113,6 +114,8 @@ fn fake_worker_multiplexes_progress_and_idempotent_cancellation() {
         .write(
             &mut worker.stdin,
             &WireMessage::Cancel(CancelFrame {
+                protocol_version: worker.hello.selected_protocol,
+                incarnation_id: worker.hello.identity.incarnation_id.clone(),
                 request_id: RequestId::from("slow"),
                 correlation_id: CorrelationId::from("flow-slow"),
             }),
@@ -133,6 +136,8 @@ fn fake_worker_multiplexes_progress_and_idempotent_cancellation() {
         .write(
             &mut worker.stdin,
             &WireMessage::Cancel(CancelFrame {
+                protocol_version: worker.hello.selected_protocol,
+                incarnation_id: worker.hello.identity.incarnation_id.clone(),
                 request_id: RequestId::from("slow"),
                 correlation_id: CorrelationId::from("flow-slow"),
             }),

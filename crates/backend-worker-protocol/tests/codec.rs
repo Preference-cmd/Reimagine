@@ -1,10 +1,12 @@
 use std::io::{self, Read};
 
 use reimagine_backend_worker_protocol::{
-    BackendExecutionError, BackendInstanceId, CancelAckFrame, CancelFrame, CodecError,
-    CorrelationId, FrameCodec, HostHello, ProgressFrame, ProtocolRange, ProtocolVersion,
-    RequestFrame, RequestId, TerminalFrame, TerminalOutcome, WireMessage, WorkerHello,
-    WorkerIdentity, WorkerIncarnationId, WorkerInstallationId,
+    BackendExecutionError, BackendInstanceId, CancelAckFrame, CancelFrame, CleanupAckFrame,
+    CleanupFrame, CodecError, ControlId, CorrelationId, FrameCodec, HealthAckFrame, HealthFrame,
+    HostHello, ProgressFrame, ProtocolRange, ProtocolVersion, RequestFrame, RequestId,
+    ShutdownAckFrame, ShutdownFrame, TerminalFrame, TerminalOutcome, WireMessage, WorkerHello,
+    WorkerIdentity, WorkerIncarnationId, WorkerInstallationId, WorkerInstanceProfile,
+    WorkerProfile,
 };
 use serde_json::json;
 
@@ -98,6 +100,65 @@ fn unknown_message_kind_is_rejected_precisely() {
 }
 
 #[test]
+fn post_handshake_request_requires_worker_incarnation() {
+    let codec = FrameCodec::new(2048);
+    let payload = br#"{
+        "kind":"request",
+        "body":{
+            "protocol_version":1,
+            "request_id":"r1",
+            "correlation_id":"c1",
+            "operation":"echo",
+            "payload":{}
+        }
+    }"#;
+    let mut encoded = (payload.len() as u32).to_be_bytes().to_vec();
+    encoded.extend_from_slice(payload);
+
+    assert!(matches!(
+        codec.read(&mut io::Cursor::new(encoded)),
+        Err(CodecError::MalformedJson(_))
+    ));
+}
+
+#[test]
+fn worker_terminal_requires_negotiated_protocol_and_incarnation() {
+    let codec = FrameCodec::new(2048);
+    let payload = br#"{
+        "kind":"terminal",
+        "body":{
+            "request_id":"r1",
+            "correlation_id":"c1",
+            "outcome":{"outcome":"cancelled"}
+        }
+    }"#;
+    let mut encoded = (payload.len() as u32).to_be_bytes().to_vec();
+    encoded.extend_from_slice(payload);
+
+    assert!(matches!(
+        codec.read(&mut io::Cursor::new(encoded)),
+        Err(CodecError::MalformedJson(_))
+    ));
+}
+
+#[test]
+fn shutdown_control_frame_is_a_known_message_kind() {
+    let codec = FrameCodec::new(2048);
+    let payload = br#"{
+        "kind":"shutdown",
+        "body":{
+            "protocol_version":1,
+            "incarnation_id":"inc-1",
+            "control_id":"shutdown-1"
+        }
+    }"#;
+    let mut encoded = (payload.len() as u32).to_be_bytes().to_vec();
+    encoded.extend_from_slice(payload);
+
+    assert!(codec.read(&mut io::Cursor::new(encoded)).is_ok());
+}
+
+#[test]
 fn every_wire_message_kind_roundtrips() {
     let request_id = RequestId::from("r1");
     let correlation_id = CorrelationId::from("c1");
@@ -119,15 +180,26 @@ fn every_wire_message_kind_roundtrips() {
                 target: "aarch64-apple-darwin".to_owned(),
                 manifest_digest: "sha256:abc".to_owned(),
             },
+            profile: WorkerProfile {
+                instances: vec![WorkerInstanceProfile {
+                    backend_instance_id: BackendInstanceId::from("burn:wgpu:default"),
+                    device_label: "wgpu:default".to_owned(),
+                    capabilities: vec!["load_bundle".to_owned()],
+                    operation_options: json!({}),
+                }],
+            },
         }),
         WireMessage::Request(RequestFrame {
             protocol_version: ProtocolVersion(2),
+            incarnation_id: WorkerIncarnationId::from("inc-1"),
             request_id: request_id.clone(),
             correlation_id: correlation_id.clone(),
             operation: "echo".to_owned(),
             payload: json!({ "input": 1 }),
         }),
         WireMessage::Progress(ProgressFrame {
+            protocol_version: ProtocolVersion(2),
+            incarnation_id: WorkerIncarnationId::from("inc-1"),
             request_id: request_id.clone(),
             correlation_id: correlation_id.clone(),
             sequence: 1,
@@ -136,16 +208,22 @@ fn every_wire_message_kind_roundtrips() {
             message: Some("halfway".to_owned()),
         }),
         WireMessage::Cancel(CancelFrame {
+            protocol_version: ProtocolVersion(2),
+            incarnation_id: WorkerIncarnationId::from("inc-1"),
             request_id: request_id.clone(),
             correlation_id: correlation_id.clone(),
         }),
         WireMessage::CancelAck(CancelAckFrame {
+            protocol_version: ProtocolVersion(2),
+            incarnation_id: WorkerIncarnationId::from("inc-1"),
             request_id: request_id.clone(),
             correlation_id: correlation_id.clone(),
             accepted: true,
             already_terminal: false,
         }),
         WireMessage::Terminal(TerminalFrame {
+            protocol_version: ProtocolVersion(2),
+            incarnation_id: WorkerIncarnationId::from("inc-1"),
             request_id,
             correlation_id,
             outcome: TerminalOutcome::BackendError {
@@ -155,6 +233,41 @@ fn every_wire_message_kind_roundtrips() {
                     retryable: false,
                 },
             },
+        }),
+        WireMessage::Health(HealthFrame {
+            protocol_version: ProtocolVersion(2),
+            incarnation_id: WorkerIncarnationId::from("inc-1"),
+            control_id: ControlId::from("health-1"),
+        }),
+        WireMessage::HealthAck(HealthAckFrame {
+            protocol_version: ProtocolVersion(2),
+            incarnation_id: WorkerIncarnationId::from("inc-1"),
+            control_id: ControlId::from("health-1"),
+            healthy: true,
+            message: None,
+        }),
+        WireMessage::Cleanup(CleanupFrame {
+            protocol_version: ProtocolVersion(2),
+            incarnation_id: WorkerIncarnationId::from("inc-1"),
+            control_id: ControlId::from("cleanup-1"),
+            run_id: Some("run-1".to_owned()),
+            object_ids: vec!["object-1".to_owned()],
+        }),
+        WireMessage::CleanupAck(CleanupAckFrame {
+            protocol_version: ProtocolVersion(2),
+            incarnation_id: WorkerIncarnationId::from("inc-1"),
+            control_id: ControlId::from("cleanup-1"),
+            released_objects: 1,
+        }),
+        WireMessage::Shutdown(ShutdownFrame {
+            protocol_version: ProtocolVersion(2),
+            incarnation_id: WorkerIncarnationId::from("inc-1"),
+            control_id: ControlId::from("shutdown-1"),
+        }),
+        WireMessage::ShutdownAck(ShutdownAckFrame {
+            protocol_version: ProtocolVersion(2),
+            incarnation_id: WorkerIncarnationId::from("inc-1"),
+            control_id: ControlId::from("shutdown-1"),
         }),
     ];
     let codec = FrameCodec::new(4096);

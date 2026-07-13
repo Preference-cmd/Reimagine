@@ -9,7 +9,8 @@ use std::time::{Duration, SystemTime, UNIX_EPOCH};
 use reimagine_backend_worker_protocol::{
     BackendExecutionError, BackendInstanceId, CancelAckFrame, FrameCodec, ProtocolRange,
     RequestFrame, RequestId, TerminalFrame, TerminalOutcome, WireMessage, WorkerHello,
-    WorkerIdentity, WorkerIncarnationId, WorkerInstallationId, negotiate_protocol,
+    WorkerIdentity, WorkerIncarnationId, WorkerInstallationId, WorkerInstanceProfile,
+    WorkerProfile, negotiate_protocol,
 };
 use serde_json::json;
 
@@ -44,6 +45,18 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 target: std::env::consts::ARCH.to_owned(),
                 manifest_digest: "test-manifest".to_owned(),
             },
+            profile: WorkerProfile {
+                instances: vec![WorkerInstanceProfile {
+                    backend_instance_id: BackendInstanceId::from("fake:cpu:default"),
+                    device_label: "cpu".to_owned(),
+                    capabilities: vec![
+                        "echo".to_owned(),
+                        "delay".to_owned(),
+                        "progress".to_owned(),
+                    ],
+                    operation_options: json!({}),
+                }],
+            },
         }),
     )?;
 
@@ -65,6 +78,8 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 write_message(
                     &stdout,
                     &WireMessage::CancelAck(CancelAckFrame {
+                        protocol_version: cancel.protocol_version,
+                        incarnation_id: cancel.incarnation_id,
                         request_id: cancel.request_id,
                         correlation_id: cancel.correlation_id,
                         accepted,
@@ -131,6 +146,8 @@ fn spawn_request(
                     write_message(
                         &stdout,
                         &WireMessage::Progress(reimagine_backend_worker_protocol::ProgressFrame {
+                            protocol_version: request.protocol_version,
+                            incarnation_id: request.incarnation_id.clone(),
                             request_id: request.request_id.clone(),
                             correlation_id: request.correlation_id.clone(),
                             sequence,
@@ -162,6 +179,8 @@ fn spawn_request(
         write_message(
             &stdout,
             &WireMessage::Terminal(TerminalFrame {
+                protocol_version: request.protocol_version,
+                incarnation_id: request.incarnation_id,
                 request_id: request.request_id.clone(),
                 correlation_id: request.correlation_id,
                 outcome,

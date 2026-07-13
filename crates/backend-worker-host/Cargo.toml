@@ -1,0 +1,20 @@
+[package]
+name = "reimagine-backend-worker-host"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+authors.workspace = true
+description.workspace = true
+license.workspace = true
+
+[dependencies]
+async-trait = { workspace = true }
+reimagine-backend-worker-protocol = { path = "../backend-worker-protocol" }
+reimagine-core = { path = "../core" }
+reimagine-inference = { path = "../inference" }
+serde_json = { workspace = true }
+tokio = { workspace = true, features = ["io-util", "macros", "process", "rt", "sync", "time"] }
+
+[[bin]]
+name = "fake-backend-worker-host-fixture"
+path = "tests/fixtures/fake_backend_worker.rs"

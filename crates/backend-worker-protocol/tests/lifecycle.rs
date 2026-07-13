@@ -2,11 +2,14 @@ use serde_json::json;
 
 use reimagine_backend_worker_protocol::{
     BackendExecutionError, CancelDisposition, CorrelationId, LifecycleError, ProgressFrame,
-    RequestId, RequestTracker, TerminalFrame, TerminalOutcome, WorkerIncarnationId,
+    ProtocolVersion, RequestId, RequestTracker, TerminalFrame, TerminalOutcome,
+    WorkerIncarnationId,
 };
 
 fn terminal(request: &str, correlation: &str, outcome: TerminalOutcome) -> TerminalFrame {
     TerminalFrame {
+        protocol_version: ProtocolVersion(1),
+        incarnation_id: WorkerIncarnationId::from("inc-1"),
         request_id: RequestId::from(request),
         correlation_id: CorrelationId::from(correlation),
         outcome,
@@ -64,6 +67,8 @@ fn progress_and_terminal_must_preserve_correlation() {
         .register(RequestId::from("r1"), CorrelationId::from("c1"))
         .unwrap();
     let progress = ProgressFrame {
+        protocol_version: ProtocolVersion(1),
+        incarnation_id: WorkerIncarnationId::from("inc-1"),
         request_id: RequestId::from("r1"),
         correlation_id: CorrelationId::from("wrong"),
         sequence: 1,
@@ -107,6 +112,8 @@ fn completed_request_tombstones_are_bounded() {
             .unwrap();
         tracker
             .record_terminal(&TerminalFrame {
+                protocol_version: ProtocolVersion(1),
+                incarnation_id: WorkerIncarnationId::from("inc-1"),
                 request_id,
                 correlation_id,
                 outcome: TerminalOutcome::Cancelled,
