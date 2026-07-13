@@ -16,6 +16,7 @@ members = [
     "crates/inference",
     "crates/inference-backends/candle",
     "crates/inference-backends/burn",
+    "crates/inference-backends/burn-worker",
     "crates/plugin",
     "crates/backend-worker-protocol",
     "crates/backend-worker-host",

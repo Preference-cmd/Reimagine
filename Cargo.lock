@@ -6505,6 +6505,19 @@ dependencies = [
 ]
 
 [[package]]
+name = "reimagine-inference-burn-worker"
+version = "0.1.0"
+dependencies = [
+ "reimagine-backend-worker-protocol",
+ "reimagine-core",
+ "reimagine-inference",
+ "reimagine-inference-burn",
+ "serde",
+ "serde_json",
+ "tokio",
+]
+
+[[package]]
 name = "reimagine-inference-candle"
 version = "0.1.0"
 dependencies = [
