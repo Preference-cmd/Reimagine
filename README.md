@@ -5,84 +5,51 @@
 **An agentic workflow studio for AIGC — node-based workflow editing**
 **with a first-class agent loop, in a single Rust + React workspace.**
 
-`GPL-3.0-or-later` · `Rust 1.96+` · `Bun`
+[![License: GPL-3.0-or-later](https://img.shields.io/badge/License-GPL--3.0--or--later-blue?style=flat-square)](LICENSE)
+[![Rust](https://img.shields.io/badge/Rust-1.96%2B-orange?style=flat-square&logo=rust)](https://www.rust-lang.org)
+[![Bun](https://img.shields.io/badge/Bun-black?style=flat-square&logo=bun)](https://bun.sh)
+[![Tauri 2](https://img.shields.io/badge/Tauri-2-purple?style=flat-square&logo=tauri)](https://tauri.app)
 
 </div>
 
----
+AIGC workflows are usually hand-wired: compose nodes, wire slots, run,
+inspect, tweak — then repeat. The bottleneck is the editing loop itself.
 
-AIGC workflows are typically hand-wired. The user authors a graph node by
-node, wires up slots by hand, runs it, inspects the output, and tweaks a few
-parameters — then repeats. The bottleneck is the editing loop itself:
-composing new nodes, fixing validation errors, adjusting slot connections,
-and translating *intent* ("make it more cinematic") into parameter changes.
-
-Reimagine closes that loop. A first-class agent can read, author, and execute
-workflows on the same runtime that powers the desktop and HTTP hosts. The
-agent exposes a typed tool surface over the graph, the validation pipeline,
-and the runtime scheduler — so a user can describe what they want, and the
-agent composes a workflow, validates it, runs it, observes the diagnostics,
-and iterates.
-
----
+Reimagine closes that loop. A first-class agent reads, authors, and executes
+workflows on the same runtime behind the desktop and HTTP hosts, exposing a
+typed tool surface over the graph, validation pipeline, and scheduler.
+Describe what you want — the agent composes, validates, runs, observes, and
+iterates.
 
 
-## Workspace layout
 
-```text
-src-tauri/        Tauri 2 desktop shell
-crates/           Domain modules (workflow model, runtime, inference, agent, …)
-ui/               React 19 + Vite 7 frontend
-assets/           Static placeholders
-examples/         Sample workflow JSON
-```
+## Architecture
 
-`src-tauri/` and `crates/axum-host/` are thin host adapters that share the
-`reimagine-app-host` facade; all domain logic lives under `crates/`.
+### Desktop app + headless server
 
-## One workspace, two hosts
+The workflow engine runs in two modes: a **desktop app** with a visual
+node editor, and a **headless server** for automation and scripting.
+Workflows built in the GUI run on the server without changes.
 
-A Tauri 2 desktop shell and an Axum HTTP host share the same
-host-neutral facade (`reimagine-app-host`). The desktop host owns the
-window, IPC channels, and runtime event hubs; the Axum host owns routing,
-serialization, and a CLI for headless operation. Both call into the same
-services; neither reimplements them.
+### Cross-platform inference
 
-The Axum host doubles as the canonical end-to-end test harness for
-workflow execution.
+Two interchangeable inference backends ship with the app. One is optimized
+for Apple Silicon; the other covers Windows, Linux, and macOS with GPU
+acceleration and a CPU fallback. Pick the best fit for your hardware.
 
-## Dual inference backends
+### Local-first models
 
-|                  | Candle                        | Burn (`wgpu` default)        |
-| ---------------- | ----------------------------- | ---------------------------- |
-| Apple Silicon    | ✅ Metal + Accelerate         | ✅ Metal via WGPU             |
-| Linux / Windows  | ✅ CPU                        | ✅ Vulkan via WGPU            |
-| CPU fallback     | —                             | ✅ `flex` backend            |
+Models stay on your machine — downloaded from HuggingFace on demand,
+verified for integrity, and managed through a local workspace store.
+No accounts, no cloud, no telemetry.
 
-Both backends sit behind the same `reimagine-inference` facade: a backend
-trait, typed request/response DTOs, capability report, model resolver,
-router, and registry. Swapping backends is a workspace-config change; no
-node or workflow change required.
 
-## Local-first model stack
-
-Manifest-based model references with fingerprinting, classification,
-scanning, and resolution — paired with a HuggingFace download pipeline
-(`hf-hub`). Models live in a workspace-scoped store the user fully
-controls.
-
-| Stage         | Crate                       | Responsibility                                       |
-| ------------- | --------------------------- | ---------------------------------------------------- |
-| Registration  | `reimagine-model-manager`   | Manifests, fingerprints, classification, resolution   |
-| Acquisition   | `reimagine-model-acquisition` | HuggingFace download pipeline (`hf-hub`)           |
-
----
 
 ## Stack
 
 | Layer             | Technology                                          |
 | ----------------- | --------------------------------------------------- |
-| Domain / runtime  | Rust 2024 workspace                    |
+| Domain / runtime  | Rust 2024 workspace                                 |
 | Desktop host      | Tauri 2                                             |
 | HTTP host         | Axum 0.8                                            |
 | Inference         | Candle 0.10 · Burn 0.21 (`wgpu` default, `flex` CPU) |
@@ -125,10 +92,6 @@ examples/         Sample workflow JSON
 
 `src-tauri/` and `crates/axum-host/` are thin host adapters that share the
 `reimagine-app-host` facade; all domain logic lives under `crates/`.
-
-
-Domain logic lives under `crates/`; `src-tauri/` and `crates/axum-host/` are
-thin host adapters that share the `reimagine-app-host` facade.
 
 ## Conventions
 
