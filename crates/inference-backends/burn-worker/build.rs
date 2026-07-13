@@ -11,9 +11,7 @@ fn main() {
 
     match (wgpu, flex) {
         (false, false) => {
-            println!(
-                "cargo:warning=MB03 worker: no compute backend feature selected."
-            );
+            println!("cargo:warning=MB03 worker: no compute backend feature selected.");
             eprintln!(
                 "error: reimagine-inference-burn-worker requires exactly one of \
                  `--features wgpu` or `--features flex`. A zero-feature build \
@@ -22,9 +20,7 @@ fn main() {
             std::process::exit(1);
         }
         (true, true) => {
-            println!(
-                "cargo:warning=MB03 worker: both wgpu and flex features selected."
-            );
+            println!("cargo:warning=MB03 worker: both wgpu and flex features selected.");
             eprintln!(
                 "error: reimagine-inference-burn-worker must not enable both \
                  `wgpu` and `flex`. Select exactly one compute backend."

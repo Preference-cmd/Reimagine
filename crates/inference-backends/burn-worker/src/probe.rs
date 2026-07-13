@@ -16,23 +16,17 @@ use reimagine_inference_burn::BurnBackend;
 /// The identity reports the currently active feature/variant so the host
 /// adapter can verify the launch expectation against the compiled binary.
 pub fn build(backend: &BurnBackend) -> (WorkerIdentity, WorkerProfile) {
-    let backend_instance_id =
-        BackendInstanceId(backend.backend_instance().as_str().to_string());
+    let backend_instance_id = BackendInstanceId(backend.backend_instance().as_str().to_string());
 
     let identity = WorkerIdentity {
         backend_instance_id: backend_instance_id.clone(),
         installation_id: WorkerInstallationId(
-            std::env::var("REIMAGINE_INSTALLATION_ID")
-                .unwrap_or_else(|_| "dev".to_string()),
+            std::env::var("REIMAGINE_INSTALLATION_ID").unwrap_or_else(|_| "dev".to_string()),
         ),
         incarnation_id: WorkerIncarnationId(format!("inc-{}", std::process::id())),
         worker_version: env!("CARGO_PKG_VERSION").to_string(),
         backend_kind: "burn".to_string(),
-        target: format!(
-            "{}-{}",
-            std::env::consts::ARCH,
-            std::env::consts::OS
-        ),
+        target: format!("{}-{}", std::env::consts::ARCH, std::env::consts::OS),
         manifest_digest: std::env::var("REIMAGINE_MANIFEST_DIGEST")
             .unwrap_or_else(|_| "dev".to_string()),
     };

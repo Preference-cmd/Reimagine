@@ -26,10 +26,7 @@ fn cargo_check(features: &[&str]) -> std::process::Output {
 #[test]
 fn zero_features_fails_to_compile() {
     let output = cargo_check(&[]);
-    assert!(
-        !output.status.success(),
-        "zero-feature build should fail"
-    );
+    assert!(!output.status.success(), "zero-feature build should fail");
     let stderr = String::from_utf8_lossy(&output.stderr);
     assert!(
         stderr.contains("requires exactly one"),
@@ -40,10 +37,7 @@ fn zero_features_fails_to_compile() {
 #[test]
 fn dual_features_fails_to_compile() {
     let output = cargo_check(&["wgpu", "flex"]);
-    assert!(
-        !output.status.success(),
-        "dual-feature build should fail"
-    );
+    assert!(!output.status.success(), "dual-feature build should fail");
     let stderr = String::from_utf8_lossy(&output.stderr);
     assert!(
         stderr.contains("must not enable both"),

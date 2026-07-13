@@ -84,6 +84,7 @@ mod tests {
     use std::collections::BTreeMap;
     use std::fs;
     use std::path::PathBuf;
+    use std::sync::atomic::{AtomicU64, Ordering};
 
     use safetensors::tensor::{Dtype, View};
 
@@ -110,11 +111,17 @@ mod tests {
     }
 
     fn temp_dir() -> PathBuf {
+        static NEXT_TEMP_DIR: AtomicU64 = AtomicU64::new(0);
+
         let nonce = std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
             .unwrap()
             .as_nanos();
-        std::env::temp_dir().join(format!("burn-ckpt-import-{}-{nonce}", std::process::id()))
+        let sequence = NEXT_TEMP_DIR.fetch_add(1, Ordering::Relaxed);
+        std::env::temp_dir().join(format!(
+            "burn-ckpt-import-{}-{nonce}-{sequence}",
+            std::process::id()
+        ))
     }
 
     fn make_ckpt(path: &Path, names: &[&str]) {

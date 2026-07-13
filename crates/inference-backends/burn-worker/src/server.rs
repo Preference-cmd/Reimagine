@@ -1,7 +1,8 @@
 use std::io::{Read, Write};
 
 use reimagine_backend_worker_protocol::{
-    BackendExecutionError, FrameCodec, TerminalOutcome, WireMessage, WorkerIncarnationId,
+    BackendExecutionError, FrameCodec, MessageSender, ProtocolVersion, TerminalOutcome,
+    WireMessage, WorkerIncarnationId, validate_message_direction,
 };
 use reimagine_inference_burn::BurnBackend;
 
@@ -23,13 +24,10 @@ pub fn serve_loop(
     codec: &FrameCodec,
     reader: &mut impl Read,
     writer: &mut impl Write,
+    protocol_version: ProtocolVersion,
+    process_incarnation: &WorkerIncarnationId,
 ) {
     let tokens = TokenGenerator::new();
-
-    // The authoritative incarnation ID is set once during the serve
-    // loop initialization. It is derived from the process identity
-    // so that each new process gets a unique incarnation.
-    let process_incarnation = WorkerIncarnationId(format!("inc-{}", std::process::id()));
 
     loop {
         let message = match codec.read(reader) {
@@ -40,28 +38,18 @@ pub fn serve_loop(
             }
         };
 
-        // Validate incarnation for all relevant frame types.
-        // HostHello/WorkerHello and Ping are exempt from incarnation
-        // checks (they are session-establishment messages).
-        if !matches!(message, WireMessage::HostHello(_) | WireMessage::WorkerHello(_) | WireMessage::Ping { .. }) {
-            let frame_incarnation = match extract_incarnation(&message) {
-                Some(inc) => inc,
-                None => {
-                    // Terminal, ack frames — unexpected from host direction.
-                    eprintln!(
-                        "serve loop: unexpected message from host: {:?}",
-                        message.kind()
-                    );
-                    continue;
-                }
-            };
-            if frame_incarnation != &process_incarnation {
-                eprintln!(
-                    "serve loop: incarnation mismatch: expected '{:?}', got '{:?}'",
-                    process_incarnation, frame_incarnation
-                );
-                continue;
+        if validate_message_direction(&message, MessageSender::Host).is_err() {
+            eprintln!("serve loop: host sent wrong-direction `{}`", message.kind());
+            break;
+        }
+        if let Some((frame_protocol, frame_incarnation)) = extract_session(&message) {
+            if frame_protocol != protocol_version || frame_incarnation != process_incarnation {
+                eprintln!("serve loop: session mismatch for `{}`", message.kind());
+                break;
             }
+        } else if !matches!(message, WireMessage::Ping { .. }) {
+            eprintln!("serve loop: unexpected post-handshake `{}`", message.kind());
+            break;
         }
 
         match message {
@@ -173,11 +161,21 @@ pub fn serve_loop(
             }
 
             WireMessage::Cleanup(frame) => {
-                // Release all payloads scoped to this incarnation.
-                backend
-                    .store()
-                    .cleanup_run(&reimagine_core::model::RunId::new("__cleanup__"));
-                let released = backend.store().payload_count();
+                let mut released = frame
+                    .run_id
+                    .as_deref()
+                    .map(|run_id| {
+                        backend
+                            .store()
+                            .cleanup_run(&reimagine_core::model::RunId::new(run_id))
+                    })
+                    .unwrap_or(0);
+                for object_id in &frame.object_ids {
+                    released +=
+                        usize::from(backend.store().release_payload(
+                            &reimagine_inference::BackendPayloadKey::new(object_id),
+                        ));
+                }
                 let ack = reimagine_backend_worker_protocol::CleanupAckFrame {
                     protocol_version: frame.protocol_version,
                     incarnation_id: frame.incarnation_id.clone(),
@@ -232,14 +230,14 @@ pub fn serve_loop(
 
 /// Extract the incarnation ID from a wire message, if the message
 /// type carries one.
-fn extract_incarnation<'a>(message: &'a WireMessage) -> Option<&'a WorkerIncarnationId> {
+fn extract_session(message: &WireMessage) -> Option<(ProtocolVersion, &WorkerIncarnationId)> {
     match message {
-        WireMessage::Request(frame) => Some(&frame.incarnation_id),
-        WireMessage::Progress(frame) => Some(&frame.incarnation_id),
-        WireMessage::Cancel(frame) => Some(&frame.incarnation_id),
-        WireMessage::Health(frame) => Some(&frame.incarnation_id),
-        WireMessage::Cleanup(frame) => Some(&frame.incarnation_id),
-        WireMessage::Shutdown(frame) => Some(&frame.incarnation_id),
+        WireMessage::Request(frame) => Some((frame.protocol_version, &frame.incarnation_id)),
+        WireMessage::Progress(frame) => Some((frame.protocol_version, &frame.incarnation_id)),
+        WireMessage::Cancel(frame) => Some((frame.protocol_version, &frame.incarnation_id)),
+        WireMessage::Health(frame) => Some((frame.protocol_version, &frame.incarnation_id)),
+        WireMessage::Cleanup(frame) => Some((frame.protocol_version, &frame.incarnation_id)),
+        WireMessage::Shutdown(frame) => Some((frame.protocol_version, &frame.incarnation_id)),
         WireMessage::HostHello(_)
         | WireMessage::WorkerHello(_)
         | WireMessage::Ping { .. }

@@ -17,13 +17,13 @@ use std::sync::atomic::{AtomicU64, Ordering};
 
 use reimagine_backend_worker_protocol::BackendExecutionError;
 use reimagine_core::model::{
-    ModelId, ModelRole, ModelSeries, ModelVariant, NodeId, ParamValue, RunId,
-    WorkflowId, WorkflowVersion,
+    ModelId, ModelRole, ModelSeries, ModelVariant, NodeId, ParamValue, RunId, WorkflowId,
+    WorkflowVersion,
 };
 use reimagine_inference::{
     CreateEmptyLatentRequest, DiffusionSampleRequest, ExecutionConditioning, ImagePreviewRequest,
-    ImageSaveRequest, InferenceBackend, LatentDecodeRequest, LoadBundleRequest,
-    ModelFormat, ResolvedInferenceModel, ResolvedInferenceModelSource, ModelSourceKind,
+    ImageSaveRequest, InferenceBackend, LatentDecodeRequest, LoadBundleRequest, ModelFormat,
+    ModelSourceKind, ResolvedInferenceModel, ResolvedInferenceModelSource,
     ResolvedInferenceModelSourceSet, TextEncodeRequest,
 };
 use reimagine_inference_burn::BurnBackend;
@@ -68,34 +68,18 @@ pub fn dispatch(
     payload: &serde_json::Value,
 ) -> MappingResult {
     match operation {
-        "latent.create_empty" => {
-            dispatch_create_empty_latent(rt, backend, tokens, payload)
-        }
-        "model.load_bundle" => {
-            dispatch_load_bundle(rt, backend, tokens, payload)
-        }
-        "text.encode" => {
-            dispatch_text_encode(rt, backend, tokens, payload)
-        }
-        "diffusion.sample" => {
-            dispatch_diffusion_sample(rt, backend, tokens, payload)
-        }
-        "latent.decode" => {
-            dispatch_latent_decode(rt, backend, tokens, payload)
-        }
-        "image.save" => {
-            dispatch_image_save(rt, backend, tokens, payload)
-        }
-        "image.preview" => {
-            dispatch_image_preview(rt, backend, tokens, payload)
-        }
-        other => {
-            MappingResult::BackendError(BackendExecutionError {
-                code: "unknown_operation".to_string(),
-                message: format!("unknown operation: {other}"),
-                retryable: false,
-            })
-        }
+        "latent.create_empty" => dispatch_create_empty_latent(rt, backend, tokens, payload),
+        "model.load_bundle" => dispatch_load_bundle(rt, backend, tokens, payload),
+        "text.encode" => dispatch_text_encode(rt, backend, tokens, payload),
+        "diffusion.sample" => dispatch_diffusion_sample(rt, backend, tokens, payload),
+        "latent.decode" => dispatch_latent_decode(rt, backend, tokens, payload),
+        "image.save" => dispatch_image_save(rt, backend, tokens, payload),
+        "image.preview" => dispatch_image_preview(rt, backend, tokens, payload),
+        other => MappingResult::BackendError(BackendExecutionError {
+            code: "unknown_operation".to_string(),
+            message: format!("unknown operation: {other}"),
+            retryable: false,
+        }),
     }
 }
 
@@ -107,8 +91,58 @@ fn extract_u32(value: &serde_json::Value, field: &str) -> Result<u32, String> {
     value
         .get(field)
         .and_then(|v| v.as_u64())
-        .map(|v| v as u32)
+        .and_then(|v| u32::try_from(v).ok())
         .ok_or_else(|| format!("missing or invalid field `{field}`"))
+}
+
+fn request_context(
+    payload: &serde_json::Value,
+    fallback: u64,
+) -> (RunId, WorkflowId, WorkflowVersion, NodeId) {
+    let run_id = payload
+        .get("run_id")
+        .and_then(serde_json::Value::as_str)
+        .map_or_else(|| format!("wrk:{fallback}"), str::to_owned);
+    let workflow_id = payload
+        .get("workflow_id")
+        .and_then(serde_json::Value::as_str)
+        .unwrap_or("burn-worker");
+    let workflow_version = payload
+        .get("workflow_version")
+        .and_then(serde_json::Value::as_u64)
+        .unwrap_or(1);
+    let node_id = payload
+        .get("node_id")
+        .and_then(serde_json::Value::as_str)
+        .unwrap_or("op");
+    (
+        RunId::new(run_id),
+        WorkflowId::new(workflow_id),
+        WorkflowVersion::new(workflow_version),
+        NodeId::new(node_id),
+    )
+}
+
+fn validate_model_path(backend: &BurnBackend, path: &std::path::Path) -> Result<PathBuf, String> {
+    let root = backend
+        .config()
+        .models_dir()
+        .canonicalize()
+        .map_err(|error| format!("models root cannot be canonicalized: {error}"))?;
+    let canonical = path.canonicalize().map_err(|error| {
+        format!(
+            "model source `{}` cannot be canonicalized: {error}",
+            path.display()
+        )
+    })?;
+    if !canonical.starts_with(&root) {
+        return Err(format!(
+            "model source `{}` is outside authorized root `{}`",
+            canonical.display(),
+            root.display()
+        ));
+    }
+    Ok(canonical)
 }
 
 fn extract_string(value: &serde_json::Value, field: &str) -> Result<String, String> {
@@ -125,6 +159,14 @@ fn extract_f32(value: &serde_json::Value, field: &str) -> Result<f32, String> {
         .and_then(|v| v.as_f64())
         .map(|v| v as f32)
         .ok_or_else(|| format!("missing or invalid field `{field}`"))
+}
+
+fn invalid_request(message: String) -> MappingResult {
+    MappingResult::BackendError(BackendExecutionError {
+        code: "invalid_request".to_owned(),
+        message,
+        retryable: false,
+    })
 }
 
 // ---------------------------------------------------------------------------
@@ -170,14 +212,15 @@ fn dispatch_create_empty_latent(
     };
 
     let token = tokens.next();
+    let (run_id, workflow_id, workflow_version, node_id) = request_context(payload, token);
     let request = CreateEmptyLatentRequest::new(
         width,
         height,
         batch_size,
-        RunId::new(format!("wrk:{token}")),
-        WorkflowId::new("burn-worker"),
-        WorkflowVersion::new(1),
-        NodeId::new("op"),
+        run_id,
+        workflow_id,
+        workflow_version,
+        node_id,
     );
 
     let response = match rt.block_on(backend.create_empty_latent(request)) {
@@ -254,8 +297,10 @@ fn dispatch_load_bundle(
             });
         }
     };
-    let source_path = match extract_string(payload, "source_path") {
-        Ok(v) => PathBuf::from(v),
+    let source_path = match extract_string(payload, "source_path")
+        .and_then(|value| validate_model_path(backend, std::path::Path::new(&value)))
+    {
+        Ok(v) => v,
         Err(e) => {
             return MappingResult::BackendError(BackendExecutionError {
                 code: "invalid_request".to_string(),
@@ -299,33 +344,46 @@ fn dispatch_load_bundle(
 
     // Build a source set from individual component paths if provided,
     // otherwise use the checkpoint-bundle source set from the resolved model.
-    let source_set = if let Some(components) = payload.get("components").and_then(|v| v.as_array()) {
+    let source_set = if let Some(components) = payload.get("components").and_then(|v| v.as_array())
+    {
         let mut sources = Vec::new();
         for comp in components {
-            let comp_role_str = match comp.get("role").and_then(|v| v.as_str()) {
-                Some(r) => r,
-                None => continue,
-            };
-            let comp_path = match comp.get("path").and_then(|v| v.as_str()) {
-                Some(p) => PathBuf::from(p),
-                None => continue,
-            };
-            let comp_role = match comp_role_str {
-                "TextEncoder" => ModelRole::TextEncoder,
-                "TextEncoder2" => ModelRole::TextEncoder,
-                "UNet" => ModelRole::DiffusionModel,
-                "VAEDecoder" => ModelRole::Vae,
-                role if role == role_str => role_from_str(role),
-                _ => continue,
-            };
-            sources.push(
-                ResolvedInferenceModelSource::new(
-                    ModelSourceKind::SplitComponent,
-                    comp_role,
-                    comp_path,
-                    ModelFormat::SafeTensors,
-                ),
-            );
+            let parsed = (|| -> Result<ResolvedInferenceModelSource, String> {
+                let kind = serde_json::from_value::<ModelSourceKind>(
+                    comp.get("kind").cloned().ok_or("component omitted kind")?,
+                )
+                .map_err(|error| format!("invalid component kind: {error}"))?;
+                let role = serde_json::from_value::<ModelRole>(
+                    comp.get("role").cloned().ok_or("component omitted role")?,
+                )
+                .map_err(|error| format!("invalid component role: {error}"))?;
+                let format = serde_json::from_value::<ModelFormat>(
+                    comp.get("format")
+                        .cloned()
+                        .ok_or("component omitted format")?,
+                )
+                .map_err(|error| format!("invalid component format: {error}"))?;
+                let raw_path = comp
+                    .get("path")
+                    .and_then(serde_json::Value::as_str)
+                    .ok_or("component omitted path")?;
+                let path = validate_model_path(backend, std::path::Path::new(raw_path))?;
+                let mut source = ResolvedInferenceModelSource::new(kind, role, path, format);
+                if let Some(metadata) = comp.get("metadata").and_then(serde_json::Value::as_str) {
+                    source = source.with_metadata(metadata);
+                }
+                Ok(source)
+            })();
+            match parsed {
+                Ok(source) => sources.push(source),
+                Err(message) => {
+                    return MappingResult::BackendError(BackendExecutionError {
+                        code: "invalid_request".to_owned(),
+                        message,
+                        retryable: false,
+                    });
+                }
+            }
         }
         if sources.is_empty() {
             resolved.to_checkpoint_bundle_source_set()
@@ -339,12 +397,13 @@ fn dispatch_load_bundle(
     let resolved_with_set = resolved.with_source_set(source_set);
 
     let token = tokens.next();
+    let (run_id, workflow_id, workflow_version, node_id) = request_context(payload, token);
     let request = LoadBundleRequest::new(
         resolved_with_set,
-        RunId::new(format!("wrk:{token}")),
-        WorkflowId::new("burn-worker"),
-        WorkflowVersion::new(1),
-        NodeId::new("op"),
+        run_id,
+        workflow_id,
+        workflow_version,
+        node_id,
     );
 
     let response = match rt.block_on(backend.load_bundle(request)) {
@@ -367,20 +426,6 @@ fn dispatch_load_bundle(
         "clip_token": clip_token,
         "vae_token": vae_token,
     }))
-}
-
-fn role_from_str(s: &str) -> ModelRole {
-    match s {
-        "CheckpointBundle" => ModelRole::CheckpointBundle,
-        "DiffusionModel" => ModelRole::DiffusionModel,
-        "TextEncoder" => ModelRole::TextEncoder,
-        "Vae" => ModelRole::Vae,
-        "Scheduler" => ModelRole::Scheduler,
-        "Lora" => ModelRole::Lora,
-        "ControlNet" => ModelRole::ControlNet,
-        "Upscaler" => ModelRole::Upscaler,
-        _ => ModelRole::CheckpointBundle,
-    }
 }
 
 // ---------------------------------------------------------------------------
@@ -415,8 +460,19 @@ fn dispatch_text_encode(
             });
         }
     };
+    let model_id = match extract_string(payload, "model_id") {
+        Ok(value) => ModelId::new(value),
+        Err(message) => {
+            return MappingResult::BackendError(BackendExecutionError {
+                code: "invalid_request".to_owned(),
+                message,
+                retryable: false,
+            });
+        }
+    };
 
     let token = tokens.next();
+    let (run_id, workflow_id, workflow_version, node_id) = request_context(payload, token);
 
     // Reconstruct the clip handle from its worker-side payload key.
     // The backend stores handles in its model cache — we can derive
@@ -427,7 +483,7 @@ fn dispatch_text_encode(
     let backend_kind = backend.backend_kind().clone();
     let backend_instance = backend.backend_instance();
     let clip_handle = reimagine_inference::RuntimeClipHandle::with_instance(
-        ModelId::new(format!("clip:{clip_token}")),
+        model_id,
         backend_kind,
         backend_instance,
         clip_token,
@@ -438,10 +494,10 @@ fn dispatch_text_encode(
         std::sync::Arc::new(reimagine_inference::ExecutionValue::Param(
             ParamValue::String(prompt_text),
         )),
-        RunId::new(format!("wrk:{token}")),
-        WorkflowId::new("burn-worker"),
-        WorkflowVersion::new(1),
-        NodeId::new("op"),
+        run_id,
+        workflow_id,
+        workflow_version,
+        node_id,
     );
 
     let response = match rt.block_on(backend.text_encode(request)) {
@@ -456,7 +512,11 @@ fn dispatch_text_encode(
     };
 
     let conditioning = response.into_conditioning();
-    let conditioning_token = conditioning.text_embedding().payload_key().as_str().to_string();
+    let conditioning_token = conditioning
+        .text_embedding()
+        .payload_key()
+        .as_str()
+        .to_string();
 
     let mut result = serde_json::json!({
         "conditioning_token": conditioning_token,
@@ -464,7 +524,8 @@ fn dispatch_text_encode(
 
     // Include pooled embedding token if available
     if let Some(pooled) = conditioning.pooled_embedding() {
-        result["pooled_token"] = serde_json::Value::String(pooled.payload_key().as_str().to_string());
+        result["pooled_token"] =
+            serde_json::Value::String(pooled.payload_key().as_str().to_string());
     }
 
     MappingResult::Success(result)
@@ -511,6 +572,12 @@ fn dispatch_diffusion_sample(
             });
         }
     };
+    let pos_pooled_token = payload
+        .get("pos_pooled_token")
+        .and_then(serde_json::Value::as_str);
+    let neg_pooled_token = payload
+        .get("neg_pooled_token")
+        .and_then(serde_json::Value::as_str);
     let latent_token = match extract_string(payload, "latent_token") {
         Ok(v) => v,
         Err(e) => {
@@ -581,8 +648,35 @@ fn dispatch_diffusion_sample(
             });
         }
     };
+    let model_id = match extract_string(payload, "model_id") {
+        Ok(value) => ModelId::new(value),
+        Err(message) => {
+            return MappingResult::BackendError(BackendExecutionError {
+                code: "invalid_request".to_owned(),
+                message,
+                retryable: false,
+            });
+        }
+    };
+    let width = match extract_u32(payload, "width") {
+        Ok(value) => value,
+        Err(message) => return invalid_request(message),
+    };
+    let height = match extract_u32(payload, "height") {
+        Ok(value) => value,
+        Err(message) => return invalid_request(message),
+    };
+    let batch_size = match extract_u32(payload, "batch_size") {
+        Ok(value) => value,
+        Err(message) => return invalid_request(message),
+    };
+    let channels = match extract_u32(payload, "channels") {
+        Ok(value) => value,
+        Err(message) => return invalid_request(message),
+    };
 
     let token = tokens.next();
+    let (run_id, workflow_id, workflow_version, node_id) = request_context(payload, token);
 
     // Reconstruct handles from worker tokens.
     let backend_kind = backend.backend_kind().clone();
@@ -591,7 +685,7 @@ fn dispatch_diffusion_sample(
     // Model handle: derive model_id from the model_cache via lookup,
     // but for the wire protocol we construct it from the token string.
     let model_handle = reimagine_inference::RuntimeModelHandle::with_instance(
-        ModelId::new(format!("model:{model_token}")),
+        model_id,
         ModelRole::DiffusionModel,
         backend_kind.clone(),
         backend_instance.clone(),
@@ -607,26 +701,50 @@ fn dispatch_diffusion_sample(
         backend_instance.clone(),
         pos_cond_token.as_str(),
         reimagine_core::model::TensorDType::F32,
-        reimagine_core::model::TensorShape::new(vec![1, 77, 2048]),
+        reimagine_core::model::TensorShape::new(vec![batch_size as usize, 77, 2048]),
         backend.device_label(),
     );
-    let pos_exec_cond = ExecutionConditioning::new(
+    let mut pos_exec_cond = ExecutionConditioning::new(
         pos_text,
-        reimagine_inference::ConditioningMetadata::new(1024, 1024),
+        reimagine_inference::ConditioningMetadata::new(width, height),
     );
+    if let Some(token) = pos_pooled_token {
+        pos_exec_cond = pos_exec_cond.with_pooled_embedding(
+            reimagine_inference::BackendTensorHandle::with_instance(
+                backend_kind.clone(),
+                backend_instance.clone(),
+                token,
+                reimagine_core::model::TensorDType::F32,
+                reimagine_core::model::TensorShape::new(vec![batch_size as usize, 1280]),
+                backend.device_label(),
+            ),
+        );
+    }
 
     let neg_text = reimagine_inference::BackendTensorHandle::with_instance(
         backend_kind.clone(),
         backend_instance.clone(),
         neg_cond_token.as_str(),
         reimagine_core::model::TensorDType::F32,
-        reimagine_core::model::TensorShape::new(vec![1, 77, 2048]),
+        reimagine_core::model::TensorShape::new(vec![batch_size as usize, 77, 2048]),
         backend.device_label(),
     );
-    let neg_exec_cond = ExecutionConditioning::new(
+    let mut neg_exec_cond = ExecutionConditioning::new(
         neg_text,
-        reimagine_inference::ConditioningMetadata::new(1024, 1024),
+        reimagine_inference::ConditioningMetadata::new(width, height),
     );
+    if let Some(token) = neg_pooled_token {
+        neg_exec_cond = neg_exec_cond.with_pooled_embedding(
+            reimagine_inference::BackendTensorHandle::with_instance(
+                backend_kind.clone(),
+                backend_instance.clone(),
+                token,
+                reimagine_core::model::TensorDType::F32,
+                reimagine_core::model::TensorShape::new(vec![batch_size as usize, 1280]),
+                backend.device_label(),
+            ),
+        );
+    }
 
     // Latent handle
     let latent_payload = reimagine_inference::BackendTensorHandle::with_instance(
@@ -634,15 +752,20 @@ fn dispatch_diffusion_sample(
         backend_instance.clone(),
         latent_token.as_str(),
         reimagine_core::model::TensorDType::F32,
-        reimagine_core::model::TensorShape::new(vec![1, 4, 128, 128]),
+        reimagine_core::model::TensorShape::new(vec![
+            batch_size as usize,
+            channels as usize,
+            (height / 8) as usize,
+            (width / 8) as usize,
+        ]),
         backend.device_label(),
     );
     let latent = reimagine_inference::RuntimeLatent::with_sdxl_base(
         latent_payload,
-        1024,
-        1024,
-        1,
-        4,
+        width,
+        height,
+        batch_size,
+        channels,
     );
 
     let sampler_name = reimagine_inference::SamplerName::from_standard_name(&sampler);
@@ -659,10 +782,10 @@ fn dispatch_diffusion_sample(
         sampler_name,
         scheduler_name,
         denoise,
-        RunId::new(format!("wrk:{token}")),
-        WorkflowId::new("burn-worker"),
-        WorkflowVersion::new(1),
-        NodeId::new("op"),
+        run_id,
+        workflow_id,
+        workflow_version,
+        node_id,
     );
 
     let response = match rt.block_on(backend.diffusion_sample(request)) {
@@ -681,6 +804,10 @@ fn dispatch_diffusion_sample(
 
     MappingResult::Success(serde_json::json!({
         "latent_token": result_latent_token,
+        "width": sampled_latent.width(),
+        "height": sampled_latent.height(),
+        "batch_size": sampled_latent.batch(),
+        "channels": sampled_latent.channels(),
     }))
 }
 
@@ -690,10 +817,7 @@ fn dispatch_diffusion_sample(
 // _build_conditioning_from_token is kept as a helper for future operation
 // implementations that need to reconstruct conditioning handles from wire tokens.
 #[allow(dead_code)]
-fn build_conditioning_from_token(
-    backend: &BurnBackend,
-    token: &str,
-) -> ExecutionConditioning {
+fn build_conditioning_from_token(backend: &BurnBackend, token: &str) -> ExecutionConditioning {
     // V1 stub: the conditioning data is already in the burn store.
     // The handle's payload_key lets the backend retrieve it.
     ExecutionConditioning::new(
@@ -739,14 +863,35 @@ fn dispatch_latent_decode(
             });
         }
     };
+    let model_id = match extract_string(payload, "model_id") {
+        Ok(value) => ModelId::new(value),
+        Err(message) => return invalid_request(message),
+    };
+    let width = match extract_u32(payload, "width") {
+        Ok(value) => value,
+        Err(message) => return invalid_request(message),
+    };
+    let height = match extract_u32(payload, "height") {
+        Ok(value) => value,
+        Err(message) => return invalid_request(message),
+    };
+    let batch_size = match extract_u32(payload, "batch_size") {
+        Ok(value) => value,
+        Err(message) => return invalid_request(message),
+    };
+    let channels = match extract_u32(payload, "channels") {
+        Ok(value) => value,
+        Err(message) => return invalid_request(message),
+    };
 
     let token = tokens.next();
+    let (run_id, workflow_id, workflow_version, node_id) = request_context(payload, token);
     let backend_kind = backend.backend_kind().clone();
     let backend_instance = backend.backend_instance();
 
     // VAE handle
     let vae_handle = reimagine_inference::RuntimeVaeHandle::with_instance(
-        ModelId::new(format!("vae:{vae_token}")),
+        model_id,
         backend_kind.clone(),
         backend_instance.clone(),
         vae_token,
@@ -758,24 +903,30 @@ fn dispatch_latent_decode(
         backend_instance,
         latent_token.as_str(),
         reimagine_core::model::TensorDType::F32,
-        reimagine_core::model::TensorShape::new(vec![1, 4, 128, 128]),
+        reimagine_core::model::TensorShape::new(vec![
+            batch_size as usize,
+            channels as usize,
+            (height / 8) as usize,
+            (width / 8) as usize,
+        ]),
         backend.device_label(),
     );
     let latent = reimagine_inference::RuntimeLatent::with_sdxl_base(
         latent_payload,
-        1024,
-        1024,
-        1,
-        4,
-    );
+        width,
+        height,
+        batch_size,
+        channels,
+    )
+    .with_content(reimagine_inference::LatentContent::Sampled);
 
     let request = LatentDecodeRequest::new(
         vae_handle,
         latent,
-        RunId::new(format!("wrk:{token}")),
-        WorkflowId::new("burn-worker"),
-        WorkflowVersion::new(1),
-        NodeId::new("op"),
+        run_id,
+        workflow_id,
+        workflow_version,
+        node_id,
     );
 
     let response = match rt.block_on(backend.latent_decode(request)) {
@@ -824,8 +975,25 @@ fn dispatch_image_save(
         Some(p) => p.to_owned(),
         None => "reimagine".to_owned(),
     };
+    let width = match extract_u32(payload, "width") {
+        Ok(value) => value,
+        Err(message) => return invalid_request(message),
+    };
+    let height = match extract_u32(payload, "height") {
+        Ok(value) => value,
+        Err(message) => return invalid_request(message),
+    };
+    let batch_size = match extract_u32(payload, "batch_size") {
+        Ok(value) => value,
+        Err(message) => return invalid_request(message),
+    };
+    let color_space = match extract_string(payload, "color_space") {
+        Ok(value) => value,
+        Err(message) => return invalid_request(message),
+    };
 
     let token = tokens.next();
+    let (run_id, workflow_id, workflow_version, node_id) = request_context(payload, token);
     let backend_kind = backend.backend_kind().clone();
     let backend_instance = backend.backend_instance();
 
@@ -834,19 +1002,24 @@ fn dispatch_image_save(
         backend_instance,
         image_token.as_str(),
         reimagine_core::model::TensorDType::F32,
-        reimagine_core::model::TensorShape::new(vec![1, 3, 1024, 1024]),
+        reimagine_core::model::TensorShape::new(vec![
+            batch_size as usize,
+            3,
+            height as usize,
+            width as usize,
+        ]),
         backend.device_label(),
     );
-    let image = reimagine_inference::RuntimeImage::new(image_payload, 1024, 1024, 1, "rgb");
+    let image = reimagine_inference::RuntimeImage::new(
+        image_payload,
+        width,
+        height,
+        batch_size,
+        color_space,
+    );
 
-    let request = ImageSaveRequest::new(
-        image,
-        RunId::new(format!("wrk:{token}")),
-        WorkflowId::new("burn-worker"),
-        WorkflowVersion::new(1),
-        NodeId::new("op"),
-    )
-    .with_filename_prefix(filename_prefix);
+    let request = ImageSaveRequest::new(image, run_id, workflow_id, workflow_version, node_id)
+        .with_filename_prefix(filename_prefix);
 
     let response = match rt.block_on(backend.image_save(request)) {
         Ok(r) => r,
@@ -888,8 +1061,25 @@ fn dispatch_image_preview(
             });
         }
     };
+    let width = match extract_u32(payload, "width") {
+        Ok(value) => value,
+        Err(message) => return invalid_request(message),
+    };
+    let height = match extract_u32(payload, "height") {
+        Ok(value) => value,
+        Err(message) => return invalid_request(message),
+    };
+    let batch_size = match extract_u32(payload, "batch_size") {
+        Ok(value) => value,
+        Err(message) => return invalid_request(message),
+    };
+    let color_space = match extract_string(payload, "color_space") {
+        Ok(value) => value,
+        Err(message) => return invalid_request(message),
+    };
 
     let token = tokens.next();
+    let (run_id, workflow_id, workflow_version, node_id) = request_context(payload, token);
     let backend_kind = backend.backend_kind().clone();
     let backend_instance = backend.backend_instance();
 
@@ -898,18 +1088,23 @@ fn dispatch_image_preview(
         backend_instance,
         image_token.as_str(),
         reimagine_core::model::TensorDType::F32,
-        reimagine_core::model::TensorShape::new(vec![1, 3, 1024, 1024]),
+        reimagine_core::model::TensorShape::new(vec![
+            batch_size as usize,
+            3,
+            height as usize,
+            width as usize,
+        ]),
         backend.device_label(),
     );
-    let image = reimagine_inference::RuntimeImage::new(image_payload, 1024, 1024, 1, "rgb");
-
-    let request = ImagePreviewRequest::new(
-        image,
-        RunId::new(format!("wrk:{token}")),
-        WorkflowId::new("burn-worker"),
-        WorkflowVersion::new(1),
-        NodeId::new("op"),
+    let image = reimagine_inference::RuntimeImage::new(
+        image_payload,
+        width,
+        height,
+        batch_size,
+        color_space,
     );
+
+    let request = ImagePreviewRequest::new(image, run_id, workflow_id, workflow_version, node_id);
 
     let response = match rt.block_on(backend.image_preview(request)) {
         Ok(r) => r,
@@ -928,4 +1123,27 @@ fn dispatch_image_preview(
     MappingResult::Success(serde_json::json!({
         "artifact_path": artifact_path,
     }))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn extract_u32_rejects_overflow() {
+        let payload = serde_json::json!({ "value": u64::from(u32::MAX) + 1 });
+        assert!(extract_u32(&payload, "value").is_err());
+    }
+
+    #[test]
+    fn model_source_outside_configured_root_is_rejected() {
+        let root = tempfile::tempdir().unwrap();
+        let outside = tempfile::NamedTempFile::new().unwrap();
+        let backend = BurnBackend::new(reimagine_inference_burn::BurnBackendConfig::new(
+            root.path(),
+            root.path(),
+        ))
+        .unwrap();
+        assert!(validate_model_path(&backend, outside.path()).is_err());
+    }
 }

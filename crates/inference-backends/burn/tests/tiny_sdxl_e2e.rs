@@ -1,10 +1,10 @@
-//! End-to-end fixture for a tiny Burn-native SDXL component package.
-//!
-//! This test intentionally exercises the public capability chain instead of
-//! crate-private helpers:
-//!
-//! load_bundle -> text.encode -> latent.create_empty -> diffusion.sample ->
-//! latent.decode -> image.preview/image.save
+// End-to-end fixture for a tiny Burn-native SDXL component package.
+//
+// This test intentionally exercises the public capability chain instead of
+// crate-private helpers:
+//
+// load_bundle -> text.encode -> latent.create_empty -> diffusion.sample ->
+// latent.decode -> image.preview/image.save
 
 use std::borrow::Cow;
 use std::collections::HashMap;
@@ -183,7 +183,7 @@ async fn tiny_sdxl_component_package_runs_public_burn_capability_chain() {
     assert_png_artifact(output.path(), saved.as_str());
 }
 
-fn load_request(root: &Path) -> LoadBundleRequest {
+pub(crate) fn load_request(root: &Path) -> LoadBundleRequest {
     LoadBundleRequest::new(
         resolved_model(root),
         run_id(),
@@ -593,7 +593,7 @@ fn identity(width: usize) -> Vec<f32> {
     values
 }
 
-fn text_request(
+pub(crate) fn text_request(
     clip: reimagine_inference::RuntimeClipHandle,
     prompt: &str,
     node: &str,
@@ -608,19 +608,19 @@ fn text_request(
     )
 }
 
-fn run_id() -> RunId {
+pub(crate) fn run_id() -> RunId {
     RunId::new(RUN_ID)
 }
 
-fn workflow_id() -> WorkflowId {
+pub(crate) fn workflow_id() -> WorkflowId {
     WorkflowId::new(WORKFLOW_ID)
 }
 
-fn workflow_version() -> WorkflowVersion {
+pub(crate) fn workflow_version() -> WorkflowVersion {
     WorkflowVersion::new(1)
 }
 
-fn assert_png_artifact(output_dir: &Path, artifact: &str) {
+pub(crate) fn assert_png_artifact(output_dir: &Path, artifact: &str) {
     let relative = artifact
         .strip_prefix("output/")
         .expect("artifact is output-relative");

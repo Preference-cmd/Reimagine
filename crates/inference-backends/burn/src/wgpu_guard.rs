@@ -8,14 +8,14 @@
 //! Two APIs:
 //!
 //! 1. [`WgpuErrorGuard`] — RAII scope guard:
-//! ```
+//! ```ignore
 //! let mut guard = WgpuErrorGuard::new();
 //! // ... GPU work ...
 //! guard.check()?;
 //! ```
 //!
 //! 2. [`check_global`] — one-shot check (no RAII):
-//! ```
+//! ```ignore
 //! // ... GPU work ...
 //! check_global()?;
 //! ```

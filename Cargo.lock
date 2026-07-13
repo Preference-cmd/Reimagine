@@ -6508,12 +6508,16 @@ dependencies = [
 name = "reimagine-inference-burn-worker"
 version = "0.1.0"
 dependencies = [
+ "image",
+ "reimagine-backend-worker-host",
  "reimagine-backend-worker-protocol",
  "reimagine-core",
  "reimagine-inference",
  "reimagine-inference-burn",
+ "safetensors 0.7.0",
  "serde",
  "serde_json",
+ "tempfile",
  "tokio",
 ]
 

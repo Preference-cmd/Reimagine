@@ -28,3 +28,9 @@ tokio = { workspace = true, features = ["rt", "macros"] }
 default = ["wgpu"]
 wgpu = ["reimagine-inference-burn/wgpu"]
 flex = ["reimagine-inference-burn/flex"]
+
+[dev-dependencies]
+image = { workspace = true }
+reimagine-backend-worker-host = { path = "../../backend-worker-host" }
+safetensors = { workspace = true }
+tempfile = { workspace = true }

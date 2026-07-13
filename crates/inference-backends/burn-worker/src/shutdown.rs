@@ -14,14 +14,8 @@ use reimagine_inference_burn::BurnBackend;
 /// associated with this worker incarnation. After this call the
 /// process is ready to terminate.
 pub fn cleanup(backend: &BurnBackend, _incarnation: &WorkerIncarnationId) {
-    // Release all payloads from the shared store. The store's
-    // payload_count is preserved for diagnostic purposes.
-    backend.store().cleanup_run(&reimagine_core::model::RunId::new("__shutdown__"));
-
-    // Log teardown progress. The worker stdout is protocol-only,
-    // so diagnostics go to stderr.
-    let payloads = backend.store().payload_count();
-    let bundles = backend.model_cache().bundle_count();
+    let payloads = backend.store().cleanup_all();
+    let bundles = backend.model_cache().clear();
     eprintln!(
         "worker shutdown: {} payloads released, {} cached bundles",
         payloads, bundles

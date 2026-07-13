@@ -98,6 +98,10 @@ async fn profile_reports_builtin_burn_default_instance_with_capabilities() {
             InferenceCapability::LoadBundle,
             InferenceCapability::CreateEmptyLatent,
             InferenceCapability::TextEncode,
+            InferenceCapability::DiffusionSample,
+            InferenceCapability::LatentDecode,
+            InferenceCapability::ImageSave,
+            InferenceCapability::ImagePreview,
         ]
     );
     assert!(cpu.operation_options.is_empty());
@@ -117,8 +121,9 @@ fn backend_kind_instance_and_capabilities_report_load_bundle_and_create_empty_la
     assert_eq!(capabilities.backend_kind().as_str(), "burn");
     // burn/08b-d-f merged text.encode, burn/10 adds
     // DiffusionSample, burn/11 adds LatentDecode,
-    // burn/12 adds ImageImport/ImageSave/ImagePreview.
-    assert_eq!(capabilities.capability_supports().len(), 8);
+    // burn/12 adds ImageSave/ImagePreview. ImageImport is intentionally
+    // omitted until the backend implements it.
+    assert_eq!(capabilities.capability_supports().len(), 7);
     assert!(capabilities.supports_capability(InferenceCapability::LoadBundle));
     assert!(capabilities.supports_capability(InferenceCapability::CreateEmptyLatent));
 }

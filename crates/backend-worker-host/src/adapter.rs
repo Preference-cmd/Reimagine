@@ -50,9 +50,7 @@ impl ProcessInferenceBackend {
 
     /// Check whether a capability is advertised by the worker.
     fn supports(&self, cap: &InferenceCapability) -> bool {
-        self.capabilities
-            .iter()
-            .any(|c| c == cap.as_str())
+        self.capabilities.iter().any(|c| c == cap.as_str())
     }
 
     fn not_implemented(&self, capability: InferenceCapability) -> InferenceError {
@@ -151,6 +149,21 @@ impl InferenceBackend for ProcessInferenceBackend {
         }
 
         let resolved = request.resolved_model();
+        let components = resolved.source_set().map(|source_set| {
+            source_set
+                .sources()
+                .iter()
+                .map(|source| {
+                    serde_json::json!({
+                        "kind": source.kind(),
+                        "role": source.role(),
+                        "path": source.path().to_string_lossy(),
+                        "format": source.format(),
+                        "metadata": source.metadata(),
+                    })
+                })
+                .collect::<Vec<_>>()
+        });
         let output = self
             .send_request(
                 "model.load_bundle",
@@ -160,6 +173,11 @@ impl InferenceBackend for ProcessInferenceBackend {
                     "variant": resolved.variant().as_str(),
                     "role": format!("{:?}", resolved.role()),
                     "source_path": resolved.source_path().to_string_lossy().to_string(),
+                    "components": components,
+                    "run_id": request.run_id().as_str(),
+                    "workflow_id": request.workflow_id().as_str(),
+                    "workflow_version": request.workflow_version().get(),
+                    "node_id": request.node_id().as_str(),
                 }),
             )
             .await?;
@@ -211,7 +229,11 @@ impl InferenceBackend for ProcessInferenceBackend {
             vae_key,
         );
 
-        Ok(LoadBundleResponse::new(model_handle, clip_handle, vae_handle))
+        Ok(LoadBundleResponse::new(
+            model_handle,
+            clip_handle,
+            vae_handle,
+        ))
     }
 
     async fn text_encode(
@@ -222,20 +244,26 @@ impl InferenceBackend for ProcessInferenceBackend {
             return Err(self.not_implemented(InferenceCapability::TextEncode));
         }
 
-        let prompt = request
-            .prompt_string()
-            .ok_or_else(|| InferenceError::BackendExecutionFailed {
-                message: "text_encode requires a string prompt".to_owned(),
-            })?;
+        let prompt =
+            request
+                .prompt_string()
+                .ok_or_else(|| InferenceError::BackendExecutionFailed {
+                    message: "text_encode requires a string prompt".to_owned(),
+                })?;
 
-        let clip_token = request.clip().payload_key().as_str().to_owned();
+        let clip_token = self.resolve_token(request.clip().payload_key())?;
 
         let output = self
             .send_request(
                 "text.encode",
                 serde_json::json!({
                     "clip_token": clip_token,
+                    "model_id": request.clip().model_id().as_str(),
                     "prompt_text": prompt,
+                    "run_id": request.run_id().as_str(),
+                    "workflow_id": request.workflow_id().as_str(),
+                    "workflow_version": request.workflow_version().get(),
+                    "node_id": request.node_id().as_str(),
                 }),
             )
             .await?;
@@ -258,7 +286,10 @@ impl InferenceBackend for ProcessInferenceBackend {
             reimagine_inference::ConditioningMetadata::new(1024, 1024),
         );
 
-        if let Some(pooled_token) = output.get("pooled_token").and_then(serde_json::Value::as_str) {
+        if let Some(pooled_token) = output
+            .get("pooled_token")
+            .and_then(serde_json::Value::as_str)
+        {
             let pooled_embedding = self.make_handle(
                 pooled_token,
                 reimagine_core::model::TensorDType::F32,
@@ -290,6 +321,10 @@ impl InferenceBackend for ProcessInferenceBackend {
                     "width": width,
                     "height": height,
                     "batch_size": batch_size,
+                    "run_id": request.run_id().as_str(),
+                    "workflow_id": request.workflow_id().as_str(),
+                    "workflow_version": request.workflow_version().get(),
+                    "node_id": request.node_id().as_str(),
                 }),
             )
             .await?;
@@ -359,25 +394,52 @@ impl InferenceBackend for ProcessInferenceBackend {
             return Err(self.not_implemented(InferenceCapability::DiffusionSample));
         }
 
-        let model_token = request.model().payload_key().as_str().to_owned();
-        let pos_cond_token = request.positive().text_embedding().payload_key().as_str().to_owned();
-        let neg_cond_token = request.negative().text_embedding().payload_key().as_str().to_owned();
-        let latent_token = request.latent().payload().payload_key().as_str().to_owned();
+        let model_token = self.resolve_token(request.model().payload_key())?;
+        let pos_cond_token =
+            self.resolve_token(request.positive().text_embedding().payload_key())?;
+        let neg_cond_token =
+            self.resolve_token(request.negative().text_embedding().payload_key())?;
+        let pos_pooled_token = request
+            .positive()
+            .pooled_embedding()
+            .map(|handle| self.resolve_token(handle.payload_key()))
+            .transpose()?;
+        let neg_pooled_token = request
+            .negative()
+            .pooled_embedding()
+            .map(|handle| self.resolve_token(handle.payload_key()))
+            .transpose()?;
+        let latent_token = self.resolve_token(request.latent().payload().payload_key())?;
+        let input_width = request.latent().width();
+        let input_height = request.latent().height();
+        let input_batch = request.latent().batch();
+        let input_channels = request.latent().channels();
 
         let output = self
             .send_request(
                 "diffusion.sample",
                 serde_json::json!({
                     "model_token": model_token,
+                    "model_id": request.model().model_id().as_str(),
                     "pos_cond_token": pos_cond_token,
                     "neg_cond_token": neg_cond_token,
+                    "pos_pooled_token": pos_pooled_token,
+                    "neg_pooled_token": neg_pooled_token,
                     "latent_token": latent_token,
+                    "width": input_width,
+                    "height": input_height,
+                    "batch_size": input_batch,
+                    "channels": input_channels,
                     "seed": request.seed(),
                     "steps": request.steps(),
                     "cfg": request.cfg(),
                     "denoise": request.denoise(),
                     "sampler": request.sampler().as_str(),
                     "scheduler": request.scheduler().as_str(),
+                    "run_id": request.run_id().as_str(),
+                    "workflow_id": request.workflow_id().as_str(),
+                    "workflow_version": request.workflow_version().get(),
+                    "node_id": request.node_id().as_str(),
                 }),
             )
             .await?;
@@ -392,15 +454,20 @@ impl InferenceBackend for ProcessInferenceBackend {
         let latent_payload = self.make_handle(
             result_latent_token,
             reimagine_core::model::TensorDType::F32,
-            TensorShape::new(vec![1, 4, 128, 128]),
+            TensorShape::new(vec![
+                input_batch as usize,
+                input_channels as usize,
+                (input_height / 8) as usize,
+                (input_width / 8) as usize,
+            ]),
         );
 
         let latent = RuntimeLatent::new(
             latent_payload,
-            1024,
-            1024,
-            request.latent().batch(),
-            4,
+            input_width,
+            input_height,
+            input_batch,
+            input_channels,
             request.latent().latent_space().clone(),
             LatentContent::Sampled,
         );
@@ -416,15 +483,24 @@ impl InferenceBackend for ProcessInferenceBackend {
             return Err(self.not_implemented(InferenceCapability::LatentDecode));
         }
 
-        let vae_token = request.vae().payload_key().as_str().to_owned();
-        let latent_token = request.latent().payload().payload_key().as_str().to_owned();
+        let vae_token = self.resolve_token(request.vae().payload_key())?;
+        let latent_token = self.resolve_token(request.latent().payload().payload_key())?;
 
         let output = self
             .send_request(
                 InferenceCapability::LatentDecode.as_str(),
                 serde_json::json!({
                     "vae_token": vae_token,
+                    "model_id": request.vae().model_id().as_str(),
                     "latent_token": latent_token,
+                    "width": request.latent().width(),
+                    "height": request.latent().height(),
+                    "batch_size": request.latent().batch(),
+                    "channels": request.latent().channels(),
+                    "run_id": request.run_id().as_str(),
+                    "workflow_id": request.workflow_id().as_str(),
+                    "workflow_version": request.workflow_version().get(),
+                    "node_id": request.node_id().as_str(),
                 }),
             )
             .await?;
@@ -451,13 +527,7 @@ impl InferenceBackend for ProcessInferenceBackend {
             TensorShape::new(vec![1, 3, height as usize, width as usize]),
         );
 
-        let image = reimagine_inference::RuntimeImage::new(
-            image_payload,
-            width,
-            height,
-            1,
-            "rgb",
-        );
+        let image = reimagine_inference::RuntimeImage::new(image_payload, width, height, 1, "rgb");
 
         Ok(LatentDecodeResponse::new(image))
     }
@@ -477,7 +547,7 @@ impl InferenceBackend for ProcessInferenceBackend {
             return Err(self.not_implemented(InferenceCapability::ImageSave));
         }
 
-        let image_token = request.image().payload().payload_key().as_str().to_owned();
+        let image_token = self.resolve_token(request.image().payload().payload_key())?;
 
         let output = self
             .send_request(
@@ -485,6 +555,14 @@ impl InferenceBackend for ProcessInferenceBackend {
                 serde_json::json!({
                     "image_token": image_token,
                     "filename_prefix": request.filename_prefix().as_str(),
+                    "width": request.image().width(),
+                    "height": request.image().height(),
+                    "batch_size": request.image().batch(),
+                    "color_space": request.image().color_space(),
+                    "run_id": request.run_id().as_str(),
+                    "workflow_id": request.workflow_id().as_str(),
+                    "workflow_version": request.workflow_version().get(),
+                    "node_id": request.node_id().as_str(),
                 }),
             )
             .await?;
@@ -507,13 +585,21 @@ impl InferenceBackend for ProcessInferenceBackend {
             return Err(self.not_implemented(InferenceCapability::ImagePreview));
         }
 
-        let image_token = request.image().payload().payload_key().as_str().to_owned();
+        let image_token = self.resolve_token(request.image().payload().payload_key())?;
 
         let output = self
             .send_request(
                 InferenceCapability::ImagePreview.as_str(),
                 serde_json::json!({
                     "image_token": image_token,
+                    "width": request.image().width(),
+                    "height": request.image().height(),
+                    "batch_size": request.image().batch(),
+                    "color_space": request.image().color_space(),
+                    "run_id": request.run_id().as_str(),
+                    "workflow_id": request.workflow_id().as_str(),
+                    "workflow_version": request.workflow_version().get(),
+                    "node_id": request.node_id().as_str(),
                 }),
             )
             .await?;

@@ -8,11 +8,26 @@
 
 use std::io::{BufReader, Read, Write};
 use std::process::{Child, ChildStdin, ChildStdout, Command, Stdio};
+use std::sync::Arc;
 
-use reimagine_backend_worker_protocol::{
-    CorrelationId, FrameCodec, HostHello, ProtocolRange, ProtocolVersion, RequestFrame, RequestId,
-    ShutdownFrame, TerminalOutcome, WireMessage, WorkerHello,
+use reimagine_backend_worker_host::{
+    ExpectedWorkerIdentity, ProcessInferenceBackend, WorkerLaunchSpec, WorkerLimits,
+    WorkerSupervisor,
 };
+use reimagine_backend_worker_protocol::{
+    BackendInstanceId, CleanupFrame, ControlId, CorrelationId, FrameCodec, HostHello,
+    ProtocolRange, ProtocolVersion, RequestFrame, RequestId, ShutdownFrame, TerminalFrame,
+    TerminalOutcome, WireMessage, WorkerHello, WorkerInstallationId,
+};
+use reimagine_core::model::NodeId;
+use reimagine_inference::{
+    CreateEmptyLatentRequest, DiffusionSampleRequest, ImagePreviewRequest, ImageSaveRequest,
+    InferenceBackend, LatentDecodeRequest, SamplerName, SchedulerName,
+};
+
+mod tiny_fixture {
+    include!("../../burn/tests/tiny_sdxl_e2e.rs");
+}
 
 const MAXIMUM_FRAME_BYTES: u32 = 64 * 1024 * 1024;
 
@@ -33,6 +48,8 @@ impl BurnWorkerProcess {
             .env_clear()
             .env("REIMAGINE_MODELS_DIR", "/tmp")
             .env("REIMAGINE_OUTPUT_DIR", "/tmp")
+            .env("REIMAGINE_ALLOWED_MODEL_ROOTS", "/tmp")
+            .env("REIMAGINE_ALLOWED_OUTPUT_ROOTS", "/tmp")
             .spawn()
             .expect("failed to spawn burn worker process");
 
@@ -104,9 +121,7 @@ impl BurnWorkerProcess {
         self.stdin
             .write_all(&raw)
             .expect("failed to write frame payload");
-        self.stdin
-            .flush()
-            .expect("failed to flush request");
+        self.stdin.flush().expect("failed to flush request");
 
         // Read the response frame
         let mut prefix = [0u8; 4];
@@ -121,6 +136,29 @@ impl BurnWorkerProcess {
         codec
             .decode_payload(&payload)
             .expect("failed to decode response")
+    }
+
+    fn send(&mut self, message: &WireMessage) {
+        let codec = FrameCodec::new(MAXIMUM_FRAME_BYTES);
+        codec.write(&mut self.stdin, message).unwrap();
+        self.stdin.flush().unwrap();
+    }
+
+    fn read(&mut self) -> WireMessage {
+        FrameCodec::new(MAXIMUM_FRAME_BYTES)
+            .read(&mut self.stdout)
+            .unwrap()
+    }
+
+    fn exits_within(&mut self, deadline: std::time::Duration) -> bool {
+        let started = std::time::Instant::now();
+        while started.elapsed() < deadline {
+            if self.child.try_wait().unwrap().is_some() {
+                return true;
+            }
+            std::thread::sleep(std::time::Duration::from_millis(10));
+        }
+        false
     }
 }
 
@@ -142,6 +180,159 @@ impl Drop for BurnWorkerProcess {
         let _ = self.child.kill();
         let _ = self.child.wait();
     }
+}
+
+fn process_launch_spec(
+    models_dir: &std::path::Path,
+    output_dir: &std::path::Path,
+) -> WorkerLaunchSpec {
+    #[cfg(feature = "wgpu")]
+    let backend_instance_id = "burn:wgpu:default";
+    #[cfg(all(not(feature = "wgpu"), feature = "flex"))]
+    let backend_instance_id = "burn:flex:cpu";
+
+    WorkerLaunchSpec {
+        executable: env!("CARGO_BIN_EXE_reimagine-inference-burn-worker").into(),
+        expected: ExpectedWorkerIdentity {
+            backend_instance_id: BackendInstanceId::from(backend_instance_id),
+            installation_id: WorkerInstallationId::from("dev"),
+            backend_kind: "burn".to_owned(),
+            target: format!("{}-{}", std::env::consts::ARCH, std::env::consts::OS),
+            manifest_digest: "dev".to_owned(),
+        },
+        supported_protocols: ProtocolRange::new(1, 1),
+        limits: WorkerLimits {
+            request_timeout: std::time::Duration::from_secs(120),
+            ..WorkerLimits::default()
+        },
+        environment: vec![
+            (
+                "REIMAGINE_MODELS_DIR".to_owned(),
+                models_dir.display().to_string(),
+            ),
+            (
+                "REIMAGINE_OUTPUT_DIR".to_owned(),
+                output_dir.display().to_string(),
+            ),
+            (
+                "REIMAGINE_ALLOWED_MODEL_ROOTS".to_owned(),
+                models_dir.display().to_string(),
+            ),
+            (
+                "REIMAGINE_ALLOWED_OUTPUT_ROOTS".to_owned(),
+                output_dir.display().to_string(),
+            ),
+        ],
+    }
+}
+
+#[tokio::test]
+async fn process_adapter_runs_tiny_sdxl_chain() {
+    let root = tempfile::tempdir().expect("package root");
+    let output = tempfile::tempdir().expect("output dir");
+    let worker = Arc::new(
+        WorkerSupervisor::new(process_launch_spec(root.path(), output.path()))
+            .start()
+            .await
+            .expect("start real Burn worker"),
+    );
+    let backend = ProcessInferenceBackend::new(worker);
+
+    let loaded = backend
+        .load_bundle(tiny_fixture::load_request(root.path()))
+        .await
+        .expect("load tiny fixture through process");
+    let positive = backend
+        .text_encode(tiny_fixture::text_request(
+            loaded.clip().clone(),
+            "small bright city at sunrise",
+            "process-positive",
+        ))
+        .await
+        .expect("positive text.encode through process")
+        .into_conditioning();
+    let negative = backend
+        .text_encode(tiny_fixture::text_request(
+            loaded.clip().clone(),
+            "low quality blur",
+            "process-negative",
+        ))
+        .await
+        .expect("negative text.encode through process")
+        .into_conditioning();
+    let latent = backend
+        .create_empty_latent(CreateEmptyLatentRequest::new(
+            64,
+            64,
+            1,
+            tiny_fixture::run_id(),
+            tiny_fixture::workflow_id(),
+            tiny_fixture::workflow_version(),
+            NodeId::new("process-empty"),
+        ))
+        .await
+        .expect("empty latent through process")
+        .into_latent();
+    let sampled = backend
+        .diffusion_sample(DiffusionSampleRequest::new(
+            loaded.model().clone(),
+            positive,
+            negative,
+            latent,
+            1234,
+            1,
+            1.0,
+            SamplerName::Euler,
+            SchedulerName::Normal,
+            1.0,
+            tiny_fixture::run_id(),
+            tiny_fixture::workflow_id(),
+            tiny_fixture::workflow_version(),
+            NodeId::new("process-diffusion"),
+        ))
+        .await
+        .expect("diffusion through process")
+        .into_latent();
+    let image = backend
+        .latent_decode(LatentDecodeRequest::new(
+            loaded.vae().clone(),
+            sampled,
+            tiny_fixture::run_id(),
+            tiny_fixture::workflow_id(),
+            tiny_fixture::workflow_version(),
+            NodeId::new("process-decode"),
+        ))
+        .await
+        .expect("decode through process")
+        .into_image();
+    let preview = backend
+        .image_preview(ImagePreviewRequest::new(
+            image.clone(),
+            tiny_fixture::run_id(),
+            tiny_fixture::workflow_id(),
+            tiny_fixture::workflow_version(),
+            NodeId::new("process-preview"),
+        ))
+        .await
+        .expect("preview through process")
+        .into_artifact();
+    let saved = backend
+        .image_save(
+            ImageSaveRequest::new(
+                image,
+                tiny_fixture::run_id(),
+                tiny_fixture::workflow_id(),
+                tiny_fixture::workflow_version(),
+                NodeId::new("process-save"),
+            )
+            .with_filename_prefix("process-tiny-sdxl"),
+        )
+        .await
+        .expect("save through process")
+        .into_artifact();
+
+    tiny_fixture::assert_png_artifact(output.path(), preview.as_str());
+    tiny_fixture::assert_png_artifact(output.path(), saved.as_str());
 }
 
 #[test]
@@ -188,7 +379,10 @@ fn worker_create_empty_latent_returns_expected_response() {
         WireMessage::Terminal(terminal) => match terminal.outcome {
             TerminalOutcome::Success { ref output } => {
                 assert!(
-                    output.get("worker_token").and_then(|v| v.as_str()).is_some(),
+                    output
+                        .get("worker_token")
+                        .and_then(|v| v.as_str())
+                        .is_some(),
                     "response must contain worker_token: {output}"
                 );
                 assert_eq!(
@@ -218,10 +412,7 @@ fn worker_create_empty_latent_returns_expected_response() {
             }
         },
         other => {
-            panic!(
-                "expected Terminal response, got: {:?}",
-                other.kind()
-            );
+            panic!("expected Terminal response, got: {:?}", other.kind());
         }
     }
 }
@@ -244,4 +435,74 @@ fn worker_unknown_operation_returns_error() {
         },
         other => panic!("expected Terminal response, got: {:?}", other.kind()),
     }
+}
+
+#[test]
+fn cleanup_reports_actual_run_removals_once() {
+    let mut worker = BurnWorkerProcess::spawn();
+    let response = worker.request(
+        "latent.create_empty",
+        serde_json::json!({
+            "width": 64,
+            "height": 64,
+            "batch_size": 1,
+            "run_id": "cleanup-run",
+        }),
+    );
+    assert!(matches!(response, WireMessage::Terminal(_)));
+
+    for expected in [1, 0] {
+        worker.send(&WireMessage::Cleanup(CleanupFrame {
+            protocol_version: ProtocolVersion(1),
+            incarnation_id: worker.hello.identity.incarnation_id.clone(),
+            control_id: ControlId::from("cleanup-control"),
+            run_id: Some("cleanup-run".to_owned()),
+            object_ids: Vec::new(),
+        }));
+        let WireMessage::CleanupAck(ack) = worker.read() else {
+            panic!("expected cleanup ack");
+        };
+        assert_eq!(ack.released_objects, expected);
+    }
+}
+
+#[test]
+fn wrong_protocol_version_terminates_session() {
+    let mut worker = BurnWorkerProcess::spawn();
+    worker.send(&WireMessage::Request(RequestFrame {
+        protocol_version: ProtocolVersion(99),
+        incarnation_id: worker.hello.identity.incarnation_id.clone(),
+        request_id: RequestId::from("wrong-version"),
+        correlation_id: CorrelationId::from("wrong-version"),
+        operation: "latent.create_empty".to_owned(),
+        payload: serde_json::json!({ "width": 64, "height": 64, "batch_size": 1 }),
+    }));
+    assert!(worker.exits_within(std::time::Duration::from_secs(1)));
+}
+
+#[test]
+fn stale_incarnation_terminates_session() {
+    let mut worker = BurnWorkerProcess::spawn();
+    worker.send(&WireMessage::Request(RequestFrame {
+        protocol_version: ProtocolVersion(1),
+        incarnation_id: reimagine_backend_worker_protocol::WorkerIncarnationId::from("stale"),
+        request_id: RequestId::from("stale-incarnation"),
+        correlation_id: CorrelationId::from("stale-incarnation"),
+        operation: "latent.create_empty".to_owned(),
+        payload: serde_json::json!({ "width": 64, "height": 64, "batch_size": 1 }),
+    }));
+    assert!(worker.exits_within(std::time::Duration::from_secs(1)));
+}
+
+#[test]
+fn wrong_direction_terminates_session() {
+    let mut worker = BurnWorkerProcess::spawn();
+    worker.send(&WireMessage::Terminal(TerminalFrame {
+        protocol_version: ProtocolVersion(1),
+        incarnation_id: worker.hello.identity.incarnation_id.clone(),
+        request_id: RequestId::from("wrong-direction"),
+        correlation_id: CorrelationId::from("wrong-direction"),
+        outcome: TerminalOutcome::Cancelled,
+    }));
+    assert!(worker.exits_within(std::time::Duration::from_secs(1)));
 }

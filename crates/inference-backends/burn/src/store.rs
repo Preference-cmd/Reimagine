@@ -723,6 +723,18 @@ impl BurnStore {
         removed
     }
 
+    /// Remove every payload and run pin owned by this backend process.
+    ///
+    /// Worker shutdown uses this process-scoped operation because no payload
+    /// authority may survive the worker incarnation.
+    pub fn cleanup_all(&self) -> usize {
+        let mut inner = self.inner.lock().expect("store poisoned");
+        let removed = inner.payloads.len();
+        inner.payloads.clear();
+        inner.run_index.clear();
+        removed
+    }
+
     /// Release a single payload by key, if present. Used by the
     /// backend-instance runtime hooks when a runtime value drops
     /// and the payload type is not statically known.
@@ -833,6 +845,14 @@ impl BurnModelCache {
 
     pub fn bundle_count(&self) -> usize {
         self.bundles.lock().expect("model cache poisoned").len()
+    }
+
+    /// Remove all model bundles cached by this backend process.
+    pub fn clear(&self) -> usize {
+        let mut bundles = self.bundles.lock().expect("model cache poisoned");
+        let removed = bundles.len();
+        bundles.clear();
+        removed
     }
 }
 
@@ -1033,6 +1053,24 @@ mod tests {
 
         // Unknown run id returns 0 and is a no-op.
         assert_eq!(store.cleanup_run(&RunId::new("run-missing")), 0);
+    }
+
+    #[test]
+    fn store_cleanup_all_removes_payloads_from_every_run() {
+        let store = BurnStore::new();
+        store.insert_latent(
+            RunId::new("run-a"),
+            BackendPayloadKey::new("a"),
+            build_payload(1, 64, 64),
+        );
+        store.insert_latent(
+            RunId::new("run-b"),
+            BackendPayloadKey::new("b"),
+            build_payload(1, 64, 64),
+        );
+        assert_eq!(store.cleanup_all(), 2);
+        assert_eq!(store.payload_count(), 0);
+        assert_eq!(store.cleanup_all(), 0);
     }
 
     #[test]
