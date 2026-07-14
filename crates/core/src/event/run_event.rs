@@ -37,6 +37,7 @@ pub enum RunEventKind {
     RunCancelled,
     NodeQueued,
     NodeStarted,
+    NodeProgress,
     NodeCompleted,
     NodeFailed,
     NodeSkipped,
@@ -44,6 +45,41 @@ pub enum RunEventKind {
     ArtifactCreated,
     PreviewUpdated,
     DiagnosticEmitted,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+pub struct NodeProgress {
+    sequence: u64,
+    completed: u64,
+    total: Option<u64>,
+    message: Option<String>,
+}
+
+impl NodeProgress {
+    pub fn new(sequence: u64, completed: u64, total: Option<u64>, message: Option<String>) -> Self {
+        Self {
+            sequence,
+            completed,
+            total,
+            message,
+        }
+    }
+
+    pub fn sequence(&self) -> u64 {
+        self.sequence
+    }
+
+    pub fn completed(&self) -> u64 {
+        self.completed
+    }
+
+    pub fn total(&self) -> Option<u64> {
+        self.total
+    }
+
+    pub fn message(&self) -> Option<&str> {
+        self.message.as_deref()
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
@@ -56,6 +92,7 @@ pub struct RunEvent {
     node_id: Option<NodeId>,
     artifact: Option<ArtifactId>,
     diagnostics: Vec<Diagnostic>,
+    progress: Option<NodeProgress>,
     created_at: Timestamp,
     correlation_id: Option<CorrelationId>,
 }
@@ -78,6 +115,7 @@ impl RunEvent {
             node_id: None,
             artifact: None,
             diagnostics: Vec::new(),
+            progress: None,
             created_at,
             correlation_id: None,
         }
@@ -95,6 +133,11 @@ impl RunEvent {
 
     pub fn with_diagnostic(mut self, diagnostic: Diagnostic) -> Self {
         self.diagnostics.push(diagnostic);
+        self
+    }
+
+    pub fn with_progress(mut self, progress: NodeProgress) -> Self {
+        self.progress = Some(progress);
         self
     }
 
@@ -135,11 +178,48 @@ impl RunEvent {
         &self.diagnostics
     }
 
+    pub fn progress(&self) -> Option<&NodeProgress> {
+        self.progress.as_ref()
+    }
+
     pub fn created_at(&self) -> &Timestamp {
         &self.created_at
     }
 
     pub fn correlation_id(&self) -> Option<&CorrelationId> {
         self.correlation_id.as_ref()
+    }
+}
+
+#[cfg(test)]
+mod progress_tests {
+    use super::*;
+
+    #[test]
+    fn node_progress_is_structured_and_serializable() {
+        let event = RunEvent::new(
+            "progress-1",
+            RunId::new("run"),
+            WorkflowId::new("workflow"),
+            WorkflowVersion::new(1),
+            RunEventKind::NodeProgress,
+            Timestamp::new("2026-07-14T00:00:00Z"),
+        )
+        .with_node_id(NodeId::new("node"))
+        .with_progress(NodeProgress::new(
+            7,
+            3,
+            Some(10),
+            Some("sampling".to_owned()),
+        ));
+
+        let json = serde_json::to_value(&event).expect("serialize progress event");
+        assert_eq!(json["progress"]["sequence"], 7);
+        assert_eq!(json["progress"]["completed"], 3);
+        assert_eq!(json["progress"]["total"], 10);
+        assert_eq!(
+            event.progress().expect("progress").message(),
+            Some("sampling")
+        );
     }
 }

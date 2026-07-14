@@ -1,3 +1,4 @@
+use std::future::Future;
 use std::sync::Arc;
 
 use reimagine_backend_worker_protocol::TerminalOutcome;
@@ -5,9 +6,10 @@ use reimagine_core::model::{ArtifactRef, TensorShape};
 use reimagine_inference::{
     Backend, BackendInstance, BackendTensorHandle, CreateEmptyLatentRequest,
     CreateEmptyLatentResponse, DiffusionSampleRequest, DiffusionSampleResponse,
-    ExecutionConditioning, ImagePreviewRequest, ImagePreviewResponse, ImageSaveRequest,
-    ImageSaveResponse, InferenceBackend, InferenceBackendCapabilities, InferenceCapability,
-    InferenceCapabilitySupport, InferenceError, LatentContent, LatentDecodeRequest,
+    ExecutionConditioning, ImageImportRequest, ImageImportResponse, ImagePreviewRequest,
+    ImagePreviewResponse, ImageSaveRequest, ImageSaveResponse, InferenceBackend,
+    InferenceBackendCapabilities, InferenceCapability, InferenceCapabilitySupport, InferenceError,
+    InferenceInvocation, InferenceProgress, LatentContent, LatentDecodeRequest,
     LatentDecodeResponse, LatentEncodeRequest, LatentEncodeResponse, LoadBundleRequest,
     LoadBundleResponse, RuntimeLatent, TextEncodeRequest, TextEncodeResponse,
 };
@@ -15,12 +17,17 @@ use reimagine_inference::{
 use crate::StartedWorker;
 use crate::authority::WorkerAuthorityTable;
 
+tokio::task_local! {
+    static PROCESS_INVOCATION: InferenceInvocation;
+}
+
 pub struct ProcessInferenceBackend {
     backend: Backend,
     instance: BackendInstance,
     worker: Arc<StartedWorker>,
     authority: WorkerAuthorityTable,
     capabilities: Vec<String>,
+    run_leases: Arc<crate::WorkerRunLeases>,
 }
 
 impl ProcessInferenceBackend {
@@ -45,7 +52,12 @@ impl ProcessInferenceBackend {
             authority: WorkerAuthorityTable::new(worker.hello.identity.incarnation_id.clone()),
             worker,
             capabilities,
+            run_leases: Arc::new(crate::WorkerRunLeases::new()),
         }
+    }
+
+    pub fn run_leases(&self) -> Arc<crate::WorkerRunLeases> {
+        Arc::clone(&self.run_leases)
     }
 
     /// Check whether a capability is advertised by the worker.
@@ -84,6 +96,12 @@ impl ProcessInferenceBackend {
         operation: &str,
         payload: serde_json::Value,
     ) -> Result<serde_json::Value, InferenceError> {
+        let invocation = PROCESS_INVOCATION.try_with(Clone::clone).ok();
+        if let Some(invocation) = invocation {
+            return self
+                .send_request_with_invocation(&invocation, operation, payload)
+                .await;
+        }
         let result = self
             .worker
             .request(operation, payload)
@@ -91,11 +109,54 @@ impl ProcessInferenceBackend {
             .map_err(|error| InferenceError::BackendExecutionFailed {
                 message: error.to_string(),
             })?;
+        Self::map_worker_result(result)
+    }
+
+    async fn send_request_with_invocation(
+        &self,
+        invocation: &InferenceInvocation,
+        operation: &str,
+        payload: serde_json::Value,
+    ) -> Result<serde_json::Value, InferenceError> {
+        let handle = self
+            .worker
+            .begin_request(operation, payload)
+            .await
+            .map_err(|error| InferenceError::BackendExecutionFailed {
+                message: error.to_string(),
+            })?;
+        let canceller = handle.canceller();
+        let finish = handle.finish_with_progress(|frame| {
+            invocation.progress().report(InferenceProgress {
+                sequence: frame.sequence,
+                completed: frame.completed,
+                total: frame.total,
+                message: frame.message.clone(),
+            });
+        });
+        tokio::pin!(finish);
+        let result = tokio::select! {
+            biased;
+            result = &mut finish => result,
+            () = invocation.cancellation().cancelled() => {
+                canceller.cancel().await.map_err(|error| {
+                    InferenceError::BackendExecutionFailed { message: error.to_string() }
+                })?;
+                finish.await
+            }
+        }
+        .map_err(|error| InferenceError::BackendExecutionFailed {
+            message: error.to_string(),
+        })?;
+        Self::map_worker_result(result)
+    }
+
+    fn map_worker_result(
+        result: crate::WorkerRequestResult,
+    ) -> Result<serde_json::Value, InferenceError> {
         match result.terminal.outcome {
             TerminalOutcome::Success { output } => Ok(output),
-            TerminalOutcome::Cancelled => Err(InferenceError::BackendExecutionFailed {
-                message: "worker request was cancelled".to_owned(),
-            }),
+            TerminalOutcome::Cancelled => Err(InferenceError::Cancelled),
             TerminalOutcome::BackendError { error } => {
                 Err(InferenceError::BackendExecutionFailed {
                     message: format!("{}: {}", error.code, error.message),
@@ -120,6 +181,24 @@ impl ProcessInferenceBackend {
             self.instance.as_str(),
         )
     }
+
+    async fn invoke<T, F>(
+        &self,
+        invocation: &InferenceInvocation,
+        operation: F,
+    ) -> Result<T, InferenceError>
+    where
+        F: Future<Output = Result<T, InferenceError>>,
+    {
+        self.run_leases
+            .acquire(invocation.run_id())
+            .map_err(|error| InferenceError::BackendExecutionFailed {
+                message: error.to_string(),
+            })?;
+        PROCESS_INVOCATION
+            .scope(invocation.clone(), operation)
+            .await
+    }
 }
 
 #[async_trait::async_trait]
@@ -138,6 +217,80 @@ impl InferenceBackend for ProcessInferenceBackend {
             caps = caps.with_support(InferenceCapabilitySupport::new(capability));
         }
         caps
+    }
+
+    async fn load_bundle_with_invocation(
+        &self,
+        invocation: &InferenceInvocation,
+        request: LoadBundleRequest,
+    ) -> Result<LoadBundleResponse, InferenceError> {
+        self.invoke(invocation, self.load_bundle(request)).await
+    }
+
+    async fn text_encode_with_invocation(
+        &self,
+        invocation: &InferenceInvocation,
+        request: TextEncodeRequest,
+    ) -> Result<TextEncodeResponse, InferenceError> {
+        self.invoke(invocation, self.text_encode(request)).await
+    }
+
+    async fn create_empty_latent_with_invocation(
+        &self,
+        invocation: &InferenceInvocation,
+        request: CreateEmptyLatentRequest,
+    ) -> Result<CreateEmptyLatentResponse, InferenceError> {
+        self.invoke(invocation, self.create_empty_latent(request))
+            .await
+    }
+
+    async fn diffusion_sample_with_invocation(
+        &self,
+        invocation: &InferenceInvocation,
+        request: DiffusionSampleRequest,
+    ) -> Result<DiffusionSampleResponse, InferenceError> {
+        self.invoke(invocation, self.diffusion_sample(request))
+            .await
+    }
+
+    async fn latent_decode_with_invocation(
+        &self,
+        invocation: &InferenceInvocation,
+        request: LatentDecodeRequest,
+    ) -> Result<LatentDecodeResponse, InferenceError> {
+        self.invoke(invocation, self.latent_decode(request)).await
+    }
+
+    async fn latent_encode_with_invocation(
+        &self,
+        invocation: &InferenceInvocation,
+        request: LatentEncodeRequest,
+    ) -> Result<LatentEncodeResponse, InferenceError> {
+        self.invoke(invocation, self.latent_encode(request)).await
+    }
+
+    async fn image_import_with_invocation(
+        &self,
+        invocation: &InferenceInvocation,
+        request: ImageImportRequest,
+    ) -> Result<ImageImportResponse, InferenceError> {
+        self.invoke(invocation, self.image_import(request)).await
+    }
+
+    async fn image_save_with_invocation(
+        &self,
+        invocation: &InferenceInvocation,
+        request: ImageSaveRequest,
+    ) -> Result<ImageSaveResponse, InferenceError> {
+        self.invoke(invocation, self.image_save(request)).await
+    }
+
+    async fn image_preview_with_invocation(
+        &self,
+        invocation: &InferenceInvocation,
+        request: ImagePreviewRequest,
+    ) -> Result<ImagePreviewResponse, InferenceError> {
+        self.invoke(invocation, self.image_preview(request)).await
     }
 
     async fn load_bundle(

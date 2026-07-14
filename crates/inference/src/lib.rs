@@ -39,6 +39,7 @@ mod execution_value;
 mod executor;
 mod executors;
 mod inference_error;
+mod invocation;
 pub mod latent_content;
 pub mod latent_space;
 pub mod node_context;
@@ -90,6 +91,9 @@ pub use diagnostic::{
     backend_not_registered, incompatible_handle_affinity,
 };
 pub use inference_error::InferenceError;
+pub use invocation::{
+    InferenceInvocation, InferenceProgress, InferenceProgressSink, NoopInferenceProgressSink,
+};
 pub use profile::{
     BackendInstanceProfile, BackendInstanceStatus, BackendProfile, BackendProfileProvider,
     DTypeProfile, DeviceKind, MemoryProfile, OperationOptionsProfile, OperationOptionsProfileKind,

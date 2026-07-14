@@ -25,6 +25,7 @@ pub trait IntoNodeExecutorError {
 impl IntoNodeExecutorError for InferenceError {
     fn into_executor_error(self) -> NodeExecutorError {
         match self {
+            InferenceError::Cancelled => NodeExecutorError::Cancelled,
             InferenceError::BackendNotImplemented {
                 capability,
                 backend_kind,

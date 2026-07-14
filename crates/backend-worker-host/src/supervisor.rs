@@ -42,32 +42,63 @@ pub struct WorkerRequestHandle {
     request_id: RequestId,
     correlation_id: CorrelationId,
     receiver: mpsc::UnboundedReceiver<PendingEvent>,
-    cancel_sent: AtomicBool,
+    cancel_sent: Arc<AtomicBool>,
+}
+
+#[derive(Clone)]
+pub struct WorkerRequestCanceller {
+    inner: Arc<WorkerClientInner>,
+    request_id: RequestId,
+    correlation_id: CorrelationId,
+    cancel_sent: Arc<AtomicBool>,
+}
+
+impl WorkerRequestCanceller {
+    pub async fn cancel(&self) -> Result<(), WorkerHostError> {
+        send_cancel(
+            &self.inner,
+            &self.request_id,
+            &self.correlation_id,
+            &self.cancel_sent,
+        )
+        .await
+    }
 }
 
 impl WorkerRequestHandle {
     pub async fn cancel(&self) -> Result<(), WorkerHostError> {
-        ensure_alive(&self.inner)?;
-        if self.cancel_sent.swap(true, Ordering::AcqRel) {
-            return Ok(());
-        }
-        let message = WireMessage::Cancel(CancelFrame {
-            protocol_version: self.inner.protocol_version,
-            incarnation_id: self.inner.incarnation_id.clone(),
-            request_id: self.request_id.clone(),
-            correlation_id: self.correlation_id.clone(),
-        });
-        let mut stdin = self.inner.stdin.lock().await;
-        write_frame(&mut *stdin, &self.inner.codec, &message).await
+        self.canceller().cancel().await
     }
 
-    pub async fn finish(mut self) -> Result<WorkerRequestResult, WorkerHostError> {
+    pub fn canceller(&self) -> WorkerRequestCanceller {
+        WorkerRequestCanceller {
+            inner: Arc::clone(&self.inner),
+            request_id: self.request_id.clone(),
+            correlation_id: self.correlation_id.clone(),
+            cancel_sent: Arc::clone(&self.cancel_sent),
+        }
+    }
+
+    pub async fn finish(self) -> Result<WorkerRequestResult, WorkerHostError> {
+        self.finish_with_progress(|_| {}).await
+    }
+
+    pub async fn finish_with_progress<F>(
+        mut self,
+        mut on_progress: F,
+    ) -> Result<WorkerRequestResult, WorkerHostError>
+    where
+        F: FnMut(&ProgressFrame),
+    {
         let receive = async {
             let mut progress = Vec::new();
             let mut cancel_acknowledged = false;
             loop {
                 match self.receiver.recv().await {
-                    Some(PendingEvent::Progress(frame)) => progress.push(frame),
+                    Some(PendingEvent::Progress(frame)) => {
+                        on_progress(&frame);
+                        progress.push(frame);
+                    }
                     Some(PendingEvent::CancelAck(_frame)) => cancel_acknowledged = true,
                     Some(PendingEvent::Terminal(terminal)) => {
                         return Ok(WorkerRequestResult {
@@ -162,6 +193,19 @@ pub struct StartedWorker {
 }
 
 impl StartedWorker {
+    pub fn state(&self) -> WorkerProcessState {
+        match self.inner.state.load(Ordering::Acquire) {
+            STATE_READY => WorkerProcessState::Ready,
+            STATE_FAILED => WorkerProcessState::Failed,
+            STATE_STARTING => WorkerProcessState::Starting,
+            _ => WorkerProcessState::Stopped,
+        }
+    }
+
+    pub fn incarnation_id(&self) -> &WorkerIncarnationId {
+        &self.inner.incarnation_id
+    }
+
     pub async fn stderr_tail(&self) -> Vec<u8> {
         self.stderr_tail.lock().await.clone()
     }
@@ -376,9 +420,33 @@ impl StartedWorker {
             request_id,
             correlation_id: CorrelationId(format!("worker-{sequence}")),
             receiver,
-            cancel_sent: AtomicBool::new(false),
+            cancel_sent: Arc::new(AtomicBool::new(false)),
         })
     }
+}
+
+async fn send_cancel(
+    inner: &Arc<WorkerClientInner>,
+    request_id: &RequestId,
+    correlation_id: &CorrelationId,
+    cancel_sent: &AtomicBool,
+) -> Result<(), WorkerHostError> {
+    ensure_alive(inner)?;
+    if cancel_sent.swap(true, Ordering::AcqRel) {
+        return Ok(());
+    }
+    let message = WireMessage::Cancel(CancelFrame {
+        protocol_version: inner.protocol_version,
+        incarnation_id: inner.incarnation_id.clone(),
+        request_id: request_id.clone(),
+        correlation_id: correlation_id.clone(),
+    });
+    let mut stdin = inner.stdin.lock().await;
+    let result = write_frame(&mut *stdin, &inner.codec, &message).await;
+    if result.is_err() {
+        cancel_sent.store(false, Ordering::Release);
+    }
+    result
 }
 
 pub struct WorkerSupervisor {

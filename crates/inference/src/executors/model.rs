@@ -73,9 +73,10 @@ impl NodeExecutor for CheckpointLoaderExecutor {
             request = request.with_correlation_id(cid);
         }
 
+        let invocation = context.inference_invocation();
         let response: LoadBundleResponse = self
             .inference
-            .load_bundle(request)
+            .load_bundle_with_invocation(&invocation, request)
             .await
             .map_err(into_executor_error)?;
 

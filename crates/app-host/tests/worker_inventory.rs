@@ -73,6 +73,10 @@ async fn inventory_profile_does_not_start_unselected_worker() {
         reimagine_inference::BackendInstanceStatus::Available
     ));
     assert!(burn.instances[0].diagnostics.is_empty());
+    assert!(matches!(
+        workspace.selected_worker().await,
+        Err(reimagine_app_host::WorkerSwitchError::NoActiveWorker)
+    ));
     let _ = tokio::fs::remove_dir_all(base).await;
 }
 

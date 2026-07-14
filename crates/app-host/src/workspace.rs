@@ -33,6 +33,7 @@ pub struct WorkspaceHost {
     services: Arc<WorkspaceServices>,
     compute_profile: Arc<WorkspaceComputeProfile>,
     resolved_backend_instance: reimagine_inference::BackendInstance,
+    worker_switch: Option<Arc<crate::WorkerSwitchService>>,
 }
 
 impl WorkspaceHost {
@@ -85,6 +86,7 @@ impl WorkspaceHost {
             services,
             compute_profile,
             resolved_backend_instance,
+            worker_switch: None,
         }
     }
 
@@ -232,6 +234,11 @@ impl WorkspaceHost {
             event_sink,
             Arc::new(reimagine_runtime::SystemClock),
         ));
+        let worker_switch = bootstrapped.runtime.worker_switch.clone();
+        if let Some(worker_switch) = &worker_switch {
+            let cancellation: Arc<dyn crate::RunCancellation> = runtime_service.clone();
+            worker_switch.set_run_cancellation(cancellation);
+        }
         let builtin_catalog = Arc::new(BuiltinNodeCatalog::v1());
         let mut host = Self::new(
             workspace_scope,
@@ -242,6 +249,7 @@ impl WorkspaceHost {
             Arc::new(bootstrapped.compute_profile),
             bootstrapped.runtime.selected_instance,
         );
+        host.worker_switch = worker_switch;
         // Replace the default AgentService with one that uses the injected event sink
         let registry = host.agent_service.registry().clone();
         let providers = host.agent_service.providers().clone();
@@ -279,6 +287,11 @@ impl WorkspaceHost {
             event_sink,
             Arc::new(reimagine_runtime::SystemClock),
         ));
+        let worker_switch = bootstrapped.runtime.worker_switch.clone();
+        if let Some(worker_switch) = &worker_switch {
+            let cancellation: Arc<dyn crate::RunCancellation> = runtime_service.clone();
+            worker_switch.set_run_cancellation(cancellation);
+        }
         let builtin_catalog = Arc::new(BuiltinNodeCatalog::v1());
         let mut host = Self::new(
             workspace_scope,
@@ -289,6 +302,7 @@ impl WorkspaceHost {
             Arc::new(bootstrapped.compute_profile),
             bootstrapped.runtime.selected_instance,
         );
+        host.worker_switch = worker_switch;
         let registry = host.agent_service.registry().clone();
         let providers = host.agent_service.providers().clone();
         host.agent_service = Arc::new(AgentService::with_registry_providers_and_sink(
@@ -332,6 +346,39 @@ impl WorkspaceHost {
     }
     pub fn runtime_service(&self) -> &Arc<RuntimeService> {
         &self.runtime_service
+    }
+    pub async fn selected_worker(
+        &self,
+    ) -> Result<crate::WorkerSelectionHandle, crate::WorkerSwitchError> {
+        let workers = self
+            .worker_switch
+            .as_ref()
+            .ok_or(crate::WorkerSwitchError::NoActiveWorker)?;
+        Ok(workers.selected().await)
+    }
+
+    pub async fn drain_and_switch_worker(
+        &self,
+        target: crate::WorkerBackendCandidate,
+        deadline: std::time::Duration,
+    ) -> Result<crate::WorkerSelectionHandle, crate::WorkerSwitchError> {
+        let workers = self
+            .worker_switch
+            .as_ref()
+            .ok_or(crate::WorkerSwitchError::NoActiveWorker)?;
+        workers.drain_and_switch(Arc::new(target), deadline).await
+    }
+
+    pub async fn cancel_and_switch_worker(
+        &self,
+        target: crate::WorkerBackendCandidate,
+        deadline: std::time::Duration,
+    ) -> Result<crate::WorkerSelectionHandle, crate::WorkerSwitchError> {
+        let workers = self
+            .worker_switch
+            .as_ref()
+            .ok_or(crate::WorkerSwitchError::NoActiveWorker)?;
+        workers.cancel_and_switch(Arc::new(target), deadline).await
     }
     pub fn agent_service(&self) -> &Arc<AgentService> {
         &self.agent_service

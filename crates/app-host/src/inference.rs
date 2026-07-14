@@ -9,4 +9,5 @@ pub(crate) mod compose;
 pub(crate) mod image_source_resolver;
 pub(crate) mod resolver;
 pub(crate) mod selection;
+pub mod switch;
 pub(crate) mod worker;
