@@ -17,7 +17,7 @@ use reimagine_backend_worker_host::{
 use reimagine_backend_worker_protocol::{
     BackendInstanceId, CleanupFrame, ControlId, CorrelationId, FrameCodec, HostHello,
     ProtocolRange, ProtocolVersion, RequestFrame, RequestId, ShutdownFrame, TerminalFrame,
-    TerminalOutcome, WireMessage, WorkerHello, WorkerInstallationId,
+    TerminalOutcome, WireMessage, WorkerHello, WorkerInstallationId, WorkerInstanceProfile,
 };
 use reimagine_core::model::NodeId;
 use reimagine_inference::{
@@ -224,6 +224,326 @@ fn process_launch_spec(
             ),
         ],
     }
+}
+
+#[tokio::test]
+async fn app_host_activates_selected_worker_from_injected_inventory() {
+    use reimagine_agent::WorkspaceScope;
+    use reimagine_app_host::{
+        StaticWorkerInventoryProvider, WorkerBackendCandidate, WorkerInventorySnapshot,
+        WorkspaceHost,
+    };
+    use reimagine_config::{AppPaths, InferenceBackendConfig};
+    use reimagine_runtime::VecRunEventSink;
+
+    let workspace = tempfile::tempdir().expect("workspace");
+    let paths = AppPaths::new(workspace.path());
+    paths.ensure_all().await.expect("workspace dirs");
+    let launch = process_launch_spec(paths.models_dir(), paths.output_dir());
+    let instance = launch.expected.backend_instance_id.clone();
+    let candidate = WorkerBackendCandidate::try_new(
+        launch,
+        WorkerInstanceProfile {
+            backend_instance_id: instance.clone(),
+            device_label: instance
+                .0
+                .strip_prefix("burn:")
+                .unwrap_or("wgpu:default")
+                .to_owned(),
+            capabilities: vec![
+                "model.load_bundle".to_owned(),
+                "latent.create_empty".to_owned(),
+                "text.encode".to_owned(),
+                "diffusion.sample".to_owned(),
+                "latent.decode".to_owned(),
+                "image.save".to_owned(),
+                "image.preview".to_owned(),
+            ],
+            operation_options: serde_json::json!({}),
+        },
+    )
+    .expect("candidate");
+    let host = WorkspaceHost::try_with_backend_config_and_worker_inventory(
+        WorkspaceScope::new("mb04-real-worker"),
+        workspace.path(),
+        InferenceBackendConfig {
+            selected_instance: Some(instance.0.clone()),
+            ..InferenceBackendConfig::default()
+        },
+        Arc::new(VecRunEventSink::new()),
+        Arc::new(StaticWorkerInventoryProvider::new(
+            WorkerInventorySnapshot::new(vec![candidate]),
+        )),
+    )
+    .await
+    .expect("app-host worker bootstrap");
+
+    let profile = host.compute_profile();
+    let selected = profile
+        .backend_profiles
+        .iter()
+        .flat_map(|backend| &backend.instances)
+        .find(|profile| profile.instance.as_str() == instance.0)
+        .expect("live selected profile");
+    assert_eq!(selected.capabilities.len(), 7);
+    assert!(selected.diagnostics.is_empty());
+    assert_eq!(host.resolved_backend_instance().as_str(), instance.0);
+}
+
+#[tokio::test]
+async fn app_host_rejects_manifest_and_live_hello_profile_mismatch() {
+    use reimagine_agent::WorkspaceScope;
+    use reimagine_app_host::{
+        StaticWorkerInventoryProvider, WorkerBackendCandidate, WorkerInventorySnapshot,
+        WorkspaceHost,
+    };
+    use reimagine_config::{AppPaths, InferenceBackendConfig};
+    use reimagine_runtime::VecRunEventSink;
+
+    let workspace = tempfile::tempdir().expect("workspace");
+    let paths = AppPaths::new(workspace.path());
+    paths.ensure_all().await.expect("workspace dirs");
+    let launch = process_launch_spec(paths.models_dir(), paths.output_dir());
+    let instance = launch.expected.backend_instance_id.clone();
+    let candidate = WorkerBackendCandidate::try_new(
+        launch,
+        WorkerInstanceProfile {
+            backend_instance_id: instance.clone(),
+            device_label: instance.0.strip_prefix("burn:").unwrap().to_owned(),
+            capabilities: vec!["latent.create_empty".to_owned()],
+            operation_options: serde_json::json!({}),
+        },
+    )
+    .expect("candidate");
+    let host = WorkspaceHost::try_with_backend_config_and_worker_inventory(
+        WorkspaceScope::new("mb04-mismatch"),
+        workspace.path(),
+        InferenceBackendConfig {
+            selected_instance: Some(instance.0.clone()),
+            ..InferenceBackendConfig::default()
+        },
+        Arc::new(VecRunEventSink::new()),
+        Arc::new(StaticWorkerInventoryProvider::new(
+            WorkerInventorySnapshot::new(vec![candidate]),
+        )),
+    )
+    .await
+    .expect("mismatch becomes readiness state");
+
+    let profile = host.compute_profile();
+    let selected = profile
+        .backend_profiles
+        .iter()
+        .flat_map(|backend| &backend.instances)
+        .find(|profile| profile.instance.as_str() == instance.0)
+        .expect("selected profile");
+    assert!(matches!(
+        selected.status,
+        reimagine_inference::BackendInstanceStatus::Unavailable
+    ));
+    assert!(selected.diagnostics[0].message().contains("live hello"));
+}
+
+#[tokio::test]
+async fn axum_workflow_reaches_png_through_process_backed_worker() {
+    use axum::body::Body;
+    use axum::http::{Request, header};
+    use http_body_util::BodyExt;
+    use reimagine_agent::WorkspaceScope;
+    use reimagine_app_host::{
+        ModelService, StaticWorkerInventoryProvider, WorkerBackendCandidate,
+        WorkerInventorySnapshot, WorkspaceHost,
+    };
+    use reimagine_axum_host::{AxumHostState, RunEventRecorder, build_router};
+    use reimagine_config::{AppPaths, InferenceBackendConfig};
+    use reimagine_core::model::{ModelId, ModelRole, ModelSeries, ModelVariant};
+    use reimagine_model_manager::{
+        ModelComponentSource, ModelDescriptor, ModelFormat, ModelManifest, ModelRoot, ModelRootId,
+        ModelSource, ModelSourceStatus,
+    };
+    use reimagine_runtime::RunEventSink;
+    use tower::ServiceExt;
+
+    fn request(method: &str, uri: &str, body: Option<serde_json::Value>) -> Request<Body> {
+        let mut builder = Request::builder().method(method).uri(uri);
+        let body = match body {
+            Some(value) => {
+                builder = builder.header(header::CONTENT_TYPE, "application/json");
+                Body::from(value.to_string())
+            }
+            None => Body::empty(),
+        };
+        builder.body(body).expect("request")
+    }
+
+    let workspace = tempfile::tempdir().expect("workspace");
+    let paths = AppPaths::new(workspace.path());
+    paths.ensure_all().await.expect("workspace dirs");
+    let package_root = paths.models_dir().join("tiny-sdxl-burn");
+    let _ = tiny_fixture::load_request(&package_root);
+
+    let component = |role: ModelRole, name: &str| {
+        ModelComponentSource::new(
+            role,
+            ModelSource::relative(
+                ModelRootId::new("base"),
+                format!("tiny-sdxl-burn/{name}/model.safetensors"),
+            ),
+            ModelFormat::Safetensors,
+        )
+        .with_metadata("component", name)
+        .with_metadata("backend", "burn")
+        .with_metadata("converted_layout", "burn_native_component_package")
+        .with_metadata("contract", "burn.component")
+        .with_metadata("contract_version", "1")
+    };
+    let descriptor = ModelDescriptor::new(
+        ModelId::new("tiny-sdxl-burn"),
+        ModelSeries::new("stable_diffusion"),
+        ModelVariant::new("sdxl"),
+        vec![
+            ModelRole::CheckpointBundle,
+            ModelRole::DiffusionModel,
+            ModelRole::TextEncoder,
+            ModelRole::Vae,
+        ],
+        ModelSource::relative(
+            ModelRootId::new("base"),
+            "tiny-sdxl-burn/diffusion/model.safetensors",
+        ),
+        ModelFormat::Safetensors,
+    )
+    .with_source_status(ModelSourceStatus::Available)
+    .with_components(vec![
+        component(ModelRole::DiffusionModel, "diffusion"),
+        component(ModelRole::Vae, "vae"),
+        component(ModelRole::TextEncoder, "text_encoder"),
+        component(ModelRole::TextEncoder, "text_encoder_2"),
+    ]);
+    ModelService::new(paths.clone())
+        .save_manifest(
+            &ModelManifest::new()
+                .with_root(ModelRoot::base_models())
+                .with_model(descriptor),
+        )
+        .await
+        .expect("manifest");
+
+    let launch = process_launch_spec(paths.models_dir(), paths.output_dir());
+    let instance = launch.expected.backend_instance_id.clone();
+    let candidate = WorkerBackendCandidate::try_new(
+        launch,
+        WorkerInstanceProfile {
+            backend_instance_id: instance.clone(),
+            device_label: instance.0.strip_prefix("burn:").unwrap().to_owned(),
+            capabilities: vec![
+                "model.load_bundle",
+                "latent.create_empty",
+                "text.encode",
+                "diffusion.sample",
+                "latent.decode",
+                "image.save",
+                "image.preview",
+            ]
+            .into_iter()
+            .map(str::to_owned)
+            .collect(),
+            operation_options: serde_json::json!({}),
+        },
+    )
+    .expect("candidate");
+    let recorder = Arc::new(RunEventRecorder::new());
+    let host = Arc::new(
+        WorkspaceHost::try_with_backend_config_and_worker_inventory(
+            WorkspaceScope::new("mb04-axum-tiny"),
+            workspace.path(),
+            InferenceBackendConfig {
+                selected_instance: Some(instance.0.clone()),
+                ..InferenceBackendConfig::default()
+            },
+            recorder.clone() as Arc<dyn RunEventSink>,
+            Arc::new(StaticWorkerInventoryProvider::new(
+                WorkerInventorySnapshot::new(vec![candidate]),
+            )),
+        )
+        .await
+        .expect("host"),
+    );
+    let app = build_router().with_state(AxumHostState::new(host, recorder));
+
+    let workflow_path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("../../../examples/workflows/sdxl-base-burn-smoke-workflow.json");
+    let mut workflow: serde_json::Value =
+        serde_json::from_slice(&std::fs::read(workflow_path).expect("workflow fixture"))
+            .expect("workflow json");
+    workflow["id"] = "wf-tiny-sdxl".into();
+    workflow["nodes"][0]["params"]["checkpoint"]["value"]["id"] = "tiny-sdxl-burn".into();
+    workflow["nodes"][5]["params"]["width"]["value"] = 64.into();
+    workflow["nodes"][5]["params"]["height"]["value"] = 64.into();
+    let open = app
+        .clone()
+        .oneshot(request(
+            "POST",
+            "/workflows/open",
+            Some(serde_json::json!({"workflow": workflow})),
+        ))
+        .await
+        .unwrap();
+    assert_eq!(open.status(), axum::http::StatusCode::OK);
+    let run = app.clone().oneshot(request(
+        "POST", "/workflows/wf-tiny-sdxl/run",
+        Some(serde_json::json!({"target_selection":{"kind":"explicit","targets":[{"kind":"node","node_id":"node_save_image"}]}})),
+    )).await.unwrap();
+    assert_eq!(run.status(), axum::http::StatusCode::OK);
+    let run_json: serde_json::Value =
+        serde_json::from_slice(&run.into_body().collect().await.unwrap().to_bytes()).unwrap();
+    let run_id = run_json["run_id"].as_str().expect("run id");
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(60);
+    let summary = loop {
+        let response = app
+            .clone()
+            .oneshot(request("GET", &format!("/runs/{run_id}"), None))
+            .await
+            .unwrap();
+        let json: serde_json::Value =
+            serde_json::from_slice(&response.into_body().collect().await.unwrap().to_bytes())
+                .unwrap();
+        let state = json
+            .pointer("/summary/state")
+            .or_else(|| json.get("state"))
+            .and_then(|value| value.as_str());
+        if matches!(
+            state,
+            Some("Completed") | Some("completed") | Some("Failed") | Some("failed")
+        ) {
+            break json;
+        }
+        assert!(std::time::Instant::now() < deadline, "run timeout: {json}");
+        tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+    };
+    let state = summary
+        .pointer("/summary/state")
+        .or_else(|| summary.get("state"))
+        .and_then(|value| value.as_str())
+        .unwrap();
+    assert!(
+        state.eq_ignore_ascii_case("completed"),
+        "worker-backed run failed: {summary}"
+    );
+    let artifacts = summary
+        .pointer("/summary/artifacts")
+        .or_else(|| summary.get("artifacts"))
+        .and_then(|value| value.as_array())
+        .expect("artifacts");
+    let artifact_id = artifacts[0]["id"].as_str().expect("artifact id");
+    let artifact = app
+        .oneshot(request("GET", &format!("/artifacts/{artifact_id}"), None))
+        .await
+        .unwrap();
+    assert_eq!(artifact.status(), axum::http::StatusCode::OK);
+    let bytes = artifact.into_body().collect().await.unwrap().to_bytes();
+    let image = image::load_from_memory(&bytes).expect("PNG");
+    assert_eq!((image.width(), image.height()), (64, 64));
 }
 
 #[tokio::test]

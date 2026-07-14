@@ -17,6 +17,10 @@ use crate::inference::candidate::{
 use crate::inference::image_source_resolver::InputImageSourceResolver;
 use crate::inference::resolver::ModelResolverAdapter;
 use crate::inference::selection::{BackendProfilesByInstance, resolve_backend_selection};
+use crate::inference::worker::{
+    WorkerControlService, WorkerInventoryProvider, WorkerInventorySnapshot, activation_diagnostic,
+    worker_backend_profile,
+};
 
 pub(crate) struct ComposedBackends {
     registry: InferenceBackendRegistry,
@@ -29,8 +33,6 @@ pub(crate) struct ComposedBackends {
 
 pub(crate) struct ComposedInferenceRuntime {
     pub(crate) executor_registry: NodeExecutorRegistry,
-    #[cfg(test)]
-    pub(crate) inference_runtime: Arc<DefaultInferenceRuntime>,
     pub(crate) runtime_hooks: Arc<dyn BackendInstanceRuntimeHooks>,
     pub(crate) selected_instance: BackendInstance,
 }
@@ -38,6 +40,12 @@ pub(crate) struct ComposedInferenceRuntime {
 pub(crate) struct BootstrapInference {
     pub(crate) runtime: ComposedInferenceRuntime,
     pub(crate) compute_profile: WorkspaceComputeProfile,
+}
+
+struct WorkerCompositionSelection {
+    selected_instance: BackendInstance,
+    priority_order: Vec<BackendInstance>,
+    disabled_instances: Vec<BackendInstance>,
 }
 
 pub(crate) fn bootstrap_inference(
@@ -51,6 +59,40 @@ pub(crate) fn bootstrap_inference(
         model_service,
         builtin_backend_candidates(),
     )
+}
+
+pub(crate) async fn bootstrap_inference_with_worker_inventory(
+    config: &AppConfig,
+    backend_config: &InferenceBackendConfig,
+    model_service: Arc<ModelService>,
+    provider: Arc<dyn WorkerInventoryProvider>,
+) -> Result<BootstrapInference, BackendCandidateError> {
+    let candidates = builtin_backend_candidates();
+    let snapshot = provider.snapshot();
+    let mut workspace_profile = collect_compute_profile_with_workers(&candidates, &snapshot);
+    let resolved = resolve_backend_selection(backend_config, &workspace_profile);
+    for diagnostic in resolved.diagnostics {
+        workspace_profile = workspace_profile.with_diagnostic(diagnostic);
+    }
+
+    let selection = WorkerCompositionSelection {
+        selected_instance: resolved.selected_instance,
+        priority_order: resolved.priority_order,
+        disabled_instances: resolved.disabled_instances,
+    };
+    let runtime = compose_inference_runtime_with_workers(
+        config,
+        model_service,
+        &candidates,
+        &snapshot,
+        &mut workspace_profile,
+        selection,
+    )
+    .await?;
+    Ok(BootstrapInference {
+        runtime,
+        compute_profile: workspace_profile,
+    })
 }
 
 fn bootstrap_inference_with_candidates(
@@ -108,11 +150,143 @@ pub(crate) fn compose_inference_runtime(
 }
 
 fn collect_compute_profile(candidates: &[Arc<dyn BackendCandidate>]) -> WorkspaceComputeProfile {
+    collect_compute_profile_with_workers(candidates, &WorkerInventorySnapshot::default())
+}
+
+fn collect_compute_profile_with_workers(
+    candidates: &[Arc<dyn BackendCandidate>],
+    workers: &WorkerInventorySnapshot,
+) -> WorkspaceComputeProfile {
     let mut profile = WorkspaceComputeProfile::new();
     for candidate in candidates {
         profile = profile.with_backend_profile(candidate.profile());
     }
-    profile
+    profile.with_backend_profile(worker_backend_profile(workers))
+}
+
+async fn compose_inference_runtime_with_workers(
+    config: &AppConfig,
+    model_service: Arc<ModelService>,
+    candidates: &[Arc<dyn BackendCandidate>],
+    workers: &WorkerInventorySnapshot,
+    profile: &mut WorkspaceComputeProfile,
+    selection: WorkerCompositionSelection,
+) -> Result<ComposedInferenceRuntime, BackendCandidateError> {
+    let WorkerCompositionSelection {
+        selected_instance,
+        priority_order,
+        disabled_instances,
+    } = selection;
+    let disabled = disabled_instances.iter().cloned().collect::<HashSet<_>>();
+    let candidate_map = candidates
+        .iter()
+        .map(|candidate| (candidate.backend(), Arc::clone(candidate)))
+        .collect::<HashMap<_, _>>();
+    let worker_map = workers
+        .candidates()
+        .iter()
+        .map(|candidate| (candidate.backend_instance(), candidate))
+        .collect::<HashMap<_, _>>();
+    let mut registry = InferenceBackendRegistry::new();
+    let mut hooks = Vec::new();
+    let mut allowed_instances = Vec::new();
+
+    for instance in priority_order.iter().cloned() {
+        if disabled.contains(&instance) {
+            continue;
+        }
+        let instance_profile = BackendProfilesByInstance::new(profile)
+            .get(&instance)
+            .cloned();
+        let Some(instance_profile) = instance_profile else {
+            continue;
+        };
+        if instance_profile.status != BackendInstanceStatus::Available {
+            continue;
+        }
+        if let Some(worker) = worker_map.get(&instance) {
+            match WorkerControlService::activate(worker).await {
+                Ok((built, live_profile)) => {
+                    replace_instance_profile(profile, live_profile);
+                    register_built_backend(&mut registry, &mut hooks, built);
+                    allowed_instances.push(instance);
+                }
+                Err(error) => {
+                    mark_instance_unavailable(
+                        profile,
+                        &instance,
+                        activation_diagnostic(&instance, &error),
+                    );
+                }
+            }
+            continue;
+        }
+        let Some(candidate) = candidate_map.get(&instance_profile.backend) else {
+            continue;
+        };
+        let built = candidate.build(config, &instance, Some(instance_profile.device))?;
+        register_built_backend(&mut registry, &mut hooks, built);
+        allowed_instances.push(instance);
+    }
+
+    let inference_runtime = compose_runtime_router(
+        registry,
+        priority_order,
+        allowed_instances,
+        disabled_instances,
+    );
+    let mut executor_registry = NodeExecutorRegistry::default();
+    let executor_inference_runtime: Arc<dyn reimagine_inference::InferenceRuntime> =
+        inference_runtime.clone();
+    register_builtin_inference_executors(
+        &mut executor_registry,
+        executor_inference_runtime,
+        Arc::new(ModelResolverAdapter::new(
+            model_service,
+            config.paths().clone(),
+        )),
+        Arc::new(InputImageSourceResolver::new(config.paths())),
+    )
+    .expect("register executors");
+    Ok(ComposedInferenceRuntime {
+        executor_registry,
+        runtime_hooks: Arc::new(CompositeBackendInstanceRuntimeHooks::new(hooks)),
+        selected_instance,
+    })
+}
+
+fn replace_instance_profile(
+    profile: &mut WorkspaceComputeProfile,
+    replacement: reimagine_inference::BackendInstanceProfile,
+) {
+    for backend in &mut profile.backend_profiles {
+        if let Some(instance) = backend
+            .instances
+            .iter_mut()
+            .find(|item| item.instance == replacement.instance)
+        {
+            *instance = replacement;
+            return;
+        }
+    }
+}
+
+fn mark_instance_unavailable(
+    profile: &mut WorkspaceComputeProfile,
+    target: &BackendInstance,
+    diagnostic: reimagine_core::diagnostic::Diagnostic,
+) {
+    for backend in &mut profile.backend_profiles {
+        if let Some(instance) = backend
+            .instances
+            .iter_mut()
+            .find(|item| &item.instance == target)
+        {
+            instance.status = BackendInstanceStatus::Unavailable;
+            instance.diagnostics.push(diagnostic);
+            return;
+        }
+    }
 }
 
 fn compose_inference_runtime_with_candidates(
@@ -156,8 +330,6 @@ fn compose_inference_runtime_with_candidates(
 
     Ok(ComposedInferenceRuntime {
         executor_registry,
-        #[cfg(test)]
-        inference_runtime,
         runtime_hooks: composed_backends.runtime_hooks,
         selected_instance: composed_backends.selected_instance,
     })
@@ -247,7 +419,7 @@ mod tests {
         BackendInstanceSnapshot, BackendProfile, BackendRunLifecycle, BackendRunLifecycleReport,
         BackendRunLifecycleRequest, CannedCapabilityResponse, CreateEmptyLatentRequest,
         CreateEmptyLatentResponse, DeviceKind, DeviceProfile, FakeBackend, InferenceError,
-        InferenceRuntime, LatentContent, LatentSpaceMetadata, RuntimeLatent,
+        LatentContent, LatentSpaceMetadata, RuntimeLatent,
     };
     use reimagine_plugin::{Extension, Plugin};
     use std::collections::BTreeMap;
@@ -260,26 +432,6 @@ mod tests {
             .unwrap()
             .as_nanos();
         std::env::temp_dir().join(format!("reimagine-app-host-compose-{prefix}-{nonce}"))
-    }
-
-    fn expected_burn_instance() -> BackendInstance {
-        let backend = reimagine_inference_burn::BurnBackend::new(
-            reimagine_inference_burn::BurnBackendConfig::new("/models", "/output"),
-        )
-        .expect("burn backend");
-        backend.backend_instance()
-    }
-
-    fn expected_burn_instance_label() -> String {
-        expected_burn_instance().as_str().to_owned()
-    }
-
-    fn expected_burn_device_label() -> String {
-        let backend = reimagine_inference_burn::BurnBackend::new(
-            reimagine_inference_burn::BurnBackendConfig::new("/models", "/output"),
-        )
-        .expect("burn backend");
-        backend.device_label().to_owned()
     }
 
     #[test]
@@ -342,146 +494,6 @@ mod tests {
             descriptor.device.as_ref().map(|d| d.label.as_str()),
             Some("cpu")
         );
-        let _ = std::fs::remove_dir_all(&base);
-    }
-
-    #[test]
-    fn builtin_compute_profile_includes_default_burn_capabilities() {
-        let profile = collect_compute_profile(&builtin_backend_candidates());
-
-        let burn = profile
-            .backend_profiles
-            .iter()
-            .find(|profile| profile.backend == Backend::new("burn"))
-            .expect("burn backend profile");
-        assert_eq!(
-            burn.plugin.as_ref().map(|plugin| plugin.as_str()),
-            Some("builtin.burn")
-        );
-        assert_eq!(
-            burn.extension.as_ref().map(|extension| extension.as_str()),
-            Some("backend.burn")
-        );
-        let default_burn = burn
-            .instances
-            .iter()
-            .find(|instance| instance.instance == expected_burn_instance())
-            .expect("default burn instance profile");
-        assert_eq!(default_burn.status, BackendInstanceStatus::Available);
-        assert_eq!(
-            default_burn.capabilities,
-            vec![
-                reimagine_inference::InferenceCapability::LoadBundle,
-                reimagine_inference::InferenceCapability::CreateEmptyLatent,
-                reimagine_inference::InferenceCapability::TextEncode,
-                reimagine_inference::InferenceCapability::DiffusionSample,
-                reimagine_inference::InferenceCapability::LatentDecode,
-                reimagine_inference::InferenceCapability::ImageSave,
-                reimagine_inference::InferenceCapability::ImagePreview,
-            ]
-        );
-        assert!(default_burn.operation_options.is_empty());
-        assert!(default_burn.diagnostics.is_empty());
-    }
-
-    #[tokio::test]
-    async fn bootstrap_with_burn_selected_registers_only_burn_candidate_and_hooks() {
-        let base = temp_dir("burn-bootstrap");
-        let config = AppConfig::new(AppPaths::new(&base));
-        let model_service = Arc::new(ModelService::new(config.paths().clone()));
-        let backend_config = InferenceBackendConfig {
-            selected_instance: Some(expected_burn_instance_label()),
-            ..InferenceBackendConfig::default()
-        };
-
-        let bootstrapped = bootstrap_inference_with_candidates(
-            &config,
-            &backend_config,
-            model_service,
-            builtin_backend_candidates(),
-        )
-        .expect("bootstrap");
-
-        assert_eq!(
-            bootstrapped.runtime.selected_instance,
-            expected_burn_instance()
-        );
-        let snapshots = reimagine_inference::BackendInstanceObservation::snapshots(
-            bootstrapped.runtime.runtime_hooks.as_ref(),
-        )
-        .await;
-        assert_eq!(
-            snapshots.len(),
-            1,
-            "selected Burn should not add Candle fallback hooks"
-        );
-        assert_eq!(snapshots[0].backend_instance, expected_burn_instance());
-        assert_eq!(
-            snapshots[0].plugin.as_ref().map(|plugin| plugin.as_str()),
-            Some("builtin.burn")
-        );
-        assert_eq!(
-            snapshots[0]
-                .extension
-                .as_ref()
-                .map(|extension| extension.as_str()),
-            Some("backend.burn")
-        );
-        assert_eq!(
-            snapshots[0]
-                .device
-                .as_ref()
-                .map(|device| device.label.as_str()),
-            Some(expected_burn_device_label().as_str())
-        );
-        let _ = std::fs::remove_dir_all(&base);
-    }
-
-    #[tokio::test]
-    async fn burn_selected_create_empty_latent_succeeds_through_router() {
-        let base = temp_dir("burn-router");
-        let config = AppConfig::new(AppPaths::new(&base));
-        let model_service = Arc::new(ModelService::new(config.paths().clone()));
-        let backend_config = InferenceBackendConfig {
-            selected_instance: Some(expected_burn_instance_label()),
-            ..InferenceBackendConfig::default()
-        };
-
-        let bootstrapped = bootstrap_inference_with_candidates(
-            &config,
-            &backend_config,
-            model_service,
-            builtin_backend_candidates(),
-        )
-        .expect("bootstrap");
-
-        let request = CreateEmptyLatentRequest::new(
-            512,
-            512,
-            1,
-            reimagine_core::model::RunId::new("run-burn-router"),
-            reimagine_core::model::WorkflowId::new("workflow-burn-router"),
-            reimagine_core::model::WorkflowVersion::new(1),
-            reimagine_core::model::NodeId::new("latent-burn-router"),
-        );
-        let response = bootstrapped
-            .runtime
-            .inference_runtime
-            .create_empty_latent(request)
-            .await
-            .expect("burn/09 implements create_empty_latent through the router");
-
-        let latent = response.into_latent();
-        assert_eq!(latent.payload().backend().as_str(), "burn");
-        assert_eq!(
-            latent.payload().backend_instance().as_str(),
-            expected_burn_instance_label().as_str()
-        );
-        assert_eq!(
-            latent.latent_space().id().as_str(),
-            "stable_diffusion/sdxl/base"
-        );
-        assert_eq!(latent.payload().shape().dims(), &[1_usize, 4, 64, 64]);
         let _ = std::fs::remove_dir_all(&base);
     }
 

@@ -10,10 +10,11 @@ license.workspace = true
 [dependencies]
 async-trait = { workspace = true }
 reimagine-agent = { path = "../agent" }
+reimagine-backend-worker-host = { path = "../backend-worker-host" }
+reimagine-backend-worker-protocol = { path = "../backend-worker-protocol" }
 reimagine-config = { path = "../config" }
 reimagine-core = { path = "../core" }
 reimagine-inference = { path = "../inference" }
-reimagine-inference-burn = { path = "../inference-backends/burn" }
 reimagine-inference-candle = { path = "../inference-backends/candle" }
 reimagine-model-acquisition = { path = "../model-acquisition" }
 reimagine-model-manager = { path = "../model-manager" }

@@ -43,13 +43,16 @@ pub enum AppHostError {
         message: String,
     },
     BootstrapConfig(ConfigError),
+    InferenceBootstrap {
+        message: String,
+    },
     Runtime(RuntimeServiceError),
     ModelManager(reimagine_model_manager::ModelManagerError),
     ModelAcquisition(reimagine_model_acquisition::ModelAcquisitionError),
     CandleCheckpointImport(reimagine_inference_candle::SdxlCheckpointImportError),
-    BurnCheckpointImport(
-        reimagine_inference_burn::models::stable_diffusion::sdxl::BurnSdxlConversionError,
-    ),
+    BurnCheckpointImport {
+        message: String,
+    },
     ArtifactAccess(ArtifactAccessError),
 }
 
@@ -92,6 +95,9 @@ impl std::fmt::Display for AppHostError {
                 write!(f, "workflow json error at `{}`: {message}", path.display())
             }
             Self::BootstrapConfig(error) => write!(f, "config bootstrap failed: {error}"),
+            Self::InferenceBootstrap { message } => {
+                write!(f, "inference bootstrap failed: {message}")
+            }
             Self::Runtime(error) => write!(f, "{error}"),
             Self::ModelManager(error) => write!(f, "{error}"),
             Self::ModelAcquisition(error) => {
@@ -102,7 +108,9 @@ impl std::fmt::Display for AppHostError {
                 )
             }
             Self::CandleCheckpointImport(error) => write!(f, "{error}"),
-            Self::BurnCheckpointImport(error) => write!(f, "Burn checkpoint import error: {error}"),
+            Self::BurnCheckpointImport { message } => {
+                write!(f, "Burn checkpoint import error: {message}")
+            }
             Self::ArtifactAccess(error) => write!(f, "artifact access error: {error}"),
         }
     }
@@ -137,16 +145,6 @@ impl From<RuntimeServiceError> for AppHostError {
 impl From<reimagine_inference_candle::SdxlCheckpointImportError> for AppHostError {
     fn from(value: reimagine_inference_candle::SdxlCheckpointImportError) -> Self {
         Self::CandleCheckpointImport(value)
-    }
-}
-
-impl From<reimagine_inference_burn::models::stable_diffusion::sdxl::BurnSdxlConversionError>
-    for AppHostError
-{
-    fn from(
-        value: reimagine_inference_burn::models::stable_diffusion::sdxl::BurnSdxlConversionError,
-    ) -> Self {
-        Self::BurnCheckpointImport(value)
     }
 }
 

@@ -7,6 +7,10 @@ use reimagine_app_host::dto::{
     ModelConvertOutput, ModelDetailDto, ModelDownloadInput, ModelListEntry, ModelListOutput,
     ModelRemoveOutput, format_status,
 };
+use reimagine_app_host::{
+    AcquireAndConvertRequest, BurnCheckpointConverter, BurnConversionComponent,
+    BurnConversionComponentRole, BurnConversionReport,
+};
 use reimagine_core::model::ModelId;
 use reimagine_model_acquisition::{
     AcquireProvider, AllowPatterns, ModelAcquisitionRequest, OverwritePolicy, RepoId, Revision,
@@ -113,11 +117,14 @@ pub async fn acquire(
 
     let result = model_service
         .acquire_and_convert(
-            &body.repo_id,
-            &model_id,
-            body.revision.as_deref(),
-            target_backend,
-            overwrite_policy,
+            AcquireAndConvertRequest {
+                repo_id: &body.repo_id,
+                model_id: &model_id,
+                revision: body.revision.as_deref(),
+                target_backend,
+                overwrite_policy,
+                burn_converter: Some(&AxumBurnCheckpointConverter),
+            },
             &acq_service,
         )
         .await?;
@@ -245,7 +252,7 @@ pub async fn convert_checkpoint(
     match target_backend {
         "burn" => {
             let report = model_service
-                .convert_checkpoint_to_burn(&body.model_id)
+                .convert_checkpoint_to_burn(&body.model_id, &AxumBurnCheckpointConverter)
                 .await?;
 
             let conversion = ModelConvertConversionReport {
@@ -283,6 +290,41 @@ pub async fn convert_checkpoint(
         other => Err(AxumHostError::BadRequest {
             message: format!("unsupported target_backend `{other}`; expected `burn` or `candle`"),
         }),
+    }
+}
+
+struct AxumBurnCheckpointConverter;
+
+impl BurnCheckpointConverter for AxumBurnCheckpointConverter {
+    fn convert(
+        &self,
+        source_path: &std::path::Path,
+        model_id: &str,
+        model_root: &std::path::Path,
+    ) -> Result<BurnConversionReport, String> {
+        let report = reimagine_inference_burn::models::stable_diffusion::sdxl::checkpoint_import::execute_real_burn_sdxl_checkpoint_import(
+            source_path,
+            model_id,
+            model_root,
+        )
+        .map_err(|error| error.to_string())?;
+        Ok(BurnConversionReport {
+            output_components: report
+                .output_components
+                .into_iter()
+                .map(|component| BurnConversionComponent {
+                    role: match component.role {
+                        reimagine_inference_burn::models::stable_diffusion::sdxl::BurnSdxlComponentRole::Diffusion => BurnConversionComponentRole::Diffusion,
+                        reimagine_inference_burn::models::stable_diffusion::sdxl::BurnSdxlComponentRole::Vae => BurnConversionComponentRole::Vae,
+                        reimagine_inference_burn::models::stable_diffusion::sdxl::BurnSdxlComponentRole::TextEncoder => BurnConversionComponentRole::TextEncoder,
+                        reimagine_inference_burn::models::stable_diffusion::sdxl::BurnSdxlComponentRole::TextEncoder2 => BurnConversionComponentRole::TextEncoder2,
+                    },
+                    path: component.path.into(),
+                })
+                .collect(),
+            mapped_tensor_count: report.mapped_tensor_count,
+            source_layout: report.source_layout,
+        })
     }
 }
 

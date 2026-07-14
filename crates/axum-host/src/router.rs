@@ -87,7 +87,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn compute_profile_route_returns_cpu_instance() {
+    async fn compute_profile_route_returns_candle_without_uninstalled_burn() {
         use axum::body::to_bytes;
 
         let app = build_router().with_state(test_state());
@@ -115,40 +115,21 @@ mod tests {
 
         let burn = backend_profiles
             .iter()
-            .find(|bp| bp["backend"].as_str() == Some("burn"))
-            .expect("burn backend profile is serialized");
-        assert_eq!(burn["plugin"].as_str(), Some("builtin.burn"));
-        assert_eq!(burn["extension"].as_str(), Some("backend.burn"));
-        let burn_cpu = burn["instances"]
-            .as_array()
-            .expect("burn instances is an array")
-            .iter()
-            .find(|inst| inst["instance"].as_str() == Some("burn:wgpu:default"))
-            .expect("burn:wgpu:default instance is serialized");
-        assert_eq!(burn_cpu["status"].as_str(), Some("Available"));
-        assert_eq!(burn_cpu["device"]["kind"].as_str(), Some("Gpu"));
-        let caps = burn_cpu["capabilities"]
-            .as_array()
-            .expect("capabilities is an array");
+            .find(|profile| profile["backend"].as_str() == Some("burn"))
+            .expect("Burn profile preserves install diagnostics");
         assert_eq!(
-            caps.len(),
-            7,
-            "burn/15i aligns 7 capabilities for burn:wgpu:default, got: {burn_cpu}"
+            burn["instances"].as_array().map(Vec::len),
+            Some(0),
+            "an uninstalled Burn worker must not be exposed as executable, got: {json}"
         );
-        assert_eq!(
-            caps[0].as_str(),
-            Some("model.load_bundle"),
-            "burn:wgpu:default capability[0] should be load_bundle, got: {burn_cpu}"
-        );
-        assert_eq!(
-            caps[1].as_str(),
-            Some("latent.create_empty"),
-            "burn:wgpu:default capability[1] should be create_empty_latent, got: {burn_cpu}"
-        );
-        assert_eq!(
-            caps[2].as_str(),
-            Some("text.encode"),
-            "burn:wgpu:default capability[2] should be text.encode, got: {burn_cpu}"
+        assert!(
+            burn["diagnostics"]
+                .as_array()
+                .expect("Burn diagnostics are an array")
+                .iter()
+                .any(|diagnostic| diagnostic["code"].as_str()
+                    == Some("APP_HOST/LOCAL_WORKER_NOT_INSTALLED")),
+            "the Burn profile must explain how to restore local execution, got: {json}"
         );
 
         // V1 must always include a `candle:cpu` instance, regardless

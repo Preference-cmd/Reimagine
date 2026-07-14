@@ -2,7 +2,6 @@ use std::sync::{Arc, RwLock};
 
 use reimagine_config::AppPaths;
 use reimagine_core::model::{ModelId, ModelRef, ModelRole, ModelSeries, ModelVariant};
-use reimagine_inference_burn::models::stable_diffusion::sdxl::checkpoint_import::execute_real_burn_sdxl_checkpoint_import;
 use reimagine_inference_candle::{
     SdxlCheckpointImportRequest, SdxlCheckpointImportResult, SdxlConvertedComponent,
     import_sdxl_checkpoint_to_candle_example_split,
@@ -21,6 +20,7 @@ use sha2::{Digest, Sha256};
 
 use crate::AppHostResult;
 use crate::model_acquisition_service::ModelAcquisitionService;
+use crate::{BurnCheckpointConverter, BurnConversionReport};
 
 pub struct ModelService {
     app_paths: AppPaths,
@@ -162,9 +162,8 @@ impl ModelService {
     pub async fn convert_checkpoint_to_burn(
         &self,
         model_id: &str,
-    ) -> AppHostResult<
-        reimagine_inference_burn::models::stable_diffusion::sdxl::BurnSdxlConversionReport,
-    > {
+        converter: &dyn BurnCheckpointConverter,
+    ) -> AppHostResult<BurnConversionReport> {
         let (manifest, _) = self.load_manifest().await?;
         let model_id_core = reimagine_core::model::ModelId::new(model_id);
         let descriptor = manifest
@@ -185,7 +184,7 @@ impl ModelService {
                 })?;
 
         let model_root = self.app_paths.models_dir();
-        let report = execute_real_burn_sdxl_checkpoint_import(&source_path, model_id, model_root)?;
+        let report = self.convert_with_burn_port(&source_path, model_id, model_root, converter)?;
         Ok(report)
     }
 
@@ -196,17 +195,23 @@ impl ModelService {
         &self,
         source_path: &std::path::Path,
         model_id: &str,
-    ) -> Result<
-        reimagine_inference_burn::models::stable_diffusion::sdxl::BurnSdxlConversionReport,
-        crate::AppHostError,
-    > {
+        converter: &dyn BurnCheckpointConverter,
+    ) -> Result<BurnConversionReport, crate::AppHostError> {
         let model_root = self.app_paths.models_dir();
-        let report = execute_real_burn_sdxl_checkpoint_import(source_path, model_id, model_root)
-            .map_err(|e| crate::AppHostError::Io {
-                path: source_path.to_path_buf(),
-                message: format!("Burn checkpoint import failed: {e}"),
-            })?;
+        let report = self.convert_with_burn_port(source_path, model_id, model_root, converter)?;
         Ok(report)
+    }
+
+    fn convert_with_burn_port(
+        &self,
+        source_path: &std::path::Path,
+        model_id: &str,
+        model_root: &std::path::Path,
+        converter: &dyn BurnCheckpointConverter,
+    ) -> AppHostResult<BurnConversionReport> {
+        converter
+            .convert(source_path, model_id, model_root)
+            .map_err(|message| crate::AppHostError::BurnCheckpointImport { message })
     }
 
     pub async fn resolve_readiness(
@@ -323,13 +328,17 @@ impl ModelService {
     /// component layout, and register the result in the manifest.
     pub async fn acquire_and_convert(
         &self,
-        repo_id: &str,
-        model_id: &str,
-        revision: Option<&str>,
-        target_backend: &str,
-        overwrite_policy: OverwritePolicy,
+        request: AcquireAndConvertRequest<'_>,
         acquisition_service: &ModelAcquisitionService,
     ) -> AppHostResult<AcquireAndConvertReport> {
+        let AcquireAndConvertRequest {
+            repo_id,
+            model_id,
+            revision,
+            target_backend,
+            overwrite_policy,
+            burn_converter,
+        } = request;
         // ---- Step 1: download ----
         let target_relative_dir =
             TargetRelativeDir::new(std::path::PathBuf::from(format!("checkpoints/{model_id}")))
@@ -406,12 +415,17 @@ impl ModelService {
             }
             _ => {
                 // Burn path: convert, build descriptor, upsert manifest.
-                let burn_report = execute_real_burn_sdxl_checkpoint_import(
+                let converter =
+                    burn_converter.ok_or_else(|| crate::AppHostError::BurnCheckpointImport {
+                        message: "no Burn checkpoint converter is configured for this host"
+                            .to_owned(),
+                    })?;
+                let burn_report = self.convert_with_burn_port(
                     &source_path,
                     model_id,
                     self.app_paths.models_dir(),
-                )
-                .map_err(crate::AppHostError::BurnCheckpointImport)?;
+                    converter,
+                )?;
 
                 let imported_model_id = format!("{model_id}-burn");
                 let burn_desc = build_burn_component_descriptor(
@@ -574,28 +588,28 @@ pub(crate) fn find_first_safetensors(dir: &std::path::Path) -> Option<std::path:
 /// Build a `ModelDescriptor` from a `BurnSdxlConversionReport` using the
 /// new flat layout produced by `execute_real_burn_sdxl_checkpoint_import`.
 fn build_burn_component_descriptor(
-    report: &reimagine_inference_burn::models::stable_diffusion::sdxl::BurnSdxlConversionReport,
+    report: &BurnConversionReport,
     model_id: &str,
     models_dir: &std::path::Path,
 ) -> ModelDescriptor {
-    use reimagine_inference_burn::models::stable_diffusion::sdxl::BurnSdxlComponentRole;
-
     let components: Vec<ModelComponentSource> = report
         .output_components
         .iter()
         .map(|comp| {
             let role = match comp.role {
-                BurnSdxlComponentRole::Diffusion => ModelRole::DiffusionModel,
-                BurnSdxlComponentRole::Vae => ModelRole::Vae,
-                BurnSdxlComponentRole::TextEncoder | BurnSdxlComponentRole::TextEncoder2 => {
-                    ModelRole::TextEncoder
-                }
+                crate::BurnConversionComponentRole::Diffusion => ModelRole::DiffusionModel,
+                crate::BurnConversionComponentRole::Vae => ModelRole::Vae,
+                crate::BurnConversionComponentRole::TextEncoder
+                | crate::BurnConversionComponentRole::TextEncoder2 => ModelRole::TextEncoder,
             };
             // comp.path is relative (e.g. "diffusion_model/<id>.safetensors")
             let path = &comp.path;
             ModelComponentSource::new(
                 role,
-                ModelSource::relative(ModelRootId::new("base"), path.clone()),
+                ModelSource::relative(
+                    ModelRootId::new("base"),
+                    path.to_string_lossy().into_owned(),
+                ),
                 ModelFormat::Safetensors,
             )
             .with_metadata("component", comp.role.as_str())
@@ -627,6 +641,15 @@ fn build_burn_component_descriptor(
 // ------------------------------------------------------------------
 //  AcquireAndConvertReport — non-serializable internal report struct
 // ------------------------------------------------------------------
+
+pub struct AcquireAndConvertRequest<'a> {
+    pub repo_id: &'a str,
+    pub model_id: &'a str,
+    pub revision: Option<&'a str>,
+    pub target_backend: &'a str,
+    pub overwrite_policy: OverwritePolicy,
+    pub burn_converter: Option<&'a dyn BurnCheckpointConverter>,
+}
 
 /// Summary returned by [`ModelService::acquire_and_convert`].
 pub struct AcquireAndConvertReport {

@@ -8,15 +8,16 @@ use reimagine_inference::WorkspaceComputeProfile;
 use reimagine_nodes::BuiltinNodeCatalog;
 use reimagine_runtime::{BoxedRunEventSink, RuntimeService, VecRunEventSink};
 
-use crate::inference::compose::bootstrap_inference;
 #[cfg(test)]
 use crate::inference::compose::compose_inference_runtime;
+use crate::inference::compose::{bootstrap_inference, bootstrap_inference_with_worker_inventory};
 use crate::inference::selection::resolved_candle_device_label;
 use crate::model_acquisition_service::ModelAcquisitionService;
 use crate::node_catalog::{NodeCatalogAlignment, NodeCatalogService};
 use crate::services::WorkspaceServices;
 use crate::tools::register_app_tools;
 use crate::{AgentService, AppHostError, BackendSelection, ModelService, WorkflowService};
+use crate::{EmptyWorkerInventoryProvider, WorkerInventoryProvider};
 
 #[derive(Debug)]
 pub struct WorkspaceHost {
@@ -122,13 +123,34 @@ impl WorkspaceHost {
         let base_path = base_path.into();
         let config = AppConfig::new(AppPaths::new(&base_path));
         let backend_config = load_backend_config_result(&config).await?;
-        Ok(Self::with_backend_config_inner(
+        Self::with_backend_config_and_worker_inventory_inner(
             workspace_scope,
             config,
             backend_config,
             event_sink,
             agent_event_sink,
-        ))
+            Arc::new(EmptyWorkerInventoryProvider),
+        )
+        .await
+    }
+
+    pub async fn try_with_backend_config_and_worker_inventory(
+        workspace_scope: WorkspaceScope,
+        base_path: impl Into<std::path::PathBuf>,
+        backend_config: InferenceBackendConfig,
+        event_sink: BoxedRunEventSink,
+        worker_inventory: Arc<dyn WorkerInventoryProvider>,
+    ) -> Result<Self, AppHostError> {
+        let config = AppConfig::new(AppPaths::new(base_path));
+        Self::with_backend_config_and_worker_inventory_inner(
+            workspace_scope,
+            config,
+            backend_config,
+            event_sink,
+            Arc::new(reimagine_agent::VecAgentEventSink::new()),
+            worker_inventory,
+        )
+        .await
     }
 
     /// Bootstrap asynchronously with a run event sink but the default
@@ -230,6 +252,52 @@ impl WorkspaceHost {
             agent_event_sink,
         ));
         host
+    }
+
+    async fn with_backend_config_and_worker_inventory_inner(
+        workspace_scope: WorkspaceScope,
+        config: AppConfig,
+        backend_config: InferenceBackendConfig,
+        event_sink: BoxedRunEventSink,
+        agent_event_sink: Arc<dyn AgentEventSink>,
+        worker_inventory: Arc<dyn WorkerInventoryProvider>,
+    ) -> Result<Self, AppHostError> {
+        let model_service = Arc::new(ModelService::new(config.paths().clone()));
+        let bootstrapped = bootstrap_inference_with_worker_inventory(
+            &config,
+            &backend_config,
+            model_service,
+            worker_inventory,
+        )
+        .await
+        .map_err(|error| AppHostError::InferenceBootstrap {
+            message: error.to_string(),
+        })?;
+        let runtime_service = Arc::new(RuntimeService::new(
+            bootstrapped.runtime.executor_registry,
+            bootstrapped.runtime.runtime_hooks.clone(),
+            event_sink,
+            Arc::new(reimagine_runtime::SystemClock),
+        ));
+        let builtin_catalog = Arc::new(BuiltinNodeCatalog::v1());
+        let mut host = Self::new(
+            workspace_scope,
+            config,
+            backend_config,
+            runtime_service,
+            builtin_catalog,
+            Arc::new(bootstrapped.compute_profile),
+            bootstrapped.runtime.selected_instance,
+        );
+        let registry = host.agent_service.registry().clone();
+        let providers = host.agent_service.providers().clone();
+        host.agent_service = Arc::new(AgentService::with_registry_providers_and_sink(
+            host.workspace_scope.clone(),
+            registry,
+            providers,
+            agent_event_sink,
+        ));
+        Ok(host)
     }
 
     pub fn with_agent_event_sink(self, event_sink: Arc<dyn AgentEventSink>) -> Self {
@@ -598,18 +666,6 @@ mod tests {
             .is_ok()
     }
 
-    fn expected_burn_instance() -> reimagine_inference::BackendInstance {
-        let backend = reimagine_inference_burn::BurnBackend::new(
-            reimagine_inference_burn::BurnBackendConfig::new("/models", "/output"),
-        )
-        .expect("burn backend");
-        backend.backend_instance()
-    }
-
-    fn expected_burn_instance_label() -> String {
-        expected_burn_instance().as_str().to_owned()
-    }
-
     #[test]
     fn compute_profile_contains_available_cpu_instance() {
         let base = temp_dir("profile-cpu");
@@ -678,7 +734,7 @@ mod tests {
     }
 
     #[test]
-    fn unknown_open_selected_instance_falls_back_to_cpu_with_diagnostic() {
+    fn unknown_open_selected_instance_remains_pinned_with_diagnostic() {
         let base = temp_dir("profile-unknown-selected");
         let backend_config = InferenceBackendConfig {
             selected_instance: Some("ghost:cpu".to_string()),
@@ -694,8 +750,8 @@ mod tests {
 
         assert_eq!(
             workspace.resolved_backend_instance(),
-            &BackendInstance::new("candle:cpu"),
-            "unknown open selected instance should fall back to candle:cpu"
+            &BackendInstance::new("ghost:cpu"),
+            "unknown explicit selection must fail closed"
         );
         let profile = workspace.compute_profile();
         assert_cpu_available(&profile);
@@ -710,54 +766,6 @@ mod tests {
                 )
             });
         assert!(diagnostic.message().contains("ghost:cpu"));
-        let _ = fs::remove_dir_all(&base);
-    }
-
-    #[test]
-    fn burn_selected_instance_is_resolved_without_candle_fallback_diagnostic() {
-        let base = temp_dir("profile-burn-selected");
-        let backend_config = InferenceBackendConfig {
-            selected_instance: Some(expected_burn_instance_label()),
-            ..InferenceBackendConfig::default()
-        };
-        let workspace = WorkspaceHost::with_backend_config(
-            WorkspaceScope::new("profile-burn-selected"),
-            &base,
-            backend_config,
-            Arc::new(VecRunEventSink::new()),
-        );
-
-        assert_eq!(
-            workspace.resolved_backend_instance(),
-            &expected_burn_instance()
-        );
-        let profile = workspace.compute_profile();
-        assert!(
-            profile
-                .backend_profiles
-                .iter()
-                .any(|backend| backend.backend.as_str() == "candle"),
-            "compute profile should keep Candle observable"
-        );
-        let burn = profile
-            .backend_profiles
-            .iter()
-            .find(|backend| backend.backend.as_str() == "burn")
-            .expect("burn backend profile");
-        let default_burn = burn
-            .instances
-            .iter()
-            .find(|instance| instance.instance == expected_burn_instance())
-            .expect("default burn profile");
-        assert_eq!(
-            default_burn.status,
-            reimagine_inference::BackendInstanceStatus::Available
-        );
-        assert!(
-            profile.diagnostics.is_empty(),
-            "known Burn selection should not emit fallback diagnostics: {:?}",
-            profile.diagnostics
-        );
         let _ = fs::remove_dir_all(&base);
     }
 

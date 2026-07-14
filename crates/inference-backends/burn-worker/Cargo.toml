@@ -30,7 +30,16 @@ wgpu = ["reimagine-inference-burn/wgpu"]
 flex = ["reimagine-inference-burn/flex"]
 
 [dev-dependencies]
+axum = { workspace = true }
+http-body-util = "0.1"
 image = { workspace = true }
+reimagine-agent = { path = "../../agent" }
+reimagine-app-host = { path = "../../app-host" }
+reimagine-axum-host = { path = "../../axum-host" }
 reimagine-backend-worker-host = { path = "../../backend-worker-host" }
+reimagine-config = { path = "../../config" }
+reimagine-runtime = { path = "../../runtime" }
+reimagine-model-manager = { path = "../../model-manager" }
 safetensors = { workspace = true }
 tempfile = { workspace = true }
+tower = { workspace = true }

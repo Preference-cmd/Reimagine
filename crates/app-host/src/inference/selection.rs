@@ -46,7 +46,7 @@ pub(crate) fn resolve_backend_selection(
             Ok(instance) => instance,
             Err(diagnostic) => {
                 diagnostics.push(*diagnostic);
-                BackendInstance::new(CANDLE_CPU_FALLBACK)
+                BackendInstance::new(instance_id)
             }
         }
     } else {
@@ -58,14 +58,14 @@ pub(crate) fn resolve_backend_selection(
 
     let mut priority_order = Vec::new();
     push_unique(&mut priority_order, selected_instance.clone());
-    for configured in &config.priority_order {
-        let configured = configured.trim();
-        if configured.is_empty() {
-            continue;
-        }
-        push_unique(&mut priority_order, BackendInstance::new(configured));
-    }
     if !has_explicit_selected_instance {
+        for configured in &config.priority_order {
+            let configured = configured.trim();
+            if configured.is_empty() {
+                continue;
+            }
+            push_unique(&mut priority_order, BackendInstance::new(configured));
+        }
         push_unique(
             &mut priority_order,
             BackendInstance::new(CANDLE_CPU_FALLBACK),
@@ -223,7 +223,7 @@ fn unknown_selected_instance(instance: &str) -> Diagnostic {
         DiagnosticSeverity::Warning,
         source(),
         format!(
-            "selected backend instance `{instance}` is not reported by any backend profile; falling back to `{CANDLE_CPU_FALLBACK}`"
+            "selected backend instance `{instance}` is not reported by any backend profile; install or enable the selected backend before local execution"
         ),
         target(format!("selected_instance/{instance}")),
     )
@@ -238,7 +238,7 @@ fn selected_instance_unavailable(instance: &str, reason: &str) -> Diagnostic {
         DiagnosticSeverity::Warning,
         source(),
         format!(
-            "selected backend instance `{instance}` is unavailable: {reason}; falling back to `{CANDLE_CPU_FALLBACK}`"
+            "selected backend instance `{instance}` is unavailable: {reason}; local execution remains pinned to the selected instance"
         ),
         target(format!("selected_instance/{instance}")),
     )
@@ -281,7 +281,7 @@ mod tests {
     }
 
     #[test]
-    fn resolve_unknown_selected_instance_falls_back_to_candle_cpu() {
+    fn resolve_unknown_explicit_instance_is_preserved_without_candle_fallback() {
         let profile = profile_with_stub();
         let cfg = InferenceBackendConfig {
             selected_instance: Some("ghost:cpu".to_string()),
@@ -292,7 +292,11 @@ mod tests {
 
         assert_eq!(
             resolved.selected_instance,
-            BackendInstance::new(CANDLE_CPU_FALLBACK)
+            BackendInstance::new("ghost:cpu")
+        );
+        assert_eq!(
+            resolved.priority_order,
+            vec![BackendInstance::new("ghost:cpu")]
         );
         assert_eq!(resolved.diagnostics.len(), 1);
         assert_eq!(
@@ -302,7 +306,39 @@ mod tests {
     }
 
     #[test]
-    fn explicit_priority_order_can_allow_candle_after_open_selected_instance() {
+    fn resolve_unavailable_explicit_instance_is_preserved_without_priority_fallback() {
+        let profile = profile_with_stub().with_backend_profile(
+            BackendProfile::new(Backend::new("burn")).with_instance(BackendInstanceProfile::new(
+                BackendInstance::new("burn:wgpu:default"),
+                Backend::new("burn"),
+                DeviceProfile::new("wgpu:default"),
+                BackendInstanceStatus::Unavailable,
+            )),
+        );
+        let cfg = InferenceBackendConfig {
+            selected_instance: Some("burn:wgpu:default".to_string()),
+            priority_order: vec!["candle:cpu".to_string()],
+            ..InferenceBackendConfig::default()
+        };
+
+        let resolved = resolve_backend_selection(&cfg, &profile);
+
+        assert_eq!(
+            resolved.selected_instance,
+            BackendInstance::new("burn:wgpu:default")
+        );
+        assert_eq!(
+            resolved.priority_order,
+            vec![BackendInstance::new("burn:wgpu:default")]
+        );
+        assert_eq!(
+            resolved.diagnostics[0].code().as_str(),
+            "APP_HOST/BACKEND_SELECTED_INSTANCE_UNAVAILABLE"
+        );
+    }
+
+    #[test]
+    fn explicit_selection_ignores_priority_fallbacks() {
         let profile = profile_with_stub();
         let cfg = InferenceBackendConfig {
             selected_instance: Some("stub:cpu".to_string()),
@@ -314,10 +350,7 @@ mod tests {
 
         assert_eq!(
             resolved.priority_order,
-            vec![
-                BackendInstance::new("stub:cpu"),
-                BackendInstance::new("candle:cpu")
-            ]
+            vec![BackendInstance::new("stub:cpu")]
         );
     }
 

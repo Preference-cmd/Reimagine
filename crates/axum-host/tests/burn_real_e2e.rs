@@ -17,8 +17,14 @@ use std::path::PathBuf;
 use axum::body::Body;
 use axum::http::{Request, header};
 use reimagine_agent::WorkspaceScope;
-use reimagine_app_host::{BackendSelection, WorkspaceHost};
+use reimagine_app_host::{
+    StaticWorkerInventoryProvider, WorkerBackendCandidate, WorkerInventorySnapshot, WorkspaceHost,
+};
 use reimagine_axum_host::{AxumHostState, build_router};
+use reimagine_backend_worker_host::{ExpectedWorkerIdentity, WorkerLaunchSpec, WorkerLimits};
+use reimagine_backend_worker_protocol::{
+    BackendInstanceId, ProtocolRange, WorkerInstallationId, WorkerInstanceProfile,
+};
 use reimagine_config::{AppPaths, InferenceBackendConfig, InferenceBackendKind};
 use reimagine_inference::InferenceCapability;
 use reimagine_runtime::RunEventSink;
@@ -30,17 +36,86 @@ const BURN_WORKFLOW_ID: &str = "workflow_sdxl_burn_smoke_real";
 const BURN_MODEL_ID: &str = "burn-real-sdxl-smoke-burn";
 const BURN_INSTANCE_LABEL: &str = "burn:wgpu:default";
 
-fn required_env() -> Option<(PathBuf, PathBuf)> {
+fn required_env() -> Option<(PathBuf, PathBuf, PathBuf)> {
     let workspace = std::env::var_os("REIMAGINE_BURN_AXUM_WORKSPACE").map(PathBuf::from)?;
     let report_path = std::env::var_os("REIMAGINE_BURN_AXUM_PACKAGE_REPORT").map(PathBuf::from)?;
-    if workspace.as_os_str().is_empty() || report_path.as_os_str().is_empty() {
+    let worker = std::env::var_os("REIMAGINE_BURN_WORKER").map(PathBuf::from)?;
+    if workspace.as_os_str().is_empty()
+        || report_path.as_os_str().is_empty()
+        || worker.as_os_str().is_empty()
+    {
         eprintln!(
-            "skipping Burn smoke bootstrap test; REIMAGINE_BURN_AXUM_WORKSPACE and \
-             REIMAGINE_BURN_AXUM_PACKAGE_REPORT must both be set to non-empty paths"
+            "skipping Burn smoke bootstrap test; workspace, package report, and REIMAGINE_BURN_WORKER are required"
         );
         return None;
     }
-    Some((workspace, report_path))
+    assert!(
+        worker.is_file(),
+        "REIMAGINE_BURN_WORKER is not a file: {}",
+        worker.display()
+    );
+    Some((workspace, report_path, worker))
+}
+
+fn worker_provider(paths: &AppPaths, executable: PathBuf) -> Arc<StaticWorkerInventoryProvider> {
+    let instance = BackendInstanceId::from(BURN_INSTANCE_LABEL);
+    let launch = WorkerLaunchSpec {
+        executable,
+        expected: ExpectedWorkerIdentity {
+            backend_instance_id: instance.clone(),
+            installation_id: WorkerInstallationId::from("dev"),
+            backend_kind: "burn".to_owned(),
+            target: format!("{}-{}", std::env::consts::ARCH, std::env::consts::OS),
+            manifest_digest: "dev".to_owned(),
+        },
+        supported_protocols: ProtocolRange::new(1, 1),
+        limits: WorkerLimits {
+            request_timeout: std::time::Duration::from_secs(120),
+            ..WorkerLimits::default()
+        },
+        environment: vec![
+            (
+                "REIMAGINE_MODELS_DIR".to_owned(),
+                paths.models_dir().display().to_string(),
+            ),
+            (
+                "REIMAGINE_OUTPUT_DIR".to_owned(),
+                paths.output_dir().display().to_string(),
+            ),
+            (
+                "REIMAGINE_ALLOWED_MODEL_ROOTS".to_owned(),
+                paths.models_dir().display().to_string(),
+            ),
+            (
+                "REIMAGINE_ALLOWED_OUTPUT_ROOTS".to_owned(),
+                paths.output_dir().display().to_string(),
+            ),
+        ],
+    };
+    let candidate = WorkerBackendCandidate::try_new(
+        launch,
+        WorkerInstanceProfile {
+            backend_instance_id: instance,
+            device_label: "wgpu:default".to_owned(),
+            capabilities: vec![
+                "model.load_bundle",
+                "latent.create_empty",
+                "text.encode",
+                "diffusion.sample",
+                "latent.decode",
+                "image.save",
+                "image.preview",
+            ]
+            .into_iter()
+            .map(str::to_owned)
+            .collect(),
+            operation_options: serde_json::json!({}),
+        },
+    )
+    .expect("worker candidate");
+    Arc::new(StaticWorkerInventoryProvider::new(
+        WorkerInventorySnapshot::new(vec![candidate]),
+    ))
 }
 
 fn json_request(method: &str, uri: &str, body: Option<&str>) -> Request<Body> {
@@ -123,7 +198,7 @@ fn assert_truthful_burn_capabilities(profile_value: &Value) {
 #[tokio::test]
 #[ignore = "requires REIMAGINE_BURN_AXUM_WORKSPACE and REIMAGINE_BURN_AXUM_PACKAGE_REPORT"]
 async fn burn_real_sdxl_smoke_workflow_opens_through_axum() {
-    let (workspace_root, report_path) = match required_env() {
+    let (workspace_root, report_path, worker_executable) = match required_env() {
         Some(values) => values,
         None => return,
     };
@@ -190,12 +265,17 @@ async fn burn_real_sdxl_smoke_workflow_opens_through_axum() {
     );
 
     let recorder = Arc::new(reimagine_axum_host::RunEventRecorder::new());
-    let host = Arc::new(WorkspaceHost::with_defaults_and_backend(
-        WorkspaceScope::new("ws-burn-smoke-05a"),
-        &workspace_root,
-        BackendSelection::Burn,
-        recorder.clone() as Arc<dyn RunEventSink>,
-    ));
+    let host = Arc::new(
+        WorkspaceHost::try_with_backend_config_and_worker_inventory(
+            WorkspaceScope::new("ws-burn-smoke-05a"),
+            &workspace_root,
+            backend_config,
+            recorder.clone() as Arc<dyn RunEventSink>,
+            worker_provider(&paths, worker_executable),
+        )
+        .await
+        .expect("process-backed workspace"),
+    );
 
     assert_eq!(
         host.backend_config().backend,
@@ -294,7 +374,7 @@ async fn burn_real_sdxl_smoke_workflow_opens_through_axum() {
 async fn burn_real_sdxl_smoke_workflow_runs_through_axum_to_png_artifact() {
     use std::time::{Duration, Instant};
 
-    let (workspace_root, report_path) = match required_env() {
+    let (workspace_root, report_path, worker_executable) = match required_env() {
         Some(values) => values,
         None => return,
     };
@@ -334,12 +414,17 @@ async fn burn_real_sdxl_smoke_workflow_runs_through_axum_to_png_artifact() {
     let descriptor_id = descriptor.id().clone();
 
     let recorder = Arc::new(reimagine_axum_host::RunEventRecorder::new());
-    let host = Arc::new(WorkspaceHost::with_defaults_and_backend(
-        WorkspaceScope::new("ws-burn-smoke-05b"),
-        &workspace_root,
-        BackendSelection::Burn,
-        recorder.clone() as Arc<dyn RunEventSink>,
-    ));
+    let host = Arc::new(
+        WorkspaceHost::try_with_backend_config_and_worker_inventory(
+            WorkspaceScope::new("ws-burn-smoke-05b"),
+            &workspace_root,
+            backend_config,
+            recorder.clone() as Arc<dyn RunEventSink>,
+            worker_provider(&paths, worker_executable),
+        )
+        .await
+        .expect("process-backed workspace"),
+    );
     let app = build_router().with_state(AxumHostState::new(host.clone(), recorder.clone()));
 
     // 1. Open the Burn smoke workflow.

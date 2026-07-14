@@ -5,9 +5,6 @@ use reimagine_inference::{
     Backend, BackendInstance, BackendInstanceDescriptor, BackendInstanceRuntimeHooks,
     BackendProfile, DeviceProfile, InferenceBackend,
 };
-use reimagine_inference_burn::{
-    BurnBackend, BurnBackendConfig, BurnBackendError, BurnDevice, BurnProfileProvider,
-};
 use reimagine_inference_candle::{
     CandleBackend, CandleBackendConfig, CandleBackendError, CandleDevice, CandleProfileProvider,
 };
@@ -15,26 +12,18 @@ use reimagine_plugin::{Extension, Plugin};
 
 #[derive(Debug)]
 pub(crate) enum BackendCandidateError {
-    Burn(BurnBackendError),
     Candle(CandleBackendError),
 }
 
 impl std::fmt::Display for BackendCandidateError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
-            Self::Burn(error) => write!(f, "{error}"),
             Self::Candle(error) => write!(f, "{error}"),
         }
     }
 }
 
 impl std::error::Error for BackendCandidateError {}
-
-impl From<BurnBackendError> for BackendCandidateError {
-    fn from(value: BurnBackendError) -> Self {
-        Self::Burn(value)
-    }
-}
 
 impl From<CandleBackendError> for BackendCandidateError {
     fn from(value: CandleBackendError) -> Self {
@@ -59,62 +48,6 @@ pub(crate) trait BackendCandidate: Send + Sync {
         instance: &BackendInstance,
         device: Option<DeviceProfile>,
     ) -> Result<BuiltBackendInstance, BackendCandidateError>;
-}
-
-#[derive(Debug, Clone, Copy)]
-pub(crate) struct BurnBackendCandidate;
-
-impl BurnBackendCandidate {
-    pub(crate) const fn new() -> Self {
-        Self
-    }
-}
-
-impl BackendCandidate for BurnBackendCandidate {
-    fn backend(&self) -> Backend {
-        Backend::new("burn")
-    }
-
-    fn profile(&self) -> BackendProfile {
-        BurnProfileProvider::new().probe()
-    }
-
-    fn build(
-        &self,
-        config: &AppConfig,
-        instance: &BackendInstance,
-        device: Option<DeviceProfile>,
-    ) -> Result<BuiltBackendInstance, BackendCandidateError> {
-        let device_label = instance
-            .as_str()
-            .split_once(':')
-            .map(|(_, label)| label)
-            .unwrap_or("cpu");
-        let burn_config = BurnBackendConfig::new(
-            config.paths().models_dir().to_path_buf(),
-            config.paths().output_dir().to_path_buf(),
-        )
-        .with_device(BurnDevice::new(device_label));
-        let backend = Arc::new(BurnBackend::new(burn_config)?);
-        let plugin = Plugin::try_from("builtin.burn").expect("valid built-in Burn plugin id");
-        let extension =
-            Extension::try_from("backend.burn").expect("valid built-in Burn extension id");
-        let descriptor =
-            BackendInstanceDescriptor::new(instance.clone(), backend.backend_kind().clone())
-                .with_plugin(plugin.clone(), extension.clone());
-        let descriptor = if let Some(device) = device.clone() {
-            descriptor.with_device(device)
-        } else {
-            descriptor
-        };
-        let runtime_hooks = backend.runtime_hooks(Some(plugin), Some(extension), device);
-        let backend: Arc<dyn InferenceBackend> = backend;
-        Ok(BuiltBackendInstance {
-            descriptor,
-            backend,
-            runtime_hooks: Arc::new(runtime_hooks),
-        })
-    }
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -173,8 +106,5 @@ impl BackendCandidate for CandleBackendCandidate {
 }
 
 pub(crate) fn builtin_backend_candidates() -> Vec<Arc<dyn BackendCandidate>> {
-    vec![
-        Arc::new(CandleBackendCandidate::new()),
-        Arc::new(BurnBackendCandidate::new()),
-    ]
+    vec![Arc::new(CandleBackendCandidate::new())]
 }

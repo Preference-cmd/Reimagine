@@ -320,7 +320,7 @@ async fn write_burn_package(
                 },
                 "components": [
                     {
-                        "component_role": "Diffusion",
+                        "component_role": "diffusion",
                         "model_role": "DiffusionModel",
                         "relative_path": "diffusion/model.safetensors",
                         "format": "safetensors",
@@ -333,7 +333,7 @@ async fn write_burn_package(
                         }
                     },
                     {
-                        "component_role": "Vae",
+                        "component_role": "vae",
                         "model_role": "Vae",
                         "relative_path": "vae/model.safetensors",
                         "format": "safetensors",
@@ -346,7 +346,7 @@ async fn write_burn_package(
                         }
                     },
                     {
-                        "component_role": "TextEncoder",
+                        "component_role": "text_encoder",
                         "model_role": "TextEncoder",
                         "relative_path": "text_encoder/model.safetensors",
                         "format": "safetensors",
@@ -359,7 +359,7 @@ async fn write_burn_package(
                         }
                     },
                     {
-                        "component_role": "TextEncoder2",
+                        "component_role": "text_encoder_2",
                         "model_role": "TextEncoder",
                         "relative_path": "text_encoder_2/model.safetensors",
                         "format": "safetensors",

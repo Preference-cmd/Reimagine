@@ -15,6 +15,7 @@ mod error;
 mod inference;
 mod inference_backend;
 mod model_acquisition_service;
+mod model_conversion;
 mod model_service;
 mod node_catalog;
 mod policy;
@@ -34,9 +35,17 @@ pub use artifact_access::{
     ArtifactAccess, ArtifactAccessError, media_type_for_reference, resolve_artifact_path,
 };
 pub use error::{AppHostError, AppHostResult};
+pub use inference::worker::{
+    EmptyWorkerInventoryProvider, StaticWorkerInventoryProvider, WorkerActivationError,
+    WorkerBackendCandidate, WorkerInventoryProvider, WorkerInventorySnapshot,
+};
 pub use inference_backend::BackendSelection;
 pub use model_acquisition_service::ModelAcquisitionService;
-pub use model_service::ModelService;
+pub use model_conversion::{
+    BurnCheckpointConverter, BurnConversionComponent, BurnConversionComponentRole,
+    BurnConversionReport,
+};
+pub use model_service::{AcquireAndConvertReport, AcquireAndConvertRequest, ModelService};
 pub use node_catalog::{NodeCatalogAlignment, NodeCatalogService};
 pub use policy::WorkflowCommandPolicy;
 pub use proposal::{ProposalReceipt, ProposalStatus, WorkflowProposal};

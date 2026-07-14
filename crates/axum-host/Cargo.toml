@@ -14,6 +14,7 @@ clap = { workspace = true }
 reimagine-agent = { path = "../agent" }
 reimagine-app-host = { path = "../app-host" }
 reimagine-config = { path = "../config" }
+reimagine-inference-burn = { path = "../inference-backends/burn" }
 reimagine-core = { path = "../core" }
 reimagine-model-acquisition = { path = "../model-acquisition" }
 reimagine-runtime = { path = "../runtime" }
@@ -31,6 +32,8 @@ async-trait = { workspace = true }
 http-body-util = "0.1"
 image = { workspace = true }
 reimagine-agent = { path = "../agent" }
+reimagine-backend-worker-host = { path = "../backend-worker-host" }
+reimagine-backend-worker-protocol = { path = "../backend-worker-protocol" }
 reimagine-config = { path = "../config" }
 reimagine-inference = { path = "../inference" }
 reimagine-model-manager = { path = "../model-manager" }
