@@ -36,6 +36,10 @@ pub use artifact_access::{
     ArtifactAccess, ArtifactAccessError, media_type_for_reference, resolve_artifact_path,
 };
 pub use error::{AppHostError, AppHostResult};
+pub use inference::switch::{
+    ProcessSwitchableWorker, RunCancellation, SwitchableWorker, SwitchingInferenceRuntime,
+    WorkerSelectionHandle, WorkerSwitchError, WorkerSwitchService, WorkerSwitchTarget,
+};
 pub use inference::worker::{
     EmptyWorkerInventoryProvider, StaticWorkerInventoryProvider, WorkerActivationError,
     WorkerBackendCandidate, WorkerInventoryProvider, WorkerInventorySnapshot,

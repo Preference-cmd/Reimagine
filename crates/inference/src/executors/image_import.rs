@@ -99,9 +99,10 @@ impl NodeExecutor for LoadImageExecutor {
             request = request.with_correlation_id(cid);
         }
 
+        let invocation = context.inference_invocation();
         let response: ImageImportResponse = self
             .inference
-            .image_import(request)
+            .image_import_with_invocation(&invocation, request)
             .await
             .map_err(into_executor_error)?;
 

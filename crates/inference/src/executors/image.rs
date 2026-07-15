@@ -79,9 +79,10 @@ impl NodeExecutor for VaeDecodeExecutor {
             });
         }
 
+        let invocation = context.inference_invocation();
         let response: LatentDecodeResponse = self
             .inference
-            .latent_decode(request)
+            .latent_decode_with_invocation(&invocation, request)
             .await
             .map_err(into_executor_error)?;
 
@@ -122,9 +123,10 @@ impl NodeExecutor for SaveImageExecutor {
             request = request.with_correlation_id(cid);
         }
 
+        let invocation = context.inference_invocation();
         let response: ImageSaveResponse = self
             .inference
-            .image_save(request)
+            .image_save_with_invocation(&invocation, request)
             .await
             .map_err(into_executor_error)?;
         let reference: ArtifactRef = response.into_artifact();
@@ -169,9 +171,10 @@ impl NodeExecutor for PreviewImageExecutor {
             request = request.with_correlation_id(cid);
         }
 
+        let invocation = context.inference_invocation();
         let response: ImagePreviewResponse = self
             .inference
-            .image_preview(request)
+            .image_preview_with_invocation(&invocation, request)
             .await
             .map_err(into_executor_error)?;
         let reference: ArtifactRef = response.into_artifact();

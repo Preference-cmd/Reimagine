@@ -21,6 +21,7 @@ mod consumer_index;
 mod error;
 mod events;
 mod handle;
+mod progress;
 mod resources;
 mod run_inputs;
 mod run_session;

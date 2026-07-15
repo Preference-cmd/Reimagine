@@ -10,6 +10,7 @@ use crate::backend_selection::{
 use crate::bridge::{BackendBridgePolicy, BridgePlan};
 use crate::capability::InferenceCapability;
 use crate::inference_error::InferenceError;
+use crate::invocation::InferenceInvocation;
 use crate::request::diffusion::DiffusionSampleRequest;
 use crate::request::image::{ImagePreviewRequest, ImageSaveRequest};
 use crate::request::image_import::ImageImportRequest;
@@ -35,8 +36,20 @@ pub trait InferenceRuntime: Send + Sync + 'static {
         request: LoadBundleRequest,
     ) -> Result<LoadBundleResponse, InferenceError>;
 
+    async fn load_bundle_with_invocation(
+        &self,
+        invocation: &InferenceInvocation,
+        request: LoadBundleRequest,
+    ) -> Result<LoadBundleResponse, InferenceError>;
+
     async fn text_encode(
         &self,
+        request: TextEncodeRequest,
+    ) -> Result<TextEncodeResponse, InferenceError>;
+
+    async fn text_encode_with_invocation(
+        &self,
+        invocation: &InferenceInvocation,
         request: TextEncodeRequest,
     ) -> Result<TextEncodeResponse, InferenceError>;
 
@@ -45,8 +58,20 @@ pub trait InferenceRuntime: Send + Sync + 'static {
         request: CreateEmptyLatentRequest,
     ) -> Result<CreateEmptyLatentResponse, InferenceError>;
 
+    async fn create_empty_latent_with_invocation(
+        &self,
+        invocation: &InferenceInvocation,
+        request: CreateEmptyLatentRequest,
+    ) -> Result<CreateEmptyLatentResponse, InferenceError>;
+
     async fn diffusion_sample(
         &self,
+        request: DiffusionSampleRequest,
+    ) -> Result<DiffusionSampleResponse, InferenceError>;
+
+    async fn diffusion_sample_with_invocation(
+        &self,
+        invocation: &InferenceInvocation,
         request: DiffusionSampleRequest,
     ) -> Result<DiffusionSampleResponse, InferenceError>;
 
@@ -55,8 +80,20 @@ pub trait InferenceRuntime: Send + Sync + 'static {
         request: LatentDecodeRequest,
     ) -> Result<LatentDecodeResponse, InferenceError>;
 
+    async fn latent_decode_with_invocation(
+        &self,
+        invocation: &InferenceInvocation,
+        request: LatentDecodeRequest,
+    ) -> Result<LatentDecodeResponse, InferenceError>;
+
     async fn latent_encode(
         &self,
+        request: LatentEncodeRequest,
+    ) -> Result<LatentEncodeResponse, InferenceError>;
+
+    async fn latent_encode_with_invocation(
+        &self,
+        invocation: &InferenceInvocation,
         request: LatentEncodeRequest,
     ) -> Result<LatentEncodeResponse, InferenceError>;
 
@@ -65,13 +102,31 @@ pub trait InferenceRuntime: Send + Sync + 'static {
         request: ImageImportRequest,
     ) -> Result<ImageImportResponse, InferenceError>;
 
+    async fn image_import_with_invocation(
+        &self,
+        invocation: &InferenceInvocation,
+        request: ImageImportRequest,
+    ) -> Result<ImageImportResponse, InferenceError>;
+
     async fn image_save(
         &self,
         request: ImageSaveRequest,
     ) -> Result<ImageSaveResponse, InferenceError>;
 
+    async fn image_save_with_invocation(
+        &self,
+        invocation: &InferenceInvocation,
+        request: ImageSaveRequest,
+    ) -> Result<ImageSaveResponse, InferenceError>;
+
     async fn image_preview(
         &self,
+        request: ImagePreviewRequest,
+    ) -> Result<ImagePreviewResponse, InferenceError>;
+
+    async fn image_preview_with_invocation(
+        &self,
+        invocation: &InferenceInvocation,
         request: ImagePreviewRequest,
     ) -> Result<ImagePreviewResponse, InferenceError>;
 }
@@ -311,12 +366,36 @@ impl InferenceRuntime for DefaultInferenceRuntime {
         backend.backend.load_bundle(request).await
     }
 
+    async fn load_bundle_with_invocation(
+        &self,
+        invocation: &InferenceInvocation,
+        request: LoadBundleRequest,
+    ) -> Result<LoadBundleResponse, InferenceError> {
+        let backend = self.resolve_for_request(&request)?;
+        backend
+            .backend
+            .load_bundle_with_invocation(invocation, request)
+            .await
+    }
+
     async fn text_encode(
         &self,
         request: TextEncodeRequest,
     ) -> Result<TextEncodeResponse, InferenceError> {
         let backend = self.resolve_for_request(&request)?;
         backend.backend.text_encode(request).await
+    }
+
+    async fn text_encode_with_invocation(
+        &self,
+        invocation: &InferenceInvocation,
+        request: TextEncodeRequest,
+    ) -> Result<TextEncodeResponse, InferenceError> {
+        let backend = self.resolve_for_request(&request)?;
+        backend
+            .backend
+            .text_encode_with_invocation(invocation, request)
+            .await
     }
 
     async fn create_empty_latent(
@@ -327,12 +406,36 @@ impl InferenceRuntime for DefaultInferenceRuntime {
         backend.backend.create_empty_latent(request).await
     }
 
+    async fn create_empty_latent_with_invocation(
+        &self,
+        invocation: &InferenceInvocation,
+        request: CreateEmptyLatentRequest,
+    ) -> Result<CreateEmptyLatentResponse, InferenceError> {
+        let backend = self.resolve_for_request(&request)?;
+        backend
+            .backend
+            .create_empty_latent_with_invocation(invocation, request)
+            .await
+    }
+
     async fn diffusion_sample(
         &self,
         request: DiffusionSampleRequest,
     ) -> Result<DiffusionSampleResponse, InferenceError> {
         let backend = self.resolve_for_request(&request)?;
         backend.backend.diffusion_sample(request).await
+    }
+
+    async fn diffusion_sample_with_invocation(
+        &self,
+        invocation: &InferenceInvocation,
+        request: DiffusionSampleRequest,
+    ) -> Result<DiffusionSampleResponse, InferenceError> {
+        let backend = self.resolve_for_request(&request)?;
+        backend
+            .backend
+            .diffusion_sample_with_invocation(invocation, request)
+            .await
     }
 
     async fn latent_decode(
@@ -343,12 +446,36 @@ impl InferenceRuntime for DefaultInferenceRuntime {
         backend.backend.latent_decode(request).await
     }
 
+    async fn latent_decode_with_invocation(
+        &self,
+        invocation: &InferenceInvocation,
+        request: LatentDecodeRequest,
+    ) -> Result<LatentDecodeResponse, InferenceError> {
+        let backend = self.resolve_for_request(&request)?;
+        backend
+            .backend
+            .latent_decode_with_invocation(invocation, request)
+            .await
+    }
+
     async fn latent_encode(
         &self,
         request: LatentEncodeRequest,
     ) -> Result<LatentEncodeResponse, InferenceError> {
         let backend = self.resolve_for_request(&request)?;
         backend.backend.latent_encode(request).await
+    }
+
+    async fn latent_encode_with_invocation(
+        &self,
+        invocation: &InferenceInvocation,
+        request: LatentEncodeRequest,
+    ) -> Result<LatentEncodeResponse, InferenceError> {
+        let backend = self.resolve_for_request(&request)?;
+        backend
+            .backend
+            .latent_encode_with_invocation(invocation, request)
+            .await
     }
 
     async fn image_import(
@@ -359,6 +486,18 @@ impl InferenceRuntime for DefaultInferenceRuntime {
         backend.backend.image_import(request).await
     }
 
+    async fn image_import_with_invocation(
+        &self,
+        invocation: &InferenceInvocation,
+        request: ImageImportRequest,
+    ) -> Result<ImageImportResponse, InferenceError> {
+        let backend = self.resolve_for_request(&request)?;
+        backend
+            .backend
+            .image_import_with_invocation(invocation, request)
+            .await
+    }
+
     async fn image_save(
         &self,
         request: ImageSaveRequest,
@@ -367,12 +506,36 @@ impl InferenceRuntime for DefaultInferenceRuntime {
         backend.backend.image_save(request).await
     }
 
+    async fn image_save_with_invocation(
+        &self,
+        invocation: &InferenceInvocation,
+        request: ImageSaveRequest,
+    ) -> Result<ImageSaveResponse, InferenceError> {
+        let backend = self.resolve_for_request(&request)?;
+        backend
+            .backend
+            .image_save_with_invocation(invocation, request)
+            .await
+    }
+
     async fn image_preview(
         &self,
         request: ImagePreviewRequest,
     ) -> Result<ImagePreviewResponse, InferenceError> {
         let backend = self.resolve_for_request(&request)?;
         backend.backend.image_preview(request).await
+    }
+
+    async fn image_preview_with_invocation(
+        &self,
+        invocation: &InferenceInvocation,
+        request: ImagePreviewRequest,
+    ) -> Result<ImagePreviewResponse, InferenceError> {
+        let backend = self.resolve_for_request(&request)?;
+        backend
+            .backend
+            .image_preview_with_invocation(invocation, request)
+            .await
     }
 }
 
@@ -789,5 +952,27 @@ mod tests {
             }
             other => panic!("expected BackendSelectionNoCandidate, got {other:?}"),
         }
+    }
+
+    #[tokio::test]
+    async fn invocation_context_is_separate_from_request_and_routes_with_it() {
+        let registry = make_registry_with_single_candle();
+        let runtime = DefaultInferenceRuntime::new(registry, Arc::new(RejectAllBridgePolicy));
+        let invocation = crate::InferenceInvocation::new(
+            RunId::new("invocation-run"),
+            NodeId::new("invocation-node"),
+            None,
+            Arc::new(crate::testing::NoopNodeCancellation::new()),
+            Arc::new(crate::NoopInferenceProgressSink),
+        );
+
+        let response = runtime
+            .create_empty_latent_with_invocation(&invocation, empty_latent_request())
+            .await
+            .expect("router should accept invocation separately from request data");
+
+        assert_eq!(invocation.run_id().as_str(), "invocation-run");
+        assert_eq!(invocation.node_id().as_str(), "invocation-node");
+        assert_eq!(response.latent().width(), 64);
     }
 }

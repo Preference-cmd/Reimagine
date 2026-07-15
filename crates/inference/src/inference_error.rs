@@ -24,6 +24,9 @@ use crate::capability::InferenceCapability;
 /// Errors produced by the inference layer.
 #[derive(Debug)]
 pub enum InferenceError {
+    /// The invocation was cooperatively cancelled before a backend terminal
+    /// success or failure won the request race.
+    Cancelled,
     /// The backend does not implement the requested capability for the
     /// given model series/variant combination. The executor should
     /// surface this as a deterministic, non-retryable node failure.
@@ -103,6 +106,7 @@ pub enum InferenceError {
 impl std::fmt::Display for InferenceError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
+            Self::Cancelled => write!(f, "inference invocation cancelled"),
             Self::BackendNotImplemented {
                 capability,
                 backend_kind,

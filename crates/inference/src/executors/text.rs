@@ -53,9 +53,10 @@ impl NodeExecutor for ClipTextEncodeExecutor {
             request = request.with_correlation_id(cid);
         }
 
+        let invocation = context.inference_invocation();
         let response: TextEncodeResponse = self
             .inference
-            .text_encode(request)
+            .text_encode_with_invocation(&invocation, request)
             .await
             .map_err(into_executor_error)?;
 

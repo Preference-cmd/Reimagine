@@ -77,9 +77,10 @@ impl NodeExecutor for VaeEncodeExecutor {
             request = request.with_correlation_id(cid);
         }
 
+        let invocation = context.inference_invocation();
         let response: LatentEncodeResponse = self
             .inference
-            .latent_encode(request)
+            .latent_encode_with_invocation(&invocation, request)
             .await
             .map_err(into_executor_error)?;
 

@@ -46,7 +46,10 @@ impl WorkerAuthorityTable {
 
     pub(crate) fn register(&self, worker_token: String) -> BackendPayloadKey {
         let sequence = self.next_key.fetch_add(1, Ordering::Relaxed);
-        let host_key = BackendPayloadKey::new(format!("worker-handle-{sequence}"));
+        let host_key = BackendPayloadKey::new(format!(
+            "worker:{}:handle:{sequence}",
+            self.incarnation_id.0
+        ));
         self.worker_tokens
             .lock()
             .expect("worker authority table poisoned")
@@ -95,6 +98,20 @@ mod tests {
         assert!(matches!(
             authority.resolve(&WorkerIncarnationId::from("inc-2"), &key),
             Err(WorkerAuthorityError::StaleIncarnation { .. })
+        ));
+    }
+
+    #[test]
+    fn payload_key_from_replaced_incarnation_never_resolves_in_new_worker() {
+        let old = WorkerAuthorityTable::new(WorkerIncarnationId::from("inc-old"));
+        let old_key = old.register("old-token".to_owned());
+        let replacement = WorkerAuthorityTable::new(WorkerIncarnationId::from("inc-new"));
+        let replacement_key = replacement.register("new-token".to_owned());
+
+        assert_ne!(old_key, replacement_key);
+        assert!(matches!(
+            replacement.resolve(replacement.incarnation_id(), &old_key),
+            Err(WorkerAuthorityError::UnknownPayloadKey(_))
         ));
     }
 }

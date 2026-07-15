@@ -28,8 +28,8 @@ use reimagine_inference::{
 };
 use reimagine_inference::{
     ImageSourceResolver, LatentContent, LatentDecodeResponse, NodeExecutionContext,
-    NodeExecutorError, NodeExecutorRegistry, NodeInputs, NodeParams, NoopNodeCancellation,
-    RecordingArtifactPublisher,
+    NodeExecutorError, NodeExecutorRegistry, NodeInputs, NodeParams, NoopInferenceProgressSink,
+    NoopNodeCancellation, RecordingArtifactPublisher,
 };
 
 // ── Fake model resolver ────────────────────────────────────────────
@@ -190,6 +190,7 @@ fn make_context(
         params,
         publisher,
         cancellation,
+        Arc::new(NoopInferenceProgressSink),
         reimagine_core::event::Timestamp::new("2026-06-13T00:00:00Z"),
     )
 }
@@ -215,6 +216,7 @@ fn make_context_with_recording(
         params,
         publisher,
         cancellation,
+        Arc::new(NoopInferenceProgressSink),
         reimagine_core::event::Timestamp::new("2026-06-13T00:00:00Z"),
     );
     (ctx, recorder)

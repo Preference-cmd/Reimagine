@@ -54,9 +54,10 @@ impl NodeExecutor for EmptyLatentImageExecutor {
             request = request.with_correlation_id(cid);
         }
 
+        let invocation = context.inference_invocation();
         let response: CreateEmptyLatentResponse = self
             .inference
-            .create_empty_latent(request)
+            .create_empty_latent_with_invocation(&invocation, request)
             .await
             .map_err(into_executor_error)?;
 

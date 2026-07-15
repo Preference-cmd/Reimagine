@@ -6,8 +6,8 @@ use reimagine_core::diagnostic::CorrelationId;
 use reimagine_core::model::{RunId, WorkflowId, WorkflowVersion};
 use reimagine_core::readiness::ExecutionNode;
 use reimagine_inference::{
-    ArtifactPublisher, ExecutionOutput, NodeCancellation, NodeExecutionContext, NodeExecutorError,
-    NodeExecutorRegistry, NodeInputs, NodeParams,
+    ArtifactPublisher, ExecutionOutput, InferenceProgressSink, NodeCancellation,
+    NodeExecutionContext, NodeExecutorError, NodeExecutorRegistry, NodeInputs, NodeParams,
 };
 use tokio::sync::Mutex;
 
@@ -15,6 +15,7 @@ use crate::artifacts::{ArtifactStore, RuntimeNodeArtifactCapability};
 use crate::cancellation::{CancellationToken, CombinedCancellation};
 use crate::clock::Clock;
 use crate::events::RunEventSink;
+use crate::progress::RuntimeInferenceProgressSink;
 
 #[derive(Debug, Clone)]
 pub struct PreparedNodeBindings {
@@ -102,6 +103,15 @@ pub async fn execute_stage_node(
         context.cancellation.clone(),
         failure_cancellation,
     ));
+    let progress: Arc<dyn InferenceProgressSink> = Arc::new(RuntimeInferenceProgressSink::new(
+        context.run_id.clone(),
+        context.workflow_id.clone(),
+        context.workflow_version,
+        node.node_id().clone(),
+        context.correlation_id.clone(),
+        Arc::clone(&context.sink),
+        Arc::clone(&context.clock),
+    ));
     let execution_context = NodeExecutionContext::new(
         context.run_id,
         context.workflow_id,
@@ -113,6 +123,7 @@ pub async fn execute_stage_node(
         params,
         publisher,
         cancellation,
+        progress,
         context.clock.now(),
     );
 

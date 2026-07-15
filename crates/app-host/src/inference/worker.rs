@@ -1,8 +1,7 @@
-use std::collections::BTreeMap;
 use std::sync::Arc;
 
 use reimagine_backend_worker_host::{
-    ProcessInferenceBackend, StartedWorker, WorkerHostError, WorkerLaunchSpec, WorkerSupervisor,
+    ProcessInferenceBackend, WorkerHostError, WorkerLaunchSpec, WorkerSupervisor,
 };
 use reimagine_backend_worker_protocol::WorkerInstanceProfile;
 use reimagine_core::diagnostic::{
@@ -11,14 +10,17 @@ use reimagine_core::diagnostic::{
 };
 use reimagine_core::model::DiagnosticId;
 use reimagine_inference::{
-    Backend, BackendInstance, BackendInstanceDescriptor, BackendInstanceObservation,
-    BackendInstanceProfile, BackendInstanceRuntimeHooks, BackendInstanceSnapshot,
-    BackendInstanceStatus, BackendProfile, BackendRunLifecycle, BackendRunLifecycleReport,
-    BackendRunLifecycleRequest, DeviceProfile, InferenceBackend, InferenceCapability,
+    Backend, BackendInstance, BackendInstanceDescriptor, BackendInstanceProfile,
+    BackendInstanceRuntimeHooks, BackendInstanceStatus, BackendProfile, DeviceProfile,
+    InferenceBackend, InferenceCapability,
 };
 use reimagine_plugin::{Extension, Plugin};
 
 use super::candidate::BuiltBackendInstance;
+use super::switch::{
+    ProcessSwitchableWorker, RunCancellation, SwitchableWorker, SwitchingInferenceBackend,
+    SwitchingWorkerRuntimeHooks, WorkerSwitchError, WorkerSwitchService,
+};
 
 #[derive(Clone, Debug, Default)]
 pub struct WorkerInventorySnapshot {
@@ -139,7 +141,14 @@ pub(crate) struct WorkerControlService;
 impl WorkerControlService {
     pub(crate) async fn activate(
         candidate: &WorkerBackendCandidate,
-    ) -> Result<(BuiltBackendInstance, BackendInstanceProfile), WorkerActivationError> {
+    ) -> Result<
+        (
+            BuiltBackendInstance,
+            BackendInstanceProfile,
+            Arc<WorkerSwitchService>,
+        ),
+        WorkerActivationError,
+    > {
         let worker = Arc::new(
             WorkerSupervisor::new(candidate.launch.clone())
                 .start()
@@ -166,6 +175,16 @@ impl WorkerControlService {
 
         let live_profile = project_worker_profile(candidate.backend(), live);
         let backend = Arc::new(ProcessInferenceBackend::new(Arc::clone(&worker)));
+        let active = Arc::new(ProcessSwitchableWorker::new(
+            live_profile.instance.clone(),
+            Arc::clone(&worker),
+            Arc::clone(&backend),
+        ));
+        let active_worker: Arc<dyn SwitchableWorker> = active;
+        let workers = Arc::new(WorkerSwitchService::new(
+            active_worker,
+            Arc::new(UnavailableRunCancellation),
+        ));
         let (plugin, extension) = burn_provenance();
         let descriptor = BackendInstanceDescriptor::new(
             live_profile.instance.clone(),
@@ -173,14 +192,12 @@ impl WorkerControlService {
         )
         .with_device(live_profile.device.clone())
         .with_plugin(plugin.clone(), extension.clone());
-        let hooks = Arc::new(WorkerRuntimeHooks {
-            worker,
-            instance: live_profile.instance.clone(),
-            backend: live_profile.backend.clone(),
-            device: live_profile.device.clone(),
-            plugin,
-            extension,
-        });
+        let backend = Arc::new(SwitchingInferenceBackend::new(
+            Arc::clone(&workers),
+            backend.backend_kind().clone(),
+            backend.capabilities(),
+        ));
+        let hooks = Arc::new(SwitchingWorkerRuntimeHooks::new(Arc::clone(&workers)));
         let backend: Arc<dyn InferenceBackend> = backend;
         let hooks: Arc<dyn BackendInstanceRuntimeHooks> = hooks;
         Ok((
@@ -190,7 +207,19 @@ impl WorkerControlService {
                 runtime_hooks: hooks,
             },
             live_profile,
+            workers,
         ))
+    }
+}
+
+struct UnavailableRunCancellation;
+
+impl RunCancellation for UnavailableRunCancellation {
+    fn cancel(&self, run_id: &reimagine_core::model::RunId) -> Result<(), WorkerSwitchError> {
+        Err(WorkerSwitchError::Cancellation {
+            run_id: run_id.clone(),
+            message: "runtime cancellation is not bound".to_owned(),
+        })
     }
 }
 
@@ -261,71 +290,6 @@ fn burn_provenance() -> (Plugin, Extension) {
         Plugin::try_from("builtin.burn").expect("valid Burn worker plugin id"),
         Extension::try_from("backend.burn").expect("valid Burn worker extension id"),
     )
-}
-
-struct WorkerRuntimeHooks {
-    worker: Arc<StartedWorker>,
-    instance: BackendInstance,
-    backend: Backend,
-    device: DeviceProfile,
-    plugin: Plugin,
-    extension: Extension,
-}
-
-#[async_trait::async_trait]
-impl BackendRunLifecycle for WorkerRuntimeHooks {
-    fn backend_instance(&self) -> &BackendInstance {
-        &self.instance
-    }
-
-    async fn begin_run(
-        &self,
-        _request: BackendRunLifecycleRequest,
-    ) -> Result<BackendRunLifecycleReport, reimagine_inference::InferenceError> {
-        Ok(BackendRunLifecycleReport {
-            backend_instance: self.instance.clone(),
-            diagnostics: Vec::new(),
-        })
-    }
-
-    async fn cleanup_run(
-        &self,
-        request: BackendRunLifecycleRequest,
-    ) -> Result<BackendRunLifecycleReport, reimagine_inference::InferenceError> {
-        self.worker
-            .cleanup(Some(request.run_id.to_string()), Vec::new())
-            .await
-            .map_err(
-                |error| reimagine_inference::InferenceError::BackendExecutionFailed {
-                    message: error.to_string(),
-                },
-            )?;
-        Ok(BackendRunLifecycleReport {
-            backend_instance: self.instance.clone(),
-            diagnostics: Vec::new(),
-        })
-    }
-}
-
-#[async_trait::async_trait]
-impl BackendInstanceObservation for WorkerRuntimeHooks {
-    fn backend_instance(&self) -> &BackendInstance {
-        &self.instance
-    }
-
-    async fn snapshot(&self) -> BackendInstanceSnapshot {
-        let mut observations = BTreeMap::new();
-        observations.insert("process_backed".to_owned(), "true".to_owned());
-        BackendInstanceSnapshot {
-            backend_instance: self.instance.clone(),
-            backend: self.backend.clone(),
-            plugin: Some(self.plugin.clone()),
-            extension: Some(self.extension.clone()),
-            device: Some(self.device.clone()),
-            observations,
-            diagnostics: Vec::new(),
-        }
-    }
 }
 
 #[cfg(test)]

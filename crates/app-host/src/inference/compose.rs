@@ -35,6 +35,7 @@ pub(crate) struct ComposedInferenceRuntime {
     pub(crate) executor_registry: NodeExecutorRegistry,
     pub(crate) runtime_hooks: Arc<dyn BackendInstanceRuntimeHooks>,
     pub(crate) selected_instance: BackendInstance,
+    pub(crate) worker_switch: Option<Arc<super::switch::WorkerSwitchService>>,
 }
 
 pub(crate) struct BootstrapInference {
@@ -190,6 +191,7 @@ async fn compose_inference_runtime_with_workers(
     let mut registry = InferenceBackendRegistry::new();
     let mut hooks = Vec::new();
     let mut allowed_instances = Vec::new();
+    let mut worker_switch = None;
 
     for instance in priority_order.iter().cloned() {
         if disabled.contains(&instance) {
@@ -206,9 +208,12 @@ async fn compose_inference_runtime_with_workers(
         }
         if let Some(worker) = worker_map.get(&instance) {
             match WorkerControlService::activate(worker).await {
-                Ok((built, live_profile)) => {
+                Ok((built, live_profile, workers)) => {
                     replace_instance_profile(profile, live_profile);
                     register_built_backend(&mut registry, &mut hooks, built);
+                    if instance == selected_instance {
+                        worker_switch = Some(workers);
+                    }
                     allowed_instances.push(instance);
                 }
                 Err(error) => {
@@ -237,7 +242,13 @@ async fn compose_inference_runtime_with_workers(
     );
     let mut executor_registry = NodeExecutorRegistry::default();
     let executor_inference_runtime: Arc<dyn reimagine_inference::InferenceRuntime> =
-        inference_runtime.clone();
+        if let Some(workers) = &worker_switch {
+            Arc::new(super::switch::SwitchingInferenceRuntime::new(Arc::clone(
+                workers,
+            )))
+        } else {
+            inference_runtime.clone()
+        };
     register_builtin_inference_executors(
         &mut executor_registry,
         executor_inference_runtime,
@@ -252,6 +263,7 @@ async fn compose_inference_runtime_with_workers(
         executor_registry,
         runtime_hooks: Arc::new(CompositeBackendInstanceRuntimeHooks::new(hooks)),
         selected_instance,
+        worker_switch,
     })
 }
 
@@ -332,6 +344,7 @@ fn compose_inference_runtime_with_candidates(
         executor_registry,
         runtime_hooks: composed_backends.runtime_hooks,
         selected_instance: composed_backends.selected_instance,
+        worker_switch: None,
     })
 }
 

@@ -20,6 +20,7 @@ use reimagine_core::model::{
 
 use crate::artifact_publisher::ArtifactPublisher;
 use crate::cancellation::NodeCancellation;
+use crate::{InferenceInvocation, InferenceProgressSink};
 
 /// Resolved input values for a single node, keyed by input `SlotId`.
 #[derive(Debug, Clone, Default)]
@@ -101,6 +102,7 @@ pub struct NodeExecutionContext {
     params: NodeParams,
     artifacts: Arc<dyn ArtifactPublisher>,
     cancellation: Arc<dyn NodeCancellation>,
+    progress: Arc<dyn InferenceProgressSink>,
     started_at: Timestamp,
 }
 
@@ -117,6 +119,7 @@ impl NodeExecutionContext {
         params: NodeParams,
         artifacts: Arc<dyn ArtifactPublisher>,
         cancellation: Arc<dyn NodeCancellation>,
+        progress: Arc<dyn InferenceProgressSink>,
         started_at: Timestamp,
     ) -> Self {
         Self {
@@ -130,6 +133,7 @@ impl NodeExecutionContext {
             params,
             artifacts,
             cancellation,
+            progress,
             started_at,
         }
     }
@@ -174,7 +178,54 @@ impl NodeExecutionContext {
         &self.cancellation
     }
 
+    pub fn inference_invocation(&self) -> InferenceInvocation {
+        InferenceInvocation::new(
+            self.run_id.clone(),
+            self.node_id.clone(),
+            self.correlation_id.clone(),
+            Arc::clone(&self.cancellation),
+            Arc::clone(&self.progress),
+        )
+    }
+
     pub fn started_at(&self) -> &Timestamp {
         &self.started_at
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::NoopInferenceProgressSink;
+    use crate::testing::{NoopArtifactPublisher, NoopNodeCancellation};
+
+    #[test]
+    fn inference_invocation_preserves_node_identity_and_cancellation() {
+        let cancellation: Arc<dyn NodeCancellation> = Arc::new(NoopNodeCancellation::new());
+        let progress = Arc::new(NoopInferenceProgressSink);
+        let context = NodeExecutionContext::new(
+            RunId::new("run-invocation"),
+            WorkflowId::new("workflow"),
+            WorkflowVersion::new(1),
+            Some(CorrelationId::new("correlation")),
+            NodeId::new("node-invocation"),
+            NodeTypeId::new("builtin.test"),
+            NodeInputs::new(),
+            NodeParams::new(),
+            Arc::new(NoopArtifactPublisher::new()),
+            Arc::clone(&cancellation),
+            progress,
+            Timestamp::new("2026-07-14T00:00:00Z"),
+        );
+
+        let invocation = context.inference_invocation();
+
+        assert_eq!(invocation.run_id(), context.run_id());
+        assert_eq!(invocation.node_id(), context.node_id());
+        assert_eq!(
+            invocation.correlation_id().map(CorrelationId::as_str),
+            Some("correlation")
+        );
+        assert!(Arc::ptr_eq(invocation.cancellation(), &cancellation));
     }
 }

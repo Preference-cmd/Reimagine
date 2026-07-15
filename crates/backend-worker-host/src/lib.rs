@@ -5,6 +5,7 @@ mod error;
 pub mod install;
 pub mod inventory;
 pub mod launch;
+mod leases;
 pub mod package;
 pub mod store_paths;
 mod supervisor;
@@ -24,13 +25,15 @@ pub use inventory::{
     VersionPolicy,
 };
 pub use launch::{ExpectedWorkerIdentity, WorkerLaunchSpec, WorkerLimits};
+pub use leases::{WorkerAdmissionState, WorkerRunLeaseError, WorkerRunLeases};
 pub use package::{
     ExtractionLimits, PackageError, PackageExtractor, PackageFileEntry, PackageManifest,
     PackageResult,
 };
 pub use store_paths::WorkerStorePaths;
 pub use supervisor::{
-    StartedWorker, WorkerProcessState, WorkerRequestHandle, WorkerRequestResult, WorkerSupervisor,
+    StartedWorker, WorkerProcessState, WorkerRequestCanceller, WorkerRequestHandle,
+    WorkerRequestResult, WorkerSupervisor,
 };
 
 // Re-export worker protocol types used in our public API

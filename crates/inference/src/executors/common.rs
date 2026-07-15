@@ -239,6 +239,7 @@ mod tests {
             params,
             Arc::new(NoopArtifactPublisher::new()),
             Arc::new(NoopNodeCancellation::new()),
+            Arc::new(crate::NoopInferenceProgressSink),
             Timestamp::new("2026-06-21T00:00:00Z"),
         )
     }

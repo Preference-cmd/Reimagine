@@ -1,5 +1,5 @@
 use std::path::PathBuf;
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
 
 use reimagine_backend_worker_host::{
     ExpectedWorkerIdentity, ProcessInferenceBackend, WorkerLaunchSpec, WorkerLimits,
@@ -8,6 +8,22 @@ use reimagine_backend_worker_host::{
 use reimagine_backend_worker_protocol::{BackendInstanceId, ProtocolRange, WorkerInstallationId};
 use reimagine_core::model::{NodeId, RunId, WorkflowId, WorkflowVersion};
 use reimagine_inference::{CreateEmptyLatentRequest, InferenceBackend, InferenceCapability};
+use reimagine_inference::{
+    InferenceError, InferenceInvocation, NoopInferenceProgressSink, NoopNodeCancellation,
+};
+use reimagine_inference::{InferenceProgress, InferenceProgressSink};
+
+#[derive(Default)]
+struct RecordingProgressSink(Mutex<Vec<InferenceProgress>>);
+
+impl InferenceProgressSink for RecordingProgressSink {
+    fn report(&self, progress: InferenceProgress) {
+        self.0
+            .lock()
+            .expect("progress sink poisoned")
+            .push(progress);
+    }
+}
 
 fn launch_spec() -> WorkerLaunchSpec {
     WorkerLaunchSpec {
@@ -93,4 +109,292 @@ async fn adapter_does_not_advertise_or_invoke_undeclared_operation() {
             ..
         })
     ));
+}
+
+#[tokio::test]
+async fn invocation_cancellation_reaches_worker_and_wins_once() {
+    let mut spec = launch_spec();
+    spec.environment
+        .push(("FAKE_LATENT_DELAY_MS".to_owned(), "250".to_owned()));
+    let worker = Arc::new(WorkerSupervisor::new(spec).start().await.unwrap());
+    let backend = Arc::new(ProcessInferenceBackend::new(worker));
+    let cancellation = Arc::new(NoopNodeCancellation::new());
+    let invocation = InferenceInvocation::new(
+        RunId::new("run-cancel"),
+        NodeId::new("node-cancel"),
+        None,
+        cancellation.clone(),
+        Arc::new(NoopInferenceProgressSink),
+    );
+
+    let request_task = {
+        let backend = Arc::clone(&backend);
+        tokio::spawn(async move {
+            backend
+                .create_empty_latent_with_invocation(
+                    &invocation,
+                    CreateEmptyLatentRequest::new(
+                        64,
+                        64,
+                        1,
+                        RunId::new("run-cancel"),
+                        WorkflowId::new("workflow-cancel"),
+                        WorkflowVersion::new(1),
+                        NodeId::new("node-cancel"),
+                    ),
+                )
+                .await
+        })
+    };
+
+    tokio::time::sleep(std::time::Duration::from_millis(25)).await;
+    cancellation.cancel();
+
+    assert!(matches!(
+        request_task.await.unwrap(),
+        Err(InferenceError::Cancelled)
+    ));
+}
+
+#[tokio::test]
+async fn backend_error_terminal_wins_over_late_cancel_ack_once() {
+    let mut spec = launch_spec();
+    spec.environment
+        .push(("FAKE_LATENT_DELAY_MS".to_owned(), "50".to_owned()));
+    spec.environment.push((
+        "FAKE_LATENT_TERMINAL".to_owned(),
+        "backend_error".to_owned(),
+    ));
+    let worker = Arc::new(WorkerSupervisor::new(spec).start().await.unwrap());
+    let backend = Arc::new(ProcessInferenceBackend::new(worker));
+    let cancellation = Arc::new(NoopNodeCancellation::new());
+    let invocation = InferenceInvocation::new(
+        RunId::new("run-backend-error-race"),
+        NodeId::new("node-backend-error-race"),
+        None,
+        cancellation.clone(),
+        Arc::new(NoopInferenceProgressSink),
+    );
+    let request_task = {
+        let backend = backend.clone();
+        tokio::spawn(async move {
+            backend
+                .create_empty_latent_with_invocation(
+                    &invocation,
+                    CreateEmptyLatentRequest::new(
+                        64,
+                        64,
+                        1,
+                        RunId::new("run-backend-error-race"),
+                        WorkflowId::new("workflow-race"),
+                        WorkflowVersion::new(1),
+                        NodeId::new("node-backend-error-race"),
+                    ),
+                )
+                .await
+        })
+    };
+
+    tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+    cancellation.cancel();
+
+    let error = request_task.await.unwrap().expect_err("backend error wins");
+    assert!(matches!(
+        error,
+        InferenceError::BackendExecutionFailed { .. }
+    ));
+    assert!(error.to_string().contains("forced_backend_error"));
+}
+
+#[tokio::test]
+async fn success_terminal_wins_over_late_cancel_ack_once() {
+    let mut spec = launch_spec();
+    spec.environment
+        .push(("FAKE_LATENT_DELAY_MS".to_owned(), "50".to_owned()));
+    spec.environment
+        .push(("FAKE_LATENT_TERMINAL".to_owned(), "success".to_owned()));
+    let worker = Arc::new(WorkerSupervisor::new(spec).start().await.unwrap());
+    let backend = Arc::new(ProcessInferenceBackend::new(worker));
+    let cancellation = Arc::new(NoopNodeCancellation::new());
+    let invocation = InferenceInvocation::new(
+        RunId::new("run-success-race"),
+        NodeId::new("node-success-race"),
+        None,
+        cancellation.clone(),
+        Arc::new(NoopInferenceProgressSink),
+    );
+    let request_task = {
+        let backend = backend.clone();
+        tokio::spawn(async move {
+            backend
+                .create_empty_latent_with_invocation(
+                    &invocation,
+                    CreateEmptyLatentRequest::new(
+                        64,
+                        64,
+                        1,
+                        RunId::new("run-success-race"),
+                        WorkflowId::new("workflow-race"),
+                        WorkflowVersion::new(1),
+                        NodeId::new("node-success-race"),
+                    ),
+                )
+                .await
+        })
+    };
+
+    tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+    cancellation.cancel();
+
+    let response = request_task.await.unwrap().expect("success wins");
+    assert_eq!(response.latent().width(), 64);
+}
+
+#[tokio::test]
+async fn worker_crash_after_cancel_request_is_transport_lost_not_cancelled() {
+    let mut spec = launch_spec();
+    spec.environment
+        .push(("FAKE_LATENT_DELAY_MS".to_owned(), "50".to_owned()));
+    spec.environment
+        .push(("FAKE_LATENT_TERMINAL".to_owned(), "crash".to_owned()));
+    let worker = Arc::new(WorkerSupervisor::new(spec).start().await.unwrap());
+    let backend = Arc::new(ProcessInferenceBackend::new(worker));
+    let cancellation = Arc::new(NoopNodeCancellation::new());
+    let invocation = InferenceInvocation::new(
+        RunId::new("run-crash-race"),
+        NodeId::new("node-crash-race"),
+        None,
+        cancellation.clone(),
+        Arc::new(NoopInferenceProgressSink),
+    );
+    let request_task = {
+        let backend = backend.clone();
+        tokio::spawn(async move {
+            backend
+                .create_empty_latent_with_invocation(
+                    &invocation,
+                    CreateEmptyLatentRequest::new(
+                        64,
+                        64,
+                        1,
+                        RunId::new("run-crash-race"),
+                        WorkflowId::new("workflow-race"),
+                        WorkflowVersion::new(1),
+                        NodeId::new("node-crash-race"),
+                    ),
+                )
+                .await
+        })
+    };
+
+    tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+    cancellation.cancel();
+
+    let error = request_task.await.unwrap().expect_err("crash wins");
+    assert!(matches!(
+        error,
+        InferenceError::BackendExecutionFailed { .. }
+    ));
+    assert!(error.to_string().contains("transport lost"));
+}
+
+#[tokio::test]
+async fn invocation_progress_is_forwarded_before_worker_terminal() {
+    let mut spec = launch_spec();
+    spec.environment
+        .push(("FAKE_LATENT_PROGRESS".to_owned(), "1".to_owned()));
+    spec.environment
+        .push(("FAKE_LATENT_DELAY_MS".to_owned(), "250".to_owned()));
+    let worker = Arc::new(WorkerSupervisor::new(spec).start().await.unwrap());
+    let backend = Arc::new(ProcessInferenceBackend::new(worker));
+    let progress = Arc::new(RecordingProgressSink::default());
+    let invocation = InferenceInvocation::new(
+        RunId::new("run-progress"),
+        NodeId::new("node-progress"),
+        None,
+        Arc::new(NoopNodeCancellation::new()),
+        progress.clone(),
+    );
+    let request_task = {
+        let backend = Arc::clone(&backend);
+        tokio::spawn(async move {
+            backend
+                .create_empty_latent_with_invocation(
+                    &invocation,
+                    CreateEmptyLatentRequest::new(
+                        64,
+                        64,
+                        1,
+                        RunId::new("run-progress"),
+                        WorkflowId::new("workflow-progress"),
+                        WorkflowVersion::new(1),
+                        NodeId::new("node-progress"),
+                    ),
+                )
+                .await
+        })
+    };
+
+    tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+    assert!(
+        !request_task.is_finished(),
+        "worker terminal should still be pending"
+    );
+    assert_eq!(
+        progress
+            .0
+            .lock()
+            .expect("progress sink poisoned")
+            .iter()
+            .map(|progress| progress.sequence)
+            .collect::<Vec<_>>(),
+        vec![1, 2, 3]
+    );
+    request_task.await.unwrap().expect("worker success");
+}
+
+#[tokio::test]
+async fn draining_rejects_first_lease_but_allows_already_leased_run() {
+    let worker = Arc::new(WorkerSupervisor::new(launch_spec()).start().await.unwrap());
+    let backend = ProcessInferenceBackend::new(worker);
+    let leases = backend.run_leases();
+
+    let invoke = |run: &'static str, node: &'static str| {
+        let backend = &backend;
+        let invocation = InferenceInvocation::new(
+            RunId::new(run),
+            NodeId::new(node),
+            None,
+            Arc::new(NoopNodeCancellation::new()),
+            Arc::new(NoopInferenceProgressSink),
+        );
+        async move {
+            backend
+                .create_empty_latent_with_invocation(
+                    &invocation,
+                    CreateEmptyLatentRequest::new(
+                        64,
+                        64,
+                        1,
+                        RunId::new(run),
+                        WorkflowId::new("workflow-lease"),
+                        WorkflowVersion::new(1),
+                        NodeId::new(node),
+                    ),
+                )
+                .await
+        }
+    };
+
+    invoke("run-owned", "node-1").await.expect("first lease");
+    leases.begin_draining();
+    invoke("run-owned", "node-2")
+        .await
+        .expect("leased run continues while draining");
+    let rejected = invoke("run-new", "node-1")
+        .await
+        .expect_err("new run must not acquire while draining");
+
+    assert!(rejected.to_string().contains("draining"));
+    assert_eq!(leases.owned_run_count(), 1);
 }

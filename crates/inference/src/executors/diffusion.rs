@@ -96,9 +96,10 @@ impl NodeExecutor for KSamplerExecutor {
             request = request.with_correlation_id(cid);
         }
 
+        let invocation = context.inference_invocation();
         let response: DiffusionSampleResponse = self
             .inference
-            .diffusion_sample(request)
+            .diffusion_sample_with_invocation(&invocation, request)
             .await
             .map_err(into_executor_error)?;
 

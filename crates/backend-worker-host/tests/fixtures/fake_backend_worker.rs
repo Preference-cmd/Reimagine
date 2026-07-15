@@ -276,14 +276,68 @@ fn spawn_request(
                     output: json!(null),
                 }
             }
-            "latent.create_empty" => TerminalOutcome::Success {
-                output: json!({
-                    "worker_token": format!("latent:{}", request.request_id.0),
-                    "width": request.payload["width"],
-                    "height": request.payload["height"],
-                    "batch_size": request.payload["batch_size"]
-                }),
-            },
+            "latent.create_empty" => {
+                if std::env::var_os("FAKE_LATENT_PROGRESS").is_some() {
+                    for sequence in 1..=3 {
+                        write_message(
+                            &stdout,
+                            &WireMessage::Progress(ProgressFrame {
+                                protocol_version: request.protocol_version,
+                                incarnation_id: request.incarnation_id.clone(),
+                                request_id: request.request_id.clone(),
+                                correlation_id: request.correlation_id.clone(),
+                                sequence,
+                                completed: sequence,
+                                total: Some(3),
+                                message: Some(format!("latent step {sequence}")),
+                            }),
+                        )
+                        .unwrap();
+                    }
+                }
+                let milliseconds = std::env::var("FAKE_LATENT_DELAY_MS")
+                    .ok()
+                    .and_then(|value| value.parse::<u64>().ok())
+                    .unwrap_or(0);
+                let forced_terminal = std::env::var("FAKE_LATENT_TERMINAL").ok();
+                for _ in 0..(milliseconds / 5) {
+                    thread::sleep(Duration::from_millis(5));
+                    if forced_terminal.is_none() && cancellation.load(Ordering::Acquire) {
+                        break;
+                    }
+                }
+                if forced_terminal.as_deref() == Some("crash") {
+                    process::exit(17);
+                } else if forced_terminal.as_deref() == Some("backend_error") {
+                    TerminalOutcome::BackendError {
+                        error: BackendExecutionError {
+                            code: "forced_backend_error".to_owned(),
+                            message: "forced backend terminal won the race".to_owned(),
+                            retryable: false,
+                        },
+                    }
+                } else if forced_terminal.as_deref() == Some("success") {
+                    TerminalOutcome::Success {
+                        output: json!({
+                            "worker_token": format!("latent:{}", request.request_id.0),
+                            "width": request.payload["width"],
+                            "height": request.payload["height"],
+                            "batch_size": request.payload["batch_size"]
+                        }),
+                    }
+                } else if cancellation.load(Ordering::Acquire) {
+                    TerminalOutcome::Cancelled
+                } else {
+                    TerminalOutcome::Success {
+                        output: json!({
+                            "worker_token": format!("latent:{}", request.request_id.0),
+                            "width": request.payload["width"],
+                            "height": request.payload["height"],
+                            "batch_size": request.payload["batch_size"]
+                        }),
+                    }
+                }
+            }
             operation => TerminalOutcome::BackendError {
                 error: BackendExecutionError {
                     code: "unsupported_operation".to_owned(),
