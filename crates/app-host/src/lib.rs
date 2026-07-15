@@ -25,6 +25,7 @@ mod run_observation;
 mod run_workflow;
 mod services;
 mod tools;
+mod worker_management;
 mod workflow_service;
 mod workspace;
 
@@ -54,5 +55,8 @@ pub use reimagine_inference::{BackendInstance, WorkspaceComputeProfile};
 pub use run_workflow::{RunWorkflowRequest, RunWorkflowResult, run_id_of};
 pub use services::WorkspaceServices;
 pub use tools::register_app_tools;
+pub use worker_management::{
+    WorkerCatalogItemDto, WorkerInstallationDto, WorkerManagementError, WorkerManagementService,
+};
 pub use workflow_service::WorkflowService;
 pub use workspace::WorkspaceHost;

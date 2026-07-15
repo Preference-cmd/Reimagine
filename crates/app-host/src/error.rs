@@ -54,6 +54,7 @@ pub enum AppHostError {
         message: String,
     },
     ArtifactAccess(ArtifactAccessError),
+    WorkerManagement(crate::WorkerManagementError),
 }
 
 impl std::fmt::Display for AppHostError {
@@ -112,6 +113,7 @@ impl std::fmt::Display for AppHostError {
                 write!(f, "Burn checkpoint import error: {message}")
             }
             Self::ArtifactAccess(error) => write!(f, "artifact access error: {error}"),
+            Self::WorkerManagement(error) => write!(f, "worker management error: {error}"),
         }
     }
 }
@@ -151,5 +153,11 @@ impl From<reimagine_inference_candle::SdxlCheckpointImportError> for AppHostErro
 impl From<ArtifactAccessError> for AppHostError {
     fn from(error: ArtifactAccessError) -> Self {
         Self::ArtifactAccess(error)
+    }
+}
+
+impl From<crate::WorkerManagementError> for AppHostError {
+    fn from(error: crate::WorkerManagementError) -> Self {
+        Self::WorkerManagement(error)
     }
 }

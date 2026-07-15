@@ -54,10 +54,10 @@ impl TauriDownloadEventHub {
     /// Send a payload to a subscriber, silently dropping on error.
     fn send(&self, download_id: &str, payload: DownloadEventPayload) {
         let mut guard = self.inner.lock().expect("download hub poisoned");
-        if let Some(channel) = guard.subscribers.get(download_id) {
-            if channel.send(payload).is_err() {
-                guard.subscribers.remove(download_id);
-            }
+        if let Some(channel) = guard.subscribers.get(download_id)
+            && channel.send(payload).is_err()
+        {
+            guard.subscribers.remove(download_id);
         }
     }
 

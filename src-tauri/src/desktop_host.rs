@@ -6,7 +6,9 @@ use reimagine_app_host::dto::{
     AgentEventPayload, AgentSessionInfo, AgentTurnResponse, ArtifactMetadataDto, ComputeProfileDto,
     HealthResponse, ModelInfoDto, NodeCatalogResponse, RunWorkflowResponse,
 };
-use reimagine_app_host::{AgentServiceTurnRequest, AppHost, AppHostError, WorkspaceHost};
+use reimagine_app_host::{
+    AgentServiceTurnRequest, AppHost, AppHostError, WorkerManagementService, WorkspaceHost,
+};
 use reimagine_config::AppPaths;
 use reimagine_core::command::CommandResult;
 use reimagine_core::workflow::Workflow;
@@ -25,10 +27,22 @@ pub struct DesktopHostState {
     event_hub: Arc<TauriRunEventHub>,
     agent_event_hub: Arc<TauriAgentEventHub>,
     download_event_hub: Arc<TauriDownloadEventHub>,
+    worker_management: Arc<WorkerManagementService>,
 }
 
 impl DesktopHostState {
+    #[cfg(test)]
     pub async fn bootstrap(workspace_base_path: impl Into<PathBuf>) -> Result<Self, AppHostError> {
+        let workspace_base_path = workspace_base_path.into();
+        let app_data_root = workspace_base_path.with_extension("app-data");
+        Self::bootstrap_with_app_data_root(app_data_root, workspace_base_path).await
+    }
+
+    pub async fn bootstrap_with_app_data_root(
+        app_data_root: impl Into<PathBuf>,
+        workspace_base_path: impl Into<PathBuf>,
+    ) -> Result<Self, AppHostError> {
+        let app_data_root = app_data_root.into();
         let workspace_base_path = workspace_base_path.into();
         AppPaths::new(&workspace_base_path).ensure_all().await?;
         let event_hub = Arc::new(TauriRunEventHub::new());
@@ -44,18 +58,25 @@ impl DesktopHostState {
         .await?;
 
         let download_event_hub = Arc::new(TauriDownloadEventHub::new());
+        let worker_management = Arc::new(WorkerManagementService::offline(app_data_root)?);
 
         Ok(Self {
             app_host: AppHost::new(workspace),
             event_hub,
             agent_event_hub,
             download_event_hub,
+            worker_management,
         })
     }
 
     #[cfg(test)]
     pub fn workspace_base_path(&self) -> &Path {
         self.app_host.workspace().base_path()
+    }
+
+    #[allow(dead_code)]
+    pub fn worker_management(&self) -> &WorkerManagementService {
+        &self.worker_management
     }
 
     pub fn health(&self) -> HealthResponse {
@@ -296,13 +317,11 @@ impl DesktopHostState {
         let node_catalog = self.app_host.workspace().node_catalog();
         let workflow_service = self.app_host.workspace().workflow_service();
 
-        workflow_service
-            .preview_batch(
-                &reimagine_core::model::WorkflowId::new(workflow_id),
-                node_catalog.as_ref(),
-                batch,
-            )
-            .map_err(AppHostError::from)
+        workflow_service.preview_batch(
+            &reimagine_core::model::WorkflowId::new(workflow_id),
+            node_catalog.as_ref(),
+            batch,
+        )
     }
 
     /// Apply a command batch directly.
@@ -325,13 +344,11 @@ impl DesktopHostState {
         let node_catalog = self.app_host.workspace().node_catalog();
         let workflow_service = self.app_host.workspace().workflow_service();
 
-        workflow_service
-            .apply_batch(
-                &reimagine_core::model::WorkflowId::new(workflow_id),
-                node_catalog.as_ref(),
-                batch,
-            )
-            .map_err(AppHostError::from)
+        workflow_service.apply_batch(
+            &reimagine_core::model::WorkflowId::new(workflow_id),
+            node_catalog.as_ref(),
+            batch,
+        )
     }
 
     /// Approve a pending workflow proposal.
@@ -343,13 +360,11 @@ impl DesktopHostState {
         let node_catalog = self.app_host.workspace().node_catalog();
         let workflow_service = self.app_host.workspace().workflow_service();
 
-        workflow_service
-            .apply_pending_proposal(
-                &reimagine_core::model::WorkflowId::new(workflow_id),
-                node_catalog.as_ref(),
-                None, // approved_by — Tauri thin shell, no human actor identity
-            )
-            .map_err(AppHostError::from)
+        workflow_service.apply_pending_proposal(
+            &reimagine_core::model::WorkflowId::new(workflow_id),
+            node_catalog.as_ref(),
+            None, // approved_by — Tauri thin shell, no human actor identity
+        )
     }
 
     /// List pending proposals from all workflows.

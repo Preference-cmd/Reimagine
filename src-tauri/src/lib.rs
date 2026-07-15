@@ -258,14 +258,15 @@ pub fn run() {
     tauri::Builder::default()
         .plugin(tauri_plugin_opener::init())
         .setup(|app| {
-            let workspace_path = default_workspace_path(
-                app.path()
-                    .app_data_dir()
-                    .map_err(|error| TauriCommandError::bootstrap(error.to_string()))?,
-            );
-            let state =
-                tauri::async_runtime::block_on(DesktopHostState::bootstrap(&workspace_path))
-                    .map_err(|error| TauriCommandError::bootstrap(error.to_string()))?;
+            let app_data_dir = app
+                .path()
+                .app_data_dir()
+                .map_err(|error| TauriCommandError::bootstrap(error.to_string()))?;
+            let workspace_path = default_workspace_path(&app_data_dir);
+            let state = tauri::async_runtime::block_on(
+                DesktopHostState::bootstrap_with_app_data_root(&app_data_dir, &workspace_path),
+            )
+            .map_err(|error| TauriCommandError::bootstrap(error.to_string()))?;
             app.manage(state);
             Ok(())
         })
@@ -323,6 +324,13 @@ mod tests {
             .expect("desktop host state should bootstrap");
 
         assert_eq!(state.workspace_base_path(), base_path.as_path());
+        assert!(
+            state
+                .worker_management()
+                .list_installed()
+                .expect("worker inventory")
+                .is_empty()
+        );
         assert!(base_path.join("models").is_dir());
         assert!(base_path.join("input").is_dir());
         assert!(base_path.join("output").is_dir());

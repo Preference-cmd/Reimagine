@@ -62,10 +62,10 @@ impl AgentEventSink for TauriAgentEventHub {
         let mut guard = self.inner.lock().expect("agent hub poisoned");
 
         // Best-effort send to subscriber; remove dead channels silently
-        if let Some(channel) = guard.subscribers.get(&session_id) {
-            if channel.send(payload).is_err() {
-                guard.subscribers.remove(&session_id);
-            }
+        if let Some(channel) = guard.subscribers.get(&session_id)
+            && channel.send(payload).is_err()
+        {
+            guard.subscribers.remove(&session_id);
         }
     }
 }

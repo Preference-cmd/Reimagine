@@ -1,0 +1,28 @@
+{
+  "signed": {
+    "_type": "root",
+    "version": 1,
+    "expires": "2035-01-01T00:00:00Z",
+    "keys": {
+      "official-root-1": {
+        "keytype": "ed25519",
+        "scheme": "ed25519",
+        "keyval": {
+          "public": "d75a980182b10ab7d54bfed3c964073a0ee172f3daa62325af021a68f707511a"
+        }
+      }
+    },
+    "roles": {
+      "root": { "keyids": ["official-root-1"], "threshold": 1 },
+      "timestamp": { "keyids": ["official-root-1"], "threshold": 1 },
+      "snapshot": { "keyids": ["official-root-1"], "threshold": 1 },
+      "targets": { "keyids": ["official-root-1"], "threshold": 1 }
+    }
+  },
+  "signatures": [
+    {
+      "keyid": "official-root-1",
+      "sig": "413d41a5928515dddde5deff506476ad900f9b1d2d3336ba5ee09183c567f4d434055404bc30545870bbcd9fea37fd387e046561d4230c6f70118411305b870a"
+    }
+  ]
+}

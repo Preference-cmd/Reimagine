@@ -2,8 +2,9 @@ use std::path::PathBuf;
 use std::time::Duration;
 
 use reimagine_backend_worker_protocol::{BackendInstanceId, ProtocolRange, WorkerInstallationId};
+use serde::{Deserialize, Serialize};
 
-#[derive(Clone, Debug, Eq, PartialEq)]
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
 pub struct ExpectedWorkerIdentity {
     pub backend_instance_id: BackendInstanceId,
     pub installation_id: WorkerInstallationId,
