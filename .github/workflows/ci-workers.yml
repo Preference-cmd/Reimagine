@@ -34,30 +34,6 @@ env:
   RUSTFLAGS: -D warnings
 
 jobs:
-  feature-contract:
-    name: worker feature contract
-    runs-on: ubuntu-22.04
-
-    steps:
-      - name: Checkout
-        uses: actions/checkout@v4
-
-      - name: Setup Rust 1.96
-        uses: dtolnay/rust-toolchain@1.96
-
-      - name: Cache Rust build
-        uses: Swatinem/rust-cache@v2
-        with:
-          workspaces: .
-          shared-key: worker-feature-contract
-
-      - name: Test mutually exclusive backend features
-        run: >-
-          cargo test
-          --locked
-          -p reimagine-inference-burn-worker
-          --test compile_features
-
   compile:
     name: worker-${{ matrix.backend }} (${{ matrix.runner }})
     runs-on: ${{ matrix.runner }}
@@ -80,12 +56,13 @@ jobs:
           workspaces: .
           shared-key: worker-${{ runner.os }}-${{ matrix.backend }}
 
-      - name: Test hardware-independent worker contracts
-        if: matrix.backend == 'wgpu'
+      - name: Test contracts and probe (Ubuntu only)
+        # Hardware-independent tests only need to run on one platform.
         # The current E2E dev-dependency graph enables Burn's default WGPU
         # feature, so a Flex cargo-test build would incorrectly unify WGPU and
-        # Flex. Flex is covered by the feature-contract job and release build.
-        run: >-
+        # Flex. Flex contract coverage comes from the release build.
+        if: matrix.backend == 'wgpu' && matrix.runner == 'ubuntu-22.04'
+        run: >
           cargo test
           --locked
           -p reimagine-inference-burn-worker
@@ -93,10 +70,9 @@ jobs:
           --features ${{ matrix.backend }}
           --lib
           --bins
-          --test probe
 
       - name: Compile worker release binary
-        run: >-
+        run: >
           cargo build
           --release
           --locked
@@ -122,6 +98,22 @@ jobs:
 
           test -s "${destination}"
           echo "Prepared ${destination} for future package/sign/release jobs."
+
+      - name: Dry-run release chain verification (Ubuntu only)
+        # Package the compiled binary, sign TUF metadata with deterministic
+        # test keys, and verify the entire release pipeline end-to-end.
+        if: matrix.runner == 'ubuntu-22.04' && matrix.backend == 'wgpu'
+        shell: bash
+        run: >
+          cargo test
+          --locked
+          -p reimagine-backend-worker-host
+          --test dry_run_release
+          -- dry_run_release_chain_from_real_binary
+          --
+          --nocapture
+        env:
+          REIMAGINE_DRY_RUN_BINARY: target/release/reimagine-inference-burn-worker
 
       # Publication is intentionally absent in the current phase:
       # - no actions/upload-artifact

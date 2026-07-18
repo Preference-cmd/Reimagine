@@ -122,15 +122,23 @@ jobs:
         run: cargo fmt --all -- --check
 
       - name: Rust check
-        run: cargo check --workspace --all-targets --locked
+        # ci-workers owns burn-worker compilation; exclude from generic check
+        run: >
+          cargo check
+          --workspace --all-targets --locked
+          --exclude reimagine-inference-burn-worker
 
       - name: Rust clippy
-        run: cargo clippy --workspace --all-targets --locked -- -D warnings
+        if: matrix.platform == 'linux'
+        run: >
+          cargo clippy
+          --workspace --all-targets --locked -- -D warnings
+          --exclude reimagine-inference-burn-worker
 
       - name: Rust tests
         # Worker tests have feature-specific boundaries and are owned by
         # ci-workers; the generic host runners must not execute GPU E2E tests.
-        run: >-
+        run: >
           cargo test
           --workspace
           --exclude reimagine

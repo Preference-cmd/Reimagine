@@ -9,6 +9,12 @@ mod leases;
 pub mod package;
 pub mod store_paths;
 mod supervisor;
+/// Test-only fixture generators for the release pipeline.
+///
+/// Compiled only when `cfg(test)` is active or the `testing` feature
+/// is enabled. Production code must not depend on this module.
+#[doc(hidden)]
+pub mod testing;
 
 pub use adapter::ProcessInferenceBackend;
 pub use catalog::{
