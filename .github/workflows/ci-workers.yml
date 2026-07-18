@@ -34,6 +34,41 @@ env:
   RUSTFLAGS: -D warnings
 
 jobs:
+  feature-contract:
+    name: worker feature contract
+    runs-on: ubuntu-22.04
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Rust 1.96
+        uses: dtolnay/rust-toolchain@1.96
+
+      - name: Cache Rust build
+        uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: .
+          shared-key: worker-feature-contract
+
+      - name: Zero features must be rejected
+        # build.rs exits with code 1; cargo propagates that exit code.
+        run: >
+          cargo check -p reimagine-inference-burn-worker --no-default-features
+          2>&1 && exit 1 || echo "correctly rejected zero features"
+
+      - name: Dual features must be rejected
+        run: >
+          cargo check -p reimagine-inference-burn-worker --no-default-features --features wgpu,flex
+          2>&1 && exit 1 || echo "correctly rejected dual features"
+
+      - name: WGPU only must succeed
+        run: >
+          cargo check -p reimagine-inference-burn-worker --no-default-features --features wgpu
+
+      - name: Flex only must succeed
+        run: >
+          cargo check -p reimagine-inference-burn-worker --no-default-features --features flex
+
   compile:
     name: worker-${{ matrix.backend }} (${{ matrix.runner }})
     runs-on: ${{ matrix.runner }}

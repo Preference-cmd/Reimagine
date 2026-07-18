@@ -11,8 +11,9 @@ pub mod store_paths;
 mod supervisor;
 /// Test-only fixture generators for the release pipeline.
 ///
-/// Compiled only when `cfg(test)` is active or the `testing` feature
-/// is enabled. Production code must not depend on this module.
+/// These are deterministic generators for worker packages and TUF
+/// metadata, used by integration tests. Production code does not
+/// depend on this module.
 #[doc(hidden)]
 pub mod testing;
 

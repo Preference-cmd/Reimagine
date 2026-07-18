@@ -692,3 +692,45 @@ mod tests {
     }
 
 }
+
+mod target_tests {
+    use super::*;
+
+    #[test]
+    fn target_hash_verification_works() {
+        let data = b"hello world";
+        let hash = hex::encode(Sha256::digest(data));
+        let target = TargetDesc {
+            length: data.len() as u64,
+            hashes: HashMap::from([("sha256".to_string(), hash)]),
+            custom: None,
+        };
+        assert!(verify_target_content("test.bin", data, &target).is_ok());
+    }
+
+    #[test]
+    fn target_hash_mismatch_rejected() {
+        let data = b"hello world";
+        let target = TargetDesc {
+            length: data.len() as u64,
+            hashes: HashMap::from([(
+                "sha256".to_string(),
+                "0000000000000000000000000000000000000000000000000000deadbeef0000".to_string(),
+            )]),
+            custom: None,
+        };
+        assert!(verify_target_content("test.bin", data, &target).is_err());
+    }
+
+    #[test]
+    fn target_length_mismatch_rejected() {
+        let data = b"hello world";
+        let hash = hex::encode(Sha256::digest(data));
+        let target = TargetDesc {
+            length: 999,
+            hashes: HashMap::from([("sha256".to_string(), hash)]),
+            custom: None,
+        };
+        assert!(verify_target_content("test.bin", data, &target).is_err());
+    }
+}
