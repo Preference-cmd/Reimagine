@@ -1,0 +1,130 @@
+name: ci-workers
+
+on:
+  push:
+    branches: [main, develop]
+    paths:
+      - 'crates/backend-worker-protocol/**'
+      - 'crates/backend-worker-host/**'
+      - 'crates/inference-backends/burn/**'
+      - 'crates/inference-backends/burn-worker/**'
+      - 'Cargo.toml'
+      - 'Cargo.lock'
+      - 'rust-toolchain.toml'
+      - '.github/workflows/ci-workers.yml'
+  pull_request:
+    branches: [main, develop]
+    paths:
+      - 'crates/backend-worker-protocol/**'
+      - 'crates/backend-worker-host/**'
+      - 'crates/inference-backends/burn/**'
+      - 'crates/inference-backends/burn-worker/**'
+      - 'Cargo.toml'
+      - 'Cargo.lock'
+      - 'rust-toolchain.toml'
+      - '.github/workflows/ci-workers.yml'
+  workflow_dispatch:
+
+concurrency:
+  group: ci-workers-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  CARGO_TERM_COLOR: always
+  RUSTFLAGS: -D warnings
+
+jobs:
+  feature-contract:
+    name: worker feature contract
+    runs-on: ubuntu-22.04
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Rust 1.96
+        uses: dtolnay/rust-toolchain@1.96
+
+      - name: Cache Rust build
+        uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: .
+          shared-key: worker-feature-contract
+
+      - name: Test mutually exclusive backend features
+        run: >-
+          cargo test
+          --locked
+          -p reimagine-inference-burn-worker
+          --test compile_features
+
+  compile:
+    name: worker-${{ matrix.backend }} (${{ matrix.runner }})
+    runs-on: ${{ matrix.runner }}
+    strategy:
+      fail-fast: false
+      matrix:
+        backend: [wgpu, flex]
+        runner: [macos-latest, ubuntu-22.04, windows-latest]
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Rust 1.96
+        uses: dtolnay/rust-toolchain@1.96
+
+      - name: Cache Rust build
+        uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: .
+          shared-key: worker-${{ runner.os }}-${{ matrix.backend }}
+
+      - name: Test hardware-independent worker contracts
+        if: matrix.backend == 'wgpu'
+        # The current E2E dev-dependency graph enables Burn's default WGPU
+        # feature, so a Flex cargo-test build would incorrectly unify WGPU and
+        # Flex. Flex is covered by the feature-contract job and release build.
+        run: >-
+          cargo test
+          --locked
+          -p reimagine-inference-burn-worker
+          --no-default-features
+          --features ${{ matrix.backend }}
+          --lib
+          --bins
+          --test probe
+
+      - name: Compile worker release binary
+        run: >-
+          cargo build
+          --release
+          --locked
+          -p reimagine-inference-burn-worker
+          --no-default-features
+          --features ${{ matrix.backend }}
+
+      - name: Stage future release input
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          target="$(rustc -vV | sed -n 's/^host: //p')"
+          extension=""
+          if [[ "${RUNNER_OS}" == "Windows" ]]; then
+            extension=".exe"
+          fi
+
+          source="target/release/reimagine-inference-burn-worker${extension}"
+          destination="dist/workers/reimagine-worker-${{ matrix.backend }}-${target}${extension}"
+          mkdir -p dist/workers
+          cp "${source}" "${destination}"
+
+          test -s "${destination}"
+          echo "Prepared ${destination} for future package/sign/release jobs."
+
+      # Publication is intentionally absent in the current phase:
+      # - no actions/upload-artifact
+      # - no GitHub Release creation
+      # - no TUF signing secrets
+      # - no package is labeled as officially supported

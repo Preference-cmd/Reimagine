@@ -1,0 +1,194 @@
+name: ci-tauri
+
+on:
+  push:
+    branches: [main, develop]
+    paths:
+      - 'crates/**'
+      - 'src-tauri/**'
+      - 'ui/**'
+      - 'Cargo.toml'
+      - 'Cargo.lock'
+      - 'rust-toolchain.toml'
+      - '.github/workflows/ci-tauri.yml'
+  pull_request:
+    branches: [main, develop]
+    paths:
+      - 'crates/**'
+      - 'src-tauri/**'
+      - 'ui/**'
+      - 'Cargo.toml'
+      - 'Cargo.lock'
+      - 'rust-toolchain.toml'
+      - '.github/workflows/ci-tauri.yml'
+  workflow_dispatch:
+
+concurrency:
+  group: ci-tauri-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  CARGO_TERM_COLOR: always
+  RUSTFLAGS: -D warnings
+
+jobs:
+  quality:
+    name: quality (${{ matrix.platform }})
+    runs-on: ${{ matrix.runner }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - platform: linux
+            runner: ubuntu-22.04
+          - platform: macos
+            runner: macos-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Install Tauri system dependencies
+        if: matrix.platform == 'linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            build-essential \
+            curl \
+            file \
+            libayatana-appindicator3-dev \
+            librsvg2-dev \
+            libssl-dev \
+            libwebkit2gtk-4.1-dev \
+            wget
+
+      - name: Setup Rust 1.96
+        uses: dtolnay/rust-toolchain@1.96
+        with:
+          components: rustfmt, clippy
+
+      - name: Cache Rust build
+        uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: .
+          shared-key: tauri-quality-${{ matrix.platform }}
+
+      - name: Setup Bun
+        if: matrix.platform == 'linux'
+        uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: latest
+
+      - name: Install frontend dependencies
+        if: matrix.platform == 'linux'
+        working-directory: ui
+        run: bun install --frozen-lockfile
+
+      - name: Type-check and build frontend
+        if: matrix.platform == 'linux'
+        working-directory: ui
+        run: bun run build
+
+      - name: Module layout scan
+        if: matrix.platform == 'linux'
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          # These four pre-existing backend-worker-host modules are tracked
+          # migration debt. Keep the gate useful by rejecting every other
+          # mod.rs rather than making the workflow permanently red.
+          if mod_rs=$(rg --files \
+                --glob '**/mod.rs' \
+                --glob '!**/target/**' \
+                crates src-tauri | rg -v \
+                '^crates/backend-worker-host/src/(catalog|install|inventory|package)/mod\.rs$'); then
+            echo "::error title=mod.rs is not allowed::Use foo.rs + foo/ instead of mod.rs."
+            echo "${mod_rs}" >&2
+            exit 1
+          fi
+
+          if path_attr=$(rg -n --type rust \
+                -e '^#\[path\s*=' \
+                --glob '!**/target/**' \
+                crates src-tauri); then
+            echo "::error title=#[path] is not allowed::Use Cargo's standard module resolution."
+            echo "${path_attr}" >&2
+            exit 1
+          fi
+
+      - name: Rust format check
+        if: matrix.platform == 'linux'
+        run: cargo fmt --all -- --check
+
+      - name: Rust check
+        run: cargo check --workspace --all-targets --locked
+
+      - name: Rust clippy
+        run: cargo clippy --workspace --all-targets --locked -- -D warnings
+
+      - name: Rust tests
+        # Worker tests have feature-specific boundaries and are owned by
+        # ci-workers; the generic host runners must not execute GPU E2E tests.
+        run: >-
+          cargo test
+          --workspace
+          --exclude reimagine
+          --exclude reimagine-inference-burn-worker
+          --locked
+
+  compile:
+    name: tauri-compile (${{ matrix.platform }})
+    needs: quality
+    runs-on: ${{ matrix.runner }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - platform: macos
+            runner: macos-latest
+          - platform: linux
+            runner: ubuntu-22.04
+          - platform: windows
+            runner: windows-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Install Tauri system dependencies
+        if: matrix.platform == 'linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            build-essential \
+            curl \
+            file \
+            libayatana-appindicator3-dev \
+            librsvg2-dev \
+            libssl-dev \
+            libwebkit2gtk-4.1-dev \
+            wget
+
+      - name: Setup Rust 1.96
+        uses: dtolnay/rust-toolchain@1.96
+
+      - name: Cache Rust build
+        uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: .
+          shared-key: tauri-${{ matrix.platform }}
+
+      - name: Setup Bun
+        uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: latest
+
+      - name: Install frontend dependencies
+        working-directory: ui
+        run: bun install --frozen-lockfile
+
+      - name: Compile Tauri application
+        uses: tauri-apps/tauri-action@v1
+        with:
+          args: --no-bundle
