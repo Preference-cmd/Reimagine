@@ -237,7 +237,8 @@ impl PackageExtractor {
             }
 
             // Skip package.json manifest (already consumed)
-            if relative_path == "package.json" {
+            // Skip SBOM (not tracked in manifest files list)
+            if relative_path == "package.json" || relative_path == "package.spdx.json" {
                 continue;
             }
 
@@ -403,6 +404,7 @@ mod tests {
             let manifest = PackageManifest {
                 schema_version: 1,
                 package_kind: "burn-worker".to_string(),
+                version: "0.0.0-test".to_string(),
                 identity: crate::ExpectedWorkerIdentity {
                     backend_instance_id: crate::BackendInstanceId("burn:wgpu:default".to_string()),
                     installation_id: crate::WorkerInstallationId("burn-wgpu-v1".to_string()),
@@ -484,6 +486,7 @@ mod tests {
         let manifest = PackageManifest {
             schema_version: 1,
             package_kind: "burn-worker".to_string(),
+            version: "0.0.0-test".to_string(),
             identity: crate::ExpectedWorkerIdentity {
                 backend_instance_id: crate::BackendInstanceId("burn:wgpu:default".to_string()),
                 installation_id: crate::WorkerInstallationId("burn-wgpu-v1".to_string()),
@@ -554,6 +557,7 @@ mod tests {
             let manifest = PackageManifest {
                 schema_version: 1,
                 package_kind: "burn-worker".to_string(),
+                version: "0.0.0-test".to_string(),
                 identity: crate::ExpectedWorkerIdentity {
                     backend_instance_id: crate::BackendInstanceId("burn:wgpu:default".to_string()),
                     installation_id: crate::WorkerInstallationId("burn-wgpu-v1".to_string()),

@@ -8,7 +8,7 @@ pub enum PackageError {
     ExpandedSizeLimit { max: u64, actual: u64 },
     /// Archive entry path is invalid (absolute, empty, etc.).
     InvalidPath { entry: String },
-    /// Archive entry attempts path traversal (e.g. `..`).
+    /// Archive entry path attempts path traversal (e.g. `..`).
     PathTraversal { entry: String },
     /// Symlinks are not allowed in worker packages.
     SymlinkRejected { entry: String },
@@ -30,6 +30,8 @@ pub enum PackageError {
     Extraction { message: String },
     /// Hash mismatch for an extracted entry.
     HashMismatch { entry: String },
+    /// Package build error (serialization, archive creation, etc.).
+    Build { message: String },
 }
 
 impl fmt::Display for PackageError {
@@ -74,6 +76,7 @@ impl fmt::Display for PackageError {
             Self::HashMismatch { entry } => {
                 write!(f, "hash mismatch for extracted entry: `{entry}`")
             }
+            Self::Build { message } => write!(f, "package build error: {message}"),
         }
     }
 }

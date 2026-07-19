@@ -140,6 +140,7 @@ pub fn generate_package(params: &PackageFixtureParams) -> Vec<u8> {
     let mut manifest = PackageManifest {
         schema_version: 1,
         package_kind: params.package_kind.clone(),
+        version: "0.0.0-test".to_string(),
         identity: ExpectedWorkerIdentity {
             backend_instance_id: BackendInstanceId(params.backend_instance_id.clone()),
             installation_id: WorkerInstallationId(params.installation_id.clone()),

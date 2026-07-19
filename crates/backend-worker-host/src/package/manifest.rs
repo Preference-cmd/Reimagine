@@ -30,6 +30,9 @@ pub struct PackageManifest {
     pub schema_version: u16,
     /// Kind identifier (e.g., "burn-worker").
     pub package_kind: String,
+    /// Human-readable package version (e.g., "0.1.0").
+    #[serde(default = "default_version")]
+    pub version: String,
     /// The expected worker identity for this package.
     pub identity: ExpectedWorkerIdentity,
     /// File entries in the package.
@@ -38,6 +41,10 @@ pub struct PackageManifest {
     pub required_size: u64,
     /// Number of entries in the archive.
     pub required_entries: usize,
+}
+
+fn default_version() -> String {
+    "0.0.0".to_string()
 }
 
 /// A single file entry in the package manifest.

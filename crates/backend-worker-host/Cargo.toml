@@ -10,6 +10,7 @@ license.workspace = true
 [dependencies]
 async-trait = { workspace = true }
 chrono = { workspace = true }
+clap = { workspace = true }
 ed25519-dalek = { workspace = true }
 flate2 = { workspace = true }
 fs2 = { workspace = true }
@@ -32,3 +33,11 @@ rand = "0.8"
 [[bin]]
 name = "fake-backend-worker-host-fixture"
 path = "tests/fixtures/fake_backend_worker.rs"
+
+[[bin]]
+name = "reimagine-package-worker"
+path = "src/bin/package_worker.rs"
+
+[[bin]]
+name = "reimagine-catalog-assemble"
+path = "src/bin/catalog_assemble.rs"

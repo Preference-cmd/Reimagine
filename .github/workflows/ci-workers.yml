@@ -202,3 +202,185 @@ jobs:
       # - no GitHub Release creation
       # - no TUF signing secrets
       # - no official worker package publication
+
+  package:
+    name: package-${{ matrix.backend }} (${{ matrix.runner }})
+    needs: compile
+    runs-on: ${{ matrix.runner }}
+    strategy:
+      fail-fast: false
+      matrix:
+        backend: [wgpu, flex]
+        runner: [macos-latest, ubuntu-22.04, windows-latest]
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Rust 1.96
+        uses: dtolnay/rust-toolchain@1.96
+
+      - name: Cache Rust build
+        uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: .
+          shared-key: worker-${{ runner.os }}-${{ matrix.backend }}
+
+      - name: Download worker build
+        uses: actions/download-artifact@v5
+        with:
+          pattern: worker-${{ matrix.backend }}-*
+          path: dist/workers
+          merge-multiple: true
+
+      - name: Compile package tool
+        run: >
+          cargo build
+          --locked
+          -p reimagine-backend-worker-host
+          --bin reimagine-package-worker
+
+      - name: Package worker into release archive
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          target="$(rustc -vV | sed -n 's/^host: //p')"
+          extension=""
+          if [[ "${RUNNER_OS}" == "Windows" ]]; then
+            extension=".exe"
+          fi
+
+          binary_path="dist/workers/reimagine-worker-${{ matrix.backend }}-${target}${extension}"
+          package_path="dist/packages/${{ matrix.backend }}-${target}.tar.gz"
+
+          mkdir -p dist/packages
+
+          os_name=""
+          case "${RUNNER_OS}" in
+            macOS) os_name="darwin" ;;
+            Linux) os_name="linux" ;;
+            Windows) os_name="windows" ;;
+          esac
+
+          arch_name=""
+          case "${RUNNER_ARCH}" in
+            ARM64) arch_name="aarch64" ;;
+            X64) arch_name="x86_64" ;;
+            *) arch_name="unknown" ;;
+          esac
+
+          ./target/debug/reimagine-package-worker \
+            --binary "${binary_path}" \
+            --binary-name "reimagine-inference-burn-worker${extension}" \
+            --backend-kind "burn" \
+            --backend-instance-id "burn:${{ matrix.backend }}:${target}" \
+            --installation-id "burn-${{ matrix.backend }}-${os_name}-${arch_name}" \
+            --target "${target}" \
+            --version "0.1.0" \
+            --output "${package_path}"
+
+          test -s "${package_path}"
+          echo "Packaged ${binary_path} → ${package_path}"
+
+      - name: Upload release package
+        uses: actions/upload-artifact@v4
+        with:
+          name: package-${{ matrix.backend }}-${RUNNER_OS}-${RUNNER_ARCH}
+          path: dist/packages/*
+          if-no-files-found: error
+          retention-days: 7
+
+  catalog-dry-run:
+    name: catalog dry-run
+    needs: package
+    runs-on: ubuntu-22.04
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Rust 1.96
+        uses: dtolnay/rust-cache@v2
+        with:
+          workspaces: .
+          shared-key: worker-catalog-dry-run
+
+      - name: Download all packages
+        uses: actions/download-artifact@v5
+        with:
+          pattern: package-*
+          path: dist/packages
+          merge-multiple: true
+
+      - name: Verify package set
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          count="$(find dist/packages -name '*.tar.gz' -type f | wc -l | tr -d ' ')"
+          echo "Found ${count} packages"
+          test "${count}" -eq 6 || { echo "Expected 6 packages, got ${count}"; exit 1; }
+          find dist/packages -name '*.tar.gz' -type f -size 0 -print -quit | grep -q . && exit 1 || true
+
+      - name: Compile catalog assemble tool
+        run: >
+          cargo build
+          --locked
+          -p reimagine-backend-worker-host
+          --bin reimagine-catalog-assemble
+
+      - name: Assemble and verify catalog
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          # Build --package arguments from the downloaded packages
+          # Each file is named: {backend}-{target}.tar.gz
+          # We use the target triple to infer OS and arch
+          package_args=()
+          for pkg in dist/packages/*.tar.gz; do
+            filename="$(basename "${pkg}")"
+            # Strip extension
+            base="${filename%.tar.gz}"
+            # base format: {backend}-{target}
+            backend="${base%%-*}"
+            target="${base#*-}"
+
+            os_name=""
+            arch_name=""
+            case "${target}" in
+              *apple-darwin*) os_name="darwin" ;;
+              *unknown-linux*) os_name="linux" ;;
+              *pc-windows*) os_name="windows" ;;
+            esac
+            case "${target}" in
+              aarch64*) arch_name="aarch64" ;;
+              x86_64*) arch_name="x86_64" ;;
+            esac
+
+            # The filename stored in TUF metadata is burn-worker-{target}.tar.gz
+            tuf_filename="burn-worker-${target}.tar.gz"
+
+            # Copy to the expected name
+            cp "${pkg}" "dist/packages/${tuf_filename}"
+
+            package_args+=(
+              "--package"
+              "${tuf_filename}@burn:${backend}:${target}@burn-${backend}-${os_name}-${arch_name}@${target}@${os_name}"
+            )
+          done
+
+          mkdir -p dist/catalog
+
+          ./target/debug/reimagine-catalog-assemble \
+            --input-dir dist/packages \
+            --output-dir dist/catalog \
+            "${package_args[@]}"
+
+      - name: Upload catalog artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: catalog-dry-run
+          path: dist/catalog/**
+          if-no-files-found: error
+          retention-days: 7
