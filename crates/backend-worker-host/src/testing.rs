@@ -20,7 +20,7 @@ use crate::catalog::tuf::{
     SnapshotMetadata, SnapshotSigned, TargetDesc, TargetsMetaEntry, TargetsMetadata, TargetsSigned,
     TimestampMetadata, TimestampSigned, TufKey, TufKeyVal,
 };
-use crate::package::{ExtractionLimits, PackageExtractor, PackageFileEntry, PackageManifest};
+use crate::package::{PackageFileEntry, PackageManifest};
 use crate::{BackendInstanceId, ExpectedWorkerIdentity, WorkerInstallationId};
 
 /// Deterministic test signing key (RFC 8032 test vector secret key).
@@ -117,7 +117,7 @@ pub fn generate_package(params: &PackageFixtureParams) -> Vec<u8> {
     let license_hash = hex::encode(Sha256::digest(license_content));
 
     // Build file entries first so we can compute the serialized manifest size
-    let mut file_entries = vec![
+    let file_entries = vec![
         PackageFileEntry {
             path: params.binary_name.clone(),
             sha256: binary_hash,
@@ -148,11 +148,9 @@ pub fn generate_package(params: &PackageFixtureParams) -> Vec<u8> {
             manifest_digest: params.manifest_digest.clone(),
         },
         files: file_entries.clone(),
-        required_size: 0, // placeholder
+        required_size: 0,    // placeholder
         required_entries: 2, // binary + LICENSE
     };
-
-    let manifest_json = serde_json::to_vec(&manifest).unwrap();
 
     // Rebuild manifest with correct required_size
     let total_size: u64 = file_entries.iter().map(|f| f.size).sum();
@@ -460,7 +458,8 @@ pub fn generate_full_catalog(
             hashes: Some(HashMap::from([("sha256".to_string(), targets_sha256)])),
         },
     );
-    let snapshot_payload = signed_payload(&serde_json::to_value(&metadata.snapshot.signed).unwrap());
+    let snapshot_payload =
+        signed_payload(&serde_json::to_value(&metadata.snapshot.signed).unwrap());
     metadata.snapshot.signatures = vec![SignatureEntry {
         keyid: metadata.key_id.clone(),
         sig: sign_hex(&snapshot_payload),
@@ -488,12 +487,7 @@ pub fn generate_full_catalog(
     std::fs::create_dir_all(&meta_dir).expect("create metadata dir");
 
     write_versioned_metadata(&meta_dir, "root", tuf_params.root_version, &metadata.root);
-    write_versioned_metadata(
-        &meta_dir,
-        "targets",
-        targets_version,
-        &metadata.targets,
-    );
+    write_versioned_metadata(&meta_dir, "targets", targets_version, &metadata.targets);
     write_versioned_metadata(
         &meta_dir,
         "snapshot",
@@ -526,13 +520,13 @@ fn write_versioned_metadata(
     std::fs::write(dir.join(format!("{version}.{name}.json")), &bytes)
         .expect("write versioned metadata file");
     // Also write unversioned copy for simple discovery (timestamp.json, root.json)
-    std::fs::write(dir.join(format!("{name}.json")), &bytes)
-        .expect("write unversioned metadata");
+    std::fs::write(dir.join(format!("{name}.json")), &bytes).expect("write unversioned metadata");
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::package::{ExtractionLimits, PackageExtractor};
 
     #[test]
     fn full_catalog_assembles_without_error() {
@@ -554,8 +548,18 @@ mod tests {
 
         assert!(catalog.catalog_dir.join("metadata/1.root.json").exists());
         assert!(catalog.catalog_dir.join("metadata/1.targets.json").exists());
-        assert!(catalog.catalog_dir.join("metadata/1.snapshot.json").exists());
-        assert!(catalog.catalog_dir.join("metadata/1.timestamp.json").exists());
+        assert!(
+            catalog
+                .catalog_dir
+                .join("metadata/1.snapshot.json")
+                .exists()
+        );
+        assert!(
+            catalog
+                .catalog_dir
+                .join("metadata/1.timestamp.json")
+                .exists()
+        );
         assert_eq!(catalog.package_paths.len(), 2);
         assert_eq!(catalog.metadata.targets.signed.targets.len(), 2);
     }
@@ -578,8 +582,10 @@ mod tests {
 
     #[test]
     fn different_manifest_digest_produces_different_package() {
-        let mut p = PackageFixtureParams::default();
-        p.manifest_digest = "different-digest".to_string();
+        let p = PackageFixtureParams {
+            manifest_digest: "different-digest".to_string(),
+            ..PackageFixtureParams::default()
+        };
         let p1 = generate_package(&PackageFixtureParams::default());
         let p2 = generate_package(&p);
         assert_ne!(p1, p2);

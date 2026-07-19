@@ -10,9 +10,7 @@
 
 use reimagine_backend_worker_host::catalog::tuf;
 use reimagine_backend_worker_host::testing::{self, PackageFixtureParams, TufMetadataParams};
-use reimagine_backend_worker_host::{
-    CatalogTarget, ExtractionLimits, PackageExtractor,
-};
+use reimagine_backend_worker_host::{CatalogTarget, ExtractionLimits, PackageExtractor};
 use sha2::{Digest, Sha256};
 
 /// Verify the full TUF chain from root → timestamp → snapshot → targets.
@@ -25,14 +23,18 @@ fn verify_tuf_chain(
     tuf::verify_timestamp(&metadata.timestamp, root, stored_timestamp_version)
         .expect("timestamp verification");
     let snapshot_meta = metadata
-        .timestamp.signed.meta
+        .timestamp
+        .signed
+        .meta
         .get("snapshot.json")
         .expect("timestamp has snapshot.json meta");
     let snapshot_bytes = serde_json::to_vec(&metadata.snapshot).unwrap();
     tuf::verify_snapshot(&metadata.snapshot, &snapshot_bytes, root, snapshot_meta)
         .expect("snapshot verification");
     let targets_meta = metadata
-        .snapshot.signed.meta
+        .snapshot
+        .signed
+        .meta
         .get("targets.json")
         .expect("snapshot has targets.json meta");
     let targets_bytes = serde_json::to_vec(&metadata.targets).unwrap();
@@ -41,11 +43,14 @@ fn verify_tuf_chain(
 
     let mut catalog_targets = Vec::new();
     for (path, desc) in &metadata.targets.signed.targets {
-        let sha256 = desc.hashes.get("sha256").cloned()
+        let sha256 = desc
+            .hashes
+            .get("sha256")
+            .cloned()
             .expect("target has valid sha256");
         let custom_deser: reimagine_backend_worker_host::TargetCustomMetadata =
             serde_json::from_value(desc.custom.clone().expect("target has custom metadata"))
-            .expect("custom metadata");
+                .expect("custom metadata");
         catalog_targets.push(CatalogTarget {
             path: path.clone(),
             sha256,
@@ -100,16 +105,21 @@ fn multiple_worker_kinds_in_one_catalog() {
         ..PackageFixtureParams::default()
     };
     let catalog = testing::generate_full_catalog(
-        dir.path(), &TufMetadataParams::default(),
+        dir.path(),
+        &TufMetadataParams::default(),
         &[pkg_wgpu.clone(), pkg_flex.clone()],
     );
     let targets = verify_tuf_chain(&catalog.metadata, 0);
     assert_eq!(targets.len(), 2);
     for pkg in &[pkg_wgpu, pkg_flex] {
-        let target = targets.iter()
-            .find(|t| t.custom.installation_id == pkg.installation_id).unwrap();
+        let target = targets
+            .iter()
+            .find(|t| t.custom.installation_id == pkg.installation_id)
+            .unwrap();
         let data = std::fs::read(dir.path().join(&target.path)).unwrap();
-        let staging = dir.path().join(format!("installed-{}", pkg.installation_id));
+        let staging = dir
+            .path()
+            .join(format!("installed-{}", pkg.installation_id));
         let extractor = PackageExtractor::new(ExtractionLimits::default());
         let manifest = extractor.extract(&data, &staging, None).unwrap();
         assert_eq!(manifest.package_kind, pkg.package_kind);
@@ -121,7 +131,8 @@ fn multiple_worker_kinds_in_one_catalog() {
 fn chain_catches_target_hash_mismatch() {
     let dir = tempfile::tempdir().unwrap();
     let catalog = testing::generate_full_catalog(
-        dir.path(), &TufMetadataParams::default(),
+        dir.path(),
+        &TufMetadataParams::default(),
         &[PackageFixtureParams::default()],
     );
     let targets = verify_tuf_chain(&catalog.metadata, 0);
