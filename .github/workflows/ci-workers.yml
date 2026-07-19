@@ -116,6 +116,7 @@ jobs:
           --features ${{ matrix.backend }}
 
       - name: Stage future release input
+        id: stage
         shell: bash
         run: |
           set -euo pipefail
@@ -132,7 +133,17 @@ jobs:
           cp "${source}" "${destination}"
 
           test -s "${destination}"
+          echo "artifact_name=worker-${{ matrix.backend }}-${RUNNER_OS}-${RUNNER_ARCH}" >> "${GITHUB_OUTPUT}"
+          echo "path=${destination}" >> "${GITHUB_OUTPUT}"
           echo "Prepared ${destination} for future package/sign/release jobs."
+
+      - name: Upload non-release worker build
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ steps.stage.outputs.artifact_name }}
+          path: ${{ steps.stage.outputs.path }}
+          if-no-files-found: error
+          retention-days: 7
 
       - name: Dry-run release chain verification (Ubuntu only)
         # Package the compiled binary, sign TUF metadata with deterministic
@@ -150,8 +161,44 @@ jobs:
         env:
           REIMAGINE_DRY_RUN_BINARY: target/release/reimagine-inference-burn-worker
 
-      # Publication is intentionally absent in the current phase:
-      # - no actions/upload-artifact
+      # These workflow artifacts are short-lived CI evidence, not user
+      # distribution assets. No package is labeled as officially supported.
+
+  attest-ci-workers:
+    name: attest non-release worker builds
+    if: >-
+      github.repository == 'Preference-cmd/Reimagine' &&
+      github.event_name != 'pull_request' &&
+      (github.ref == 'refs/heads/main' || github.ref == 'refs/heads/develop')
+    needs: compile
+    runs-on: ubuntu-22.04
+    permissions:
+      contents: read
+      id-token: write
+      attestations: write
+    steps:
+      - name: Download worker builds
+        uses: actions/download-artifact@v5
+        with:
+          pattern: worker-*
+          path: dist/workers
+          merge-multiple: true
+
+      - name: Verify worker build set
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          test "$(find dist/workers -type f | wc -l | tr -d ' ')" -eq 6
+          find dist/workers -type f -size 0 -print -quit | grep -q . && exit 1 || true
+
+      - name: Attest worker build provenance
+        uses: actions/attest@v4
+        with:
+          subject-path: dist/workers/*
+
+      # Intentionally absent until the production TUF signer and protected
+      # catalog-release environment exist:
       # - no GitHub Release creation
       # - no TUF signing secrets
-      # - no package is labeled as officially supported
+      # - no official worker package publication

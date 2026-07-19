@@ -15,12 +15,8 @@
 use std::path::Path;
 
 use reimagine_backend_worker_host::catalog::tuf;
-use reimagine_backend_worker_host::testing::{
-    self, PackageFixtureParams, TufMetadataParams,
-};
-use reimagine_backend_worker_host::{
-    ExtractionLimits, PackageExtractor,
-};
+use reimagine_backend_worker_host::testing::{self, PackageFixtureParams, TufMetadataParams};
+use reimagine_backend_worker_host::{ExtractionLimits, PackageExtractor};
 
 const ENV_BINARY_PATH: &str = "REIMAGINE_DRY_RUN_BINARY";
 
@@ -120,11 +116,7 @@ fn dry_run_release_chain_from_real_binary() {
         expires: "2999-12-31T23:59:59Z".to_string(),
     };
 
-    let catalog = testing::generate_full_catalog(
-        dir.path(),
-        &tuf_params,
-        &[pkg_params],
-    );
+    let catalog = testing::generate_full_catalog(dir.path(), &tuf_params, &[pkg_params]);
 
     // ── Step 4: Verify TUF chain ──────────────────────────────────
     let target_names = verify_tuf_chain(&catalog.metadata);

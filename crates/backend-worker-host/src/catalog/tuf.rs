@@ -690,11 +690,15 @@ mod tests {
             Err(CatalogError::MetadataVersionMismatch { .. })
         ));
     }
-
 }
 
+#[cfg(test)]
 mod target_tests {
-    use super::*;
+    use std::collections::HashMap;
+
+    use sha2::{Digest, Sha256};
+
+    use super::{TargetDesc, verify_target_content};
 
     #[test]
     fn target_hash_verification_works() {

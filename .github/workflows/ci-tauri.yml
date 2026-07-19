@@ -132,18 +132,36 @@ jobs:
         if: matrix.platform == 'linux'
         run: >
           cargo clippy
-          --workspace --all-targets --locked -- -D warnings
+          --workspace --all-targets --locked
           --exclude reimagine-inference-burn-worker
+          -- -D warnings
 
-      - name: Rust tests
+      - name: Rust tests (non-Burn)
         # Worker tests have feature-specific boundaries and are owned by
-        # ci-workers; the generic host runners must not execute GPU E2E tests.
+        # ci-workers. Burn is tested separately with a runner-appropriate
+        # backend so no-GPU Linux hosts never execute WGPU compute tests.
         run: >
           cargo test
           --workspace
           --exclude reimagine
+          --exclude reimagine-inference-burn
           --exclude reimagine-inference-burn-worker
           --locked
+
+      - name: Burn tests (Flex CPU)
+        if: matrix.platform == 'linux'
+        run: >
+          cargo test
+          -p reimagine-inference-burn
+          --lib --locked
+          --no-default-features --features flex
+
+      - name: Burn tests (WGPU Metal)
+        if: matrix.platform == 'macos'
+        run: >
+          cargo test
+          -p reimagine-inference-burn
+          --lib --locked
 
   compile:
     name: tauri-compile (${{ matrix.platform }})
