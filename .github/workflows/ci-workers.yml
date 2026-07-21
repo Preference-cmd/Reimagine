@@ -40,7 +40,8 @@ env:
   #   - same-backend jobs across compile/package/catalog-dry-run share deps
   #   - different-backends on the same OS do NOT share deps
   #   - same OS, same backend, different feature patch doesn't trigger all 6
-  WORKER_BACKEND: ${{ matrix.backend }}
+  # Defined per-job to avoid workflow-level matrix context errors in
+  # non-matrix jobs (feature-contract, attest, catalog-dry-run).
 
 jobs:
   feature-contract:
@@ -83,6 +84,8 @@ jobs:
     name: worker-${{ matrix.backend }} (${{ matrix.runner }})
     runs-on: ${{ matrix.runner }}
     timeout-minutes: 25
+    env:
+      WORKER_BACKEND: ${{ matrix.backend }}
     strategy:
       fail-fast: false
       matrix:
@@ -225,6 +228,8 @@ jobs:
     needs: compile
     runs-on: ${{ matrix.runner }}
     timeout-minutes: 10
+    env:
+      WORKER_BACKEND: ${{ matrix.backend }}
     strategy:
       fail-fast: false
       matrix:
@@ -328,13 +333,13 @@ jobs:
       - name: Cache Rust build
         # catalog-dry-run has no matrix so WORKER_BACKEND is unset; force a
         # constant so it lands on its own cache namespace.
-        env:
-          WORKER_BACKEND: catalog
         uses: Swatinem/rust-cache@v2.9.1
         with:
           workspaces: .
           shared-key: worker-catalog-dry-run
           env-vars: WORKER_BACKEND
+        env:
+          WORKER_BACKEND: catalog
 
       - name: Download all packages
         uses: actions/download-artifact@v5
