@@ -182,7 +182,7 @@ jobs:
       attestations: write
     steps:
       - name: Download worker builds
-        uses: actions/download-artifact@v6
+        uses: actions/download-artifact@v5
         with:
           pattern: worker-*
           path: dist/workers
@@ -232,7 +232,7 @@ jobs:
           shared-key: worker-${{ runner.os }}
 
       - name: Download worker build
-        uses: actions/download-artifact@v6
+        uses: actions/download-artifact@v5
         with:
           pattern: worker-${{ matrix.backend }}-*
           path: dist/workers
@@ -315,7 +315,7 @@ jobs:
           shared-key: worker-catalog-dry-run
 
       - name: Download all packages
-        uses: actions/download-artifact@v6
+        uses: actions/download-artifact@v5
         with:
           pattern: package-*
           path: dist/packages
