@@ -291,7 +291,7 @@ jobs:
       - name: Upload release package
         uses: actions/upload-artifact@v5
         with:
-          name: package-${{ matrix.backend }}-${RUNNER_OS}-${RUNNER_ARCH}
+          name: package-${{ matrix.backend }}-${{ runner.os }}-${{ runner.arch }}
           path: dist/packages/*
           if-no-files-found: error
           retention-days: 7
