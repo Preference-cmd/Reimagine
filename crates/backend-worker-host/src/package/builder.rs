@@ -99,8 +99,7 @@ pub fn build_package(params: &PackageParams) -> PackageResult<BuiltPackage> {
         }
         None => {
             // Fallback placeholder (should not happen in production CI).
-            b"GNU GENERAL PUBLIC LICENSE Version 3, 29 June 2007\n"
-                .to_vec()
+            b"GNU GENERAL PUBLIC LICENSE Version 3, 29 June 2007\n".to_vec()
         }
     };
     let license_hash = hex::encode(Sha256::digest(&license_content));
@@ -150,11 +149,10 @@ pub fn build_package(params: &PackageParams) -> PackageResult<BuiltPackage> {
         required_entries: file_entries.len(),
     };
 
-    let manifest_json = serde_json::to_vec(&provisional_manifest).map_err(|e| {
-        PackageError::Build {
+    let manifest_json =
+        serde_json::to_vec(&provisional_manifest).map_err(|e| PackageError::Build {
             message: format!("manifest serialization: {e}"),
-        }
-    })?;
+        })?;
     let manifest_digest = hex::encode(Sha256::digest(&manifest_json));
 
     // ── Rebuild with correct manifest_digest ────────────────────────
@@ -176,10 +174,8 @@ pub fn build_package(params: &PackageParams) -> PackageResult<BuiltPackage> {
         required_entries: file_entries.len(),
     };
 
-    let final_manifest_json = serde_json::to_vec(&manifest).map_err(|e| {
-        PackageError::Build {
-            message: format!("manifest serialization: {e}"),
-        }
+    let final_manifest_json = serde_json::to_vec(&manifest).map_err(|e| PackageError::Build {
+        message: format!("manifest serialization: {e}"),
     })?;
 
     // ── Build tar.gz archive ───────────────────────────────────────
@@ -323,10 +319,7 @@ pub fn target_path(kind: &str, target: &str) -> String {
 
 /// Build a TUF TargetDesc for a built package.
 #[must_use]
-pub fn target_desc(
-    built: &BuiltPackage,
-    params: &PackageParams,
-) -> (String, TargetDesc) {
+pub fn target_desc(built: &BuiltPackage, params: &PackageParams) -> (String, TargetDesc) {
     use std::collections::HashMap;
     let path = target_path(&params.package_kind, &params.target);
     let desc = TargetDesc {
@@ -461,10 +454,7 @@ mod tests {
         let (path, desc) = target_desc(&pkg, &params);
         assert!(path.contains("aarch64-apple-darwin"));
         assert_eq!(desc.length, pkg.archive.len() as u64);
-        assert_eq!(
-            desc.hashes.get("sha256").unwrap(),
-            &pkg.sha256
-        );
+        assert_eq!(desc.hashes.get("sha256").unwrap(), &pkg.sha256);
     }
 
     #[test]

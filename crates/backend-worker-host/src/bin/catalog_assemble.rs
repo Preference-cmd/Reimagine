@@ -26,7 +26,7 @@ use std::path::PathBuf;
 use clap::Parser;
 
 use reimagine_backend_worker_host::catalog::builder::{
-    build_catalog, verify_catalog, write_catalog, CatalogParams, TestSigningKey,
+    CatalogParams, TestSigningKey, build_catalog, verify_catalog, write_catalog,
 };
 use reimagine_backend_worker_host::catalog::tuf::TargetDesc;
 use sha2::{Digest, Sha256};
@@ -66,7 +66,10 @@ fn parse_package(s: &str) -> PackageEntry {
 }
 
 #[derive(Parser, Debug)]
-#[command(name = "reimagine-catalog-assemble", about = "Assemble and verify a TUF catalog from worker packages")]
+#[command(
+    name = "reimagine-catalog-assemble",
+    about = "Assemble and verify a TUF catalog from worker packages"
+)]
 struct Args {
     /// Output directory for the catalog metadata and package files.
     #[arg(long)]
@@ -113,11 +116,7 @@ struct Args {
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     let args = Args::parse();
 
-    let packages: Vec<PackageEntry> = args
-        .package
-        .iter()
-        .map(|s| parse_package(s))
-        .collect();
+    let packages: Vec<PackageEntry> = args.package.iter().map(|s| parse_package(s)).collect();
 
     if packages.is_empty() {
         eprintln!("error: at least one --package is required");
@@ -197,14 +196,27 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     println!("Packages: {}", packages.len());
     println!("Output: {}", args.output_dir.display());
     println!("Root metadata version: {}", bundle.root.signed.version);
-    println!("Targets metadata version: {}", bundle.targets.signed.version);
+    println!(
+        "Targets metadata version: {}",
+        bundle.targets.signed.version
+    );
     println!("Targets count: {}", bundle.targets.signed.targets.len());
     for (path, target) in &bundle.targets.signed.targets {
-        let sha = target.hashes.get("sha256").map(|s| &s[..16]).unwrap_or("???");
+        let sha = target
+            .hashes
+            .get("sha256")
+            .map(|s| &s[..16])
+            .unwrap_or("???");
         println!("  {} ({} bytes, sha256: {}...)", path, target.length, sha);
     }
-    println!("Snapshot metadata version: {}", bundle.snapshot.signed.version);
-    println!("Timestamp metadata version: {}", bundle.timestamp.signed.version);
+    println!(
+        "Snapshot metadata version: {}",
+        bundle.snapshot.signed.version
+    );
+    println!(
+        "Timestamp metadata version: {}",
+        bundle.timestamp.signed.version
+    );
     println!("Verify: PASSED");
 
     Ok(())

@@ -22,7 +22,10 @@ use std::path::PathBuf;
 use clap::Parser;
 
 #[derive(Parser, Debug)]
-#[command(name = "reimagine-package-worker", about = "Package a compiled worker binary into a release archive")]
+#[command(
+    name = "reimagine-package-worker",
+    about = "Package a compiled worker binary into a release archive"
+)]
 struct Args {
     /// Path to the compiled worker binary.
     #[arg(long)]

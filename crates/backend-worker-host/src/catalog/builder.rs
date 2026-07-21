@@ -178,10 +178,7 @@ pub struct CatalogBundle {
 /// # Panics
 ///
 /// Panics on internal serialization failures (bug-level, not input errors).
-pub fn build_catalog(
-    params: &CatalogParams,
-    targets: &[(String, TargetDesc)],
-) -> CatalogBundle {
+pub fn build_catalog(params: &CatalogParams, targets: &[(String, TargetDesc)]) -> CatalogBundle {
     let online_key_id = params.online_provider.key_id();
     let online_key = params.online_provider.tuf_key();
 
@@ -372,9 +369,21 @@ pub fn write_catalog(
     };
 
     write_meta("root", bundle.root.signed.version, &bundle.root_json)?;
-    write_meta("targets", bundle.targets.signed.version, &bundle.targets_json)?;
-    write_meta("snapshot", bundle.snapshot.signed.version, &bundle.snapshot_json)?;
-    write_meta("timestamp", bundle.timestamp.signed.version, &bundle.timestamp_json)?;
+    write_meta(
+        "targets",
+        bundle.targets.signed.version,
+        &bundle.targets_json,
+    )?;
+    write_meta(
+        "snapshot",
+        bundle.snapshot.signed.version,
+        &bundle.snapshot_json,
+    )?;
+    write_meta(
+        "timestamp",
+        bundle.timestamp.signed.version,
+        &bundle.timestamp_json,
+    )?;
 
     // Write packages
     for (path, data) in target_archives {
@@ -412,15 +421,16 @@ pub fn verify_catalog(bundle: &CatalogBundle) -> Result<(), super::CatalogError>
         timestamp_snapshot_meta,
     )?;
 
-    let snapshot_targets_meta = bundle
-        .snapshot
-        .signed
-        .meta
-        .get("targets.json")
-        .ok_or_else(|| super::CatalogError::Json {
-            path: None,
-            message: "snapshot missing targets.json meta".to_string(),
-        })?;
+    let snapshot_targets_meta =
+        bundle
+            .snapshot
+            .signed
+            .meta
+            .get("targets.json")
+            .ok_or_else(|| super::CatalogError::Json {
+                path: None,
+                message: "snapshot missing targets.json meta".to_string(),
+            })?;
     tuf::verify_targets(
         &bundle.targets,
         &bundle.targets_json,
@@ -430,18 +440,23 @@ pub fn verify_catalog(bundle: &CatalogBundle) -> Result<(), super::CatalogError>
 
     // Verify each target's hash in the metadata matches our recorded hash
     for (path, expected_sha256) in &bundle.target_hashes {
-        let found = bundle.targets.signed.targets.get(path).ok_or_else(|| {
-            super::CatalogError::Json {
-                path: None,
-                message: format!("target `{path}` not found in targets metadata"),
-            }
-        })?;
-        let found_sha256 = found.hashes.get("sha256").ok_or_else(|| {
-            super::CatalogError::Json {
+        let found =
+            bundle
+                .targets
+                .signed
+                .targets
+                .get(path)
+                .ok_or_else(|| super::CatalogError::Json {
+                    path: None,
+                    message: format!("target `{path}` not found in targets metadata"),
+                })?;
+        let found_sha256 = found
+            .hashes
+            .get("sha256")
+            .ok_or_else(|| super::CatalogError::Json {
                 path: None,
                 message: format!("target `{path}` missing sha256 hash"),
-            }
-        })?;
+            })?;
         if found_sha256 != expected_sha256 {
             return Err(super::CatalogError::TargetHashMismatch {
                 target: path.clone(),
@@ -452,9 +467,14 @@ pub fn verify_catalog(bundle: &CatalogBundle) -> Result<(), super::CatalogError>
 
     // Verify root keys are consistent
     if !root_keys.is_empty()
-        && root_keys
-            .values()
-            .any(|key| bundle.root.signed.keys.values().any(|rk| rk.key_type != key.key_type))
+        && root_keys.values().any(|key| {
+            bundle
+                .root
+                .signed
+                .keys
+                .values()
+                .any(|rk| rk.key_type != key.key_type)
+        })
     {
         // Just a sanity cross-check — the verify calls above already validate.
     }
@@ -465,7 +485,7 @@ pub fn verify_catalog(bundle: &CatalogBundle) -> Result<(), super::CatalogError>
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::package::builder::{build_package, PackageParams};
+    use crate::package::builder::{PackageParams, build_package};
 
     #[test]
     fn build_catalog_with_test_keys_succeeds() {
@@ -497,11 +517,8 @@ mod tests {
             },
         );
 
-        let params = CatalogParams::with_test_keys(
-            None,
-            1, 1, 1, 1,
-            "2999-12-31T23:59:59Z".to_string(),
-        );
+        let params =
+            CatalogParams::with_test_keys(None, 1, 1, 1, 1, "2999-12-31T23:59:59Z".to_string());
 
         let bundle = build_catalog(&params, &[(path.clone(), desc)]);
 
@@ -638,19 +655,19 @@ mod tests {
         let bundle = build_catalog(&params, &[(path.clone(), desc)]);
 
         let dir = tempfile::tempdir().unwrap();
-        write_catalog(
-            &bundle,
-            dir.path(),
-            &[(&path, &pkg.archive)],
-        )
-        .expect("write catalog");
+        write_catalog(&bundle, dir.path(), &[(&path, &pkg.archive)]).expect("write catalog");
 
         // Verify directory structure
         assert!(dir.path().join("metadata").join("1.root.json").exists());
         assert!(dir.path().join("metadata").join("root.json").exists());
         assert!(dir.path().join("metadata").join("1.targets.json").exists());
         assert!(dir.path().join("metadata").join("1.snapshot.json").exists());
-        assert!(dir.path().join("metadata").join("1.timestamp.json").exists());
+        assert!(
+            dir.path()
+                .join("metadata")
+                .join("1.timestamp.json")
+                .exists()
+        );
         assert!(dir.path().join(&path).exists());
     }
 
