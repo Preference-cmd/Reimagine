@@ -257,7 +257,7 @@ jobs:
           fi
 
           binary_path="dist/workers/reimagine-worker-${{ matrix.backend }}-${target}${extension}"
-          package_path="dist/packages/burn-worker-${target}.tar.gz"
+          package_path="dist/packages/burn-worker-${{ matrix.backend }}-${target}.tar.gz"
 
           mkdir -p dist/packages
 
@@ -346,9 +346,11 @@ jobs:
           package_args=()
           for pkg in dist/packages/*.tar.gz; do
             filename="$(basename "${pkg}")"
-            # filename format: burn-worker-{target}.tar.gz
-            # Strip prefix and extension to extract target triple
-            target="${filename#burn-worker-}"
+            # filename format: burn-worker-{backend}-{target}.tar.gz
+            # Strip prefix and extension to extract backend and target triple
+            rest="${filename#burn-worker-}"
+            backend="${rest%%-*}"
+            target="${rest#*-}"
             target="${target%.tar.gz}"
 
             os_name=""
