@@ -22,6 +22,7 @@ on:
       - 'rust-toolchain.toml'
       - '.github/workflows/ci-tauri.yml'
   workflow_dispatch:
+  merge_group:
 
 concurrency:
   group: ci-tauri-${{ github.workflow }}-${{ github.ref }}
@@ -35,12 +36,13 @@ jobs:
   quality:
     name: quality (${{ matrix.platform }})
     runs-on: ${{ matrix.runner }}
+    timeout-minutes: 20
     strategy:
       fail-fast: false
       matrix:
         include:
           - platform: linux
-            runner: ubuntu-22.04
+            runner: ubuntu-24.04
           - platform: macos
             runner: macos-latest
 
@@ -71,13 +73,21 @@ jobs:
         uses: Swatinem/rust-cache@v2
         with:
           workspaces: .
-          shared-key: tauri-quality-${{ matrix.platform }}
+          shared-key: tauri-${{ matrix.platform }}
 
       - name: Setup Bun
         if: matrix.platform == 'linux'
         uses: oven-sh/setup-bun@v2
         with:
           bun-version: latest
+
+      - name: Cache Bun global store
+        if: matrix.platform == 'linux'
+        uses: actions/cache@v4
+        with:
+          path: ~/.bun/install/cache
+          key: bun-${{ runner.os }}-${{ hashFiles('ui/bun.lock') }}
+          restore-keys: bun-${{ runner.os }}-
 
       - name: Install frontend dependencies
         if: matrix.platform == 'linux'
@@ -122,6 +132,7 @@ jobs:
         run: cargo fmt --all -- --check
 
       - name: Rust check
+        if: matrix.platform == 'linux'
         # ci-workers owns burn-worker compilation; exclude from generic check
         run: >
           cargo check
@@ -167,6 +178,7 @@ jobs:
     name: tauri-compile (${{ matrix.platform }})
     needs: quality
     runs-on: ${{ matrix.runner }}
+    timeout-minutes: 30
     strategy:
       fail-fast: false
       matrix:
@@ -174,7 +186,7 @@ jobs:
           - platform: macos
             runner: macos-latest
           - platform: linux
-            runner: ubuntu-22.04
+            runner: ubuntu-24.04
           - platform: windows
             runner: windows-latest
 
@@ -209,6 +221,13 @@ jobs:
         uses: oven-sh/setup-bun@v2
         with:
           bun-version: latest
+
+      - name: Cache Bun global store
+        uses: actions/cache@v4
+        with:
+          path: ~/.bun/install/cache
+          key: bun-${{ runner.os }}-${{ hashFiles('ui/bun.lock') }}
+          restore-keys: bun-${{ runner.os }}-
 
       - name: Install frontend dependencies
         working-directory: ui

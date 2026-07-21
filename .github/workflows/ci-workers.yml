@@ -24,6 +24,7 @@ on:
       - 'rust-toolchain.toml'
       - '.github/workflows/ci-workers.yml'
   workflow_dispatch:
+  merge_group:
 
 concurrency:
   group: ci-workers-${{ github.workflow }}-${{ github.ref }}
@@ -36,7 +37,8 @@ env:
 jobs:
   feature-contract:
     name: worker feature contract
-    runs-on: ubuntu-22.04
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -72,11 +74,12 @@ jobs:
   compile:
     name: worker-${{ matrix.backend }} (${{ matrix.runner }})
     runs-on: ${{ matrix.runner }}
+    timeout-minutes: 25
     strategy:
       fail-fast: false
       matrix:
         backend: [wgpu, flex]
-        runner: [macos-latest, ubuntu-22.04, windows-latest]
+        runner: [macos-latest, ubuntu-24.04, windows-latest]
 
     steps:
       - name: Checkout
@@ -89,14 +92,14 @@ jobs:
         uses: Swatinem/rust-cache@v2
         with:
           workspaces: .
-          shared-key: worker-${{ runner.os }}-${{ matrix.backend }}
+          shared-key: worker-${{ runner.os }}
 
       - name: Test contracts and probe (Ubuntu only)
         # Hardware-independent tests only need to run on one platform.
         # The current E2E dev-dependency graph enables Burn's default WGPU
         # feature, so a Flex cargo-test build would incorrectly unify WGPU and
         # Flex. Flex contract coverage comes from the release build.
-        if: matrix.backend == 'wgpu' && matrix.runner == 'ubuntu-22.04'
+        if: matrix.backend == 'wgpu' && matrix.runner == 'ubuntu-24.04'
         run: >
           cargo test
           --locked
@@ -138,7 +141,7 @@ jobs:
           echo "Prepared ${destination} for future package/sign/release jobs."
 
       - name: Upload non-release worker build
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v5
         with:
           name: ${{ steps.stage.outputs.artifact_name }}
           path: ${{ steps.stage.outputs.path }}
@@ -148,7 +151,7 @@ jobs:
       - name: Dry-run release chain verification (Ubuntu only)
         # Package the compiled binary, sign TUF metadata with deterministic
         # test keys, and verify the entire release pipeline end-to-end.
-        if: matrix.runner == 'ubuntu-22.04' && matrix.backend == 'wgpu'
+        if: matrix.runner == 'ubuntu-24.04' && matrix.backend == 'wgpu'
         shell: bash
         run: >
           cargo test
@@ -171,14 +174,15 @@ jobs:
       github.event_name != 'pull_request' &&
       (github.ref == 'refs/heads/main' || github.ref == 'refs/heads/develop')
     needs: compile
-    runs-on: ubuntu-22.04
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
     permissions:
       contents: read
       id-token: write
       attestations: write
     steps:
       - name: Download worker builds
-        uses: actions/download-artifact@v5
+        uses: actions/download-artifact@v6
         with:
           pattern: worker-*
           path: dist/workers
@@ -207,11 +211,12 @@ jobs:
     name: package-${{ matrix.backend }} (${{ matrix.runner }})
     needs: compile
     runs-on: ${{ matrix.runner }}
+    timeout-minutes: 10
     strategy:
       fail-fast: false
       matrix:
         backend: [wgpu, flex]
-        runner: [macos-latest, ubuntu-22.04, windows-latest]
+        runner: [macos-latest, ubuntu-24.04, windows-latest]
 
     steps:
       - name: Checkout
@@ -224,10 +229,10 @@ jobs:
         uses: Swatinem/rust-cache@v2
         with:
           workspaces: .
-          shared-key: worker-${{ runner.os }}-${{ matrix.backend }}
+          shared-key: worker-${{ runner.os }}
 
       - name: Download worker build
-        uses: actions/download-artifact@v5
+        uses: actions/download-artifact@v6
         with:
           pattern: worker-${{ matrix.backend }}-*
           path: dist/workers
@@ -252,7 +257,7 @@ jobs:
           fi
 
           binary_path="dist/workers/reimagine-worker-${{ matrix.backend }}-${target}${extension}"
-          package_path="dist/packages/${{ matrix.backend }}-${target}.tar.gz"
+          package_path="dist/packages/burn-worker-${target}.tar.gz"
 
           mkdir -p dist/packages
 
@@ -284,7 +289,7 @@ jobs:
           echo "Packaged ${binary_path} → ${package_path}"
 
       - name: Upload release package
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v5
         with:
           name: package-${{ matrix.backend }}-${RUNNER_OS}-${RUNNER_ARCH}
           path: dist/packages/*
@@ -294,19 +299,23 @@ jobs:
   catalog-dry-run:
     name: catalog dry-run
     needs: package
-    runs-on: ubuntu-22.04
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
     steps:
       - name: Checkout
         uses: actions/checkout@v4
 
       - name: Setup Rust 1.96
-        uses: dtolnay/rust-cache@v2
+        uses: dtolnay/rust-toolchain@1.96
+
+      - name: Cache Rust build
+        uses: Swatinem/rust-cache@v2
         with:
           workspaces: .
           shared-key: worker-catalog-dry-run
 
       - name: Download all packages
-        uses: actions/download-artifact@v5
+        uses: actions/download-artifact@v6
         with:
           pattern: package-*
           path: dist/packages
@@ -334,17 +343,13 @@ jobs:
         run: |
           set -euo pipefail
 
-          # Build --package arguments from the downloaded packages
-          # Each file is named: {backend}-{target}.tar.gz
-          # We use the target triple to infer OS and arch
           package_args=()
           for pkg in dist/packages/*.tar.gz; do
             filename="$(basename "${pkg}")"
-            # Strip extension
-            base="${filename%.tar.gz}"
-            # base format: {backend}-{target}
-            backend="${base%%-*}"
-            target="${base#*-}"
+            # filename format: burn-worker-{target}.tar.gz
+            # Strip prefix and extension to extract target triple
+            target="${filename#burn-worker-}"
+            target="${target%.tar.gz}"
 
             os_name=""
             arch_name=""
@@ -358,15 +363,11 @@ jobs:
               x86_64*) arch_name="x86_64" ;;
             esac
 
-            # The filename stored in TUF metadata is burn-worker-{target}.tar.gz
-            tuf_filename="burn-worker-${target}.tar.gz"
-
-            # Copy to the expected name
-            cp "${pkg}" "dist/packages/${tuf_filename}"
-
+            # Infer backend kind from the installed-worker metadata in the package
+            # File is named burn-worker-{target}.tar.gz, backend is "burn"
             package_args+=(
               "--package"
-              "${tuf_filename}@burn:${backend}:${target}@burn-${backend}-${os_name}-${arch_name}@${target}@${os_name}"
+              "${filename}@burn:default:${target}@burn-${os_name}-${arch_name}@${target}@${os_name}"
             )
           done
 
@@ -378,7 +379,7 @@ jobs:
             "${package_args[@]}"
 
       - name: Upload catalog artifact
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v5
         with:
           name: catalog-dry-run
           path: dist/catalog/**
