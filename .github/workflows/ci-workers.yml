@@ -33,6 +33,14 @@ concurrency:
 env:
   CARGO_TERM_COLOR: always
   RUSTFLAGS: -D warnings
+  # WORKER_BACKEND scopes the Rust cache to a single backend so Cargo.lock
+  # changes inside one backend's tree only invalidate that backend's cache,
+  # not every wgpu AND flex job on the same runner OS. Combined with the
+  # runner.os-scoped shared-key, this gives us:
+  #   - same-backend jobs across compile/package/catalog-dry-run share deps
+  #   - different-backends on the same OS do NOT share deps
+  #   - same OS, same backend, different feature patch doesn't trigger all 6
+  WORKER_BACKEND: ${{ matrix.backend }}
 
 jobs:
   feature-contract:
@@ -89,10 +97,15 @@ jobs:
         uses: dtolnay/rust-toolchain@1.96
 
       - name: Cache Rust build
+        # env-vars: WORKER_BACKEND splits the cache key by backend (wgpu/flex)
+        # so deps changes scoped to one backend don't invalidate the other.
+        # shared-key: worker-${{ runner.os }} still lets compile/package/
+        # catalog-dry-run jobs that share runner.os AND backend share cache.
         uses: Swatinem/rust-cache@v2.9.1
         with:
           workspaces: .
           shared-key: worker-${{ runner.os }}
+          env-vars: WORKER_BACKEND
 
       - name: Test contracts and probe (Ubuntu only)
         # Hardware-independent tests only need to run on one platform.
@@ -226,10 +239,14 @@ jobs:
         uses: dtolnay/rust-toolchain@1.96
 
       - name: Cache Rust build
+        # Same backend split as the compile job. Package tool (a small CLI) is
+        # small enough that cache miss has minor cost; the win is that package
+        # reads from a deps cache that matches what compile already produced.
         uses: Swatinem/rust-cache@v2.9.1
         with:
           workspaces: .
           shared-key: worker-${{ runner.os }}
+          env-vars: WORKER_BACKEND
 
       - name: Download worker build
         uses: actions/download-artifact@v5
@@ -309,10 +326,15 @@ jobs:
         uses: dtolnay/rust-toolchain@1.96
 
       - name: Cache Rust build
+        # catalog-dry-run has no matrix so WORKER_BACKEND is unset; force a
+        # constant so it lands on its own cache namespace.
+        env:
+          WORKER_BACKEND: catalog
         uses: Swatinem/rust-cache@v2.9.1
         with:
           workspaces: .
           shared-key: worker-catalog-dry-run
+          env-vars: WORKER_BACKEND
 
       - name: Download all packages
         uses: actions/download-artifact@v5
