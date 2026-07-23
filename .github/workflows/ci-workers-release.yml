@@ -407,6 +407,8 @@ jobs:
       - name: Sign catalog (disable tracing, safe env)
         shell: bash
         # Disable shell tracing so key material is not leaked.
+        # Env vars are inherited from the job-level env block (loaded from
+        # secrets.*). No step-level env override needed.
         run: |
           set +x
           set -euo pipefail
@@ -438,12 +440,6 @@ jobs:
           unset REIMAGINE_TUF_TARGET_KEY REIMAGINE_TUF_SNAPSHOT_KEY
           unset REIMAGINE_TUF_TIMESTAMP_KEY REIMAGINE_TUF_ROOT_PUBLIC_KEYS_JSON
           set -x
-        env:
-          # Override defaults with actual secrets from the environment
-          REIMAGINE_TUF_TARGET_KEY: ${{ env.REIMAGINE_TUF_TARGET_KEY }}
-          REIMAGINE_TUF_SNAPSHOT_KEY: ${{ env.REIMAGINE_TUF_SNAPSHOT_KEY }}
-          REIMAGINE_TUF_TIMESTAMP_KEY: ${{ env.REIMAGINE_TUF_TIMESTAMP_KEY }}
-          REIMAGINE_TUF_ROOT_PUBLIC_KEYS_JSON: ${{ env.REIMAGINE_TUF_ROOT_PUBLIC_KEYS_JSON }}
 
       - name: Upload signed catalog
         uses: actions/upload-artifact@v5
