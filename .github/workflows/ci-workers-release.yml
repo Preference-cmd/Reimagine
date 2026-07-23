@@ -476,17 +476,19 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          ls -la dist/signed/
-          test -f dist/signed/root.json || { echo "root.json missing"; exit 1; }
-          test -f dist/signed/targets.json || { echo "targets.json missing"; exit 1; }
-          test -f dist/signed/snapshot.json || { echo "snapshot.json missing"; exit 1; }
-          test -f dist/signed/timestamp.json || { echo "timestamp.json missing"; exit 1; }
+          find dist/signed -type f | sort
+          test -f dist/signed/metadata/root.json || { echo "root.json not found"; exit 1; }
+          test -f dist/signed/metadata/targets.json || { echo "targets.json not found"; exit 1; }
+          test -f dist/signed/metadata/snapshot.json || { echo "snapshot.json not found"; exit 1; }
+          test -f dist/signed/metadata/timestamp.json || { echo "timestamp.json not found"; exit 1; }
           echo "All metadata files present."
 
       - name: Attest official release artifacts
         uses: actions/attest@v4
         with:
-          subject-path: dist/signed/*
+          subject-path: |
+            dist/signed/*.tar.gz
+            dist/signed/metadata/*.json
           github-token: ${{ github.token }}
 
       - name: Create draft GitHub Release
@@ -502,7 +504,9 @@ jobs:
 
             This release contains signed TUF metadata and the full set of
             WGPU/Flex worker packages.
-          files: dist/signed/*
+          files: |
+            dist/signed/*.tar.gz
+            dist/signed/metadata/*.json
           draft: true
           fail_on_unmatched_files: true
           generate_release_notes: false
