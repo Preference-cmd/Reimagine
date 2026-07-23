@@ -2,11 +2,11 @@
   "signatures": [
     {
       "keyid": "root-key-1",
-      "sig": "4eb2a740fab07822769d380c749fdc4251695c817fc833641cc499aec93686d298e9091fe1eca6107dca0e1a9f8bd66ced61fdef809efc731bb22895b74bdd00"
+      "sig": "f8a408cdea55199caf5e1d476cf18a2d641530f64e61088063614ac2817397fe184e642d072397358480be23ad4ee5fca851f46f4997d3922ed088dc9d55980d"
     },
     {
       "keyid": "root-key-2",
-      "sig": "fe68692e98148fc1a7b393d89c73bcf43ec83ee7f702a8d810399e573284b55c71cc694fd57ee158f9cd7ee64fa7a6a2cea3e9fb8e4d162412a4b45c78dba406"
+      "sig": "8fd91e1d57ac1f3de9b72558b6f76854cdde13cf6ae824ef55f41237f7f0eb2527824a568081c0186df3c18c0806c7610aa83de4fc9459fc08c49383d6092b07"
     }
   ],
   "signed": {
@@ -17,42 +17,42 @@
       "root-key-1": {
         "keytype": "ed25519",
         "keyval": {
-          "public": "689522c008957abcb23b2e8ae56e7af922485277b4710e9e3af5b1a0c0732752"
+          "public": "409939b889d5d057a75518a94348b31115ad2192799f6e0dd29e893328e4496a"
         },
         "scheme": "ed25519"
       },
       "root-key-2": {
         "keytype": "ed25519",
         "keyval": {
-          "public": "e72dc890b672b40c9b4837e0d60c5987aaaa5eddee9ddc6d53c12643ca018a9d"
+          "public": "44b06831d7eb61c3af2046eee2800941d714d63afe324855df949ec9f9d9bd2f"
         },
         "scheme": "ed25519"
       },
       "root-key-3": {
         "keytype": "ed25519",
         "keyval": {
-          "public": "d92c5839c3ffe26949a45e240c04c9f37ce2241a3797849da928f8a87d9dcd9f"
+          "public": "6b4036dbe79291218acb9a64392d9742a1311f7d10e286f7e56a1c443a342d3c"
         },
         "scheme": "ed25519"
       },
       "snapshot-key": {
         "keytype": "ed25519",
         "keyval": {
-          "public": "19c5109847bcd828da6a026cff14c0c91b99c9bbdf4a79e151575c4f54c541b0"
+          "public": "43c297eb940148d3c49b544a186a0cdf3c44600a33e75106f6fe8835baecc8db"
         },
         "scheme": "ed25519"
       },
       "targets-key": {
         "keytype": "ed25519",
         "keyval": {
-          "public": "5417c78588f142f9ffe326855f8ecea1974435bb558493841ddd4dfe5e36e6b7"
+          "public": "21c725653f9507ac850fe8a58a21e46b6264570279d8daab2e9399ab24a60c7b"
         },
         "scheme": "ed25519"
       },
       "timestamp-key": {
         "keytype": "ed25519",
         "keyval": {
-          "public": "c33e0255d9be58406c0a8a845d21854834ac535313f051d36303befd10129ee1"
+          "public": "b02223ea1e24270b46eba349febd9844925eb12e8f4b8f4c0c145810b3962ecf"
         },
         "scheme": "ed25519"
       }
