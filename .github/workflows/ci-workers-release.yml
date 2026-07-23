@@ -457,8 +457,8 @@ jobs:
     needs: sign-catalog
     runs-on: ubuntu-24.04
     timeout-minutes: 10
-    environment:
-      name: catalog-release
+    # FIXME: add back environment: catalog-release when GitHub fixes
+    # tag-triggered workflow deployment resolution (same as sign-catalog).
     permissions:
       contents: write
       id-token: write
