@@ -186,13 +186,26 @@ jobs:
       - name: Verify attestation
         # Verifies that the GitHub-issued build attestation matches.
         # Only works for repo-owned runs (attest-ci-workers is gated).
+        # Non-fatal: attestation verification is informative for the
+        # test/rehearsal phase; the release gates job enforces production
+        # evidence requirements.
         if: github.repository == 'Preference-cmd/Reimagine'
         shell: bash
         run: |
           set -euo pipefail
+          failed=0
           for f in dist/workers/*; do
-            gh attestation verify "$f" --repo "${{ github.repository }}" 2>&1 | tail -1
+            echo "--- Verifying: ${f} ---"
+            if gh attestation verify "$f" --repo "${{ github.repository }}" 2>&1; then
+              echo "✅ ${f}: attestation verified"
+            else
+              echo "⚠️  ${f}: attestation not found (non-fatal)"
+              failed=$((failed + 1))
+            fi
           done
+          if [[ "$failed" -gt 0 ]]; then
+            echo "Non-fatal: ${failed} artifacts without attestation"
+          fi
 
   # ═══════════════════════════════════════════════════════════════════
   # 3. Package workers into release archives
