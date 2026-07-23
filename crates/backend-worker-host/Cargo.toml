@@ -1,0 +1,51 @@
+[package]
+name = "reimagine-backend-worker-host"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+authors.workspace = true
+description.workspace = true
+license.workspace = true
+
+[dependencies]
+async-trait = { workspace = true }
+chrono = { workspace = true }
+clap = { workspace = true }
+ed25519-dalek = { workspace = true }
+flate2 = { workspace = true }
+fs2 = { workspace = true }
+hex = { workspace = true }
+reimagine-backend-worker-protocol = { path = "../backend-worker-protocol" }
+reimagine-core = { path = "../core" }
+reimagine-inference = { path = "../inference" }
+reqwest = { workspace = true }
+serde = { workspace = true, features = ["derive"] }
+serde_json = { workspace = true }
+sha2 = { workspace = true }
+tar = { workspace = true }
+tokio = { workspace = true, features = ["fs", "io-util", "macros", "process", "rt", "rt-multi-thread", "sync", "time"] }
+tracing = { workspace = true }
+
+[dev-dependencies]
+tempfile = { workspace = true }
+rand = "0.8"
+axum = { workspace = true }
+sha2 = { workspace = true }
+tokio = { workspace = true, features = ["net", "rt", "macros"] }
+tower = { workspace = true }
+
+[[bin]]
+name = "fake-backend-worker-host-fixture"
+path = "tests/fixtures/fake_backend_worker.rs"
+
+[[bin]]
+name = "reimagine-package-worker"
+path = "src/bin/package_worker.rs"
+
+[[bin]]
+name = "reimagine-catalog-assemble"
+path = "src/bin/catalog_assemble.rs"
+
+[[bin]]
+name = "reimagine-catalog-sign"
+path = "src/bin/catalog_sign.rs"

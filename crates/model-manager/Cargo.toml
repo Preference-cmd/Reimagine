@@ -1,0 +1,21 @@
+[package]
+name = "reimagine-model-manager"
+version.workspace = true
+description.workspace = true
+authors.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+
+[dependencies]
+reimagine-config = { path = "../config" }
+reimagine-core = { path = "../core" }
+glob-match = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+sha2 = { workspace = true }
+tokio = { workspace = true, features = ["fs"] }
+
+[dev-dependencies]
+tokio = { workspace = true, features = ["macros", "rt", "fs"] }
+serde_json = { workspace = true }

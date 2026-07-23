@@ -1,0 +1,40 @@
+[package]
+name = "reimagine-inference-burn"
+version.workspace = true
+description.workspace = true
+authors.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+
+[features]
+# Default to GPU compute via the burn-wgpu stack
+# (Metal on Apple Silicon, Vulkan on Linux/Windows, CubeCL CPU
+# fallback within wgpu when no GPU adapter is available).
+default = ["wgpu"]
+# CPU compute via burn-flex (SIMD + rayon + Apple AMX). Use for
+# CI, CPU-only hosts, and debug builds.
+flex = ["dep:burn-flex"]
+# GPU compute via burn-wgpu (wgpu + CubeCL).
+wgpu = ["dep:burn-wgpu"]
+
+[dependencies]
+async-trait = { workspace = true }
+burn-core = { workspace = true }
+burn-nn = { workspace = true }
+burn-store = { workspace = true }
+burn-tensor = { workspace = true }
+burn-flex = { workspace = true, optional = true }
+burn-wgpu = { workspace = true, optional = true }
+image = { workspace = true }
+reimagine-core = { path = "../../core" }
+reimagine-inference = { path = "../../inference" }
+reimagine-plugin = { path = "../../plugin" }
+serde = { workspace = true }
+serde_json = { workspace = true }
+safetensors = { workspace = true }
+tokenizers = { workspace = true }
+
+[dev-dependencies]
+tempfile = { workspace = true }
+tokio = { workspace = true, features = ["macros", "rt"] }

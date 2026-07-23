@@ -1,0 +1,32 @@
+//! Local model manifest and model identity infrastructure.
+
+#![deny(unsafe_code)]
+
+mod classify;
+mod error;
+mod identity;
+mod manifest;
+mod resolve;
+mod scan;
+mod store;
+mod verify;
+
+pub use classify::{
+    ClassificationCandidate, ClassificationResult, Classifier, MODEL_SERIES_SCHEMA_VERSION,
+    ModelSeriesConfig, ModelSeriesRule,
+};
+pub use error::{ModelManagerError, ModelManagerResult};
+pub use identity::{AutoIdResult, IdPolicy, IdResolution};
+pub use manifest::{
+    Fingerprint, ManifestValidationReport, ModelComponentSource, ModelDescriptor, ModelFormat,
+    ModelManifest, ModelRoot, ModelRootId, ModelRootKind, ModelSource, ModelSourceStatus,
+    import_burn_package_descriptor, resolve_source_path, upsert_burn_package_descriptor,
+    validate_manifest, validate_manifest_with_series_config,
+};
+pub use resolve::{
+    ManifestModelResolver, ModelDescriptorResolver, ModelReadinessResolver, ModelResolution,
+    ResolvedComponent, ResolvedDescriptorView, ResolvedModelInfo,
+};
+pub use scan::{ManifestUpdate, ManifestUpdatePolicy, ModelScanner, ScanConfig, ScanObservation};
+pub use store::{ModelManifestStore, load_model_manifest};
+pub use verify::{FingerprintRefresh, ModelFingerprintVerifier};

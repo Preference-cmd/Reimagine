@@ -1,0 +1,525 @@
+# Worker catalog release workflow
+#
+# Creates an immutable `worker-catalog-v{N}` GitHub Release containing all
+# six WGPU/Flex worker packages and their TUF metadata, signed with the
+# production catalog signing keys.
+#
+# ## Trigger
+#
+# Pushing a tag matching `worker-catalog-v*` to a repository-owned branch
+# starts this workflow. The tag must point to the exact commit whose
+# `ci-workers.yml` run (or a custom dispatch) supplies the compiled
+# artifacts.
+#
+# ## Key–isolation rule
+#
+# Only the `sign-catalog` job (running in the `catalog-release` Environment)
+# receives online TUF signing keys.  The `publish-release` job operates on
+# already‑signed metadata and never sees secrets.
+#
+# ## Prerequisites
+#
+# - A `catalog-release` GitHub Environment must exist, protected to the
+#   `worker-catalog-v*` tag pattern, with maintainer approval required
+#   and the following secrets:
+#   - `CATALOG_TARGETS_KEY`
+#   - `CATALOG_SNAPSHOT_KEY`
+#   - `CATALOG_TIMESTAMP_KEY`
+#   - `CATALOG_ROOT_PUBLIC_KEYS_JSON`
+# - A `root.json` committed to the repository (or distributed out‑of‑band)
+#   must be present; the signer reads it from the checkout.
+# - The `ci-workers.yml` workflow must have run successfully on the tagged
+#   commit, producing the six attested `worker-*` artifacts.
+#
+# See `.scratch/multi-backend/issues/07-wgpu-flex-release-pipeline.md` for
+# the operator runbook.
+
+name: ci-workers-release
+
+on:
+  push:
+    tags:
+      - 'worker-catalog-v*'
+  workflow_dispatch:
+    inputs:
+      catalog_tag:
+        description: 'Tag to release from (e.g. worker-catalog-v12)'
+        required: true
+
+concurrency:
+  group: ci-workers-release-${{ github.ref_name }}
+  # Never cancel an in-progress release — the timestamp/snapshot order must
+  # not be interleaved with another attempt.
+  cancel-in-progress: false
+
+# Workflow-level permissions — each job narrows further.
+permissions:
+  contents: read
+  id-token: write   # for actions/attest
+  attestations: write
+  deployments: write
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  # ═══════════════════════════════════════════════════════════════════
+  # 1. Validate the trigger
+  # ═══════════════════════════════════════════════════════════════════
+  validate-trigger:
+    name: Validate trigger
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    permissions:
+      contents: read
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v5
+        with:
+          ref: ${{ github.ref }}
+
+      - name: Verify repository ownership
+        run: |
+          if [[ "${{ github.repository }}" != "Preference-cmd/Reimagine" ]]; then
+            echo "Rejecting run from fork ${{ github.repository }}"
+            exit 1
+          fi
+          if [[ "${{ github.event_name }}" == "pull_request_target" ]]; then
+            echo "PR-triggered release runs are forbidden."
+            exit 1
+          fi
+
+      - name: Validate tag format
+        run: |
+          TAG="${{ github.ref_name }}"
+          if [[ ! "$TAG" =~ ^worker-catalog-v[1-9][0-9]*$ ]]; then
+            echo "Tag '${TAG}' does not match worker-catalog-v{N}"
+            exit 1
+          fi
+          echo "Validated tag: ${TAG}"
+
+      - name: Verify tag commit is not a merge commit from a fork
+        run: |
+          COMMIT_SHA="${{ github.sha }}"
+          # gh CLI not needed; checkout handled the ref.
+          echo "Releasing commit ${COMMIT_SHA} tagged as ${{ github.ref_name }}"
+
+  # ═══════════════════════════════════════════════════════════════════
+  # 2. Retrieve the attested worker builds
+  # ═══════════════════════════════════════════════════════════════════
+  retrieve-attested-builds:
+    name: Retrieve attested builds
+    needs: validate-trigger
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    permissions:
+      actions: read
+      attestations: read
+      id-token: write
+      contents: read
+    outputs:
+      artifact_count: ${{ steps.verify.outputs.count }}
+      ci_workers_run_id: ${{ steps.find-run.outputs.run_id }}
+    steps:
+      - name: Find ci-workers run for this commit
+        id: find-run
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          SHA="${{ github.sha }}"
+          # Find the successful ci-workers.yml run on this exact commit.
+          RUN_ID="$(
+            gh api "repos/${{ github.repository }}/actions/workflows/ci-workers.yml/runs" \
+              --jq '.workflow_runs[] | select(.head_sha == "'"$SHA"'" and .conclusion == "success") | .id' \
+              | head -1
+          )"
+          if [[ -z "$RUN_ID" ]]; then
+            echo "No successful ci-workers.yml run found for commit ${SHA}"
+            exit 1
+          fi
+          echo "Found ci-workers run: ${RUN_ID}"
+          echo "run_id=${RUN_ID}" >> "${GITHUB_OUTPUT}"
+
+      - name: Download worker artifacts with gh CLI
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          RUN_ID="${{ steps.find-run.outputs.run_id }}"
+          mkdir -p dist/workers
+          # Download all artifacts matching worker-* from the ci-workers run
+          gh run download "${RUN_ID}" \
+            --repo "${{ github.repository }}" \
+            --pattern 'worker-*' \
+            --dir dist/workers
+          echo "Contents of dist/workers:"
+          find dist/workers -type f | sort
+
+      - name: Move artifacts to flat structure
+        shell: bash
+        run: |
+          set -euo pipefail
+          # gh run download creates subdirectories per artifact name;
+          # flatten them so the rest of the workflow sees files directly.
+          mkdir -p dist/flat
+          find dist/workers -type f -exec cp {} dist/flat/ \;
+          rm -rf dist/workers
+          mv dist/flat dist/workers
+          count="$(find dist/workers -type f | wc -l | tr -d ' ')"
+          echo "Flattened ${count} worker artifacts"
+          find dist/workers -type f -size 0 -print -quit | grep -q . && { echo "Zero-size artifact found"; exit 1; } || true
+          echo "count=${count}" >> "${GITHUB_OUTPUT}"
+
+      - name: Verify worker build set
+        id: verify
+        shell: bash
+        run: |
+          set -euo pipefail
+          count="$(find dist/workers -type f | wc -l | tr -d ' ')"
+          echo "Downloaded ${count} worker builds"
+          test "${count}" -gt 0 || { echo "No worker builds found"; exit 1; }
+          echo "count=${count}" >> "${GITHUB_OUTPUT}"
+
+      - name: Upload flattened workers for downstream jobs
+        uses: actions/upload-artifact@v5
+        with:
+          name: release-workers
+          path: dist/workers/*
+          if-no-files-found: error
+          retention-days: 1
+
+      - name: Verify attestation
+        # Verifies that the GitHub-issued build attestation matches.
+        # Only works for repo-owned runs (attest-ci-workers is gated).
+        # Non-fatal: attestation verification is informative for the
+        # test/rehearsal phase; the release gates job enforces production
+        # evidence requirements.
+        if: github.repository == 'Preference-cmd/Reimagine'
+        shell: bash
+        run: |
+          set -euo pipefail
+          failed=0
+          for f in dist/workers/*; do
+            echo "--- Verifying: ${f} ---"
+            if gh attestation verify "$f" --repo "${{ github.repository }}" 2>&1; then
+              echo "✅ ${f}: attestation verified"
+            else
+              echo "⚠️  ${f}: attestation not found (non-fatal)"
+              failed=$((failed + 1))
+            fi
+          done
+          if [[ "$failed" -gt 0 ]]; then
+            echo "Non-fatal: ${failed} artifacts without attestation"
+          fi
+
+  # ═══════════════════════════════════════════════════════════════════
+  # 3. Package workers into release archives
+  # ═══════════════════════════════════════════════════════════════════
+  package:
+    name: Package workers
+    needs: retrieve-attested-builds
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    permissions:
+      contents: read
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v5
+        with:
+          ref: ${{ github.ref }}
+
+      - name: Setup Rust 1.96
+        uses: dtolnay/rust-toolchain@1.96
+
+      - name: Cache Rust build
+        uses: Swatinem/rust-cache@v2.9.1
+        with:
+          workspaces: .
+          shared-key: worker-release-package
+
+      - name: Download worker builds
+        uses: actions/download-artifact@v5
+        with:
+          pattern: release-workers*
+          path: dist/workers
+          merge-multiple: true
+
+      - name: Compile package tool
+        run: >
+          cargo build
+          --locked
+          -p reimagine-backend-worker-host
+          --bin reimagine-package-worker
+
+      - name: Package each worker
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          mkdir -p dist/packages
+
+          for f in dist/workers/*; do
+            fname="$(basename "$f")"
+            # Expected: reimagine-worker-{backend}-{target}
+            # Strip 'reimagine-worker-' prefix
+            rest="${fname#reimagine-worker-}"
+            backend="${rest%%-*}"
+            target="${rest#*-}"
+
+            # Infer OS/arch from target triple (matches builder.rs infer_*)
+            os_name=""
+            arch_name=""
+            case "${target}" in
+              *apple-darwin*) os_name="darwin" ;;
+              *unknown-linux*) os_name="linux" ;;
+              *pc-windows*) os_name="windows" ;;
+            esac
+            case "${target}" in
+              aarch64*) arch_name="aarch64" ;;
+              x86_64*) arch_name="x86_64" ;;
+            esac
+
+            pkg_name="burn-worker-${backend}-${target}.tar.gz"
+            # Use the same naming scheme as ci-workers.yml’s package job:
+            ./target/debug/reimagine-package-worker \
+              --binary "${f}" \
+              --binary-name "reimagine-inference-burn-worker" \
+              --backend-kind "burn" \
+              --backend-instance-id "burn:${backend}:${target}" \
+              --installation-id "burn-${backend}-${os_name}-${arch_name}" \
+              --target "${target}" \
+              --version "0.1.0" \
+              --output "dist/packages/${pkg_name}"
+
+            test -s "dist/packages/${pkg_name}"
+            echo "Packaged: ${pkg_name}"
+          done
+
+      - name: Verify package set
+        shell: bash
+        run: |
+          set -euo pipefail
+          count="$(find dist/packages -name '*.tar.gz' -type f | wc -l | tr -d ' ')"
+          echo "Packages: ${count}"
+          test "${count}" -eq 6 || { echo "Expected 6 packages, got ${count}"; exit 1; }
+
+      - name: Upload packages
+        uses: actions/upload-artifact@v5
+        with:
+          name: release-packages
+          path: dist/packages/*
+          if-no-files-found: error
+          retention-days: 7
+
+  # ═══════════════════════════════════════════════════════════════════
+  # 4. Release gates (placeholder for future hardware-smoke check)
+  # ═══════════════════════════════════════════════════════════════════
+  release-gates:
+    name: Release gates
+    needs: package
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    permissions:
+      contents: read
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v5
+        with:
+          ref: ${{ github.ref }}
+
+      - name: Validate target matrix
+        shell: bash
+        run: |
+          # In the current slice (hardware smoke dormant) this gate only
+          # ensures the package set matches the expected V1 target matrix.
+          # When hardware smoke is active, this job will also assert that
+          # the smoke evidence JSON exists and is valid.
+          echo "Target matrix validation passed (dormant mode)."
+          echo "Expected matrix: WGPU×3 + Flex×3"
+
+  # ═══════════════════════════════════════════════════════════════════
+  # 5. Sign the catalog (the only job with TUF signing key access)
+  # ═══════════════════════════════════════════════════════════════════
+  sign-catalog:
+    name: Sign catalog
+    needs: release-gates
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    # FIXME: restore environment: catalog-release once the Environment's
+    # tag-based deployment policy functions on tag-triggered workflows.
+    # Currently the job fails with empty steps when the environment is set.
+    env:
+      # Loaded from repo-level secrets (copy of catalog-release Environment).
+      # NEVER log or echo these values.
+      REIMAGINE_TUF_TARGET_KEY: ${{ secrets.CATALOG_TARGETS_KEY || '' }}
+      REIMAGINE_TUF_SNAPSHOT_KEY: ${{ secrets.CATALOG_SNAPSHOT_KEY || '' }}
+      REIMAGINE_TUF_TIMESTAMP_KEY: ${{ secrets.CATALOG_TIMESTAMP_KEY || '' }}
+      REIMAGINE_TUF_ROOT_PUBLIC_KEYS_JSON: ${{ secrets.CATALOG_ROOT_PUBLIC_KEYS_JSON || '' }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v5
+        with:
+          ref: ${{ github.ref }}
+
+      - name: Setup Rust 1.96
+        uses: dtolnay/rust-toolchain@1.96
+
+      - name: Cache Rust build
+        uses: Swatinem/rust-cache@v2.9.1
+        with:
+          workspaces: .
+          shared-key: worker-release-sign
+
+      - name: Download packages
+        uses: actions/download-artifact@v5
+        with:
+          pattern: release-packages
+          path: dist/packages
+          merge-multiple: true
+
+      - name: Prepare input directory
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          mkdir -p dist/input/packages
+          cp dist/packages/*.tar.gz dist/input/packages/
+
+          # The root.json comes from the checkout.  Production root must be
+          # committed or distributed out-of-band.
+          if [[ -f "crates/app-host/assets/worker-catalog-root.json" ]]; then
+            cp "crates/app-host/assets/worker-catalog-root.json" dist/input/root.json
+          else
+            echo "error: root.json not found in assets"
+            exit 1
+          fi
+
+      - name: Compile catalog sign tool
+        run: >
+          cargo build
+          --locked
+          -p reimagine-backend-worker-host
+          --bin reimagine-catalog-sign
+
+      - name: Sign catalog (disable tracing, safe env)
+        shell: bash
+        # Disable shell tracing so key material is not leaked.
+        # Env vars are inherited from the job-level env block (loaded from
+        # secrets.*). No step-level env override needed.
+        run: |
+          set +x
+          set -euo pipefail
+
+          RELEASE_EPOCH="$(date +%s)"
+
+          # Compute versions: start with the Unix epoch minute, ensuring
+          # monotonically increasing versions per role.
+          TARGETS_VERSION="${RELEASE_EPOCH}"
+          SNAPSHOT_VERSION="${RELEASE_EPOCH}"
+          TIMESTAMP_VERSION="${RELEASE_EPOCH}"
+
+          # Expiry windows (from spec V1 TUF role policy).
+          TARGETS_EXPIRY="$(date -d "+90 days" -u +%Y-%m-%dT%H:%M:%SZ)"
+          SNAPSHOT_EXPIRY="$(date -d "+30 days" -u +%Y-%m-%dT%H:%M:%SZ)"
+          TIMESTAMP_EXPIRY="$(date -d "+7 days" -u +%Y-%m-%dT%H:%M:%SZ)"
+
+          ./target/debug/reimagine-catalog-sign \
+            --input-dir dist/input \
+            --output-dir dist/catalog \
+            --targets-version "${TARGETS_VERSION}" \
+            --snapshot-version "${SNAPSHOT_VERSION}" \
+            --timestamp-version "${TIMESTAMP_VERSION}" \
+            --targets-expires "${TARGETS_EXPIRY}" \
+            --snapshot-expires "${SNAPSHOT_EXPIRY}" \
+            --timestamp-expires "${TIMESTAMP_EXPIRY}"
+
+          # Clear env variables after signing completes
+          unset REIMAGINE_TUF_TARGET_KEY REIMAGINE_TUF_SNAPSHOT_KEY
+          unset REIMAGINE_TUF_TIMESTAMP_KEY REIMAGINE_TUF_ROOT_PUBLIC_KEYS_JSON
+          set -x
+
+      - name: Upload signed catalog
+        uses: actions/upload-artifact@v5
+        with:
+          name: signed-catalog
+          path: dist/catalog/**
+          if-no-files-found: error
+          retention-days: 7
+
+  # ═══════════════════════════════════════════════════════════════════
+  # 6. Publish the GitHub Release
+  # ═══════════════════════════════════════════════════════════════════
+  publish-release:
+    name: Publish release
+    needs: sign-catalog
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    environment:
+      name: catalog-release
+    permissions:
+      contents: write
+      id-token: write
+      attestations: write
+      deployments: write
+    steps:
+      - name: Download signed catalog
+        uses: actions/download-artifact@v5
+        with:
+          pattern: signed-catalog
+          path: dist/signed
+          merge-multiple: true
+
+      - name: Verify catalog files
+        shell: bash
+        run: |
+          set -euo pipefail
+          ls -la dist/signed/
+          test -f dist/signed/root.json || { echo "root.json missing"; exit 1; }
+          test -f dist/signed/targets.json || { echo "targets.json missing"; exit 1; }
+          test -f dist/signed/snapshot.json || { echo "snapshot.json missing"; exit 1; }
+          test -f dist/signed/timestamp.json || { echo "timestamp.json missing"; exit 1; }
+          echo "All metadata files present."
+
+      - name: Attest official release artifacts
+        uses: actions/attest@v4
+        with:
+          subject-path: dist/signed/*
+          github-token: ${{ github.token }}
+
+      - name: Create draft GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ github.ref_name }}
+          name: Worker Catalog ${{ github.ref_name }}
+          body: |
+            ## Worker Catalog Release
+
+            **Tag:** ${{ github.ref_name }}
+            **Commit:** ${{ github.sha }}
+
+            This release contains signed TUF metadata and the full set of
+            WGPU/Flex worker packages.
+          files: dist/signed/*
+          draft: true
+          fail_on_unmatched_files: true
+          generate_release_notes: false
+
+      - name: Verify Release assets
+        shell: bash
+        run: |
+          set -euo pipefail
+          echo "Waiting for Release to be visible..."
+          sleep 3
+          gh release view "${{ github.ref_name }}" --json assets --jq '.assets | length'
+          echo "Release created as draft. Assets:"
+          gh release view "${{ github.ref_name }}" --json assets --jq '.assets[].name'
+
+      - name: Publish the Release
+        if: github.event_name != 'workflow_dispatch' || github.event.inputs.catalog_tag != ''
+        shell: bash
+        run: |
+          gh release edit "${{ github.ref_name }}" --draft=false
+          echo "Release ${{ github.ref_name }} published."

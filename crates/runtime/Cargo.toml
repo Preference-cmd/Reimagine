@@ -1,0 +1,19 @@
+[package]
+name = "reimagine-runtime"
+version.workspace = true
+description.workspace = true
+authors.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+
+[dependencies]
+reimagine-core = { path = "../core" }
+reimagine-inference = { path = "../inference" }
+async-trait = { workspace = true }
+serde = { workspace = true }
+tokio = { workspace = true, features = ["macros", "rt", "rt-multi-thread", "sync", "time"] }
+tracing = "0.1"
+
+[dev-dependencies]
+tokio = { workspace = true, features = ["macros", "rt", "rt-multi-thread", "sync", "time", "test-util"] }

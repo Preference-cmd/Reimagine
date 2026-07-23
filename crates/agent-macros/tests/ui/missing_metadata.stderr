@@ -1,0 +1,11 @@
+error: missing required agent_tool metadata `description`
+  --> tests/ui/missing_metadata.rs:16:1
+   |
+16 | / #[agent_tool(
+17 | |     name = "workflow.missing",
+18 | |     modes = ["agent"],
+19 | |     permission = "workflow.read"
+20 | | )]
+   | |__^
+   |
+   = note: this error originates in the attribute macro `agent_tool` (in Nightly builds, run with -Z macro-backtrace for more info)

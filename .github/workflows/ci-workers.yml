@@ -1,0 +1,416 @@
+name: ci-workers
+
+on:
+  push:
+    branches: [main, develop]
+    paths:
+      - 'crates/backend-worker-protocol/**'
+      - 'crates/backend-worker-host/**'
+      - 'crates/inference-backends/burn/**'
+      - 'crates/inference-backends/burn-worker/**'
+      - 'Cargo.toml'
+      - 'Cargo.lock'
+      - 'rust-toolchain.toml'
+      - '.github/workflows/ci-workers.yml'
+  pull_request:
+    branches: [main, develop]
+    paths:
+      - 'crates/backend-worker-protocol/**'
+      - 'crates/backend-worker-host/**'
+      - 'crates/inference-backends/burn/**'
+      - 'crates/inference-backends/burn-worker/**'
+      - 'Cargo.toml'
+      - 'Cargo.lock'
+      - 'rust-toolchain.toml'
+      - '.github/workflows/ci-workers.yml'
+  workflow_dispatch:
+  merge_group:
+
+concurrency:
+  group: ci-workers-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  CARGO_TERM_COLOR: always
+  RUSTFLAGS: -D warnings
+  # WORKER_BACKEND scopes the Rust cache to a single backend so Cargo.lock
+  # changes inside one backend's tree only invalidate that backend's cache,
+  # not every wgpu AND flex job on the same runner OS. Combined with the
+  # runner.os-scoped shared-key, this gives us:
+  #   - same-backend jobs across compile/package/catalog-dry-run share deps
+  #   - different-backends on the same OS do NOT share deps
+  #   - same OS, same backend, different feature patch doesn't trigger all 6
+  # Defined per-job to avoid workflow-level matrix context errors in
+  # non-matrix jobs (feature-contract, attest, catalog-dry-run).
+
+jobs:
+  feature-contract:
+    name: worker feature contract
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v5
+
+      - name: Setup Rust 1.96
+        uses: dtolnay/rust-toolchain@1.96
+
+      - name: Cache Rust build
+        uses: Swatinem/rust-cache@v2.9.1
+        with:
+          workspaces: .
+          shared-key: worker-feature-contract
+
+      - name: Zero features must be rejected
+        # build.rs exits with code 1; cargo propagates that exit code.
+        run: >
+          cargo check -p reimagine-inference-burn-worker --no-default-features
+          2>&1 && exit 1 || echo "correctly rejected zero features"
+
+      - name: Dual features must be rejected
+        run: >
+          cargo check -p reimagine-inference-burn-worker --no-default-features --features wgpu,flex
+          2>&1 && exit 1 || echo "correctly rejected dual features"
+
+      - name: WGPU only must succeed
+        run: >
+          cargo check -p reimagine-inference-burn-worker --no-default-features --features wgpu
+
+      - name: Flex only must succeed
+        run: >
+          cargo check -p reimagine-inference-burn-worker --no-default-features --features flex
+
+  compile:
+    name: worker-${{ matrix.backend }} (${{ matrix.runner }})
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 25
+    env:
+      WORKER_BACKEND: ${{ matrix.backend }}
+    strategy:
+      fail-fast: false
+      matrix:
+        backend: [wgpu, flex]
+        runner: [macos-latest, ubuntu-24.04, windows-latest]
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v5
+
+      - name: Setup Rust 1.96
+        uses: dtolnay/rust-toolchain@1.96
+
+      - name: Cache Rust build
+        # env-vars: WORKER_BACKEND splits the cache key by backend (wgpu/flex)
+        # so deps changes scoped to one backend don't invalidate the other.
+        # shared-key: worker-${{ runner.os }} still lets compile/package/
+        # catalog-dry-run jobs that share runner.os AND backend share cache.
+        uses: Swatinem/rust-cache@v2.9.1
+        with:
+          workspaces: .
+          shared-key: worker-${{ runner.os }}
+          env-vars: WORKER_BACKEND
+
+      - name: Test contracts and probe (Ubuntu only)
+        # Hardware-independent tests only need to run on one platform.
+        # The current E2E dev-dependency graph enables Burn's default WGPU
+        # feature, so a Flex cargo-test build would incorrectly unify WGPU and
+        # Flex. Flex contract coverage comes from the release build.
+        if: matrix.backend == 'wgpu' && matrix.runner == 'ubuntu-24.04'
+        run: >
+          cargo test
+          --locked
+          -p reimagine-inference-burn-worker
+          --no-default-features
+          --features ${{ matrix.backend }}
+          --lib
+          --bins
+
+      - name: Compile worker release binary
+        run: >
+          cargo build
+          --release
+          --locked
+          -p reimagine-inference-burn-worker
+          --no-default-features
+          --features ${{ matrix.backend }}
+
+      - name: Stage future release input
+        id: stage
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          target="$(rustc -vV | sed -n 's/^host: //p')"
+          extension=""
+          if [[ "${RUNNER_OS}" == "Windows" ]]; then
+            extension=".exe"
+          fi
+
+          source="target/release/reimagine-inference-burn-worker${extension}"
+          destination="dist/workers/reimagine-worker-${{ matrix.backend }}-${target}${extension}"
+          mkdir -p dist/workers
+          cp "${source}" "${destination}"
+
+          test -s "${destination}"
+          echo "artifact_name=worker-${{ matrix.backend }}-${RUNNER_OS}-${RUNNER_ARCH}" >> "${GITHUB_OUTPUT}"
+          echo "path=${destination}" >> "${GITHUB_OUTPUT}"
+          echo "Prepared ${destination} for future package/sign/release jobs."
+
+      - name: Upload non-release worker build
+        uses: actions/upload-artifact@v5
+        with:
+          name: ${{ steps.stage.outputs.artifact_name }}
+          path: ${{ steps.stage.outputs.path }}
+          if-no-files-found: error
+          retention-days: 7
+
+      - name: Dry-run release chain verification (Ubuntu only)
+        # Package the compiled binary, sign TUF metadata with deterministic
+        # test keys, and verify the entire release pipeline end-to-end.
+        if: matrix.runner == 'ubuntu-24.04' && matrix.backend == 'wgpu'
+        shell: bash
+        run: >
+          cargo test
+          --locked
+          -p reimagine-backend-worker-host
+          --test dry_run_release
+          -- dry_run_release_chain_from_real_binary
+          --
+          --nocapture
+        env:
+          REIMAGINE_DRY_RUN_BINARY: target/release/reimagine-inference-burn-worker
+
+      # These workflow artifacts are short-lived CI evidence, not user
+      # distribution assets. No package is labeled as officially supported.
+
+  attest-ci-workers:
+    name: attest non-release worker builds
+    if: >-
+      github.repository == 'Preference-cmd/Reimagine' &&
+      github.event_name != 'pull_request' &&
+      (github.ref == 'refs/heads/main' || github.ref == 'refs/heads/develop')
+    needs: compile
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    permissions:
+      contents: read
+      id-token: write
+      attestations: write
+    steps:
+      - name: Download worker builds
+        uses: actions/download-artifact@v5
+        with:
+          pattern: worker-*
+          path: dist/workers
+          merge-multiple: true
+
+      - name: Verify worker build set
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          test "$(find dist/workers -type f | wc -l | tr -d ' ')" -eq 6
+          find dist/workers -type f -size 0 -print -quit | grep -q . && exit 1 || true
+
+      - name: Attest worker build provenance
+        uses: actions/attest@v4
+        with:
+          subject-path: dist/workers/*
+
+      # Intentionally absent until the production TUF signer and protected
+      # catalog-release environment exist:
+      # - no GitHub Release creation
+      # - no TUF signing secrets
+      # - no official worker package publication
+
+  package:
+    name: package-${{ matrix.backend }} (${{ matrix.runner }})
+    needs: compile
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 10
+    env:
+      WORKER_BACKEND: ${{ matrix.backend }}
+    strategy:
+      fail-fast: false
+      matrix:
+        backend: [wgpu, flex]
+        runner: [macos-latest, ubuntu-24.04, windows-latest]
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v5
+
+      - name: Setup Rust 1.96
+        uses: dtolnay/rust-toolchain@1.96
+
+      - name: Cache Rust build
+        # Same backend split as the compile job. Package tool (a small CLI) is
+        # small enough that cache miss has minor cost; the win is that package
+        # reads from a deps cache that matches what compile already produced.
+        uses: Swatinem/rust-cache@v2.9.1
+        with:
+          workspaces: .
+          shared-key: worker-${{ runner.os }}
+          env-vars: WORKER_BACKEND
+
+      - name: Download worker build
+        uses: actions/download-artifact@v5
+        with:
+          pattern: worker-${{ matrix.backend }}-*
+          path: dist/workers
+          merge-multiple: true
+
+      - name: Compile package tool
+        run: >
+          cargo build
+          --locked
+          -p reimagine-backend-worker-host
+          --bin reimagine-package-worker
+
+      - name: Package worker into release archive
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          target="$(rustc -vV | sed -n 's/^host: //p')"
+          extension=""
+          if [[ "${RUNNER_OS}" == "Windows" ]]; then
+            extension=".exe"
+          fi
+
+          binary_path="dist/workers/reimagine-worker-${{ matrix.backend }}-${target}${extension}"
+          package_path="dist/packages/burn-worker-${{ matrix.backend }}-${target}.tar.gz"
+
+          mkdir -p dist/packages
+
+          os_name=""
+          case "${RUNNER_OS}" in
+            macOS) os_name="darwin" ;;
+            Linux) os_name="linux" ;;
+            Windows) os_name="windows" ;;
+          esac
+
+          arch_name=""
+          case "${RUNNER_ARCH}" in
+            ARM64) arch_name="aarch64" ;;
+            X64) arch_name="x86_64" ;;
+            *) arch_name="unknown" ;;
+          esac
+
+          ./target/debug/reimagine-package-worker \
+            --binary "${binary_path}" \
+            --binary-name "reimagine-inference-burn-worker${extension}" \
+            --backend-kind "burn" \
+            --backend-instance-id "burn:${{ matrix.backend }}:${target}" \
+            --installation-id "burn-${{ matrix.backend }}-${os_name}-${arch_name}" \
+            --target "${target}" \
+            --version "0.1.0" \
+            --output "${package_path}"
+
+          test -s "${package_path}"
+          echo "Packaged ${binary_path} → ${package_path}"
+
+      - name: Upload release package
+        uses: actions/upload-artifact@v5
+        with:
+          name: package-${{ matrix.backend }}-${{ runner.os }}-${{ runner.arch }}
+          path: dist/packages/*
+          if-no-files-found: error
+          retention-days: 7
+
+  catalog-dry-run:
+    name: catalog dry-run
+    needs: package
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v5
+
+      - name: Setup Rust 1.96
+        uses: dtolnay/rust-toolchain@1.96
+
+      - name: Cache Rust build
+        # catalog-dry-run has no matrix so WORKER_BACKEND is unset; force a
+        # constant so it lands on its own cache namespace.
+        uses: Swatinem/rust-cache@v2.9.1
+        with:
+          workspaces: .
+          shared-key: worker-catalog-dry-run
+          env-vars: WORKER_BACKEND
+        env:
+          WORKER_BACKEND: catalog
+
+      - name: Download all packages
+        uses: actions/download-artifact@v5
+        with:
+          pattern: package-*
+          path: dist/packages
+          merge-multiple: true
+
+      - name: Verify package set
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          count="$(find dist/packages -name '*.tar.gz' -type f | wc -l | tr -d ' ')"
+          echo "Found ${count} packages"
+          test "${count}" -eq 6 || { echo "Expected 6 packages, got ${count}"; exit 1; }
+          find dist/packages -name '*.tar.gz' -type f -size 0 -print -quit | grep -q . && exit 1 || true
+
+      - name: Compile catalog assemble tool
+        run: >
+          cargo build
+          --locked
+          -p reimagine-backend-worker-host
+          --bin reimagine-catalog-assemble
+
+      - name: Assemble and verify catalog
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          package_args=()
+          for pkg in dist/packages/*.tar.gz; do
+            filename="$(basename "${pkg}")"
+            # filename format: burn-worker-{backend}-{target}.tar.gz
+            # Strip prefix and extension to extract backend and target triple
+            rest="${filename#burn-worker-}"
+            backend="${rest%%-*}"
+            target="${rest#*-}"
+            target="${target%.tar.gz}"
+
+            os_name=""
+            arch_name=""
+            case "${target}" in
+              *apple-darwin*) os_name="darwin" ;;
+              *unknown-linux*) os_name="linux" ;;
+              *pc-windows*) os_name="windows" ;;
+            esac
+            case "${target}" in
+              aarch64*) arch_name="aarch64" ;;
+              x86_64*) arch_name="x86_64" ;;
+            esac
+
+            # Infer backend kind from the installed-worker metadata in the package
+            # File is named burn-worker-{backend}-{target}.tar.gz
+            package_args+=(
+              "--package"
+              "${filename}@burn:${backend}:${target}@burn-${backend}-${os_name}-${arch_name}@${target}@${os_name}"
+            )
+          done
+
+          mkdir -p dist/catalog
+
+          ./target/debug/reimagine-catalog-assemble \
+            --input-dir dist/packages \
+            --output-dir dist/catalog \
+            "${package_args[@]}"
+
+      - name: Upload catalog artifact
+        uses: actions/upload-artifact@v5
+        with:
+          name: catalog-dry-run
+          path: dist/catalog/**
+          if-no-files-found: error
+          retention-days: 7

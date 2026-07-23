@@ -1,0 +1,791 @@
+use std::collections::{HashMap, HashSet};
+use std::sync::Arc;
+
+use reimagine_config::{AppConfig, InferenceBackendConfig};
+use reimagine_inference::registry::register_builtin_inference_executors;
+use reimagine_inference::{
+    BackendInstance, BackendInstanceRuntimeHooks, BackendInstanceStatus, BackendOverrides,
+    CompositeBackendInstanceRuntimeHooks, DefaultInferenceRuntime, InferenceBackendRegistry,
+    RejectAllBridgePolicy, StaticBackendSelectionPolicy, WorkspaceComputeProfile,
+};
+use reimagine_runtime::NodeExecutorRegistry;
+
+use crate::ModelService;
+use crate::inference::candidate::{
+    BackendCandidate, BackendCandidateError, BuiltBackendInstance, builtin_backend_candidates,
+};
+use crate::inference::image_source_resolver::InputImageSourceResolver;
+use crate::inference::resolver::ModelResolverAdapter;
+use crate::inference::selection::{BackendProfilesByInstance, resolve_backend_selection};
+use crate::inference::worker::{
+    WorkerControlService, WorkerInventoryProvider, WorkerInventorySnapshot, activation_diagnostic,
+    worker_backend_profile,
+};
+
+pub(crate) struct ComposedBackends {
+    registry: InferenceBackendRegistry,
+    runtime_hooks: Arc<dyn BackendInstanceRuntimeHooks>,
+    selected_instance: BackendInstance,
+    priority_order: Vec<BackendInstance>,
+    allowed_instances: Vec<BackendInstance>,
+    disabled_instances: Vec<BackendInstance>,
+}
+
+pub(crate) struct ComposedInferenceRuntime {
+    pub(crate) executor_registry: NodeExecutorRegistry,
+    pub(crate) runtime_hooks: Arc<dyn BackendInstanceRuntimeHooks>,
+    pub(crate) selected_instance: BackendInstance,
+    pub(crate) worker_switch: Option<Arc<super::switch::WorkerSwitchService>>,
+}
+
+pub(crate) struct BootstrapInference {
+    pub(crate) runtime: ComposedInferenceRuntime,
+    pub(crate) compute_profile: WorkspaceComputeProfile,
+}
+
+struct WorkerCompositionSelection {
+    selected_instance: BackendInstance,
+    priority_order: Vec<BackendInstance>,
+    disabled_instances: Vec<BackendInstance>,
+}
+
+pub(crate) fn bootstrap_inference(
+    config: &AppConfig,
+    backend_config: &InferenceBackendConfig,
+    model_service: Arc<ModelService>,
+) -> Result<BootstrapInference, BackendCandidateError> {
+    bootstrap_inference_with_candidates(
+        config,
+        backend_config,
+        model_service,
+        builtin_backend_candidates(),
+    )
+}
+
+pub(crate) async fn bootstrap_inference_with_worker_inventory(
+    config: &AppConfig,
+    backend_config: &InferenceBackendConfig,
+    model_service: Arc<ModelService>,
+    provider: Arc<dyn WorkerInventoryProvider>,
+) -> Result<BootstrapInference, BackendCandidateError> {
+    let candidates = builtin_backend_candidates();
+    let snapshot = provider.snapshot();
+    let mut workspace_profile = collect_compute_profile_with_workers(&candidates, &snapshot);
+    let resolved = resolve_backend_selection(backend_config, &workspace_profile);
+    for diagnostic in resolved.diagnostics {
+        workspace_profile = workspace_profile.with_diagnostic(diagnostic);
+    }
+
+    let selection = WorkerCompositionSelection {
+        selected_instance: resolved.selected_instance,
+        priority_order: resolved.priority_order,
+        disabled_instances: resolved.disabled_instances,
+    };
+    let runtime = compose_inference_runtime_with_workers(
+        config,
+        model_service,
+        &candidates,
+        &snapshot,
+        &mut workspace_profile,
+        selection,
+    )
+    .await?;
+    Ok(BootstrapInference {
+        runtime,
+        compute_profile: workspace_profile,
+    })
+}
+
+fn bootstrap_inference_with_candidates(
+    config: &AppConfig,
+    backend_config: &InferenceBackendConfig,
+    model_service: Arc<ModelService>,
+    candidates: Vec<Arc<dyn BackendCandidate>>,
+) -> Result<BootstrapInference, BackendCandidateError> {
+    let mut workspace_profile = collect_compute_profile(&candidates);
+    let resolved = resolve_backend_selection(backend_config, &workspace_profile);
+    for diagnostic in resolved.diagnostics {
+        workspace_profile = workspace_profile.with_diagnostic(diagnostic);
+    }
+
+    let runtime = compose_inference_runtime_with_candidates(
+        config,
+        model_service,
+        &candidates,
+        &workspace_profile,
+        resolved.selected_instance,
+        resolved.priority_order,
+        resolved.disabled_instances,
+    )?;
+
+    Ok(BootstrapInference {
+        runtime,
+        compute_profile: workspace_profile,
+    })
+}
+
+/// Construct the inference runtime for a workspace from built-in candidates.
+///
+/// Production V1 registers built-in backend candidates through a backend-
+/// keyed path: candidates provide profiles, selected instances, backend
+/// builders, and runtime hooks. Tests inject an additional stub candidate through
+/// `bootstrap_inference_with_candidates` to prove this path is no longer
+/// Candle-shaped.
+#[cfg(test)]
+pub(crate) fn compose_inference_runtime(
+    config: &AppConfig,
+    selected_instance: BackendInstance,
+    model_service: Arc<ModelService>,
+) -> Result<ComposedInferenceRuntime, BackendCandidateError> {
+    let candidates = builtin_backend_candidates();
+    let profile = collect_compute_profile(&candidates);
+    compose_inference_runtime_with_candidates(
+        config,
+        model_service,
+        &candidates,
+        &profile,
+        selected_instance.clone(),
+        vec![selected_instance],
+        Vec::new(),
+    )
+}
+
+fn collect_compute_profile(candidates: &[Arc<dyn BackendCandidate>]) -> WorkspaceComputeProfile {
+    collect_compute_profile_with_workers(candidates, &WorkerInventorySnapshot::default())
+}
+
+fn collect_compute_profile_with_workers(
+    candidates: &[Arc<dyn BackendCandidate>],
+    workers: &WorkerInventorySnapshot,
+) -> WorkspaceComputeProfile {
+    let mut profile = WorkspaceComputeProfile::new();
+    for candidate in candidates {
+        profile = profile.with_backend_profile(candidate.profile());
+    }
+    profile.with_backend_profile(worker_backend_profile(workers))
+}
+
+async fn compose_inference_runtime_with_workers(
+    config: &AppConfig,
+    model_service: Arc<ModelService>,
+    candidates: &[Arc<dyn BackendCandidate>],
+    workers: &WorkerInventorySnapshot,
+    profile: &mut WorkspaceComputeProfile,
+    selection: WorkerCompositionSelection,
+) -> Result<ComposedInferenceRuntime, BackendCandidateError> {
+    let WorkerCompositionSelection {
+        selected_instance,
+        priority_order,
+        disabled_instances,
+    } = selection;
+    let disabled = disabled_instances.iter().cloned().collect::<HashSet<_>>();
+    let candidate_map = candidates
+        .iter()
+        .map(|candidate| (candidate.backend(), Arc::clone(candidate)))
+        .collect::<HashMap<_, _>>();
+    let worker_map = workers
+        .candidates()
+        .iter()
+        .map(|candidate| (candidate.backend_instance(), candidate))
+        .collect::<HashMap<_, _>>();
+    let mut registry = InferenceBackendRegistry::new();
+    let mut hooks = Vec::new();
+    let mut allowed_instances = Vec::new();
+    let mut worker_switch = None;
+
+    for instance in priority_order.iter().cloned() {
+        if disabled.contains(&instance) {
+            continue;
+        }
+        let instance_profile = BackendProfilesByInstance::new(profile)
+            .get(&instance)
+            .cloned();
+        let Some(instance_profile) = instance_profile else {
+            continue;
+        };
+        if instance_profile.status != BackendInstanceStatus::Available {
+            continue;
+        }
+        if let Some(worker) = worker_map.get(&instance) {
+            match WorkerControlService::activate(worker).await {
+                Ok((built, live_profile, workers)) => {
+                    replace_instance_profile(profile, live_profile);
+                    register_built_backend(&mut registry, &mut hooks, built);
+                    if instance == selected_instance {
+                        worker_switch = Some(workers);
+                    }
+                    allowed_instances.push(instance);
+                }
+                Err(error) => {
+                    mark_instance_unavailable(
+                        profile,
+                        &instance,
+                        activation_diagnostic(&instance, &error),
+                    );
+                }
+            }
+            continue;
+        }
+        let Some(candidate) = candidate_map.get(&instance_profile.backend) else {
+            continue;
+        };
+        let built = candidate.build(config, &instance, Some(instance_profile.device))?;
+        register_built_backend(&mut registry, &mut hooks, built);
+        allowed_instances.push(instance);
+    }
+
+    let inference_runtime = compose_runtime_router(
+        registry,
+        priority_order,
+        allowed_instances,
+        disabled_instances,
+    );
+    let mut executor_registry = NodeExecutorRegistry::default();
+    let executor_inference_runtime: Arc<dyn reimagine_inference::InferenceRuntime> =
+        if let Some(workers) = &worker_switch {
+            Arc::new(super::switch::SwitchingInferenceRuntime::new(Arc::clone(
+                workers,
+            )))
+        } else {
+            inference_runtime.clone()
+        };
+    register_builtin_inference_executors(
+        &mut executor_registry,
+        executor_inference_runtime,
+        Arc::new(ModelResolverAdapter::new(
+            model_service,
+            config.paths().clone(),
+        )),
+        Arc::new(InputImageSourceResolver::new(config.paths())),
+    )
+    .expect("register executors");
+    Ok(ComposedInferenceRuntime {
+        executor_registry,
+        runtime_hooks: Arc::new(CompositeBackendInstanceRuntimeHooks::new(hooks)),
+        selected_instance,
+        worker_switch,
+    })
+}
+
+fn replace_instance_profile(
+    profile: &mut WorkspaceComputeProfile,
+    replacement: reimagine_inference::BackendInstanceProfile,
+) {
+    for backend in &mut profile.backend_profiles {
+        if let Some(instance) = backend
+            .instances
+            .iter_mut()
+            .find(|item| item.instance == replacement.instance)
+        {
+            *instance = replacement;
+            return;
+        }
+    }
+}
+
+fn mark_instance_unavailable(
+    profile: &mut WorkspaceComputeProfile,
+    target: &BackendInstance,
+    diagnostic: reimagine_core::diagnostic::Diagnostic,
+) {
+    for backend in &mut profile.backend_profiles {
+        if let Some(instance) = backend
+            .instances
+            .iter_mut()
+            .find(|item| &item.instance == target)
+        {
+            instance.status = BackendInstanceStatus::Unavailable;
+            instance.diagnostics.push(diagnostic);
+            return;
+        }
+    }
+}
+
+fn compose_inference_runtime_with_candidates(
+    config: &AppConfig,
+    model_service: Arc<ModelService>,
+    candidates: &[Arc<dyn BackendCandidate>],
+    profile: &WorkspaceComputeProfile,
+    selected_instance: BackendInstance,
+    priority_order: Vec<BackendInstance>,
+    disabled_instances: Vec<BackendInstance>,
+) -> Result<ComposedInferenceRuntime, BackendCandidateError> {
+    let composed_backends = compose_inference_backends(
+        config,
+        candidates,
+        profile,
+        selected_instance,
+        priority_order,
+        disabled_instances,
+    )?;
+    let inference_runtime = compose_runtime_router(
+        composed_backends.registry,
+        composed_backends.priority_order,
+        composed_backends.allowed_instances,
+        composed_backends.disabled_instances,
+    );
+
+    let mut executor_registry = NodeExecutorRegistry::default();
+    let image_source_resolver = Arc::new(InputImageSourceResolver::new(config.paths()));
+    let executor_inference_runtime: Arc<dyn reimagine_inference::InferenceRuntime> =
+        inference_runtime.clone();
+    register_builtin_inference_executors(
+        &mut executor_registry,
+        executor_inference_runtime,
+        Arc::new(ModelResolverAdapter::new(
+            model_service,
+            config.paths().clone(),
+        )),
+        image_source_resolver,
+    )
+    .expect("register executors");
+
+    Ok(ComposedInferenceRuntime {
+        executor_registry,
+        runtime_hooks: composed_backends.runtime_hooks,
+        selected_instance: composed_backends.selected_instance,
+        worker_switch: None,
+    })
+}
+
+fn compose_inference_backends(
+    config: &AppConfig,
+    candidates: &[Arc<dyn BackendCandidate>],
+    profile: &WorkspaceComputeProfile,
+    selected_instance: BackendInstance,
+    priority_order: Vec<BackendInstance>,
+    disabled_instances: Vec<BackendInstance>,
+) -> Result<ComposedBackends, BackendCandidateError> {
+    let profiles = BackendProfilesByInstance::new(profile);
+    let candidate_map = candidates
+        .iter()
+        .map(|candidate| (candidate.backend(), Arc::clone(candidate)))
+        .collect::<HashMap<_, _>>();
+
+    let disabled = disabled_instances.iter().cloned().collect::<HashSet<_>>();
+    let mut registry = InferenceBackendRegistry::new();
+    let mut hooks = Vec::new();
+    let mut allowed_instances = Vec::new();
+
+    for instance in priority_order.iter().cloned() {
+        if disabled.contains(&instance) {
+            continue;
+        }
+        let Some(instance_profile) = profiles.get(&instance) else {
+            continue;
+        };
+        if instance_profile.status != BackendInstanceStatus::Available {
+            continue;
+        }
+        let Some(candidate) = candidate_map.get(&instance_profile.backend) else {
+            continue;
+        };
+        let built = candidate.build(config, &instance, Some(instance_profile.device.clone()))?;
+        register_built_backend(&mut registry, &mut hooks, built);
+        allowed_instances.push(instance);
+    }
+
+    Ok(ComposedBackends {
+        registry,
+        runtime_hooks: Arc::new(CompositeBackendInstanceRuntimeHooks::new(hooks)),
+        selected_instance,
+        priority_order,
+        allowed_instances,
+        disabled_instances,
+    })
+}
+
+fn register_built_backend(
+    registry: &mut InferenceBackendRegistry,
+    hooks: &mut Vec<Arc<dyn BackendInstanceRuntimeHooks>>,
+    built: BuiltBackendInstance,
+) {
+    registry.register(built.descriptor, built.backend);
+    hooks.push(built.runtime_hooks);
+}
+
+fn compose_runtime_router(
+    registry: InferenceBackendRegistry,
+    priority_order: Vec<BackendInstance>,
+    allowed_instances: Vec<BackendInstance>,
+    disabled_instances: Vec<BackendInstance>,
+) -> Arc<DefaultInferenceRuntime> {
+    let policy = StaticBackendSelectionPolicy::with_overrides(
+        BackendOverrides::new(),
+        priority_order,
+        Some(allowed_instances),
+        disabled_instances,
+    );
+    Arc::new(DefaultInferenceRuntime::with_policy(
+        Arc::new(registry),
+        Arc::new(policy),
+        Arc::new(RejectAllBridgePolicy),
+    ))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use reimagine_config::AppPaths;
+    use reimagine_inference::{
+        Backend, BackendInstanceDescriptor, BackendInstanceObservation, BackendInstanceProfile,
+        BackendInstanceSnapshot, BackendProfile, BackendRunLifecycle, BackendRunLifecycleReport,
+        BackendRunLifecycleRequest, CannedCapabilityResponse, CreateEmptyLatentRequest,
+        CreateEmptyLatentResponse, DeviceKind, DeviceProfile, FakeBackend, InferenceError,
+        LatentContent, LatentSpaceMetadata, RuntimeLatent,
+    };
+    use reimagine_plugin::{Extension, Plugin};
+    use std::collections::BTreeMap;
+
+    use crate::inference::candidate::CandleBackendCandidate;
+
+    fn temp_dir(prefix: &str) -> std::path::PathBuf {
+        let nonce = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_nanos();
+        std::env::temp_dir().join(format!("reimagine-app-host-compose-{prefix}-{nonce}"))
+    }
+
+    #[test]
+    fn compose_backends_registers_cpu_instance_for_resolved_cpu_instance() {
+        let base = temp_dir("resolved-cpu");
+        let config = AppConfig::new(AppPaths::new(&base));
+        let profile = collect_compute_profile(&builtin_backend_candidates());
+
+        let composed = compose_inference_backends(
+            &config,
+            &builtin_backend_candidates(),
+            &profile,
+            BackendInstance::new("candle:cpu"),
+            vec![BackendInstance::new("candle:cpu")],
+            Vec::new(),
+        )
+        .expect("backends");
+
+        assert_eq!(
+            composed.registry.len(),
+            1,
+            "selected backend should register once"
+        );
+        assert_eq!(
+            composed.selected_instance,
+            BackendInstance::new("candle:cpu")
+        );
+        let _ = std::fs::remove_dir_all(&base);
+    }
+
+    #[test]
+    fn compose_backends_attaches_builtin_candle_plugin_provenance() {
+        let base = temp_dir("plugin-provenance");
+        let config = AppConfig::new(AppPaths::new(&base));
+        let candidates = builtin_backend_candidates();
+        let profile = collect_compute_profile(&candidates);
+
+        let composed = compose_inference_backends(
+            &config,
+            &candidates,
+            &profile,
+            BackendInstance::new("candle:cpu"),
+            vec![BackendInstance::new("candle:cpu")],
+            Vec::new(),
+        )
+        .expect("backends");
+        let descriptors = composed.registry.descriptors();
+        let descriptor = descriptors.first().expect("registered descriptor");
+
+        assert_eq!(descriptor.instance, composed.selected_instance);
+        assert_eq!(
+            descriptor.plugin.as_ref().map(|p| p.as_str()),
+            Some("builtin.candle")
+        );
+        assert_eq!(
+            descriptor.extension.as_ref().map(|e| e.as_str()),
+            Some("backend.candle")
+        );
+        assert_eq!(
+            descriptor.device.as_ref().map(|d| d.label.as_str()),
+            Some("cpu")
+        );
+        let _ = std::fs::remove_dir_all(&base);
+    }
+
+    #[test]
+    fn compose_uses_metal_instance_when_available_or_errors_when_unavailable() {
+        let base = temp_dir("resolved-metal");
+        let config = AppConfig::new(AppPaths::new(&base));
+        let candidates = builtin_backend_candidates();
+        let profile = collect_compute_profile(&candidates);
+
+        let result = compose_inference_backends(
+            &config,
+            &candidates,
+            &profile,
+            BackendInstance::new("candle:metal"),
+            vec![BackendInstance::new("candle:metal")],
+            Vec::new(),
+        );
+        match result {
+            Ok(composed) => {
+                assert_eq!(
+                    composed.selected_instance,
+                    BackendInstance::new("candle:metal")
+                );
+            }
+            Err(BackendCandidateError::Candle(
+                reimagine_inference_candle::CandleBackendError::DeviceUnavailable {
+                    requested, ..
+                },
+            )) => {
+                assert_eq!(
+                    requested, "metal",
+                    "non-Metal hosts may reject direct resolved-metal composition"
+                );
+            }
+            Err(other) => panic!("expected metal composition or DeviceUnavailable, got {other:?}"),
+        }
+        let _ = std::fs::remove_dir_all(&base);
+    }
+
+    #[test]
+    fn compose_runtime_router_uses_config_projected_backend_policy() {
+        let instance = BackendInstance::new("candle:cpu");
+        let registry = InferenceBackendRegistry::new();
+        let runtime = compose_runtime_router(
+            registry,
+            vec![instance.clone()],
+            vec![instance.clone()],
+            Vec::new(),
+        );
+        let request = reimagine_inference::BackendSelectionRequest {
+            capability: reimagine_inference::InferenceCapability::LoadBundle,
+            node_id: None,
+            affinities: Vec::new(),
+            registered: Vec::new(),
+            explicit_override: None,
+        };
+
+        assert_eq!(
+            runtime.selection_policy().candidates(&request),
+            vec![instance.clone()]
+        );
+        assert!(
+            runtime
+                .selection_policy()
+                .allows_explicit_override(&instance, &request)
+        );
+        assert!(
+            !runtime
+                .selection_policy()
+                .allows_explicit_override(&BackendInstance::new("candle:metal"), &request)
+        );
+    }
+
+    #[test]
+    fn compose_runtime_accepts_selected_instance_without_backend_config() {
+        let base = temp_dir("resolved-instance-smoke");
+        let config = AppConfig::new(AppPaths::new(&base));
+        let model_service = Arc::new(ModelService::new(config.paths().clone()));
+
+        let runtime =
+            compose_inference_runtime(&config, BackendInstance::new("candle:cpu"), model_service)
+                .expect("runtime");
+        assert_eq!(
+            runtime.selected_instance,
+            BackendInstance::new("candle:cpu")
+        );
+        let _ = std::fs::remove_dir_all(&base);
+    }
+
+    #[tokio::test]
+    async fn bootstrap_with_stub_collects_multiple_profiles_and_selects_stub() {
+        let base = temp_dir("stub-bootstrap");
+        let config = AppConfig::new(AppPaths::new(&base));
+        let model_service = Arc::new(ModelService::new(config.paths().clone()));
+        let backend_config = InferenceBackendConfig {
+            selected_instance: Some("stub:cpu".to_string()),
+            priority_order: vec!["stub:cpu".to_string(), "candle:cpu".to_string()],
+            ..InferenceBackendConfig::default()
+        };
+
+        let bootstrapped = bootstrap_inference_with_candidates(
+            &config,
+            &backend_config,
+            model_service,
+            vec![
+                Arc::new(CandleBackendCandidate::new()),
+                Arc::new(StubBackendCandidate::new()),
+            ],
+        )
+        .expect("bootstrap");
+
+        assert_eq!(
+            bootstrapped.runtime.selected_instance,
+            BackendInstance::new("stub:cpu")
+        );
+        assert!(
+            bootstrapped
+                .compute_profile
+                .backend_profiles
+                .iter()
+                .any(|profile| profile.backend == Backend::new("candle"))
+        );
+        assert!(
+            bootstrapped
+                .compute_profile
+                .backend_profiles
+                .iter()
+                .any(|profile| profile.backend == Backend::new("stub"))
+        );
+        let snapshots = reimagine_inference::BackendInstanceObservation::snapshots(
+            bootstrapped.runtime.runtime_hooks.as_ref(),
+        )
+        .await;
+        assert!(
+            snapshots
+                .iter()
+                .any(|snapshot| snapshot.backend_instance == BackendInstance::new("stub:cpu")),
+            "composite hooks should include the selected stub backend instance"
+        );
+        let _ = std::fs::remove_dir_all(&base);
+    }
+
+    #[derive(Debug, Clone, Copy)]
+    struct StubBackendCandidate;
+
+    impl StubBackendCandidate {
+        fn new() -> Self {
+            Self
+        }
+    }
+
+    impl BackendCandidate for StubBackendCandidate {
+        fn backend(&self) -> Backend {
+            Backend::new("stub")
+        }
+
+        fn profile(&self) -> BackendProfile {
+            BackendProfile::new(Backend::new("stub"))
+                .with_plugin(
+                    Plugin::try_from("builtin.stub").expect("plugin"),
+                    Extension::try_from("backend.stub").expect("extension"),
+                )
+                .with_instance(
+                    BackendInstanceProfile::new(
+                        BackendInstance::new("stub:cpu"),
+                        Backend::new("stub"),
+                        DeviceProfile::new("cpu").with_kind(DeviceKind::Cpu),
+                        BackendInstanceStatus::Available,
+                    )
+                    .with_capability(reimagine_inference::InferenceCapability::CreateEmptyLatent),
+                )
+        }
+
+        fn build(
+            &self,
+            _config: &AppConfig,
+            instance: &BackendInstance,
+            device: Option<DeviceProfile>,
+        ) -> Result<BuiltBackendInstance, BackendCandidateError> {
+            let backend = Arc::new(FakeBackend::new("stub").create_empty_latent(
+                CannedCapabilityResponse::from_request(|request: CreateEmptyLatentRequest| {
+                    let batch_size = request.batch_size() as usize;
+                    Ok(CreateEmptyLatentResponse::new(RuntimeLatent::new(
+                        reimagine_inference::BackendTensorHandle::new(
+                            Backend::new("stub"),
+                            reimagine_inference::BackendPayloadKey::new("stub-latent"),
+                            reimagine_core::model::TensorDType::F32,
+                            reimagine_core::model::TensorShape::new(vec![
+                                batch_size,
+                                4,
+                                (request.height() / 8) as usize,
+                                (request.width() / 8) as usize,
+                            ]),
+                            "cpu",
+                        ),
+                        request.width(),
+                        request.height(),
+                        request.batch_size(),
+                        4,
+                        LatentSpaceMetadata::sdxl_base(),
+                        LatentContent::EmptyGeometry,
+                    )))
+                }),
+            ));
+            let plugin = Plugin::try_from("builtin.stub").expect("plugin");
+            let extension = Extension::try_from("backend.stub").expect("extension");
+            let descriptor = BackendInstanceDescriptor::new(instance.clone(), Backend::new("stub"))
+                .with_plugin(plugin.clone(), extension.clone());
+            let descriptor = if let Some(device) = device.clone() {
+                descriptor.with_device(device)
+            } else {
+                descriptor
+            };
+            let backend: Arc<dyn reimagine_inference::InferenceBackend> = backend;
+            Ok(BuiltBackendInstance {
+                descriptor,
+                backend,
+                runtime_hooks: Arc::new(StubRuntimeHooks {
+                    instance: instance.clone(),
+                    device,
+                    plugin: Some(plugin),
+                    extension: Some(extension),
+                }),
+            })
+        }
+    }
+
+    #[derive(Debug)]
+    struct StubRuntimeHooks {
+        instance: BackendInstance,
+        device: Option<DeviceProfile>,
+        plugin: Option<Plugin>,
+        extension: Option<Extension>,
+    }
+
+    #[async_trait::async_trait]
+    impl BackendRunLifecycle for StubRuntimeHooks {
+        fn backend_instance(&self) -> &BackendInstance {
+            &self.instance
+        }
+
+        async fn begin_run(
+            &self,
+            _request: BackendRunLifecycleRequest,
+        ) -> Result<BackendRunLifecycleReport, InferenceError> {
+            Ok(BackendRunLifecycleReport {
+                backend_instance: self.instance.clone(),
+                diagnostics: Vec::new(),
+            })
+        }
+
+        async fn cleanup_run(
+            &self,
+            _request: BackendRunLifecycleRequest,
+        ) -> Result<BackendRunLifecycleReport, InferenceError> {
+            Ok(BackendRunLifecycleReport {
+                backend_instance: self.instance.clone(),
+                diagnostics: Vec::new(),
+            })
+        }
+    }
+
+    #[async_trait::async_trait]
+    impl BackendInstanceObservation for StubRuntimeHooks {
+        fn backend_instance(&self) -> &BackendInstance {
+            &self.instance
+        }
+
+        async fn snapshot(&self) -> BackendInstanceSnapshot {
+            BackendInstanceSnapshot {
+                backend_instance: self.instance.clone(),
+                backend: Backend::new("stub"),
+                plugin: self.plugin.clone(),
+                extension: self.extension.clone(),
+                device: self.device.clone(),
+                observations: BTreeMap::new(),
+                diagnostics: Vec::new(),
+            }
+        }
+    }
+}

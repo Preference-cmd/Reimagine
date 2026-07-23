@@ -1,0 +1,164 @@
+{
+  "schema_version": "reimagine.workflow.v1",
+  "id": "workflow_sdxl_burn_smoke_real",
+  "version": 1,
+  "metadata": {
+    "name": "SDXL Burn Smoke (Real E2E)",
+    "description": "Minimal SDXL Burn smoke workflow (256x256, one Euler/normal step) gated behind the 05a opt-in test. Read at workspace-bootstrap time via REIMAGINE_BURN_AXUM_WORKSPACE and REIMAGINE_BURN_AXUM_PACKAGE_REPORT env vars.",
+    "created_by": "human"
+  },
+  "interface": { "inputs": [], "outputs": [] },
+  "nodes": [
+    {
+      "id": "node_checkpoint",
+      "type_id": "builtin.checkpoint_loader",
+      "label": "Checkpoint",
+      "params": {
+        "checkpoint": {
+          "type": "model_ref",
+          "value": {
+            "id": "burn-real-sdxl-smoke-burn",
+            "model_series": "stable_diffusion",
+            "variant": "sdxl",
+            "role": "CheckpointBundle"
+          }
+        }
+      }
+    },
+    {
+      "id": "node_positive_prompt",
+      "type_id": "builtin.string",
+      "label": "Positive Prompt",
+      "params": {
+        "value": { "type": "string", "value": "small bright city at sunrise" }
+      }
+    },
+    {
+      "id": "node_negative_prompt",
+      "type_id": "builtin.string",
+      "label": "Negative Prompt",
+      "params": {
+        "value": { "type": "string", "value": "low quality blur" }
+      }
+    },
+    {
+      "id": "node_positive_encode",
+      "type_id": "builtin.clip_text_encode",
+      "label": "Positive CLIP Encode",
+      "params": {}
+    },
+    {
+      "id": "node_negative_encode",
+      "type_id": "builtin.clip_text_encode",
+      "label": "Negative CLIP Encode",
+      "params": {}
+    },
+    {
+      "id": "node_latent",
+      "type_id": "builtin.empty_latent_image",
+      "label": "Empty Latent",
+      "params": {
+        "width": { "type": "integer", "value": 256 },
+        "height": { "type": "integer", "value": 256 },
+        "batch_size": { "type": "integer", "value": 1 }
+      }
+    },
+    {
+      "id": "node_sampler",
+      "type_id": "builtin.ksampler",
+      "label": "KSampler",
+      "params": {
+        "seed": { "type": "seed", "value": 1234 },
+        "steps": { "type": "integer", "value": 1 },
+        "cfg": { "type": "float", "value": 7.5 },
+        "sampler": { "type": "select", "value": "euler" },
+        "scheduler": { "type": "select", "value": "normal" },
+        "denoise": { "type": "float", "value": 1.0 }
+      }
+    },
+    {
+      "id": "node_vae_decode",
+      "type_id": "builtin.vae_decode",
+      "label": "VAE Decode",
+      "params": {}
+    },
+    {
+      "id": "node_save_image",
+      "type_id": "builtin.save_image",
+      "label": "Save Image",
+      "params": {
+        "filename_prefix": { "type": "string", "value": "sdxl_burn_real_e2e" }
+      }
+    }
+  ],
+  "edges": [
+    {
+      "id": "edge_checkpoint_model_sampler",
+      "from": { "node": "node_checkpoint", "slot": "model" },
+      "to": { "node": "node_sampler", "slot": "model" }
+    },
+    {
+      "id": "edge_checkpoint_clip_positive",
+      "from": { "node": "node_checkpoint", "slot": "clip" },
+      "to": { "node": "node_positive_encode", "slot": "clip" }
+    },
+    {
+      "id": "edge_checkpoint_clip_negative",
+      "from": { "node": "node_checkpoint", "slot": "clip" },
+      "to": { "node": "node_negative_encode", "slot": "clip" }
+    },
+    {
+      "id": "edge_positive_prompt_encode",
+      "from": { "node": "node_positive_prompt", "slot": "value" },
+      "to": { "node": "node_positive_encode", "slot": "text" }
+    },
+    {
+      "id": "edge_negative_prompt_encode",
+      "from": { "node": "node_negative_prompt", "slot": "value" },
+      "to": { "node": "node_negative_encode", "slot": "text" }
+    },
+    {
+      "id": "edge_positive_conditioning_sampler",
+      "from": { "node": "node_positive_encode", "slot": "conditioning" },
+      "to": { "node": "node_sampler", "slot": "positive" }
+    },
+    {
+      "id": "edge_negative_conditioning_sampler",
+      "from": { "node": "node_negative_encode", "slot": "conditioning" },
+      "to": { "node": "node_sampler", "slot": "negative" }
+    },
+    {
+      "id": "edge_latent_sampler",
+      "from": { "node": "node_latent", "slot": "latent" },
+      "to": { "node": "node_sampler", "slot": "latent" }
+    },
+    {
+      "id": "edge_sampler_vae_decode",
+      "from": { "node": "node_sampler", "slot": "latent" },
+      "to": { "node": "node_vae_decode", "slot": "latent" }
+    },
+    {
+      "id": "edge_checkpoint_vae_decode",
+      "from": { "node": "node_checkpoint", "slot": "vae" },
+      "to": { "node": "node_vae_decode", "slot": "vae" }
+    },
+    {
+      "id": "edge_vae_decode_save",
+      "from": { "node": "node_vae_decode", "slot": "image" },
+      "to": { "node": "node_save_image", "slot": "image" }
+    }
+  ],
+  "layout": {
+    "nodes": {
+      "node_checkpoint": { "x": 0, "y": 0 },
+      "node_positive_prompt": { "x": 0, "y": 220 },
+      "node_negative_prompt": { "x": 0, "y": 380 },
+      "node_positive_encode": { "x": 320, "y": 220 },
+      "node_negative_encode": { "x": 320, "y": 380 },
+      "node_latent": { "x": 320, "y": 560 },
+      "node_sampler": { "x": 680, "y": 280 },
+      "node_vae_decode": { "x": 1040, "y": 280 },
+      "node_save_image": { "x": 1360, "y": 280 }
+    }
+  }
+}
