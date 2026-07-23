@@ -130,26 +130,48 @@ jobs:
           set -euo pipefail
           SHA="${{ github.sha }}"
           # Find the successful ci-workers.yml run on this exact commit.
-          RUN_JSON="$(
+          RUN_ID="$(
             gh api "repos/${{ github.repository }}/actions/workflows/ci-workers.yml/runs" \
               --jq '.workflow_runs[] | select(.head_sha == "'"$SHA"'" and .conclusion == "success") | .id' \
               | head -1
           )"
-          if [[ -z "$RUN_JSON" ]]; then
+          if [[ -z "$RUN_ID" ]]; then
             echo "No successful ci-workers.yml run found for commit ${SHA}"
             exit 1
           fi
-          echo "Found ci-workers run: ${RUN_JSON}"
-          echo "run_id=${RUN_JSON}" >> "${GITHUB_OUTPUT}"
+          echo "Found ci-workers run: ${RUN_ID}"
+          echo "run_id=${RUN_ID}" >> "${GITHUB_OUTPUT}"
 
-      - name: Download worker artifacts from ci-workers run
-        uses: actions/download-artifact@v5
-        with:
-          pattern: worker-*
-          path: dist/workers
-          merge-multiple: true
-          repository: ${{ github.repository }}
-          run-id: ${{ steps.find-run.outputs.run_id }}
+      - name: Download worker artifacts with gh CLI
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          RUN_ID="${{ steps.find-run.outputs.run_id }}"
+          mkdir -p dist/workers
+          # Download all artifacts matching worker-* from the ci-workers run
+          gh run download "${RUN_ID}" \
+            --repo "${{ github.repository }}" \
+            --pattern 'worker-*' \
+            --dir dist/workers
+          echo "Contents of dist/workers:"
+          find dist/workers -type f | sort
+
+      - name: Move artifacts to flat structure
+        shell: bash
+        run: |
+          set -euo pipefail
+          # gh run download creates subdirectories per artifact name;
+          # flatten them so the rest of the workflow sees files directly.
+          mkdir -p dist/flat
+          find dist/workers -type f -exec cp {} dist/flat/ \;
+          rm -rf dist/workers
+          mv dist/flat dist/workers
+          count="$(find dist/workers -type f | wc -l | tr -d ' ')"
+          echo "Flattened ${count} worker artifacts"
+          find dist/workers -type f -size 0 -print -quit | grep -q . && { echo "Zero-size artifact found"; exit 1; } || true
+          echo "count=${count}" >> "${GITHUB_OUTPUT}"
 
       - name: Verify worker build set
         id: verify
@@ -159,7 +181,6 @@ jobs:
           count="$(find dist/workers -type f | wc -l | tr -d ' ')"
           echo "Downloaded ${count} worker builds"
           test "${count}" -gt 0 || { echo "No worker builds found"; exit 1; }
-          find dist/workers -type f -size 0 -print -quit | grep -q . && { echo "Zero-size artifact found"; exit 1; } || true
           echo "count=${count}" >> "${GITHUB_OUTPUT}"
 
       - name: Verify attestation
