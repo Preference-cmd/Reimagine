@@ -183,6 +183,14 @@ jobs:
           test "${count}" -gt 0 || { echo "No worker builds found"; exit 1; }
           echo "count=${count}" >> "${GITHUB_OUTPUT}"
 
+      - name: Upload flattened workers for downstream jobs
+        uses: actions/upload-artifact@v5
+        with:
+          name: release-workers
+          path: dist/workers/*
+          if-no-files-found: error
+          retention-days: 1
+
       - name: Verify attestation
         # Verifies that the GitHub-issued build attestation matches.
         # Only works for repo-owned runs (attest-ci-workers is gated).
@@ -235,7 +243,7 @@ jobs:
       - name: Download worker builds
         uses: actions/download-artifact@v5
         with:
-          pattern: worker-*
+          pattern: release-workers*
           path: dist/workers
           merge-multiple: true
 
