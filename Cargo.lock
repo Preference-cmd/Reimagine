@@ -6549,6 +6549,7 @@ name = "reimagine-backend-worker-host"
 version = "0.1.0"
 dependencies = [
  "async-trait",
+ "axum",
  "chrono",
  "clap",
  "ed25519-dalek",
@@ -6566,6 +6567,7 @@ dependencies = [
  "tar",
  "tempfile",
  "tokio",
+ "tower",
  "tracing",
 ]
 

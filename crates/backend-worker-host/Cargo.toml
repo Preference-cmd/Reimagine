@@ -29,6 +29,10 @@ tracing = { workspace = true }
 [dev-dependencies]
 tempfile = { workspace = true }
 rand = "0.8"
+axum = { workspace = true }
+sha2 = { workspace = true }
+tokio = { workspace = true, features = ["net", "rt", "macros"] }
+tower = { workspace = true }
 
 [[bin]]
 name = "fake-backend-worker-host-fixture"
@@ -41,3 +45,7 @@ path = "src/bin/package_worker.rs"
 [[bin]]
 name = "reimagine-catalog-assemble"
 path = "src/bin/catalog_assemble.rs"
+
+[[bin]]
+name = "reimagine-catalog-sign"
+path = "src/bin/catalog_sign.rs"

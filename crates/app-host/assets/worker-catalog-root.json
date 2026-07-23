@@ -1,28 +1,90 @@
 {
+  "signatures": [
+    {
+      "keyid": "root-key-1",
+      "sig": "4eb2a740fab07822769d380c749fdc4251695c817fc833641cc499aec93686d298e9091fe1eca6107dca0e1a9f8bd66ced61fdef809efc731bb22895b74bdd00"
+    },
+    {
+      "keyid": "root-key-2",
+      "sig": "fe68692e98148fc1a7b393d89c73bcf43ec83ee7f702a8d810399e573284b55c71cc694fd57ee158f9cd7ee64fa7a6a2cea3e9fb8e4d162412a4b45c78dba406"
+    }
+  ],
   "signed": {
     "_type": "root",
     "version": 1,
-    "expires": "2035-01-01T00:00:00Z",
+    "expires": "2027-07-23T00:00:00Z",
     "keys": {
-      "official-root-1": {
+      "root-key-1": {
         "keytype": "ed25519",
-        "scheme": "ed25519",
         "keyval": {
-          "public": "d75a980182b10ab7d54bfed3c964073a0ee172f3daa62325af021a68f707511a"
-        }
+          "public": "689522c008957abcb23b2e8ae56e7af922485277b4710e9e3af5b1a0c0732752"
+        },
+        "scheme": "ed25519"
+      },
+      "root-key-2": {
+        "keytype": "ed25519",
+        "keyval": {
+          "public": "e72dc890b672b40c9b4837e0d60c5987aaaa5eddee9ddc6d53c12643ca018a9d"
+        },
+        "scheme": "ed25519"
+      },
+      "root-key-3": {
+        "keytype": "ed25519",
+        "keyval": {
+          "public": "d92c5839c3ffe26949a45e240c04c9f37ce2241a3797849da928f8a87d9dcd9f"
+        },
+        "scheme": "ed25519"
+      },
+      "snapshot-key": {
+        "keytype": "ed25519",
+        "keyval": {
+          "public": "19c5109847bcd828da6a026cff14c0c91b99c9bbdf4a79e151575c4f54c541b0"
+        },
+        "scheme": "ed25519"
+      },
+      "targets-key": {
+        "keytype": "ed25519",
+        "keyval": {
+          "public": "5417c78588f142f9ffe326855f8ecea1974435bb558493841ddd4dfe5e36e6b7"
+        },
+        "scheme": "ed25519"
+      },
+      "timestamp-key": {
+        "keytype": "ed25519",
+        "keyval": {
+          "public": "c33e0255d9be58406c0a8a845d21854834ac535313f051d36303befd10129ee1"
+        },
+        "scheme": "ed25519"
       }
     },
     "roles": {
-      "root": { "keyids": ["official-root-1"], "threshold": 1 },
-      "timestamp": { "keyids": ["official-root-1"], "threshold": 1 },
-      "snapshot": { "keyids": ["official-root-1"], "threshold": 1 },
-      "targets": { "keyids": ["official-root-1"], "threshold": 1 }
-    }
-  },
-  "signatures": [
-    {
-      "keyid": "official-root-1",
-      "sig": "413d41a5928515dddde5deff506476ad900f9b1d2d3336ba5ee09183c567f4d434055404bc30545870bbcd9fea37fd387e046561d4230c6f70118411305b870a"
-    }
-  ]
+      "root": {
+        "keyids": [
+          "root-key-1",
+          "root-key-2",
+          "root-key-3"
+        ],
+        "threshold": 2
+      },
+      "snapshot": {
+        "keyids": [
+          "snapshot-key"
+        ],
+        "threshold": 1
+      },
+      "targets": {
+        "keyids": [
+          "targets-key"
+        ],
+        "threshold": 1
+      },
+      "timestamp": {
+        "keyids": [
+          "timestamp-key"
+        ],
+        "threshold": 1
+      }
+    },
+    "version": 1
+  }
 }

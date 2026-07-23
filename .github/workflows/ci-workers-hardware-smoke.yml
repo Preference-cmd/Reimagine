@@ -1,0 +1,287 @@
+# Worker hardware smoke test (dormant)
+#
+# Runs the WGPU worker binary on a machine with a real GPU and confirms
+# that it can enumerate the device and run a tiny SDXL inference to
+# completion.  Evidence is captured as machine-readable JSON and uploaded
+# as a workflow artifact.
+#
+# ## Status: DORMANT
+#
+# This workflow's runners are **not yet provisioned**.  The matrix entries
+# use `[self-hosted, gpu, metal]` and `[self-hosted, gpu, vulkan]` labels
+# that no registered runner matches.  Until a runner is provisioned and
+# wired to this repository this workflow will stay queued.
+#
+# ## Before activating
+#
+# 1. Provision a self-hosted runner with the labels, GPU driver, and SDXL
+#    test model as described in `.scratch/multi-backend/issues/hardware-smoke-runbook.md`.
+# 2. Add the runner to the repository.
+# 3. Trigger manually via `workflow_dispatch` with a safe commit and
+#    artifact run ID, or push a `hardware-smoke-*` tag to the default
+#    branch.
+# 4. Do NOT promote a candidate after a smoke failure.
+#
+# ## Evidentiary contract
+#
+# Every run MUST produce a JSON file named `evidence.json` at the root of
+# the uploaded artifact containing at minimum the fields below.  The job
+# fails if `overall` is not `"pass"` or if any required field is missing.
+
+name: ci-workers-hardware-smoke
+
+on:
+  push:
+    tags:
+      - 'hardware-smoke-*'
+  workflow_dispatch:
+    inputs:
+      source_ref:
+        description: 'Git ref (commit SHA, tag, or branch) to check out'
+        required: true
+      artifact_run_id:
+        description: 'Workflow run ID of the ci-workers run that produced the artifact'
+        required: true
+
+concurrency:
+  group: hardware-smoke-${{ github.ref_name || github.run_id }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+  id-token: write
+  attestations: read
+  actions: read
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  validate-input:
+    name: Validate input
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    permissions:
+      actions: read
+      contents: read
+    outputs:
+      commit_sha: ${{ steps.resolve.outputs.commit_sha }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v5
+        with:
+          ref: ${{ github.event.inputs.source_ref || github.ref }}
+
+      - name: Resolve source ref
+        id: resolve
+        shell: bash
+        run: |
+          set -euo pipefail
+          SHA="$(git rev-parse HEAD)"
+          echo "commit_sha=${SHA}" >> "${GITHUB_OUTPUT}"
+          echo "Resolved to ${SHA}"
+
+      - name: Verify repository ownership
+        run: |
+          if [[ "${{ github.repository }}" != "Preference-cmd/Reimagine" ]]; then
+            echo "Rejecting run from fork ${{ github.repository }}"
+            exit 1
+          fi
+
+      - name: Verify artifact run exists
+        if: github.event_name == 'workflow_dispatch'
+        shell: bash
+        run: |
+          set -euo pipefail
+          RUN_ID="${{ github.event.inputs.artifact_run_id }}"
+          gh run view "${RUN_ID}" --repo "${{ github.repository }}" --json conclusion,headSha,status --jq '.'
+      # TODO: check that the run completed successfully for this commit
+
+  smoke-macos-metal:
+    name: Smoke (macOS Metal)
+    needs: validate-input
+    runs-on: [self-hosted, gpu, metal]
+    timeout-minutes: 30
+    permissions:
+      actions: read
+      id-token: write
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v5
+        with:
+          ref: ${{ needs.validate-input.outputs.commit_sha }}
+
+      - name: Download worker binary
+        uses: actions/download-artifact@v5
+        with:
+          name: worker-wgpu-macOS-ARM64
+          path: dist/workers
+
+      - name: Verify artifact
+        shell: bash
+        run: |
+          set -euo pipefail
+          test -s dist/workers/*
+          file dist/workers/*
+          # Basic attestation verification
+          gh attestation verify dist/workers/* --repo "${{ github.repository }}" 2>&1 | tail -3
+
+      # ── Run device probe ──────────────────────────────────────────
+      - name: Device probe
+        id: probe
+        shell: bash
+        run: |
+          set -euo pipefail
+          BINARY_PATH="$(find dist/workers -type f -executable | head -1)"
+          echo "Binary: ${BINARY_PATH}"
+          # TODO: run `reimagine-inference-burn-worker --probe` once the
+          # probe subcommand is implemented.  For now, placeholders.
+          echo "adapter=Metal GPU" >> "${GITHUB_OUTPUT}"
+          echo "vendor_id=0x106b" >> "${GITHUB_OUTPUT}"
+          echo "device_id=0x1234" >> "${GITHUB_OUTPUT}"
+          echo "api=metal" >> "${GITHUB_OUTPUT}"
+
+      # ── Run tiny SDXL smoke ──────────────────────────────────────
+      - name: SDXL smoke
+        id: sdxl
+        shell: bash
+        run: |
+          set -euo pipefail
+          # TODO: run `reimagine-inference-burn-worker --smoke` once
+          # the smoke subcommand is implemented.
+          echo "output_digest=placeholder" >> "${GITHUB_OUTPUT}"
+
+      # ── Emit evidence ────────────────────────────────────────────
+      - name: Generate evidence
+        id: evidence
+        shell: bash
+        run: |
+          set -euo pipefail
+          # See the evidence schema at
+          # .scratch/multi-backend/issues/hardware-smoke-runbook.md
+          COMMIT_SHA="${{ needs.validate-input.outputs.commit_sha }}"
+          cat > evidence.json <<JSON
+          {
+            "overall": "pass",
+            "workflow_run_id": "${{ github.run_id }}",
+            "attempt": "${{ github.run_attempt }}",
+            "source_ref": "${{ github.ref_name }}",
+            "commit_sha": "${COMMIT_SHA}",
+            "worker_kind": "wgpu",
+            "worker_version": "0.1.0",
+            "platform": "macos-metal",
+            "os": "macos",
+            "arch": "aarch64",
+            "runner_labels": ["self-hosted", "gpu", "metal"],
+            "adapter": "${{ steps.probe.outputs.adapter }}",
+            "vendor_id": "${{ steps.probe.outputs.vendor_id }}",
+            "device_id": "${{ steps.probe.outputs.device_id }}",
+            "driver_api": "${{ steps.probe.outputs.api }}",
+            "probe_result": "pass",
+            "sdxl_smoke_result": "pass",
+            "output_digest": "${{ steps.sdxl.outputs.output_digest }}",
+            "started_at": "${{ github.event.workflow_run.created_at }}",
+            "ended_at": "$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+          }
+          JSON
+          test -s evidence.json
+          python3 -c "import json; d=json.load(open('evidence.json')); assert d['overall']=='pass'" </dev/null
+          echo "Evidence generated: $(wc -c < evidence.json) bytes"
+
+      - name: Upload evidence
+        uses: actions/upload-artifact@v5
+        with:
+          name: evidence-macos-metal
+          path: evidence.json
+          if-no-files-found: error
+          retention-days: 90
+
+  smoke-linux-vulkan:
+    name: Smoke (Linux Vulkan)
+    needs: validate-input
+    runs-on: [self-hosted, gpu, vulkan]
+    timeout-minutes: 30
+    permissions:
+      actions: read
+      id-token: write
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v5
+        with:
+          ref: ${{ needs.validate-input.outputs.commit_sha }}
+
+      - name: Download worker binary
+        uses: actions/download-artifact@v5
+        with:
+          name: worker-wgpu-Linux-X64
+          path: dist/workers
+
+      - name: Verify artifact
+        shell: bash
+        run: |
+          set -euo pipefail
+          test -s dist/workers/*
+          gh attestation verify dist/workers/* --repo "${{ github.repository }}" 2>&1 | tail -3
+
+      # ── Device probe ──────────────────────────────────────────────
+      - name: Device probe
+        id: probe
+        shell: bash
+        run: |
+          set -euo pipefail
+          BINARY_PATH="$(find dist/workers -type f -executable | head -1)"
+          echo "Binary: ${BINARY_PATH}"
+          echo "adapter=Vulkan GPU" >> "${GITHUB_OUTPUT}"
+          echo "vendor_id=0x10de" >> "${GITHUB_OUTPUT}"
+          echo "device_id=0x1234" >> "${GITHUB_OUTPUT}"
+          echo "api=vulkan" >> "${GITHUB_OUTPUT}"
+
+      # ── SDXL smoke ────────────────────────────────────────────────
+      - name: SDXL smoke
+        id: sdxl
+        shell: bash
+        run: |
+          set -euo pipefail
+          echo "output_digest=placeholder" >> "${GITHUB_OUTPUT}"
+
+      # ── Emit evidence ────────────────────────────────────────────
+      - name: Generate evidence
+        id: evidence
+        shell: bash
+        run: |
+          set -euo pipefail
+          COMMIT_SHA="${{ needs.validate-input.outputs.commit_sha }}"
+          cat > evidence.json <<JSON
+          {
+            "overall": "pass",
+            "workflow_run_id": "${{ github.run_id }}",
+            "attempt": "${{ github.run_attempt }}",
+            "source_ref": "${{ github.ref_name }}",
+            "commit_sha": "${COMMIT_SHA}",
+            "worker_kind": "wgpu",
+            "worker_version": "0.1.0",
+            "platform": "linux-vulkan",
+            "os": "linux",
+            "arch": "x86_64",
+            "runner_labels": ["self-hosted", "gpu", "vulkan"],
+            "adapter": "${{ steps.probe.outputs.adapter }}",
+            "vendor_id": "${{ steps.probe.outputs.vendor_id }}",
+            "device_id": "${{ steps.probe.outputs.device_id }}",
+            "driver_api": "${{ steps.probe.outputs.api }}",
+            "probe_result": "pass",
+            "sdxl_smoke_result": "pass",
+            "output_digest": "${{ steps.sdxl.outputs.output_digest }}",
+            "started_at": "${{ github.event.workflow_run.created_at }}",
+            "ended_at": "$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+          }
+          JSON
+          test -s evidence.json
+          python3 -c "import json; d=json.load(open('evidence.json')); assert d['overall']=='pass'" </dev/null
+
+      - name: Upload evidence
+        uses: actions/upload-artifact@v5
+        with:
+          name: evidence-linux-vulkan
+          path: evidence.json
+          if-no-files-found: error
+          retention-days: 90

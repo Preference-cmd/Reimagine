@@ -26,7 +26,8 @@ use std::path::PathBuf;
 use clap::Parser;
 
 use reimagine_backend_worker_host::catalog::builder::{
-    CatalogParams, TestSigningKey, build_catalog, verify_catalog, write_catalog,
+    CatalogParams, OnlineSigningRole, RoleDistinctTestKey, TestSigningKey, build_catalog,
+    verify_catalog, write_catalog,
 };
 use reimagine_backend_worker_host::catalog::tuf::TargetDesc;
 use sha2::{Digest, Sha256};
@@ -165,9 +166,6 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     }
 
     // ── Build catalog ──────────────────────────────────────────────
-    let online = TestSigningKey::new();
-    let root_key = TestSigningKey::new();
-
     let params = CatalogParams {
         root: None,
         root_version: args.root_version,
@@ -175,8 +173,10 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         snapshot_version: args.snapshot_version,
         timestamp_version: args.timestamp_version,
         expires: args.expires,
-        online_provider: Box::new(online),
-        root_provider: Box::new(root_key),
+        targets_provider: Box::new(RoleDistinctTestKey::new(OnlineSigningRole::Targets)),
+        snapshot_provider: Box::new(RoleDistinctTestKey::new(OnlineSigningRole::Snapshot)),
+        timestamp_provider: Box::new(RoleDistinctTestKey::new(OnlineSigningRole::Timestamp)),
+        root_provider: Box::new(TestSigningKey::new()),
     };
 
     let bundle = build_catalog(&params, &target_entries);

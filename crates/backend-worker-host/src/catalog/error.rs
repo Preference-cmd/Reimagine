@@ -1,6 +1,58 @@
 use std::fmt;
 use std::path::PathBuf;
 
+/// Errors that arise while constructing an environment-loaded TUF signing key.
+///
+/// These errors intentionally never include the secret material — they only
+/// reference the variable name, the role, and the failure category. Operators
+/// must be able to log these safely without leaking key bytes.
+#[derive(Debug)]
+pub enum CatalogSigningKeyError {
+    /// The expected environment variable was not set.
+    Missing {
+        role: &'static str,
+        env_var: &'static str,
+    },
+    /// The environment variable was set but empty / whitespace-only.
+    Empty {
+        role: &'static str,
+        env_var: &'static str,
+    },
+    /// The hex value could not be decoded.
+    InvalidHex {
+        role: &'static str,
+        env_var: &'static str,
+    },
+    /// The decoded length is not exactly 32 bytes (Ed25519 seed).
+    InvalidLength {
+        role: &'static str,
+        env_var: &'static str,
+        length: usize,
+    },
+}
+
+impl fmt::Display for CatalogSigningKeyError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::Missing { role, env_var } => {
+                write!(f, "TUF signing key for role `{role}` is missing: env var `{env_var}` is not set")
+            }
+            Self::Empty { role, env_var } => {
+                write!(f, "TUF signing key for role `{role}` is empty: env var `{env_var}` has no value")
+            }
+            Self::InvalidHex { role, env_var } => {
+                write!(f, "TUF signing key for role `{role}` from env var `{env_var}` is not valid hex")
+            }
+            Self::InvalidLength { role, env_var, length } => write!(
+                f,
+                "TUF signing key for role `{role}` from env var `{env_var}` has invalid length {length} bytes; expected exactly 32 bytes for an Ed25519 seed"
+            ),
+        }
+    }
+}
+
+impl std::error::Error for CatalogSigningKeyError {}
+
 #[derive(Debug)]
 pub enum CatalogError {
     /// The embedded root metadata could not be loaded or parsed.
@@ -73,6 +125,16 @@ pub enum CatalogError {
     UnknownKey {
         role: String,
         key_id: String,
+    },
+    /// Failure reading or writing the durable trusted-state file.
+    State {
+        path: PathBuf,
+        message: String,
+    },
+    /// GitHub Releases discovery did not return a usable concrete tag.
+    Discovery {
+        url: String,
+        message: String,
     },
 }
 
@@ -158,6 +220,12 @@ impl fmt::Display for CatalogError {
             }
             Self::UnknownKey { role, key_id } => {
                 write!(f, "{role} references unknown key `{key_id}`")
+            }
+            Self::State { path, message } => {
+                write!(f, "trusted state error at `{}`: {}", path.display(), message)
+            }
+            Self::Discovery { url, message } => {
+                write!(f, "catalog discovery failed for `{url}`: {message}")
             }
         }
     }

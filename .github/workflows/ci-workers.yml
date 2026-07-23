@@ -393,10 +393,10 @@ jobs:
             esac
 
             # Infer backend kind from the installed-worker metadata in the package
-            # File is named burn-worker-{target}.tar.gz, backend is "burn"
+            # File is named burn-worker-{backend}-{target}.tar.gz
             package_args+=(
               "--package"
-              "${filename}@burn:default:${target}@burn-${os_name}-${arch_name}@${target}@${os_name}"
+              "${filename}@burn:${backend}:${target}@burn-${backend}-${os_name}-${arch_name}@${target}@${os_name}"
             )
           done
 

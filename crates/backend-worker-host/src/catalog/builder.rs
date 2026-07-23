@@ -14,11 +14,46 @@ use std::collections::HashMap;
 
 use sha2::{Digest, Sha256};
 
+use super::error::CatalogSigningKeyError;
 use super::tuf::{
     self, RoleConfig, RootMetadata, RootSigned, SignatureEntry, SnapshotMetaEntry,
     SnapshotMetadata, SnapshotSigned, TargetDesc, TargetsMetaEntry, TargetsMetadata, TargetsSigned,
     TimestampMetadata, TimestampSigned, TufKey, TufKeyVal,
 };
+
+/// TUF online roles that have distinct signing keys under V1.
+///
+/// Root keys are *not* online — they stay offline — so they do not appear
+/// here. Each variant maps to a specific environment variable; the mapping is
+/// enforced by [`EnvSigningKeyProvider::from_role`].
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum OnlineSigningRole {
+    Targets,
+    Snapshot,
+    Timestamp,
+}
+
+impl OnlineSigningRole {
+    /// Human-readable role name used in error messages and tests.
+    #[must_use]
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::Targets => "targets",
+            Self::Snapshot => "snapshot",
+            Self::Timestamp => "timestamp",
+        }
+    }
+
+    /// Environment variable name carrying the Ed25519 seed for this role.
+    #[must_use]
+    pub const fn env_var(self) -> &'static str {
+        match self {
+            Self::Targets => "REIMAGINE_TUF_TARGET_KEY",
+            Self::Snapshot => "REIMAGINE_TUF_SNAPSHOT_KEY",
+            Self::Timestamp => "REIMAGINE_TUF_TIMESTAMP_KEY",
+        }
+    }
+}
 
 /// A canonical representation of the signed payload bytes.
 fn serialize_canonical(value: &serde_json::Value) -> Vec<u8> {
@@ -99,6 +134,105 @@ impl SigningKeyProvider for TestSigningKey {
     }
 }
 
+/// A signing key loaded from an environment variable.
+///
+/// Used for production releases where keys are stored as GitHub Environment
+/// secrets and injected only into the protected `sign-catalog` job.
+///
+/// The provider refuses to expose the secret material via [`Debug`] or any
+/// error path: errors reference the variable name, never the bytes.
+#[derive(Clone)]
+pub struct EnvSigningKeyProvider {
+    role: OnlineSigningRole,
+    signing_key: ed25519_dalek::SigningKey,
+}
+
+// `Debug` is hand-written so the seed never appears in logs.
+impl std::fmt::Debug for EnvSigningKeyProvider {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("EnvSigningKeyProvider")
+            .field("role", &self.role)
+            .field("key_id", &self.key_id())
+            .finish_non_exhaustive()
+    }
+}
+
+impl EnvSigningKeyProvider {
+    /// Build a provider for the given role, loading the seed from the role's
+    /// canonical environment variable.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`CatalogSigningKeyError`] if the variable is missing, empty,
+    /// not valid hex, or not exactly 32 bytes after decoding. None of these
+    /// paths include the secret material.
+    pub fn from_role(role: OnlineSigningRole) -> Result<Self, CatalogSigningKeyError> {
+        let env_var = role.env_var();
+        let raw = std::env::var(env_var).map_err(|_| CatalogSigningKeyError::Missing {
+            role: role.as_str(),
+            env_var,
+        })?;
+        Self::from_hex(role, raw)
+    }
+
+    /// Build a provider from a hex string. Useful for tests that do not want
+    /// to mutate process-wide environment state.
+    ///
+    /// # Errors
+    ///
+    /// See [`Self::from_role`].
+    pub fn from_hex(
+        role: OnlineSigningRole,
+        hex_seed: String,
+    ) -> Result<Self, CatalogSigningKeyError> {
+        let env_var = role.env_var();
+        let trimmed = hex_seed.trim();
+        if trimmed.is_empty() {
+            return Err(CatalogSigningKeyError::Empty {
+                role: role.as_str(),
+                env_var,
+            });
+        }
+        let bytes = hex::decode(trimmed).map_err(|_| CatalogSigningKeyError::InvalidHex {
+            role: role.as_str(),
+            env_var,
+        })?;
+        if bytes.len() != 32 {
+            return Err(CatalogSigningKeyError::InvalidLength {
+                role: role.as_str(),
+                env_var,
+                length: bytes.len(),
+            });
+        }
+        let mut seed = [0u8; 32];
+        seed.copy_from_slice(&bytes);
+        let signing_key = ed25519_dalek::SigningKey::from_bytes(&seed);
+        Ok(Self { role, signing_key })
+    }
+
+    /// The role this provider signs for.
+    #[must_use]
+    pub const fn role(&self) -> OnlineSigningRole {
+        self.role
+    }
+}
+
+impl SigningKeyProvider for EnvSigningKeyProvider {
+    fn sign(&self, data: &[u8]) -> String {
+        use ed25519_dalek::Signer;
+        hex::encode(self.signing_key.sign(data).to_bytes())
+    }
+
+    fn tuf_key(&self) -> TufKey {
+        let public = hex::encode(self.signing_key.verifying_key().to_bytes());
+        TufKey {
+            key_type: "ed25519".to_string(),
+            scheme: "ed25519".to_string(),
+            keyval: TufKeyVal { public },
+        }
+    }
+}
+
 /// Parameters for building a catalog.
 #[derive(Debug)]
 pub struct CatalogParams {
@@ -116,15 +250,21 @@ pub struct CatalogParams {
     pub timestamp_version: u64,
     /// Expiry date string for all metadata (e.g. "2999-12-31T23:59:59Z").
     pub expires: String,
-    /// The signing key provider for all online roles (targets, snapshot, timestamp).
-    /// In production, distinct providers are used for each role.
-    pub online_provider: Box<dyn SigningKeyProvider>,
-    /// The signing key provider for the root role (if generating a new root).
+    /// Signing key provider for the targets role. Must be distinct from
+    /// the snapshot and timestamp providers in production.
+    pub targets_provider: Box<dyn SigningKeyProvider>,
+    /// Signing key provider for the snapshot role.
+    pub snapshot_provider: Box<dyn SigningKeyProvider>,
+    /// Signing key provider for the timestamp role.
+    pub timestamp_provider: Box<dyn SigningKeyProvider>,
+    /// The signing key provider for the root role (only used when generating
+    /// a new root, i.e. when `root` is None).
     pub root_provider: Box<dyn SigningKeyProvider>,
 }
 
 impl CatalogParams {
-    /// Create a `CatalogParams` using deterministic test signing keys.
+    /// Create a `CatalogParams` using three distinct deterministic test signing
+    /// keys, one per online role, plus an independent root test key.
     ///
     /// Useful in CI dry-run and local testing where production keys are
     /// not available.
@@ -144,8 +284,67 @@ impl CatalogParams {
             snapshot_version,
             timestamp_version,
             expires,
-            online_provider: Box::new(TestSigningKey::new()),
+            targets_provider: Box::new(RoleDistinctTestKey::new(OnlineSigningRole::Targets)),
+            snapshot_provider: Box::new(RoleDistinctTestKey::new(OnlineSigningRole::Snapshot)),
+            timestamp_provider: Box::new(RoleDistinctTestKey::new(OnlineSigningRole::Timestamp)),
             root_provider: Box::new(TestSigningKey::new()),
+        }
+    }
+}
+
+/// A deterministic test signing key whose seed varies by role so that
+/// each online role uses a distinct key ID in tests.
+///
+/// Backed by the RFC 8032 Ed25519 test vector but XOR-mixed with a per-role
+/// salt so the three online roles are visibly different. This exists so that
+/// distinct-key tests (e.g. "root does not authorize this provider's key ID")
+/// have something to assert against.
+#[derive(Clone, Debug)]
+pub struct RoleDistinctTestKey {
+    role: OnlineSigningRole,
+    signing_key: ed25519_dalek::SigningKey,
+}
+
+impl RoleDistinctTestKey {
+    /// Construct a test key for the given role. Different roles produce
+    /// different key IDs.
+    #[must_use]
+    pub fn new(role: OnlineSigningRole) -> Self {
+        let base_seed: [u8; 32] =
+            hex::decode("9d61b19deffd5a60ba844af492ec2cc44449c5697b326919703bac031cae7f60")
+                .expect("valid hex")
+                .try_into()
+                .expect("valid 32-byte key");
+        let salt: u8 = match role {
+            OnlineSigningRole::Targets => 0x01,
+            OnlineSigningRole::Snapshot => 0x02,
+            OnlineSigningRole::Timestamp => 0x03,
+        };
+        let mut seed = base_seed;
+        seed[0] ^= salt;
+        let signing_key = ed25519_dalek::SigningKey::from_bytes(&seed);
+        Self { role, signing_key }
+    }
+
+    /// The role this test key signs for.
+    #[must_use]
+    pub const fn role(&self) -> OnlineSigningRole {
+        self.role
+    }
+}
+
+impl SigningKeyProvider for RoleDistinctTestKey {
+    fn sign(&self, data: &[u8]) -> String {
+        use ed25519_dalek::Signer;
+        hex::encode(self.signing_key.sign(data).to_bytes())
+    }
+
+    fn tuf_key(&self) -> TufKey {
+        let public = hex::encode(self.signing_key.verifying_key().to_bytes());
+        TufKey {
+            key_type: "ed25519".to_string(),
+            scheme: "ed25519".to_string(),
+            keyval: TufKeyVal { public },
         }
     }
 }
@@ -175,23 +374,54 @@ pub struct CatalogBundle {
 
 /// Build a complete TUF catalog for a set of target entries.
 ///
+/// When `params.root` is `None`, a root is generated that authorizes the
+/// three distinct online providers under their respective roles. When
+/// `params.root` is provided (production path), each provider's key ID
+/// must already be authorized by the supplied root for its role.
+///
 /// # Panics
 ///
 /// Panics on internal serialization failures (bug-level, not input errors).
 pub fn build_catalog(params: &CatalogParams, targets: &[(String, TargetDesc)]) -> CatalogBundle {
-    let online_key_id = params.online_provider.key_id();
-    let online_key = params.online_provider.tuf_key();
+    let targets_key_id = params.targets_provider.key_id();
+    let targets_key = params.targets_provider.tuf_key();
+    let snapshot_key_id = params.snapshot_provider.key_id();
+    let snapshot_key = params.snapshot_provider.tuf_key();
+    let timestamp_key_id = params.timestamp_provider.key_id();
+    let timestamp_key = params.timestamp_provider.tuf_key();
 
     // ── Root ──────────────────────────────────────────────────────
     let root = match &params.root {
-        Some(root) => root.clone(),
+        Some(root) => {
+            // Validate that each provider's key is authorized for its role
+            // before signing any metadata. Failing closed here prevents
+            // publishing catalogs that the root would later reject.
+            for (role, key_id) in [
+                ("root", &key_id_or_unauthorized(root, "root")),
+                ("targets", &targets_key_id),
+                ("snapshot", &snapshot_key_id),
+                ("timestamp", &timestamp_key_id),
+            ] {
+                let role_cfg = root.signed.roles.get(role).unwrap_or_else(|| {
+                    panic!("supplied root is missing role `{role}`")
+                });
+                if !role_cfg.keyids.contains(key_id) {
+                    panic!(
+                        "supplied root does not authorize key `{key_id}` for role `{role}`"
+                    );
+                }
+            }
+            root.clone()
+        }
         None => {
             let root_key_id = params.root_provider.key_id();
             let root_key = params.root_provider.tuf_key();
 
             let mut all_keys = HashMap::new();
             all_keys.insert(root_key_id.clone(), root_key.clone());
-            all_keys.insert(online_key_id.clone(), online_key.clone());
+            all_keys.insert(targets_key_id.clone(), targets_key.clone());
+            all_keys.insert(snapshot_key_id.clone(), snapshot_key.clone());
+            all_keys.insert(timestamp_key_id.clone(), timestamp_key.clone());
 
             let root_signed = RootSigned {
                 kind: "root".to_string(),
@@ -209,21 +439,21 @@ pub fn build_catalog(params: &CatalogParams, targets: &[(String, TargetDesc)]) -
                     (
                         "timestamp".to_string(),
                         RoleConfig {
-                            keyids: vec![online_key_id.clone()],
+                            keyids: vec![timestamp_key_id.clone()],
                             threshold: 1,
                         },
                     ),
                     (
                         "snapshot".to_string(),
                         RoleConfig {
-                            keyids: vec![online_key_id.clone()],
+                            keyids: vec![snapshot_key_id.clone()],
                             threshold: 1,
                         },
                     ),
                     (
                         "targets".to_string(),
                         RoleConfig {
-                            keyids: vec![online_key_id.clone()],
+                            keyids: vec![targets_key_id.clone()],
                             threshold: 1,
                         },
                     ),
@@ -261,8 +491,8 @@ pub fn build_catalog(params: &CatalogParams, targets: &[(String, TargetDesc)]) -
     let targets = TargetsMetadata {
         signed: targets_signed,
         signatures: vec![SignatureEntry {
-            keyid: online_key_id.clone(),
-            sig: params.online_provider.sign(&targets_payload),
+            keyid: targets_key_id,
+            sig: params.targets_provider.sign(&targets_payload),
         }],
     };
     let targets_bytes = serde_json::to_vec(&targets).unwrap();
@@ -286,8 +516,8 @@ pub fn build_catalog(params: &CatalogParams, targets: &[(String, TargetDesc)]) -
     let snapshot = SnapshotMetadata {
         signed: snapshot_signed,
         signatures: vec![SignatureEntry {
-            keyid: online_key_id.clone(),
-            sig: params.online_provider.sign(&snapshot_payload),
+            keyid: snapshot_key_id,
+            sig: params.snapshot_provider.sign(&snapshot_payload),
         }],
     };
     let snapshot_bytes = serde_json::to_vec(&snapshot).unwrap();
@@ -311,8 +541,8 @@ pub fn build_catalog(params: &CatalogParams, targets: &[(String, TargetDesc)]) -
     let timestamp = TimestampMetadata {
         signed: timestamp_signed,
         signatures: vec![SignatureEntry {
-            keyid: online_key_id,
-            sig: params.online_provider.sign(&timestamp_payload),
+            keyid: timestamp_key_id,
+            sig: params.timestamp_provider.sign(&timestamp_payload),
         }],
     };
 
@@ -327,6 +557,15 @@ pub fn build_catalog(params: &CatalogParams, targets: &[(String, TargetDesc)]) -
         timestamp,
         target_hashes,
     }
+}
+
+/// Helper used inside `build_catalog`'s panic messages only.
+fn key_id_or_unauthorized(root: &RootMetadata, role: &str) -> String {
+    root.signed
+        .roles
+        .get(role)
+        .and_then(|cfg| cfg.keyids.first().cloned())
+        .unwrap_or_else(|| format!("<no {role} key>"))
 }
 
 /// Write a catalog bundle to disk in the expected directory layout.
@@ -486,6 +725,7 @@ pub fn verify_catalog(bundle: &CatalogBundle) -> Result<(), super::CatalogError>
 mod tests {
     use super::*;
     use crate::package::builder::{PackageParams, build_package};
+    use ed25519_dalek::Verifier;
 
     #[test]
     fn build_catalog_with_test_keys_succeeds() {
@@ -533,9 +773,6 @@ mod tests {
 
     #[test]
     fn build_catalog_multiple_targets() {
-        let online = TestSigningKey::new();
-        let root = TestSigningKey::new();
-
         let pkg1 = build_package(&PackageParams {
             backend_kind: "burn".to_string(),
             backend_instance_id: "burn:wgpu:darwin".to_string(),
@@ -598,8 +835,10 @@ mod tests {
             snapshot_version: 1,
             timestamp_version: 1,
             expires: "2999-12-31T23:59:59Z".to_string(),
-            online_provider: Box::new(online),
-            root_provider: Box::new(root),
+            targets_provider: Box::new(RoleDistinctTestKey::new(OnlineSigningRole::Targets)),
+            snapshot_provider: Box::new(RoleDistinctTestKey::new(OnlineSigningRole::Snapshot)),
+            timestamp_provider: Box::new(RoleDistinctTestKey::new(OnlineSigningRole::Timestamp)),
+            root_provider: Box::new(TestSigningKey::new()),
         };
 
         let bundle = build_catalog(&params, &[(p1_path, p1_desc), (p2_path, p2_desc)]);
@@ -610,9 +849,6 @@ mod tests {
 
     #[test]
     fn catalog_write_and_verify_roundtrip() {
-        let online = TestSigningKey::new();
-        let root_provider = TestSigningKey::new();
-
         let pkg = build_package(&PackageParams {
             backend_kind: "burn".to_string(),
             backend_instance_id: "burn:wgpu:default".to_string(),
@@ -648,8 +884,10 @@ mod tests {
             snapshot_version: 1,
             timestamp_version: 1,
             expires: "2999-12-31T23:59:59Z".to_string(),
-            online_provider: Box::new(online),
-            root_provider: Box::new(root_provider),
+            targets_provider: Box::new(RoleDistinctTestKey::new(OnlineSigningRole::Targets)),
+            snapshot_provider: Box::new(RoleDistinctTestKey::new(OnlineSigningRole::Snapshot)),
+            timestamp_provider: Box::new(RoleDistinctTestKey::new(OnlineSigningRole::Timestamp)),
+            root_provider: Box::new(TestSigningKey::new()),
         };
 
         let bundle = build_catalog(&params, &[(path.clone(), desc)]);
@@ -682,5 +920,177 @@ mod tests {
             k2.sign(b"test"),
             "signatures must be deterministic"
         );
+    }
+
+    // ── EnvSigningKeyProvider tests ──────────────────────────────
+
+    const TEST_TARGET_SEED_HEX: &str =
+        "9d61b19deffd5a60ba844af492ec2cc44449c5697b326919703bac031cae7f60";
+
+    #[test]
+    fn env_provider_loads_from_hex_and_signs() {
+        let provider = EnvSigningKeyProvider::from_hex(
+            OnlineSigningRole::Targets,
+            TEST_TARGET_SEED_HEX.to_string(),
+        )
+        .expect("valid hex should construct");
+
+        // Signing round-trip: sign a payload and verify with the public key.
+        let payload = b"hello world";
+        let sig_hex = provider.sign(payload);
+        let pub_key_bytes = hex::decode(provider.tuf_key().keyval.public.clone())
+            .expect("valid hex");
+        let public = ed25519_dalek::VerifyingKey::from_bytes(
+            &pub_key_bytes.try_into().expect("32-byte public key"),
+        )
+        .expect("valid public key");
+        let sig_bytes = hex::decode(&sig_hex).expect("valid hex");
+        let sig = ed25519_dalek::Signature::from_slice(&sig_bytes)
+            .expect("valid signature bytes");
+        public.verify_strict(payload, &sig).expect("signature must verify");
+    }
+
+    #[test]
+    fn env_provider_rejects_missing_var() {
+        // Use a sentinel env var name unlikely to be set. The unit test never
+        // touches process env unless it calls from_role.
+        let result = std::panic::catch_unwind(|| {
+            // from_role reads std::env. Force a path that won't be set by
+            // ensuring the role's env var is cleared for the duration.
+            // We can't actually unset process env safely in unit tests, so
+            // skip if it's set in CI.
+            if std::env::var(OnlineSigningRole::Targets.env_var()).is_ok() {
+                return None;
+            }
+            Some(EnvSigningKeyProvider::from_role(OnlineSigningRole::Targets))
+        });
+        match result {
+            Ok(Some(Err(e))) => {
+                assert!(matches!(e, super::super::error::CatalogSigningKeyError::Missing { .. }));
+            }
+            Ok(None) => {
+                // env var is set; skip the test cleanly.
+                eprintln!("skipping env_provider_rejects_missing_var: var is set");
+            }
+            Ok(Some(Ok(_))) => panic!("expected Err, got Ok"),
+            Err(_) => panic!("test panicked"),
+        }
+    }
+
+    #[test]
+    fn env_provider_rejects_empty_hex() {
+        let err = EnvSigningKeyProvider::from_hex(
+            OnlineSigningRole::Snapshot,
+            "   ".to_string(),
+        )
+        .expect_err("empty should fail");
+        assert!(matches!(err, super::super::error::CatalogSigningKeyError::Empty { .. }));
+    }
+
+    #[test]
+    fn env_provider_rejects_non_hex() {
+        let err = EnvSigningKeyProvider::from_hex(
+            OnlineSigningRole::Timestamp,
+            "not-hex-at-all".to_string(),
+        )
+        .expect_err("non-hex should fail");
+        assert!(matches!(err, super::super::error::CatalogSigningKeyError::InvalidHex { .. }));
+    }
+
+    #[test]
+    fn env_provider_rejects_wrong_length() {
+        // 31 bytes of valid hex — wrong length.
+        let short = "9d61b19deffd5a60ba844af492ec2cc44449c5697b326919703bac031cae7f";
+        let err = EnvSigningKeyProvider::from_hex(
+            OnlineSigningRole::Targets,
+            short.to_string(),
+        )
+        .expect_err("wrong length should fail");
+        assert!(matches!(err, super::super::error::CatalogSigningKeyError::InvalidLength { .. }));
+    }
+
+    #[test]
+    fn env_provider_debug_does_not_leak_seed() {
+        let provider = EnvSigningKeyProvider::from_hex(
+            OnlineSigningRole::Targets,
+            TEST_TARGET_SEED_HEX.to_string(),
+        )
+        .expect("valid hex");
+        let debug = format!("{provider:?}");
+        // The seed bytes must not appear in the Debug output.
+        assert!(
+            !debug.contains(TEST_TARGET_SEED_HEX),
+            "Debug output leaked seed hex: {debug}"
+        );
+        // But the key ID should appear.
+        assert!(
+            debug.contains(&provider.key_id()),
+            "Debug should contain the key ID"
+        );
+    }
+
+    #[test]
+    fn role_distinct_test_keys_have_distinct_ids() {
+        let t = RoleDistinctTestKey::new(OnlineSigningRole::Targets);
+        let s = RoleDistinctTestKey::new(OnlineSigningRole::Snapshot);
+        let ts = RoleDistinctTestKey::new(OnlineSigningRole::Timestamp);
+        assert_ne!(t.key_id(), s.key_id());
+        assert_ne!(s.key_id(), ts.key_id());
+        assert_ne!(t.key_id(), ts.key_id());
+    }
+
+    #[test]
+    fn build_catalog_with_three_role_distinct_keys_authorizes_all_roles() {
+        // Verifies that the root generated by `build_catalog` when no root
+        // is provided authorizes every distinct provider's key ID under
+        // its respective role — preventing a regression where the root
+        // would still be issued with a single shared key.
+        let pkg = build_package(&PackageParams {
+            backend_kind: "burn".to_string(),
+            backend_instance_id: "burn:wgpu:default".to_string(),
+            installation_id: "burn-wgpu-darwin-aarch64".to_string(),
+            target: "aarch64-apple-darwin".to_string(),
+            version: "0.1.0".to_string(),
+            package_kind: "burn-worker".to_string(),
+            binary_content: b"distinct roles".to_vec(),
+            binary_name: "worker".to_string(),
+            license_path: None,
+        })
+        .expect("build package");
+
+        let (path, desc) = crate::package::builder::target_desc(
+            &pkg,
+            &PackageParams {
+                backend_kind: "burn".to_string(),
+                backend_instance_id: "burn:wgpu:default".to_string(),
+                installation_id: "burn-wgpu-darwin-aarch64".to_string(),
+                target: "aarch64-apple-darwin".to_string(),
+                version: "0.1.0".to_string(),
+                package_kind: "burn-worker".to_string(),
+                binary_content: b"distinct roles".to_vec(),
+                binary_name: "worker".to_string(),
+                license_path: None,
+            },
+        );
+
+        let targets_provider = RoleDistinctTestKey::new(OnlineSigningRole::Targets);
+        let snapshot_provider = RoleDistinctTestKey::new(OnlineSigningRole::Snapshot);
+        let timestamp_provider = RoleDistinctTestKey::new(OnlineSigningRole::Timestamp);
+
+        let params = CatalogParams {
+            root: None,
+            root_version: 1,
+            targets_version: 1,
+            snapshot_version: 1,
+            timestamp_version: 1,
+            expires: "2999-12-31T23:59:59Z".to_string(),
+            targets_provider: Box::new(targets_provider),
+            snapshot_provider: Box::new(snapshot_provider),
+            timestamp_provider: Box::new(timestamp_provider),
+            root_provider: Box::new(TestSigningKey::new()),
+        };
+
+        let bundle = build_catalog(&params, &[(path, desc)]);
+        verify_catalog(&bundle).expect("chain verifies with distinct keys");
     }
 }
