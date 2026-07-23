@@ -119,13 +119,37 @@ jobs:
       contents: read
     outputs:
       artifact_count: ${{ steps.verify.outputs.count }}
+      ci_workers_run_id: ${{ steps.find-run.outputs.run_id }}
     steps:
-      - name: Download worker artifacts
+      - name: Find ci-workers run for this commit
+        id: find-run
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          SHA="${{ github.sha }}"
+          # Find the successful ci-workers.yml run on this exact commit.
+          RUN_JSON="$(
+            gh api "repos/${{ github.repository }}/actions/workflows/ci-workers.yml/runs" \
+              --jq '.workflow_runs[] | select(.head_sha == "'"$SHA"'" and .conclusion == "success") | .id' \
+              | head -1
+          )"
+          if [[ -z "$RUN_JSON" ]]; then
+            echo "No successful ci-workers.yml run found for commit ${SHA}"
+            exit 1
+          fi
+          echo "Found ci-workers run: ${RUN_JSON}"
+          echo "run_id=${RUN_JSON}" >> "${GITHUB_OUTPUT}"
+
+      - name: Download worker artifacts from ci-workers run
         uses: actions/download-artifact@v5
         with:
           pattern: worker-*
           path: dist/workers
           merge-multiple: true
+          repository: ${{ github.repository }}
+          run-id: ${{ steps.find-run.outputs.run_id }}
 
       - name: Verify worker build set
         id: verify
