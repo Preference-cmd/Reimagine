@@ -22,7 +22,7 @@
 # - A `catalog-release` GitHub Environment must exist, protected to the
 #   `worker-catalog-v*` tag pattern, with maintainer approval required
 #   and the following secrets:
-#   - `CATALOG_TARGET_KEY`
+#   - `CATALOG_TARGETS_KEY`
 #   - `CATALOG_SNAPSHOT_KEY`
 #   - `CATALOG_TIMESTAMP_KEY`
 #   - `CATALOG_ROOT_PUBLIC_KEYS_JSON`
@@ -354,7 +354,7 @@ jobs:
     env:
       # Loaded from repo-level secrets (copy of catalog-release Environment).
       # NEVER log or echo these values.
-      REIMAGINE_TUF_TARGET_KEY: ${{ secrets.CATALOG_TARGET_KEY || '' }}
+      REIMAGINE_TUF_TARGET_KEY: ${{ secrets.CATALOG_TARGETS_KEY || '' }}
       REIMAGINE_TUF_SNAPSHOT_KEY: ${{ secrets.CATALOG_SNAPSHOT_KEY || '' }}
       REIMAGINE_TUF_TIMESTAMP_KEY: ${{ secrets.CATALOG_TIMESTAMP_KEY || '' }}
       REIMAGINE_TUF_ROOT_PUBLIC_KEYS_JSON: ${{ secrets.CATALOG_ROOT_PUBLIC_KEYS_JSON || '' }}
@@ -390,8 +390,8 @@ jobs:
 
           # The root.json comes from the checkout.  Production root must be
           # committed or distributed out-of-band.
-          if [[ -f "crates/app-host/src/assets/worker-catalog-root.json" ]]; then
-            cp "crates/app-host/src/assets/worker-catalog-root.json" dist/input/root.json
+          if [[ -f "crates/app-host/assets/worker-catalog-root.json" ]]; then
+            cp "crates/app-host/assets/worker-catalog-root.json" dist/input/root.json
           else
             echo "error: root.json not found in assets"
             exit 1
