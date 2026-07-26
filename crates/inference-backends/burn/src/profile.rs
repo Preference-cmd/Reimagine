@@ -30,12 +30,19 @@ impl BurnProfileProvider {
     /// Advertise backend instances matching the active feature.
     ///
     /// V1 production instances follow the active feature:
-    /// WGPU by default and Flex for CPU fallback builds.
+    /// CUDA by feature, WGPU by default, and Flex for CPU fallback builds.
     pub fn probe(&self) -> BackendProfile {
         let backend = Self::backend_kind();
         let (plugin, extension) = Self::plugin_provenance();
 
         let mut profile = BackendProfile::new(backend).with_plugin(plugin, extension);
+
+        // Under `cuda`, advertise the single `burn:cuda:0`
+        // instance — real device enumeration is deferred.
+        #[cfg(feature = "cuda")]
+        {
+            profile = add_cuda_instance(profile);
+        }
 
         // Under `wgpu` (default), advertise synthesized instances
         // per graphics API. Real adapter enumeration at runtime
@@ -48,7 +55,7 @@ impl BurnProfileProvider {
 
         // Under `flex` (only), advertise the single `burn:flex:cpu`
         // instance — burn-flex has no device selection.
-        #[cfg(all(not(feature = "wgpu"), feature = "flex"))]
+        #[cfg(all(not(any(feature = "cuda", feature = "wgpu")), feature = "flex"))]
         {
             profile = add_flex_instance(profile);
         }
@@ -107,7 +114,27 @@ fn adapter_kind(device: &burn_wgpu::WgpuDevice, default: DeviceKind) -> DeviceKi
     }
 }
 
-#[cfg(all(not(feature = "wgpu"), feature = "flex"))]
+#[cfg(feature = "cuda")]
+fn add_cuda_instance(profile: BackendProfile) -> BackendProfile {
+    let instance = BackendInstance::new("burn:cuda:0");
+    let device_profile = DeviceProfile::new("cuda:0").with_kind(DeviceKind::Gpu);
+    let instance_profile = BackendInstanceProfile::new(
+        instance,
+        BurnProfileProvider::backend_kind(),
+        device_profile,
+        BackendInstanceStatus::Available,
+    )
+    .with_capability(InferenceCapability::LoadBundle)
+    .with_capability(InferenceCapability::CreateEmptyLatent)
+    .with_capability(InferenceCapability::TextEncode)
+    .with_capability(InferenceCapability::DiffusionSample)
+    .with_capability(InferenceCapability::LatentDecode)
+    .with_capability(InferenceCapability::ImageSave)
+    .with_capability(InferenceCapability::ImagePreview);
+    profile.with_instance(instance_profile)
+}
+
+#[cfg(all(not(any(feature = "cuda", feature = "wgpu")), feature = "flex"))]
 fn add_flex_instance(profile: BackendProfile) -> BackendProfile {
     let instance = BackendInstance::new("burn:flex:cpu");
     let device_profile = DeviceProfile::new("flex:cpu").with_kind(DeviceKind::Cpu);
