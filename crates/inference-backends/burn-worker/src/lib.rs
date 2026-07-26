@@ -30,13 +30,19 @@ mod tests {
             .expect("failed to create BurnBackend");
         let (_identity, profile) = probe::build(&backend);
         let instance = &profile.instances[0];
+        #[cfg(feature = "cuda")]
+        assert!(
+            instance.device_label.starts_with("cuda:"),
+            "cuda device label should start with 'cuda:', got {}",
+            instance.device_label
+        );
         #[cfg(feature = "wgpu")]
         assert!(
             instance.device_label.starts_with("wgpu:"),
             "wgpu device label should start with 'wgpu:', got {}",
             instance.device_label
         );
-        #[cfg(all(not(feature = "wgpu"), feature = "flex"))]
+        #[cfg(all(not(any(feature = "cuda", feature = "wgpu")), feature = "flex"))]
         assert_eq!(instance.device_label, "flex:cpu");
     }
 

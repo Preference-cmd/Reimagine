@@ -72,6 +72,33 @@ jobs:
           cargo check -p reimagine-inference-burn-worker --no-default-features --features wgpu,flex
           2>&1 && exit 1 || echo "correctly rejected dual features"
 
+      - name: CUDA only must succeed (worker)
+        # Level 1: worker with cuda transitively compiles the burn lib.
+        # Also verifies build.rs feature contract passes (exactly one).
+        run: >
+          cargo check -p reimagine-inference-burn-worker --no-default-features --features cuda
+
+      - name: CUDA burn lib compiles in isolation
+        # Level 2: burn lib alone with cuda, without dev-dep feature unify.
+        # CI-safe: no GPU needed, just checks compile_error guards + type aliases.
+        run: >
+          cargo check -p reimagine-inference-burn --no-default-features --features cuda
+
+      - name: WGPU + CUDA must be rejected
+        run: >
+          cargo check -p reimagine-inference-burn-worker --no-default-features --features wgpu,cuda
+          2>&1 && exit 1 || echo "correctly rejected wgpu+cuda"
+
+      - name: Flex + CUDA must be rejected
+        run: >
+          cargo check -p reimagine-inference-burn-worker --no-default-features --features flex,cuda
+          2>&1 && exit 1 || echo "correctly rejected flex+cuda"
+
+      - name: WGPU + Flex + CUDA must be rejected
+        run: >
+          cargo check -p reimagine-inference-burn-worker --no-default-features --features wgpu,flex,cuda
+          2>&1 && exit 1 || echo "correctly rejected all three"
+
       - name: WGPU only must succeed
         run: >
           cargo check -p reimagine-inference-burn-worker --no-default-features --features wgpu
@@ -79,6 +106,12 @@ jobs:
       - name: Flex only must succeed
         run: >
           cargo check -p reimagine-inference-burn-worker --no-default-features --features flex
+
+      - name: Verify no CUDA deps leak into host crates
+        run: |
+          cargo tree -p reimagine-backend-worker-host --no-default-features -e features 2>/dev/null | grep -qi cuda && { echo "CUDA leaked into backend-worker-host"; exit 1; } || echo "backend-worker-host: clean"
+          cargo tree -p reimagine-app-host --no-default-features -e features 2>/dev/null | grep -qi cuda && { echo "CUDA leaked into app-host"; exit 1; } || echo "app-host: clean"
+          cargo tree -p reimagine-inference --no-default-features -e features 2>/dev/null | grep -qi cuda && { echo "CUDA leaked into inference"; exit 1; } || echo "inference: clean"
 
   compile:
     name: worker-${{ matrix.backend }} (${{ matrix.runner }})
@@ -89,8 +122,11 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        backend: [wgpu, flex]
+        backend: [wgpu, flex, cuda]
         runner: [macos-latest, ubuntu-24.04, windows-latest]
+        exclude:
+          - backend: cuda
+            runner: macos-latest
 
     steps:
       - name: Checkout
@@ -113,8 +149,9 @@ jobs:
       - name: Test contracts and probe (Ubuntu only)
         # Hardware-independent tests only need to run on one platform.
         # The current E2E dev-dependency graph enables Burn's default WGPU
-        # feature, so a Flex cargo-test build would incorrectly unify WGPU and
-        # Flex. Flex contract coverage comes from the release build.
+        # feature, so a Flex or CUDA cargo-test build would incorrectly
+        # unify WGPU and the target feature. Flex/CUDA contract coverage
+        # comes from the release build.
         if: matrix.backend == 'wgpu' && matrix.runner == 'ubuntu-24.04'
         run: >
           cargo test
@@ -209,7 +246,7 @@ jobs:
         run: |
           set -euo pipefail
 
-          test "$(find dist/workers -type f | wc -l | tr -d ' ')" -eq 6
+          test "$(find dist/workers -type f | wc -l | tr -d ' ')" -eq 8
           find dist/workers -type f -size 0 -print -quit | grep -q . && exit 1 || true
 
       - name: Attest worker build provenance
@@ -233,8 +270,11 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        backend: [wgpu, flex]
+        backend: [wgpu, flex, cuda]
         runner: [macos-latest, ubuntu-24.04, windows-latest]
+        exclude:
+          - backend: cuda
+            runner: macos-latest
 
     steps:
       - name: Checkout
@@ -355,7 +395,7 @@ jobs:
 
           count="$(find dist/packages -name '*.tar.gz' -type f | wc -l | tr -d ' ')"
           echo "Found ${count} packages"
-          test "${count}" -eq 6 || { echo "Expected 6 packages, got ${count}"; exit 1; }
+          test "${count}" -eq 8 || { echo "Expected 8 packages (wgpu×3 + flex×3 + cuda×2), got ${count}"; exit 1; }
           find dist/packages -name '*.tar.gz' -type f -size 0 -print -quit | grep -q . && exit 1 || true
 
       - name: Compile catalog assemble tool
