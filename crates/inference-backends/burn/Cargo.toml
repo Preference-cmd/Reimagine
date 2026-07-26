@@ -17,6 +17,8 @@ default = ["wgpu"]
 flex = ["dep:burn-flex"]
 # GPU compute via burn-wgpu (wgpu + CubeCL).
 wgpu = ["dep:burn-wgpu"]
+# GPU compute via burn-cuda (CubeCL + cudarc).
+cuda = ["dep:burn-cuda"]
 
 [dependencies]
 async-trait = { workspace = true }
@@ -26,6 +28,7 @@ burn-store = { workspace = true }
 burn-tensor = { workspace = true }
 burn-flex = { workspace = true, optional = true }
 burn-wgpu = { workspace = true, optional = true }
+burn-cuda = { workspace = true, optional = true }
 image = { workspace = true }
 reimagine-core = { path = "../../core" }
 reimagine-inference = { path = "../../inference" }

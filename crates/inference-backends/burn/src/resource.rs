@@ -174,12 +174,14 @@ mod tests {
             })
             .await
             .expect("cleanup_run");
-        let expected_instance = if cfg!(feature = "wgpu") {
+        let expected_instance = if cfg!(feature = "cuda") {
+            "burn:cuda:0"
+        } else if cfg!(feature = "wgpu") {
             "burn:wgpu:default"
-        } else if cfg!(all(not(feature = "wgpu"), feature = "flex")) {
+        } else if cfg!(feature = "flex") {
             "burn:flex:cpu"
         } else {
-            unreachable!("Burn backend requires either wgpu or flex feature")
+            unreachable!("Burn backend requires exactly one of cuda, wgpu, or flex feature")
         };
         assert_eq!(cleanup.backend_instance.as_str(), expected_instance);
         assert!(cleanup.diagnostics.is_empty());

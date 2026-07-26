@@ -186,9 +186,11 @@ fn process_launch_spec(
     models_dir: &std::path::Path,
     output_dir: &std::path::Path,
 ) -> WorkerLaunchSpec {
+    #[cfg(feature = "cuda")]
+    let backend_instance_id = "burn:cuda:0";
     #[cfg(feature = "wgpu")]
     let backend_instance_id = "burn:wgpu:default";
-    #[cfg(all(not(feature = "wgpu"), feature = "flex"))]
+    #[cfg(all(not(any(feature = "cuda", feature = "wgpu")), feature = "flex"))]
     let backend_instance_id = "burn:flex:cpu";
 
     WorkerLaunchSpec {

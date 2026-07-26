@@ -28,6 +28,7 @@ tokio = { workspace = true, features = ["rt", "macros"] }
 default = ["wgpu"]
 wgpu = ["reimagine-inference-burn/wgpu"]
 flex = ["reimagine-inference-burn/flex"]
+cuda = ["reimagine-inference-burn/cuda"]
 
 [dev-dependencies]
 axum = { workspace = true }
