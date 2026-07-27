@@ -67,13 +67,13 @@ async fn setup_test_catalog(
     }
 
     for (name, data) in &meta_files {
-        server::register_file(&*state, &format!("{tag}/{name}"), data.clone());
+        server::register_file(state, &format!("{tag}/{name}"), data.clone());
     }
 
     // Also register target package files.
     for pkg_path in &catalog.package_paths {
         let data = std::fs::read(dir.path().join(pkg_path)).unwrap();
-        server::register_file(&*state, &format!("{tag}/{pkg_path}"), data);
+        server::register_file(state, &format!("{tag}/{pkg_path}"), data);
     }
 
     (catalog.metadata, server_base)

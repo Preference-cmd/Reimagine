@@ -119,7 +119,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     for entry in std::fs::read_dir(&packages_dir)? {
         let entry = entry?;
         let path = entry.path();
-        if !path.extension().map_or(false, |e| e == "gz" || e == "zip") {
+        if !path.extension().is_some_and(|e| e == "gz" || e == "zip") {
             continue;
         }
 

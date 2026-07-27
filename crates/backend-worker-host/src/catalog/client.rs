@@ -179,7 +179,7 @@ impl CatalogClient {
         tuf::verify_targets(&targets, &targets_bytes, trusted_root, targets_meta)?;
 
         // 6. Build targets and filter.
-        let catalog_targets = self.build_targets(&targets, &pinned)?;
+        let catalog_targets = self.build_targets(&targets, pinned)?;
 
         Ok(VerifiedCatalog {
             targets: catalog_targets,
