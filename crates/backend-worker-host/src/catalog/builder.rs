@@ -725,6 +725,7 @@ pub fn verify_catalog(bundle: &CatalogBundle) -> Result<(), super::CatalogError>
 mod tests {
     use super::*;
     use crate::package::builder::{PackageParams, build_package};
+    #[allow(unused_imports)]
     use ed25519_dalek::Verifier;
 
     #[test]

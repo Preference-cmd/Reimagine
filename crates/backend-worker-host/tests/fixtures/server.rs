@@ -19,6 +19,7 @@ pub struct TestCatalogConfig {
     /// The concrete tag to redirect to (e.g. "worker-catalog-v12").
     pub redirect_tag: String,
     /// Port to bind. If `0`, the OS assigns one.
+    #[allow(dead_code)]
     pub port: u16,
 }
 
