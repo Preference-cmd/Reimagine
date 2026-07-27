@@ -114,17 +114,22 @@ mod tests {
 
     use crate::{BurnBackend, BurnBackendConfig};
 
-    #[cfg(feature = "cuda")]
-    fn expected_instance() -> &'static str {
-        "burn:cuda:0"
-    }
-
     #[cfg(feature = "wgpu")]
     fn expected_instance() -> &'static str {
         "burn:wgpu:default"
     }
 
-    #[cfg(all(not(any(feature = "cuda", feature = "wgpu")), feature = "flex"))]
+    #[cfg(feature = "cuda")]
+    fn expected_instance() -> &'static str {
+        "burn:cuda:0"
+    }
+
+    #[cfg(feature = "rocm")]
+    fn expected_instance() -> &'static str {
+        "burn:rocm:0"
+    }
+
+    #[cfg(all(not(any(feature = "cuda", feature = "rocm")), feature = "flex"))]
     fn expected_instance() -> &'static str {
         "burn:flex:cpu"
     }
@@ -134,12 +139,20 @@ mod tests {
         "cuda:0"
     }
 
+    #[cfg(feature = "rocm")]
+    fn expected_device_label() -> &'static str {
+        "rocm:0"
+    }
+
     #[cfg(feature = "wgpu")]
     fn expected_device_label() -> &'static str {
         "wgpu:default"
     }
 
-    #[cfg(all(not(any(feature = "cuda", feature = "wgpu")), feature = "flex"))]
+    #[cfg(all(
+        not(any(feature = "cuda", feature = "rocm", feature = "wgpu")),
+        feature = "flex"
+    ))]
     fn expected_device_label() -> &'static str {
         "flex:cpu"
     }

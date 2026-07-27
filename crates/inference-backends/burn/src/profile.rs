@@ -44,6 +44,13 @@ impl BurnProfileProvider {
             profile = add_cuda_instance(profile);
         }
 
+        // Under `rocm`, advertise the single `burn:rocm:0`
+        // instance — real device enumeration is deferred.
+        #[cfg(feature = "rocm")]
+        {
+            profile = add_rocm_instance(profile);
+        }
+
         // Under `wgpu` (default), advertise synthesized instances
         // per graphics API. Real adapter enumeration at runtime
         // is deferred to a later issue; V1 lists the static
@@ -55,7 +62,10 @@ impl BurnProfileProvider {
 
         // Under `flex` (only), advertise the single `burn:flex:cpu`
         // instance — burn-flex has no device selection.
-        #[cfg(all(not(any(feature = "cuda", feature = "wgpu")), feature = "flex"))]
+        #[cfg(all(
+            not(any(feature = "cuda", feature = "rocm", feature = "wgpu")),
+            feature = "flex"
+        ))]
         {
             profile = add_flex_instance(profile);
         }
@@ -134,7 +144,30 @@ fn add_cuda_instance(profile: BackendProfile) -> BackendProfile {
     profile.with_instance(instance_profile)
 }
 
-#[cfg(all(not(any(feature = "cuda", feature = "wgpu")), feature = "flex"))]
+#[cfg(feature = "rocm")]
+fn add_rocm_instance(profile: BackendProfile) -> BackendProfile {
+    let instance = BackendInstance::new("burn:rocm:0");
+    let device_profile = DeviceProfile::new("rocm:0").with_kind(DeviceKind::Gpu);
+    let instance_profile = BackendInstanceProfile::new(
+        instance,
+        BurnProfileProvider::backend_kind(),
+        device_profile,
+        BackendInstanceStatus::Available,
+    )
+    .with_capability(InferenceCapability::LoadBundle)
+    .with_capability(InferenceCapability::CreateEmptyLatent)
+    .with_capability(InferenceCapability::TextEncode)
+    .with_capability(InferenceCapability::DiffusionSample)
+    .with_capability(InferenceCapability::LatentDecode)
+    .with_capability(InferenceCapability::ImageSave)
+    .with_capability(InferenceCapability::ImagePreview);
+    profile.with_instance(instance_profile)
+}
+
+#[cfg(all(
+    not(any(feature = "cuda", feature = "rocm", feature = "wgpu")),
+    feature = "flex"
+))]
 fn add_flex_instance(profile: BackendProfile) -> BackendProfile {
     let instance = BackendInstance::new("burn:flex:cpu");
     let device_profile = DeviceProfile::new("flex:cpu").with_kind(DeviceKind::Cpu);
