@@ -1,7 +1,7 @@
 # Worker catalog release workflow
 #
 # Creates an immutable `worker-catalog-v{N}` GitHub Release containing all
-# nine WGPU/Flex/CUDA/ROCm worker packages and their TUF metadata, signed
+# seven WGPU/Flex/CUDA worker packages and their TUF metadata, signed
 # with the production catalog signing keys.
 #
 # ## Trigger
@@ -29,7 +29,7 @@
 # - A `root.json` committed to the repository (or distributed out‑of‑band)
 #   must be present; the signer reads it from the checkout.
 # - The `ci-workers.yml` workflow must have run successfully on the tagged
-#   commit, producing the nine attested `worker-*` artifacts.
+#   commit, producing the seven attested `worker-*` artifacts.
 #
 # See `.scratch/multi-backend/issues/07-wgpu-flex-release-pipeline.md` for
 # the operator runbook.
@@ -304,7 +304,7 @@ jobs:
           set -euo pipefail
           count="$(find dist/packages -name '*.tar.gz' -type f | wc -l | tr -d ' ')"
           echo "Packages: ${count}"
-          test "${count}" -eq 8 || { echo "Expected 8 packages (wgpu×3 + flex×2 + cuda×2 + rocm×1), got ${count}"; exit 1; }
+          test "${count}" -eq 7 || { echo "Expected 7 packages (wgpu×3 + flex×2 + cuda×2), got ${count}"; exit 1; }
 
       - name: Upload packages
         uses: actions/upload-artifact@v6
@@ -338,7 +338,7 @@ jobs:
           # When hardware smoke is active, this job will also assert that
           # the smoke evidence JSON exists and is valid.
           echo "Target matrix validation passed (dormant mode)."
-          echo "Expected matrix: WGPU×3 + Flex×3 + CUDA×2 + ROCm×1"
+          echo "Expected matrix: WGPU×3 + Flex×2 + CUDA×2"
 
   # ═══════════════════════════════════════════════════════════════════
   # 5. Sign the catalog (the only job with TUF signing key access)
@@ -503,7 +503,7 @@ jobs:
             **Commit:** ${{ github.sha }}
 
             This release contains signed TUF metadata and the full set of
-            WGPU/Flex/CUDA/ROCm worker packages.
+            WGPU/Flex/CUDA worker packages.
           files: |
             dist/signed/*.tar.gz
             dist/signed/metadata/*.json
