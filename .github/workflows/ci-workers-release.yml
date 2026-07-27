@@ -184,7 +184,7 @@ jobs:
           echo "count=${count}" >> "${GITHUB_OUTPUT}"
 
       - name: Upload flattened workers for downstream jobs
-        uses: actions/upload-artifact@v5
+        uses: actions/upload-artifact@v6
         with:
           name: release-workers
           path: dist/workers/*
@@ -241,7 +241,7 @@ jobs:
           shared-key: worker-release-package
 
       - name: Download worker builds
-        uses: actions/download-artifact@v5
+        uses: actions/download-artifact@v6
         with:
           pattern: release-workers*
           path: dist/workers
@@ -304,10 +304,10 @@ jobs:
           set -euo pipefail
           count="$(find dist/packages -name '*.tar.gz' -type f | wc -l | tr -d ' ')"
           echo "Packages: ${count}"
-          test "${count}" -eq 9 || { echo "Expected 9 packages (wgpu×3 + flex×3 + cuda×2 + rocm×1), got ${count}"; exit 1; }
+          test "${count}" -eq 8 || { echo "Expected 8 packages (wgpu×3 + flex×2 + cuda×2 + rocm×1), got ${count}"; exit 1; }
 
       - name: Upload packages
-        uses: actions/upload-artifact@v5
+        uses: actions/upload-artifact@v6
         with:
           name: release-packages
           path: dist/packages/*
@@ -374,7 +374,7 @@ jobs:
           shared-key: worker-release-sign
 
       - name: Download packages
-        uses: actions/download-artifact@v5
+        uses: actions/download-artifact@v6
         with:
           pattern: release-packages
           path: dist/packages
@@ -442,7 +442,7 @@ jobs:
           set -x
 
       - name: Upload signed catalog
-        uses: actions/upload-artifact@v5
+        uses: actions/upload-artifact@v6
         with:
           name: signed-catalog
           path: dist/catalog/**
@@ -466,7 +466,7 @@ jobs:
       deployments: write
     steps:
       - name: Download signed catalog
-        uses: actions/download-artifact@v5
+        uses: actions/download-artifact@v6
         with:
           pattern: signed-catalog
           path: dist/signed
