@@ -20,7 +20,7 @@ use ed25519_dalek::Signer;
 /// Build a test catalog with one package target, register its files
 /// on the server (flat naming, no metadata/ prefix), and return the
 /// metadata bundle so callers can extract the trusted root.
-#[allow(clippy::borrow_deref_ref)]
+#[allow(clippy::borrow_deref_ref, clippy::explicit_auto_deref)]
 async fn setup_test_catalog(
     config: server::TestCatalogConfig,
 ) -> (testing::TufMetadataBundle, String) {
