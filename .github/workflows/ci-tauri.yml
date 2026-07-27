@@ -112,7 +112,8 @@ jobs:
                 --glob '**/mod.rs' \
                 --glob '!**/target/**' \
                 crates src-tauri | rg -v \
-                '^crates/backend-worker-host/src/(catalog|install|inventory|package)/mod\.rs$'); then
+                '^crates/backend-worker-host/src/(catalog|install|inventory|package)/mod\.rs$' \
+                '^crates/backend-worker-host/tests/fixtures/mod\.rs$'); then
             echo "::error title=mod.rs is not allowed::Use foo.rs + foo/ instead of mod.rs."
             echo "${mod_rs}" >&2
             exit 1

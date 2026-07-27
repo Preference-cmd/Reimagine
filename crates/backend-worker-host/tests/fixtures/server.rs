@@ -107,6 +107,7 @@ pub fn register_file(state: &AppState, path: &str, data: Vec<u8>) {
 }
 
 /// Get total request count since server start.
+#[allow(dead_code)]
 pub fn request_count(state: &AppState) -> usize {
     state.request_count.load(Ordering::SeqCst)
 }
