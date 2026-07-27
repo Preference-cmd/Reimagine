@@ -8,8 +8,7 @@ use reimagine_app_host::dto::{
     ModelRemoveOutput, format_status,
 };
 use reimagine_app_host::{
-    AcquireAndConvertRequest, BurnCheckpointConverter, BurnConversionComponent,
-    BurnConversionComponentRole, BurnConversionReport,
+    AcquireAndConvertRequest, BurnCheckpointConverter,
 };
 use reimagine_core::model::ModelId;
 use reimagine_model_acquisition::{
@@ -123,7 +122,7 @@ pub async fn acquire(
                 revision: body.revision.as_deref(),
                 target_backend,
                 overwrite_policy,
-                burn_converter: Some(&AxumBurnCheckpointConverter),
+                burn_converter: burn_checkpoint_converter(),
             },
             &acq_service,
         )
@@ -251,8 +250,11 @@ pub async fn convert_checkpoint(
 
     match target_backend {
         "burn" => {
+            let converter = burn_checkpoint_converter().ok_or_else(|| AxumHostError::BadRequest {
+                message: "burn backend not available (no burn feature enabled in axum-host)".to_string(),
+            })?;
             let report = model_service
-                .convert_checkpoint_to_burn(&body.model_id, &AxumBurnCheckpointConverter)
+                .convert_checkpoint_to_burn(&body.model_id, converter)
                 .await?;
 
             let conversion = ModelConvertConversionReport {
@@ -293,39 +295,69 @@ pub async fn convert_checkpoint(
     }
 }
 
-struct AxumBurnCheckpointConverter;
+#[cfg(any(
+    feature = "burn-wgpu",
+    feature = "burn-flex",
+    feature = "burn-cuda",
+    feature = "burn-rocm",
+))]
+mod burn_conv {
+    use reimagine_app_host::{BurnCheckpointConverter, BurnConversionComponent, BurnConversionComponentRole, BurnConversionReport};
 
-impl BurnCheckpointConverter for AxumBurnCheckpointConverter {
-    fn convert(
-        &self,
-        source_path: &std::path::Path,
-        model_id: &str,
-        model_root: &std::path::Path,
-    ) -> Result<BurnConversionReport, String> {
-        let report = reimagine_inference_burn::models::stable_diffusion::sdxl::checkpoint_import::execute_real_burn_sdxl_checkpoint_import(
-            source_path,
-            model_id,
-            model_root,
-        )
-        .map_err(|error| error.to_string())?;
-        Ok(BurnConversionReport {
-            output_components: report
-                .output_components
-                .into_iter()
-                .map(|component| BurnConversionComponent {
-                    role: match component.role {
-                        reimagine_inference_burn::models::stable_diffusion::sdxl::BurnSdxlComponentRole::Diffusion => BurnConversionComponentRole::Diffusion,
-                        reimagine_inference_burn::models::stable_diffusion::sdxl::BurnSdxlComponentRole::Vae => BurnConversionComponentRole::Vae,
-                        reimagine_inference_burn::models::stable_diffusion::sdxl::BurnSdxlComponentRole::TextEncoder => BurnConversionComponentRole::TextEncoder,
-                        reimagine_inference_burn::models::stable_diffusion::sdxl::BurnSdxlComponentRole::TextEncoder2 => BurnConversionComponentRole::TextEncoder2,
-                    },
-                    path: component.path.into(),
-                })
-                .collect(),
-            mapped_tensor_count: report.mapped_tensor_count,
-            source_layout: report.source_layout,
-        })
+    pub(super) struct AxumBurnCheckpointConverter;
+
+    impl BurnCheckpointConverter for AxumBurnCheckpointConverter {
+        fn convert(
+            &self,
+            source_path: &std::path::Path,
+            model_id: &str,
+            model_root: &std::path::Path,
+        ) -> Result<BurnConversionReport, String> {
+            let report = reimagine_inference_burn::models::stable_diffusion::sdxl::checkpoint_import::execute_real_burn_sdxl_checkpoint_import(
+                source_path,
+                model_id,
+                model_root,
+            )
+            .map_err(|error| error.to_string())?;
+            Ok(BurnConversionReport {
+                output_components: report
+                    .output_components
+                    .into_iter()
+                    .map(|component| BurnConversionComponent {
+                        role: match component.role {
+                            reimagine_inference_burn::models::stable_diffusion::sdxl::BurnSdxlComponentRole::Diffusion => BurnConversionComponentRole::Diffusion,
+                            reimagine_inference_burn::models::stable_diffusion::sdxl::BurnSdxlComponentRole::Vae => BurnConversionComponentRole::Vae,
+                            reimagine_inference_burn::models::stable_diffusion::sdxl::BurnSdxlComponentRole::TextEncoder => BurnConversionComponentRole::TextEncoder,
+                            reimagine_inference_burn::models::stable_diffusion::sdxl::BurnSdxlComponentRole::TextEncoder2 => BurnConversionComponentRole::TextEncoder2,
+                        },
+                        path: component.path.into(),
+                    })
+                    .collect(),
+                mapped_tensor_count: report.mapped_tensor_count,
+                source_layout: report.source_layout,
+            })
+        }
     }
+}
+
+#[cfg(not(any(
+    feature = "burn-wgpu",
+    feature = "burn-flex",
+    feature = "burn-cuda",
+    feature = "burn-rocm",
+)))]
+fn burn_checkpoint_converter() -> Option<&'static (dyn BurnCheckpointConverter + 'static)> {
+    None
+}
+
+#[cfg(any(
+    feature = "burn-wgpu",
+    feature = "burn-flex",
+    feature = "burn-cuda",
+    feature = "burn-rocm",
+))]
+fn burn_checkpoint_converter() -> Option<&'static (dyn BurnCheckpointConverter + 'static)> {
+    Some(&burn_conv::AxumBurnCheckpointConverter)
 }
 
 #[cfg(test)]

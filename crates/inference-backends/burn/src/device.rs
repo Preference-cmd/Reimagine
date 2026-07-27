@@ -9,11 +9,12 @@
 //! | Feature  | Variant         | Label        |
 //! |----------|-----------------|--------------|
 //! | `cuda`   | `Cuda(_)`       | `cuda:{n}`   |
+//! | `rocm`   | `Rocm(_)`       | `rocm:{n}`   |
 //! | `wgpu`   | `Wgpu(_)`       | `wgpu:default`, `wgpu:metal`, `wgpu:vulkan` |
 //! | `flex`   | `Flex`          | `flex:cpu`   |
 //!
-//! The `wgpu`, `flex`, and `cuda` features are mutually exclusive at the
-//! crate level; only one can be the live production compute backend.
+//! The backends are mutually exclusive at the crate level; only
+//! one can be the live production compute backend.
 
 use crate::error::BurnBackendError;
 
@@ -26,6 +27,9 @@ pub enum BurnDevice {
     /// GPU backend via burn-cuda (CubeCL + cudarc).
     #[cfg(feature = "cuda")]
     Cuda(burn_cuda::CudaDevice),
+    /// GPU backend via burn-rocm (CubeCL + HIP).
+    #[cfg(feature = "rocm")]
+    Rocm(burn_rocm::RocmDevice),
     /// GPU backend via burn-wgpu
     /// (`burn_wgpu::WgpuDevice` — Metal/Vulkan/CubeCL CPU).
     #[cfg(feature = "wgpu")]
@@ -46,8 +50,10 @@ impl BurnDevice {
     /// Under each feature, `new` maps labels to the canonical
     /// variant for the active feature:
     ///
-    /// - Under `cuda`: `"cuda:0"`, `"cuda:{n}"` -> `Cuda(CudaDevice { index: n })`,
+    /// - Under `cuda`: `"cuda:0"`, `"cuda:{n}"` -> `Cuda(CudaDevice::new(n))`,
     ///   `"0"` -> `Cuda(CudaDevice::default())`.
+    /// - Under `rocm`: `"rocm:0"`, `"rocm:{n}"` -> `Rocm(RocmDevice::new(n))`,
+    ///   `"0"` -> `Rocm(RocmDevice::default())`.
     /// - Under `wgpu` (default): `"default"` -> `Wgpu(DefaultDevice)`,
     ///   `"metal"` -> `Wgpu(IntegratedGpu(0))`,
     ///   `"vulkan"` -> `Wgpu(DiscreteGpu(0))`.
@@ -61,7 +67,7 @@ impl BurnDevice {
                 "0" | "cuda:0" => Some(BurnDevice::Cuda(burn_cuda::CudaDevice::default())),
                 s if s.starts_with("cuda:") => {
                     let n: usize = s.strip_prefix("cuda:").unwrap().parse().ok().unwrap_or(0);
-                    Some(BurnDevice::Cuda(burn_cuda::CudaDevice { index: n }))
+                    Some(BurnDevice::Cuda(burn_cuda::CudaDevice::new(n)))
                 }
                 _ => None,
             }
@@ -69,6 +75,23 @@ impl BurnDevice {
 
         #[cfg(feature = "cuda")]
         if let Some(device) = parse_cuda(&label_str) {
+            return device;
+        }
+
+        #[cfg(feature = "rocm")]
+        fn parse_rocm(label: &str) -> Option<BurnDevice> {
+            match label {
+                "0" | "rocm:0" => Some(BurnDevice::Rocm(burn_rocm::RocmDevice::default())),
+                s if s.starts_with("rocm:") => {
+                    let n: usize = s.strip_prefix("rocm:").unwrap().parse().ok().unwrap_or(0);
+                    Some(BurnDevice::Rocm(burn_rocm::RocmDevice::new(n)))
+                }
+                _ => None,
+            }
+        }
+
+        #[cfg(feature = "rocm")]
+        if let Some(device) = parse_rocm(&label_str) {
             return device;
         }
 
@@ -96,9 +119,11 @@ impl BurnDevice {
         match self {
             #[cfg(feature = "cuda")]
             Self::Cuda(device) => cuda_device_label(device),
+            #[cfg(feature = "rocm")]
+            Self::Rocm(device) => rocm_device_label(device),
             #[cfg(feature = "wgpu")]
             Self::Wgpu(device) => wgpu_device_label(device),
-            #[cfg(all(not(any(feature = "cuda", feature = "wgpu")), feature = "flex"))]
+            #[cfg(all(not(any(feature = "cuda", feature = "rocm")), feature = "flex"))]
             Self::Flex => "flex:cpu",
         }
     }
@@ -119,7 +144,7 @@ impl BurnDevice {
                         reason: format!("invalid CUDA device ordinal in `{s}`"),
                     }
                 })?;
-                Ok(Self::Cuda(burn_cuda::CudaDevice { index: n }))
+                Ok(Self::Cuda(burn_cuda::CudaDevice::new(n)))
             }
             other => Err(BurnBackendError::DeviceUnavailable {
                 requested: other.to_owned(),
@@ -130,7 +155,29 @@ impl BurnDevice {
         }
     }
 
-    #[cfg(feature = "wgpu")]
+    #[cfg(feature = "rocm")]
+    pub fn try_build_device(label: &str) -> Result<Self, BurnBackendError> {
+        match label {
+            "0" | "rocm:0" => Ok(Self::Rocm(burn_rocm::RocmDevice::default())),
+            s if s.starts_with("rocm:") => {
+                let n: usize = s.strip_prefix("rocm:").unwrap().parse().map_err(|_| {
+                    BurnBackendError::DeviceUnavailable {
+                        requested: s.to_owned(),
+                        reason: format!("invalid ROCm device ordinal in `{s}`"),
+                    }
+                })?;
+                Ok(Self::Rocm(burn_rocm::RocmDevice::new(n)))
+            }
+            other => Err(BurnBackendError::DeviceUnavailable {
+                requested: other.to_owned(),
+                reason: format!(
+                    "unknown Burn device label `{other}`; supported under rocm feature: rocm:N"
+                ),
+            }),
+        }
+    }
+
+    #[cfg(all(not(any(feature = "cuda", feature = "rocm")), feature = "wgpu"))]
     pub fn try_build_device(label: &str) -> Result<Self, BurnBackendError> {
         match label {
             "default" | "wgpu:default" => Ok(Self::Wgpu(burn_wgpu::WgpuDevice::DefaultDevice)),
@@ -145,7 +192,10 @@ impl BurnDevice {
         }
     }
 
-    #[cfg(all(not(any(feature = "cuda", feature = "wgpu")), feature = "flex"))]
+    #[cfg(all(
+        not(any(feature = "cuda", feature = "rocm", feature = "wgpu")),
+        feature = "flex"
+    ))]
     pub fn try_build_device(label: &str) -> Result<Self, BurnBackendError> {
         match label {
             "cpu" | "flex:cpu" => Ok(Self::Flex),
@@ -163,12 +213,20 @@ impl BurnDevice {
         Self::Cuda(burn_cuda::CudaDevice::default())
     }
 
-    #[cfg(feature = "wgpu")]
+    #[cfg(feature = "rocm")]
+    fn active_cpu() -> Self {
+        Self::Rocm(burn_rocm::RocmDevice::default())
+    }
+
+    #[cfg(all(not(any(feature = "cuda", feature = "rocm")), feature = "wgpu"))]
     fn active_cpu() -> Self {
         Self::Wgpu(burn_wgpu::WgpuDevice::DefaultDevice)
     }
 
-    #[cfg(all(not(any(feature = "cuda", feature = "wgpu")), feature = "flex"))]
+    #[cfg(all(
+        not(any(feature = "cuda", feature = "rocm", feature = "wgpu")),
+        feature = "flex"
+    ))]
     fn active_cpu() -> Self {
         Self::Flex
     }
@@ -187,6 +245,20 @@ fn cuda_device_label(device: &burn_cuda::CudaDevice) -> &'static str {
         2 => "cuda:2",
         3 => "cuda:3",
         _ => "cuda:0",
+    }
+}
+
+/// Canonical short label for a [`burn_rocm::RocmDevice`].
+#[cfg(feature = "rocm")]
+fn rocm_device_label(device: &burn_rocm::RocmDevice) -> &'static str {
+    // RocmDevice is a struct { pub index: usize }. Ordinal 1+
+    // is dynamic; return the first label for now.
+    match device.index {
+        0 => "rocm:0",
+        1 => "rocm:1",
+        2 => "rocm:2",
+        3 => "rocm:3",
+        _ => "rocm:0",
     }
 }
 
@@ -222,9 +294,14 @@ mod tests {
         let device = BurnDevice::default_device();
         #[cfg(feature = "cuda")]
         assert_eq!(device.label(), "cuda:0");
+        #[cfg(feature = "rocm")]
+        assert_eq!(device.label(), "rocm:0");
         #[cfg(feature = "wgpu")]
         assert_eq!(device.label(), "wgpu:default");
-        #[cfg(all(not(any(feature = "cuda", feature = "wgpu")), feature = "flex"))]
+        #[cfg(all(
+            not(any(feature = "cuda", feature = "rocm", feature = "wgpu")),
+            feature = "flex"
+        ))]
         assert_eq!(device.label(), "flex:cpu");
     }
 
@@ -243,6 +320,21 @@ mod tests {
         assert!(err.to_string().contains("cuda"));
     }
 
+    #[cfg(feature = "rocm")]
+    #[test]
+    fn rocm_label_mappings() {
+        assert_eq!(BurnDevice::new("rocm:0").label(), "rocm:0");
+        assert_eq!(BurnDevice::new("0").label(), "rocm:0");
+    }
+
+    #[cfg(feature = "rocm")]
+    #[test]
+    fn rocm_try_build_device() {
+        assert!(BurnDevice::try_build_device("rocm:0").is_ok());
+        let err = BurnDevice::try_build_device("gpu").unwrap_err();
+        assert!(err.to_string().contains("rocm"));
+    }
+
     #[cfg(feature = "wgpu")]
     #[test]
     fn wgpu_label_mappings_match_issue_spec() {
@@ -255,9 +347,14 @@ mod tests {
     fn try_build_device_accepts_known_label_and_rejects_unknown() {
         #[cfg(feature = "cuda")]
         assert!(BurnDevice::try_build_device("cuda:0").is_ok());
+        #[cfg(feature = "rocm")]
+        assert!(BurnDevice::try_build_device("rocm:0").is_ok());
         #[cfg(feature = "wgpu")]
         assert!(BurnDevice::try_build_device("default").is_ok());
-        #[cfg(all(not(any(feature = "cuda", feature = "wgpu")), feature = "flex"))]
+        #[cfg(all(
+            not(any(feature = "cuda", feature = "rocm", feature = "wgpu")),
+            feature = "flex"
+        ))]
         assert!(BurnDevice::try_build_device("cpu").is_ok());
 
         let err = BurnDevice::try_build_device("gpu").unwrap_err();
@@ -272,13 +369,20 @@ mod tests {
         assert!(BurnDevice::try_build_device("cuda:1").is_ok());
     }
 
+    #[cfg(feature = "rocm")]
+    #[test]
+    fn try_build_device_accepts_ordinal_labels_rocm() {
+        assert!(BurnDevice::try_build_device("rocm:0").is_ok());
+        assert!(BurnDevice::try_build_device("rocm:1").is_ok());
+    }
+
     #[cfg(feature = "cuda")]
     #[test]
     fn try_build_device_rejects_metal_and_cpu_labels_under_cuda() {
         let err = BurnDevice::try_build_device("metal").unwrap_err();
-        assert!(err.to_string().contains("cuda"));
+        assert!(err.to_string().contains("metal"));
         let err = BurnDevice::try_build_device("cpu").unwrap_err();
-        assert!(err.to_string().contains("cuda"));
+        assert!(err.to_string().contains("cpu"));
     }
 
     #[cfg(feature = "wgpu")]
@@ -295,7 +399,10 @@ mod tests {
         assert!(err.to_string().contains("cpu"));
     }
 
-    #[cfg(all(not(any(feature = "cuda", feature = "wgpu")), feature = "flex"))]
+    #[cfg(all(
+        not(any(feature = "cuda", feature = "rocm", feature = "wgpu")),
+        feature = "flex"
+    ))]
     #[test]
     fn try_build_device_rejects_metal_and_vulkan_labels_under_flex() {
         let err = BurnDevice::try_build_device("metal").unwrap_err();

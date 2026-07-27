@@ -65,6 +65,7 @@ burn-tensor = { version = "0.21", default-features = false, features = ["std"] }
 burn-core = { version = "0.21", default-features = false, features = ["std"] }
 burn-store = { version = "0.21", default-features = false, features = ["std", "safetensors"] }
 burn-cuda = { version = "0.21", default-features = false, features = ["std"] }
+burn-rocm = { version = "0.21", default-features = false, features = ["std"] }
 tokenizers = "0.21"
 image = "0.25"
 tempfile = "3"

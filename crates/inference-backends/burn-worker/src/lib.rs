@@ -36,13 +36,22 @@ mod tests {
             "cuda device label should start with 'cuda:', got {}",
             instance.device_label
         );
+        #[cfg(feature = "rocm")]
+        assert!(
+            instance.device_label.starts_with("rocm:"),
+            "rocm device label should start with 'rocm:', got {}",
+            instance.device_label
+        );
         #[cfg(feature = "wgpu")]
         assert!(
             instance.device_label.starts_with("wgpu:"),
             "wgpu device label should start with 'wgpu:', got {}",
             instance.device_label
         );
-        #[cfg(all(not(any(feature = "cuda", feature = "wgpu")), feature = "flex"))]
+        #[cfg(all(
+            not(any(feature = "cuda", feature = "rocm", feature = "wgpu")),
+            feature = "flex"
+        ))]
         assert_eq!(instance.device_label, "flex:cpu");
     }
 
