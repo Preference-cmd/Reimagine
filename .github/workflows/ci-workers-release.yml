@@ -184,7 +184,7 @@ jobs:
           echo "count=${count}" >> "${GITHUB_OUTPUT}"
 
       - name: Upload flattened workers for downstream jobs
-        uses: actions/upload-artifact@v6
+        uses: actions/upload-artifact@v7
         with:
           name: release-workers
           path: dist/workers/*
@@ -241,7 +241,7 @@ jobs:
           shared-key: worker-release-package
 
       - name: Download worker builds
-        uses: actions/download-artifact@v6
+        uses: actions/download-artifact@v7
         with:
           pattern: release-workers*
           path: dist/workers
@@ -307,7 +307,7 @@ jobs:
           test "${count}" -eq 7 || { echo "Expected 7 packages (wgpu×3 + flex×2 + cuda×2), got ${count}"; exit 1; }
 
       - name: Upload packages
-        uses: actions/upload-artifact@v6
+        uses: actions/upload-artifact@v7
         with:
           name: release-packages
           path: dist/packages/*
@@ -374,7 +374,7 @@ jobs:
           shared-key: worker-release-sign
 
       - name: Download packages
-        uses: actions/download-artifact@v6
+        uses: actions/download-artifact@v7
         with:
           pattern: release-packages
           path: dist/packages
@@ -442,7 +442,7 @@ jobs:
           set -x
 
       - name: Upload signed catalog
-        uses: actions/upload-artifact@v6
+        uses: actions/upload-artifact@v7
         with:
           name: signed-catalog
           path: dist/catalog/**
@@ -466,7 +466,7 @@ jobs:
       deployments: write
     steps:
       - name: Download signed catalog
-        uses: actions/download-artifact@v6
+        uses: actions/download-artifact@v7
         with:
           pattern: signed-catalog
           path: dist/signed

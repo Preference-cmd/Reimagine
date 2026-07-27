@@ -252,7 +252,7 @@ jobs:
 
       - name: Upload non-release worker build
         if: matrix.backend != 'rocm'
-        uses: actions/upload-artifact@v6
+        uses: actions/upload-artifact@v7
         with:
           name: ${{ steps.stage.outputs.artifact_name }}
           path: ${{ steps.stage.outputs.path }}
@@ -293,7 +293,7 @@ jobs:
       attestations: write
     steps:
       - name: Download worker builds
-        uses: actions/download-artifact@v6
+        uses: actions/download-artifact@v7
         with:
           pattern: worker-*
           path: dist/workers
@@ -354,7 +354,7 @@ jobs:
           env-vars: WORKER_BACKEND
 
       - name: Download worker build
-        uses: actions/download-artifact@v6
+        uses: actions/download-artifact@v7
         with:
           pattern: worker-${{ matrix.backend }}-*
           path: dist/workers
@@ -411,7 +411,7 @@ jobs:
           echo "Packaged ${binary_path} → ${package_path}"
 
       - name: Upload release package
-        uses: actions/upload-artifact@v6
+        uses: actions/upload-artifact@v7
         with:
           name: package-${{ matrix.backend }}-${{ runner.os }}-${{ runner.arch }}
           path: dist/packages/*
@@ -442,7 +442,7 @@ jobs:
           WORKER_BACKEND: catalog
 
       - name: Download all packages
-        uses: actions/download-artifact@v6
+        uses: actions/download-artifact@v7
         with:
           pattern: package-*
           path: dist/packages
@@ -508,7 +508,7 @@ jobs:
             "${package_args[@]}"
 
       - name: Upload catalog artifact
-        uses: actions/upload-artifact@v6
+        uses: actions/upload-artifact@v7
         with:
           name: catalog-dry-run
           path: dist/catalog/**
