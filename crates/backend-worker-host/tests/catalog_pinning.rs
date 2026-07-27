@@ -30,7 +30,9 @@ async fn setup_test_catalog(
     // signing, and re-signing internally.
     let dir = tempfile::tempdir().expect("temp dir");
     let params = testing::PackageFixtureParams {
-        target: testing::TufMetadataParams::default().targets_version.to_string(),
+        target: testing::TufMetadataParams::default()
+            .targets_version
+            .to_string(),
         ..testing::PackageFixtureParams::default()
     };
     let catalog = testing::generate_full_catalog(
@@ -160,11 +162,7 @@ async fn redirect_to_unversioned_tag_is_rejected() {
     let client = CatalogClient::new(format!("{server_base}/latest"), filter);
 
     let result = client
-        .fetch_catalog(
-            &fixtures_root_minimal(),
-            &HashMap::new(),
-            0,
-        )
+        .fetch_catalog(&fixtures_root_minimal(), &HashMap::new(), 0)
         .await;
 
     match result {
@@ -200,19 +198,31 @@ fn fixtures_root_minimal() -> tuf::RootMetadata {
         roles: HashMap::from([
             (
                 "root".to_string(),
-                tuf::RoleConfig { keyids: vec![key_id.clone()], threshold: 1 },
+                tuf::RoleConfig {
+                    keyids: vec![key_id.clone()],
+                    threshold: 1,
+                },
             ),
             (
                 "targets".to_string(),
-                tuf::RoleConfig { keyids: vec![key_id.clone()], threshold: 1 },
+                tuf::RoleConfig {
+                    keyids: vec![key_id.clone()],
+                    threshold: 1,
+                },
             ),
             (
                 "snapshot".to_string(),
-                tuf::RoleConfig { keyids: vec![key_id.clone()], threshold: 1 },
+                tuf::RoleConfig {
+                    keyids: vec![key_id.clone()],
+                    threshold: 1,
+                },
             ),
             (
                 "timestamp".to_string(),
-                tuf::RoleConfig { keyids: vec![key_id.clone()], threshold: 1 },
+                tuf::RoleConfig {
+                    keyids: vec![key_id.clone()],
+                    threshold: 1,
+                },
             ),
         ]),
     };

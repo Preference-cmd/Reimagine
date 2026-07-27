@@ -37,8 +37,8 @@ use std::path::PathBuf;
 use clap::Parser;
 
 use reimagine_backend_worker_host::catalog::builder::{
-    build_catalog, verify_catalog, write_catalog, CatalogParams, EnvSigningKeyProvider,
-    OnlineSigningRole, SigningKeyProvider, TestSigningKey,
+    CatalogParams, EnvSigningKeyProvider, OnlineSigningRole, SigningKeyProvider, TestSigningKey,
+    build_catalog, verify_catalog, write_catalog,
 };
 use reimagine_backend_worker_host::catalog::tuf::{RootMetadata, TargetDesc};
 use sha2::{Digest, Sha256};
@@ -92,12 +92,12 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         std::process::exit(1);
     }
     let root_bytes = std::fs::read(&root_path)?;
-    let root: RootMetadata = serde_json::from_slice(&root_bytes).map_err(|e| {
-        format!("failed to parse root.json: {e}")
-    })?;
+    let root: RootMetadata = serde_json::from_slice(&root_bytes)
+        .map_err(|e| format!("failed to parse root.json: {e}"))?;
     // Verify root and discard the returned keys (they are re-derived by build_catalog)
     reimagine_backend_worker_host::catalog::tuf::verify_root(&root, None)?;
-    eprintln!("Root v{} verified; {} keys, {} roles",
+    eprintln!(
+        "Root v{} verified; {} keys, {} roles",
         root.signed.version,
         root.signed.keys.len(),
         root.signed.roles.len(),
@@ -106,7 +106,10 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     // ── 2. Discover and validate packages ────────────────────────
     let packages_dir = args.input_dir.join("packages");
     if !packages_dir.exists() {
-        eprintln!("error: packages/ directory not found at `{}`", packages_dir.display());
+        eprintln!(
+            "error: packages/ directory not found at `{}`",
+            packages_dir.display()
+        );
         std::process::exit(1);
     }
 
@@ -126,7 +129,8 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             continue;
         }
 
-        let filename = path.file_name()
+        let filename = path
+            .file_name()
             .unwrap_or_default()
             .to_string_lossy()
             .to_string();
@@ -135,11 +139,10 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         // Build TargetDesc from archive bytes and derived metadata.
         // In production, the signing tool trusts `package.json` inside the
         // archive as authoritative, not the filename alone.
-        let custom = derive_custom_from_archive(&data, &filename)
-            .unwrap_or_else(|| {
-                // Fallback: filename-only metadata (less precise).
-                fallback_custom(&filename)
-            });
+        let custom = derive_custom_from_archive(&data, &filename).unwrap_or_else(|| {
+            // Fallback: filename-only metadata (less precise).
+            fallback_custom(&filename)
+        });
 
         let desc = TargetDesc {
             length: data.len() as u64,
@@ -156,12 +159,15 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     eprintln!("Discovered {count} package(s)");
 
     // ── 3. Load signing keys from environment ────────────────────
-    let targets_provider: Box<dyn SigningKeyProvider> =
-        Box::new(EnvSigningKeyProvider::from_role(OnlineSigningRole::Targets)?);
-    let snapshot_provider: Box<dyn SigningKeyProvider> =
-        Box::new(EnvSigningKeyProvider::from_role(OnlineSigningRole::Snapshot)?);
-    let timestamp_provider: Box<dyn SigningKeyProvider> =
-        Box::new(EnvSigningKeyProvider::from_role(OnlineSigningRole::Timestamp)?);
+    let targets_provider: Box<dyn SigningKeyProvider> = Box::new(EnvSigningKeyProvider::from_role(
+        OnlineSigningRole::Targets,
+    )?);
+    let snapshot_provider: Box<dyn SigningKeyProvider> = Box::new(
+        EnvSigningKeyProvider::from_role(OnlineSigningRole::Snapshot)?,
+    );
+    let timestamp_provider: Box<dyn SigningKeyProvider> = Box::new(
+        EnvSigningKeyProvider::from_role(OnlineSigningRole::Timestamp)?,
+    );
 
     // The root signing key is never loaded from the environment — the existing
     // root is provided on disk. We pass a TestSigningKey as a placeholder for
@@ -204,9 +210,18 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     println!("=== Catalog Sign Summary ===");
     println!("Packages: {}", targets.len());
     println!("Root: v{}", bundle.root.signed.version);
-    println!("Targets: v{} (expires {})", bundle.targets.signed.version, args.targets_expires);
-    println!("Snapshot: v{} (expires {})", bundle.snapshot.signed.version, args.snapshot_expires);
-    println!("Timestamp: v{} (expires {})", bundle.timestamp.signed.version, args.timestamp_expires);
+    println!(
+        "Targets: v{} (expires {})",
+        bundle.targets.signed.version, args.targets_expires
+    );
+    println!(
+        "Snapshot: v{} (expires {})",
+        bundle.snapshot.signed.version, args.snapshot_expires
+    );
+    println!(
+        "Timestamp: v{} (expires {})",
+        bundle.timestamp.signed.version, args.timestamp_expires
+    );
     println!("Output: {}", args.output_dir.display());
 
     Ok(())
@@ -235,7 +250,8 @@ fn fallback_custom(filename: &str) -> serde_json::Value {
     // Split on the first `-` after `burn-worker-`: `{backend}-{target}`
     // Example: `burn-worker-wgpu-aarch64-apple-darwin.tar.gz`
     //       rest = `wgpu-aarch64-apple-darwin`
-    let (backend_part, target) = rest.split_once('-')
+    let (backend_part, target) = rest
+        .split_once('-')
         .map(|(b, t)| (b.to_string(), t.to_string()))
         .unwrap_or_else(|| (rest.to_string(), rest.to_string()));
 

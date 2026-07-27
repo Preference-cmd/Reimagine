@@ -7,9 +7,7 @@ use reimagine_app_host::dto::{
     ModelConvertOutput, ModelDetailDto, ModelDownloadInput, ModelListEntry, ModelListOutput,
     ModelRemoveOutput, format_status,
 };
-use reimagine_app_host::{
-    AcquireAndConvertRequest, BurnCheckpointConverter,
-};
+use reimagine_app_host::{AcquireAndConvertRequest, BurnCheckpointConverter};
 use reimagine_core::model::ModelId;
 use reimagine_model_acquisition::{
     AcquireProvider, AllowPatterns, ModelAcquisitionRequest, OverwritePolicy, RepoId, Revision,
@@ -250,9 +248,11 @@ pub async fn convert_checkpoint(
 
     match target_backend {
         "burn" => {
-            let converter = burn_checkpoint_converter().ok_or_else(|| AxumHostError::BadRequest {
-                message: "burn backend not available (no burn feature enabled in axum-host)".to_string(),
-            })?;
+            let converter =
+                burn_checkpoint_converter().ok_or_else(|| AxumHostError::BadRequest {
+                    message: "burn backend not available (no burn feature enabled in axum-host)"
+                        .to_string(),
+                })?;
             let report = model_service
                 .convert_checkpoint_to_burn(&body.model_id, converter)
                 .await?;
@@ -302,7 +302,10 @@ pub async fn convert_checkpoint(
     feature = "burn-rocm",
 ))]
 mod burn_conv {
-    use reimagine_app_host::{BurnCheckpointConverter, BurnConversionComponent, BurnConversionComponentRole, BurnConversionReport};
+    use reimagine_app_host::{
+        BurnCheckpointConverter, BurnConversionComponent, BurnConversionComponentRole,
+        BurnConversionReport,
+    };
 
     pub(super) struct AxumBurnCheckpointConverter;
 

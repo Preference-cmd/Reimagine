@@ -6,9 +6,8 @@ pub mod state;
 pub mod tuf;
 
 pub use builder::{
-    CatalogBundle, CatalogParams, EnvSigningKeyProvider, OnlineSigningRole,
-    RoleDistinctTestKey, SigningKeyProvider, TestSigningKey, build_catalog, verify_catalog,
-    write_catalog,
+    CatalogBundle, CatalogParams, EnvSigningKeyProvider, OnlineSigningRole, RoleDistinctTestKey,
+    SigningKeyProvider, TestSigningKey, build_catalog, verify_catalog, write_catalog,
 };
 pub use client::{CatalogClient, VerifiedCatalog};
 pub use compatibility::{CatalogTarget, CompatibilityFilter, HostInfo, TargetCustomMetadata};

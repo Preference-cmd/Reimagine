@@ -71,10 +71,18 @@ pub async fn start_server(config: TestCatalogConfig) -> (String, Arc<AppState>) 
     });
 
     let app = axum::Router::new()
-        .route("/releases/download/{*path}", axum::routing::get(asset_handler))
-        .route("/{*path}", axum::routing::get(move |state: axum::extract::State<Arc<AppState>>| async move {
-            latest_handler(state).await
-        }))
+        .route(
+            "/releases/download/{*path}",
+            axum::routing::get(asset_handler),
+        )
+        .route(
+            "/{*path}",
+            axum::routing::get(
+                move |state: axum::extract::State<Arc<AppState>>| async move {
+                    latest_handler(state).await
+                },
+            ),
+        )
         .with_state(state.clone());
 
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0")

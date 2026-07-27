@@ -116,10 +116,12 @@ impl CatalogClient {
         }
 
         // 3. Fetch and verify timestamp.
-        let timestamp_url = pinned.join("timestamp.json").map_err(|_| CatalogError::Network {
-            url: pinned.to_string(),
-            message: "invalid timestamp URL".into(),
-        })?;
+        let timestamp_url = pinned
+            .join("timestamp.json")
+            .map_err(|_| CatalogError::Network {
+                url: pinned.to_string(),
+                message: "invalid timestamp URL".into(),
+            })?;
         let timestamp_bytes = self.fetch_url(&timestamp_url).await?;
         let timestamp: tuf::TimestampMetadata =
             serde_json::from_slice(&timestamp_bytes).map_err(|e| CatalogError::Json {
@@ -129,15 +131,17 @@ impl CatalogClient {
         tuf::verify_timestamp(&timestamp, trusted_root, stored_timestamp_version)?;
 
         // 4. Snapshot.
-        let snapshot_meta = timestamp
-            .signed
-            .meta
-            .get("snapshot.json")
-            .ok_or_else(|| CatalogError::Json {
-                path: None,
-                message: "timestamp missing snapshot.json meta entry".to_string(),
-            })?;
-        let snapshot_url = pinned.join(&format!("{}.snapshot.json", snapshot_meta.version))
+        let snapshot_meta =
+            timestamp
+                .signed
+                .meta
+                .get("snapshot.json")
+                .ok_or_else(|| CatalogError::Json {
+                    path: None,
+                    message: "timestamp missing snapshot.json meta entry".to_string(),
+                })?;
+        let snapshot_url = pinned
+            .join(&format!("{}.snapshot.json", snapshot_meta.version))
             .map_err(|_| CatalogError::Network {
                 url: pinned.to_string(),
                 message: "invalid snapshot URL".into(),
@@ -151,15 +155,17 @@ impl CatalogClient {
         tuf::verify_snapshot(&snapshot, &snapshot_bytes, trusted_root, snapshot_meta)?;
 
         // 5. Targets.
-        let targets_meta = snapshot
-            .signed
-            .meta
-            .get("targets.json")
-            .ok_or_else(|| CatalogError::Json {
-                path: None,
-                message: "snapshot missing targets.json meta entry".to_string(),
-            })?;
-        let targets_url = pinned.join(&format!("{}.targets.json", targets_meta.version))
+        let targets_meta =
+            snapshot
+                .signed
+                .meta
+                .get("targets.json")
+                .ok_or_else(|| CatalogError::Json {
+                    path: None,
+                    message: "snapshot missing targets.json meta entry".to_string(),
+                })?;
+        let targets_url = pinned
+            .join(&format!("{}.targets.json", targets_meta.version))
             .map_err(|_| CatalogError::Network {
                 url: pinned.to_string(),
                 message: "invalid targets URL".into(),
@@ -391,7 +397,9 @@ impl CatalogClient {
             let sha256 = desc
                 .hashes
                 .get("sha256")
-                .filter(|digest| digest.len() == 64 && digest.bytes().all(|b| b.is_ascii_hexdigit()))
+                .filter(|digest| {
+                    digest.len() == 64 && digest.bytes().all(|b| b.is_ascii_hexdigit())
+                })
                 .cloned()
                 .ok_or_else(|| CatalogError::Json {
                     path: Some(std::path::PathBuf::from(path)),
@@ -503,7 +511,10 @@ mod tests {
         };
 
         // Use a concrete pinned base so `build_targets` can construct download URLs.
-        let asset_base = Url::parse("https://github.com/Preference-cmd/Reimagine/releases/download/worker-catalog-v12/").unwrap();
+        let asset_base = Url::parse(
+            "https://github.com/Preference-cmd/Reimagine/releases/download/worker-catalog-v12/",
+        )
+        .unwrap();
         let result = client.build_targets(&metadata, &asset_base).unwrap();
         assert_eq!(result.len(), 1);
         assert_eq!(result[0].path, "burn-worker-darwin-aarch64.tar.gz");
@@ -550,7 +561,10 @@ mod tests {
             signatures: Vec::new(),
         };
 
-        let asset_base = Url::parse("https://github.com/Preference-cmd/Reimagine/releases/download/worker-catalog-v12/").unwrap();
+        let asset_base = Url::parse(
+            "https://github.com/Preference-cmd/Reimagine/releases/download/worker-catalog-v12/",
+        )
+        .unwrap();
         assert!(client.build_targets(&metadata, &asset_base).is_err());
     }
 
@@ -562,7 +576,8 @@ mod tests {
             supported_protocol_range: (1, 3),
         });
         let client = CatalogClient::new(
-            "https://github.com/Preference-cmd/Reimagine/releases/download/worker-catalog-v12/".into(),
+            "https://github.com/Preference-cmd/Reimagine/releases/download/worker-catalog-v12/"
+                .into(),
             filter,
         );
         // The client should recognise the concrete URL as already pinned.

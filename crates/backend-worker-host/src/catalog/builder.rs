@@ -402,13 +402,13 @@ pub fn build_catalog(params: &CatalogParams, targets: &[(String, TargetDesc)]) -
                 ("snapshot", &snapshot_key_id),
                 ("timestamp", &timestamp_key_id),
             ] {
-                let role_cfg = root.signed.roles.get(role).unwrap_or_else(|| {
-                    panic!("supplied root is missing role `{role}`")
-                });
+                let role_cfg = root
+                    .signed
+                    .roles
+                    .get(role)
+                    .unwrap_or_else(|| panic!("supplied root is missing role `{role}`"));
                 if !role_cfg.keyids.contains(key_id) {
-                    panic!(
-                        "supplied root does not authorize key `{key_id}` for role `{role}`"
-                    );
+                    panic!("supplied root does not authorize key `{key_id}` for role `{role}`");
                 }
             }
             root.clone()
@@ -938,16 +938,17 @@ mod tests {
         // Signing round-trip: sign a payload and verify with the public key.
         let payload = b"hello world";
         let sig_hex = provider.sign(payload);
-        let pub_key_bytes = hex::decode(provider.tuf_key().keyval.public.clone())
-            .expect("valid hex");
+        let pub_key_bytes =
+            hex::decode(provider.tuf_key().keyval.public.clone()).expect("valid hex");
         let public = ed25519_dalek::VerifyingKey::from_bytes(
             &pub_key_bytes.try_into().expect("32-byte public key"),
         )
         .expect("valid public key");
         let sig_bytes = hex::decode(&sig_hex).expect("valid hex");
-        let sig = ed25519_dalek::Signature::from_slice(&sig_bytes)
-            .expect("valid signature bytes");
-        public.verify_strict(payload, &sig).expect("signature must verify");
+        let sig = ed25519_dalek::Signature::from_slice(&sig_bytes).expect("valid signature bytes");
+        public
+            .verify_strict(payload, &sig)
+            .expect("signature must verify");
     }
 
     #[test]
@@ -966,7 +967,10 @@ mod tests {
         });
         match result {
             Ok(Some(Err(e))) => {
-                assert!(matches!(e, super::super::error::CatalogSigningKeyError::Missing { .. }));
+                assert!(matches!(
+                    e,
+                    super::super::error::CatalogSigningKeyError::Missing { .. }
+                ));
             }
             Ok(None) => {
                 // env var is set; skip the test cleanly.
@@ -979,12 +983,12 @@ mod tests {
 
     #[test]
     fn env_provider_rejects_empty_hex() {
-        let err = EnvSigningKeyProvider::from_hex(
-            OnlineSigningRole::Snapshot,
-            "   ".to_string(),
-        )
-        .expect_err("empty should fail");
-        assert!(matches!(err, super::super::error::CatalogSigningKeyError::Empty { .. }));
+        let err = EnvSigningKeyProvider::from_hex(OnlineSigningRole::Snapshot, "   ".to_string())
+            .expect_err("empty should fail");
+        assert!(matches!(
+            err,
+            super::super::error::CatalogSigningKeyError::Empty { .. }
+        ));
     }
 
     #[test]
@@ -994,19 +998,22 @@ mod tests {
             "not-hex-at-all".to_string(),
         )
         .expect_err("non-hex should fail");
-        assert!(matches!(err, super::super::error::CatalogSigningKeyError::InvalidHex { .. }));
+        assert!(matches!(
+            err,
+            super::super::error::CatalogSigningKeyError::InvalidHex { .. }
+        ));
     }
 
     #[test]
     fn env_provider_rejects_wrong_length() {
         // 31 bytes of valid hex — wrong length.
         let short = "9d61b19deffd5a60ba844af492ec2cc44449c5697b326919703bac031cae7f";
-        let err = EnvSigningKeyProvider::from_hex(
-            OnlineSigningRole::Targets,
-            short.to_string(),
-        )
-        .expect_err("wrong length should fail");
-        assert!(matches!(err, super::super::error::CatalogSigningKeyError::InvalidLength { .. }));
+        let err = EnvSigningKeyProvider::from_hex(OnlineSigningRole::Targets, short.to_string())
+            .expect_err("wrong length should fail");
+        assert!(matches!(
+            err,
+            super::super::error::CatalogSigningKeyError::InvalidLength { .. }
+        ));
     }
 
     #[test]

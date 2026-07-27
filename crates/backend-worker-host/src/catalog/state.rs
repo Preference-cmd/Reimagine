@@ -68,9 +68,17 @@ impl fmt::Display for TrustedStateError {
                 write!(f, "I/O error on `{}`: {}", path.display(), message)
             }
             Self::Parse { path, message } => {
-                write!(f, "failed to parse trusted state at `{}`: {}", path.display(), message)
+                write!(
+                    f,
+                    "failed to parse trusted state at `{}`: {}",
+                    path.display(),
+                    message
+                )
             }
-            Self::RootKeysMismatch { missing, unexpected } => {
+            Self::RootKeysMismatch {
+                missing,
+                unexpected,
+            } => {
                 write!(
                     f,
                     "stored root keys disagree with derived keys from root metadata: \
@@ -130,10 +138,11 @@ impl TrustedCatalogState {
             })?;
 
         // Re-derive keys from stored root and compare.
-        let derived = super::tuf::verify_root(&state.root, None)
-            .map_err(|e: CatalogError| TrustedStateError::RootVerification {
+        let derived = super::tuf::verify_root(&state.root, None).map_err(|e: CatalogError| {
+            TrustedStateError::RootVerification {
                 message: e.to_string(),
-            })?;
+            }
+        })?;
         let mut missing = Vec::new();
         for id in state.root_keys.keys() {
             if !derived.contains_key(id) {
@@ -147,7 +156,10 @@ impl TrustedCatalogState {
             }
         }
         if !missing.is_empty() || !unexpected.is_empty() {
-            return Err(TrustedStateError::RootKeysMismatch { missing, unexpected });
+            return Err(TrustedStateError::RootKeysMismatch {
+                missing,
+                unexpected,
+            });
         }
         Ok(state)
     }
@@ -197,9 +209,7 @@ impl TrustedCatalogState {
 ///
 /// Convenience wrapper that maps [`TrustedStateError`] to the unified
 /// catalog error type so callers can use a single error path.
-pub fn load_trusted_state(
-    path: &Path,
-) -> Result<TrustedCatalogState, CatalogError> {
+pub fn load_trusted_state(path: &Path) -> Result<TrustedCatalogState, CatalogError> {
     TrustedCatalogState::load(path).map_err(|e| CatalogError::State {
         path: path.to_path_buf(),
         message: e.to_string(),
@@ -207,10 +217,7 @@ pub fn load_trusted_state(
 }
 
 /// Save the state to the canonical state file.
-pub fn save_trusted_state(
-    state: &TrustedCatalogState,
-    path: &Path,
-) -> Result<(), CatalogError> {
+pub fn save_trusted_state(state: &TrustedCatalogState, path: &Path) -> Result<(), CatalogError> {
     state.save(path).map_err(|e| CatalogError::State {
         path: path.to_path_buf(),
         message: e.to_string(),
@@ -226,9 +233,12 @@ mod tests {
 
     fn make_root() -> (RootMetadata, HashMap<String, TufKey>) {
         let root_key = TestSigningKey::new();
-        let targets_key = RoleDistinctTestKey::new(crate::catalog::builder::OnlineSigningRole::Targets);
-        let snapshot_key = RoleDistinctTestKey::new(crate::catalog::builder::OnlineSigningRole::Snapshot);
-        let timestamp_key = RoleDistinctTestKey::new(crate::catalog::builder::OnlineSigningRole::Timestamp);
+        let targets_key =
+            RoleDistinctTestKey::new(crate::catalog::builder::OnlineSigningRole::Targets);
+        let snapshot_key =
+            RoleDistinctTestKey::new(crate::catalog::builder::OnlineSigningRole::Snapshot);
+        let timestamp_key =
+            RoleDistinctTestKey::new(crate::catalog::builder::OnlineSigningRole::Timestamp);
 
         let mut keys = HashMap::new();
         keys.insert(root_key.key_id(), root_key.tuf_key());
@@ -242,28 +252,39 @@ mod tests {
             expires: "2999-12-31T23:59:59Z".to_string(),
             keys: keys.clone(),
             roles: HashMap::from([
-                ("root".to_string(), RoleConfig {
-                    keyids: vec![root_key.key_id()],
-                    threshold: 1,
-                }),
-                ("targets".to_string(), RoleConfig {
-                    keyids: vec![root_key.key_id()],
-                    threshold: 1,
-                }),
-                ("snapshot".to_string(), RoleConfig {
-                    keyids: vec![root_key.key_id()],
-                    threshold: 1,
-                }),
-                ("timestamp".to_string(), RoleConfig {
-                    keyids: vec![root_key.key_id()],
-                    threshold: 1,
-                }),
+                (
+                    "root".to_string(),
+                    RoleConfig {
+                        keyids: vec![root_key.key_id()],
+                        threshold: 1,
+                    },
+                ),
+                (
+                    "targets".to_string(),
+                    RoleConfig {
+                        keyids: vec![root_key.key_id()],
+                        threshold: 1,
+                    },
+                ),
+                (
+                    "snapshot".to_string(),
+                    RoleConfig {
+                        keyids: vec![root_key.key_id()],
+                        threshold: 1,
+                    },
+                ),
+                (
+                    "timestamp".to_string(),
+                    RoleConfig {
+                        keyids: vec![root_key.key_id()],
+                        threshold: 1,
+                    },
+                ),
             ]),
         };
         // Sign the root payload with the root key
-        let root_payload = serde_json::to_vec(
-            &serde_json::to_value(&root_signed).unwrap()
-        ).unwrap();
+        let root_payload =
+            serde_json::to_vec(&serde_json::to_value(&root_signed).unwrap()).unwrap();
         let sig = root_key.sign(&root_payload);
 
         let root = RootMetadata {

@@ -35,15 +35,28 @@ impl fmt::Display for CatalogSigningKeyError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             Self::Missing { role, env_var } => {
-                write!(f, "TUF signing key for role `{role}` is missing: env var `{env_var}` is not set")
+                write!(
+                    f,
+                    "TUF signing key for role `{role}` is missing: env var `{env_var}` is not set"
+                )
             }
             Self::Empty { role, env_var } => {
-                write!(f, "TUF signing key for role `{role}` is empty: env var `{env_var}` has no value")
+                write!(
+                    f,
+                    "TUF signing key for role `{role}` is empty: env var `{env_var}` has no value"
+                )
             }
             Self::InvalidHex { role, env_var } => {
-                write!(f, "TUF signing key for role `{role}` from env var `{env_var}` is not valid hex")
+                write!(
+                    f,
+                    "TUF signing key for role `{role}` from env var `{env_var}` is not valid hex"
+                )
             }
-            Self::InvalidLength { role, env_var, length } => write!(
+            Self::InvalidLength {
+                role,
+                env_var,
+                length,
+            } => write!(
                 f,
                 "TUF signing key for role `{role}` from env var `{env_var}` has invalid length {length} bytes; expected exactly 32 bytes for an Ed25519 seed"
             ),
@@ -222,7 +235,12 @@ impl fmt::Display for CatalogError {
                 write!(f, "{role} references unknown key `{key_id}`")
             }
             Self::State { path, message } => {
-                write!(f, "trusted state error at `{}`: {}", path.display(), message)
+                write!(
+                    f,
+                    "trusted state error at `{}`: {}",
+                    path.display(),
+                    message
+                )
             }
             Self::Discovery { url, message } => {
                 write!(f, "catalog discovery failed for `{url}`: {message}")
