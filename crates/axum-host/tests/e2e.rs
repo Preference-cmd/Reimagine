@@ -146,7 +146,7 @@ fn manifest_with_model(model_id: &ModelId, filename: &str) -> ModelManifest {
         ModelVariant::new("sdxl"),
         vec![ModelRole::CheckpointBundle],
         ModelSource::relative(ModelRoot::base_models().id().clone(), filename),
-        ModelFormat::Safetensors,
+        ModelFormat::SafeTensors,
     )
     .with_source_status(ModelSourceStatus::Available);
     ModelManifest::new()

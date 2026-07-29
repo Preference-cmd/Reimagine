@@ -92,7 +92,7 @@ async fn refresh_fails_when_relative_root_is_not_in_manifest() {
         ModelVariant::new("sdxl"),
         vec![ModelRole::CheckpointBundle],
         ModelSource::relative(ModelRootId::new("external"), "demo.safetensors"),
-        ModelFormat::Safetensors,
+        ModelFormat::SafeTensors,
     );
     let verifier = ModelFingerprintVerifier::new(&manifest, base.join("models"));
 
@@ -117,7 +117,7 @@ fn sample_descriptor() -> ModelDescriptor {
             ModelRootId::new("base"),
             "checkpoints/demo-model.safetensors",
         ),
-        ModelFormat::Safetensors,
+        ModelFormat::SafeTensors,
     )
 }
 

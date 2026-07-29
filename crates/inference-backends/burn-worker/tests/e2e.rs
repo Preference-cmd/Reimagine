@@ -396,7 +396,7 @@ async fn axum_workflow_reaches_png_through_process_backed_worker() {
                 ModelRootId::new("base"),
                 format!("tiny-sdxl-burn/{name}/model.safetensors"),
             ),
-            ModelFormat::Safetensors,
+            ModelFormat::SafeTensors,
         )
         .with_metadata("component", name)
         .with_metadata("backend", "burn")
@@ -418,7 +418,7 @@ async fn axum_workflow_reaches_png_through_process_backed_worker() {
             ModelRootId::new("base"),
             "tiny-sdxl-burn/diffusion/model.safetensors",
         ),
-        ModelFormat::Safetensors,
+        ModelFormat::SafeTensors,
     )
     .with_source_status(ModelSourceStatus::Available)
     .with_components(vec![

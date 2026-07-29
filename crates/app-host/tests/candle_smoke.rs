@@ -44,7 +44,7 @@ fn manifest_with_model() -> ModelManifest {
         reimagine_core::model::ModelVariant::new("sdxl"),
         vec![ModelRole::CheckpointBundle],
         ModelSource::relative(ModelRoot::base_models().id().clone(), CHECKPOINT_FILENAME),
-        ModelFormat::Safetensors,
+        ModelFormat::SafeTensors,
     )
     .with_source_status(ModelSourceStatus::Available);
     ModelManifest::new()

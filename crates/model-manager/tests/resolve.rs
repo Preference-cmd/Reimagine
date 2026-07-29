@@ -35,7 +35,7 @@ async fn successful_resolve_returns_readiness_info_and_descriptor() {
     assert_eq!(info.model_series().as_str(), "stable_diffusion");
     assert_eq!(info.variant().as_str(), "sdxl");
     assert_eq!(info.roles(), &[ModelRole::CheckpointBundle]);
-    assert_eq!(info.format(), ModelFormat::Safetensors);
+    assert_eq!(info.format(), ModelFormat::SafeTensors);
     assert_eq!(info.source_status(), ModelSourceStatus::Available);
     assert!(info.source_available());
 
@@ -258,7 +258,7 @@ fn sample_descriptor(id: &str) -> ModelDescriptor {
             ModelRootId::new("base"),
             "checkpoints/demo-model.safetensors",
         ),
-        ModelFormat::Safetensors,
+        ModelFormat::SafeTensors,
     )
 }
 
@@ -277,7 +277,7 @@ fn split_sdxl_descriptor(id: &str) -> ModelDescriptor {
             ModelRootId::new("base"),
             "sdxl-base-1.0/manifest.safetensors",
         ),
-        ModelFormat::Safetensors,
+        ModelFormat::SafeTensors,
     )
     .with_source_status(ModelSourceStatus::Available)
     .with_size_bytes(7)
@@ -290,7 +290,7 @@ fn split_sdxl_descriptor(id: &str) -> ModelDescriptor {
                 ModelRootId::new("base"),
                 "sdxl-base-1.0/unet/model.safetensors",
             ),
-            ModelFormat::Safetensors,
+            ModelFormat::SafeTensors,
         )
         .with_metadata("component", "unet"),
     )
@@ -301,7 +301,7 @@ fn split_sdxl_descriptor(id: &str) -> ModelDescriptor {
                 ModelRootId::new("base"),
                 "sdxl-base-1.0/text_encoder/model.safetensors",
             ),
-            ModelFormat::Safetensors,
+            ModelFormat::SafeTensors,
         )
         .with_metadata("component", "clip_l"),
     )
@@ -312,7 +312,7 @@ fn split_sdxl_descriptor(id: &str) -> ModelDescriptor {
                 ModelRootId::new("base"),
                 "sdxl-base-1.0/text_encoder_2/model.safetensors",
             ),
-            ModelFormat::Safetensors,
+            ModelFormat::SafeTensors,
         )
         .with_metadata("component", "clip_g"),
     )
@@ -323,7 +323,7 @@ fn split_sdxl_descriptor(id: &str) -> ModelDescriptor {
                 ModelRootId::new("base"),
                 "sdxl-base-1.0/vae/model.safetensors",
             ),
-            ModelFormat::Safetensors,
+            ModelFormat::SafeTensors,
         )
         .with_metadata("component", "vae"),
     )
@@ -455,7 +455,7 @@ async fn split_descriptor_reports_duplicate_component_metadata() {
                         ModelRootId::new("base"),
                         "sdxl-base-1.0/text_encoder_dup/model.safetensors",
                     ),
-                    ModelFormat::Safetensors,
+                    ModelFormat::SafeTensors,
                 )
                 .with_metadata("component", "clip_l"),
             ),
@@ -653,7 +653,7 @@ async fn resolver_emits_source_path_invalid_for_malformed_absolute_component_pat
             ModelRootId::new("base"),
             "sdxl-base-1.0/manifest.safetensors",
         ),
-        ModelFormat::Safetensors,
+        ModelFormat::SafeTensors,
     )
     .with_source_status(ModelSourceStatus::Available)
     .with_size_bytes(7)
@@ -663,7 +663,7 @@ async fn resolver_emits_source_path_invalid_for_malformed_absolute_component_pat
         ModelComponentSource::new(
             ModelRole::DiffusionModel,
             ModelSource::absolute("relative/path".to_owned()),
-            ModelFormat::Safetensors,
+            ModelFormat::SafeTensors,
         )
         .with_metadata("component", "unet"),
     )
@@ -671,7 +671,7 @@ async fn resolver_emits_source_path_invalid_for_malformed_absolute_component_pat
         ModelComponentSource::new(
             ModelRole::TextEncoder,
             ModelSource::absolute(String::new()),
-            ModelFormat::Safetensors,
+            ModelFormat::SafeTensors,
         )
         .with_metadata("component", "clip_l"),
     );

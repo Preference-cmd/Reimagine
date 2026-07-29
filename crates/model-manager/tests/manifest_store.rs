@@ -132,7 +132,7 @@ fn sample_descriptor() -> ModelDescriptor {
         ModelVariant::new("sdxl"),
         vec![ModelRole::CheckpointBundle, ModelRole::DiffusionModel],
         ModelSource::relative(ModelRootId::new("base"), "checkpoints/demo.safetensors"),
-        ModelFormat::Safetensors,
+        ModelFormat::SafeTensors,
     )
 }
 

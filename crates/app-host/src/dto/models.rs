@@ -228,7 +228,7 @@ mod tests {
                 reimagine_model_manager::ModelRootId::new("base"),
                 format!("models/{id}.safetensors"),
             ),
-            ModelFormat::Safetensors,
+            ModelFormat::SafeTensors,
         )
         .with_size_bytes(7_456_123_456)
         .with_source_status(reimagine_model_manager::ModelSourceStatus::Available)
@@ -287,7 +287,7 @@ mod tests {
                 reimagine_model_manager::ModelRootId::new("base"),
                 "models/converted/src_id/fp/sdxl",
             ),
-            ModelFormat::Safetensors,
+            ModelFormat::SafeTensors,
         )
         .with_size_bytes(0)
         .with_source_status(reimagine_model_manager::ModelSourceStatus::Available);
@@ -320,7 +320,7 @@ mod tests {
                 reimagine_model_manager::ModelRootId::new("base"),
                 "nowhere.safetensors",
             ),
-            ModelFormat::Safetensors,
+            ModelFormat::SafeTensors,
         );
         let dto: ModelInfoDto = minimal.into();
         assert_eq!(dto.display_name, "Test Series Test Variant");
@@ -346,7 +346,7 @@ mod tests {
                     reimagine_model_manager::ModelRootId::new("base"),
                     "test.safetensors",
                 ),
-                ModelFormat::Safetensors,
+                ModelFormat::SafeTensors,
             )
             .with_source_status(status);
             let dto: ModelInfoDto = descriptor.into();

@@ -24,7 +24,7 @@ fn sdxl_manifest_example_roundtrips_through_documented_json_shape() {
                     ModelRootId::new("base"),
                     "checkpoints/sdxl_base_1.0.safetensors",
                 ),
-                ModelFormat::Safetensors,
+                ModelFormat::SafeTensors,
             )
             .with_source_status(ModelSourceStatus::Available)
             .with_size_bytes(6_938_078_336)
@@ -96,7 +96,7 @@ fn model_series_config_scan_config_and_rule_shape_are_serializable() {
         .with_extension("safetensors")
         .with_role(ModelRole::CheckpointBundle)
         .with_role(ModelRole::DiffusionModel)
-        .with_format(ModelFormat::Safetensors),
+        .with_format(ModelFormat::SafeTensors),
     );
     let scan = ScanConfig::default()
         .with_recursive(true)
@@ -162,7 +162,7 @@ fn split_sdxl_descriptor_with_components_roundtrips_through_documented_json_shap
             ModelRootId::new("base"),
             "sdxl-base-1.0/manifest.safetensors",
         ),
-        ModelFormat::Safetensors,
+        ModelFormat::SafeTensors,
     )
     .with_source_status(ModelSourceStatus::Available)
     .with_component(
@@ -172,7 +172,7 @@ fn split_sdxl_descriptor_with_components_roundtrips_through_documented_json_shap
                 ModelRootId::new("base"),
                 "sdxl-base-1.0/unet/model.safetensors",
             ),
-            ModelFormat::Safetensors,
+            ModelFormat::SafeTensors,
         )
         .with_metadata("component", "unet"),
     )
@@ -183,7 +183,7 @@ fn split_sdxl_descriptor_with_components_roundtrips_through_documented_json_shap
                 ModelRootId::new("base"),
                 "sdxl-base-1.0/text_encoder/model.safetensors",
             ),
-            ModelFormat::Safetensors,
+            ModelFormat::SafeTensors,
         )
         .with_metadata("component", "clip_l"),
     )
@@ -194,7 +194,7 @@ fn split_sdxl_descriptor_with_components_roundtrips_through_documented_json_shap
                 ModelRootId::new("base"),
                 "sdxl-base-1.0/text_encoder_2/model.safetensors",
             ),
-            ModelFormat::Safetensors,
+            ModelFormat::SafeTensors,
         )
         .with_metadata("component", "clip_g"),
     )
@@ -205,7 +205,7 @@ fn split_sdxl_descriptor_with_components_roundtrips_through_documented_json_shap
                 ModelRootId::new("base"),
                 "sdxl-base-1.0/vae/model.safetensors",
             ),
-            ModelFormat::Safetensors,
+            ModelFormat::SafeTensors,
         )
         .with_metadata("component", "vae"),
     );
@@ -246,7 +246,7 @@ fn split_sdxl_descriptor_with_components_roundtrips_through_documented_json_shap
     );
     assert_eq!(
         decoded_descriptor.components()[0].format(),
-        ModelFormat::Safetensors
+        ModelFormat::SafeTensors
     );
     assert_eq!(
         decoded_descriptor.components()[0]
@@ -262,7 +262,7 @@ fn model_component_source_serde_shape() {
     let component = ModelComponentSource::new(
         ModelRole::TextEncoder,
         ModelSource::relative(ModelRootId::new("base"), "clip_l.safetensors"),
-        ModelFormat::Safetensors,
+        ModelFormat::SafeTensors,
     )
     .with_metadata("component", "clip_l");
 
@@ -286,7 +286,7 @@ fn descriptor_without_components_keeps_legacy_json_shape() {
         ModelVariant::new("sd15"),
         vec![ModelRole::CheckpointBundle],
         ModelSource::relative(ModelRootId::new("base"), "sd15.safetensors"),
-        ModelFormat::Safetensors,
+        ModelFormat::SafeTensors,
     )
     .with_source_status(ModelSourceStatus::Available);
 

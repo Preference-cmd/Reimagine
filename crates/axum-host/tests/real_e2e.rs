@@ -70,14 +70,14 @@ fn build_manifest(split_dir: &std::path::Path) -> ModelManifest {
             ModelRole::Vae,
         ],
         ModelSource::absolute(unet.to_string_lossy()),
-        ModelFormat::Safetensors,
+        ModelFormat::SafeTensors,
     )
     .with_source_status(ModelSourceStatus::Available)
     .with_component(
         ModelComponentSource::new(
             ModelRole::DiffusionModel,
             ModelSource::absolute(unet.to_string_lossy()),
-            ModelFormat::Safetensors,
+            ModelFormat::SafeTensors,
         )
         .with_metadata("component", "unet"),
     )
@@ -85,7 +85,7 @@ fn build_manifest(split_dir: &std::path::Path) -> ModelManifest {
         ModelComponentSource::new(
             ModelRole::TextEncoder,
             ModelSource::absolute(clip_l.to_string_lossy()),
-            ModelFormat::Safetensors,
+            ModelFormat::SafeTensors,
         )
         .with_metadata("component", "clip_l"),
     )
@@ -93,7 +93,7 @@ fn build_manifest(split_dir: &std::path::Path) -> ModelManifest {
         ModelComponentSource::new(
             ModelRole::TextEncoder,
             ModelSource::absolute(clip_g.to_string_lossy()),
-            ModelFormat::Safetensors,
+            ModelFormat::SafeTensors,
         )
         .with_metadata("component", "clip_g"),
     )
@@ -101,7 +101,7 @@ fn build_manifest(split_dir: &std::path::Path) -> ModelManifest {
         ModelComponentSource::new(
             ModelRole::Vae,
             ModelSource::absolute(vae.to_string_lossy()),
-            ModelFormat::Safetensors,
+            ModelFormat::SafeTensors,
         )
         .with_metadata("component", "vae"),
     );

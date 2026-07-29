@@ -171,9 +171,9 @@ fn extension(path: &Path) -> String {
 
 fn format_for_extension(extension: &str) -> ModelFormat {
     match extension {
-        "safetensors" => ModelFormat::Safetensors,
+        "safetensors" => ModelFormat::SafeTensors,
         "gguf" => ModelFormat::Gguf,
-        "ckpt" => ModelFormat::Ckpt,
+        "ckpt" => ModelFormat::PyTorch,
         _ => ModelFormat::Unknown,
     }
 }

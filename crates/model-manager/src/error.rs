@@ -28,10 +28,14 @@ impl ModelManagerError {
     fn diagnostic_id(&self) -> String {
         match self {
             Self::ManifestInvalid { path, .. } => {
-                format!("model_manager:{path}:manifest_invalid")
+                format!("model_manager:{}:manifest_invalid", sanitize_id(path))
             }
-            Self::ReadFailed { path, .. } => format!("model_manager:{path}:read_failed"),
-            Self::WriteFailed { path, .. } => format!("model_manager:{path}:write_failed"),
+            Self::ReadFailed { path, .. } => {
+                format!("model_manager:{}:read_failed", sanitize_id(path))
+            }
+            Self::WriteFailed { path, .. } => {
+                format!("model_manager:{}:write_failed", sanitize_id(path))
+            }
         }
     }
 
@@ -84,4 +88,10 @@ impl DiagnosticError for ModelManagerError {
     fn diagnostic_severity(&self) -> DiagnosticSeverity {
         DiagnosticSeverity::Error
     }
+}
+
+/// Sanitize a path for use in a diagnostic ID by replacing path separators
+/// with dashes.
+fn sanitize_id(path: &str) -> String {
+    path.replace(['/', '\\'], "-")
 }

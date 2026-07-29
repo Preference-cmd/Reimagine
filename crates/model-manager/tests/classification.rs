@@ -19,7 +19,7 @@ fn sdxl_config() -> ModelSeriesConfig {
             .with_role(ModelRole::DiffusionModel)
             .with_role(ModelRole::TextEncoder)
             .with_role(ModelRole::Vae)
-            .with_format(ModelFormat::Safetensors),
+            .with_format(ModelFormat::SafeTensors),
         )
         .with_rule(
             ModelSeriesRule::new(
@@ -29,7 +29,7 @@ fn sdxl_config() -> ModelSeriesConfig {
             .with_extension("safetensors")
             .with_filename_pattern("*sd1*")
             .with_role(ModelRole::CheckpointBundle)
-            .with_format(ModelFormat::Safetensors),
+            .with_format(ModelFormat::SafeTensors),
         )
 }
 
@@ -105,7 +105,7 @@ fn extension_match_sets_model_series_variant_roles_format() {
     assert_eq!(result.model_series().as_str(), "stable_diffusion");
     assert_eq!(result.variant().as_str(), "sdxl");
     assert_eq!(result.roles().len(), 4);
-    assert_eq!(result.format(), Some(ModelFormat::Safetensors));
+    assert_eq!(result.format(), Some(ModelFormat::SafeTensors));
 }
 
 #[test]

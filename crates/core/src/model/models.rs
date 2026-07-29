@@ -1,5 +1,43 @@
 use super::ids::ModelId;
 
+/// Canonical, backend-neutral model file format.
+///
+/// This is the single source of truth for model format variants across
+/// the workspace. Both `model-manager` and `inference` re-export this
+/// type rather than defining their own.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, serde::Serialize, serde::Deserialize)]
+pub enum ModelFormat {
+    #[serde(rename = "safetensors")]
+    SafeTensors,
+    #[serde(rename = "gguf")]
+    Gguf,
+    #[serde(rename = "pytorch")]
+    PyTorch,
+    #[serde(rename = "onnx")]
+    Onnx,
+    #[serde(rename = "unknown")]
+    Unknown,
+}
+
+impl ModelFormat {
+    /// Returns `true` when the format is one the runtime can load.
+    pub fn is_supported(self) -> bool {
+        !matches!(self, Self::Unknown)
+    }
+}
+
+impl std::fmt::Display for ModelFormat {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::SafeTensors => f.write_str("SafeTensors"),
+            Self::Gguf => f.write_str("Gguf"),
+            Self::PyTorch => f.write_str("PyTorch"),
+            Self::Onnx => f.write_str("Onnx"),
+            Self::Unknown => f.write_str("Unknown"),
+        }
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Hash, serde::Serialize, serde::Deserialize)]
 pub struct ModelSeries(String);
 

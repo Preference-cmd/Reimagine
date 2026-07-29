@@ -97,7 +97,7 @@ async fn model_service_wraps_manifest_store_and_resolver() {
             ModelRoot::base_models().id().clone(),
             "sdxl-base.safetensors",
         ),
-        ModelFormat::Safetensors,
+        ModelFormat::SafeTensors,
     )
     .with_source_status(ModelSourceStatus::Available);
     let manifest = ModelManifest::new()
@@ -175,7 +175,7 @@ async fn model_service_import_reuses_existing_candle_split_conversion_and_update
             ModelRoot::base_models().id().clone(),
             "checkpoints/sdxl-base.safetensors",
         ),
-        ModelFormat::Safetensors,
+        ModelFormat::SafeTensors,
     )
     .with_source_status(ModelSourceStatus::Available)
     .with_fingerprint(fingerprint);
@@ -239,7 +239,7 @@ async fn model_service_import_failure_does_not_mutate_manifest() {
             ModelRoot::base_models().id().clone(),
             "checkpoints/sdxl-base.safetensors",
         ),
-        ModelFormat::Safetensors,
+        ModelFormat::SafeTensors,
     )
     .with_source_status(ModelSourceStatus::Available)
     .with_fingerprint(Fingerprint::sha256("abc123"));
@@ -289,7 +289,7 @@ async fn model_service_import_original_checkpoint_adds_split_components() {
             ModelRoot::base_models().id().clone(),
             "checkpoints/sdxl-base.safetensors",
         ),
-        ModelFormat::Safetensors,
+        ModelFormat::SafeTensors,
     )
     .with_source_status(ModelSourceStatus::Available)
     .with_fingerprint(Fingerprint::sha256("abc123"));

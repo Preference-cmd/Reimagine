@@ -4,7 +4,7 @@ use std::sync::Arc;
 use reimagine_config::AppPaths;
 use reimagine_core::model::{ModelRef, ModelRole};
 use reimagine_inference::{
-    InferenceError, ModelFormat, ModelResolver, ModelSourceKind, ResolvedInferenceModel,
+    InferenceError, ModelResolver, ModelSourceKind, ResolvedInferenceModel,
     ResolvedInferenceModelSource, ResolvedInferenceModelSourceSet,
 };
 use reimagine_model_manager::ResolvedComponent;
@@ -84,7 +84,7 @@ impl ModelResolver for ModelResolverAdapter {
             descriptor.variant().clone(),
             model_ref.role(),
             source_path,
-            map_model_format(format),
+            format,
         );
 
         let source_set = if descriptor.components().is_empty() {
@@ -103,7 +103,7 @@ impl ModelResolver for ModelResolverAdapter {
                         ModelSourceKind::SplitComponent,
                         component.role(),
                         component.path().to_path_buf(),
-                        map_model_format(component.format()),
+                        component.format(),
                     )
                     .with_metadata(serialize_metadata(component.metadata()))
                 })
@@ -176,22 +176,12 @@ fn serialize_metadata(metadata: &BTreeMap<String, String>) -> String {
         .join(";")
 }
 
-fn map_model_format(format: reimagine_model_manager::ModelFormat) -> ModelFormat {
-    match format {
-        reimagine_model_manager::ModelFormat::Safetensors => ModelFormat::SafeTensors,
-        reimagine_model_manager::ModelFormat::Gguf => ModelFormat::Gguf,
-        reimagine_model_manager::ModelFormat::Ckpt => ModelFormat::PyTorch,
-        reimagine_model_manager::ModelFormat::Unknown => ModelFormat::Other,
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use std::path::PathBuf;
 
     use reimagine_config::AppPaths;
     use reimagine_core::model::{ModelId, ModelRef, ModelRole, ModelSeries, ModelVariant};
-    use reimagine_inference::ModelFormat as InferenceModelFormat;
     use reimagine_model_manager::{
         ModelComponentSource, ModelDescriptor, ModelFormat, ModelManifest, ModelRoot, ModelRootId,
         ModelSource, ModelSourceStatus,
@@ -221,7 +211,7 @@ mod tests {
                 ModelRootId::new("base"),
                 "sdxl-base-1.0/manifest.safetensors",
             ),
-            ModelFormat::Safetensors,
+            ModelFormat::SafeTensors,
         )
         .with_source_status(ModelSourceStatus::Available)
         .with_size_bytes(7)
@@ -233,7 +223,7 @@ mod tests {
                     ModelRootId::new("base"),
                     "sdxl-base-1.0/unet/model.safetensors",
                 ),
-                ModelFormat::Safetensors,
+                ModelFormat::SafeTensors,
             )
             .with_metadata("component", "unet"),
         )
@@ -244,7 +234,7 @@ mod tests {
                     ModelRootId::new("base"),
                     "sdxl-base-1.0/text_encoder/model.safetensors",
                 ),
-                ModelFormat::Safetensors,
+                ModelFormat::SafeTensors,
             )
             .with_metadata("component", "clip_l"),
         )
@@ -255,7 +245,7 @@ mod tests {
                     ModelRootId::new("base"),
                     "sdxl-base-1.0/text_encoder_2/model.safetensors",
                 ),
-                ModelFormat::Safetensors,
+                ModelFormat::SafeTensors,
             )
             .with_metadata("component", "clip_g"),
         )
@@ -266,7 +256,7 @@ mod tests {
                     ModelRootId::new("base"),
                     "sdxl-base-1.0/vae/model.safetensors",
                 ),
-                ModelFormat::Safetensors,
+                ModelFormat::SafeTensors,
             )
             .with_metadata("component", "vae"),
         )
@@ -282,7 +272,7 @@ mod tests {
                 ModelRootId::new("base"),
                 "sdxl-base-1.0/checkpoint.safetensors",
             ),
-            ModelFormat::Safetensors,
+            ModelFormat::SafeTensors,
         )
         .with_source_status(ModelSourceStatus::Available)
         .with_size_bytes(7)
@@ -346,7 +336,7 @@ mod tests {
             .find(|s| s.role() == ModelRole::DiffusionModel)
             .expect("diffusion source");
         assert_eq!(diffusion_source.kind(), ModelSourceKind::SplitComponent);
-        assert_eq!(diffusion_source.format(), InferenceModelFormat::SafeTensors);
+        assert_eq!(diffusion_source.format(), ModelFormat::SafeTensors);
         assert_eq!(diffusion_source.metadata(), Some("component=unet"));
 
         let clip_l_source = source_set
@@ -416,7 +406,7 @@ mod tests {
         assert_eq!(source_set.sources()[0].role(), ModelRole::CheckpointBundle);
         assert_eq!(
             source_set.sources()[0].format(),
-            InferenceModelFormat::SafeTensors
+            ModelFormat::SafeTensors
         );
         assert!(source_set.sources()[0].metadata().is_none());
 

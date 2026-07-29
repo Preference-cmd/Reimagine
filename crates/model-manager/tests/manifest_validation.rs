@@ -65,7 +65,7 @@ async fn duplicate_ids_and_invalid_unknown_descriptor_are_reported() {
                 ModelVariant::new("unknown"),
                 vec![ModelRole::DiffusionModel],
                 ModelSource::absolute(base.join("unknown.safetensors").display().to_string()),
-                ModelFormat::Safetensors,
+                ModelFormat::SafeTensors,
             )
             .with_source_status(ModelSourceStatus::Available),
         );
@@ -102,7 +102,7 @@ async fn unsupported_series_and_variant_are_reported() {
                 ModelVariant::new("totally_not_a_variant"),
                 vec![ModelRole::DiffusionModel],
                 ModelSource::absolute(source_path.display().to_string()),
-                ModelFormat::Safetensors,
+                ModelFormat::SafeTensors,
             )
             .with_source_status(ModelSourceStatus::Available),
         );
@@ -129,7 +129,7 @@ async fn series_config_is_the_supported_series_variant_source() {
                 ModelVariant::new("sd3"),
                 vec![ModelRole::DiffusionModel],
                 ModelSource::absolute(source_path.display().to_string()),
-                ModelFormat::Safetensors,
+                ModelFormat::SafeTensors,
             )
             .with_source_status(ModelSourceStatus::Available),
         );
@@ -161,7 +161,7 @@ async fn empty_series_and_variant_emit_one_descriptor_diagnostic() {
                 ModelVariant::new(""),
                 vec![ModelRole::DiffusionModel],
                 ModelSource::absolute(source_path.display().to_string()),
-                ModelFormat::Safetensors,
+                ModelFormat::SafeTensors,
             )
             .with_source_status(ModelSourceStatus::Available),
         );
@@ -232,7 +232,7 @@ async fn source_status_consistency_and_root_existence_are_reported() {
                     ModelRootId::new("missing-root"),
                     "checkpoints/missing.safetensors",
                 ),
-                ModelFormat::Safetensors,
+                ModelFormat::SafeTensors,
             )
             .with_source_status(ModelSourceStatus::Available),
         )
@@ -243,7 +243,7 @@ async fn source_status_consistency_and_root_existence_are_reported() {
                 ModelVariant::new("sdxl"),
                 vec![ModelRole::DiffusionModel],
                 ModelSource::absolute(base.join("size-mismatch.safetensors").display().to_string()),
-                ModelFormat::Safetensors,
+                ModelFormat::SafeTensors,
             )
             .with_source_status(ModelSourceStatus::Missing)
             .with_size_bytes(100)
@@ -294,7 +294,7 @@ async fn declared_relative_root_missing_on_disk_is_reported() {
                 ModelVariant::new("sdxl"),
                 vec![ModelRole::DiffusionModel],
                 ModelSource::relative(ModelRootId::new("external"), "file.safetensors"),
-                ModelFormat::Safetensors,
+                ModelFormat::SafeTensors,
             )
             .with_source_status(ModelSourceStatus::Missing),
         );
@@ -315,7 +315,7 @@ fn descriptor(id: &str) -> ModelDescriptor {
         ModelVariant::new("sdxl"),
         vec![ModelRole::DiffusionModel],
         ModelSource::relative(ModelRootId::new("base"), "checkpoints/demo.safetensors"),
-        ModelFormat::Safetensors,
+        ModelFormat::SafeTensors,
     )
 }
 
@@ -334,7 +334,7 @@ fn split_sdxl_descriptor(source_status: ModelSourceStatus) -> ModelDescriptor {
             ModelRootId::new("base"),
             "sdxl-base-1.0/manifest.safetensors",
         ),
-        ModelFormat::Safetensors,
+        ModelFormat::SafeTensors,
     )
     .with_source_status(source_status)
     .with_component(
@@ -344,7 +344,7 @@ fn split_sdxl_descriptor(source_status: ModelSourceStatus) -> ModelDescriptor {
                 ModelRootId::new("base"),
                 "sdxl-base-1.0/unet/model.safetensors",
             ),
-            ModelFormat::Safetensors,
+            ModelFormat::SafeTensors,
         )
         .with_metadata("component", "unet"),
     )
@@ -355,7 +355,7 @@ fn split_sdxl_descriptor(source_status: ModelSourceStatus) -> ModelDescriptor {
                 ModelRootId::new("base"),
                 "sdxl-base-1.0/text_encoder/model.safetensors",
             ),
-            ModelFormat::Safetensors,
+            ModelFormat::SafeTensors,
         )
         .with_metadata("component", "clip_l"),
     )
@@ -366,7 +366,7 @@ fn split_sdxl_descriptor(source_status: ModelSourceStatus) -> ModelDescriptor {
                 ModelRootId::new("base"),
                 "sdxl-base-1.0/text_encoder_2/model.safetensors",
             ),
-            ModelFormat::Safetensors,
+            ModelFormat::SafeTensors,
         )
         .with_metadata("component", "clip_g"),
     )
@@ -377,7 +377,7 @@ fn split_sdxl_descriptor(source_status: ModelSourceStatus) -> ModelDescriptor {
                 ModelRootId::new("base"),
                 "sdxl-base-1.0/vae/model.safetensors",
             ),
-            ModelFormat::Safetensors,
+            ModelFormat::SafeTensors,
         )
         .with_metadata("component", "vae"),
     )
@@ -461,14 +461,14 @@ async fn component_with_invalid_absolute_source_path_emits_source_path_invalid()
             ModelRootId::new("base"),
             "sdxl-base-1.0/manifest.safetensors",
         ),
-        ModelFormat::Safetensors,
+        ModelFormat::SafeTensors,
     )
     .with_source_status(ModelSourceStatus::Available)
     .with_component(
         ModelComponentSource::new(
             ModelRole::DiffusionModel,
             ModelSource::absolute("relative/path/model.safetensors".to_owned()),
-            ModelFormat::Safetensors,
+            ModelFormat::SafeTensors,
         )
         .with_metadata("component", "unet"),
     )
@@ -476,7 +476,7 @@ async fn component_with_invalid_absolute_source_path_emits_source_path_invalid()
         ModelComponentSource::new(
             ModelRole::TextEncoder,
             ModelSource::absolute(String::new()),
-            ModelFormat::Safetensors,
+            ModelFormat::SafeTensors,
         )
         .with_metadata("component", "clip_l"),
     );
@@ -520,7 +520,7 @@ async fn component_with_unsupported_format_emits_component_format_unsupported() 
             ModelRootId::new("base"),
             "sdxl-base-1.0/manifest.safetensors",
         ),
-        ModelFormat::Safetensors,
+        ModelFormat::SafeTensors,
     )
     .with_source_status(ModelSourceStatus::Available)
     .with_component(
@@ -566,7 +566,7 @@ async fn duplicate_component_role_metadata_pair_emits_component_duplicate_diagno
             ModelRootId::new("base"),
             "sdxl-base-1.0/manifest.safetensors",
         ),
-        ModelFormat::Safetensors,
+        ModelFormat::SafeTensors,
     )
     .with_source_status(ModelSourceStatus::Unverified)
     .with_component(
@@ -576,7 +576,7 @@ async fn duplicate_component_role_metadata_pair_emits_component_duplicate_diagno
                 ModelRootId::new("base"),
                 "sdxl-base-1.0/text_encoder/model.safetensors",
             ),
-            ModelFormat::Safetensors,
+            ModelFormat::SafeTensors,
         )
         .with_metadata("component", "clip_l"),
     )
@@ -587,7 +587,7 @@ async fn duplicate_component_role_metadata_pair_emits_component_duplicate_diagno
                 ModelRootId::new("base"),
                 "sdxl-base-1.0/text_encoder_dup/model.safetensors",
             ),
-            ModelFormat::Safetensors,
+            ModelFormat::SafeTensors,
         )
         .with_metadata("component", "clip_l"),
     );

@@ -1,19 +1,3 @@
-use serde::{Deserialize, Serialize};
+//! Re-export of the canonical [`ModelFormat`] from `reimagine-core`.
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
-pub enum ModelFormat {
-    #[serde(rename = "safetensors")]
-    Safetensors,
-    #[serde(rename = "gguf")]
-    Gguf,
-    #[serde(rename = "ckpt")]
-    Ckpt,
-    #[serde(rename = "unknown")]
-    Unknown,
-}
-
-impl ModelFormat {
-    pub fn is_supported(self) -> bool {
-        !matches!(self, Self::Unknown)
-    }
-}
+pub use reimagine_core::model::ModelFormat;

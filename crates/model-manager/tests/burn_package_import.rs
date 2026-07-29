@@ -28,7 +28,7 @@ async fn burn_package_report_projects_to_split_sdxl_descriptor() {
             ModelRole::Vae,
         ]
     );
-    assert_eq!(descriptor.format(), ModelFormat::Safetensors);
+    assert_eq!(descriptor.format(), ModelFormat::SafeTensors);
     assert!(matches!(
         descriptor.source(),
         ModelSource::LocalFileRelative { root_id, path }
@@ -220,7 +220,7 @@ fn assert_component(
         })
         .expect("component source should exist");
 
-    assert_eq!(component_source.format(), ModelFormat::Safetensors);
+    assert_eq!(component_source.format(), ModelFormat::SafeTensors);
     assert!(matches!(
         component_source.source(),
         ModelSource::LocalFileRelative { root_id, path: actual }

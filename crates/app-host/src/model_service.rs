@@ -477,7 +477,7 @@ impl ModelService {
             ModelVariant::new("sdxl"),
             vec![ModelRole::CheckpointBundle],
             source,
-            ModelFormat::Safetensors,
+            ModelFormat::SafeTensors,
         )
         .with_source_status(ModelSourceStatus::Available)
         .with_fingerprint(Fingerprint::sha256(fingerprint));
@@ -610,7 +610,7 @@ fn build_burn_component_descriptor(
                     ModelRootId::new("base"),
                     path.to_string_lossy().into_owned(),
                 ),
-                ModelFormat::Safetensors,
+                ModelFormat::SafeTensors,
             )
             .with_metadata("component", comp.role.as_str())
             .with_metadata("converted_layout", "burn_native_component")
@@ -630,7 +630,7 @@ fn build_burn_component_descriptor(
             ModelRootId::new("base"),
             models_dir.to_string_lossy().to_string(),
         ),
-        ModelFormat::Safetensors,
+        ModelFormat::SafeTensors,
     )
     .with_source_status(ModelSourceStatus::Available)
     .with_components(components)
@@ -706,7 +706,7 @@ fn component_source(
     ModelComponentSource::new(
         role,
         ModelSource::relative(ModelRootId::new("base"), path),
-        ModelFormat::Safetensors,
+        ModelFormat::SafeTensors,
     )
     .with_metadata("component", component.metadata_component())
     .with_metadata(

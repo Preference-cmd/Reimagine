@@ -103,7 +103,7 @@ async fn descriptor_from_burn_package_report(
             ModelRole::Vae,
         ],
         ModelSource::relative(ModelRootId::new("base"), primary_path),
-        ModelFormat::Safetensors,
+        ModelFormat::SafeTensors,
     )
     .with_source_status(ModelSourceStatus::Available)
     .with_metadata("backend", TARGET_BACKEND)
@@ -313,7 +313,7 @@ fn component_source(
         ModelComponentSource::new(
             role,
             ModelSource::relative(ModelRootId::new("base"), path),
-            ModelFormat::Safetensors,
+            ModelFormat::SafeTensors,
         ),
         |source, (key, value)| source.with_metadata(key, value),
     )

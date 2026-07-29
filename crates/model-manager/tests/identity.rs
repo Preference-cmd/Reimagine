@@ -37,7 +37,7 @@ fn manual_id_no_conflict() {
         "sdxl",
         vec![ModelRole::CheckpointBundle],
         ModelSource::relative(ModelRootId::new("base"), "checkpoints/model.safetensors"),
-        ModelFormat::Safetensors,
+        ModelFormat::SafeTensors,
     )];
     let policy = IdPolicy::new(&existing);
     let report = policy.validate_manual_id("other-model");
@@ -52,7 +52,7 @@ fn manual_id_conflict_rejected() {
         "sdxl",
         vec![ModelRole::CheckpointBundle],
         ModelSource::relative(ModelRootId::new("base"), "checkpoints/model.safetensors"),
-        ModelFormat::Safetensors,
+        ModelFormat::SafeTensors,
     )];
     let policy = IdPolicy::new(&existing);
     let report = policy.validate_manual_id("my-model");
@@ -183,7 +183,7 @@ fn auto_id_collision_same_fingerprint_resolves_to_same() {
             "sdxl",
             vec![ModelRole::CheckpointBundle],
             source.clone(),
-            ModelFormat::Safetensors,
+            ModelFormat::SafeTensors,
         )
         .with_fingerprint(fp.clone())
         .with_source_status(ModelSourceStatus::Available),
@@ -221,7 +221,7 @@ fn auto_id_collision_different_fingerprint_suffixes_and_diagnostic() {
             "sdxl",
             vec![ModelRole::CheckpointBundle],
             source.clone(),
-            ModelFormat::Safetensors,
+            ModelFormat::SafeTensors,
         )
         .with_fingerprint(test_fingerprint("abc123"))
         .with_source_status(ModelSourceStatus::Available),
@@ -274,7 +274,7 @@ fn auto_id_collision_avoids_taken_suffixed_id() {
         "sdxl",
         vec![ModelRole::CheckpointBundle],
         source.clone(),
-        ModelFormat::Safetensors,
+        ModelFormat::SafeTensors,
     )
     .with_fingerprint(test_fingerprint("first"))
     .with_source_status(ModelSourceStatus::Available);
@@ -297,7 +297,7 @@ fn auto_id_collision_avoids_taken_suffixed_id() {
             "sdxl",
             vec![ModelRole::CheckpointBundle],
             ModelSource::relative(ModelRootId::new("base"), "other/sdxl_model.safetensors"),
-            ModelFormat::Safetensors,
+            ModelFormat::SafeTensors,
         )
         .with_fingerprint(test_fingerprint("third"))
         .with_source_status(ModelSourceStatus::Available),
@@ -356,7 +356,7 @@ fn same_fingerprint_different_source_not_same_identity() {
             "sdxl",
             vec![ModelRole::CheckpointBundle],
             existing_source,
-            ModelFormat::Safetensors,
+            ModelFormat::SafeTensors,
         )
         .with_fingerprint(fp.clone())
         .with_source_status(ModelSourceStatus::Available),
@@ -395,7 +395,7 @@ fn same_fingerprint_same_relative_path_different_root_not_same_identity() {
             "sdxl",
             vec![ModelRole::CheckpointBundle],
             source,
-            ModelFormat::Safetensors,
+            ModelFormat::SafeTensors,
         )
         .with_fingerprint(fp.clone())
         .with_source_status(ModelSourceStatus::Available),

@@ -412,7 +412,7 @@ mod tests {
                 ModelRole::Vae,
             ],
             ModelSource::relative(ModelRootId::new("base"), "test/model.safetensors"),
-            ModelFormat::Safetensors,
+            ModelFormat::SafeTensors,
         )
         .with_source_status(ModelSourceStatus::Available)
         .with_fingerprint(Fingerprint::sha256("abc123"));

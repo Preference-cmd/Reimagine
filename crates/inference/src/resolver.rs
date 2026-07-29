@@ -6,6 +6,7 @@
 
 use std::path::PathBuf;
 
+pub use reimagine_core::model::ModelFormat;
 use reimagine_core::model::{ModelId, ModelRef, ModelRole, ModelSeries, ModelVariant};
 
 use crate::inference_error::InferenceError;
@@ -109,17 +110,6 @@ impl ResolvedInferenceModel {
     pub fn metadata(&self) -> Option<&str> {
         self.metadata.as_deref()
     }
-}
-
-/// Stable, backend-neutral model file format.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, serde::Serialize, serde::Deserialize)]
-#[serde(rename_all = "snake_case")]
-pub enum ModelFormat {
-    SafeTensors,
-    PyTorch,
-    Onnx,
-    Gguf,
-    Other,
 }
 
 /// Model resolver capability.

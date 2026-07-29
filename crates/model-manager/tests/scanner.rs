@@ -252,7 +252,7 @@ async fn manifest_update_policy_only_marks_missing_for_scanned_roots() {
             ModelRootId::new("external"),
             "checkpoints/external.safetensors",
         ),
-        ModelFormat::Safetensors,
+        ModelFormat::SafeTensors,
     )
     .with_source_status(ModelSourceStatus::Available)
     .with_observed_size_bytes(8);
@@ -334,7 +334,7 @@ fn sdxl_config() -> ModelSeriesConfig {
         .with_role(ModelRole::DiffusionModel)
         .with_role(ModelRole::TextEncoder)
         .with_role(ModelRole::Vae)
-        .with_format(ModelFormat::Safetensors),
+        .with_format(ModelFormat::SafeTensors),
     )
 }
 
@@ -345,7 +345,7 @@ fn existing_descriptor(id: &str, path: &str) -> ModelDescriptor {
         ModelVariant::new("sdxl"),
         vec![ModelRole::CheckpointBundle],
         ModelSource::relative(ModelRootId::new("base"), path),
-        ModelFormat::Safetensors,
+        ModelFormat::SafeTensors,
     )
 }
 

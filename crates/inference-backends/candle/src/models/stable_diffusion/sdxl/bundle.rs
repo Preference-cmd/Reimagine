@@ -473,7 +473,7 @@ fn expected_extension_for(format: ModelFormat) -> Option<&'static str> {
         ModelFormat::Gguf => Some("gguf"),
         ModelFormat::Onnx => Some("onnx"),
         ModelFormat::PyTorch => Some("pt"),
-        ModelFormat::Other => None,
+        ModelFormat::Unknown => None,
     }
 }
 
@@ -562,7 +562,7 @@ mod tests {
     fn validate_source_skips_extension_check_for_other_format() {
         let dir = unique_temp_dir();
         let path = write_placeholder(&dir, "model.bin");
-        validate_source(&path, ModelFormat::Other)
+        validate_source(&path, ModelFormat::Unknown)
             .expect("Other format should not check extension");
         let _ = fs::remove_dir_all(&dir);
     }
