@@ -10,6 +10,7 @@ pub enum ProposalStatus {
     Approved,
     Rejected,
     Superseded,
+    Conflicted,
 }
 
 /// Receipt returned by `workflow.propose_commands`.

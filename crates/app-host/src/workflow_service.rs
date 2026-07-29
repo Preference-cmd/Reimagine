@@ -189,6 +189,20 @@ impl WorkflowService {
             }
         })?;
 
+        // Stale-approval guard: reject if the workflow has advanced since the proposal was created.
+        {
+            let session = self.session(workflow_id)?;
+            let guard = session.lock().expect("workflow session poisoned");
+            let current_version = guard.version();
+            if current_version != proposal.base_version() {
+                return Err(AppHostError::ProposalStale {
+                    workflow_id: workflow_id.clone(),
+                    proposal_base_version: proposal.base_version(),
+                    current_version,
+                });
+            }
+        }
+
         let mut batch = CommandBatch::new(
             proposal.command_batch().id().clone(),
             CommandActor::new(CommandActorKind::Agent)

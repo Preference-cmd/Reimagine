@@ -14,6 +14,11 @@ pub enum AppHostError {
     NoPendingProposal {
         workflow_id: WorkflowId,
     },
+    ProposalStale {
+        workflow_id: WorkflowId,
+        proposal_base_version: WorkflowVersion,
+        current_version: WorkflowVersion,
+    },
     UnknownAgentSession {
         session_id: reimagine_agent::AgentSessionId,
     },
@@ -66,6 +71,14 @@ impl std::fmt::Display for AppHostError {
             Self::NoPendingProposal { workflow_id } => {
                 write!(f, "no pending proposal for workflow `{workflow_id}`")
             }
+            Self::ProposalStale {
+                workflow_id,
+                proposal_base_version,
+                current_version,
+            } => write!(
+                f,
+                "proposal for workflow `{workflow_id}` is stale: proposal was based on version {proposal_base_version}, but the workflow is now at version {current_version}"
+            ),
             Self::UnknownAgentSession { session_id } => {
                 write!(f, "unknown agent session `{session_id}`")
             }
