@@ -101,6 +101,22 @@ pub enum InferenceError {
         backend: Backend,
         capability: InferenceCapability,
     },
+    /// The requested model is not loaded or missing.
+    ModelNotLoaded { model_id: String },
+    /// The requested compute device is not available.
+    DeviceUnavailable { device: String },
+    /// The backend ran out of memory during execution.
+    OutOfMemory {
+        requested: Option<usize>,
+        available: Option<usize>,
+    },
+    /// The tokenizer failed to encode the input.
+    TokenizationFailed { message: String },
+    /// A model component failed validation checks.
+    ComponentValidation {
+        component: String,
+        reason: String,
+    },
 }
 
 impl std::fmt::Display for InferenceError {
@@ -182,11 +198,53 @@ impl std::fmt::Display for InferenceError {
                 f,
                 "candidate backend instance `{instance}` (backend `{backend}`) does not advertise capability `{capability}`"
             ),
+            Self::ModelNotLoaded { model_id } => {
+                write!(f, "model `{model_id}` is not loaded or missing")
+            }
+            Self::DeviceUnavailable { device } => {
+                write!(f, "device `{device}` is unavailable")
+            }
+            Self::OutOfMemory {
+                requested,
+                available,
+            } => {
+                write!(f, "out of memory")?;
+                match (requested, available) {
+                    (Some(req), Some(avail)) => {
+                        write!(f, " (requested {req}, available {avail})")?;
+                    }
+                    (Some(req), None) => {
+                        write!(f, " (requested {req})")?;
+                    }
+                    (None, Some(avail)) => {
+                        write!(f, " (available {avail})")?;
+                    }
+                    (None, None) => {}
+                }
+                Ok(())
+            }
+            Self::TokenizationFailed { message } => {
+                write!(f, "tokenization failed: {message}")
+            }
+            Self::ComponentValidation {
+                component,
+                reason,
+            } => {
+                write!(f, "component `{component}` validation failed: {reason}")
+            }
         }
     }
 }
 
 impl std::error::Error for InferenceError {}
+
+impl InferenceError {
+    /// Returns `true` if this error is transient and the caller
+    /// should consider retrying the operation.
+    pub fn is_retryable(&self) -> bool {
+        matches!(self, Self::OutOfMemory { .. })
+    }
+}
 
 #[cfg(test)]
 mod tests {

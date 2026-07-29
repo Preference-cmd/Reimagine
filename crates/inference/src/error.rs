@@ -120,6 +120,40 @@ impl IntoNodeExecutorError for InferenceError {
                     "candidate backend instance `{instance}` (backend `{backend}`) does not advertise capability `{capability}`"
                 ),
             },
+            InferenceError::ModelNotLoaded { model_id } => NodeExecutorError::Failed {
+                message: format!("model `{model_id}` is not loaded or missing"),
+            },
+            InferenceError::DeviceUnavailable { device } => NodeExecutorError::Failed {
+                message: format!("device `{device}` is unavailable"),
+            },
+            InferenceError::OutOfMemory {
+                requested,
+                available,
+            } => {
+                let mut message = "out of memory".to_string();
+                match (requested, available) {
+                    (Some(req), Some(avail)) => {
+                        message.push_str(&format!(" (requested {req}, available {avail})"));
+                    }
+                    (Some(req), None) => {
+                        message.push_str(&format!(" (requested {req})"));
+                    }
+                    (None, Some(avail)) => {
+                        message.push_str(&format!(" (available {avail})"));
+                    }
+                    (None, None) => {}
+                }
+                NodeExecutorError::Failed { message }
+            }
+            InferenceError::TokenizationFailed { message } => NodeExecutorError::Failed {
+                message: format!("tokenization failed: {message}"),
+            },
+            InferenceError::ComponentValidation {
+                component,
+                reason,
+            } => NodeExecutorError::Failed {
+                message: format!("component `{component}` validation failed: {reason}"),
+            },
         }
     }
 }

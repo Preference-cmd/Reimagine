@@ -18,7 +18,7 @@ use crate::models::stable_diffusion::sdxl::text_conditioning::cache::SdxlTextEnc
 use crate::operation::{
     execute_diffusion_sample, execute_image_preview, execute_image_save,
     execute_latent_create_empty, execute_latent_decode, execute_model_load_bundle,
-    execute_text_encode, map_to_inference_error,
+    execute_text_encode,
 };
 use crate::profile::{BACKEND_LABEL, BurnProfileProvider};
 use crate::resource::BurnBackendInstanceRuntimeHooks;
@@ -37,13 +37,6 @@ pub struct BurnBackend {
 
 impl BurnBackend {
     pub fn new(config: BurnBackendConfig) -> Result<Self, BurnBackendError> {
-        // The config layer stores a `BurnDevice` already
-        // constructed from the user's label string, so we just
-        // clone the resolved variant. Validating
-        // `try_build_device` is exposed as an associated
-        // function for callers that want precise errors for
-        // unknown labels — config validation runs through the
-        // `new` constructor and a generic `cpu` fallback.
         let device = config.device().clone();
         let active_device = active_device(&device);
         Ok(Self {
@@ -65,11 +58,6 @@ impl BurnBackend {
     }
 
     pub fn device_label(&self) -> &str {
-        // The profile advertises one backend instance per
-        // active feature-device combination (e.g.,
-        // `burn:wgpu:default`, `burn:flex:cpu`). `device_label`
-        // returns the short suffix used to construct the
-        // `burn:<label>` instance.
         self.device.label()
     }
 
@@ -124,9 +112,38 @@ impl BurnBackend {
 }
 
 fn map_err<T>(result: Result<T, BurnBackendError>) -> Result<T, InferenceError> {
-    result.map_err(|err| InferenceError::BackendExecutionFailed {
-        message: err.to_string(),
-    })
+    result.map_err(burn_error_to_inference_error)
+}
+
+/// Map a [`BurnBackendError`] into [`InferenceError`], preserving
+/// structured variant information so callers can distinguish error
+/// types programmatically.
+fn burn_error_to_inference_error(err: BurnBackendError) -> InferenceError {
+    match err {
+        BurnBackendError::DeviceUnavailable { requested, reason } => {
+            InferenceError::DeviceUnavailable {
+                device: format!("{requested}: {reason}"),
+            }
+        }
+        BurnBackendError::MissingComponent(component) => InferenceError::ModelNotLoaded {
+            model_id: component,
+        },
+        BurnBackendError::ComponentValidation { path, source } => {
+            InferenceError::ComponentValidation {
+                component: path.display().to_string(),
+                reason: source.to_string(),
+            }
+        }
+        BurnBackendError::Tokenizer(error) => InferenceError::TokenizationFailed {
+            message: error.to_string(),
+        },
+        BurnBackendError::CacheIncompatible(message) => InferenceError::ModelNotLoaded {
+            model_id: message,
+        },
+        other => InferenceError::BackendExecutionFailed {
+            message: other.to_string(),
+        },
+    }
 }
 
 #[async_trait::async_trait]
@@ -172,21 +189,14 @@ impl InferenceBackend for BurnBackend {
         &self,
         request: TextEncodeRequest,
     ) -> Result<TextEncodeResponse, InferenceError> {
-        // burn/08f implements the real text.encode pipeline: validate
-        // the request, tokenize the prompt, store the conditioning
-        // payload, and return backend-affine handles. The CLIP-L/CLIP-G
-        // tensor forward pass is wired for correct shape metadata;
-        // the actual tensor execution is a follow-up deepening.
-        execute_text_encode(self, request).map_err(|err| InferenceError::BackendExecutionFailed {
-            message: err.to_string(),
-        })
+        execute_text_encode(self, request).map_err(burn_error_to_inference_error)
     }
 
     async fn create_empty_latent(
         &self,
         request: CreateEmptyLatentRequest,
     ) -> Result<CreateEmptyLatentResponse, InferenceError> {
-        execute_latent_create_empty(self, request).map_err(map_to_inference_error)
+        execute_latent_create_empty(self, request).map_err(burn_error_to_inference_error)
     }
 
     async fn diffusion_sample(
@@ -221,17 +231,13 @@ impl InferenceBackend for BurnBackend {
         &self,
         request: ImageSaveRequest,
     ) -> Result<ImageSaveResponse, InferenceError> {
-        execute_image_save(request, self).map_err(|err| InferenceError::BackendExecutionFailed {
-            message: err.to_string(),
-        })
+        execute_image_save(request, self).map_err(burn_error_to_inference_error)
     }
 
     async fn image_preview(
         &self,
         request: ImagePreviewRequest,
     ) -> Result<ImagePreviewResponse, InferenceError> {
-        execute_image_preview(request, self).map_err(|err| InferenceError::BackendExecutionFailed {
-            message: err.to_string(),
-        })
+        execute_image_preview(request, self).map_err(burn_error_to_inference_error)
     }
 }
