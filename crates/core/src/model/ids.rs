@@ -15,7 +15,14 @@ macro_rules! id_type {
 
         impl $name {
             pub fn new(id: impl Into<String>) -> Self {
-                Self(id.into())
+                let s = id.into();
+                assert!(!s.is_empty(), "ID must not be empty");
+                assert!(s.is_ascii(), "ID must be ASCII");
+                assert!(
+                    !s.contains(['/', '\\', '\0']),
+                    "ID contains invalid characters"
+                );
+                Self(s)
             }
 
             pub fn as_str(&self) -> &str {

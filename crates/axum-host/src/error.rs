@@ -225,7 +225,7 @@ mod tests {
     #[tokio::test]
     async fn unsafe_workflow_id_maps_to_400() {
         let err: AxumHostError = AppHostError::WorkflowIdPathUnsafe {
-            workflow_id: WorkflowId::new("../escape"),
+            workflow_id: WorkflowId::from("../escape"),
         }
         .into();
         let response = err.into_response();

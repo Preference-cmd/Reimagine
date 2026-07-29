@@ -83,3 +83,43 @@ fn id_display() {
     assert_eq!(RunId::new("r42").to_string(), "r42");
     assert_eq!(ProposalId::new("p-1").to_string(), "p-1");
 }
+
+// -----------------------------------------------------------
+// Validation: new() rejects invalid IDs
+// -----------------------------------------------------------
+#[test]
+#[should_panic(expected = "ID must not be empty")]
+fn id_new_rejects_empty_string() {
+    NodeId::new("");
+}
+
+#[test]
+#[should_panic(expected = "ID must be ASCII")]
+fn id_new_rejects_non_ascii() {
+    NodeId::new("node\u{00e9}test");
+}
+
+#[test]
+#[should_panic(expected = "ID contains invalid characters")]
+fn id_new_rejects_forward_slash() {
+    NodeId::new("../../../etc/passwd");
+}
+
+#[test]
+#[should_panic(expected = "ID contains invalid characters")]
+fn id_new_rejects_backslash() {
+    NodeId::new("node\\test");
+}
+
+#[test]
+#[should_panic(expected = "ID contains invalid characters")]
+fn id_new_rejects_null_byte() {
+    NodeId::new("node\0test");
+}
+
+#[test]
+fn id_from_str_bypasses_validation() {
+    // From<&str> bypasses validation for backwards compatibility
+    let id = NodeId::from("../../../etc/passwd");
+    assert_eq!(id.as_str(), "../../../etc/passwd");
+}
