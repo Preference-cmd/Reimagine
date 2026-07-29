@@ -58,13 +58,13 @@ fn load_text_encoder_modules_from_profiles<B: Backend>(
         runtime.device(),
     );
 
-    let mut primary_store = sdxl_clip_store_from_path(primary_path);
+    let mut primary_store = sdxl_clip_store_from_path(primary_path, "text_encoder");
     let primary_result = runtime
         .load_module_store(&mut module, &mut primary_store)
         .map_err(|source| BurnBackendError::InvalidRequest(source.to_string()))?;
     validate_apply_result("text_encoder", &primary_result)?;
 
-    let mut secondary_store = sdxl_clip_store_from_path(secondary_path);
+    let mut secondary_store = sdxl_clip_store_from_path(secondary_path, "text_encoder_2");
     let secondary_result = runtime
         .load_module_store(&mut module, &mut secondary_store)
         .map_err(|source| BurnBackendError::InvalidRequest(source.to_string()))?;

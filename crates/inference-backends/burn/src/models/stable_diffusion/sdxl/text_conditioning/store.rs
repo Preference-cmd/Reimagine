@@ -9,31 +9,147 @@ use burn_store::{
 };
 use burn_tensor::{DType, Shape, TensorData, backend::Backend};
 
+/// Detect whether a safetensors file contains diffusers-format CLIP keys
+/// (separate `q_proj`/`k_proj`/`v_proj`) versus converted fused QKV keys
+/// (`in_proj_weight`).
+///
+/// Reads the safetensors header to check key names without loading tensor data.
+#[allow(dead_code)]
+fn detect_diffusers_clip_format(path: &std::path::Path) -> bool {
+    let Ok(bytes) = std::fs::read(path) else {
+        return false;
+    };
+    if bytes.is_empty() {
+        return false;
+    }
+    // The safetensors header is a JSON object at the start of the file.
+    // We look for `q_proj` as a reliable indicator of diffusers CLIP format.
+    // Converted files use `in_proj_weight`/`in_proj_bias` instead.
+    let header_end = bytes.len().min(1024 * 1024); // 1 MiB header limit
+    let header_bytes = &bytes[..header_end];
+    // Search for the diffusers CLIP indicator key pattern.
+    // SAFETY: we only search for ASCII patterns in the JSON header.
+    let header_str = String::from_utf8_lossy(header_bytes);
+    header_str.contains("q_proj")
+}
+
 /// Build a burn-store loader for one SDXL CLIP component safetensors file.
+///
+/// The `component_role` parameter determines the target prefix for
+/// diffusers-format remapping: `"text_encoder"` maps to `clip_l.blocks.`,
+/// `"text_encoder_2"` maps to `open_clip_g.blocks.`.
 #[allow(dead_code)]
 pub(crate) fn sdxl_clip_store_from_path(
     path: impl Into<PathBuf>,
+    component_role: &str,
 ) -> SdxlClipStore<SafetensorsStore> {
-    SdxlClipStore::new(sdxl_clip_safetensors_store(SafetensorsStore::from_file(
-        path,
-    )))
+    let path = path.into();
+    let diffusers_format = detect_diffusers_clip_format(&path);
+    SdxlClipStore::new(sdxl_clip_safetensors_store(
+        SafetensorsStore::from_file(path),
+        diffusers_format,
+        component_role,
+    ))
     .with_from_adapter(PyTorchToBurnAdapter)
+    .with_diffusers_format(diffusers_format)
 }
 
 #[cfg(test)]
 fn sdxl_clip_store_from_bytes(bytes: Vec<u8>) -> SdxlClipStore<SafetensorsStore> {
-    SdxlClipStore::new(sdxl_clip_safetensors_store(SafetensorsStore::from_bytes(
-        Some(bytes),
-    )))
+    // Detect format from raw bytes: check if any key contains `q_proj`
+    let diffusers_format = {
+        let header_end = bytes.len().min(1024 * 1024);
+        let header_str = String::from_utf8_lossy(&bytes[..header_end]);
+        header_str.contains("q_proj")
+    };
+    SdxlClipStore::new(sdxl_clip_safetensors_store(
+        SafetensorsStore::from_bytes(Some(bytes)),
+        diffusers_format,
+        "text_encoder", // default for test; tests that need open_clip_g will use a variant
+    ))
     .with_from_adapter(PyTorchToBurnAdapter)
+    .with_diffusers_format(diffusers_format)
 }
 
 #[allow(dead_code)]
-fn sdxl_clip_safetensors_store(store: SafetensorsStore) -> SafetensorsStore {
+fn sdxl_clip_safetensors_store(
+    store: SafetensorsStore,
+    diffusers_format: bool,
+    component_role: &str,
+) -> SafetensorsStore {
+    let remapper = if diffusers_format {
+        diffusers_clip_key_remapper(component_role)
+    } else {
+        sdxl_clip_key_remapper()
+    };
     store
-        .remap(sdxl_clip_key_remapper())
+        .remap(remapper)
         .allow_partial(true)
         .validate(true)
+}
+
+/// Key remapper for diffusers-format CLIP safetensors files.
+///
+/// Diffusers CLIP uses separate `q_proj`/`k_proj`/`v_proj` attention
+/// projections instead of a single fused `in_proj_weight`. This remapper
+/// maps diffusers CLIP key paths to Burn module snapshot key paths.
+///
+/// The `component_role` parameter determines the target prefix:
+/// - `"text_encoder"` (CLIP-L) -> `clip_l.blocks.N.`
+/// - `"text_encoder_2"` (OpenCLIP-G) -> `open_clip_g.blocks.N.`
+///
+/// Key transformations:
+/// - `text_model.encoder.` prefix is stripped
+/// - `layers.N.` is mapped to the component-specific `blocks.N.` prefix
+/// - `self_attn.q_proj` -> `attention.query`
+/// - `self_attn.k_proj` -> `attention.key`
+/// - `self_attn.v_proj` -> `attention.value`
+/// - `self_attn.out_proj` -> `attention.output`
+/// - `mlp.fc1` -> `ffn.ff1`
+/// - `mlp.fc2` -> `ffn.ff2`
+/// - `layer_norm1` -> `layer_norm`
+/// - `layer_norm2` -> `layer_norm_inner`
+#[allow(dead_code)]
+fn diffusers_clip_key_remapper(component_role: &str) -> KeyRemapper {
+    let block_prefix = match component_role {
+        "text_encoder" => "clip_l.",
+        "text_encoder_2" => "open_clip_g.",
+        _ => "clip_l.",
+    };
+
+    KeyRemapper::new()
+        // Attention projection renames (applied before prefix strip).
+        .add_pattern(r"\.self_attn\.q_proj\.", ".attention.query.")
+        .expect("static diffusers CLIP q_proj remapping regex should compile")
+        .add_pattern(r"\.self_attn\.k_proj\.", ".attention.key.")
+        .expect("static diffusers CLIP k_proj remapping regex should compile")
+        .add_pattern(r"\.self_attn\.v_proj\.", ".attention.value.")
+        .expect("static diffusers CLIP v_proj remapping regex should compile")
+        .add_pattern(r"\.self_attn\.out_proj\.", ".attention.output.")
+        .expect("static diffusers CLIP out_proj remapping regex should compile")
+        // MLP layer renames.
+        .add_pattern(r"\.mlp\.fc1\.", ".ffn.ff1.")
+        .expect("static diffusers CLIP mlp.fc1 remapping regex should compile")
+        .add_pattern(r"\.mlp\.fc2\.", ".ffn.ff2.")
+        .expect("static diffusers CLIP mlp.fc2 remapping regex should compile")
+        // Layer norm renames.
+        .add_pattern(r"\.layer_norm1\.", ".layer_norm.")
+        .expect("static diffusers CLIP layer_norm1 remapping regex should compile")
+        .add_pattern(r"\.layer_norm2\.", ".layer_norm_inner.")
+        .expect("static diffusers CLIP layer_norm2 remapping regex should compile")
+        // Strip the `text_model.encoder.` prefix and add component-specific
+        // block prefix. `layers.N` becomes `clip_l.blocks.N` or
+        // `open_clip_g.blocks.N`.
+        .add_pattern(
+            r"^text_model\.encoder\.layers\.(\d+)\.",
+            format!("{block_prefix}blocks.$1."),
+        )
+        .expect("static diffusers CLIP prefix+block remapping regex should compile")
+        // Final layer norm gamma/beta -> weight/bias.
+        .add_pattern(r"\.final_layer_norm\.gamma$", ".final_layer_norm.weight")
+        .expect("static diffusers CLIP final layer norm weight regex should compile")
+        .add_pattern(r"\.final_layer_norm\.beta$", ".final_layer_norm.bias")
+        .expect("static diffusers CLIP final layer norm bias regex should compile")
 }
 
 #[allow(dead_code)]
@@ -61,10 +177,15 @@ fn sdxl_clip_key_remapper() -> KeyRemapper {
 
 /// Store wrapper that expands CLIP/OpenCLIP fused QKV tensors before applying
 /// snapshots to Burn-native `MultiHeadAttention` modules.
+///
+/// For diffusers-format source files (separate `q_proj`/`k_proj`/`v_proj`),
+/// the QKV expansion is skipped because the source already contains separate
+/// attention projections. The `diffusers_format` flag controls this behavior.
 #[allow(dead_code)]
 pub(crate) struct SdxlClipStore<S> {
     inner: S,
     from_adapter: Option<Box<dyn ModuleAdapter>>,
+    diffusers_format: bool,
 }
 
 #[allow(dead_code)]
@@ -73,11 +194,19 @@ impl<S> SdxlClipStore<S> {
         Self {
             inner,
             from_adapter: None,
+            diffusers_format: false,
         }
     }
 
     pub(crate) fn with_from_adapter(mut self, adapter: impl ModuleAdapter + 'static) -> Self {
         self.from_adapter = Some(Box::new(adapter));
+        self
+    }
+
+    /// Mark this store as loading diffusers-format CLIP keys (separate
+    /// q/k/v projections). When set, fused QKV expansion is skipped.
+    pub(crate) fn with_diffusers_format(mut self, diffusers_format: bool) -> Self {
+        self.diffusers_format = diffusers_format;
         self
     }
 }
@@ -133,6 +262,14 @@ impl<S: ModuleStore> SdxlClipStore<S> {
         let source = self.inner.get_all_snapshots()?;
         let mut snapshots: Vec<TensorSnapshot> = source.values().cloned().collect();
 
+        // For diffusers format, the source already contains separate
+        // q_proj/k_proj/v_proj projections. No QKV expansion is needed.
+        if self.diffusers_format {
+            return Ok(snapshots);
+        }
+
+        // For converted/legacy format, expand fused in_proj_weight/in_proj_bias
+        // into separate query/key/value snapshots for Burn MultiHeadAttention.
         for (path, snapshot) in source {
             if let Some(prefix) = path.strip_suffix(".in_proj_weight")
                 && snapshot.shape.len() == 2
@@ -621,5 +758,324 @@ mod tests {
     fn active_test_device() -> burn_tensor::Device<ActiveBurnBackend> {
         let config = BurnBackendConfig::new("/models", "/output");
         active_device(config.device())
+    }
+
+    // ── Diffusers CLIP format tests ──────────────────────────────
+
+    #[test]
+    fn diffusers_clip_store_remaps_qkv_to_burn_mha_keys() {
+        type B = ActiveBurnBackend;
+
+        let runtime = BurnRuntime::<B>::new(active_test_device());
+        let clip_l_profile = tiny_profile(ClipTextEncoderVariant::ClipL, false);
+        let open_clip_g_profile = tiny_profile(ClipTextEncoderVariant::OpenClipG, true);
+        let mut module = SdxlTextEncoders::<B>::init_from_profiles(
+            &clip_l_profile,
+            &open_clip_g_profile,
+            runtime.device(),
+        );
+        // Diffusers CLIP format: separate q_proj/k_proj/v_proj
+        let bytes = safetensors_bytes(vec![
+            tensor_view(
+                "text_model.encoder.layers.0.self_attn.q_proj.weight",
+                vec![2, 2],
+                vec![1.0, 2.0, 3.0, 4.0],
+            ),
+            tensor_view(
+                "text_model.encoder.layers.0.self_attn.q_proj.bias",
+                vec![2],
+                vec![101.0, 102.0],
+            ),
+            tensor_view(
+                "text_model.encoder.layers.0.self_attn.k_proj.weight",
+                vec![2, 2],
+                vec![5.0, 6.0, 7.0, 8.0],
+            ),
+            tensor_view(
+                "text_model.encoder.layers.0.self_attn.k_proj.bias",
+                vec![2],
+                vec![103.0, 104.0],
+            ),
+            tensor_view(
+                "text_model.encoder.layers.0.self_attn.v_proj.weight",
+                vec![2, 2],
+                vec![9.0, 10.0, 11.0, 12.0],
+            ),
+            tensor_view(
+                "text_model.encoder.layers.0.self_attn.v_proj.bias",
+                vec![2],
+                vec![105.0, 106.0],
+            ),
+            tensor_view(
+                "text_model.encoder.layers.0.self_attn.out_proj.weight",
+                vec![2, 2],
+                vec![201.0, 202.0, 203.0, 204.0],
+            ),
+            tensor_view(
+                "text_model.encoder.layers.0.self_attn.out_proj.bias",
+                vec![2],
+                vec![301.0, 302.0],
+            ),
+            tensor_view(
+                "text_model.encoder.layers.0.mlp.fc1.weight",
+                vec![8, 2],
+                vec![
+                    0.01, 0.02, 0.03, 0.04, 0.05, 0.06, 0.07, 0.08, 0.09, 0.10, 0.11, 0.12,
+                    0.13, 0.14, 0.15, 0.16,
+                ],
+            ),
+            tensor_view(
+                "text_model.encoder.layers.0.mlp.fc1.bias",
+                vec![8],
+                vec![0.0; 8],
+            ),
+            tensor_view(
+                "text_model.encoder.layers.0.mlp.fc2.weight",
+                vec![2, 8],
+                vec![
+                    0.01, 0.02, 0.03, 0.04, 0.05, 0.06, 0.07, 0.08, 0.09, 0.10, 0.11, 0.12,
+                    0.13, 0.14, 0.15, 0.16,
+                ],
+            ),
+            tensor_view(
+                "text_model.encoder.layers.0.mlp.fc2.bias",
+                vec![2],
+                vec![0.0; 2],
+            ),
+            tensor_view(
+                "text_model.encoder.layers.0.layer_norm1.weight",
+                vec![2],
+                vec![1.0, 1.0],
+            ),
+            tensor_view(
+                "text_model.encoder.layers.0.layer_norm1.bias",
+                vec![2],
+                vec![0.0, 0.0],
+            ),
+            tensor_view(
+                "text_model.encoder.layers.0.layer_norm2.weight",
+                vec![2],
+                vec![1.0, 1.0],
+            ),
+            tensor_view(
+                "text_model.encoder.layers.0.layer_norm2.bias",
+                vec![2],
+                vec![0.0, 0.0],
+            ),
+        ]);
+        let mut store = super::sdxl_clip_store_from_bytes(bytes);
+
+        let result = runtime
+            .load_module_store(&mut module, &mut store)
+            .expect("diffusers CLIP store should load through burn-store");
+
+        assert!(
+            result.errors.is_empty(),
+            "unexpected store load errors: {result}"
+        );
+        // Verify Q/K/V remapping
+        assert!(
+            result
+                .applied
+                .contains(&"clip_l.blocks.0.attention.query.weight".to_string()),
+            "missing query.weight in applied: {result}"
+        );
+        assert_param_2d(
+            &module.clip_l.blocks()[0].attention.query.weight,
+            [1.0, 2.0, 3.0, 4.0],
+        );
+        assert_param_1d(
+            module.clip_l.blocks()[0]
+                .attention
+                .query
+                .bias
+                .as_ref()
+                .expect("query bias"),
+            [101.0, 102.0],
+        );
+        assert_param_2d(
+            &module.clip_l.blocks()[0].attention.key.weight,
+            [5.0, 6.0, 7.0, 8.0],
+        );
+        assert_param_1d(
+            module.clip_l.blocks()[0]
+                .attention
+                .key
+                .bias
+                .as_ref()
+                .expect("key bias"),
+            [103.0, 104.0],
+        );
+        assert_param_2d(
+            &module.clip_l.blocks()[0].attention.value.weight,
+            [9.0, 10.0, 11.0, 12.0],
+        );
+        assert_param_1d(
+            module.clip_l.blocks()[0]
+                .attention
+                .value
+                .bias
+                .as_ref()
+                .expect("value bias"),
+            [105.0, 106.0],
+        );
+        // Verify out_proj remapping
+        assert_param_2d(
+            &module.clip_l.blocks()[0].attention.output.weight,
+            [201.0, 203.0, 202.0, 204.0],
+        );
+    }
+
+    #[test]
+    fn diffusers_clip_store_remaps_mlp_and_layer_norm_keys() {
+        // Test that mlp.fc1/fc2 and layer_norm1/layer_norm2 are correctly remapped
+        // through the diffusers CLIP key remapper.
+        let remapper = super::diffusers_clip_key_remapper("text_encoder");
+
+        let test_cases: Vec<(&str, &str)> = vec![
+            (
+                "text_model.encoder.layers.0.self_attn.q_proj.weight",
+                "clip_l.blocks.0.attention.query.weight",
+            ),
+            (
+                "text_model.encoder.layers.0.self_attn.k_proj.weight",
+                "clip_l.blocks.0.attention.key.weight",
+            ),
+            (
+                "text_model.encoder.layers.0.self_attn.v_proj.weight",
+                "clip_l.blocks.0.attention.value.weight",
+            ),
+            (
+                "text_model.encoder.layers.0.self_attn.out_proj.weight",
+                "clip_l.blocks.0.attention.output.weight",
+            ),
+            (
+                "text_model.encoder.layers.0.mlp.fc1.weight",
+                "clip_l.blocks.0.ffn.ff1.weight",
+            ),
+            (
+                "text_model.encoder.layers.0.mlp.fc2.weight",
+                "clip_l.blocks.0.ffn.ff2.weight",
+            ),
+            (
+                "text_model.encoder.layers.0.layer_norm1.weight",
+                "clip_l.blocks.0.layer_norm.weight",
+            ),
+            (
+                "text_model.encoder.layers.0.layer_norm2.weight",
+                "clip_l.blocks.0.layer_norm_inner.weight",
+            ),
+            (
+                "text_model.encoder.layers.0.layer_norm1.bias",
+                "clip_l.blocks.0.layer_norm.bias",
+            ),
+            (
+                "text_model.encoder.layers.0.layer_norm2.bias",
+                "clip_l.blocks.0.layer_norm_inner.bias",
+            ),
+        ];
+
+        for (source, expected) in test_cases {
+            let snapshot = snapshot_2d(source, 1, 1, vec
+![1.0]);
+            let (remapped, _) = remapper.remap(vec
+![snapshot]);
+            assert_eq!(
+                remapped.len()
+, 1, "remapper should produce exactly one snapshot for `{source}`"
+            );
+            let result_path = remapped[0].full_path();
+            assert_eq!(
+                result_path, expected,
+                "remapping `{source}` should produce `{expected}`, got `{result_path}`"
+            );
+        }
+    }
+
+    #[test]
+    fn detect_diffusers_clip_format_returns_true_for_q_proj_keys() {
+        let bytes = safetensors_bytes(vec![tensor_view(
+            "text_model.encoder.layers.0.self_attn.q_proj.weight",
+            vec![2, 2],
+            vec![1.0, 2.0, 3.0, 4.0],
+        )]);
+        let header_str = String::from_utf8_lossy(&bytes[..bytes.len().min(1024 * 1024)]);
+        assert!(
+            header_str.contains("q_proj"),
+            "header should contain q_proj indicator"
+        );
+    }
+
+    #[test]
+    fn detect_diffusers_clip_format_returns_false_for_in_proj_weight() {
+        let bytes = safetensors_bytes(vec![tensor_view(
+            "model.text_encoder.transformer.resblocks.0.attn.in_proj_weight",
+            vec![6, 2],
+            vec![1.0, 2.0, 3.0, 4.0, 5.0, 6.0, 7.0, 8.0, 9.0, 10.0, 11.0, 12.0],
+        )]);
+        let header_str = String::from_utf8_lossy(&bytes[..bytes.len().min(1024 * 1024)]);
+        assert!(
+            !header_str.contains("q_proj"),
+            "header should not contain q_proj for fused format"
+        );
+    }
+
+    #[test]
+    fn diffusers_format_skips_qkv_expansion() {
+        // When diffusers_format is true, the store should NOT try to split
+        // in_proj_weight into separate q/k/v (since they're already separate).
+        type B = ActiveBurnBackend;
+
+        let runtime = BurnRuntime::<B>::new(active_test_device());
+        let clip_l_profile = tiny_profile(ClipTextEncoderVariant::ClipL, false);
+        let open_clip_g_profile = tiny_profile(ClipTextEncoderVariant::OpenClipG, true);
+        let mut module = SdxlTextEncoders::<B>::init_from_profiles(
+            &clip_l_profile,
+            &open_clip_g_profile,
+            runtime.device(),
+        );
+        // Diffusers format with separate Q/K/V - already in target shape
+        let mut store = super::SdxlClipStore::new(SnapshotStore::new(vec![
+            snapshot_2d(
+                "clip_l.blocks.0.attention.query.weight",
+                2,
+                2,
+                vec![1.0, 2.0, 3.0, 4.0],
+            ),
+            snapshot_2d(
+                "clip_l.blocks.0.attention.key.weight",
+                2,
+                2,
+                vec![5.0, 6.0, 7.0, 8.0],
+            ),
+            snapshot_2d(
+                "clip_l.blocks.0.attention.value.weight",
+                2,
+                2,
+                vec![9.0, 10.0, 11.0, 12.0],
+            ),
+        ]))
+        .with_from_adapter(PyTorchToBurnAdapter)
+        .with_diffusers_format(true);
+
+        let result = runtime
+            .load_module_store(&mut module, &mut store)
+            .expect("diffusers format store should load without QKV expansion");
+
+        assert!(
+            result.errors.is_empty(),
+            "unexpected store load errors: {result}"
+        );
+        // The snapshots should be applied directly, not split
+        assert!(
+            result
+                .applied
+                .contains(&"clip_l.blocks.0.attention.query.weight".to_string()),
+            "query.weight should be applied directly in diffusers mode"
+        );
+        assert_param_2d(
+            &module.clip_l.blocks()[0].attention.query.weight,
+            [1.0, 2.0, 3.0, 4.0],
+        );
     }
 }
