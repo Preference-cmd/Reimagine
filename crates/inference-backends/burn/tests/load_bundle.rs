@@ -357,19 +357,23 @@ async fn load_bundle_rejects_checkpoint_bundle_sources() {
 async fn load_bundle_rejects_missing_component_without_cache_mutation() {
     let temp = tempfile::tempdir().expect("tempdir");
     let backend = backend();
-    let sources = BurnSdxlComponentRole::all()
-        .into_iter()
-        .filter(|role| *role != BurnSdxlComponentRole::TextEncoder2)
-        .map(|role| split_component_source(temp.path(), role))
-        .collect::<Vec<_>>();
+    // Provide 3 components but omit Diffusion (a required role).
+    let sources = [
+        BurnSdxlComponentRole::Vae,
+        BurnSdxlComponentRole::TextEncoder,
+        BurnSdxlComponentRole::TextEncoder2,
+    ]
+    .into_iter()
+    .map(|role| split_component_source(temp.path(), role))
+    .collect::<Vec<_>>();
     let model = resolved_model_from_sources(temp.path(), sources);
 
     let err = backend
         .load_bundle(request_from_model(model))
         .await
-        .expect_err("missing component should fail");
+        .expect_err("missing required component should fail");
 
-    assert_backend_execution_failed_contains(err, "requires exactly 4");
+    assert_backend_execution_failed_contains(err, "missing Burn SDXL component");
     assert_eq!(backend.model_cache().bundle_count(), 0);
 }
 

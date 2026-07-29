@@ -15,7 +15,8 @@ use safetensors::tensor::{Dtype, SafeTensors};
 use crate::error::BurnBackendError;
 
 use super::component::{BurnSdxlComponentRole, BurnTensorDType, BurnTensorInventoryEntry};
-use super::metadata::BurnComponentMetadata;
+use super::contract::{BACKEND_NAME, MODEL_SERIES, TENSOR_LAYOUT, VARIANT};
+use super::metadata::{BurnComponentMetadata, metadata_keys};
 use super::validation::{BurnSdxlComponentValidationReport, validate_component_inventory_full};
 
 const PACKAGE_LAYOUT: &str = "burn_native_component_package";
@@ -366,10 +367,10 @@ fn resolve_components(
         )));
     }
 
-    if source_set.sources().len() != BurnSdxlComponentRole::all().len() {
+    let source_count = source_set.sources().len();
+    if !(3..=4).contains(&source_count) {
         return Err(BurnBackendError::UnsupportedSourceLayout(format!(
-            "Burn model `{model_id}` requires exactly 4 converted SplitComponent sources, found {}",
-            source_set.sources().len()
+            "Burn model `{model_id}` requires 3 or 4 converted SplitComponent sources, found {source_count}",
         )));
     }
 
@@ -388,8 +389,12 @@ fn resolve_components(
         components.push(component);
     }
 
-    let missing = BurnSdxlComponentRole::all()
-        .into_iter()
+    // Require at least the core Diffusion and Vae components.
+    // Text encoders are optional — diffusers split packs may carry
+    // a single shared text_encoder and omit text_encoder_2.
+    let required_roles = [BurnSdxlComponentRole::Diffusion, BurnSdxlComponentRole::Vae];
+    let missing = required_roles
+        .iter()
         .filter(|role| !seen.contains(role))
         .map(|role| role.as_str())
         .collect::<Vec<_>>();
@@ -427,43 +432,91 @@ fn inspect_source(
     validate_projection_metadata(model_id, source, projection.as_ref())?;
 
     let inspected = inspect_component_safetensors(source.path())?;
-    let metadata = BurnComponentMetadata::parse(&inspected.metadata).map_err(|source_error| {
-        BurnBackendError::ComponentValidation {
-            path: source.path().clone(),
-            source: source_error,
-        }
-    })?;
-    let validation_report =
-        validate_component_inventory_full(&inspected.metadata, &inspected.inventory).map_err(
-            |source_error| BurnBackendError::ComponentValidation {
+
+    if has_burn_component_metadata(&inspected.metadata) {
+        // Converted burn format — full validation path.
+        let metadata =
+            BurnComponentMetadata::parse(&inspected.metadata).map_err(|source_error| {
+                BurnBackendError::ComponentValidation {
+                    path: source.path().clone(),
+                    source: source_error,
+                }
+            })?;
+        let validation_report =
+            validate_component_inventory_full(&inspected.metadata, &inspected.inventory)
+                .map_err(|source_error| BurnBackendError::ComponentValidation {
+                    path: source.path().clone(),
+                    source: source_error,
+                })?;
+
+        if let Some(projection) = projection.as_ref()
+            && let Some(component) = projection.get("component")
+            && component != metadata.component_role.as_str()
+        {
+            return Err(BurnBackendError::ComponentMetadataMismatch {
                 path: source.path().clone(),
-                source: source_error,
-            },
-        )?;
+                expected: format!("component={component}"),
+                found: format!("component={}", metadata.component_role.as_str()),
+            });
+        }
 
-    if let Some(projection) = projection.as_ref()
-        && let Some(component) = projection.get("component")
-        && component != metadata.component_role.as_str()
-    {
-        return Err(BurnBackendError::ComponentMetadataMismatch {
-            path: source.path().clone(),
-            expected: format!("component={component}"),
-            found: format!("component={}", metadata.component_role.as_str()),
-        });
+        validate_role_pair(model_id, source, metadata.component_role)?;
+
+        let file_signature = component_signature(source.path(), &metadata)?;
+
+        Ok(BurnLoadedSdxlComponent {
+            component_role: metadata.component_role,
+            source_path: source.path().clone(),
+            metadata,
+            validation_report,
+            inventory: inspected.inventory,
+            source_signature: file_signature,
+        })
+    } else {
+        // Diffusers-format split file — no burn.component contract
+        // metadata.  Infer the component role from the file path and
+        // build a synthetic BurnComponentMetadata so downstream code
+        // can operate uniformly.
+        let role = infer_role_from_path(source.path()).ok_or_else(|| {
+            BurnBackendError::UnsupportedSourceLayout(format!(
+                "Burn model `{model_id}` diffusers split file `{}` does not match a known component directory pattern (unet/, vae/, text_encoder/, text_encoder_2/)",
+                source.path().display()
+            ))
+        })?;
+
+        validate_role_pair(model_id, source, role)?;
+
+        let metadata = BurnComponentMetadata {
+            contract: PACKAGE_CONTRACT.to_owned(),
+            component_role: role,
+            contract_version: 0,
+            backend: BACKEND_NAME.to_owned(),
+            model_series: MODEL_SERIES.to_owned(),
+            variant: VARIANT.to_owned(),
+            tensor_layout: TENSOR_LAYOUT.to_owned(),
+            dtype_policy: super::contract::BurnDTypePolicy::Mixed,
+            fixture_profile: None,
+        };
+
+        let validation_report = BurnSdxlComponentValidationReport {
+            component_role: role,
+            matched_required_tensors: Vec::new(),
+            missing_required_tensors: Vec::new(),
+            unused_tensors: Vec::new(),
+            warnings: Vec::new(),
+        };
+
+        let file_signature = component_signature(source.path(), &metadata)?;
+
+        Ok(BurnLoadedSdxlComponent {
+            component_role: role,
+            source_path: source.path().clone(),
+            metadata,
+            validation_report,
+            inventory: inspected.inventory,
+            source_signature: file_signature,
+        })
     }
-
-    validate_role_pair(model_id, source, metadata.component_role)?;
-
-    let file_signature = component_signature(source.path(), &metadata)?;
-
-    Ok(BurnLoadedSdxlComponent {
-        component_role: metadata.component_role,
-        source_path: source.path().clone(),
-        metadata,
-        validation_report,
-        inventory: inspected.inventory,
-        source_signature: file_signature,
-    })
 }
 
 fn validate_projection_metadata(
@@ -547,6 +600,41 @@ fn parse_projection_metadata(raw: &str) -> Result<BTreeMap<String, String>, Burn
         parsed.insert(key.trim().to_owned(), value.trim().to_owned());
     }
     Ok(parsed)
+}
+
+/// Returns `true` when the safetensors header contains the
+/// `reimagine.contract` key, indicating a converted Burn component
+/// package rather than a raw diffusers split file.
+fn has_burn_component_metadata(header: &BTreeMap<String, String>) -> bool {
+    header.contains_key(metadata_keys::CONTRACT)
+}
+
+/// Infer the SDXL component role from a diffusers-format split file
+/// path by inspecting the parent directory name.
+///
+/// Recognised patterns:
+/// - `…/unet/model.safetensors`          → Diffusion
+/// - `…/vae/diffusion_pytorch_model.safetensors` → Vae
+/// - `…/text_encoder/model.safetensors`  → TextEncoder
+/// - `…/text_encoder_2/model.safetensors`→ TextEncoder2
+fn infer_role_from_path(path: &Path) -> Option<BurnSdxlComponentRole> {
+    // Walk up at most two parent levels to find a recognisable
+    // directory name.  Diffusers splits typically place the
+    // safetensors file one level below the role directory.
+    let mut candidate = path;
+    for _ in 0..2 {
+        candidate = candidate.parent()?;
+        if let Some(dir_name) = candidate.file_name().and_then(|n| n.to_str()) {
+            match dir_name {
+                "unet" => return Some(BurnSdxlComponentRole::Diffusion),
+                "vae" => return Some(BurnSdxlComponentRole::Vae),
+                "text_encoder" => return Some(BurnSdxlComponentRole::TextEncoder),
+                "text_encoder_2" => return Some(BurnSdxlComponentRole::TextEncoder2),
+                _ => continue,
+            }
+        }
+    }
+    None
 }
 
 #[derive(Debug)]
