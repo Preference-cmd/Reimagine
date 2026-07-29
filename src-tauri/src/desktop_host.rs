@@ -465,6 +465,15 @@ impl DesktopHostState {
 
         Ok(reimagine_app_host::dto::ModelDownloadOutput::from(report))
     }
+
+    /// Shut down the active inference worker, if any.
+    ///
+    /// This is the application-level shutdown hook. Call it when the host
+    /// is exiting so that child worker processes are cleaned up instead of
+    /// becoming orphans.
+    pub async fn shutdown(&self) {
+        self.app_host.shutdown().await;
+    }
 }
 
 pub fn default_workspace_path(app_data_dir: impl AsRef<Path>) -> PathBuf {

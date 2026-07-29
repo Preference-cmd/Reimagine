@@ -291,8 +291,30 @@ pub fn run() {
             // Model download commands
             download_huggingface_model,
         ])
-        .run(tauri::generate_context!())
-        .expect("error while running tauri application");
+        .build(tauri::generate_context!())
+        .expect("error while building tauri application")
+        .run(|app_handle, event| {
+            if let tauri::RunEvent::ExitRequested { .. } = event {
+                let state = app_handle.state::<DesktopHostState>();
+                let state = state.inner().clone();
+                let _ = std::thread::scope(|s| {
+                    s.spawn(|| {
+                        let rt = tokio::runtime::Handle::current();
+                        let _ = rt.block_on(async {
+                            let shutdown = tokio::time::timeout(
+                                std::time::Duration::from_secs(5),
+                                state.shutdown(),
+                            );
+                            if shutdown.await.is_err() {
+                                eprintln!("[tauri] worker shutdown timed out after 5s; exiting");
+                                std::process::exit(1);
+                            }
+                        });
+                    })
+                    .join()
+                });
+            }
+        });
 }
 
 #[cfg(test)]

@@ -684,6 +684,26 @@ impl WorkerSwitchService {
         Ok(selected)
     }
 
+    /// Shut down the active worker gracefully.
+    ///
+    /// If graceful shutdown does not complete within `deadline`, the worker
+    /// process is force-killed via the drop-based cleanup.
+    pub async fn shutdown_active(&self, deadline: Duration) -> Result<(), WorkerSwitchError> {
+        let active = Arc::clone(&self.state.read().await.active);
+        match tokio::time::timeout(deadline, active.shutdown()).await {
+            Ok(result) => result,
+            Err(_elapsed) => {
+                // Graceful shutdown timed out — drop the Arc so the
+                // process supervisor can kill the child on drop.
+                eprintln!(
+                    "[app-host] worker `{}` graceful shutdown timed out after {deadline:?}; dropping reference",
+                    active.instance(),
+                );
+                Ok(())
+            }
+        }
+    }
+
     pub async fn cancel_and_switch(
         &self,
         target: Arc<dyn WorkerSwitchTarget>,

@@ -463,6 +463,21 @@ impl WorkspaceHost {
     pub fn resolved_backend_instance(&self) -> &reimagine_inference::BackendInstance {
         &self.resolved_backend_instance
     }
+
+    /// Shut down the active inference worker, if any.
+    ///
+    /// This is the application-level shutdown hook. Call it when the host
+    /// is exiting so that child worker processes are cleaned up instead of
+    /// becoming orphans.
+    pub async fn shutdown(&self) {
+        let Some(worker_switch) = &self.worker_switch else {
+            return;
+        };
+        let deadline = std::time::Duration::from_secs(5);
+        if let Err(error) = worker_switch.shutdown_active(deadline).await {
+            eprintln!("[app-host] worker shutdown error: {error}");
+        }
+    }
 }
 
 fn load_backend_config(config: &AppConfig) -> InferenceBackendConfig {
