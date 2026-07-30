@@ -5,7 +5,7 @@ use reimagine_config::{AppConfig, InferenceBackendConfig};
 use reimagine_inference::registry::register_builtin_inference_executors;
 use reimagine_inference::{
     BackendInstance, BackendInstanceRuntimeHooks, BackendInstanceStatus, BackendOverrides,
-    CompositeBackendInstanceRuntimeHooks, DefaultInferenceRuntime, InferenceBackendRegistry,
+    CompositeBackendInstanceRuntimeHooks, InferenceBackendRegistry, InferenceRouter, RouterRef,
     RejectAllBridgePolicy, StaticBackendSelectionPolicy, WorkspaceComputeProfile,
 };
 use reimagine_runtime::NodeExecutorRegistry;
@@ -241,17 +241,16 @@ async fn compose_inference_runtime_with_workers(
         disabled_instances,
     );
     let mut executor_registry = NodeExecutorRegistry::default();
-    let executor_inference_runtime: Arc<dyn reimagine_inference::InferenceRuntime> =
-        if let Some(workers) = &worker_switch {
-            Arc::new(super::switch::SwitchingInferenceRuntime::new(Arc::clone(
-                workers,
-            )))
-        } else {
-            inference_runtime.clone()
-        };
+    let executor_router_ref: RouterRef = if let Some(workers) = &worker_switch {
+        let switching = Arc::new(arc_swap::ArcSwap::from_pointee(inference_runtime.as_ref().clone()));
+        workers.set_router_ref(Arc::clone(&switching));
+        switching
+    } else {
+        Arc::new(arc_swap::ArcSwap::from_pointee(inference_runtime.as_ref().clone()))
+    };
     register_builtin_inference_executors(
         &mut executor_registry,
-        executor_inference_runtime,
+        executor_router_ref,
         Arc::new(ModelResolverAdapter::new(
             model_service,
             config.paths().clone(),
@@ -327,11 +326,11 @@ fn compose_inference_runtime_with_candidates(
 
     let mut executor_registry = NodeExecutorRegistry::default();
     let image_source_resolver = Arc::new(InputImageSourceResolver::new(config.paths()));
-    let executor_inference_runtime: Arc<dyn reimagine_inference::InferenceRuntime> =
-        inference_runtime.clone();
+    let executor_router_ref: RouterRef =
+        Arc::new(arc_swap::ArcSwap::from_pointee(inference_runtime.as_ref().clone()));
     register_builtin_inference_executors(
         &mut executor_registry,
-        executor_inference_runtime,
+        executor_router_ref,
         Arc::new(ModelResolverAdapter::new(
             model_service,
             config.paths().clone(),
@@ -409,14 +408,14 @@ fn compose_runtime_router(
     priority_order: Vec<BackendInstance>,
     allowed_instances: Vec<BackendInstance>,
     disabled_instances: Vec<BackendInstance>,
-) -> Arc<DefaultInferenceRuntime> {
+) -> Arc<InferenceRouter> {
     let policy = StaticBackendSelectionPolicy::with_overrides(
         BackendOverrides::new(),
         priority_order,
         Some(allowed_instances),
         disabled_instances,
     );
-    Arc::new(DefaultInferenceRuntime::with_policy(
+    Arc::new(InferenceRouter::with_policy(
         Arc::new(registry),
         Arc::new(policy),
         Arc::new(RejectAllBridgePolicy),
@@ -437,6 +436,7 @@ mod tests {
     use reimagine_plugin::{Extension, Plugin};
     use std::collections::BTreeMap;
 
+    #[cfg(feature = "candle")]
     use crate::inference::candidate::CandleBackendCandidate;
 
     fn temp_dir(prefix: &str) -> std::path::PathBuf {
@@ -510,6 +510,7 @@ mod tests {
         let _ = std::fs::remove_dir_all(&base);
     }
 
+    #[cfg(feature = "candle")]
     #[test]
     fn compose_uses_metal_instance_when_available_or_errors_when_unavailable() {
         let base = temp_dir("resolved-metal");
@@ -597,6 +598,7 @@ mod tests {
         let _ = std::fs::remove_dir_all(&base);
     }
 
+    #[cfg(feature = "candle")]
     #[tokio::test]
     async fn bootstrap_with_stub_collects_multiple_profiles_and_selects_stub() {
         let base = temp_dir("stub-bootstrap");

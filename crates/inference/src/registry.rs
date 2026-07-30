@@ -11,7 +11,7 @@
 use std::sync::Arc;
 
 use crate::executors::image_import::{ImageSourceResolver, LoadImageExecutor};
-use crate::{InferenceRuntime, ModelResolver};
+use crate::{RouterRef, ModelResolver};
 use reimagine_core::model::NodeTypeId;
 
 use crate::executor::{NodeExecutorRegistry, NodeExecutorRegistryError};
@@ -35,7 +35,7 @@ use crate::executors::{
 /// registry rejects duplicates).
 pub fn register_builtin_inference_executors(
     registry: &mut NodeExecutorRegistry,
-    inference: Arc<dyn InferenceRuntime>,
+    inference: RouterRef,
     resolver: Arc<dyn ModelResolver>,
     image_source_resolver: Arc<dyn ImageSourceResolver>,
 ) -> Result<(), NodeExecutorRegistryError> {

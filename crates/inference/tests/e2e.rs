@@ -21,9 +21,9 @@ use reimagine_inference::{
 use reimagine_inference::{
     CannedCapabilityResponse, CreateEmptyLatentRequest, CreateEmptyLatentResponse, FakeBackend,
     ImageSaveResponse, InferenceBackend, InferenceBackendCapabilities, InferenceBackendRegistry,
-    InferenceCapabilitySupport, InferenceError, InferenceRuntime, IntoNodeExecutorError,
+    InferenceCapabilitySupport, InferenceError, InferenceRouter, IntoNodeExecutorError,
     LoadBundleResponse, ModelFormat, ModelResolver, RejectAllBridgePolicy, ResolvedImageSource,
-    ResolvedInferenceModel, RuntimeLatent, TextEncodeRequest, TextEncodeResponse,
+    ResolvedInferenceModel, RouterRef, RuntimeLatent, TextEncodeRequest, TextEncodeResponse,
     register_builtin_inference_executors,
 };
 use reimagine_inference::{
@@ -155,7 +155,7 @@ fn make_load_bundle_response() -> LoadBundleResponse {
     )
 }
 
-fn runtime_for_backend(backend: Arc<dyn InferenceBackend>) -> Arc<dyn InferenceRuntime> {
+fn runtime_for_backend(backend: Arc<dyn InferenceBackend>) -> RouterRef {
     let mut registry = InferenceBackendRegistry::new();
     let backend_label = backend.backend_kind().clone();
     let descriptor = reimagine_inference::BackendInstanceDescriptor::new(
@@ -163,9 +163,11 @@ fn runtime_for_backend(backend: Arc<dyn InferenceBackend>) -> Arc<dyn InferenceR
         backend_label,
     );
     registry.register(descriptor, backend);
-    Arc::new(reimagine_inference::DefaultInferenceRuntime::new(
-        Arc::new(registry),
-        Arc::new(RejectAllBridgePolicy),
+    Arc::new(arc_swap::ArcSwap::from_pointee(
+        reimagine_inference::InferenceRouter::new(
+            Arc::new(registry),
+            Arc::new(RejectAllBridgePolicy),
+        ),
     ))
 }
 

@@ -18,11 +18,9 @@
 //! preview nodes emit no execution value outputs; they publish
 //! artifact observations instead.
 
-use std::sync::Arc;
-
 use crate::{
     ExecutionOutput, ImagePreviewRequest, ImagePreviewResponse, ImageSaveRequest,
-    ImageSaveResponse, InferenceRuntime, LatentDecodeRequest, LatentDecodeResponse,
+    ImageSaveResponse, LatentDecodeRequest, LatentDecodeResponse, RouterRef,
 };
 use reimagine_core::model::{ArtifactRef, SlotId};
 
@@ -37,11 +35,11 @@ use crate::executors::validation::image_output;
 
 /// `builtin.vae_decode` executor.
 pub struct VaeDecodeExecutor {
-    inference: Arc<dyn InferenceRuntime>,
+    inference: RouterRef,
 }
 
 impl VaeDecodeExecutor {
-    pub fn new(inference: Arc<dyn InferenceRuntime>) -> Self {
+    pub fn new(inference: RouterRef) -> Self {
         Self { inference }
     }
 }
@@ -82,6 +80,7 @@ impl NodeExecutor for VaeDecodeExecutor {
         let invocation = context.inference_invocation();
         let response: LatentDecodeResponse = self
             .inference
+            .load()
             .latent_decode_with_invocation(&invocation, request)
             .await
             .map_err(into_executor_error)?;
@@ -92,11 +91,11 @@ impl NodeExecutor for VaeDecodeExecutor {
 
 /// `builtin.save_image` executor.
 pub struct SaveImageExecutor {
-    inference: Arc<dyn InferenceRuntime>,
+    inference: RouterRef,
 }
 
 impl SaveImageExecutor {
-    pub fn new(inference: Arc<dyn InferenceRuntime>) -> Self {
+    pub fn new(inference: RouterRef) -> Self {
         Self { inference }
     }
 }
@@ -126,6 +125,7 @@ impl NodeExecutor for SaveImageExecutor {
         let invocation = context.inference_invocation();
         let response: ImageSaveResponse = self
             .inference
+            .load()
             .image_save_with_invocation(&invocation, request)
             .await
             .map_err(into_executor_error)?;
@@ -143,11 +143,11 @@ impl NodeExecutor for SaveImageExecutor {
 
 /// `builtin.preview_image` executor.
 pub struct PreviewImageExecutor {
-    inference: Arc<dyn InferenceRuntime>,
+    inference: RouterRef,
 }
 
 impl PreviewImageExecutor {
-    pub fn new(inference: Arc<dyn InferenceRuntime>) -> Self {
+    pub fn new(inference: RouterRef) -> Self {
         Self { inference }
     }
 }
@@ -174,6 +174,7 @@ impl NodeExecutor for PreviewImageExecutor {
         let invocation = context.inference_invocation();
         let response: ImagePreviewResponse = self
             .inference
+            .load()
             .image_preview_with_invocation(&invocation, request)
             .await
             .map_err(into_executor_error)?;

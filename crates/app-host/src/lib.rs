@@ -37,7 +37,7 @@ pub use artifact_access::{
 };
 pub use error::{AppHostError, AppHostResult};
 pub use inference::switch::{
-    ProcessSwitchableWorker, RunCancellation, SwitchableWorker, SwitchingInferenceRuntime,
+    ProcessSwitchableWorker, RunCancellation, SwitchableWorker,
     WorkerSelectionHandle, WorkerSwitchError, WorkerSwitchService, WorkerSwitchTarget,
 };
 pub use inference::worker::{

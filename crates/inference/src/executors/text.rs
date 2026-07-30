@@ -12,9 +12,7 @@
 //! typically consumed by the ksampler in the same run. Runtime owns
 //! retention enforcement and value lifetime.
 
-use std::sync::Arc;
-
-use crate::{ExecutionOutput, InferenceRuntime, TextEncodeRequest, TextEncodeResponse};
+use crate::{ExecutionOutput, RouterRef, TextEncodeRequest, TextEncodeResponse};
 
 use crate::error::into_executor_error;
 use crate::executor::{NodeExecutionContext, NodeExecutor, NodeExecutorError};
@@ -23,11 +21,11 @@ use crate::executors::validation::conditioning_output;
 
 /// `builtin.clip_text_encode` executor.
 pub struct ClipTextEncodeExecutor {
-    inference: Arc<dyn InferenceRuntime>,
+    inference: RouterRef,
 }
 
 impl ClipTextEncodeExecutor {
-    pub fn new(inference: Arc<dyn InferenceRuntime>) -> Self {
+    pub fn new(inference: RouterRef) -> Self {
         Self { inference }
     }
 }
@@ -56,6 +54,7 @@ impl NodeExecutor for ClipTextEncodeExecutor {
         let invocation = context.inference_invocation();
         let response: TextEncodeResponse = self
             .inference
+            .load()
             .text_encode_with_invocation(&invocation, request)
             .await
             .map_err(into_executor_error)?;

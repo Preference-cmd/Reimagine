@@ -11,9 +11,10 @@ use reimagine_backend_worker_protocol::WorkerIncarnationId;
 use reimagine_core::model::RunId;
 use reimagine_core::model::{NodeId, TensorDType, TensorShape, WorkflowId, WorkflowVersion};
 use reimagine_inference::{
-    Backend, BackendInstance, BackendPayloadKey, BackendTensorHandle, CannedCapabilityResponse,
-    CreateEmptyLatentRequest, CreateEmptyLatentResponse, FakeBackend, InferenceBackend,
-    InferenceRuntime, LatentContent, LatentSpaceMetadata, RuntimeLatent,
+    Backend, BackendInstance, BackendInstanceDescriptor, BackendPayloadKey, BackendTensorHandle,
+    CannedCapabilityResponse, CreateEmptyLatentRequest, CreateEmptyLatentResponse, FakeBackend,
+    InferenceBackend, InferenceBackendRegistry, InferenceRouter, LatentContent,
+    LatentSpaceMetadata, RejectAllBridgePolicy, RouterRef, RuntimeLatent,
 };
 
 #[derive(Default)]
@@ -420,8 +421,22 @@ async fn inference_runtime_routes_atomically_to_the_committed_worker() {
         "new-incarnation",
         "new-payload",
     ));
-    let workers = Arc::new(WorkerSwitchService::new(old, Arc::new(NoopRunCancellation)));
-    let runtime = reimagine_app_host::SwitchingInferenceRuntime::new(workers.clone());
+    let workers = Arc::new(WorkerSwitchService::new(old.clone(), Arc::new(NoopRunCancellation)));
+
+    // Build initial router from old worker's backend and attach to service.
+    let router_ref: RouterRef = Arc::new(arc_swap::ArcSwap::from_pointee(router_for_worker(
+        old.inference_backend().expect("old backend"),
+        "burn:wgpu:default",
+    )));
+    workers.set_router_ref(Arc::clone(&router_ref));
+
+    let invocation = reimagine_inference::InferenceInvocation::new(
+        RunId::new("route-run"),
+        NodeId::new("route-node"),
+        None,
+        Arc::new(reimagine_inference::NoopNodeCancellation::new()),
+        Arc::new(reimagine_inference::NoopInferenceProgressSink),
+    );
     let request = || {
         CreateEmptyLatentRequest::new(
             64,
@@ -434,8 +449,9 @@ async fn inference_runtime_routes_atomically_to_the_committed_worker() {
         )
     };
 
-    let before = runtime
-        .create_empty_latent(request())
+    let before = router_ref
+        .load()
+        .create_empty_latent_with_invocation(&invocation, request())
         .await
         .expect("old route");
     assert_eq!(
@@ -446,7 +462,7 @@ async fn inference_runtime_routes_atomically_to_the_committed_worker() {
     workers
         .drain_and_switch(
             Arc::new(FakeTarget {
-                worker: target,
+                worker: target.clone(),
                 events: Arc::new(Mutex::new(Vec::new())),
             }),
             Duration::from_secs(1),
@@ -454,8 +470,15 @@ async fn inference_runtime_routes_atomically_to_the_committed_worker() {
         .await
         .expect("switch");
 
-    let after = runtime
-        .create_empty_latent(request())
+    // Swap the router to point at the new worker's backend.
+    workers.swap_router(router_for_worker(
+        target.inference_backend().expect("new backend"),
+        "burn:wgpu:secondary",
+    ));
+
+    let after = router_ref
+        .load()
+        .create_empty_latent_with_invocation(&invocation, request())
         .await
         .expect("new route");
     assert_eq!(
@@ -466,6 +489,19 @@ async fn inference_runtime_routes_atomically_to_the_committed_worker() {
         after.latent().payload().backend_instance().as_str(),
         "burn:wgpu:secondary"
     );
+}
+
+/// Build an [`InferenceRouter`] from a single worker's backend.
+fn router_for_worker(backend: Arc<dyn InferenceBackend>, instance: &str) -> InferenceRouter {
+    let mut registry = InferenceBackendRegistry::new();
+    registry.register(
+        BackendInstanceDescriptor::new(
+            BackendInstance::new(instance),
+            backend.backend_kind().clone(),
+        ),
+        backend,
+    );
+    InferenceRouter::new(Arc::new(registry), Arc::new(RejectAllBridgePolicy))
 }
 
 #[tokio::test]

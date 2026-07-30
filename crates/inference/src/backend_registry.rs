@@ -33,7 +33,7 @@ impl std::fmt::Debug for BackendRegistryEntry {
 /// order.
 ///
 /// V1 keeps the registry in app-host and exposes it to the
-/// executor-facing router through `DefaultInferenceRuntime`. App-host
+/// executor-facing router through `InferenceRouter`. App-host
 /// chooses the order, the open backend label, and the descriptor
 /// metadata; the registry stores the result verbatim.
 #[derive(Default)]

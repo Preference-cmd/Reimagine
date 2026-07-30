@@ -126,7 +126,7 @@ pub use response::latent::{CreateEmptyLatentResponse, LatentDecodeResponse};
 pub use response::latent_encode::LatentEncodeResponse;
 pub use response::model::LoadBundleResponse;
 pub use response::text::TextEncodeResponse;
-pub use router::{DefaultInferenceRuntime, InferenceRuntime};
+pub use router::{InferenceRouter, RouterRef};
 
 pub use artifact_publisher::{ArtifactEventKind, ArtifactPublisher};
 pub use cancellation::NodeCancellation;

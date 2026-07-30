@@ -1,4 +1,11 @@
-//! Executor-facing router trait and registry-backed default implementation.
+//! Executor-facing inference router.
+//!
+//! [`InferenceRouter`] is the concrete struct that built-in executors
+//! call to dispatch typed capability requests. It resolves the target
+//! backend via a [`BackendSelectionPolicy`](crate::BackendSelectionPolicy),
+//! consults the [`BackendBridgePolicy`](crate::BackendBridgePolicy)
+//! for cross-backend handle conflicts, and delegates to the selected
+//! [`InferenceBackend`](crate::InferenceBackend).
 
 use std::sync::Arc;
 
@@ -27,114 +34,17 @@ use crate::response::model::LoadBundleResponse;
 use crate::response::text::TextEncodeResponse;
 use crate::routing_request::RoutableInferenceRequest;
 
-/// Executor-facing router. Built-in executors call this trait rather
-/// than a concrete backend directly.
-#[async_trait::async_trait]
-pub trait InferenceRuntime: Send + Sync + 'static {
-    async fn load_bundle(
-        &self,
-        request: LoadBundleRequest,
-    ) -> Result<LoadBundleResponse, InferenceError>;
+/// RouterRef is the type held by executors for lock-free atomic access
+/// to the current [`InferenceRouter`]. When a worker hot-swaps, the
+/// router is replaced atomically via [`arc_swap::ArcSwap::store`].
+pub type RouterRef = Arc<arc_swap::ArcSwap<InferenceRouter>>;
 
-    async fn load_bundle_with_invocation(
-        &self,
-        invocation: &InferenceInvocation,
-        request: LoadBundleRequest,
-    ) -> Result<LoadBundleResponse, InferenceError>;
-
-    async fn text_encode(
-        &self,
-        request: TextEncodeRequest,
-    ) -> Result<TextEncodeResponse, InferenceError>;
-
-    async fn text_encode_with_invocation(
-        &self,
-        invocation: &InferenceInvocation,
-        request: TextEncodeRequest,
-    ) -> Result<TextEncodeResponse, InferenceError>;
-
-    async fn create_empty_latent(
-        &self,
-        request: CreateEmptyLatentRequest,
-    ) -> Result<CreateEmptyLatentResponse, InferenceError>;
-
-    async fn create_empty_latent_with_invocation(
-        &self,
-        invocation: &InferenceInvocation,
-        request: CreateEmptyLatentRequest,
-    ) -> Result<CreateEmptyLatentResponse, InferenceError>;
-
-    async fn diffusion_sample(
-        &self,
-        request: DiffusionSampleRequest,
-    ) -> Result<DiffusionSampleResponse, InferenceError>;
-
-    async fn diffusion_sample_with_invocation(
-        &self,
-        invocation: &InferenceInvocation,
-        request: DiffusionSampleRequest,
-    ) -> Result<DiffusionSampleResponse, InferenceError>;
-
-    async fn latent_decode(
-        &self,
-        request: LatentDecodeRequest,
-    ) -> Result<LatentDecodeResponse, InferenceError>;
-
-    async fn latent_decode_with_invocation(
-        &self,
-        invocation: &InferenceInvocation,
-        request: LatentDecodeRequest,
-    ) -> Result<LatentDecodeResponse, InferenceError>;
-
-    async fn latent_encode(
-        &self,
-        request: LatentEncodeRequest,
-    ) -> Result<LatentEncodeResponse, InferenceError>;
-
-    async fn latent_encode_with_invocation(
-        &self,
-        invocation: &InferenceInvocation,
-        request: LatentEncodeRequest,
-    ) -> Result<LatentEncodeResponse, InferenceError>;
-
-    async fn image_import(
-        &self,
-        request: ImageImportRequest,
-    ) -> Result<ImageImportResponse, InferenceError>;
-
-    async fn image_import_with_invocation(
-        &self,
-        invocation: &InferenceInvocation,
-        request: ImageImportRequest,
-    ) -> Result<ImageImportResponse, InferenceError>;
-
-    async fn image_save(
-        &self,
-        request: ImageSaveRequest,
-    ) -> Result<ImageSaveResponse, InferenceError>;
-
-    async fn image_save_with_invocation(
-        &self,
-        invocation: &InferenceInvocation,
-        request: ImageSaveRequest,
-    ) -> Result<ImageSaveResponse, InferenceError>;
-
-    async fn image_preview(
-        &self,
-        request: ImagePreviewRequest,
-    ) -> Result<ImagePreviewResponse, InferenceError>;
-
-    async fn image_preview_with_invocation(
-        &self,
-        invocation: &InferenceInvocation,
-        request: ImagePreviewRequest,
-    ) -> Result<ImagePreviewResponse, InferenceError>;
-}
-
-/// Default router: applies a [`BackendSelectionPolicy`] to derive a
-/// candidate [`BackendInstance`], consults the
-/// [`BackendBridgePolicy`] for cross-backend handle conflicts, and
-/// dispatches the typed capability call to the selected backend.
+/// Executor-facing inference router.
+///
+/// Applies a [`BackendSelectionPolicy`] to derive a candidate
+/// [`BackendInstance`], consults the [`BackendBridgePolicy`] for
+/// cross-backend handle conflicts, and dispatches the typed capability
+/// call to the selected backend.
 ///
 /// Selection precedence (deterministic, see `docs/architecture/modules/inference.md`):
 ///
@@ -144,13 +54,14 @@ pub trait InferenceRuntime: Send + Sync + 'static {
 ///    incompatible handles exist).
 /// 3. Priority order from the policy.
 /// 4. Diagnostic failure.
-pub struct DefaultInferenceRuntime {
+#[derive(Clone)]
+pub struct InferenceRouter {
     registry: Arc<InferenceBackendRegistry>,
     selection_policy: Arc<dyn BackendSelectionPolicy>,
     bridge_policy: Arc<dyn BackendBridgePolicy>,
 }
 
-impl DefaultInferenceRuntime {
+impl InferenceRouter {
     /// Construct a router with the [`StaticBackendSelectionPolicy`].
     pub fn new(
         registry: Arc<InferenceBackendRegistry>,
@@ -324,9 +235,6 @@ impl DefaultInferenceRuntime {
             if caps.supports_capability(capability) {
                 return Ok(registered);
             }
-            // Record the first capability-missing candidate so we
-            // can return a precise diagnostic if no viable
-            // candidate is found.
             if first_missing.is_none() {
                 first_missing = Some((instance, caps.backend_kind().clone()));
             }
@@ -354,19 +262,10 @@ impl DefaultInferenceRuntime {
         let selection = request.selection_request(self.registry.descriptors());
         self.resolve_backend(&selection)
     }
-}
 
-#[async_trait::async_trait]
-impl InferenceRuntime for DefaultInferenceRuntime {
-    async fn load_bundle(
-        &self,
-        request: LoadBundleRequest,
-    ) -> Result<LoadBundleResponse, InferenceError> {
-        let backend = self.resolve_for_request(&request)?;
-        backend.backend.load_bundle(request).await
-    }
+    // ─── Typed capability dispatch methods ─────────────────────
 
-    async fn load_bundle_with_invocation(
+    pub async fn load_bundle_with_invocation(
         &self,
         invocation: &InferenceInvocation,
         request: LoadBundleRequest,
@@ -378,15 +277,7 @@ impl InferenceRuntime for DefaultInferenceRuntime {
             .await
     }
 
-    async fn text_encode(
-        &self,
-        request: TextEncodeRequest,
-    ) -> Result<TextEncodeResponse, InferenceError> {
-        let backend = self.resolve_for_request(&request)?;
-        backend.backend.text_encode(request).await
-    }
-
-    async fn text_encode_with_invocation(
+    pub async fn text_encode_with_invocation(
         &self,
         invocation: &InferenceInvocation,
         request: TextEncodeRequest,
@@ -398,15 +289,7 @@ impl InferenceRuntime for DefaultInferenceRuntime {
             .await
     }
 
-    async fn create_empty_latent(
-        &self,
-        request: CreateEmptyLatentRequest,
-    ) -> Result<CreateEmptyLatentResponse, InferenceError> {
-        let backend = self.resolve_for_request(&request)?;
-        backend.backend.create_empty_latent(request).await
-    }
-
-    async fn create_empty_latent_with_invocation(
+    pub async fn create_empty_latent_with_invocation(
         &self,
         invocation: &InferenceInvocation,
         request: CreateEmptyLatentRequest,
@@ -418,15 +301,7 @@ impl InferenceRuntime for DefaultInferenceRuntime {
             .await
     }
 
-    async fn diffusion_sample(
-        &self,
-        request: DiffusionSampleRequest,
-    ) -> Result<DiffusionSampleResponse, InferenceError> {
-        let backend = self.resolve_for_request(&request)?;
-        backend.backend.diffusion_sample(request).await
-    }
-
-    async fn diffusion_sample_with_invocation(
+    pub async fn diffusion_sample_with_invocation(
         &self,
         invocation: &InferenceInvocation,
         request: DiffusionSampleRequest,
@@ -438,15 +313,7 @@ impl InferenceRuntime for DefaultInferenceRuntime {
             .await
     }
 
-    async fn latent_decode(
-        &self,
-        request: LatentDecodeRequest,
-    ) -> Result<LatentDecodeResponse, InferenceError> {
-        let backend = self.resolve_for_request(&request)?;
-        backend.backend.latent_decode(request).await
-    }
-
-    async fn latent_decode_with_invocation(
+    pub async fn latent_decode_with_invocation(
         &self,
         invocation: &InferenceInvocation,
         request: LatentDecodeRequest,
@@ -458,15 +325,7 @@ impl InferenceRuntime for DefaultInferenceRuntime {
             .await
     }
 
-    async fn latent_encode(
-        &self,
-        request: LatentEncodeRequest,
-    ) -> Result<LatentEncodeResponse, InferenceError> {
-        let backend = self.resolve_for_request(&request)?;
-        backend.backend.latent_encode(request).await
-    }
-
-    async fn latent_encode_with_invocation(
+    pub async fn latent_encode_with_invocation(
         &self,
         invocation: &InferenceInvocation,
         request: LatentEncodeRequest,
@@ -478,15 +337,7 @@ impl InferenceRuntime for DefaultInferenceRuntime {
             .await
     }
 
-    async fn image_import(
-        &self,
-        request: ImageImportRequest,
-    ) -> Result<ImageImportResponse, InferenceError> {
-        let backend = self.resolve_for_request(&request)?;
-        backend.backend.image_import(request).await
-    }
-
-    async fn image_import_with_invocation(
+    pub async fn image_import_with_invocation(
         &self,
         invocation: &InferenceInvocation,
         request: ImageImportRequest,
@@ -498,15 +349,7 @@ impl InferenceRuntime for DefaultInferenceRuntime {
             .await
     }
 
-    async fn image_save(
-        &self,
-        request: ImageSaveRequest,
-    ) -> Result<ImageSaveResponse, InferenceError> {
-        let backend = self.resolve_for_request(&request)?;
-        backend.backend.image_save(request).await
-    }
-
-    async fn image_save_with_invocation(
+    pub async fn image_save_with_invocation(
         &self,
         invocation: &InferenceInvocation,
         request: ImageSaveRequest,
@@ -518,15 +361,7 @@ impl InferenceRuntime for DefaultInferenceRuntime {
             .await
     }
 
-    async fn image_preview(
-        &self,
-        request: ImagePreviewRequest,
-    ) -> Result<ImagePreviewResponse, InferenceError> {
-        let backend = self.resolve_for_request(&request)?;
-        backend.backend.image_preview(request).await
-    }
-
-    async fn image_preview_with_invocation(
+    pub async fn image_preview_with_invocation(
         &self,
         invocation: &InferenceInvocation,
         request: ImagePreviewRequest,
@@ -539,9 +374,9 @@ impl InferenceRuntime for DefaultInferenceRuntime {
     }
 }
 
-impl std::fmt::Debug for DefaultInferenceRuntime {
+impl std::fmt::Debug for InferenceRouter {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.debug_struct("DefaultInferenceRuntime")
+        f.debug_struct("InferenceRouter")
             .field("registry", &self.registry)
             .field("selection_policy", &"<dyn BackendSelectionPolicy>")
             .field("bridge_policy", &"<dyn BackendBridgePolicy>")
@@ -738,12 +573,23 @@ mod tests {
         Arc::new(reg)
     }
 
+    fn noop_invocation() -> InferenceInvocation {
+        InferenceInvocation::new(
+            RunId::new("test-run"),
+            NodeId::new("test-node"),
+            None,
+            Arc::new(crate::testing::NoopNodeCancellation::new()),
+            Arc::new(crate::NoopInferenceProgressSink),
+        )
+    }
+
     #[tokio::test]
     async fn routes_through_first_registered_when_no_affinity() {
         let registry = make_registry_with_single_candle();
-        let runtime = DefaultInferenceRuntime::new(registry, Arc::new(RejectAllBridgePolicy));
-        let response = runtime
-            .create_empty_latent(empty_latent_request())
+        let router = InferenceRouter::new(registry, Arc::new(RejectAllBridgePolicy));
+        let invocation = noop_invocation();
+        let response = router
+            .create_empty_latent_with_invocation(&invocation, empty_latent_request())
             .await
             .unwrap();
         assert_eq!(response.latent().width(), 64);
@@ -751,12 +597,13 @@ mod tests {
 
     #[tokio::test]
     async fn returns_no_candidate_when_registry_empty_and_no_policy() {
-        let runtime = DefaultInferenceRuntime::new(
+        let router = InferenceRouter::new(
             Arc::new(InferenceBackendRegistry::new()),
             Arc::new(RejectAllBridgePolicy),
         );
-        let err = runtime
-            .create_empty_latent(empty_latent_request())
+        let invocation = noop_invocation();
+        let err = router
+            .create_empty_latent_with_invocation(&invocation, empty_latent_request())
             .await
             .unwrap_err();
         assert!(matches!(
@@ -767,14 +614,9 @@ mod tests {
 
     #[tokio::test]
     async fn returns_capability_unsupported_when_no_candidate_supports_capability() {
-        // Echo backend does not advertise TextEncode. The clip
-        // handle's affinity is `candle`, and candle:cpu is the only
-        // registered instance. The router must report that the
-        // affinity-targeted instance lacks the requested
-        // capability.
         let registry = make_registry_with_single_candle();
         let policy = StaticBackendSelectionPolicy::new(vec![BackendInstance::new("candle:cpu")]);
-        let runtime = DefaultInferenceRuntime::with_policy(
+        let router = InferenceRouter::with_policy(
             registry,
             Arc::new(policy),
             Arc::new(RejectAllBridgePolicy),
@@ -796,7 +638,11 @@ mod tests {
             WorkflowVersion::new(1),
             NodeId::new("n"),
         );
-        let err = runtime.text_encode(req).await.unwrap_err();
+        let invocation = noop_invocation();
+        let err = router
+            .text_encode_with_invocation(&invocation, req)
+            .await
+            .unwrap_err();
         assert!(matches!(
             err,
             InferenceError::CandidateBackendLacksCapability { .. }
@@ -806,25 +652,32 @@ mod tests {
     #[tokio::test]
     async fn explicit_override_pins_known_instance() {
         let registry = make_registry_with_single_candle();
-        let runtime = DefaultInferenceRuntime::new(registry, Arc::new(RejectAllBridgePolicy));
-        // Use the request overlay to pin candle:cpu.
+        let router = InferenceRouter::new(registry, Arc::new(RejectAllBridgePolicy));
+        let invocation = noop_invocation();
         let mut req = empty_latent_request();
         req.set_backend_selection_overlay(crate::BackendSelectionOverlay::with_explicit_override(
             BackendInstance::new("candle:cpu"),
         ));
-        let response = runtime.create_empty_latent(req).await.unwrap();
+        let response = router
+            .create_empty_latent_with_invocation(&invocation, req)
+            .await
+            .unwrap();
         assert_eq!(response.latent().width(), 64);
     }
 
     #[tokio::test]
     async fn explicit_override_for_missing_instance_returns_not_registered() {
         let registry = make_registry_with_single_candle();
-        let runtime = DefaultInferenceRuntime::new(registry, Arc::new(RejectAllBridgePolicy));
+        let router = InferenceRouter::new(registry, Arc::new(RejectAllBridgePolicy));
+        let invocation = noop_invocation();
         let mut req = empty_latent_request();
         req.set_backend_selection_overlay(crate::BackendSelectionOverlay::with_explicit_override(
             BackendInstance::new("missing"),
         ));
-        let err = runtime.create_empty_latent(req).await.unwrap_err();
+        let err = router
+            .create_empty_latent_with_invocation(&invocation, req)
+            .await
+            .unwrap_err();
         assert!(matches!(
             err,
             InferenceError::CandidateBackendNotRegistered { .. }
@@ -840,16 +693,20 @@ mod tests {
             None,
             vec![BackendInstance::new("candle:cpu")],
         );
-        let runtime = DefaultInferenceRuntime::with_policy(
+        let router = InferenceRouter::with_policy(
             registry,
             Arc::new(policy),
             Arc::new(RejectAllBridgePolicy),
         );
+        let invocation = noop_invocation();
         let mut req = empty_latent_request();
         req.set_backend_selection_overlay(crate::BackendSelectionOverlay::with_explicit_override(
             BackendInstance::new("candle:cpu"),
         ));
-        let err = runtime.create_empty_latent(req).await.unwrap_err();
+        let err = router
+            .create_empty_latent_with_invocation(&invocation, req)
+            .await
+            .unwrap_err();
         assert!(matches!(
             err,
             InferenceError::BackendSelectionNoCandidate { .. }
@@ -859,7 +716,7 @@ mod tests {
     #[tokio::test]
     async fn handle_affinity_pins_concrete_backend_instance() {
         let registry = make_registry_with_two_candle_instances();
-        let runtime = DefaultInferenceRuntime::new(registry, Arc::new(RejectAllBridgePolicy));
+        let router = InferenceRouter::new(registry, Arc::new(RejectAllBridgePolicy));
         let clip = crate::RuntimeClipHandle::with_instance(
             reimagine_core::model::ModelId::new("clip"),
             Backend::new("candle"),
@@ -877,7 +734,11 @@ mod tests {
             WorkflowVersion::new(1),
             NodeId::new("n"),
         );
-        let err = runtime.text_encode(req).await.unwrap_err();
+        let invocation = noop_invocation();
+        let err = router
+            .text_encode_with_invocation(&invocation, req)
+            .await
+            .unwrap_err();
         match err {
             InferenceError::CandidateBackendLacksCapability { instance, .. } => {
                 assert_eq!(instance, BackendInstance::new("candle:metal"));
@@ -888,12 +749,6 @@ mod tests {
 
     #[tokio::test]
     async fn affinity_for_unregistered_backend_returns_not_registered() {
-        // The affinity names a backend that no instance advertises.
-        // The router's affinity branch short-circuits to
-        // "candidate not registered" without consulting the bridge
-        // policy. Bridge policy coverage is exercised by the
-        // `bridge_policy_rejects_cross_backend_transfer` test in
-        // `bridge.rs`.
         let mut reg = InferenceBackendRegistry::new();
         reg.register(
             BackendInstanceDescriptor::new(BackendInstance::new("a:cpu"), Backend::new("a")),
@@ -903,10 +758,9 @@ mod tests {
             BackendInstanceDescriptor::new(BackendInstance::new("b:cpu"), Backend::new("b")),
             Arc::new(EchoBackend::new("b")),
         );
-        let runtime = DefaultInferenceRuntime::new(Arc::new(reg), Arc::new(RejectAllBridgePolicy));
+        let router =
+            InferenceRouter::new(Arc::new(reg), Arc::new(RejectAllBridgePolicy));
 
-        // The clip handle's affinity is `other` — a backend that
-        // no registered instance advertises.
         let clip = crate::RuntimeClipHandle::with_instance(
             reimagine_core::model::ModelId::new("clip"),
             Backend::new("other"),
@@ -924,7 +778,11 @@ mod tests {
             WorkflowVersion::new(1),
             NodeId::new("n"),
         );
-        let err = runtime.text_encode(req).await.unwrap_err();
+        let invocation = noop_invocation();
+        let err = router
+            .text_encode_with_invocation(&invocation, req)
+            .await
+            .unwrap_err();
         assert!(matches!(
             err,
             InferenceError::CandidateBackendNotRegistered { .. }
@@ -933,17 +791,13 @@ mod tests {
 
     #[tokio::test]
     async fn empty_registry_produces_no_candidate_with_registered_zero() {
-        // When the registry is empty and no override is supplied,
-        // the router must report "no candidate" with
-        // `registered == 0` so downstream diagnostic consumers can
-        // distinguish "nothing registered" from "policy filtered
-        // every candidate".
-        let runtime = DefaultInferenceRuntime::new(
+        let router = InferenceRouter::new(
             Arc::new(InferenceBackendRegistry::new()),
             Arc::new(RejectAllBridgePolicy),
         );
-        let err = runtime
-            .create_empty_latent(empty_latent_request())
+        let invocation = noop_invocation();
+        let err = router
+            .create_empty_latent_with_invocation(&invocation, empty_latent_request())
             .await
             .unwrap_err();
         match err {
@@ -957,7 +811,7 @@ mod tests {
     #[tokio::test]
     async fn invocation_context_is_separate_from_request_and_routes_with_it() {
         let registry = make_registry_with_single_candle();
-        let runtime = DefaultInferenceRuntime::new(registry, Arc::new(RejectAllBridgePolicy));
+        let router = InferenceRouter::new(registry, Arc::new(RejectAllBridgePolicy));
         let invocation = crate::InferenceInvocation::new(
             RunId::new("invocation-run"),
             NodeId::new("invocation-node"),
@@ -966,7 +820,7 @@ mod tests {
             Arc::new(crate::NoopInferenceProgressSink),
         );
 
-        let response = runtime
+        let response = router
             .create_empty_latent_with_invocation(&invocation, empty_latent_request())
             .await
             .expect("router should accept invocation separately from request data");

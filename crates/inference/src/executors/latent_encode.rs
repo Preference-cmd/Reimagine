@@ -20,9 +20,7 @@
 //! in the same run. Runtime owns retention enforcement and value
 //! lifetime.
 
-use std::sync::Arc;
-
-use crate::{ExecutionOutput, InferenceRuntime, LatentEncodeRequest, LatentEncodeResponse};
+use crate::{ExecutionOutput, LatentEncodeRequest, LatentEncodeResponse, RouterRef};
 
 use crate::error::into_executor_error;
 use crate::executor::{NodeExecutionContext, NodeExecutor, NodeExecutorError};
@@ -31,11 +29,11 @@ use crate::executors::validation::encoded_latent_output;
 
 /// `builtin.vae_encode` executor.
 pub struct VaeEncodeExecutor {
-    inference: Arc<dyn InferenceRuntime>,
+    inference: RouterRef,
 }
 
 impl VaeEncodeExecutor {
-    pub fn new(inference: Arc<dyn InferenceRuntime>) -> Self {
+    pub fn new(inference: RouterRef) -> Self {
         Self { inference }
     }
 }
@@ -80,6 +78,7 @@ impl NodeExecutor for VaeEncodeExecutor {
         let invocation = context.inference_invocation();
         let response: LatentEncodeResponse = self
             .inference
+            .load()
             .latent_encode_with_invocation(&invocation, request)
             .await
             .map_err(into_executor_error)?;

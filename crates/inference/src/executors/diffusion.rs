@@ -12,11 +12,9 @@
 //! Retention: the sampled `latent` is declared `RunScoped`. Runtime
 //! owns retention enforcement and value lifetime.
 
-use std::sync::Arc;
-
 use crate::{
-    DiffusionSampleRequest, DiffusionSampleResponse, ExecutionOutput, InferenceRuntime,
-    SamplerName, SchedulerName,
+    DiffusionSampleRequest, DiffusionSampleResponse, ExecutionOutput, RouterRef, SamplerName,
+    SchedulerName,
 };
 
 use crate::error::into_executor_error;
@@ -44,11 +42,11 @@ fn select_scheduler(name: Option<String>) -> SchedulerName {
 
 /// `builtin.ksampler` executor.
 pub struct KSamplerExecutor {
-    inference: Arc<dyn InferenceRuntime>,
+    inference: RouterRef,
 }
 
 impl KSamplerExecutor {
-    pub fn new(inference: Arc<dyn InferenceRuntime>) -> Self {
+    pub fn new(inference: RouterRef) -> Self {
         Self { inference }
     }
 }
@@ -99,6 +97,7 @@ impl NodeExecutor for KSamplerExecutor {
         let invocation = context.inference_invocation();
         let response: DiffusionSampleResponse = self
             .inference
+            .load()
             .diffusion_sample_with_invocation(&invocation, request)
             .await
             .map_err(into_executor_error)?;

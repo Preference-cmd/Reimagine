@@ -8,6 +8,7 @@ rust-version.workspace = true
 license.workspace = true
 
 [dependencies]
+arc-swap = { workspace = true }
 async-trait = { workspace = true }
 reimagine-core = { path = "../core" }
 reimagine-plugin = { path = "../plugin" }

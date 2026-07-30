@@ -27,7 +27,7 @@
 //!   (e.g. [`crate::LoadBundleRequest`]).
 //!
 //! Selection precedence is fixed in
-//! [`crate::router::DefaultInferenceRuntime`]:
+//! [`crate::router::InferenceRouter`]:
 //!
 //! 1. Existing backend-bound handle affinities.
 //! 2. Explicit override from the request overlay (when no

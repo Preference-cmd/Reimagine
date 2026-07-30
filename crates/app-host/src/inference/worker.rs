@@ -18,7 +18,7 @@ use reimagine_plugin::{Extension, Plugin};
 
 use super::candidate::BuiltBackendInstance;
 use super::switch::{
-    ProcessSwitchableWorker, RunCancellation, SwitchableWorker, SwitchingInferenceBackend,
+    ProcessSwitchableWorker, RunCancellation, SwitchableWorker,
     SwitchingWorkerRuntimeHooks, WorkerSwitchError, WorkerSwitchService,
 };
 
@@ -192,11 +192,6 @@ impl WorkerControlService {
         )
         .with_device(live_profile.device.clone())
         .with_plugin(plugin.clone(), extension.clone());
-        let backend = Arc::new(SwitchingInferenceBackend::new(
-            Arc::clone(&workers),
-            backend.backend_kind().clone(),
-            backend.capabilities(),
-        ));
         let hooks = Arc::new(SwitchingWorkerRuntimeHooks::new(Arc::clone(&workers)));
         let backend: Arc<dyn InferenceBackend> = backend;
         let hooks: Arc<dyn BackendInstanceRuntimeHooks> = hooks;

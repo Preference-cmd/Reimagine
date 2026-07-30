@@ -23,7 +23,7 @@
 use std::sync::Arc;
 
 use crate::{
-    ExecutionOutput, ImageImportRequest, ImageImportResponse, InferenceRuntime, ResolvedImageSource,
+    ExecutionOutput, ImageImportRequest, ImageImportResponse, ResolvedImageSource, RouterRef,
 };
 use reimagine_core::diagnostic::CorrelationId;
 use reimagine_core::model::SlotId;
@@ -48,13 +48,13 @@ pub trait ImageSourceResolver: Send + Sync + 'static {
 
 /// `builtin.load_image` executor.
 pub struct LoadImageExecutor {
-    inference: Arc<dyn InferenceRuntime>,
+    inference: RouterRef,
     resolver: Arc<dyn ImageSourceResolver>,
 }
 
 impl LoadImageExecutor {
     pub fn new(
-        inference: Arc<dyn InferenceRuntime>,
+        inference: RouterRef,
         resolver: Arc<dyn ImageSourceResolver>,
     ) -> Self {
         Self {
@@ -102,6 +102,7 @@ impl NodeExecutor for LoadImageExecutor {
         let invocation = context.inference_invocation();
         let response: ImageImportResponse = self
             .inference
+            .load()
             .image_import_with_invocation(&invocation, request)
             .await
             .map_err(into_executor_error)?;

@@ -11,22 +11,21 @@
 //! retention enforcement and value lifetime.
 
 use crate::{
-    CreateEmptyLatentRequest, CreateEmptyLatentResponse, ExecutionOutput, InferenceRuntime,
+    CreateEmptyLatentRequest, CreateEmptyLatentResponse, ExecutionOutput, RouterRef,
 };
 
 use crate::error::into_executor_error;
 use crate::executor::{NodeExecutionContext, NodeExecutor, NodeExecutorError};
 use crate::executors::common::{optional_correlation_id, required_u32_param};
 use crate::executors::validation::latent_output;
-use std::sync::Arc;
 
 /// `builtin.empty_latent_image` executor.
 pub struct EmptyLatentImageExecutor {
-    inference: Arc<dyn InferenceRuntime>,
+    inference: RouterRef,
 }
 
 impl EmptyLatentImageExecutor {
-    pub fn new(inference: Arc<dyn InferenceRuntime>) -> Self {
+    pub fn new(inference: RouterRef) -> Self {
         Self { inference }
     }
 }
@@ -57,6 +56,7 @@ impl NodeExecutor for EmptyLatentImageExecutor {
         let invocation = context.inference_invocation();
         let response: CreateEmptyLatentResponse = self
             .inference
+            .load()
             .create_empty_latent_with_invocation(&invocation, request)
             .await
             .map_err(into_executor_error)?;

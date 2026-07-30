@@ -3,7 +3,7 @@
 //! [`InferenceError`] is the canonical error type returned by the
 //! typed capability methods on
 //! [`crate::backend::InferenceBackend`] and
-//! [`crate::router::InferenceRuntime`].
+//! [`crate::router::InferenceRouter`].
 //!
 //! The mapping from [`InferenceError`] to
 //! [`crate::executor::NodeExecutorError`] is intentionally kept in

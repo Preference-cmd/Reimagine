@@ -16,7 +16,7 @@
 //! single run. Runtime owns retention enforcement and value lifetime.
 
 use crate::{
-    ExecutionOutput, InferenceRuntime, LoadBundleRequest, LoadBundleResponse, ModelResolver,
+    ExecutionOutput, LoadBundleRequest, LoadBundleResponse, ModelResolver, RouterRef,
 };
 use reimagine_core::model::{ModelRef, ParamValue, SlotId};
 
@@ -27,12 +27,12 @@ use std::sync::Arc;
 
 /// `builtin.checkpoint_loader` executor.
 pub struct CheckpointLoaderExecutor {
-    inference: Arc<dyn InferenceRuntime>,
+    inference: RouterRef,
     resolver: Arc<dyn ModelResolver>,
 }
 
 impl CheckpointLoaderExecutor {
-    pub fn new(inference: Arc<dyn InferenceRuntime>, resolver: Arc<dyn ModelResolver>) -> Self {
+    pub fn new(inference: RouterRef, resolver: Arc<dyn ModelResolver>) -> Self {
         Self {
             inference,
             resolver,
@@ -76,6 +76,7 @@ impl NodeExecutor for CheckpointLoaderExecutor {
         let invocation = context.inference_invocation();
         let response: LoadBundleResponse = self
             .inference
+            .load()
             .load_bundle_with_invocation(&invocation, request)
             .await
             .map_err(into_executor_error)?;

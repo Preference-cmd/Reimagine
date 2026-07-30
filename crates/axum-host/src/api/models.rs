@@ -35,6 +35,7 @@ pub async fn download(
         allow_patterns,
         target_relative_dir,
         overwrite,
+        auto_detect,
     } = body;
 
     // Parse repo_id
@@ -64,6 +65,7 @@ pub async fn download(
         allow_patterns,
         target_relative_dir,
         overwrite_policy,
+        auto_detect: auto_detect.unwrap_or(true),
     };
 
     // Clone the service Arc and call acquire

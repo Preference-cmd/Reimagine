@@ -9,11 +9,9 @@ use reimagine_backend_worker_host::{
 use reimagine_backend_worker_protocol::WorkerIncarnationId;
 use reimagine_core::model::RunId;
 use reimagine_inference::{
-    Backend, BackendInstance, BackendInstanceDescriptor, BackendInstanceObservation,
-    BackendInstanceSnapshot, BackendOverrides, BackendRunLifecycle, BackendRunLifecycleReport,
-    BackendRunLifecycleRequest, DefaultInferenceRuntime, DeviceProfile, InferenceBackend,
-    InferenceBackendCapabilities, InferenceBackendRegistry, RejectAllBridgePolicy,
-    StaticBackendSelectionPolicy,
+    Backend, BackendInstance, BackendInstanceObservation, BackendInstanceSnapshot,
+    BackendRunLifecycle, BackendRunLifecycleReport, BackendRunLifecycleRequest, DeviceProfile,
+    InferenceBackend, InferenceRouter, RouterRef,
 };
 use tokio::sync::{Mutex, RwLock};
 
@@ -289,6 +287,7 @@ pub struct WorkerSwitchService {
     state: RwLock<WorkerSwitchState>,
     transaction: Mutex<()>,
     run_cancellation: SyncRwLock<Arc<dyn RunCancellation>>,
+    router_ref: SyncRwLock<Option<RouterRef>>,
 }
 
 impl std::fmt::Debug for WorkerSwitchService {
@@ -298,136 +297,6 @@ impl std::fmt::Debug for WorkerSwitchService {
             .finish_non_exhaustive()
     }
 }
-
-pub struct SwitchingInferenceRuntime {
-    workers: Arc<WorkerSwitchService>,
-}
-
-pub(crate) struct SwitchingInferenceBackend {
-    workers: Arc<WorkerSwitchService>,
-    backend: Backend,
-    capabilities: InferenceBackendCapabilities,
-}
-
-impl SwitchingInferenceBackend {
-    pub(crate) fn new(
-        workers: Arc<WorkerSwitchService>,
-        backend: Backend,
-        capabilities: InferenceBackendCapabilities,
-    ) -> Self {
-        Self {
-            workers,
-            backend,
-            capabilities,
-        }
-    }
-
-    async fn active_backend(
-        &self,
-    ) -> Result<Arc<dyn InferenceBackend>, reimagine_inference::InferenceError> {
-        let state = self.workers.state.read().await;
-        state.active.inference_backend().ok_or_else(|| {
-            reimagine_inference::InferenceError::BackendExecutionFailed {
-                message: format!(
-                    "worker `{}` has no inference backend",
-                    state.active.instance()
-                ),
-            }
-        })
-    }
-}
-
-macro_rules! impl_switching_inference_backend {
-    ($(($legacy:ident, $invoked:ident, $request:ty, $response:ty)),+ $(,)?) => {
-        #[async_trait]
-        impl InferenceBackend for SwitchingInferenceBackend {
-            fn backend_kind(&self) -> &Backend {
-                &self.backend
-            }
-
-            fn capabilities(&self) -> InferenceBackendCapabilities {
-                self.capabilities.clone()
-            }
-
-            $(
-                async fn $legacy(
-                    &self,
-                    request: $request,
-                ) -> Result<$response, reimagine_inference::InferenceError> {
-                    self.active_backend().await?.$legacy(request).await
-                }
-
-                async fn $invoked(
-                    &self,
-                    invocation: &reimagine_inference::InferenceInvocation,
-                    request: $request,
-                ) -> Result<$response, reimagine_inference::InferenceError> {
-                    self.active_backend()
-                        .await?
-                        .$invoked(invocation, request)
-                        .await
-                }
-            )+
-        }
-    };
-}
-
-impl_switching_inference_backend!(
-    (
-        load_bundle,
-        load_bundle_with_invocation,
-        reimagine_inference::LoadBundleRequest,
-        reimagine_inference::LoadBundleResponse
-    ),
-    (
-        text_encode,
-        text_encode_with_invocation,
-        reimagine_inference::TextEncodeRequest,
-        reimagine_inference::TextEncodeResponse
-    ),
-    (
-        create_empty_latent,
-        create_empty_latent_with_invocation,
-        reimagine_inference::CreateEmptyLatentRequest,
-        reimagine_inference::CreateEmptyLatentResponse
-    ),
-    (
-        diffusion_sample,
-        diffusion_sample_with_invocation,
-        reimagine_inference::DiffusionSampleRequest,
-        reimagine_inference::DiffusionSampleResponse
-    ),
-    (
-        latent_decode,
-        latent_decode_with_invocation,
-        reimagine_inference::LatentDecodeRequest,
-        reimagine_inference::LatentDecodeResponse
-    ),
-    (
-        latent_encode,
-        latent_encode_with_invocation,
-        reimagine_inference::LatentEncodeRequest,
-        reimagine_inference::LatentEncodeResponse
-    ),
-    (
-        image_import,
-        image_import_with_invocation,
-        reimagine_inference::ImageImportRequest,
-        reimagine_inference::ImageImportResponse
-    ),
-    (
-        image_save,
-        image_save_with_invocation,
-        reimagine_inference::ImageSaveRequest,
-        reimagine_inference::ImageSaveResponse
-    ),
-    (
-        image_preview,
-        image_preview_with_invocation,
-        reimagine_inference::ImagePreviewRequest,
-        reimagine_inference::ImagePreviewResponse
-    ),
-);
 
 pub(crate) struct SwitchingWorkerRuntimeHooks {
     workers: Arc<WorkerSwitchService>,
@@ -490,127 +359,6 @@ impl BackendInstanceObservation for SwitchingWorkerRuntimeHooks {
     }
 }
 
-impl SwitchingInferenceRuntime {
-    pub fn new(workers: Arc<WorkerSwitchService>) -> Self {
-        Self { workers }
-    }
-
-    async fn active_runtime(
-        &self,
-    ) -> Result<DefaultInferenceRuntime, reimagine_inference::InferenceError> {
-        let state = self.workers.state.read().await;
-        let instance = state.active.instance().clone();
-        let backend = state.active.inference_backend().ok_or_else(|| {
-            reimagine_inference::InferenceError::BackendExecutionFailed {
-                message: format!("worker `{instance}` has no inference backend"),
-            }
-        })?;
-        let mut registry = InferenceBackendRegistry::new();
-        registry.register(
-            BackendInstanceDescriptor::new(instance.clone(), backend.backend_kind().clone()),
-            backend,
-        );
-        Ok(DefaultInferenceRuntime::with_policy(
-            Arc::new(registry),
-            Arc::new(StaticBackendSelectionPolicy::with_overrides(
-                BackendOverrides::new(),
-                vec![instance.clone()],
-                Some(vec![instance]),
-                Vec::new(),
-            )),
-            Arc::new(RejectAllBridgePolicy),
-        ))
-    }
-}
-
-macro_rules! impl_switching_inference_runtime {
-    ($(($legacy:ident, $invoked:ident, $request:ty, $response:ty)),+ $(,)?) => {
-        #[async_trait]
-        impl reimagine_inference::InferenceRuntime for SwitchingInferenceRuntime {
-            $(
-                async fn $legacy(
-                    &self,
-                    request: $request,
-                ) -> Result<$response, reimagine_inference::InferenceError> {
-                    let runtime = self.active_runtime().await?;
-                    reimagine_inference::InferenceRuntime::$legacy(&runtime, request).await
-                }
-
-                async fn $invoked(
-                    &self,
-                    invocation: &reimagine_inference::InferenceInvocation,
-                    request: $request,
-                ) -> Result<$response, reimagine_inference::InferenceError> {
-                    let runtime = self.active_runtime().await?;
-                    reimagine_inference::InferenceRuntime::$invoked(
-                        &runtime,
-                        invocation,
-                        request,
-                    )
-                    .await
-                }
-            )+
-        }
-    };
-}
-
-impl_switching_inference_runtime!(
-    (
-        load_bundle,
-        load_bundle_with_invocation,
-        reimagine_inference::LoadBundleRequest,
-        reimagine_inference::LoadBundleResponse
-    ),
-    (
-        text_encode,
-        text_encode_with_invocation,
-        reimagine_inference::TextEncodeRequest,
-        reimagine_inference::TextEncodeResponse
-    ),
-    (
-        create_empty_latent,
-        create_empty_latent_with_invocation,
-        reimagine_inference::CreateEmptyLatentRequest,
-        reimagine_inference::CreateEmptyLatentResponse
-    ),
-    (
-        diffusion_sample,
-        diffusion_sample_with_invocation,
-        reimagine_inference::DiffusionSampleRequest,
-        reimagine_inference::DiffusionSampleResponse
-    ),
-    (
-        latent_decode,
-        latent_decode_with_invocation,
-        reimagine_inference::LatentDecodeRequest,
-        reimagine_inference::LatentDecodeResponse
-    ),
-    (
-        latent_encode,
-        latent_encode_with_invocation,
-        reimagine_inference::LatentEncodeRequest,
-        reimagine_inference::LatentEncodeResponse
-    ),
-    (
-        image_import,
-        image_import_with_invocation,
-        reimagine_inference::ImageImportRequest,
-        reimagine_inference::ImageImportResponse
-    ),
-    (
-        image_save,
-        image_save_with_invocation,
-        reimagine_inference::ImageSaveRequest,
-        reimagine_inference::ImageSaveResponse
-    ),
-    (
-        image_preview,
-        image_preview_with_invocation,
-        reimagine_inference::ImagePreviewRequest,
-        reimagine_inference::ImagePreviewResponse
-    ),
-);
-
 impl WorkerSwitchService {
     pub fn new(
         active: Arc<dyn SwitchableWorker>,
@@ -623,6 +371,30 @@ impl WorkerSwitchService {
             }),
             transaction: Mutex::new(()),
             run_cancellation: SyncRwLock::new(run_cancellation),
+            router_ref: SyncRwLock::new(None),
+        }
+    }
+
+    /// Attach a `RouterRef` so that hot-swap can atomically replace the router.
+    pub fn set_router_ref(&self, router_ref: RouterRef) {
+        *self
+            .router_ref
+            .write()
+            .expect("router_ref poisoned") = Some(router_ref);
+    }
+
+    /// Atomically swap the current `InferenceRouter` for a new one.
+    ///
+    /// This is called after a worker switch to point executors at the
+    /// new backend. In-flight requests on the old router continue to
+    /// completion (they hold an `Arc` guard via `ArcSwap::load`).
+    pub fn swap_router(&self, new_router: InferenceRouter) {
+        if let Some(ref router_ref) = *self
+            .router_ref
+            .read()
+            .expect("router_ref poisoned")
+        {
+            router_ref.store(Arc::new(new_router));
         }
     }
 
