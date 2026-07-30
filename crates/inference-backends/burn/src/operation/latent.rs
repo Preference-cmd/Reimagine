@@ -26,7 +26,7 @@ use reimagine_core::model::{NodeId, RunId, TensorShape};
 use reimagine_inference::latent_space::validate_pixel_dimensions_against;
 use reimagine_inference::{
     BackendPayloadKey, BackendTensorHandle, CreateEmptyLatentRequest, CreateEmptyLatentResponse,
-    InferenceBackend, InferenceError, LatentContent, LatentDecodeRequest, LatentDecodeResponse,
+    InferenceBackend, LatentContent, LatentDecodeRequest, LatentDecodeResponse,
     LatentSpaceError, LatentSpaceMetadata, RuntimeImage, RuntimeLatent,
 };
 
@@ -178,13 +178,6 @@ pub fn execute_latent_create_empty(
     );
 
     Ok(CreateEmptyLatentResponse::new(latent))
-}
-
-/// Map a [`BurnBackendError`] into the inference-layer error type.
-pub fn map_to_inference_error(err: BurnBackendError) -> InferenceError {
-    InferenceError::BackendExecutionFailed {
-        message: err.to_string(),
-    }
 }
 
 /// `latent.decode` entry point for the Burn backend.
