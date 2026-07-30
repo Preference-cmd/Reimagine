@@ -293,8 +293,8 @@ fn backend_profile_provider_trait_is_object_safe() {
 }
 
 #[test]
-fn invalid_candle_device_diagnostic_targets_compute_profile() {
-    let d = diagnostics::invalid_candle_device("tpu");
+fn invalid_backend_device_diagnostic_targets_compute_profile() {
+    let d = diagnostics::invalid_backend_device("tpu");
     assert_eq!(d.code().as_str(), "INFERENCE_PROFILE/INVALID_DEVICE");
     assert_eq!(d.source().as_str(), "inference");
     assert_eq!(
@@ -307,8 +307,8 @@ fn invalid_candle_device_diagnostic_targets_compute_profile() {
 }
 
 #[test]
-fn candle_device_unavailable_diagnostic_carries_reason() {
-    let d = diagnostics::candle_device_unavailable("metal", "no metal runtime");
+fn backend_device_unavailable_diagnostic_carries_reason() {
+    let d = diagnostics::backend_device_unavailable("metal", "no metal runtime");
     assert_eq!(d.code().as_str(), "INFERENCE_PROFILE/DEVICE_UNAVAILABLE");
     assert_eq!(d.source().as_str(), "inference");
     assert_eq!(

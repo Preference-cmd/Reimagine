@@ -2,13 +2,14 @@ use std::sync::{Arc, RwLock};
 
 use reimagine_config::AppPaths;
 use reimagine_core::model::{ModelId, ModelRef, ModelRole, ModelSeries, ModelVariant};
+#[cfg(feature = "candle")]
 use reimagine_inference_candle::{
     SdxlCheckpointImportRequest, SdxlCheckpointImportResult, SdxlConvertedComponent,
     import_sdxl_checkpoint_to_candle_example_split,
 };
 use reimagine_model_acquisition::{
-    AcquireProvider, AllowPatterns, ModelAcquisitionRequest, OverwritePolicy, RepoId, Revision,
-    TargetRelativeDir,
+    AcquireProvider, AllowPatterns, ComponentRole, ModelAcquisitionRequest, OverwritePolicy,
+    RepoId, Revision, TargetRelativeDir, resolve_from_model_index,
 };
 use reimagine_model_manager::{
     Fingerprint, ManifestModelResolver, ManifestValidationReport, ModelComponentSource,
@@ -86,6 +87,7 @@ impl ModelService {
         Ok((manifest, report))
     }
 
+    #[cfg(feature = "candle")]
     pub async fn import_sdxl_checkpoint_to_candle_split(
         &self,
         model_id: &ModelId,
@@ -359,6 +361,7 @@ impl ModelService {
             allow_patterns: AllowPatterns::new(vec!["*.safetensors".to_string()]),
             target_relative_dir,
             overwrite_policy,
+            auto_detect: true,
         };
 
         // acquire() returns Pin<Box<dyn Future>> when called on Arc<Self>.
@@ -382,6 +385,7 @@ impl ModelService {
         let mut cleanup = CleanupGuard::checkpoint(model_id, self.app_paths.models_dir());
 
         match target_backend {
+            #[cfg(feature = "candle")]
             "candle" => {
                 // Candle path: register checkpoint in manifest, then call
                 // import pipeline which does conversion + manifest upsert.
@@ -414,25 +418,54 @@ impl ModelService {
                 })
             }
             _ => {
-                // Burn path: convert, build descriptor, upsert manifest.
-                let converter =
-                    burn_converter.ok_or_else(|| crate::AppHostError::BurnCheckpointImport {
-                        message: "no Burn checkpoint converter is configured for this host"
-                            .to_owned(),
-                    })?;
-                let burn_report = self.convert_with_burn_port(
-                    &source_path,
-                    model_id,
-                    self.app_paths.models_dir(),
-                    converter,
-                )?;
+                // Burn path: detect diffusers vs single-file format.
+                let checkpoint_dir = self
+                    .app_paths
+                    .models_dir()
+                    .join("checkpoints")
+                    .join(model_id);
 
-                let imported_model_id = format!("{model_id}-burn");
-                let burn_desc = build_burn_component_descriptor(
-                    &burn_report,
-                    &imported_model_id,
-                    self.app_paths.models_dir(),
-                );
+                // Check if model_index.json exists — indicates diffusers format
+                // where components are already split into subdirectories.
+                let diffusers_components = resolve_from_model_index(&checkpoint_dir);
+
+                let (imported_model_id, component_count, source_layout, burn_desc) =
+                    if let Some(components) = diffusers_components {
+                        // Diffusers format: components are already split.
+                        // Build the manifest descriptor directly from the
+                        // resolved component paths without conversion.
+                        let imported_model_id = format!("{model_id}-burn");
+                        let desc = build_diffusers_component_descriptor(
+                            &components,
+                            &imported_model_id,
+                            self.app_paths.models_dir(),
+                        );
+                        let component_count = components.len();
+                        (imported_model_id, component_count, "diffusers_split".to_string(), desc)
+                    } else {
+                        // Single-file or CompVis format: convert via Burn port.
+                        let converter = burn_converter.ok_or_else(|| {
+                            crate::AppHostError::BurnCheckpointImport {
+                                message: "no Burn checkpoint converter is configured for this host"
+                                    .to_owned(),
+                            }
+                        })?;
+                        let burn_report = self.convert_with_burn_port(
+                            &source_path,
+                            model_id,
+                            self.app_paths.models_dir(),
+                            converter,
+                        )?;
+
+                        let imported_model_id = format!("{model_id}-burn");
+                        let desc = build_burn_component_descriptor(
+                            &burn_report,
+                            &imported_model_id,
+                            self.app_paths.models_dir(),
+                        );
+                        let component_count = burn_report.output_components.len();
+                        (imported_model_id, component_count, burn_report.source_layout, desc)
+                    };
 
                 let (mut manifest, _) = self.load_manifest().await?;
                 manifest.upsert_model(burn_desc);
@@ -440,15 +473,14 @@ impl ModelService {
 
                 cleanup.disarm();
 
-                let component_count = burn_report.output_components.len();
                 Ok(AcquireAndConvertReport {
                     outcome: "acquired".to_string(),
                     model_id: model_id.to_string(),
                     imported_model_id: Some(imported_model_id),
                     backend: "burn".to_string(),
-                    mapped_tensor_count: burn_report.mapped_tensor_count,
+                    mapped_tensor_count: 0,
                     component_count,
-                    source_layout: burn_report.source_layout,
+                    source_layout,
                     acquisition_report: acquisition_report.repo_id.clone(),
                     acquisition_file_count: acquisition_report.files.len(),
                     acquisition_total_bytes: acquisition_report.total_bytes,
@@ -638,6 +670,77 @@ fn build_burn_component_descriptor(
     .with_metadata("source_layout", report.source_layout.clone())
 }
 
+/// Build a `ModelDescriptor` from resolved diffusers-format components.
+///
+/// When a diffusers model is downloaded, the `model_index.json` provides
+/// the component mapping. This function converts the resolved component
+/// paths into `ModelComponentSource` entries for the manifest, without
+/// requiring conversion through the Burn port.
+fn build_diffusers_component_descriptor(
+    components: &[reimagine_model_acquisition::ResolvedComponent],
+    model_id: &str,
+    models_dir: &std::path::Path,
+) -> ModelDescriptor {
+    let model_component_sources: Vec<ModelComponentSource> = components
+        .iter()
+        .map(|comp| {
+            let role = match comp.role {
+                ComponentRole::Diffusion => ModelRole::DiffusionModel,
+                ComponentRole::Vae => ModelRole::Vae,
+                ComponentRole::TextEncoder | ComponentRole::TextEncoder2 => ModelRole::TextEncoder,
+            };
+            // Compute path relative to models_dir
+            let relative_path = comp
+                .path
+                .strip_prefix(models_dir)
+                .unwrap_or(comp.path.as_path())
+                .to_string_lossy()
+                .replace('\\', "/");
+
+            ModelComponentSource::new(
+                role,
+                ModelSource::relative(ModelRootId::new("base"), relative_path),
+                ModelFormat::SafeTensors,
+            )
+            .with_metadata("component", comp.role.as_str())
+            .with_metadata("source_layout", "diffusers_split")
+        })
+        .collect();
+
+    // Determine which roles are present
+    let mut roles = Vec::new();
+    if components
+        .iter()
+        .any(|c| c.role == ComponentRole::Diffusion)
+    {
+        roles.push(ModelRole::DiffusionModel);
+    }
+    if components.iter().any(|c| c.role == ComponentRole::Vae) {
+        roles.push(ModelRole::Vae);
+    }
+    if components
+        .iter()
+        .any(|c| c.role == ComponentRole::TextEncoder || c.role == ComponentRole::TextEncoder2)
+    {
+        roles.push(ModelRole::TextEncoder);
+    }
+
+    ModelDescriptor::new(
+        reimagine_core::model::ModelId::new(model_id),
+        ModelSeries::new("stable_diffusion"),
+        ModelVariant::new("sdxl"),
+        roles,
+        ModelSource::relative(
+            ModelRootId::new("base"),
+            models_dir.to_string_lossy().to_string(),
+        ),
+        ModelFormat::SafeTensors,
+    )
+    .with_source_status(ModelSourceStatus::Available)
+    .with_components(model_component_sources)
+    .with_metadata("source_layout", "diffusers_split")
+}
+
 // ------------------------------------------------------------------
 //  AcquireAndConvertReport — non-serializable internal report struct
 // ------------------------------------------------------------------
@@ -665,6 +768,7 @@ pub struct AcquireAndConvertReport {
     pub acquisition_total_bytes: u64,
 }
 
+#[cfg(feature = "candle")]
 fn descriptor_with_converted_components(
     descriptor: ModelDescriptor,
     import_result: &SdxlCheckpointImportResult,
@@ -691,6 +795,7 @@ fn descriptor_with_converted_components(
         .with_components(components)
 }
 
+#[cfg(feature = "candle")]
 fn component_source(
     component: SdxlConvertedComponent,
     import_result: &SdxlCheckpointImportResult,

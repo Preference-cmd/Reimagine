@@ -5,19 +5,22 @@ use reimagine_inference::{
     Backend, BackendInstance, BackendInstanceDescriptor, BackendInstanceRuntimeHooks,
     BackendProfile, DeviceProfile, InferenceBackend,
 };
+#[cfg(feature = "candle")]
 use reimagine_inference_candle::{
-    CandleBackend, CandleBackendConfig, CandleBackendError, CandleDevice, CandleProfileProvider,
+    CandleBackend, CandleBackendConfig, CandleDevice, CandleProfileProvider,
 };
 use reimagine_plugin::{Extension, Plugin};
 
 #[derive(Debug)]
 pub(crate) enum BackendCandidateError {
-    Candle(CandleBackendError),
+    #[cfg(feature = "candle")]
+    Candle(reimagine_inference_candle::CandleBackendError),
 }
 
 impl std::fmt::Display for BackendCandidateError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
+            #[cfg(feature = "candle")]
             Self::Candle(error) => write!(f, "{error}"),
         }
     }
@@ -25,8 +28,9 @@ impl std::fmt::Display for BackendCandidateError {
 
 impl std::error::Error for BackendCandidateError {}
 
-impl From<CandleBackendError> for BackendCandidateError {
-    fn from(value: CandleBackendError) -> Self {
+#[cfg(feature = "candle")]
+impl From<reimagine_inference_candle::CandleBackendError> for BackendCandidateError {
+    fn from(value: reimagine_inference_candle::CandleBackendError) -> Self {
         Self::Candle(value)
     }
 }
@@ -50,15 +54,18 @@ pub(crate) trait BackendCandidate: Send + Sync {
     ) -> Result<BuiltBackendInstance, BackendCandidateError>;
 }
 
+#[cfg(feature = "candle")]
 #[derive(Debug, Clone, Copy)]
 pub(crate) struct CandleBackendCandidate;
 
+#[cfg(feature = "candle")]
 impl CandleBackendCandidate {
     pub(crate) const fn new() -> Self {
         Self
     }
 }
 
+#[cfg(feature = "candle")]
 impl BackendCandidate for CandleBackendCandidate {
     fn backend(&self) -> Backend {
         Backend::new("candle")
@@ -106,5 +113,8 @@ impl BackendCandidate for CandleBackendCandidate {
 }
 
 pub(crate) fn builtin_backend_candidates() -> Vec<Arc<dyn BackendCandidate>> {
-    vec![Arc::new(CandleBackendCandidate::new())]
+    let mut candidates: Vec<Arc<dyn BackendCandidate>> = Vec::new();
+    #[cfg(feature = "candle")]
+    candidates.push(Arc::new(CandleBackendCandidate::new()));
+    candidates
 }

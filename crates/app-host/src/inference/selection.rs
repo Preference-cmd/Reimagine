@@ -10,8 +10,8 @@ use reimagine_inference::{
     BackendInstance, BackendInstanceProfile, BackendInstanceStatus, WorkspaceComputeProfile,
 };
 
-pub(crate) const CANDLE_CPU_FALLBACK: &str = "candle:cpu";
-pub(crate) const CANDLE_CPU_FALLBACK_LABEL: &str = "cpu";
+pub(crate) const DEFAULT_BACKEND_FALLBACK: &str = "candle:cpu";
+pub(crate) const DEFAULT_BACKEND_FALLBACK_LABEL: &str = "cpu";
 
 #[derive(Debug)]
 pub(crate) struct ResolvedBackendSelection {
@@ -50,8 +50,12 @@ pub(crate) fn resolve_backend_selection(
             }
         }
     } else {
+        let backend_kind = match config.backend {
+            reimagine_config::InferenceBackendKind::Candle => "candle",
+            reimagine_config::InferenceBackendKind::Burn => "burn",
+        };
         let (instance, fallback_diagnostics) =
-            resolve_legacy_candle_device(profile, config.candle_device.trim(), &disabled);
+            resolve_legacy_backend_device(backend_kind, profile, config.candle_device.trim(), &disabled);
         diagnostics.extend(fallback_diagnostics);
         instance
     };
@@ -68,7 +72,7 @@ pub(crate) fn resolve_backend_selection(
         }
         push_unique(
             &mut priority_order,
-            BackendInstance::new(CANDLE_CPU_FALLBACK),
+            BackendInstance::new(DEFAULT_BACKEND_FALLBACK),
         );
     }
 
@@ -133,7 +137,8 @@ fn resolve_open_selected_instance(
     Ok(instance)
 }
 
-fn resolve_legacy_candle_device(
+fn resolve_legacy_backend_device(
+    backend_kind: &str,
     profile: &WorkspaceComputeProfile,
     configured_label: &str,
     disabled: &HashSet<BackendInstance>,
@@ -143,7 +148,7 @@ fn resolve_legacy_candle_device(
         "mps" => "metal",
         other => other,
     };
-    let instance_id = format!("candle:{lookup_label}");
+    let instance_id = format!("{backend_kind}:{lookup_label}");
     let instance = BackendInstance::new(instance_id);
 
     let lookup = find_instance_profile(profile, &instance);
@@ -151,7 +156,7 @@ fn resolve_legacy_candle_device(
         Some(profile) if profile.status == BackendInstanceStatus::Available => {
             if disabled.contains(&instance) {
                 return (
-                    BackendInstance::new(CANDLE_CPU_FALLBACK),
+                    BackendInstance::new(DEFAULT_BACKEND_FALLBACK),
                     vec![selected_instance_unavailable(
                         instance.as_str(),
                         "backend instance is disabled by config",
@@ -172,16 +177,16 @@ fn resolve_legacy_candle_device(
                 lookup_label
             };
             (
-                BackendInstance::new(CANDLE_CPU_FALLBACK),
-                vec![reimagine_inference::diagnostics::candle_device_unavailable(
+                BackendInstance::new(DEFAULT_BACKEND_FALLBACK),
+                vec![reimagine_inference::diagnostics::backend_device_unavailable(
                     diagnostic_label,
                     &reason,
                 )],
             )
         }
         None => (
-            BackendInstance::new(CANDLE_CPU_FALLBACK),
-            vec![reimagine_inference::diagnostics::invalid_candle_device(
+            BackendInstance::new(DEFAULT_BACKEND_FALLBACK),
+            vec![reimagine_inference::diagnostics::invalid_backend_device(
                 configured_label.trim(),
             )],
         ),
@@ -249,7 +254,7 @@ fn instance_label(instance: &BackendInstance) -> &str {
         .as_str()
         .split_once(':')
         .map(|(_, label)| label)
-        .unwrap_or(CANDLE_CPU_FALLBACK_LABEL)
+        .unwrap_or(DEFAULT_BACKEND_FALLBACK_LABEL)
 }
 
 #[cfg(test)]

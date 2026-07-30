@@ -7,7 +7,12 @@ edition.workspace = true
 rust-version.workspace = true
 license.workspace = true
 
+[features]
+default = ["candle"]
+candle = ["dep:reimagine-inference-candle"]
+
 [dependencies]
+arc-swap = { workspace = true }
 async-trait = { workspace = true }
 reimagine-agent = { path = "../agent" }
 reimagine-backend-worker-host = { path = "../backend-worker-host" }
@@ -15,7 +20,7 @@ reimagine-backend-worker-protocol = { path = "../backend-worker-protocol" }
 reimagine-config = { path = "../config" }
 reimagine-core = { path = "../core" }
 reimagine-inference = { path = "../inference" }
-reimagine-inference-candle = { path = "../inference-backends/candle" }
+reimagine-inference-candle = { path = "../inference-backends/candle", optional = true }
 reimagine-model-acquisition = { path = "../model-acquisition" }
 reimagine-model-manager = { path = "../model-manager" }
 reimagine-nodes = { path = "../nodes" }

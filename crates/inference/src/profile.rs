@@ -492,7 +492,7 @@ pub mod diagnostics {
     /// Diagnostic emitted when a backend provider enumerates a
     /// device label that is not recognized by the inference profile
     /// vocabulary.
-    pub fn invalid_candle_device(label: &str) -> Diagnostic {
+    pub fn invalid_backend_device(label: &str) -> Diagnostic {
         let id = format!("inference-profile-invalid-device-{label}");
         Diagnostic::new(
             DiagnosticId::new(id),
@@ -500,22 +500,22 @@ pub mod diagnostics {
             DiagnosticSeverity::Warning,
             source(),
             format!("device label `{label}` is not recognized by the inference profile vocabulary"),
-            target(format!("candle.device/{label}")),
+            target(format!("backend.device/{label}")),
         )
     }
 
     /// Diagnostic emitted when a backend provider recognizes a
     /// device label but cannot construct it on the current host
     /// (e.g. `candle:metal` requested on Linux).
-    pub fn candle_device_unavailable(label: &str, reason: &str) -> Diagnostic {
+    pub fn backend_device_unavailable(label: &str, reason: &str) -> Diagnostic {
         let id = format!("inference-profile-device-unavailable-{label}");
         Diagnostic::new(
             DiagnosticId::new(id),
             DiagnosticCode::new("INFERENCE_PROFILE/DEVICE_UNAVAILABLE"),
             DiagnosticSeverity::Error,
             source(),
-            format!("candle device `{label}` is unavailable on this host: {reason}"),
-            target(format!("candle.device/{label}")),
+            format!("backend device `{label}` is unavailable on this host: {reason}"),
+            target(format!("backend.device/{label}")),
         )
     }
 }

@@ -22,7 +22,7 @@
 
 use candle_core::Device;
 
-use reimagine_inference::diagnostics::candle_device_unavailable;
+use reimagine_inference::diagnostics::backend_device_unavailable;
 use reimagine_inference::{
     Backend, BackendInstance, BackendInstanceProfile, BackendInstanceStatus, BackendProfile,
     BackendProfileProvider, DeviceKind, DeviceProfile, InferenceCapability,
@@ -156,7 +156,7 @@ fn probe_metal_instance(
                 ),
                 capabilities,
             )
-            .with_diagnostic(candle_device_unavailable("metal", &reason))
+            .with_diagnostic(backend_device_unavailable("metal", &reason))
         }
     }
 }

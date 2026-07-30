@@ -54,6 +54,7 @@ pub enum AppHostError {
     Runtime(RuntimeServiceError),
     ModelManager(reimagine_model_manager::ModelManagerError),
     ModelAcquisition(reimagine_model_acquisition::ModelAcquisitionError),
+    #[cfg(feature = "candle")]
     CandleCheckpointImport(reimagine_inference_candle::SdxlCheckpointImportError),
     BurnCheckpointImport {
         message: String,
@@ -121,6 +122,7 @@ impl std::fmt::Display for AppHostError {
                     reimagine_core::diagnostic::DiagnosticError::user_message(error)
                 )
             }
+            #[cfg(feature = "candle")]
             Self::CandleCheckpointImport(error) => write!(f, "{error}"),
             Self::BurnCheckpointImport { message } => {
                 write!(f, "Burn checkpoint import error: {message}")
@@ -157,6 +159,7 @@ impl From<RuntimeServiceError> for AppHostError {
     }
 }
 
+#[cfg(feature = "candle")]
 impl From<reimagine_inference_candle::SdxlCheckpointImportError> for AppHostError {
     fn from(value: reimagine_inference_candle::SdxlCheckpointImportError) -> Self {
         Self::CandleCheckpointImport(value)
