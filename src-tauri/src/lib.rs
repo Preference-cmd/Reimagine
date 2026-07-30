@@ -200,6 +200,7 @@ async fn download_huggingface_model(
     allow_patterns: Option<Vec<String>>,
     target_relative_dir: String,
     overwrite: Option<String>,
+    auto_detect: Option<bool>,
     channel: tauri::ipc::Channel<DownloadEventPayload>,
 ) -> Result<reimagine_app_host::dto::ModelDownloadOutput, TauriCommandError> {
     state
@@ -209,6 +210,7 @@ async fn download_huggingface_model(
             allow_patterns,
             target_relative_dir,
             overwrite,
+            auto_detect,
             channel,
         )
         .await

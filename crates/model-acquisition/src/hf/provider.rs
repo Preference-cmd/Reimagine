@@ -3,6 +3,7 @@ use std::sync::Arc;
 use hf_hub::progress::{self, DownloadEvent, FileStatus, Progress, ProgressHandler};
 
 use crate::error::ModelAcquisitionResult;
+use crate::hf::strategy::resolve_download_patterns;
 use crate::report::{AcquisitionFileEntry, AcquisitionOutcome, AcquisitionReport};
 use crate::request::ModelAcquisitionRequest;
 use crate::staging::{self, staging_dir};
@@ -161,6 +162,48 @@ impl HuggingFaceProvider {
         if let Some(s) = sink {
             s.done(&report);
         }
+
+        Ok(report)
+    }
+
+    /// Download a HuggingFace model with automatic format detection.
+    ///
+    /// When `request.auto_detect` is true and `allow_patterns` is empty,
+    /// fetches repository metadata, detects the format, and builds optimal
+    /// download patterns before downloading. The detected format is written
+    /// to [`AcquisitionReport::detected_format`].
+    ///
+    /// When explicit `allow_patterns` are provided, they are used as-is
+    /// (backward compatible with the existing `download()` method).
+    pub async fn download_smart(
+        self,
+        base_models_dir: std::path::PathBuf,
+        mut request: ModelAcquisitionRequest,
+        sink: Option<Arc<dyn AcquisitionProgressSink>>,
+    ) -> ModelAcquisitionResult<AcquisitionReport> {
+        let detected_format = if request.auto_detect && request.allow_patterns.is_empty() {
+            let resolved = resolve_download_patterns(
+                &self.client,
+                request.repo_id.as_str(),
+                request.revision.as_str(),
+                &request.allow_patterns,
+            )
+            .await?;
+
+            // Apply the resolved patterns to the request.
+            request.allow_patterns = resolved.patterns;
+
+            Some(resolved.format)
+        } else {
+            None
+        };
+
+        let mut report = self
+            .download(base_models_dir, request, sink)
+            .await?;
+
+        // Attach the detected format to the report.
+        report.detected_format = detected_format.map(|f| format!("{f:?}"));
 
         Ok(report)
     }

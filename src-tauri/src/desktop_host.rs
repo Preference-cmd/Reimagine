@@ -403,6 +403,7 @@ impl DesktopHostState {
         allow_patterns: Option<Vec<String>>,
         target_relative_dir: String,
         overwrite: Option<String>,
+        auto_detect: Option<bool>,
         channel: Channel<reimagine_app_host::dto::DownloadEventPayload>,
     ) -> Result<reimagine_app_host::dto::ModelDownloadOutput, AppHostError> {
         use reimagine_model_acquisition::{
@@ -448,6 +449,7 @@ impl DesktopHostState {
             allow_patterns,
             target_relative_dir,
             overwrite_policy,
+            auto_detect: auto_detect.unwrap_or(true),
         };
 
         let acq = self

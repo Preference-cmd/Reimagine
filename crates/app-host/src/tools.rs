@@ -578,6 +578,7 @@ async fn model_download(
         allow_patterns,
         target_relative_dir,
         overwrite_policy,
+        auto_detect: true,
     };
 
     let acq = Arc::clone(services.model_acquisition_service());

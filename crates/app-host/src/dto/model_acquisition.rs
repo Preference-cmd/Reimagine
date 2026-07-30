@@ -35,6 +35,11 @@ pub struct ModelDownloadInput {
     /// Defaults to `"skip"`.
     #[serde(default)]
     pub overwrite: Option<String>,
+    /// When true (the default), if `allow_patterns` is empty the download strategy
+    /// will fetch repository metadata, detect the model format, and build optimal
+    /// download patterns automatically.
+    #[serde(default)]
+    pub auto_detect: Option<bool>,
 }
 
 /// Single file record in the download report.
@@ -69,6 +74,10 @@ pub struct ModelDownloadOutput {
     pub total_bytes: u64,
     /// ISO 8601 timestamp of completion.
     pub finished_at: String,
+    /// The detected repository format (e.g., "Diffusers", "SingleFileSafetensors").
+    /// Present only when auto-detect was used.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub detected_format: Option<String>,
 }
 
 impl From<reimagine_model_acquisition::AcquisitionReport> for ModelDownloadOutput {
@@ -90,6 +99,7 @@ impl From<reimagine_model_acquisition::AcquisitionReport> for ModelDownloadOutpu
                 .collect(),
             total_bytes: report.total_bytes,
             finished_at: report.finished_at,
+            detected_format: report.detected_format,
         }
     }
 }

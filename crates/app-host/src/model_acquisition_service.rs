@@ -51,6 +51,10 @@ impl ModelAcquisitionService {
     ///
     /// Returns a `Pin<Box<dyn Future + Send>>` so the caller does not need to
     /// worry about hf-hub's internal !Send borrows.
+    ///
+    /// When `request.auto_detect` is true and `allow_patterns` is empty,
+    /// automatically detects the repository format and builds optimal download
+    /// patterns before downloading.
     pub fn acquire(
         self: Arc<Self>,
         request: ModelAcquisitionRequest,
@@ -62,7 +66,29 @@ impl ModelAcquisitionService {
             Err(e) => return Box::pin(std::future::ready(Err(e))),
         };
         let models_dir2 = models_dir.clone();
+        let auto_detect = request.auto_detect;
+        let explicit_patterns_empty = request.allow_patterns.is_empty();
+        let should_resolve = auto_detect && explicit_patterns_empty;
         Box::pin(async move {
+            // If auto-detect is enabled and no explicit patterns, resolve them first.
+            let (resolved_format, request) = if should_resolve {
+                let async_client = reimagine_model_acquisition::build_hf_client(&cfg);
+                let resolved = reimagine_model_acquisition::resolve_download_patterns(
+                    &async_client,
+                    request.repo_id.as_str(),
+                    request.revision.as_str(),
+                    &request.allow_patterns,
+                )
+                .await
+                .map_err(crate::AppHostError::from)?;
+                let format_name = Some(format!("{:?}", resolved.format));
+                let mut req = request;
+                req.allow_patterns = resolved.patterns;
+                (format_name, req)
+            } else {
+                (None, request)
+            };
+
             // Run the download on a dedicated spawned task.  hf-hub uses
             // std::sync::Mutex internally which makes the borrow-chain
             // !Send when &references cross .await points.  By moving all
@@ -139,6 +165,7 @@ impl ModelAcquisitionService {
                     request.revision.as_str(),
                     request.target_relative_dir.as_os_str().to_string_lossy(),
                 );
+                report.detected_format = resolved_format;
                 if snapshot_path.exists() {
                     for entry in std::fs::read_dir(&snapshot_path).map_err(|e| {
                         reimagine_model_acquisition::ModelAcquisitionError::Io {

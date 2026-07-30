@@ -43,6 +43,10 @@ pub struct AcquisitionReport {
     pub total_bytes: u64,
     /// ISO 8601 timestamp of completion.
     pub finished_at: String,
+    /// The detected repository format (e.g., `"Diffusers"`, `"SingleFileSafetensors"`).
+    /// Populated when auto-detect was used; `None` when explicit patterns were provided.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub detected_format: Option<String>,
 }
 
 impl AcquisitionReport {
@@ -61,6 +65,7 @@ impl AcquisitionReport {
             files: Vec::new(),
             total_bytes: 0,
             finished_at: crate::timestamp::now_utc(),
+            detected_format: None,
         }
     }
 
@@ -73,6 +78,12 @@ impl AcquisitionReport {
             _ => {}
         }
         self.files.push(entry);
+    }
+
+    /// Set the detected repository format.
+    pub fn with_detected_format(mut self, format: impl Into<String>) -> Self {
+        self.detected_format = Some(format.into());
+        self
     }
 
     /// Write the report as `acquisition-report.json` alongside the target directory.

@@ -44,6 +44,7 @@ fn tiny_model_request(overwrite: OverwritePolicy) -> ModelAcquisitionRequest {
         allow_patterns: AllowPatterns::new(vec!["config.json".to_owned()]),
         target_relative_dir: target_dir,
         overwrite_policy: overwrite,
+        auto_detect: true,
     }
 }
 
@@ -59,6 +60,7 @@ fn tokenizer_request() -> ModelAcquisitionRequest {
         allow_patterns: AllowPatterns::new(vec!["tokenizer.json".to_owned()]),
         target_relative_dir: target_dir,
         overwrite_policy: OverwritePolicy::Overwrite,
+        auto_detect: true,
     }
 }
 
@@ -174,6 +176,7 @@ async fn test_download_with_revision() {
         allow_patterns: AllowPatterns::new(vec!["config.json".to_owned()]),
         target_relative_dir: target_dir,
         overwrite_policy: OverwritePolicy::Overwrite,
+        auto_detect: true,
     };
 
     let report = provider

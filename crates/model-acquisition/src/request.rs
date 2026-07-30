@@ -175,6 +175,18 @@ pub struct ModelAcquisitionRequest {
     pub target_relative_dir: TargetRelativeDir,
     #[serde(default)]
     pub overwrite_policy: OverwritePolicy,
+    /// When true (the default), if `allow_patterns` is empty the download
+    /// strategy will fetch repository metadata, detect the model format, and
+    /// build optimal download patterns automatically.
+    ///
+    /// When false and `allow_patterns` is empty, all files in the repository
+    /// are downloaded.
+    #[serde(default = "default_auto_detect")]
+    pub auto_detect: bool,
+}
+
+fn default_auto_detect() -> bool {
+    true
 }
 
 #[cfg(test)]
