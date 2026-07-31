@@ -377,10 +377,7 @@ impl WorkerSwitchService {
 
     /// Attach a `RouterRef` so that hot-swap can atomically replace the router.
     pub fn set_router_ref(&self, router_ref: RouterRef) {
-        *self
-            .router_ref
-            .write()
-            .expect("router_ref poisoned") = Some(router_ref);
+        *self.router_ref.write().expect("router_ref poisoned") = Some(router_ref);
     }
 
     /// Atomically swap the current `InferenceRouter` for a new one.
@@ -389,11 +386,7 @@ impl WorkerSwitchService {
     /// new backend. In-flight requests on the old router continue to
     /// completion (they hold an `Arc` guard via `ArcSwap::load`).
     pub fn swap_router(&self, new_router: InferenceRouter) {
-        if let Some(ref router_ref) = *self
-            .router_ref
-            .read()
-            .expect("router_ref poisoned")
-        {
+        if let Some(ref router_ref) = *self.router_ref.read().expect("router_ref poisoned") {
             router_ref.store(Arc::new(new_router));
         }
     }

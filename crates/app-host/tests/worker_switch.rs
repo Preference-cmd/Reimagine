@@ -421,7 +421,10 @@ async fn inference_runtime_routes_atomically_to_the_committed_worker() {
         "new-incarnation",
         "new-payload",
     ));
-    let workers = Arc::new(WorkerSwitchService::new(old.clone(), Arc::new(NoopRunCancellation)));
+    let workers = Arc::new(WorkerSwitchService::new(
+        old.clone(),
+        Arc::new(NoopRunCancellation),
+    ));
 
     // Build initial router from old worker's backend and attach to service.
     let router_ref: RouterRef = Arc::new(arc_swap::ArcSwap::from_pointee(router_for_worker(

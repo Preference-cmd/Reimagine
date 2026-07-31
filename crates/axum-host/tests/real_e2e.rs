@@ -33,6 +33,17 @@ use sdxl_workflows::{SdxlWorkflowOptions, image_to_image, text_to_image};
 use serde_json::Value;
 use tower::ServiceExt;
 
+/// Helper to build a `ModelService` for tests with a mock `ModelAcquisitionService`.
+fn test_model_service(paths: AppPaths) -> reimagine_app_host::ModelService {
+    use std::sync::Arc;
+    let config = reimagine_config::AppConfig::new(paths.clone());
+    let acquisition_service = Arc::new(reimagine_app_host::ModelAcquisitionService::new(
+        paths.clone(),
+        &config,
+    ));
+    reimagine_app_host::ModelService::new(paths, acquisition_service)
+}
+
 const WORKFLOW_ID: &str = "workflow_sdxl_base_demo";
 const MODEL_ID: &str = "sdxl-base-1.0";
 
@@ -336,13 +347,14 @@ async fn real_sdxl_split_weights_produces_png_artifact() {
 
     // manifest.json
     let manifest = build_manifest(&split_dir);
-    let model_service = reimagine_app_host::ModelService::new(paths.clone());
+    let model_service = test_model_service(paths.clone());
     model_service
         .save_manifest(&manifest)
         .await
         .expect("save manifest");
 
     let recorder = Arc::new(reimagine_axum_host::RunEventRecorder::new());
+    #[allow(deprecated)]
     let host = Arc::new(WorkspaceHost::with_defaults_and_backend(
         WorkspaceScope::new("ws-real-e2e"),
         &base_path,
@@ -413,13 +425,14 @@ async fn real_sdxl_img2img_split_weights_produces_png_artifact() {
     .unwrap();
 
     let manifest = build_manifest(&split_dir);
-    let model_service = reimagine_app_host::ModelService::new(paths.clone());
+    let model_service = test_model_service(paths.clone());
     model_service
         .save_manifest(&manifest)
         .await
         .expect("save manifest");
 
     let recorder = Arc::new(reimagine_axum_host::RunEventRecorder::new());
+    #[allow(deprecated)]
     let host = Arc::new(WorkspaceHost::with_defaults_and_backend(
         WorkspaceScope::new("ws-real-img2img-e2e"),
         &base_path,

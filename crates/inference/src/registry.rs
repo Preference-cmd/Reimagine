@@ -11,7 +11,7 @@
 use std::sync::Arc;
 
 use crate::executors::image_import::{ImageSourceResolver, LoadImageExecutor};
-use crate::{RouterRef, ModelResolver};
+use crate::{ModelResolver, RouterRef};
 use reimagine_core::model::NodeTypeId;
 
 use crate::executor::{NodeExecutorRegistry, NodeExecutorRegistryError};

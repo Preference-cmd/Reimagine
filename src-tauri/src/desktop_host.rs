@@ -393,9 +393,44 @@ impl DesktopHostState {
             .collect())
     }
 
+    /// Search HuggingFace models via the catalog.
+    pub async fn search_models(
+        &self,
+        query: &reimagine_model_acquisition::ModelSearchQuery,
+    ) -> Result<Vec<reimagine_app_host::dto::ModelCatalogEntryDto>, AppHostError> {
+        let entries = self
+            .app_host
+            .workspace()
+            .model_service()
+            .search(query)
+            .await?;
+        Ok(entries
+            .into_iter()
+            .map(reimagine_app_host::dto::ModelCatalogEntryDto::from)
+            .collect())
+    }
+
+    /// Fetch the full model card for a repository.
+    pub async fn get_model_card(
+        &self,
+        repo_id: &str,
+    ) -> Result<reimagine_app_host::dto::ModelCardDto, AppHostError> {
+        let card = self
+            .app_host
+            .workspace()
+            .model_service()
+            .model_card(repo_id)
+            .await?;
+        Ok(reimagine_app_host::dto::ModelCardDto::from(card))
+    }
+
     /// Download a HuggingFace model with progress streaming.
     ///
     /// Returns an `AcquisitionReportDto` through the Tauri IPC channel.
+    /// When `from_catalog` is true, uses the smart download strategy from BE-42
+    /// which fetches repository metadata, detects the format, and builds
+    /// optimal download patterns automatically.
+    #[allow(clippy::too_many_arguments)]
     pub async fn download_huggingface_model(
         &self,
         repo_id: String,
@@ -404,6 +439,7 @@ impl DesktopHostState {
         target_relative_dir: String,
         overwrite: Option<String>,
         auto_detect: Option<bool>,
+        from_catalog: Option<bool>,
         channel: Channel<reimagine_app_host::dto::DownloadEventPayload>,
     ) -> Result<reimagine_app_host::dto::ModelDownloadOutput, AppHostError> {
         use reimagine_model_acquisition::{
@@ -442,6 +478,13 @@ impl DesktopHostState {
             _ => OverwritePolicy::Skip,
         };
 
+        let use_smart_download = from_catalog.unwrap_or(false);
+        let effective_auto_detect = if use_smart_download {
+            true
+        } else {
+            auto_detect.unwrap_or(true)
+        };
+
         let request = ModelAcquisitionRequest {
             provider: AcquireProvider::HuggingFace,
             repo_id,
@@ -449,7 +492,7 @@ impl DesktopHostState {
             allow_patterns,
             target_relative_dir,
             overwrite_policy,
-            auto_detect: auto_detect.unwrap_or(true),
+            auto_detect: effective_auto_detect,
         };
 
         let acq = self
@@ -460,8 +503,34 @@ impl DesktopHostState {
             .clone();
         let progress_sink = self.download_event_hub.sink_for(&download_id);
 
-        // Notify started.
-        progress_sink.started(request.repo_id.as_str(), request.revision.as_str());
+        // Notify started with catalog metadata when from_catalog.
+        if use_smart_download {
+            if let Ok(card) = self
+                .app_host
+                .workspace()
+                .model_service()
+                .model_card(request.repo_id.as_str())
+                .await
+            {
+                let model_name = card.entry.id.clone();
+                let detected_format = format!("{:?}", card.detected_format);
+                let estimated_size = card.estimated_download_size;
+                progress_sink.started(request.repo_id.as_str(), request.revision.as_str());
+                // Enrich the started event with catalog metadata via a custom event.
+                self.download_event_hub.send_enriched_started(
+                    &download_id,
+                    request.repo_id.as_str(),
+                    request.revision.as_str(),
+                    Some(model_name),
+                    Some(detected_format),
+                    Some(estimated_size),
+                );
+            } else {
+                progress_sink.started(request.repo_id.as_str(), request.revision.as_str());
+            }
+        } else {
+            progress_sink.started(request.repo_id.as_str(), request.revision.as_str());
+        }
 
         let report = acq.acquire(request, Some(progress_sink)).await?;
 

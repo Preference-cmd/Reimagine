@@ -32,6 +32,17 @@ use serde_json::Value;
 use std::sync::Arc;
 use tower::ServiceExt;
 
+/// Helper to build a `ModelService` for tests with a mock `ModelAcquisitionService`.
+fn test_model_service(paths: AppPaths) -> reimagine_app_host::ModelService {
+    use std::sync::Arc as StdArc;
+    let config = reimagine_config::AppConfig::new(paths.clone());
+    let acquisition_service = StdArc::new(reimagine_app_host::ModelAcquisitionService::new(
+        paths.clone(),
+        &config,
+    ));
+    reimagine_app_host::ModelService::new(paths, acquisition_service)
+}
+
 const BURN_WORKFLOW_ID: &str = "workflow_sdxl_burn_smoke_real";
 const BURN_MODEL_ID: &str = "burn-real-sdxl-smoke-burn";
 const BURN_INSTANCE_LABEL: &str = "burn:wgpu:default";
@@ -253,7 +264,7 @@ async fn burn_real_sdxl_smoke_workflow_opens_through_axum() {
     .await
     .unwrap();
 
-    let model_service = reimagine_app_host::ModelService::new(paths.clone());
+    let model_service = test_model_service(paths.clone());
     let (_, _, descriptor) = model_service
         .import_burn_converted_package(&report_path)
         .await
@@ -406,7 +417,7 @@ async fn burn_real_sdxl_smoke_workflow_runs_through_axum_to_png_artifact() {
     .await
     .unwrap();
 
-    let model_service = reimagine_app_host::ModelService::new(paths.clone());
+    let model_service = test_model_service(paths.clone());
     let (_, _, descriptor) = model_service
         .import_burn_converted_package(&report_path)
         .await

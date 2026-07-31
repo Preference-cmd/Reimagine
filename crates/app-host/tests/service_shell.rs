@@ -20,6 +20,17 @@ use reimagine_model_manager::{
 };
 use reimagine_nodes::{BUILTIN_CHECKPOINT_LOADER, BUILTIN_STRING, BuiltinNodeCatalog};
 
+/// Helper to build a `ModelService` for tests with a mock `ModelAcquisitionService`.
+fn test_model_service(paths: AppPaths) -> ModelService {
+    use std::sync::Arc;
+    let config = reimagine_config::AppConfig::new(paths.clone());
+    let acquisition_service = Arc::new(reimagine_app_host::ModelAcquisitionService::new(
+        paths.clone(),
+        &config,
+    ));
+    ModelService::new(paths, acquisition_service)
+}
+
 #[test]
 fn app_host_owns_single_workspace_arc() {
     let workspace = WorkspaceHost::with_defaults(WorkspaceScope::new("ws-main"), temp_dir("app"));
@@ -86,7 +97,7 @@ async fn model_service_wraps_manifest_store_and_resolver() {
         .expect("models dir should be created");
     tokio::fs::write(&model_path, b"model").await.unwrap();
 
-    let service = ModelService::new(paths.clone());
+    let service = test_model_service(paths.clone());
     let model_id = ModelId::new("stable_diffusion.sdxl.base");
     let descriptor = ModelDescriptor::new(
         model_id.clone(),
@@ -179,7 +190,7 @@ async fn model_service_import_reuses_existing_candle_split_conversion_and_update
     )
     .with_source_status(ModelSourceStatus::Available)
     .with_fingerprint(fingerprint);
-    let service = ModelService::new(paths.clone());
+    let service = test_model_service(paths.clone());
     service
         .save_manifest(
             &ModelManifest::new()
@@ -243,7 +254,7 @@ async fn model_service_import_failure_does_not_mutate_manifest() {
     )
     .with_source_status(ModelSourceStatus::Available)
     .with_fingerprint(Fingerprint::sha256("abc123"));
-    let service = ModelService::new(paths);
+    let service = test_model_service(paths);
     service
         .save_manifest(
             &ModelManifest::new()
@@ -293,7 +304,7 @@ async fn model_service_import_original_checkpoint_adds_split_components() {
     )
     .with_source_status(ModelSourceStatus::Available)
     .with_fingerprint(Fingerprint::sha256("abc123"));
-    let service = ModelService::new(paths);
+    let service = test_model_service(paths);
     service
         .save_manifest(
             &ModelManifest::new()
@@ -316,7 +327,7 @@ async fn model_service_import_original_checkpoint_adds_split_components() {
 async fn model_service_imports_burn_package_report_and_persists_manifest() {
     let paths = AppPaths::new(temp_dir("burn-package-import"));
     let report_path = write_burn_package(paths.models_dir(), "sdxl-base-1.0", "sha256-abc123");
-    let service = ModelService::new(paths.clone());
+    let service = test_model_service(paths.clone());
 
     let (manifest, report, descriptor) = service
         .import_burn_converted_package(&report_path)
@@ -362,7 +373,7 @@ async fn model_service_rejects_burn_package_descriptor_collision_without_saving(
     let paths = AppPaths::new(temp_dir("burn-package-collision"));
     let first_report = write_burn_package(paths.models_dir(), "sdxl-base-1.0", "sha256-abc123");
     let second_report = write_burn_package(paths.models_dir(), "sdxl-base-1.0", "sha256-def456");
-    let service = ModelService::new(paths);
+    let service = test_model_service(paths);
     let (_, _, original) = service
         .import_burn_converted_package(&first_report)
         .await
@@ -386,7 +397,7 @@ async fn model_service_rejects_burn_package_report_outside_models_dir() {
     std::fs::create_dir_all(paths.models_dir()).unwrap();
     let outside = temp_dir("burn-package-outside-report");
     let report_path = write_burn_package(&outside.join("models"), "sdxl-base-1.0", "sha256-abc123");
-    let service = ModelService::new(paths);
+    let service = test_model_service(paths);
 
     let error = service
         .import_burn_converted_package(&report_path)

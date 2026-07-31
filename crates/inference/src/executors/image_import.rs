@@ -53,10 +53,7 @@ pub struct LoadImageExecutor {
 }
 
 impl LoadImageExecutor {
-    pub fn new(
-        inference: RouterRef,
-        resolver: Arc<dyn ImageSourceResolver>,
-    ) -> Self {
+    pub fn new(inference: RouterRef, resolver: Arc<dyn ImageSourceResolver>) -> Self {
         Self {
             inference,
             resolver,

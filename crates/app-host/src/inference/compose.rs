@@ -5,8 +5,8 @@ use reimagine_config::{AppConfig, InferenceBackendConfig};
 use reimagine_inference::registry::register_builtin_inference_executors;
 use reimagine_inference::{
     BackendInstance, BackendInstanceRuntimeHooks, BackendInstanceStatus, BackendOverrides,
-    CompositeBackendInstanceRuntimeHooks, InferenceBackendRegistry, InferenceRouter, RouterRef,
-    RejectAllBridgePolicy, StaticBackendSelectionPolicy, WorkspaceComputeProfile,
+    CompositeBackendInstanceRuntimeHooks, InferenceBackendRegistry, InferenceRouter,
+    RejectAllBridgePolicy, RouterRef, StaticBackendSelectionPolicy, WorkspaceComputeProfile,
 };
 use reimagine_runtime::NodeExecutorRegistry;
 
@@ -242,11 +242,15 @@ async fn compose_inference_runtime_with_workers(
     );
     let mut executor_registry = NodeExecutorRegistry::default();
     let executor_router_ref: RouterRef = if let Some(workers) = &worker_switch {
-        let switching = Arc::new(arc_swap::ArcSwap::from_pointee(inference_runtime.as_ref().clone()));
+        let switching = Arc::new(arc_swap::ArcSwap::from_pointee(
+            inference_runtime.as_ref().clone(),
+        ));
         workers.set_router_ref(Arc::clone(&switching));
         switching
     } else {
-        Arc::new(arc_swap::ArcSwap::from_pointee(inference_runtime.as_ref().clone()))
+        Arc::new(arc_swap::ArcSwap::from_pointee(
+            inference_runtime.as_ref().clone(),
+        ))
     };
     register_builtin_inference_executors(
         &mut executor_registry,
@@ -326,8 +330,9 @@ fn compose_inference_runtime_with_candidates(
 
     let mut executor_registry = NodeExecutorRegistry::default();
     let image_source_resolver = Arc::new(InputImageSourceResolver::new(config.paths()));
-    let executor_router_ref: RouterRef =
-        Arc::new(arc_swap::ArcSwap::from_pointee(inference_runtime.as_ref().clone()));
+    let executor_router_ref: RouterRef = Arc::new(arc_swap::ArcSwap::from_pointee(
+        inference_runtime.as_ref().clone(),
+    ));
     register_builtin_inference_executors(
         &mut executor_registry,
         executor_router_ref,
@@ -438,6 +443,7 @@ mod tests {
 
     #[cfg(feature = "candle")]
     use crate::inference::candidate::CandleBackendCandidate;
+    use crate::model_acquisition_service::ModelAcquisitionService;
 
     fn temp_dir(prefix: &str) -> std::path::PathBuf {
         let nonce = std::time::SystemTime::now()
@@ -586,7 +592,14 @@ mod tests {
     fn compose_runtime_accepts_selected_instance_without_backend_config() {
         let base = temp_dir("resolved-instance-smoke");
         let config = AppConfig::new(AppPaths::new(&base));
-        let model_service = Arc::new(ModelService::new(config.paths().clone()));
+        let acquisition_service = Arc::new(ModelAcquisitionService::new(
+            config.paths().clone(),
+            &config,
+        ));
+        let model_service = Arc::new(ModelService::new(
+            config.paths().clone(),
+            acquisition_service,
+        ));
 
         let runtime =
             compose_inference_runtime(&config, BackendInstance::new("candle:cpu"), model_service)
@@ -603,7 +616,14 @@ mod tests {
     async fn bootstrap_with_stub_collects_multiple_profiles_and_selects_stub() {
         let base = temp_dir("stub-bootstrap");
         let config = AppConfig::new(AppPaths::new(&base));
-        let model_service = Arc::new(ModelService::new(config.paths().clone()));
+        let acquisition_service = Arc::new(ModelAcquisitionService::new(
+            config.paths().clone(),
+            &config,
+        ));
+        let model_service = Arc::new(ModelService::new(
+            config.paths().clone(),
+            acquisition_service,
+        ));
         let backend_config = InferenceBackendConfig {
             selected_instance: Some("stub:cpu".to_string()),
             priority_order: vec!["stub:cpu".to_string(), "candle:cpu".to_string()],

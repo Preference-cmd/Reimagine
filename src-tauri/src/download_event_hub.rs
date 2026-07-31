@@ -70,6 +70,33 @@ impl TauriDownloadEventHub {
             download_id: download_id.to_string(),
         })
     }
+
+    /// Send an enriched started event with catalog metadata.
+    pub fn send_enriched_started(
+        &self,
+        download_id: &str,
+        repo_id: &str,
+        revision: &str,
+        model_name: Option<String>,
+        detected_format: Option<String>,
+        estimated_size: Option<u64>,
+    ) {
+        self.send(
+            download_id,
+            DownloadEventPayload {
+                id: download_id.to_string(),
+                status: "started".to_string(),
+                repo_id: repo_id.to_string(),
+                revision: revision.to_string(),
+                bytes_downloaded: 0,
+                total_bytes: estimated_size,
+                message: model_name,
+                model_name: None,
+                detected_format,
+                estimated_size,
+            },
+        );
+    }
 }
 
 /// Bridges `TauriDownloadEventHub` to the `AcquisitionProgressSink` trait.
@@ -90,6 +117,9 @@ impl AcquisitionProgressSink for TauriDownloadProgressSink {
                 bytes_downloaded: 0,
                 total_bytes: None,
                 message: None,
+                model_name: None,
+                detected_format: None,
+                estimated_size: None,
             },
         );
     }
@@ -105,6 +135,9 @@ impl AcquisitionProgressSink for TauriDownloadProgressSink {
                 bytes_downloaded: bytes,
                 total_bytes: None,
                 message: Some(format!("file {outcome}: {relative_path}")),
+                model_name: None,
+                detected_format: None,
+                estimated_size: None,
             },
         );
     }
@@ -120,6 +153,9 @@ impl AcquisitionProgressSink for TauriDownloadProgressSink {
                 bytes_downloaded: report.total_bytes,
                 total_bytes: Some(report.total_bytes),
                 message: None,
+                model_name: None,
+                detected_format: report.detected_format.clone(),
+                estimated_size: None,
             },
         );
     }

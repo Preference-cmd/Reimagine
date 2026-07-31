@@ -148,12 +148,11 @@ impl IntoNodeExecutorError for InferenceError {
             InferenceError::TokenizationFailed { message } => NodeExecutorError::Failed {
                 message: format!("tokenization failed: {message}"),
             },
-            InferenceError::ComponentValidation {
-                component,
-                reason,
-            } => NodeExecutorError::Failed {
-                message: format!("component `{component}` validation failed: {reason}"),
-            },
+            InferenceError::ComponentValidation { component, reason } => {
+                NodeExecutorError::Failed {
+                    message: format!("component `{component}` validation failed: {reason}"),
+                }
+            }
         }
     }
 }

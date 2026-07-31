@@ -26,8 +26,8 @@ use reimagine_core::model::{NodeId, RunId, TensorShape};
 use reimagine_inference::latent_space::validate_pixel_dimensions_against;
 use reimagine_inference::{
     BackendPayloadKey, BackendTensorHandle, CreateEmptyLatentRequest, CreateEmptyLatentResponse,
-    InferenceBackend, LatentContent, LatentDecodeRequest, LatentDecodeResponse,
-    LatentSpaceError, LatentSpaceMetadata, RuntimeImage, RuntimeLatent,
+    InferenceBackend, LatentContent, LatentDecodeRequest, LatentDecodeResponse, LatentSpaceError,
+    LatentSpaceMetadata, RuntimeImage, RuntimeLatent,
 };
 
 use crate::backend::BurnBackend;

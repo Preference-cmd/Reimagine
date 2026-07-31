@@ -82,10 +82,7 @@ fn sdxl_clip_safetensors_store(
     } else {
         sdxl_clip_key_remapper()
     };
-    store
-        .remap(remapper)
-        .allow_partial(true)
-        .validate(true)
+    store.remap(remapper).allow_partial(true).validate(true)
 }
 
 /// Key remapper for diffusers-format CLIP safetensors files.
@@ -820,8 +817,8 @@ mod tests {
                 "text_model.encoder.layers.0.mlp.fc1.weight",
                 vec![8, 2],
                 vec![
-                    0.01, 0.02, 0.03, 0.04, 0.05, 0.06, 0.07, 0.08, 0.09, 0.10, 0.11, 0.12,
-                    0.13, 0.14, 0.15, 0.16,
+                    0.01, 0.02, 0.03, 0.04, 0.05, 0.06, 0.07, 0.08, 0.09, 0.10, 0.11, 0.12, 0.13,
+                    0.14, 0.15, 0.16,
                 ],
             ),
             tensor_view(
@@ -833,8 +830,8 @@ mod tests {
                 "text_model.encoder.layers.0.mlp.fc2.weight",
                 vec![2, 8],
                 vec![
-                    0.01, 0.02, 0.03, 0.04, 0.05, 0.06, 0.07, 0.08, 0.09, 0.10, 0.11, 0.12,
-                    0.13, 0.14, 0.15, 0.16,
+                    0.01, 0.02, 0.03, 0.04, 0.05, 0.06, 0.07, 0.08, 0.09, 0.10, 0.11, 0.12, 0.13,
+                    0.14, 0.15, 0.16,
                 ],
             ),
             tensor_view(
@@ -976,13 +973,12 @@ mod tests {
         ];
 
         for (source, expected) in test_cases {
-            let snapshot = snapshot_2d(source, 1, 1, vec
-![1.0]);
-            let (remapped, _) = remapper.remap(vec
-![snapshot]);
+            let snapshot = snapshot_2d(source, 1, 1, vec![1.0]);
+            let (remapped, _) = remapper.remap(vec![snapshot]);
             assert_eq!(
-                remapped.len()
-, 1, "remapper should produce exactly one snapshot for `{source}`"
+                remapped.len(),
+                1,
+                "remapper should produce exactly one snapshot for `{source}`"
             );
             let result_path = remapped[0].full_path();
             assert_eq!(
@@ -1011,7 +1007,9 @@ mod tests {
         let bytes = safetensors_bytes(vec![tensor_view(
             "model.text_encoder.transformer.resblocks.0.attn.in_proj_weight",
             vec![6, 2],
-            vec![1.0, 2.0, 3.0, 4.0, 5.0, 6.0, 7.0, 8.0, 9.0, 10.0, 11.0, 12.0],
+            vec![
+                1.0, 2.0, 3.0, 4.0, 5.0, 6.0, 7.0, 8.0, 9.0, 10.0, 11.0, 12.0,
+            ],
         )]);
         let header_str = String::from_utf8_lossy(&bytes[..bytes.len().min(1024 * 1024)]);
         assert!(

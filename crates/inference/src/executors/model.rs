@@ -15,9 +15,7 @@
 //! because they back the rest of the workflow and should outlive any
 //! single run. Runtime owns retention enforcement and value lifetime.
 
-use crate::{
-    ExecutionOutput, LoadBundleRequest, LoadBundleResponse, ModelResolver, RouterRef,
-};
+use crate::{ExecutionOutput, LoadBundleRequest, LoadBundleResponse, ModelResolver, RouterRef};
 use reimagine_core::model::{ModelRef, ParamValue, SlotId};
 
 use crate::error::into_executor_error;

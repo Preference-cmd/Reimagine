@@ -180,7 +180,7 @@ fn serialize_metadata(metadata: &BTreeMap<String, String>) -> String {
 mod tests {
     use std::path::PathBuf;
 
-    use reimagine_config::AppPaths;
+    use reimagine_config::{AppConfig, AppPaths};
     use reimagine_core::model::{ModelId, ModelRef, ModelRole, ModelSeries, ModelVariant};
     use reimagine_model_manager::{
         ModelComponentSource, ModelDescriptor, ModelFormat, ModelManifest, ModelRoot, ModelRootId,
@@ -310,7 +310,15 @@ mod tests {
         let manifest = ModelManifest::new()
             .with_root(ModelRoot::base_models())
             .with_model(split_sdxl_descriptor());
-        let service = ModelService::new(paths.clone());
+        let service = ModelService::new(
+            paths.clone(),
+            std::sync::Arc::new(
+                crate::model_acquisition_service::ModelAcquisitionService::new(
+                    paths.clone(),
+                    &AppConfig::new(paths.clone()),
+                ),
+            ),
+        );
         service
             .save_manifest(&manifest)
             .await
@@ -381,7 +389,15 @@ mod tests {
         let manifest = ModelManifest::new()
             .with_root(ModelRoot::base_models())
             .with_model(legacy_descriptor());
-        let service = ModelService::new(paths.clone());
+        let service = ModelService::new(
+            paths.clone(),
+            std::sync::Arc::new(
+                crate::model_acquisition_service::ModelAcquisitionService::new(
+                    paths.clone(),
+                    &AppConfig::new(paths.clone()),
+                ),
+            ),
+        );
         service
             .save_manifest(&manifest)
             .await
@@ -404,10 +420,7 @@ mod tests {
             ModelSourceKind::CheckpointBundle
         );
         assert_eq!(source_set.sources()[0].role(), ModelRole::CheckpointBundle);
-        assert_eq!(
-            source_set.sources()[0].format(),
-            ModelFormat::SafeTensors
-        );
+        assert_eq!(source_set.sources()[0].format(), ModelFormat::SafeTensors);
         assert!(source_set.sources()[0].metadata().is_none());
 
         let _ = tokio::fs::remove_dir_all(&base).await;
@@ -435,7 +448,15 @@ mod tests {
         let manifest = ModelManifest::new()
             .with_root(ModelRoot::base_models())
             .with_model(split_sdxl_descriptor());
-        let service = ModelService::new(paths.clone());
+        let service = ModelService::new(
+            paths.clone(),
+            std::sync::Arc::new(
+                crate::model_acquisition_service::ModelAcquisitionService::new(
+                    paths.clone(),
+                    &AppConfig::new(paths.clone()),
+                ),
+            ),
+        );
         service
             .save_manifest(&manifest)
             .await
@@ -503,7 +524,15 @@ mod tests {
         let manifest = ModelManifest::new()
             .with_root(ModelRoot::base_models())
             .with_model(split_sdxl_descriptor());
-        let service = ModelService::new(paths.clone());
+        let service = ModelService::new(
+            paths.clone(),
+            std::sync::Arc::new(
+                crate::model_acquisition_service::ModelAcquisitionService::new(
+                    paths.clone(),
+                    &AppConfig::new(paths.clone()),
+                ),
+            ),
+        );
         service
             .save_manifest(&manifest)
             .await

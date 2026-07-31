@@ -8,8 +8,9 @@ use reimagine_inference_candle::{
     import_sdxl_checkpoint_to_candle_example_split,
 };
 use reimagine_model_acquisition::{
-    AcquireProvider, AllowPatterns, ComponentRole, ModelAcquisitionRequest, OverwritePolicy,
-    RepoId, Revision, TargetRelativeDir, resolve_from_model_index,
+    AcquireProvider, AllowPatterns, ComponentRole, ModelAcquisitionRequest, ModelCard,
+    ModelCatalog, ModelSearchQuery, OverwritePolicy, RepoId, Revision, TargetRelativeDir,
+    resolve_from_model_index,
 };
 use reimagine_model_manager::{
     Fingerprint, ManifestModelResolver, ManifestValidationReport, ModelComponentSource,
@@ -28,6 +29,7 @@ pub struct ModelService {
     store: Arc<ModelManifestStore>,
     manifest: RwLock<Option<ModelManifest>>,
     report: RwLock<Option<ManifestValidationReport>>,
+    acquisition_service: Arc<ModelAcquisitionService>,
 }
 
 impl std::fmt::Debug for ModelService {
@@ -40,12 +42,13 @@ impl std::fmt::Debug for ModelService {
 }
 
 impl ModelService {
-    pub fn new(app_paths: AppPaths) -> Self {
+    pub fn new(app_paths: AppPaths, acquisition_service: Arc<ModelAcquisitionService>) -> Self {
         Self {
             store: Arc::new(ModelManifestStore::new(app_paths.clone())),
             app_paths,
             manifest: RwLock::new(None),
             report: RwLock::new(None),
+            acquisition_service,
         }
     }
 
@@ -281,6 +284,45 @@ impl ModelService {
             .clone()
     }
 
+    /// Build a `ModelCatalog` from the HuggingFace acquisition config.
+    async fn build_catalog(&self) -> AppHostResult<ModelCatalog> {
+        let cfg = self.acquisition_service.load_config().await?;
+        let mut client = hf_hub::HFClientBuilder::new().endpoint(cfg.huggingface.endpoint.clone());
+        if let Some(ref token) = cfg.huggingface.token {
+            client = client.token(token.clone());
+        }
+        let hf_client = client.build().map_err(|e| crate::AppHostError::Io {
+            path: std::path::PathBuf::new(),
+            message: format!("failed to build HF client: {e}"),
+        })?;
+        let mut catalog = ModelCatalog::new(hf_client);
+        if let Some(ref token) = cfg.huggingface.token {
+            catalog = catalog.with_token(token.clone());
+        }
+        Ok(catalog)
+    }
+
+    /// Search HuggingFace models using the catalog.
+    pub async fn search(
+        &self,
+        query: &ModelSearchQuery,
+    ) -> AppHostResult<Vec<reimagine_model_acquisition::ModelCatalogEntry>> {
+        let catalog = self.build_catalog().await?;
+        catalog
+            .search(query)
+            .await
+            .map_err(crate::AppHostError::from)
+    }
+
+    /// Fetch the full model card for a repository.
+    pub async fn model_card(&self, repo_id: &str) -> AppHostResult<ModelCard> {
+        let catalog = self.build_catalog().await?;
+        catalog
+            .model_card(repo_id)
+            .await
+            .map_err(crate::AppHostError::from)
+    }
+
     fn replace_cached_manifest(&self, manifest: ModelManifest, report: ManifestValidationReport) {
         *self
             .manifest
@@ -441,7 +483,12 @@ impl ModelService {
                             self.app_paths.models_dir(),
                         );
                         let component_count = components.len();
-                        (imported_model_id, component_count, "diffusers_split".to_string(), desc)
+                        (
+                            imported_model_id,
+                            component_count,
+                            "diffusers_split".to_string(),
+                            desc,
+                        )
                     } else {
                         // Single-file or CompVis format: convert via Burn port.
                         let converter = burn_converter.ok_or_else(|| {
@@ -464,7 +511,12 @@ impl ModelService {
                             self.app_paths.models_dir(),
                         );
                         let component_count = burn_report.output_components.len();
-                        (imported_model_id, component_count, burn_report.source_layout, desc)
+                        (
+                            imported_model_id,
+                            component_count,
+                            burn_report.source_layout,
+                            desc,
+                        )
                     };
 
                 let (mut manifest, _) = self.load_manifest().await?;

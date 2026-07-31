@@ -18,8 +18,8 @@ use reimagine_plugin::{Extension, Plugin};
 
 use super::candidate::BuiltBackendInstance;
 use super::switch::{
-    ProcessSwitchableWorker, RunCancellation, SwitchableWorker,
-    SwitchingWorkerRuntimeHooks, WorkerSwitchError, WorkerSwitchService,
+    ProcessSwitchableWorker, RunCancellation, SwitchableWorker, SwitchingWorkerRuntimeHooks,
+    WorkerSwitchError, WorkerSwitchService,
 };
 
 #[derive(Clone, Debug, Default)]

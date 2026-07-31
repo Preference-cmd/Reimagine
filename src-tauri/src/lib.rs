@@ -9,7 +9,8 @@ use reimagine_app_host::{
     AppHostError,
     dto::{
         AgentEventPayload, AgentSessionInfo, AgentTurnResponse, ArtifactMetadataDto,
-        ComputeProfileDto, DownloadEventPayload, HealthResponse, ModelInfoDto, NodeDefDto,
+        ComputeProfileDto, DownloadEventPayload, HealthResponse, ModelCardDto,
+        ModelCatalogEntryDto, ModelDownloadOutput, ModelFilters, ModelInfoDto, NodeDefDto,
         RunWorkflowResponse,
     },
 };
@@ -193,6 +194,7 @@ fn list_agent_providers(
 ///
 /// Streams `DownloadEventPayload` events through the provided channel.
 #[tauri::command]
+#[allow(clippy::too_many_arguments)]
 async fn download_huggingface_model(
     state: tauri::State<'_, DesktopHostState>,
     repo_id: String,
@@ -201,8 +203,9 @@ async fn download_huggingface_model(
     target_relative_dir: String,
     overwrite: Option<String>,
     auto_detect: Option<bool>,
+    from_catalog: Option<bool>,
     channel: tauri::ipc::Channel<DownloadEventPayload>,
-) -> Result<reimagine_app_host::dto::ModelDownloadOutput, TauriCommandError> {
+) -> Result<ModelDownloadOutput, TauriCommandError> {
     state
         .download_huggingface_model(
             repo_id,
@@ -211,8 +214,54 @@ async fn download_huggingface_model(
             target_relative_dir,
             overwrite,
             auto_detect,
+            from_catalog,
             channel,
         )
+        .await
+        .map_err(|e| TauriCommandError::command(e.to_string()))
+}
+
+/// Search HuggingFace models via the catalog.
+///
+/// Returns a list of model catalog entries matching the query and filters.
+#[tauri::command]
+async fn search_models(
+    state: tauri::State<'_, DesktopHostState>,
+    query: String,
+    filters: Option<ModelFilters>,
+) -> Result<Vec<ModelCatalogEntryDto>, TauriCommandError> {
+    use reimagine_model_acquisition::{ModelSearchQuery, SortBy};
+
+    let sort = match filters.as_ref().map(|f| f.sort.as_str()) {
+        Some("likes") => SortBy::Likes,
+        Some("trending") => SortBy::Trending,
+        Some("lastModified") => SortBy::LastModified,
+        _ => SortBy::Downloads,
+    };
+
+    let search_query = ModelSearchQuery {
+        search: if query.is_empty() { None } else { Some(query) },
+        pipeline_tag: filters.as_ref().and_then(|f| f.pipeline_tag.clone()),
+        library_name: filters.as_ref().and_then(|f| f.library_name.clone()),
+        tags: filters.as_ref().map(|f| f.tags.clone()).unwrap_or_default(),
+        sort,
+        limit: filters.map(|f| f.limit).unwrap_or(20),
+    };
+
+    state
+        .search_models(&search_query)
+        .await
+        .map_err(|e| TauriCommandError::command(e.to_string()))
+}
+
+/// Fetch the full model card for a HuggingFace repository.
+#[tauri::command]
+async fn get_model_card(
+    state: tauri::State<'_, DesktopHostState>,
+    repo_id: String,
+) -> Result<ModelCardDto, TauriCommandError> {
+    state
+        .get_model_card(&repo_id)
         .await
         .map_err(|e| TauriCommandError::command(e.to_string()))
 }
@@ -292,6 +341,9 @@ pub fn run() {
             approve_proposal,
             // Model download commands
             download_huggingface_model,
+            // Catalog commands
+            search_models,
+            get_model_card,
         ])
         .build(tauri::generate_context!())
         .expect("error while building tauri application")
@@ -302,7 +354,7 @@ pub fn run() {
                 let _ = std::thread::scope(|s| {
                     s.spawn(|| {
                         let rt = tokio::runtime::Handle::current();
-                        let _ = rt.block_on(async {
+                        rt.block_on(async {
                             let shutdown = tokio::time::timeout(
                                 std::time::Duration::from_secs(5),
                                 state.shutdown(),
@@ -392,5 +444,175 @@ mod tests {
         );
 
         let _ = std::fs::remove_dir_all(&base_path);
+    }
+
+    // ─── Catalog command parameter validation tests ────────────────
+
+    #[test]
+    fn search_models_query_parsing_default_filters() {
+        use reimagine_app_host::dto::ModelFilters;
+        use reimagine_model_acquisition::{ModelSearchQuery, SortBy};
+
+        let filters = ModelFilters::default();
+        let sort = match filters.sort.as_str() {
+            "likes" => SortBy::Likes,
+            "trending" => SortBy::Trending,
+            "lastModified" => SortBy::LastModified,
+            _ => SortBy::Downloads,
+        };
+
+        let query = ModelSearchQuery {
+            search: None,
+            pipeline_tag: filters.pipeline_tag,
+            library_name: filters.library_name,
+            tags: filters.tags,
+            sort,
+            limit: filters.limit,
+        };
+
+        assert!(query.search.is_none());
+        assert!(query.pipeline_tag.is_none());
+        assert!(query.library_name.is_none());
+        assert!(query.tags.is_empty());
+        assert_eq!(query.sort, SortBy::Downloads);
+        assert_eq!(query.limit, 20);
+    }
+
+    #[test]
+    fn search_models_query_parsing_with_text_search() {
+        use reimagine_app_host::dto::ModelFilters;
+        use reimagine_model_acquisition::{ModelSearchQuery, SortBy};
+
+        let query_text = "stable diffusion".to_string();
+        let filters = ModelFilters {
+            pipeline_tag: Some("text-to-image".to_string()),
+            sort: "likes".to_string(),
+            limit: 5,
+            ..Default::default()
+        };
+
+        let sort = match filters.sort.as_str() {
+            "likes" => SortBy::Likes,
+            "trending" => SortBy::Trending,
+            "lastModified" => SortBy::LastModified,
+            _ => SortBy::Downloads,
+        };
+
+        let query = ModelSearchQuery {
+            search: if query_text.is_empty() {
+                None
+            } else {
+                Some(query_text)
+            },
+            pipeline_tag: filters.pipeline_tag,
+            library_name: filters.library_name,
+            tags: filters.tags,
+            sort,
+            limit: filters.limit,
+        };
+
+        assert_eq!(query.search.as_deref(), Some("stable diffusion"));
+        assert_eq!(query.pipeline_tag.as_deref(), Some("text-to-image"));
+        assert_eq!(query.sort, SortBy::Likes);
+        assert_eq!(query.limit, 5);
+    }
+
+    #[test]
+    fn search_models_query_parsing_empty_search_becomes_none() {
+        use reimagine_app_host::dto::ModelFilters;
+        use reimagine_model_acquisition::{ModelSearchQuery, SortBy};
+
+        let query_text = String::new();
+        let filters = ModelFilters::default();
+        let sort = SortBy::Downloads;
+
+        let query = ModelSearchQuery {
+            search: if query_text.is_empty() {
+                None
+            } else {
+                Some(query_text)
+            },
+            pipeline_tag: filters.pipeline_tag,
+            library_name: filters.library_name,
+            tags: filters.tags,
+            sort,
+            limit: filters.limit,
+        };
+
+        assert!(query.search.is_none());
+    }
+
+    #[test]
+    fn model_card_dto_conversion() {
+        use reimagine_app_host::dto::ModelCardDto;
+        use reimagine_model_acquisition::{
+            ModelCard, ModelCardData, ModelCatalogEntry, ModelRepoFormat,
+        };
+
+        let card = ModelCard {
+            entry: ModelCatalogEntry {
+                id: "org/model".to_string(),
+                author: Some("org".to_string()),
+                pipeline_tag: Some("text-to-image".to_string()),
+                tags: vec!["diffusers".to_string()],
+                downloads: 1000,
+                likes: 50,
+                last_modified: None,
+                private: false,
+            },
+            siblings: vec![],
+            card_data: Some(ModelCardData {
+                model_summary: Some("A test model".to_string()),
+                ..Default::default()
+            }),
+            detected_format: ModelRepoFormat::Diffusers,
+            component_mapping: None,
+            estimated_download_size: 1_000_000,
+        };
+
+        let dto = ModelCardDto::from(card);
+        assert_eq!(dto.entry.id, "org/model");
+        assert_eq!(dto.detected_format, "Diffusers");
+        assert_eq!(dto.estimated_download_size, 1_000_000);
+        assert_eq!(dto.model_summary.as_deref(), Some("A test model"));
+        assert_eq!(dto.file_count, 0);
+        assert!(dto.components.is_empty());
+    }
+
+    #[test]
+    fn model_catalog_entry_dto_conversion() {
+        use reimagine_app_host::dto::ModelCatalogEntryDto;
+        use reimagine_model_acquisition::ModelCatalogEntry;
+
+        let entry = ModelCatalogEntry {
+            id: "org/model".to_string(),
+            author: Some("org".to_string()),
+            pipeline_tag: Some("text-to-image".to_string()),
+            tags: vec!["diffusers".to_string(), "safetensors".to_string()],
+            downloads: 5000,
+            likes: 100,
+            last_modified: Some("2025-01-01T00:00:00Z".to_string()),
+            private: false,
+        };
+
+        let dto = ModelCatalogEntryDto::from(entry);
+        assert_eq!(dto.id, "org/model");
+        assert_eq!(dto.author.as_deref(), Some("org"));
+        assert_eq!(dto.downloads, 5000);
+        assert_eq!(dto.likes, 100);
+        assert_eq!(dto.tags.len(), 2);
+        assert!(!dto.private);
+    }
+
+    #[test]
+    fn model_filters_default_values() {
+        use reimagine_app_host::dto::ModelFilters;
+
+        let filters = ModelFilters::default();
+        assert!(filters.pipeline_tag.is_none());
+        assert!(filters.library_name.is_none());
+        assert!(filters.tags.is_empty());
+        assert_eq!(filters.sort, "downloads");
+        assert_eq!(filters.limit, 20);
     }
 }

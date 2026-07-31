@@ -25,6 +25,17 @@ use reimagine_inference::{
     InferenceBackend, LatentDecodeRequest, SamplerName, SchedulerName,
 };
 
+/// Helper to build a `ModelService` for tests with a mock `ModelAcquisitionService`.
+fn test_model_service(paths: reimagine_config::AppPaths) -> reimagine_app_host::ModelService {
+    use std::sync::Arc;
+    let config = reimagine_config::AppConfig::new(paths.clone());
+    let acquisition_service = Arc::new(reimagine_app_host::ModelAcquisitionService::new(
+        paths.clone(),
+        &config,
+    ));
+    reimagine_app_host::ModelService::new(paths, acquisition_service)
+}
+
 mod tiny_fixture {
     include!("../../burn/tests/tiny_sdxl_e2e.rs");
 }
@@ -358,8 +369,8 @@ async fn axum_workflow_reaches_png_through_process_backed_worker() {
     use http_body_util::BodyExt;
     use reimagine_agent::WorkspaceScope;
     use reimagine_app_host::{
-        ModelService, StaticWorkerInventoryProvider, WorkerBackendCandidate,
-        WorkerInventorySnapshot, WorkspaceHost,
+        StaticWorkerInventoryProvider, WorkerBackendCandidate, WorkerInventorySnapshot,
+        WorkspaceHost,
     };
     use reimagine_axum_host::{AxumHostState, RunEventRecorder, build_router};
     use reimagine_config::{AppPaths, InferenceBackendConfig};
@@ -427,7 +438,7 @@ async fn axum_workflow_reaches_png_through_process_backed_worker() {
         component(ModelRole::TextEncoder, "text_encoder"),
         component(ModelRole::TextEncoder, "text_encoder_2"),
     ]);
-    ModelService::new(paths.clone())
+    test_model_service(paths.clone())
         .save_manifest(
             &ModelManifest::new()
                 .with_root(ModelRoot::base_models())

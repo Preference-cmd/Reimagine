@@ -10,9 +10,7 @@
 //! Retention: the empty latent is declared `RunScoped`. Runtime owns
 //! retention enforcement and value lifetime.
 
-use crate::{
-    CreateEmptyLatentRequest, CreateEmptyLatentResponse, ExecutionOutput, RouterRef,
-};
+use crate::{CreateEmptyLatentRequest, CreateEmptyLatentResponse, ExecutionOutput, RouterRef};
 
 use crate::error::into_executor_error;
 use crate::executor::{NodeExecutionContext, NodeExecutor, NodeExecutorError};

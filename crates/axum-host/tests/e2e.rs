@@ -158,6 +158,17 @@ fn manifest_with_missing_model() -> ModelManifest {
     ModelManifest::new().with_root(ModelRoot::base_models())
 }
 
+/// Helper to build a `ModelService` for tests with a mock `ModelAcquisitionService`.
+fn test_model_service(paths: AppPaths) -> ModelService {
+    use std::sync::Arc;
+    let config = reimagine_config::AppConfig::new(paths.clone());
+    let acquisition_service = Arc::new(reimagine_app_host::ModelAcquisitionService::new(
+        paths.clone(),
+        &config,
+    ));
+    ModelService::new(paths, acquisition_service)
+}
+
 /// Build a host with a registered mock executor, a populated model
 /// manifest, and a fresh event recorder. Tests that need a different
 /// manifest or runtime can call the lower-level helpers below.
@@ -174,7 +185,7 @@ async fn build_ready_host(
     tokio::fs::write(paths.models_dir().join(CHECKPOINT_FILENAME), b"placeholder")
         .await
         .unwrap();
-    let model_service = ModelService::new(paths.clone());
+    let model_service = test_model_service(paths.clone());
     model_service
         .save_manifest(&manifest)
         .await
@@ -258,13 +269,14 @@ async fn build_candle_ready_host(
     tokio::fs::write(paths.models_dir().join(CHECKPOINT_FILENAME), b"placeholder")
         .await
         .unwrap();
-    let model_service = ModelService::new(paths.clone());
+    let model_service = test_model_service(paths.clone());
     model_service
         .save_manifest(&manifest)
         .await
         .expect("save manifest");
 
     let recorder = Arc::new(RunEventRecorder::new());
+    #[allow(deprecated)]
     let host = WorkspaceHost::with_defaults_and_backend(
         WorkspaceScope::new(format!("ws-{base}")),
         &base_path,

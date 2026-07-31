@@ -113,10 +113,7 @@ pub enum InferenceError {
     /// The tokenizer failed to encode the input.
     TokenizationFailed { message: String },
     /// A model component failed validation checks.
-    ComponentValidation {
-        component: String,
-        reason: String,
-    },
+    ComponentValidation { component: String, reason: String },
 }
 
 impl std::fmt::Display for InferenceError {
@@ -226,10 +223,7 @@ impl std::fmt::Display for InferenceError {
             Self::TokenizationFailed { message } => {
                 write!(f, "tokenization failed: {message}")
             }
-            Self::ComponentValidation {
-                component,
-                reason,
-            } => {
+            Self::ComponentValidation { component, reason } => {
                 write!(f, "component `{component}` validation failed: {reason}")
             }
         }

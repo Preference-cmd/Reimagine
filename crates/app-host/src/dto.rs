@@ -39,7 +39,8 @@ pub use compute_profile::{
 pub use health::HealthResponse;
 pub use model_acquisition::{
     DownloadEventPayload, FileEntryDto, ModelAcquireConversionReport, ModelAcquireDownloadReport,
-    ModelAcquireInput, ModelAcquireOutput, ModelDownloadInput, ModelDownloadOutput,
+    ModelAcquireInput, ModelAcquireOutput, ModelCardDto, ModelCatalogEntryDto, ModelDownloadInput,
+    ModelDownloadOutput, ModelFilters,
 };
 pub use models::{
     ModelComponentDto, ModelConvertConversionReport, ModelConvertInput, ModelConvertOutput,

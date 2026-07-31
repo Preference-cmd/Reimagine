@@ -6884,6 +6884,7 @@ dependencies = [
  "hf-hub",
  "reimagine-config",
  "reimagine-core",
+ "reqwest 0.12.28",
  "serde",
  "serde_json",
  "tempfile",

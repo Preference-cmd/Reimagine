@@ -758,8 +758,7 @@ mod tests {
             BackendInstanceDescriptor::new(BackendInstance::new("b:cpu"), Backend::new("b")),
             Arc::new(EchoBackend::new("b")),
         );
-        let router =
-            InferenceRouter::new(Arc::new(reg), Arc::new(RejectAllBridgePolicy));
+        let router = InferenceRouter::new(Arc::new(reg), Arc::new(RejectAllBridgePolicy));
 
         let clip = crate::RuntimeClipHandle::with_instance(
             reimagine_core::model::ModelId::new("clip"),

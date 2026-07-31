@@ -14,6 +14,15 @@ pub struct DownloadEventPayload {
     pub bytes_downloaded: u64,
     pub total_bytes: Option<u64>,
     pub message: Option<String>,
+    /// Model display name from catalog metadata (e.g., "Stable Diffusion XL").
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub model_name: Option<String>,
+    /// Detected repository format (e.g., "Diffusers", "SingleFileSafetensors").
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub detected_format: Option<String>,
+    /// Estimated total download size in bytes from catalog metadata.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub estimated_size: Option<u64>,
 }
 
 /// Input to the `model.download` agent tool.
@@ -166,4 +175,139 @@ pub struct ModelAcquireConversionReport {
     pub component_count: usize,
     /// Source layout detected.
     pub source_layout: String,
+}
+
+// ─── Catalog search DTOs ───────────────────────────────────────────
+
+/// Optional filters for catalog search.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ModelFilters {
+    /// Pipeline tag filter (e.g., "text-to-image", "text-generation").
+    #[serde(default)]
+    pub pipeline_tag: Option<String>,
+    /// Library name filter (e.g., "diffusers", "transformers").
+    #[serde(default)]
+    pub library_name: Option<String>,
+    /// Additional tag filters.
+    #[serde(default)]
+    pub tags: Vec<String>,
+    /// Sort order: "downloads", "likes", "trending", "lastModified".
+    #[serde(default = "default_sort_downloads")]
+    pub sort: String,
+    /// Maximum number of results.
+    #[serde(default = "default_limit_20")]
+    pub limit: usize,
+}
+
+impl Default for ModelFilters {
+    fn default() -> Self {
+        Self {
+            pipeline_tag: None,
+            library_name: None,
+            tags: Vec::new(),
+            sort: default_sort_downloads(),
+            limit: default_limit_20(),
+        }
+    }
+}
+
+fn default_sort_downloads() -> String {
+    "downloads".to_string()
+}
+
+fn default_limit_20() -> usize {
+    20
+}
+
+/// A single model catalog entry returned from search.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ModelCatalogEntryDto {
+    /// Repository ID in `owner/name` form.
+    pub id: String,
+    /// Repository author/owner.
+    pub author: Option<String>,
+    /// Primary pipeline tag (e.g., "text-to-image").
+    pub pipeline_tag: Option<String>,
+    /// Hub tags associated with this model.
+    pub tags: Vec<String>,
+    /// Number of downloads in the last 30 days.
+    pub downloads: u64,
+    /// Number of likes.
+    pub likes: u64,
+    /// ISO-8616 timestamp of the most recent commit.
+    pub last_modified: Option<String>,
+    /// Whether the repository is private.
+    pub private: bool,
+}
+
+impl From<reimagine_model_acquisition::ModelCatalogEntry> for ModelCatalogEntryDto {
+    fn from(entry: reimagine_model_acquisition::ModelCatalogEntry) -> Self {
+        Self {
+            id: entry.id,
+            author: entry.author,
+            pipeline_tag: entry.pipeline_tag,
+            tags: entry.tags,
+            downloads: entry.downloads,
+            likes: entry.likes,
+            last_modified: entry.last_modified,
+            private: entry.private,
+        }
+    }
+}
+
+/// Full model card with detailed metadata.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ModelCardDto {
+    /// Basic catalog entry information.
+    pub entry: ModelCatalogEntryDto,
+    /// Detected model repository format.
+    pub detected_format: String,
+    /// Estimated total download size in bytes.
+    pub estimated_download_size: u64,
+    /// Model summary from the model card.
+    pub model_summary: Option<String>,
+    /// Number of files in the repository.
+    pub file_count: usize,
+    /// Names of key components detected (e.g., "unet", "vae", "text_encoder").
+    pub components: Vec<String>,
+}
+
+impl From<reimagine_model_acquisition::ModelCard> for ModelCardDto {
+    fn from(card: reimagine_model_acquisition::ModelCard) -> Self {
+        let components = card
+            .component_mapping
+            .as_ref()
+            .map(|cm| {
+                let mut names = Vec::new();
+                if cm.unet.is_some() {
+                    names.push("unet".to_string());
+                }
+                if cm.text_encoder.is_some() {
+                    names.push("text_encoder".to_string());
+                }
+                if cm.text_encoder_2.is_some() {
+                    names.push("text_encoder_2".to_string());
+                }
+                if cm.vae.is_some() {
+                    names.push("vae".to_string());
+                }
+                names
+            })
+            .unwrap_or_default();
+
+        Self {
+            entry: ModelCatalogEntryDto::from(card.entry),
+            detected_format: format!("{:?}", card.detected_format),
+            estimated_download_size: card.estimated_download_size,
+            model_summary: card
+                .card_data
+                .as_ref()
+                .and_then(|cd| cd.model_summary.clone()),
+            file_count: card.siblings.len(),
+            components,
+        }
+    }
 }

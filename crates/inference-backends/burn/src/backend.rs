@@ -137,9 +137,9 @@ fn burn_error_to_inference_error(err: BurnBackendError) -> InferenceError {
         BurnBackendError::Tokenizer(error) => InferenceError::TokenizationFailed {
             message: error.to_string(),
         },
-        BurnBackendError::CacheIncompatible(message) => InferenceError::ModelNotLoaded {
-            model_id: message,
-        },
+        BurnBackendError::CacheIncompatible(message) => {
+            InferenceError::ModelNotLoaded { model_id: message }
+        }
         other => InferenceError::BackendExecutionFailed {
             message: other.to_string(),
         },

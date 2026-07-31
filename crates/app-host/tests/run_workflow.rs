@@ -42,6 +42,16 @@ fn empty_compute_profile() -> Arc<WorkspaceComputeProfile> {
     Arc::new(WorkspaceComputeProfile::new())
 }
 
+/// Helper to build a `ModelService` for tests with a mock `ModelAcquisitionService`.
+fn test_model_service(paths: AppPaths) -> ModelService {
+    let config = AppConfig::new(paths.clone());
+    let acquisition_service = Arc::new(reimagine_app_host::ModelAcquisitionService::new(
+        paths.clone(),
+        &config,
+    ));
+    ModelService::new(paths, acquisition_service)
+}
+
 const WORKFLOW_ID: &str = "wf-run-test";
 const MODEL_ID: &str = "sdxl-base-1.0";
 
@@ -162,7 +172,7 @@ async fn run_to_completion(service: &RuntimeService, handle: &reimagine_runtime:
 async fn build_host(manifest: ModelManifest, base: &str) -> WorkspaceHost {
     let paths = AppPaths::new(unique_temp_dir(base));
     tokio::fs::create_dir_all(paths.models_dir()).await.unwrap();
-    let model_service = ModelService::new(paths.clone());
+    let model_service = test_model_service(paths.clone());
     model_service
         .save_manifest(&manifest)
         .await
@@ -187,7 +197,7 @@ async fn build_readiness_snapshot_preserves_warnings_for_resolved_model() {
     tokio::fs::write(&model_path, b"placeholder").await.unwrap();
 
     let manifest = manifest_with_model(&model_id, "sdxl-base-1.0.safetensors");
-    let service = ModelService::new(paths);
+    let service = test_model_service(paths);
     service.save_manifest(&manifest).await.unwrap();
 
     let workflow = build_workflow(&model_id);
@@ -219,7 +229,7 @@ async fn build_readiness_snapshot_preserves_warnings_for_resolved_model() {
 async fn build_readiness_snapshot_records_diagnostics_for_missing_model() {
     let model_id = ModelId::new(MODEL_ID);
     let paths = AppPaths::new(unique_temp_dir("snapshot-missing"));
-    let service = ModelService::new(paths);
+    let service = test_model_service(paths);
     service
         .save_manifest(&manifest_with_missing_model())
         .await
@@ -296,7 +306,7 @@ async fn run_workflow_handoff_completes_when_readiness_passes() {
     .unwrap();
 
     let manifest = manifest_with_model(&model_id, "sdxl-base-1.0.safetensors");
-    let model_service = ModelService::new(paths.clone());
+    let model_service = test_model_service(paths.clone());
     model_service.save_manifest(&manifest).await.unwrap();
 
     let runtime = build_runtime();
@@ -372,7 +382,7 @@ async fn run_workflow_propagates_correlation_id_to_runtime_options() {
     .unwrap();
 
     let manifest = manifest_with_model(&model_id, "sdxl-base-1.0.safetensors");
-    let model_service = ModelService::new(paths.clone());
+    let model_service = test_model_service(paths.clone());
     model_service.save_manifest(&manifest).await.unwrap();
 
     let mut registry = NodeExecutorRegistry::default();

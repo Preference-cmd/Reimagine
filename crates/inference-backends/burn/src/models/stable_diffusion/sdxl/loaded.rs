@@ -443,11 +443,12 @@ fn inspect_source(
                 }
             })?;
         let validation_report =
-            validate_component_inventory_full(&inspected.metadata, &inspected.inventory)
-                .map_err(|source_error| BurnBackendError::ComponentValidation {
+            validate_component_inventory_full(&inspected.metadata, &inspected.inventory).map_err(
+                |source_error| BurnBackendError::ComponentValidation {
                     path: source.path().clone(),
                     source: source_error,
-                })?;
+                },
+            )?;
 
         if let Some(projection) = projection.as_ref()
             && let Some(component) = projection.get("component")
