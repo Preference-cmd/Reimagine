@@ -1,3 +1,5 @@
+#![allow(deprecated)]
+
 //! App-host smoke test for the Candle-backed workspace.
 //!
 //! This test builds an SDXL-shaped workflow, registers a matching
@@ -25,6 +27,16 @@ use reimagine_model_manager::{
     ModelDescriptor, ModelFormat, ModelManifest, ModelRoot, ModelSource, ModelSourceStatus,
 };
 use reimagine_runtime::{RunState, VecRunEventSink};
+
+/// Helper to build a `ModelService` for tests with a mock `ModelAcquisitionService`.
+fn test_model_service(paths: AppPaths) -> ModelService {
+    let config = reimagine_config::AppConfig::new(paths.clone());
+    let acquisition_service = Arc::new(reimagine_app_host::ModelAcquisitionService::new(
+        paths.clone(),
+        &config,
+    ));
+    ModelService::new(paths, acquisition_service)
+}
 
 const MODEL_ID: &str = "sdxl-base-1.0";
 const CHECKPOINT_FILENAME: &str = "sdxl-base-1.0.safetensors";
@@ -230,7 +242,7 @@ async fn candle_backend_sdxl_placeholder_workflow_reports_missing_text_encoder_w
         .await
         .unwrap();
 
-    let model_service = ModelService::new(paths.clone());
+    let model_service = test_model_service(paths.clone());
     model_service
         .save_manifest(&manifest_with_model())
         .await

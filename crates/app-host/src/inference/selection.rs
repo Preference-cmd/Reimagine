@@ -10,7 +10,7 @@ use reimagine_inference::{
     BackendInstance, BackendInstanceProfile, BackendInstanceStatus, WorkspaceComputeProfile,
 };
 
-pub(crate) const DEFAULT_BACKEND_FALLBACK: &str = "candle:cpu";
+pub(crate) const DEFAULT_BACKEND_FALLBACK: &str = "burn:cpu";
 pub(crate) const DEFAULT_BACKEND_FALLBACK_LABEL: &str = "cpu";
 
 #[derive(Debug)]
@@ -50,12 +50,14 @@ pub(crate) fn resolve_backend_selection(
             }
         }
     } else {
-        let backend_kind = match config.backend {
-            reimagine_config::InferenceBackendKind::Candle => "candle",
-            reimagine_config::InferenceBackendKind::Burn => "burn",
+        let (backend_kind, configured_device) = match config.backend {
+            reimagine_config::InferenceBackendKind::Candle => {
+                ("candle", config.candle_device.trim())
+            }
+            reimagine_config::InferenceBackendKind::Burn => ("burn", config.burn_device.trim()),
         };
         let (instance, fallback_diagnostics) =
-            resolve_legacy_backend_device(backend_kind, profile, config.candle_device.trim(), &disabled);
+            resolve_legacy_backend_device(backend_kind, profile, configured_device, &disabled);
         diagnostics.extend(fallback_diagnostics);
         instance
     };
@@ -178,10 +180,12 @@ fn resolve_legacy_backend_device(
             };
             (
                 BackendInstance::new(DEFAULT_BACKEND_FALLBACK),
-                vec![reimagine_inference::diagnostics::backend_device_unavailable(
-                    diagnostic_label,
-                    &reason,
-                )],
+                vec![
+                    reimagine_inference::diagnostics::backend_device_unavailable(
+                        diagnostic_label,
+                        &reason,
+                    ),
+                ],
             )
         }
         None => (
@@ -359,12 +363,67 @@ mod tests {
         );
     }
 
+    #[test]
+    fn default_backend_resolves_to_burn_cpu() {
+        let profile = profile_with_stub();
+        let cfg = InferenceBackendConfig::default();
+
+        let resolved = resolve_backend_selection(&cfg, &profile);
+
+        assert_eq!(
+            resolved.selected_instance,
+            BackendInstance::new("burn:cpu"),
+            "default backend should resolve to burn:cpu"
+        );
+        assert!(resolved.diagnostics.is_empty());
+    }
+
+    #[test]
+    fn default_backend_fallback_in_priority_order() {
+        let profile = profile_with_stub();
+        let cfg = InferenceBackendConfig::default();
+
+        let resolved = resolve_backend_selection(&cfg, &profile);
+
+        assert!(
+            resolved
+                .priority_order
+                .contains(&BackendInstance::new("burn:cpu")),
+            "burn:cpu should be in priority order as fallback"
+        );
+    }
+
+    #[test]
+    fn explicit_candle_backend_resolves_to_candle() {
+        let profile = profile_with_stub();
+        let cfg = InferenceBackendConfig {
+            backend: reimagine_config::InferenceBackendKind::Candle,
+            ..InferenceBackendConfig::default()
+        };
+
+        let resolved = resolve_backend_selection(&cfg, &profile);
+
+        assert_eq!(
+            resolved.selected_instance,
+            BackendInstance::new("candle:cpu"),
+            "explicit candle backend should resolve to candle:cpu"
+        );
+    }
+
     fn profile_with_stub() -> WorkspaceComputeProfile {
         WorkspaceComputeProfile::new()
             .with_backend_profile(BackendProfile::new(Backend::new("candle")).with_instance(
                 BackendInstanceProfile::new(
                     BackendInstance::new("candle:cpu"),
                     Backend::new("candle"),
+                    DeviceProfile::new("cpu").with_kind(DeviceKind::Cpu),
+                    BackendInstanceStatus::Available,
+                ),
+            ))
+            .with_backend_profile(BackendProfile::new(Backend::new("burn")).with_instance(
+                BackendInstanceProfile::new(
+                    BackendInstance::new("burn:cpu"),
+                    Backend::new("burn"),
                     DeviceProfile::new("cpu").with_kind(DeviceKind::Cpu),
                     BackendInstanceStatus::Available,
                 ),

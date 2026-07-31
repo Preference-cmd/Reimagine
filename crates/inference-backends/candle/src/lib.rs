@@ -1,5 +1,10 @@
 #![deny(unsafe_code)]
 
+//! Candle inference backend (deprecated).
+//!
+//! **Candle is deprecated. Use Burn for all new development.**
+//! This crate is kept in the workspace for V1 fallback but is not included
+//! in release bundles.
 mod backend;
 mod config;
 mod device;

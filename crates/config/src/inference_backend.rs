@@ -8,8 +8,8 @@ use crate::{ConfigDocument, ConfigValidationContext};
 #[serde(rename_all = "snake_case")]
 pub enum InferenceBackendKind {
     #[default]
-    Candle,
     Burn,
+    Candle,
 }
 
 /// Persisted inference backend configuration.
@@ -24,7 +24,10 @@ pub struct InferenceBackendConfig {
     #[serde(default = "default_candle_device")]
     pub candle_device: String,
 
-    /// Open backend instance selected by config, e.g. `"candle:cpu"`.
+    #[serde(default = "default_burn_device")]
+    pub burn_device: String,
+
+    /// Open backend instance selected by config, e.g. `"burn:cpu"`.
     ///
     /// This is intentionally a string rather than an inference-owned
     /// `BackendInstance` so the config crate remains independent of the
@@ -52,12 +55,17 @@ fn default_candle_device() -> String {
     "cpu".to_string()
 }
 
+fn default_burn_device() -> String {
+    "cpu".to_string()
+}
+
 impl Default for InferenceBackendConfig {
     fn default() -> Self {
         Self {
             schema_version: default_schema_version(),
             backend: InferenceBackendKind::default(),
             candle_device: default_candle_device(),
+            burn_device: default_burn_device(),
             selected_instance: None,
             priority_order: Vec::new(),
             disabled_instances: Vec::new(),
@@ -79,25 +87,26 @@ mod tests {
     use super::*;
 
     #[test]
-    fn default_is_candle() {
+    fn default_is_burn() {
         let cfg = InferenceBackendConfig::default();
-        assert_eq!(cfg.backend, InferenceBackendKind::Candle);
+        assert_eq!(cfg.backend, InferenceBackendKind::Burn);
         assert_eq!(cfg.candle_device, "cpu");
+        assert_eq!(cfg.burn_device, "cpu");
         assert_eq!(cfg.schema_version, "1");
     }
 
     #[test]
-    fn serialize_has_snake_case_candle() {
+    fn serialize_has_snake_case_burn() {
         let cfg = InferenceBackendConfig::default();
         let json = serde_json::to_value(&cfg).unwrap();
-        assert_eq!(json["backend"], "candle");
+        assert_eq!(json["backend"], "burn");
     }
 
     #[test]
-    fn missing_backend_defaults_to_candle() {
+    fn missing_backend_defaults_to_burn() {
         let json = r#"{"candle_device": "cpu"}"#;
         let cfg: InferenceBackendConfig = serde_json::from_str(json).unwrap();
-        assert_eq!(cfg.backend, InferenceBackendKind::Candle);
+        assert_eq!(cfg.backend, InferenceBackendKind::Burn);
     }
 
     #[test]
@@ -116,10 +125,19 @@ mod tests {
     }
 
     #[test]
+    fn burn_device_deserializes() {
+        let json = r#"{"backend": "burn", "burn_device": "wgpu:default"}"#;
+        let cfg: InferenceBackendConfig = serde_json::from_str(json).unwrap();
+        assert_eq!(cfg.burn_device, "wgpu:default");
+        assert_eq!(cfg.backend, InferenceBackendKind::Burn);
+    }
+
+    #[test]
     fn empty_json_defaults() {
         let cfg: InferenceBackendConfig = serde_json::from_str("{}").unwrap();
-        assert_eq!(cfg.backend, InferenceBackendKind::Candle);
+        assert_eq!(cfg.backend, InferenceBackendKind::Burn);
         assert_eq!(cfg.candle_device, "cpu");
+        assert_eq!(cfg.burn_device, "cpu");
         assert_eq!(cfg.schema_version, "1");
         assert_eq!(cfg.selected_instance, None);
         assert!(cfg.priority_order.is_empty());
@@ -134,7 +152,7 @@ mod tests {
             "disabled_instances": ["candle:metal"]
         }"#;
         let cfg: InferenceBackendConfig = serde_json::from_str(json).unwrap();
-        assert_eq!(cfg.backend, InferenceBackendKind::Candle);
+        assert_eq!(cfg.backend, InferenceBackendKind::Burn);
         assert_eq!(cfg.candle_device, "cpu");
         assert_eq!(cfg.selected_instance.as_deref(), Some("stub:cpu"));
         assert_eq!(cfg.priority_order, vec!["stub:cpu", "candle:cpu"]);

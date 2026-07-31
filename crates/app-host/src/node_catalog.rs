@@ -229,6 +229,7 @@ fn target_for_node_type(type_id: &NodeTypeId) -> DiagnosticTarget {
 }
 
 #[cfg(test)]
+#[allow(deprecated)]
 mod tests {
     use super::*;
     use reimagine_core::model::{InputSlotDef, OutputSlotDef, SlotKind};

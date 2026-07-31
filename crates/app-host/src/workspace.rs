@@ -48,7 +48,14 @@ impl WorkspaceHost {
     ) -> Self {
         let config = Arc::new(config);
         let workflow_service = Arc::new(WorkflowService::new(config.paths().clone()));
-        let model_service = Arc::new(ModelService::new(config.paths().clone()));
+        let acquisition_service = Arc::new(ModelAcquisitionService::new(
+            config.paths().clone(),
+            &config,
+        ));
+        let model_service = Arc::new(ModelService::new(
+            config.paths().clone(),
+            acquisition_service.clone(),
+        ));
         let backend = BackendSelection::from(backend_config.backend);
         let node_catalog = Arc::new(NodeCatalogService::new(
             Arc::clone(&builtin_catalog),
@@ -59,10 +66,7 @@ impl WorkspaceHost {
             Arc::clone(&config),
             Arc::clone(&workflow_service),
             Arc::clone(&model_service),
-            Arc::new(ModelAcquisitionService::new(
-                config.paths().clone(),
-                &config,
-            )),
+            acquisition_service,
             Arc::clone(&runtime_service),
             Arc::clone(&node_catalog),
         ));
@@ -97,7 +101,7 @@ impl WorkspaceHost {
         Self::with_defaults_and_backend(
             workspace_scope,
             base_path,
-            BackendSelection::Candle,
+            BackendSelection::default(),
             Arc::new(VecRunEventSink::new()),
         )
     }
@@ -179,7 +183,7 @@ impl WorkspaceHost {
         Self::with_defaults_and_backend(
             workspace_scope,
             base_path,
-            BackendSelection::Candle,
+            BackendSelection::default(),
             event_sink,
         )
     }
@@ -224,7 +228,14 @@ impl WorkspaceHost {
         event_sink: BoxedRunEventSink,
         agent_event_sink: Arc<dyn AgentEventSink>,
     ) -> Self {
-        let model_service = Arc::new(ModelService::new(config.paths().clone()));
+        let acquisition_service = Arc::new(ModelAcquisitionService::new(
+            config.paths().clone(),
+            &config,
+        ));
+        let model_service = Arc::new(ModelService::new(
+            config.paths().clone(),
+            acquisition_service.clone(),
+        ));
 
         let bootstrapped = bootstrap_inference(&config, &backend_config, model_service.clone())
             .expect("default backend composition should build a usable Candle fallback");
@@ -270,7 +281,14 @@ impl WorkspaceHost {
         agent_event_sink: Arc<dyn AgentEventSink>,
         worker_inventory: Arc<dyn WorkerInventoryProvider>,
     ) -> Result<Self, AppHostError> {
-        let model_service = Arc::new(ModelService::new(config.paths().clone()));
+        let acquisition_service = Arc::new(ModelAcquisitionService::new(
+            config.paths().clone(),
+            &config,
+        ));
+        let model_service = Arc::new(ModelService::new(
+            config.paths().clone(),
+            acquisition_service.clone(),
+        ));
         let bootstrapped = bootstrap_inference_with_worker_inventory(
             &config,
             &backend_config,
@@ -568,7 +586,14 @@ mod tests {
     fn app_host_inference_composition_registers_builtin_executors() {
         let base = temp_dir("compose-runtime");
         let config = AppConfig::new(reimagine_config::AppPaths::new(&base));
-        let model_service = Arc::new(ModelService::new(config.paths().clone()));
+        let acquisition_service = Arc::new(ModelAcquisitionService::new(
+            config.paths().clone(),
+            &config,
+        ));
+        let model_service = Arc::new(ModelService::new(
+            config.paths().clone(),
+            acquisition_service,
+        ));
 
         let composed = compose_inference_runtime(
             &config,
