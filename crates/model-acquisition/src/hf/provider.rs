@@ -198,9 +198,7 @@ impl HuggingFaceProvider {
             None
         };
 
-        let mut report = self
-            .download(base_models_dir, request, sink)
-            .await?;
+        let mut report = self.download(base_models_dir, request, sink).await?;
 
         // Attach the detected format to the report.
         report.detected_format = detected_format.map(|f| format!("{f:?}"));

@@ -1,5 +1,5 @@
 use crate::error::ModelAcquisitionError;
-use crate::hf::format::{detect_format, diffusers_download_patterns, ModelRepoFormat};
+use crate::hf::format::{ModelRepoFormat, detect_format, diffusers_download_patterns};
 use crate::hf::metadata::HfRepoMetadata;
 use crate::hf::model_index::{ComponentMapping, ModelIndex};
 use crate::request::AllowPatterns;
@@ -83,17 +83,17 @@ pub async fn resolve_download_patterns(
 }
 
 /// Fetch and parse model_index.json from a diffusers-format repository.
-async fn fetch_model_index(
+pub(crate) async fn fetch_model_index(
     client: &hf_hub::HFClient,
     repo_id: &str,
     revision: &str,
 ) -> Result<ModelIndex, ModelAcquisitionError> {
-    let (owner, name) = repo_id.split_once('/').ok_or_else(|| {
-        ModelAcquisitionError::Hub {
+    let (owner, name) = repo_id
+        .split_once('/')
+        .ok_or_else(|| ModelAcquisitionError::Hub {
             repo: repo_id.to_string(),
             message: "invalid repo_id format, expected 'owner/name'".to_string(),
-        }
-    })?;
+        })?;
 
     let repo = client.model(owner, name);
 

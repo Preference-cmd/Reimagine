@@ -79,20 +79,16 @@ pub fn diffusers_download_patterns(metadata: &HfRepoMetadata) -> Vec<String> {
             continue;
         }
 
-        // For safetensors files, include them directly
-        if path.ends_with(".safetensors") {
-            patterns.push(path.clone());
-        }
-        // For JSON files (config files), include them
-        else if path.ends_with(".json") {
-            patterns.push(path.clone());
-        }
-        // For tokenizer files
-        else if path.contains("tokenizer") || path.contains("vocab") || path.contains("merges") {
-            patterns.push(path.clone());
-        }
-        // For other important files
-        else if path.ends_with(".txt") || path.ends_with(".py") || path.ends_with(".onnx") {
+        // Include safetensors, JSON config, tokenizer, and other important files
+        if path.ends_with(".safetensors")
+            || path.ends_with(".json")
+            || path.contains("tokenizer")
+            || path.contains("vocab")
+            || path.contains("merges")
+            || path.ends_with(".txt")
+            || path.ends_with(".py")
+            || path.ends_with(".onnx")
+        {
             patterns.push(path.clone());
         }
     }
@@ -189,18 +185,19 @@ mod tests {
             },
         ]);
 
-        assert_eq!(detect_format(&metadata), ModelRepoFormat::SingleFileSafetensors);
+        assert_eq!(
+            detect_format(&metadata),
+            ModelRepoFormat::SingleFileSafetensors
+        );
     }
 
     #[test]
     fn test_detect_unknown_format() {
-        let metadata = make_metadata(vec![
-            HfSibling {
-                rfilename: "README.md".to_string(),
-                size: Some(1000),
-                lfs: None,
-            },
-        ]);
+        let metadata = make_metadata(vec![HfSibling {
+            rfilename: "README.md".to_string(),
+            size: Some(1000),
+            lfs: None,
+        }]);
 
         assert_eq!(detect_format(&metadata), ModelRepoFormat::Unknown);
     }

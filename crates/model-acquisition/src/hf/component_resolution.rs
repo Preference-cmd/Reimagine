@@ -114,9 +114,7 @@ pub fn resolve_component_paths_verified(
 ///
 /// Returns `None` if `model_index.json` does not exist, is not valid
 /// JSON, or contains no recognizable components.
-pub fn resolve_from_model_index(
-    base_dir: &Path,
-) -> Option<Vec<ResolvedComponent>> {
+pub fn resolve_from_model_index(base_dir: &Path) -> Option<Vec<ResolvedComponent>> {
     let index_path = base_dir.join("model_index.json");
     if !index_path.exists() {
         return None;

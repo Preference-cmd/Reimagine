@@ -42,10 +42,12 @@ pub struct ComponentMapping {
 impl ModelIndex {
     /// Parse model_index.json from a serde_json::Value.
     pub fn from_json(value: serde_json::Value) -> Result<Self, ModelAcquisitionError> {
-        let obj = value.as_object().ok_or_else(|| ModelAcquisitionError::Json {
-            path: Some("model_index.json".into()),
-            message: "expected a JSON object".to_string(),
-        })?;
+        let obj = value
+            .as_object()
+            .ok_or_else(|| ModelAcquisitionError::Json {
+                path: Some("model_index.json".into()),
+                message: "expected a JSON object".to_string(),
+            })?;
 
         let class_name = obj
             .get("_class_name")
@@ -165,10 +167,7 @@ mod tests {
 
         // Check text_encoder_2 exists
         let text_encoder_2 = model_index.components.get("text_encoder_2").unwrap();
-        assert_eq!(
-            text_encoder_2.class_name.as_deref(),
-            Some("CLIPTextModel")
-        );
+        assert_eq!(text_encoder_2.class_name.as_deref(), Some("CLIPTextModel"));
         assert_eq!(
             text_encoder_2.path.as_deref(),
             Some("text_encoder_2/model.safetensors")
