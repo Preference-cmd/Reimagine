@@ -19,7 +19,9 @@ use reimagine_inference::{
     InferenceBackend, InferenceError, LoadBundleRequest, ModelFormat, ModelSourceKind,
     ResolvedInferenceModel, ResolvedInferenceModelSource, ResolvedInferenceModelSourceSet,
 };
-use reimagine_inference_burn::models::stable_diffusion::sdxl::{BurnSdxlComponentRole, metadata_keys};
+use reimagine_inference_burn::models::stable_diffusion::sdxl::{
+    BurnSdxlComponentRole, metadata_keys,
+};
 use reimagine_inference_burn::{BurnBackend, BurnBackendConfig};
 use safetensors::tensor::{Dtype, View, serialize_to_file};
 
@@ -102,7 +104,10 @@ fn write_diffusers_unet(path: &Path) {
     let tensors: Vec<(String, ZeroTensorView)> = vec![
         ("conv_in.weight".into(), tensor_view_f32(vec![320, 4, 3, 3])),
         ("conv_in.bias".into(), tensor_view_f32(vec![320])),
-        ("conv_out.weight".into(), tensor_view_f32(vec![4, 320, 3, 3])),
+        (
+            "conv_out.weight".into(),
+            tensor_view_f32(vec![4, 320, 3, 3]),
+        ),
         ("conv_out.bias".into(), tensor_view_f32(vec![4])),
     ];
     // No metadata — this is a raw diffusers file.
@@ -117,7 +122,10 @@ fn write_diffusers_vae(path: &Path) {
         ("conv_in.bias".into(), tensor_view_f32(vec![128])),
         ("conv_norm_out.weight".into(), tensor_view_f32(vec![128])),
         ("conv_norm_out.bias".into(), tensor_view_f32(vec![128])),
-        ("conv_out.weight".into(), tensor_view_f32(vec![3, 128, 3, 3])),
+        (
+            "conv_out.weight".into(),
+            tensor_view_f32(vec![3, 128, 3, 3]),
+        ),
         ("conv_out.bias".into(), tensor_view_f32(vec![3])),
     ];
     serialize_to_file(tensors, None, path).expect("write vae safetensors");
@@ -141,10 +149,8 @@ fn write_diffusers_text_encoder(path: &Path) {
 
 /// Write a minimal diffusers-format text_encoder_2 safetensors file.
 fn write_diffusers_text_encoder_2(path: &Path) {
-    std::fs::create_dir_all(path
-        .parent()
-        .expect("text_encoder_2 parent"))
-    .expect("text_encoder_2 dir");
+    std::fs::create_dir_all(path.parent().expect("text_encoder_2 parent"))
+        .expect("text_encoder_2 dir");
     let tensors: Vec<(String, ZeroTensorView)> = vec![
         (
             "token_embedding.weight".into(),
@@ -199,7 +205,10 @@ fn diffusers_source(root: &Path, role: BurnSdxlComponentRole) -> ResolvedInferen
     )
 }
 
-fn resolved_model(root: &Path, sources: Vec<ResolvedInferenceModelSource>) -> ResolvedInferenceModel {
+fn resolved_model(
+    root: &Path,
+    sources: Vec<ResolvedInferenceModelSource>,
+) -> ResolvedInferenceModel {
     ResolvedInferenceModel::new(
         ModelId::new("diffusers-direct-load-test"),
         ModelSeries::new("stable_diffusion"),
@@ -261,7 +270,10 @@ async fn diffusers_direct_load_accepts_4_component_layout() {
         .expect("4-component diffusers layout should be accepted");
 
     assert_eq!(response.model().backend().as_str(), "burn");
-    assert_eq!(response.model().model_id().as_str(), "diffusers-direct-load-test");
+    assert_eq!(
+        response.model().model_id().as_str(),
+        "diffusers-direct-load-test"
+    );
     assert_eq!(response.model().role(), ModelRole::CheckpointBundle);
 }
 
@@ -307,13 +319,10 @@ async fn diffusers_direct_load_accepts_2_component_minimal() {
     let temp = tempfile::tempdir().expect("tempdir");
     let backend = backend();
 
-    let sources: Vec<_> = [
-        BurnSdxlComponentRole::Diffusion,
-        BurnSdxlComponentRole::Vae,
-    ]
-    .into_iter()
-    .map(|role| diffusers_source(temp.path(), role))
-    .collect();
+    let sources: Vec<_> = [BurnSdxlComponentRole::Diffusion, BurnSdxlComponentRole::Vae]
+        .into_iter()
+        .map(|role| diffusers_source(temp.path(), role))
+        .collect();
 
     let response = backend
         .load_bundle(load_request(temp.path(), sources))
@@ -421,9 +430,8 @@ async fn diffusers_direct_load_rejects_unrecognised_directory() {
         .join("bogus_component")
         .join("model.safetensors");
     std::fs::create_dir_all(path.parent().expect("bogus parent")).expect("bogus dir");
-    let tensors: Vec<(String, ZeroTensorView)> = vec![
-        ("weight".into(), tensor_view_f32(vec![4, 4, 3, 3])),
-    ];
+    let tensors: Vec<(String, ZeroTensorView)> =
+        vec![("weight".into(), tensor_view_f32(vec![4, 4, 3, 3]))];
     serialize_to_file(tensors, None, &path).expect("write bogus safetensors");
 
     let source = ResolvedInferenceModelSource::new(
@@ -462,10 +470,7 @@ async fn diffusers_direct_load_detected_by_absent_contract_metadata() {
     // Create 3 diffusers-format files with explicit None metadata.
     let unet_path = temp.path().join("unet").join("model.safetensors");
     let vae_path = temp.path().join("vae").join("model.safetensors");
-    let te_path = temp
-        .path()
-        .join("text_encoder")
-        .join("model.safetensors");
+    let te_path = temp.path().join("text_encoder").join("model.safetensors");
 
     write_diffusers_unet(&unet_path);
     write_diffusers_vae(&vae_path);
@@ -525,14 +530,23 @@ async fn diffusers_direct_load_coexists_with_burn_native_format() {
     let burn_tensors: Vec<(String, ZeroTensorView)> = vec![
         ("conv_in.weight".into(), tensor_view_f32(vec![320, 4, 3, 3])),
         ("conv_in.bias".into(), tensor_view_f32(vec![320])),
-        ("conv_out.weight".into(), tensor_view_f32(vec![4, 320, 3, 3])),
+        (
+            "conv_out.weight".into(),
+            tensor_view_f32(vec![4, 320, 3, 3]),
+        ),
         ("conv_out.bias".into(), tensor_view_f32(vec![4])),
     ];
     let burn_meta = std::collections::HashMap::from([
-        (metadata_keys::CONTRACT.to_owned(), "burn.component".to_owned()),
+        (
+            metadata_keys::CONTRACT.to_owned(),
+            "burn.component".to_owned(),
+        ),
         (metadata_keys::CONTRACT_VERSION.to_owned(), "1".to_owned()),
         (metadata_keys::BACKEND.to_owned(), "burn".to_owned()),
-        (metadata_keys::MODEL_SERIES.to_owned(), "stable_diffusion".to_owned()),
+        (
+            metadata_keys::MODEL_SERIES.to_owned(),
+            "stable_diffusion".to_owned(),
+        ),
         (metadata_keys::VARIANT.to_owned(), "sdxl".to_owned()),
         (
             metadata_keys::COMPONENT_ROLE.to_owned(),
@@ -548,10 +562,7 @@ async fn diffusers_direct_load_coexists_with_burn_native_format() {
 
     // Create diffusers-format vae and text_encoder files (no contract metadata).
     let vae_path = temp.path().join("vae").join("model.safetensors");
-    let te_path = temp
-        .path()
-        .join("text_encoder")
-        .join("model.safetensors");
+    let te_path = temp.path().join("text_encoder").join("model.safetensors");
     write_diffusers_vae(&vae_path);
     write_diffusers_text_encoder(&te_path);
 
@@ -601,14 +612,10 @@ async fn diffusers_direct_load_rejects_too_many_components() {
         .collect();
 
     // Add a 5th source with a different directory that maps to Diffusion.
-    let extra_unet_path = temp
-        .path()
-        .join("extra_unet")
-        .join("model.safetensors");
+    let extra_unet_path = temp.path().join("extra_unet").join("model.safetensors");
     std::fs::create_dir_all(extra_unet_path.parent().expect("extra parent")).expect("extra dir");
-    let extra_tensors: Vec<(String, ZeroTensorView)> = vec![
-        ("conv_in.weight".into(), tensor_view_f32(vec![4, 4, 3, 3])),
-    ];
+    let extra_tensors: Vec<(String, ZeroTensorView)> =
+        vec![("conv_in.weight".into(), tensor_view_f32(vec![4, 4, 3, 3]))];
     serialize_to_file(extra_tensors, None, &extra_unet_path).expect("write extra unet");
     sources.push(ResolvedInferenceModelSource::new(
         ModelSourceKind::SplitComponent,

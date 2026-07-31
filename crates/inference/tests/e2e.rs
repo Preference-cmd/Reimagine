@@ -21,9 +21,9 @@ use reimagine_inference::{
 use reimagine_inference::{
     CannedCapabilityResponse, CreateEmptyLatentRequest, CreateEmptyLatentResponse, FakeBackend,
     ImageSaveResponse, InferenceBackend, InferenceBackendCapabilities, InferenceBackendRegistry,
-    InferenceCapabilitySupport, InferenceError, InferenceRouter, IntoNodeExecutorError,
-    LoadBundleResponse, ModelFormat, ModelResolver, RejectAllBridgePolicy, ResolvedImageSource,
-    ResolvedInferenceModel, RouterRef, RuntimeLatent, TextEncodeRequest, TextEncodeResponse,
+    InferenceCapabilitySupport, InferenceError, IntoNodeExecutorError, LoadBundleResponse,
+    ModelFormat, ModelResolver, RejectAllBridgePolicy, ResolvedImageSource, ResolvedInferenceModel,
+    RouterRef, RuntimeLatent, TextEncodeRequest, TextEncodeResponse,
     register_builtin_inference_executors,
 };
 use reimagine_inference::{
