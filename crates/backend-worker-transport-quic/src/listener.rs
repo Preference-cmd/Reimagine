@@ -6,7 +6,6 @@ use reimagine_backend_worker_protocol::{
     WorkerInstallationId, WorkerInstanceProfile, WorkerProfile, WireMessage,
     negotiate_protocol, ProtocolRange,
 };
-use tokio::io::{AsyncReadExt, AsyncWriteExt};
 
 use crate::tls::SelfSignedCert;
 use crate::Error;
