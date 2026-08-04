@@ -46,7 +46,7 @@ async fn quic_worker_listener_handshake_and_request() {
 
     // Server task: accept connection, handle requests
     let server = tokio::spawn(async move {
-        let (mut send, mut recv, hello) = listener.accept().await.unwrap();
+        let (_connection, mut send, mut recv, hello) = listener.accept().await.unwrap();
         assert_eq!(hello.identity.backend_kind, "fake");
 
         // Read a request from the host

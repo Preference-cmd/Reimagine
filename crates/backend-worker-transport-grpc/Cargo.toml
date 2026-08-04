@@ -9,11 +9,13 @@ license.workspace = true
 
 [dependencies]
 async-trait = { workspace = true }
+futures-core = "0.3"
 prost = "0.14"
 reimagine-backend-worker-protocol = { path = "../backend-worker-protocol" }
 serde_json = { workspace = true }
 tokio = { workspace = true, features = ["io-util", "rt", "sync", "time"] }
-tonic = "0.14"
+tokio-stream = "0.1"
+tonic = { version = "0.14", features = ["transport"] }
 tonic-prost = "0.14"
 
 [build-dependencies]

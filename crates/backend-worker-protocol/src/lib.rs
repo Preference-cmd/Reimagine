@@ -10,6 +10,7 @@ mod lifecycle;
 mod progress;
 mod request;
 mod response;
+mod tensor_transfer;
 pub mod transport;
 mod worker_profile;
 
@@ -30,6 +31,10 @@ pub use lifecycle::{CancelDisposition, LifecycleError, RequestTracker, Transport
 pub use progress::ProgressFrame;
 pub use request::{CorrelationId, RequestFrame, RequestId};
 pub use response::{TerminalFrame, TerminalOutcome};
+pub use tensor_transfer::{
+    TensorDataFrame, TensorMetadata, TensorTransferAckFrame, TensorTransferRequestFrame,
+    TransferStatus,
+};
 pub use transport::{
     TransportDescription, TransportError, TransportKind, WorkerTransport,
 };

@@ -31,10 +31,11 @@ impl QuicWorkerListener {
 
     /// Accept the next incoming connection.
     ///
-    /// Returns the bidirectional stream pair after completing the handshake.
+    /// Returns the connection, bidirectional stream pair, and the
+    /// `WorkerHello` after completing the handshake.
     pub async fn accept(
         &self,
-    ) -> Result<(quinn::SendStream, quinn::RecvStream, WorkerHello), Error> {
+    ) -> Result<(quinn::Connection, quinn::SendStream, quinn::RecvStream, WorkerHello), Error> {
         let incoming = self
             .endpoint
             .accept()
@@ -106,6 +107,6 @@ impl QuicWorkerListener {
             .await
             .map_err(|e| Error::Io(format!("write hello payload: {e}")))?;
 
-        Ok((send, recv, worker_hello))
+        Ok((connection, send, recv, worker_hello))
     }
 }
