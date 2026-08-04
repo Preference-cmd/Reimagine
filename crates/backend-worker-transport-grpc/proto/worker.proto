@@ -1,0 +1,182 @@
+syntax = "proto3";
+package reimagine.worker.v1;
+
+service WorkerService {
+  /// Bidirectional streaming for the worker protocol.
+  /// Host sends HostToWorker messages, worker responds with WorkerToHost messages.
+  rpc Communication(stream HostToWorker) returns (stream WorkerToHost);
+
+  /// Simple health check RPC.
+  rpc HealthCheck(HealthRequest) returns (HealthResponse);
+}
+
+// ── Host → Worker messages ────────────────────────────────────────
+
+message HostToWorker {
+  oneof message {
+    HostHello host_hello = 1;
+    Request request = 2;
+    Cancel cancel = 3;
+    Health health = 4;
+    Cleanup cleanup = 5;
+    Shutdown shutdown = 6;
+  }
+}
+
+message HostHello {
+  uint32 protocol_min = 1;
+  uint32 protocol_max = 2;
+}
+
+message Request {
+  uint32 protocol_version = 1;
+  string incarnation_id = 2;
+  string request_id = 3;
+  string correlation_id = 4;
+  string operation = 5;
+  bytes payload = 6;  // JSON-encoded serde_json::Value
+}
+
+message Cancel {
+  uint32 protocol_version = 1;
+  string incarnation_id = 2;
+  string request_id = 3;
+  string correlation_id = 4;
+}
+
+message Health {
+  uint32 protocol_version = 1;
+  string incarnation_id = 2;
+  string control_id = 3;
+}
+
+message Cleanup {
+  uint32 protocol_version = 1;
+  string incarnation_id = 2;
+  string control_id = 3;
+  optional string run_id = 4;
+  repeated string object_ids = 5;
+}
+
+message Shutdown {
+  uint32 protocol_version = 1;
+  string incarnation_id = 2;
+  string control_id = 3;
+}
+
+// ── Worker → Host messages ────────────────────────────────────────
+
+message WorkerToHost {
+  oneof message {
+    WorkerHello worker_hello = 1;
+    Progress progress = 2;
+    CancelAck cancel_ack = 3;
+    Terminal terminal = 4;
+    HealthAck health_ack = 5;
+    CleanupAck cleanup_ack = 6;
+    ShutdownAck shutdown_ack = 7;
+  }
+}
+
+message WorkerHello {
+  uint32 selected_protocol = 1;
+  WorkerIdentity identity = 2;
+  WorkerProfile profile = 3;
+}
+
+message WorkerIdentity {
+  string backend_instance_id = 1;
+  string installation_id = 2;
+  string incarnation_id = 3;
+  string worker_version = 4;
+  string backend_kind = 5;
+  string target = 6;
+  string manifest_digest = 7;
+}
+
+message WorkerProfile {
+  repeated WorkerInstanceProfile instances = 1;
+}
+
+message WorkerInstanceProfile {
+  string backend_instance_id = 1;
+  string device_label = 2;
+  repeated string capabilities = 3;
+  bytes operation_options = 4;  // JSON-encoded serde_json::Value
+}
+
+message Progress {
+  uint32 protocol_version = 1;
+  string incarnation_id = 2;
+  string request_id = 3;
+  string correlation_id = 4;
+  uint64 sequence = 5;
+  uint64 completed = 6;
+  optional uint64 total = 7;
+  optional string message = 8;
+}
+
+message CancelAck {
+  uint32 protocol_version = 1;
+  string incarnation_id = 2;
+  string request_id = 3;
+  string correlation_id = 4;
+  bool accepted = 5;
+  bool already_terminal = 6;
+}
+
+message Terminal {
+  uint32 protocol_version = 1;
+  string incarnation_id = 2;
+  string request_id = 3;
+  string correlation_id = 4;
+  TerminalOutcome outcome = 5;
+}
+
+message TerminalOutcome {
+  oneof outcome {
+    Success success = 1;
+    bytes cancelled = 2;  // unit variant, empty
+    BackendError backend_error = 3;
+  }
+}
+
+message Success {
+  bytes output = 1;  // JSON-encoded serde_json::Value
+}
+
+message BackendError {
+  string code = 1;
+  string message = 2;
+  bool retryable = 3;
+}
+
+message HealthAck {
+  uint32 protocol_version = 1;
+  string incarnation_id = 2;
+  string control_id = 3;
+  bool healthy = 4;
+  optional string message = 5;
+}
+
+message CleanupAck {
+  uint32 protocol_version = 1;
+  string incarnation_id = 2;
+  string control_id = 3;
+  uint64 released_objects = 4;
+}
+
+message ShutdownAck {
+  uint32 protocol_version = 1;
+  string incarnation_id = 2;
+  string control_id = 3;
+}
+
+// ── Health check messages ─────────────────────────────────────────
+
+message HealthRequest {}
+
+message HealthResponse {
+  bool healthy = 1;
+  string message = 2;
+}
