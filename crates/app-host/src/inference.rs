@@ -7,6 +7,7 @@
 pub(crate) mod candidate;
 pub(crate) mod compose;
 pub(crate) mod image_source_resolver;
+pub mod pool;
 pub(crate) mod resolver;
 pub(crate) mod selection;
 pub mod switch;
