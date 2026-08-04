@@ -1,5 +1,4 @@
 use std::collections::HashMap;
-use std::process::Stdio;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, AtomicU8, AtomicU64, Ordering};
 use std::time::Duration;
@@ -8,10 +7,9 @@ use reimagine_backend_worker_protocol::{
     CancelAckFrame, CancelFrame, CleanupAckFrame, CleanupFrame, CodecError, ControlId,
     CorrelationId, FrameCodec, HealthAckFrame, HealthFrame, HostHello, MessageSender,
     ProgressFrame, ProtocolVersion, RequestFrame, RequestId, ShutdownFrame, TerminalFrame,
-    WireMessage, WorkerHello, WorkerIncarnationId, validate_message_direction,
+    WorkerTransport, WireMessage, WorkerHello, WorkerIncarnationId, validate_message_direction,
 };
 use tokio::io::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt};
-use tokio::process::{Child, ChildStdin, Command};
 use tokio::sync::{Mutex, mpsc, oneshot};
 use tokio::task::JoinHandle;
 use tokio::time::timeout;
@@ -153,8 +151,7 @@ struct ReaderLifecycle {
 }
 
 struct WorkerClientInner {
-    child: Mutex<Child>,
-    stdin: Mutex<ChildStdin>,
+    write: Mutex<Box<dyn AsyncWrite + Send + Unpin>>,
     pending: PendingRequests,
     controls: PendingControls,
     codec: FrameCodec,
@@ -187,6 +184,7 @@ impl Drop for WorkerClientInner {
 pub struct StartedWorker {
     pub hello: WorkerHello,
     inner: Arc<WorkerClientInner>,
+    transport: Arc<dyn WorkerTransport>,
     stderr_tail: Arc<Mutex<Vec<u8>>>,
     _reader_task: JoinHandle<()>,
     _stderr_task: JoinHandle<()>,
@@ -277,8 +275,8 @@ impl StartedWorker {
             .await
             .insert(control_id.clone(), sender);
         {
-            let mut stdin = self.inner.stdin.lock().await;
-            if let Err(error) = write_frame(&mut *stdin, &self.inner.codec, &message).await {
+            let mut write = self.inner.write.lock().await;
+            if let Err(error) = write_frame(&mut *write, &self.inner.codec, &message).await {
                 self.inner.controls.lock().await.remove(&control_id);
                 return Err(error);
             }
@@ -316,8 +314,8 @@ impl StartedWorker {
             control_id: control_id.clone(),
         });
         {
-            let mut stdin = self.inner.stdin.lock().await;
-            if let Err(error) = write_frame(&mut *stdin, &self.inner.codec, &message).await {
+            let mut write = self.inner.write.lock().await;
+            if let Err(error) = write_frame(&mut *write, &self.inner.codec, &message).await {
                 self.inner.controls.lock().await.remove(&control_id);
                 return Err(error);
             }
@@ -335,9 +333,7 @@ impl StartedWorker {
                 });
             }
             Err(_) => {
-                let mut child = self.inner.child.lock().await;
-                let _ = child.start_kill();
-                let _ = child.wait().await;
+                let _ = self.transport.shutdown().await;
                 self.inner.alive.store(false, Ordering::Release);
                 store_state_if_current(
                     &self.inner.state,
@@ -348,22 +344,7 @@ impl StartedWorker {
                 return Err(WorkerHostError::ShutdownTimeout);
             }
         }
-        let mut child = self.inner.child.lock().await;
-        if timeout(self.inner.shutdown_timeout, child.wait())
-            .await
-            .is_err()
-        {
-            let _ = child.start_kill();
-            let _ = child.wait().await;
-            self.inner.alive.store(false, Ordering::Release);
-            store_state_if_current(
-                &self.inner.state,
-                &self.inner.current_generation,
-                self.inner.generation,
-                STATE_STOPPED,
-            );
-            return Err(WorkerHostError::ShutdownTimeout);
-        }
+        let _ = self.transport.shutdown().await;
         self.inner.alive.store(false, Ordering::Release);
         store_state_if_current(
             &self.inner.state,
@@ -408,8 +389,8 @@ impl StartedWorker {
             payload,
         });
         let write_result = {
-            let mut stdin = self.inner.stdin.lock().await;
-            write_frame(&mut *stdin, &self.inner.codec, &message).await
+            let mut write = self.inner.write.lock().await;
+            write_frame(&mut *write, &self.inner.codec, &message).await
         };
         if let Err(error) = write_result {
             self.inner.pending.lock().await.remove(&request_id);
@@ -441,8 +422,8 @@ async fn send_cancel(
         request_id: request_id.clone(),
         correlation_id: correlation_id.clone(),
     });
-    let mut stdin = inner.stdin.lock().await;
-    let result = write_frame(&mut *stdin, &inner.codec, &message).await;
+    let mut write = inner.write.lock().await;
+    let result = write_frame(&mut *write, &inner.codec, &message).await;
     if result.is_err() {
         cancel_sent.store(false, Ordering::Release);
     }
@@ -541,30 +522,13 @@ impl WorkerSupervisor {
             Arc::clone(&self.current_generation),
         )?;
         let generation = start_guard.generation();
-        let mut command = Command::new(&self.launch.executable);
-        command
-            .env_clear()
-            .envs(self.launch.environment.iter().cloned())
-            .stdin(Stdio::piped())
-            .stdout(Stdio::piped())
-            .stderr(Stdio::piped())
-            .kill_on_drop(true);
-        let mut child = command.spawn().map_err(|error| WorkerHostError::Spawn {
-            path: self.launch.executable.clone(),
-            message: error.to_string(),
-        })?;
-        let mut stdin = child.stdin.take().ok_or_else(|| WorkerHostError::Io {
-            operation: "stdin setup",
-            message: "child stdin was not piped".to_owned(),
-        })?;
-        let mut stdout = child.stdout.take().ok_or_else(|| WorkerHostError::Io {
-            operation: "stdout setup",
-            message: "child stdout was not piped".to_owned(),
-        })?;
-        let stderr = child.stderr.take().ok_or_else(|| WorkerHostError::Io {
-            operation: "stderr setup",
-            message: "child stderr was not piped".to_owned(),
-        })?;
+        let (transport, mut stdin, mut stdout, stderr) =
+            crate::StdioTransport::spawn(&self.launch.executable, &self.launch.environment)
+                .await
+                .map_err(|e| WorkerHostError::Spawn {
+                    path: self.launch.executable.clone(),
+                    message: e.to_string(),
+                })?;
         let stderr_tail = Arc::new(Mutex::new(Vec::new()));
         let stderr_task = spawn_stderr_drain(
             stderr,
@@ -615,8 +579,7 @@ impl WorkerSupervisor {
         let controls = Arc::new(Mutex::new(HashMap::new()));
         let alive = Arc::new(AtomicBool::new(true));
         let inner = Arc::new(WorkerClientInner {
-            child: Mutex::new(child),
-            stdin: Mutex::new(stdin),
+            write: Mutex::new(Box::new(stdin)),
             pending: Arc::clone(&pending),
             controls: Arc::clone(&controls),
             codec: FrameCodec::new(self.launch.limits.maximum_frame_bytes),
@@ -633,7 +596,7 @@ impl WorkerSupervisor {
         });
         start_guard.commit();
         let reader_task = tokio::spawn(reader_loop(
-            stdout,
+            Box::new(stdout),
             FrameCodec::new(self.launch.limits.maximum_frame_bytes),
             pending,
             controls,
@@ -649,6 +612,7 @@ impl WorkerSupervisor {
         Ok(StartedWorker {
             hello,
             inner,
+            transport: Arc::new(transport),
             stderr_tail,
             _reader_task: reader_task,
             _stderr_task: stderr_task,
@@ -657,7 +621,7 @@ impl WorkerSupervisor {
 }
 
 async fn reader_loop(
-    mut stdout: tokio::process::ChildStdout,
+    mut reader: Box<dyn AsyncRead + Send + Unpin>,
     codec: FrameCodec,
     pending: PendingRequests,
     controls: PendingControls,
@@ -666,7 +630,7 @@ async fn reader_loop(
     lifecycle: ReaderLifecycle,
 ) {
     loop {
-        let message = match read_frame(&mut stdout, &codec).await {
+        let message = match read_frame(&mut reader, &codec).await {
             Ok(message) => message,
             Err(error) => {
                 fail_reader(&lifecycle, &pending, &controls, error.to_string()).await;

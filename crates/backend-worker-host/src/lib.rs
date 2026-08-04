@@ -16,6 +16,7 @@ mod supervisor;
 /// depend on this module.
 #[doc(hidden)]
 pub mod testing;
+pub mod transport;
 
 pub use adapter::ProcessInferenceBackend;
 pub use catalog::{
@@ -42,6 +43,7 @@ pub use supervisor::{
     StartedWorker, WorkerProcessState, WorkerRequestCanceller, WorkerRequestHandle,
     WorkerRequestResult, WorkerSupervisor,
 };
+pub use transport::StdioTransport;
 
 // Re-export worker protocol types used in our public API
 pub use reimagine_backend_worker_protocol::{

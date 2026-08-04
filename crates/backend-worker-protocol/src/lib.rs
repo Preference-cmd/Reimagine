@@ -10,6 +10,7 @@ mod lifecycle;
 mod progress;
 mod request;
 mod response;
+pub mod transport;
 mod worker_profile;
 
 pub use cancellation::{CancelAckFrame, CancelFrame};
@@ -29,4 +30,7 @@ pub use lifecycle::{CancelDisposition, LifecycleError, RequestTracker, Transport
 pub use progress::ProgressFrame;
 pub use request::{CorrelationId, RequestFrame, RequestId};
 pub use response::{TerminalFrame, TerminalOutcome};
+pub use transport::{
+    TransportDescription, TransportError, TransportKind, WorkerTransport,
+};
 pub use worker_profile::{WorkerInstanceProfile, WorkerProfile};
