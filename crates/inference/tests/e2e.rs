@@ -15,8 +15,9 @@ use reimagine_core::model::{
 use reimagine_core::model::{TensorDType, TensorShape};
 use reimagine_inference::operation::InferenceCapability;
 use reimagine_inference::{
-    Backend, BackendPayloadKey, BackendTensorHandle, ConditioningMetadata, ExecutionConditioning,
-    ExecutionValue, RuntimeClipHandle, RuntimeImage, RuntimeModelHandle, RuntimeVaeHandle,
+    Backend, BackendPayloadKey, BackendTensorHandle, ConditioningMetadata, DynExecutionValue,
+    ExecutionConditioning, ExecutionOutput, ExecutionValue, ExecutionValueKind, RuntimeClipHandle,
+    RuntimeImage, RuntimeModelHandle, RuntimeVaeHandle,
 };
 use reimagine_inference::{
     CannedCapabilityResponse, CreateEmptyLatentRequest, CreateEmptyLatentResponse, FakeBackend,
@@ -28,8 +29,8 @@ use reimagine_inference::{
 };
 use reimagine_inference::{
     ImageSourceResolver, LatentContent, LatentDecodeResponse, NodeExecutionContext,
-    NodeExecutorError, NodeExecutorRegistry, NodeInputs, NodeParams, NoopInferenceProgressSink,
-    NoopNodeCancellation, RecordingArtifactPublisher,
+    NodeExecutionOutputs, NodeExecutor, NodeExecutorError, NodeExecutorRegistry, NodeInputs,
+    NodeParams, NoopInferenceProgressSink, NoopNodeCancellation, RecordingArtifactPublisher,
 };
 
 // ── Fake model resolver ────────────────────────────────────────────
@@ -774,4 +775,164 @@ async fn fake_backend_capabilities_advertise_registered_capabilities() {
         let _ = support.capability();
     }
     let _ = InferenceCapabilitySupport::new(InferenceCapability::LoadBundle);
+}
+
+// ── Extension value round-trip ─────────────────────────────────────
+
+#[derive(Debug, Clone, PartialEq)]
+struct ControlNetContext {
+    name: String,
+    strength: f32,
+}
+
+impl ControlNetContext {
+    fn new(name: impl Into<String>, strength: f32) -> Self {
+        Self {
+            name: name.into(),
+            strength,
+        }
+    }
+}
+
+impl DynExecutionValue for ControlNetContext {
+    fn type_name(&self) -> &'static str {
+        "ControlNetContext"
+    }
+
+    fn as_any(&self) -> &dyn std::any::Any {
+        self
+    }
+
+    fn clone_box(&self) -> Box<dyn DynExecutionValue> {
+        Box::new(self.clone())
+    }
+
+    fn eq_box(&self, other: &dyn DynExecutionValue) -> bool {
+        other
+            .as_any()
+            .downcast_ref::<ControlNetContext>()
+            .is_some_and(|other| other == self)
+    }
+}
+
+struct ProduceControlNetExecutor;
+
+#[async_trait::async_trait]
+impl NodeExecutor for ProduceControlNetExecutor {
+    async fn execute(
+        &self,
+        _context: NodeExecutionContext,
+    ) -> Result<NodeExecutionOutputs, NodeExecutorError> {
+        Ok(vec![ExecutionOutput::run_scoped(
+            SlotId::new("controlnet"),
+            Arc::new(ExecutionValue::Extension(Box::new(ControlNetContext::new(
+                "canny", 0.6,
+            )))),
+        )])
+    }
+}
+
+struct ConsumeControlNetExecutor;
+
+#[async_trait::async_trait]
+impl NodeExecutor for ConsumeControlNetExecutor {
+    async fn execute(
+        &self,
+        context: NodeExecutionContext,
+    ) -> Result<NodeExecutionOutputs, NodeExecutorError> {
+        let value = context
+            .inputs()
+            .get(&SlotId::new("controlnet"))
+            .expect("extension input");
+        let extension = value
+            .as_extension()
+            .expect("input should be an extension value");
+        assert_eq!(extension.type_name(), "ControlNetContext");
+        let ctx = extension
+            .as_any()
+            .downcast_ref::<ControlNetContext>()
+            .expect("input should downcast to ControlNetContext");
+        assert_eq!(ctx, &ControlNetContext::new("canny", 0.6));
+        Ok(vec![ExecutionOutput::run_scoped(
+            SlotId::new("controlnet"),
+            value.clone(),
+        )])
+    }
+}
+
+#[tokio::test]
+async fn custom_extension_values_round_trip_through_executors() {
+    let mut registry = NodeExecutorRegistry::default();
+    registry
+        .register(
+            "test.produce_controlnet",
+            Arc::new(ProduceControlNetExecutor),
+        )
+        .expect("register producer");
+    registry
+        .register(
+            "test.consume_controlnet",
+            Arc::new(ConsumeControlNetExecutor),
+        )
+        .expect("register consumer");
+
+    let producer = registry
+        .get(&reimagine_core::model::NodeTypeId::new(
+            "test.produce_controlnet",
+        ))
+        .expect("producer registered");
+    let produced = producer
+        .execute(make_context(
+            "producer",
+            "test.produce_controlnet",
+            NodeInputs::new(),
+            NodeParams::new(),
+        ))
+        .await
+        .expect("produce ok");
+    assert_eq!(produced.len(), 1);
+    let produced_value = produced[0].value().clone();
+
+    let extension = produced_value
+        .as_extension()
+        .expect("producer should emit an extension value");
+    assert_eq!(extension.type_name(), "ControlNetContext");
+    assert_eq!(
+        extension
+            .as_any()
+            .downcast_ref::<ControlNetContext>()
+            .expect("downcast"),
+        &ControlNetContext::new("canny", 0.6)
+    );
+    assert_eq!(produced_value.kind(), ExecutionValueKind::Extension);
+    assert_eq!(ExecutionValueKind::Extension.as_str(), "extension");
+    assert_eq!(produced_value.kind().as_str(), "extension");
+    assert_eq!(produced_value.as_ref().clone(), *produced_value.as_ref());
+    assert_ne!(&*produced_value, &ExecutionValue::Null);
+    assert_ne!(
+        &*produced_value,
+        &ExecutionValue::Param(ParamValue::String("canny".to_owned()))
+    );
+
+    let mut inputs = NodeInputs::new();
+    inputs.insert(SlotId::new("controlnet"), produced_value);
+    let consumer = registry
+        .get(&reimagine_core::model::NodeTypeId::new(
+            "test.consume_controlnet",
+        ))
+        .expect("consumer registered");
+    let consumed = consumer
+        .execute(make_context(
+            "consumer",
+            "test.consume_controlnet",
+            inputs,
+            NodeParams::new(),
+        ))
+        .await
+        .expect("consume ok");
+    assert_eq!(consumed.len(), 1);
+    assert_eq!(
+        consumed[0].value().as_ref(),
+        &ExecutionValue::Extension(Box::new(ControlNetContext::new("canny", 0.6)))
+    );
 }

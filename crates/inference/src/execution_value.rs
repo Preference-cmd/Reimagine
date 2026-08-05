@@ -35,4 +35,4 @@ pub use handles::{
 };
 pub use output::{ExecutionOutput, ExecutionValueRetention};
 pub use tensor::BackendTensorMetadata;
-pub use value::{ExecutionValue, ExecutionValueKind};
+pub use value::{DynExecutionValue, ExecutionValue, ExecutionValueKind};

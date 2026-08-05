@@ -18,6 +18,9 @@
 //! - [`Artifact`](ExecutionValue::Artifact) for output artifact
 //!   references
 //! - [`Null`](ExecutionValue::Null) as the explicit no-value variant
+//! - [`Extension`](ExecutionValue::Extension) for opaque, type-erased
+//!   extension values (ControlNet, LoRA, future non-core types) that
+//!   implement [`DynExecutionValue`]
 //!
 //! `ExecutionValue` is the run-time envelope. It is **not** the
 //! workflow JSON value, **not** a host DTO, **not** a snapshot /
@@ -34,7 +37,27 @@ use super::handles::{
     RuntimeVaeHandle,
 };
 
-#[derive(Debug, Clone, PartialEq)]
+/// Extension value that can ride on [`ExecutionValue::Extension`].
+///
+/// The core envelope treats implementors as opaque; callers that know
+/// the concrete type recover it via [`DynExecutionValue::as_any`].
+/// Implementors provide the `Debug`, `Clone` (`clone_box`), and
+/// `PartialEq` (`eq_box`) semantics the envelope requires.
+pub trait DynExecutionValue: std::any::Any + Send + Sync + std::fmt::Debug {
+    /// Stable type name for diagnostics and dispatch.
+    fn type_name(&self) -> &'static str;
+
+    /// Downcast to the concrete extension value.
+    fn as_any(&self) -> &dyn std::any::Any;
+
+    /// Clone as a boxed trait object.
+    fn clone_box(&self) -> Box<dyn DynExecutionValue>;
+
+    /// Compare against another boxed extension value.
+    fn eq_box(&self, other: &dyn DynExecutionValue) -> bool;
+}
+
+#[derive(Debug)]
 pub enum ExecutionValue {
     Param(ParamValue),
     Model(RuntimeModelHandle),
@@ -44,7 +67,44 @@ pub enum ExecutionValue {
     Conditioning(ExecutionConditioning),
     Image(RuntimeImage),
     Artifact(ArtifactRef),
+    /// Type-erased extension value for non-core payloads.
+    Extension(Box<dyn DynExecutionValue>),
     Null,
+}
+
+impl Clone for ExecutionValue {
+    fn clone(&self) -> Self {
+        match self {
+            Self::Param(v) => Self::Param(v.clone()),
+            Self::Model(v) => Self::Model(v.clone()),
+            Self::Clip(v) => Self::Clip(v.clone()),
+            Self::Vae(v) => Self::Vae(v.clone()),
+            Self::Latent(v) => Self::Latent(v.clone()),
+            Self::Conditioning(v) => Self::Conditioning(v.clone()),
+            Self::Image(v) => Self::Image(v.clone()),
+            Self::Artifact(v) => Self::Artifact(v.clone()),
+            Self::Extension(ext) => Self::Extension(ext.clone_box()),
+            Self::Null => Self::Null,
+        }
+    }
+}
+
+impl PartialEq for ExecutionValue {
+    fn eq(&self, other: &Self) -> bool {
+        match (self, other) {
+            (Self::Param(a), Self::Param(b)) => a == b,
+            (Self::Model(a), Self::Model(b)) => a == b,
+            (Self::Clip(a), Self::Clip(b)) => a == b,
+            (Self::Vae(a), Self::Vae(b)) => a == b,
+            (Self::Latent(a), Self::Latent(b)) => a == b,
+            (Self::Conditioning(a), Self::Conditioning(b)) => a == b,
+            (Self::Image(a), Self::Image(b)) => a == b,
+            (Self::Artifact(a), Self::Artifact(b)) => a == b,
+            (Self::Extension(a), Self::Extension(b)) => a.eq_box(b.as_ref()),
+            (Self::Null, Self::Null) => true,
+            _ => false,
+        }
+    }
 }
 
 impl ExecutionValue {
@@ -113,6 +173,15 @@ impl ExecutionValue {
         }
     }
 
+    /// Returns the boxed extension value when this value is
+    /// [`ExecutionValue::Extension`], otherwise `None`.
+    pub fn as_extension(&self) -> Option<&dyn DynExecutionValue> {
+        match self {
+            Self::Extension(ext) => Some(ext.as_ref()),
+            _ => None,
+        }
+    }
+
     /// Returns `true` when the value is [`ExecutionValue::Null`].
     pub fn is_null(&self) -> bool {
         matches!(self, Self::Null)
@@ -130,6 +199,7 @@ impl ExecutionValue {
             Self::Conditioning(_) => ExecutionValueKind::Conditioning,
             Self::Image(_) => ExecutionValueKind::Image,
             Self::Artifact(_) => ExecutionValueKind::Artifact,
+            Self::Extension(_) => ExecutionValueKind::Extension,
             Self::Null => ExecutionValueKind::Null,
         }
     }
@@ -147,6 +217,7 @@ pub enum ExecutionValueKind {
     Conditioning,
     Image,
     Artifact,
+    Extension,
     Null,
 }
 
@@ -162,6 +233,7 @@ impl ExecutionValueKind {
             Self::Conditioning => "conditioning",
             Self::Image => "image",
             Self::Artifact => "artifact",
+            Self::Extension => "extension",
             Self::Null => "null",
         }
     }

@@ -63,7 +63,7 @@ pub mod testing;
 
 pub use execution_value::{
     BackendPayloadKey, BackendTensorHandle, BackendTensorMetadata, ConditioningMetadata,
-    ExecutionConditioning, ExecutionOutput, ExecutionValue, ExecutionValueKind,
+    DynExecutionValue, ExecutionConditioning, ExecutionOutput, ExecutionValue, ExecutionValueKind,
     ExecutionValueRetention, RuntimeClipHandle, RuntimeImage, RuntimeLatent, RuntimeModelHandle,
     RuntimeVaeHandle,
 };
