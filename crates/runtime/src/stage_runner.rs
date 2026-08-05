@@ -99,8 +99,9 @@ pub async fn execute_stage_node(
         context.clock.clone(),
         context.cancellation.clone(),
     ));
-    let cancellation: Arc<dyn NodeCancellation> = Arc::new(CombinedCancellation::new(
+    let cancellation: Arc<dyn NodeCancellation> = Arc::new(CombinedCancellation::triple(
         context.cancellation.clone(),
+        context.cancellation.node_cancellation(node.node_id()),
         failure_cancellation,
     ));
     let progress: Arc<dyn InferenceProgressSink> = Arc::new(RuntimeInferenceProgressSink::new(

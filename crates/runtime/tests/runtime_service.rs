@@ -286,6 +286,46 @@ impl NodeExecutor for LateSuccessExecutor {
     }
 }
 
+/// Executor that runs forever but observes cancellation at cheap check
+/// points, returning `Cancelled` once its node token is armed.
+struct CooperativeCancellationExecutor {
+    started: Arc<AtomicUsize>,
+}
+
+#[async_trait]
+impl NodeExecutor for CooperativeCancellationExecutor {
+    async fn execute(
+        &self,
+        context: NodeExecutionContext,
+    ) -> Result<Vec<reimagine_runtime::ExecutionOutput>, NodeExecutorError> {
+        self.started.fetch_add(1, Ordering::SeqCst);
+        loop {
+            if context.cancellation().is_cancelled() {
+                return Err(NodeExecutorError::Cancelled);
+            }
+            tokio::time::sleep(Duration::from_millis(5)).await;
+        }
+    }
+}
+
+/// Executor that blocks forever and never observes cancellation. Used to
+/// verify the deadline enforcement aborts stuck tasks.
+struct StuckExecutor {
+    started: Arc<AtomicUsize>,
+}
+
+#[async_trait]
+impl NodeExecutor for StuckExecutor {
+    async fn execute(
+        &self,
+        _context: NodeExecutionContext,
+    ) -> Result<Vec<reimagine_runtime::ExecutionOutput>, NodeExecutorError> {
+        self.started.fetch_add(1, Ordering::SeqCst);
+        let () = std::future::pending().await;
+        Ok(Vec::new())
+    }
+}
+
 fn run_to_completion(service: &RuntimeService, handle: &RunHandle) {
     let run_id = handle.run_id().clone();
     // Spin until the run has reached a terminal state.
@@ -1450,6 +1490,381 @@ fn executor_cancelled_on_last_node_marks_run_cancelled_not_failed() {
         assert!(kinds.contains(&RunEventKind::RunCancelled));
         assert!(!kinds.contains(&RunEventKind::RunFailed));
     });
+}
+
+#[test]
+fn cancel_node_mid_run_cancels_only_that_node_and_run_continues() {
+    let rt = test_runtime();
+    rt.block_on(async {
+        let mut registry = NodeExecutorRegistry::default();
+        let slow_count = Arc::new(AtomicUsize::new(0));
+        registry
+            .register(
+                "mock.slow",
+                Arc::new(MockExecutor {
+                    label: "slow".to_owned(),
+                    count: slow_count.clone(),
+                    delay: Duration::from_secs(2),
+                    fail_with: None,
+                }),
+            )
+            .unwrap();
+        let sink = Arc::new(VecRunEventSink::new());
+        let service = RuntimeService::new(
+            registry,
+            Arc::new(NoopBackendInstanceRuntimeHooks::default()),
+            sink.clone(),
+            Arc::new(FixedClock),
+        );
+        let handle = service
+            .run(
+                Arc::new(two_node_same_stage_plan("mock.slow", "a", "b")),
+                Default::default(),
+                RuntimeOptions::default(),
+            )
+            .unwrap();
+
+        // Wait for `a` to start, then cancel it at node level. `b` has not
+        // been admitted yet (stage concurrency is 1) and is cancelled too.
+        wait_for_condition(Duration::from_secs(2), || {
+            slow_count.load(Ordering::SeqCst) > 0
+        });
+        handle.cancellation().cancel_node(&NodeId::new("a"));
+        handle.cancellation().cancel_node(&NodeId::new("b"));
+
+        run_to_completion(&service, &handle);
+
+        let summary = service.summary(handle.run_id()).unwrap();
+        assert_eq!(summary.state, reimagine_runtime::RunState::Completed);
+        let snapshot = service.snapshot(handle.run_id()).unwrap();
+        assert_eq!(
+            snapshot.node_states.get(&NodeId::new("a")),
+            Some(&reimagine_runtime::NodeState::Cancelled)
+        );
+        assert_eq!(
+            snapshot.node_states.get(&NodeId::new("b")),
+            Some(&reimagine_runtime::NodeState::Cancelled)
+        );
+        let kinds: Vec<RunEventKind> = sink.events().iter().map(|e| e.kind()).collect();
+        assert!(kinds.contains(&RunEventKind::NodeCancelled));
+        assert!(!kinds.contains(&RunEventKind::RunCancelled));
+        assert!(!kinds.contains(&RunEventKind::RunFailed));
+    });
+}
+
+#[test]
+fn node_deadline_expiry_fails_node_with_diagnostic_and_run_continues() {
+    let rt = test_runtime();
+    rt.block_on(async {
+        let mut registry = NodeExecutorRegistry::default();
+        let started = Arc::new(AtomicUsize::new(0));
+        registry
+            .register(
+                "mock.cooperative_blocking",
+                Arc::new(CooperativeCancellationExecutor {
+                    started: started.clone(),
+                }),
+            )
+            .unwrap();
+        registry
+            .register(
+                "mock.fast",
+                Arc::new(MockExecutor {
+                    label: "fast".to_owned(),
+                    count: Arc::new(AtomicUsize::new(0)),
+                    delay: Duration::ZERO,
+                    fail_with: None,
+                }),
+            )
+            .unwrap();
+        let sink = Arc::new(VecRunEventSink::new());
+        let service = RuntimeService::new(
+            registry,
+            Arc::new(NoopBackendInstanceRuntimeHooks::default()),
+            sink.clone(),
+            Arc::new(FixedClock),
+        );
+        let mut options = RuntimeOptions::default();
+        options.default_node_timeout = Some(Duration::from_millis(150));
+
+        // Same stage: `a` blocks forever (cooperatively), `b` completes
+        // instantly. `a` times out; `b` still runs to completion.
+        let plan = ExecutionPlan::new(
+            WorkflowId::new("workflow-deadline"),
+            WorkflowVersion::new(1),
+            RunTargetSelection::AllDefaultTargets,
+            vec![
+                RunTarget::Node {
+                    node_id: NodeId::new("a"),
+                },
+                RunTarget::Node {
+                    node_id: NodeId::new("b"),
+                },
+            ],
+            vec![
+                ExecutionNode::new(
+                    NodeId::new("a"),
+                    NodeTypeId::new("mock.cooperative_blocking"),
+                    Vec::new(),
+                    vec![SlotId::new("out")],
+                ),
+                ExecutionNode::new(
+                    NodeId::new("b"),
+                    NodeTypeId::new("mock.fast"),
+                    Vec::new(),
+                    vec![SlotId::new("out")],
+                ),
+            ],
+            Vec::new(),
+            Vec::new(),
+            vec![ExecutionStage::new(
+                0,
+                vec![NodeId::new("a"), NodeId::new("b")],
+            )],
+        );
+        let handle = service
+            .run(Arc::new(plan), Default::default(), options)
+            .unwrap();
+        run_to_completion(&service, &handle);
+
+        assert!(started.load(Ordering::SeqCst) >= 1);
+        let summary = service.summary(handle.run_id()).unwrap();
+        assert_eq!(summary.state, reimagine_runtime::RunState::Completed);
+        let snapshot = service.snapshot(handle.run_id()).unwrap();
+        assert_eq!(
+            snapshot.node_states.get(&NodeId::new("a")),
+            Some(&reimagine_runtime::NodeState::Failed)
+        );
+        assert_eq!(
+            snapshot.node_states.get(&NodeId::new("b")),
+            Some(&reimagine_runtime::NodeState::Completed)
+        );
+        let timeout_diag = snapshot
+            .diagnostics
+            .iter()
+            .find(|d| d.message().contains("deadline"))
+            .expect("deadline diagnostic");
+        assert!(
+            timeout_diag.message().contains("node a"),
+            "diagnostic must name the node: {}",
+            timeout_diag.message()
+        );
+        let kinds: Vec<RunEventKind> = sink.events().iter().map(|e| e.kind()).collect();
+        assert!(kinds.contains(&RunEventKind::NodeFailed));
+        assert!(!kinds.contains(&RunEventKind::RunFailed));
+        assert!(!kinds.contains(&RunEventKind::RunCancelled));
+    });
+}
+
+#[test]
+fn stuck_executor_is_aborted_after_deadline_and_stage_continues() {
+    let rt = test_runtime();
+    rt.block_on(async {
+        let mut registry = NodeExecutorRegistry::default();
+        let started = Arc::new(AtomicUsize::new(0));
+        registry
+            .register(
+                "mock.stuck",
+                Arc::new(StuckExecutor {
+                    started: started.clone(),
+                }),
+            )
+            .unwrap();
+        registry
+            .register(
+                "mock.fast",
+                Arc::new(MockExecutor {
+                    label: "fast".to_owned(),
+                    count: Arc::new(AtomicUsize::new(0)),
+                    delay: Duration::ZERO,
+                    fail_with: None,
+                }),
+            )
+            .unwrap();
+        let sink = Arc::new(VecRunEventSink::new());
+        let service = RuntimeService::new(
+            registry,
+            Arc::new(NoopBackendInstanceRuntimeHooks::default()),
+            sink.clone(),
+            Arc::new(FixedClock),
+        );
+
+        // Stage 0 holds the stuck node; stage 1 holds an independent node.
+        let plan = ExecutionPlan::new(
+            WorkflowId::new("workflow-stuck-timeout"),
+            WorkflowVersion::new(1),
+            RunTargetSelection::AllDefaultTargets,
+            vec![
+                RunTarget::Node {
+                    node_id: NodeId::new("b"),
+                },
+                RunTarget::Node {
+                    node_id: NodeId::new("c"),
+                },
+            ],
+            vec![
+                ExecutionNode::new(
+                    NodeId::new("b"),
+                    NodeTypeId::new("mock.stuck"),
+                    Vec::new(),
+                    vec![SlotId::new("out")],
+                ),
+                ExecutionNode::new(
+                    NodeId::new("c"),
+                    NodeTypeId::new("mock.fast"),
+                    Vec::new(),
+                    vec![SlotId::new("out")],
+                ),
+            ],
+            Vec::new(),
+            Vec::new(),
+            vec![
+                ExecutionStage::new(0, vec![NodeId::new("b")]),
+                ExecutionStage::new(1, vec![NodeId::new("c")]),
+            ],
+        );
+        let mut options = RuntimeOptions::default();
+        options.default_node_timeout = Some(Duration::from_millis(100));
+        let handle = service
+            .run(Arc::new(plan), Default::default(), options)
+            .unwrap();
+        run_to_completion(&service, &handle);
+
+        // The stuck node must have been started and then failed by deadline.
+        assert_eq!(started.load(Ordering::SeqCst), 1);
+        let summary = service.summary(handle.run_id()).unwrap();
+        assert_eq!(summary.state, reimagine_runtime::RunState::Completed);
+        let snapshot = service.snapshot(handle.run_id()).unwrap();
+        assert_eq!(
+            snapshot.node_states.get(&NodeId::new("b")),
+            Some(&reimagine_runtime::NodeState::Failed)
+        );
+        assert_eq!(
+            snapshot.node_states.get(&NodeId::new("c")),
+            Some(&reimagine_runtime::NodeState::Completed)
+        );
+        let timeout_diag = snapshot
+            .diagnostics
+            .iter()
+            .find(|d| d.message().contains("deadline"))
+            .expect("deadline diagnostic");
+        assert!(
+            timeout_diag.message().contains("node b"),
+            "diagnostic must name the node: {}",
+            timeout_diag.message()
+        );
+        let kinds: Vec<RunEventKind> = sink.events().iter().map(|e| e.kind()).collect();
+        assert!(kinds.contains(&RunEventKind::NodeFailed));
+        assert!(!kinds.contains(&RunEventKind::RunFailed));
+    });
+}
+
+#[test]
+fn ready_set_path_respects_node_cancellation() {
+    let rt = test_runtime();
+    rt.block_on(async {
+        let mut registry = NodeExecutorRegistry::default();
+        let slow_count = Arc::new(AtomicUsize::new(0));
+        registry
+            .register(
+                "mock.slow",
+                Arc::new(MockExecutor {
+                    label: "slow".to_owned(),
+                    count: slow_count.clone(),
+                    delay: Duration::from_secs(2),
+                    fail_with: None,
+                }),
+            )
+            .unwrap();
+        registry
+            .register(
+                "mock.fast",
+                Arc::new(MockExecutor {
+                    label: "fast".to_owned(),
+                    count: Arc::new(AtomicUsize::new(0)),
+                    delay: Duration::ZERO,
+                    fail_with: None,
+                }),
+            )
+            .unwrap();
+        let sink = Arc::new(VecRunEventSink::new());
+        let service = RuntimeService::new(
+            registry,
+            Arc::new(NoopBackendInstanceRuntimeHooks::default()),
+            sink.clone(),
+            Arc::new(FixedClock),
+        );
+        let mut options = RuntimeOptions::default();
+        options.use_ready_set = true;
+
+        // Both nodes are ready in the initial batch; `a` runs slowly, `b`
+        // completes instantly.
+        let plan = ExecutionPlan::new(
+            WorkflowId::new("workflow-ready-set-cancel"),
+            WorkflowVersion::new(1),
+            RunTargetSelection::AllDefaultTargets,
+            vec![
+                RunTarget::Node {
+                    node_id: NodeId::new("a"),
+                },
+                RunTarget::Node {
+                    node_id: NodeId::new("b"),
+                },
+            ],
+            vec![
+                ExecutionNode::new(
+                    NodeId::new("a"),
+                    NodeTypeId::new("mock.slow"),
+                    Vec::new(),
+                    vec![SlotId::new("out")],
+                ),
+                ExecutionNode::new(
+                    NodeId::new("b"),
+                    NodeTypeId::new("mock.fast"),
+                    Vec::new(),
+                    vec![SlotId::new("out")],
+                ),
+            ],
+            Vec::new(),
+            Vec::new(),
+            vec![ExecutionStage::new(
+                0,
+                vec![NodeId::new("a"), NodeId::new("b")],
+            )],
+        );
+        let handle = service
+            .run(Arc::new(plan), Default::default(), options)
+            .unwrap();
+
+        wait_for_condition(Duration::from_secs(2), || {
+            slow_count.load(Ordering::SeqCst) > 0
+        });
+        handle.cancellation().cancel_node(&NodeId::new("a"));
+
+        run_to_completion(&service, &handle);
+
+        let summary = service.summary(handle.run_id()).unwrap();
+        assert_eq!(summary.state, reimagine_runtime::RunState::Completed);
+        let snapshot = service.snapshot(handle.run_id()).unwrap();
+        assert_eq!(
+            snapshot.node_states.get(&NodeId::new("a")),
+            Some(&reimagine_runtime::NodeState::Cancelled)
+        );
+        assert_eq!(
+            snapshot.node_states.get(&NodeId::new("b")),
+            Some(&reimagine_runtime::NodeState::Completed)
+        );
+        let kinds: Vec<RunEventKind> = sink.events().iter().map(|e| e.kind()).collect();
+        assert!(!kinds.contains(&RunEventKind::RunCancelled));
+    });
+}
+
+#[test]
+fn default_node_timeout_defaults_to_five_minutes() {
+    assert_eq!(
+        RuntimeOptions::default().default_node_timeout,
+        Some(Duration::from_secs(5 * 60))
+    );
 }
 
 #[test]

@@ -1,5 +1,6 @@
 use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, Ordering};
+use std::time::Duration;
 
 use reimagine_core::diagnostic::{CorrelationId, Diagnostic};
 use reimagine_core::event::{RunEvent, RunEventId, RunEventKind};
@@ -22,7 +23,7 @@ use crate::snapshot::{RunArtifactRef, RunSnapshot, RunSummary};
 use crate::store::RunStore;
 
 /// Options passed to [`RuntimeService::run`].
-#[derive(Debug, Clone, Default)]
+#[derive(Debug, Clone)]
 #[non_exhaustive]
 pub struct RuntimeOptions {
     /// Optional correlation id propagated to events and node contexts.
@@ -45,6 +46,29 @@ pub struct RuntimeOptions {
     /// `None` (default) means unlimited — the backend uses all available VRAM.
     /// When set, the backend should evict cached models to stay under budget.
     pub vram_budget: Option<VramBudget>,
+    /// Default per-node execution deadline (BE-16/BE-27 merged).
+    ///
+    /// The deadline is armed when a node is admitted into a stage. A node
+    /// that does not finish within the window is failed with a timeout
+    /// diagnostic; per node-level semantics this is **not** a run failure —
+    /// the run continues with the remaining nodes (downstream nodes that
+    /// depend on the timed-out node's outputs fail on missing values, which
+    /// does fail the run).
+    ///
+    /// Defaults to 5 minutes. `None` disables per-node deadlines entirely.
+    pub default_node_timeout: Option<Duration>,
+}
+
+impl Default for RuntimeOptions {
+    fn default() -> Self {
+        Self {
+            correlation_id: None,
+            max_stage_concurrency: None,
+            use_ready_set: false,
+            vram_budget: None,
+            default_node_timeout: Some(Duration::from_secs(5 * 60)),
+        }
+    }
 }
 
 /// Public errors returned from `RuntimeService` operations.

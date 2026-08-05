@@ -1,4 +1,6 @@
+use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
+use std::time::{Duration, Instant};
 
 use reimagine_core::diagnostic::Diagnostic;
 use reimagine_core::event::{RunEventKind, Timestamp};
@@ -22,6 +24,22 @@ use crate::stage_runner::{
 };
 use crate::value_store::OutputKey;
 
+/// How long the reducer waits for a timed-out task to observe cancellation
+/// and return before aborting the stage. Cooperative executors return within
+/// milliseconds; a task still running after the grace window is assumed
+/// stuck and is aborted together with the stage.
+const STAGE_ABORT_GRACE: Duration = Duration::from_secs(1);
+
+/// Diagnostic message for a node that exceeded its execution deadline.
+fn node_timeout_message(node_id: &NodeId, timeout: Option<Duration>) -> String {
+    match timeout {
+        Some(timeout) => format!(
+            "node {node_id} exceeded its execution deadline (timeout {timeout:?}); node aborted"
+        ),
+        None => format!("node {node_id} exceeded its execution deadline; node aborted"),
+    }
+}
+
 struct StageReductionContext<'a> {
     session: &'a mut RunSession,
     started_at: &'a Timestamp,
@@ -44,6 +62,11 @@ impl Runner {
         let mut joins = JoinSet::new();
         let mut next_index = 0usize;
         let failure_cancellation = CancellationToken::new();
+        // node_id -> deadline, for in-flight nodes with an armed deadline.
+        let mut in_flight_deadlines: HashMap<NodeId, Instant> = HashMap::new();
+        // In-flight nodes whose deadline already expired (reduced as timed
+        // out) but whose task has not returned yet.
+        let mut expired_in_flight: HashSet<NodeId> = HashSet::new();
 
         while next_index < node_ids.len() || !joins.is_empty() {
             if joins.is_empty() {
@@ -78,6 +101,33 @@ impl Runner {
                         StageNodeDecision::Execute => {}
                     }
 
+                    // Node-level cancellation at admission: this node (or the
+                    // run) was cancelled before it started. Only this node is
+                    // affected; the stage continues.
+                    if self.cancellation.is_node_cancelled(node_id) {
+                        self.reduce_node_cancelled(&node, session, started_at, artifact_store)
+                            .await;
+                        continue;
+                    }
+
+                    // Deadline at admission: the node's deadline was armed
+                    // before admission (e.g. by the host) and has already
+                    // passed. Fail it without failing the run.
+                    if self.cancellation.is_node_expired(node_id) {
+                        let message =
+                            node_timeout_message(node_id, self.options.default_node_timeout);
+                        let mut reduction = StageReductionContext {
+                            session,
+                            started_at,
+                            artifact_store,
+                            consumer_index,
+                            policy,
+                        };
+                        self.reduce_node_timed_out(&node, message, &mut reduction)
+                            .await;
+                        continue;
+                    }
+
                     let work = match self.prepare_stage_node_work(&node, session) {
                         Ok(work) => work,
                         Err(StageNodePrepareError::Failed(message)) => {
@@ -97,6 +147,17 @@ impl Runner {
 
                     self.admit_stage_node(work.node(), session, started_at, artifact_store)
                         .await;
+
+                    // Arm the per-node deadline once the node is admitted.
+                    let deadline = self
+                        .options
+                        .default_node_timeout
+                        .map(|timeout| Instant::now() + timeout);
+                    if let Some(deadline) = deadline {
+                        self.cancellation.set_deadline_at(node_id, deadline);
+                        in_flight_deadlines.insert(node_id.clone(), deadline);
+                    }
+
                     let execution = StageExecutionContext {
                         run_id: self.run_id.clone(),
                         workflow_id: self.plan.workflow_id().clone(),
@@ -120,7 +181,54 @@ impl Runner {
                 break;
             }
 
-            let Some(result) = joins.join_next().await else {
+            // Wait for the next node result, racing the earliest in-flight
+            // deadline. Expired nodes are failed with a timeout diagnostic
+            // (node-level, not a run failure).
+            let result = match in_flight_deadlines.values().copied().min() {
+                Some(deadline) => {
+                    tokio::select! {
+                        result = joins.join_next() => result,
+                        _ = tokio::time::sleep_until(tokio::time::Instant::from_std(deadline)) => {
+                            self.expire_in_flight_nodes(
+                                &mut in_flight_deadlines,
+                                &mut expired_in_flight,
+                                session,
+                                started_at,
+                                artifact_store,
+                                consumer_index,
+                                policy,
+                            )
+                            .await;
+                            continue;
+                        }
+                    }
+                }
+                None if !expired_in_flight.is_empty() => {
+                    // Every in-flight node is past its deadline. Give the
+                    // expired tasks a grace window to observe cancellation
+                    // and return before aborting the stage (dropping the
+                    // JoinSet then aborts any task that is truly stuck).
+                    tokio::select! {
+                        result = joins.join_next() => result,
+                        _ = tokio::time::sleep(STAGE_ABORT_GRACE) => {
+                            failure_cancellation.cancel();
+                            self.skip_stage_remaining(
+                                next_index,
+                                node_ids,
+                                "stage aborted: in-flight node(s) exceeded their execution deadline",
+                                session,
+                                started_at,
+                                artifact_store,
+                            )
+                            .await;
+                            return false;
+                        }
+                    }
+                }
+                None => joins.join_next().await,
+            };
+
+            let Some(result) = result else {
                 break;
             };
 
@@ -136,6 +244,23 @@ impl Runner {
                     continue;
                 }
             };
+
+            let node_id = match &result {
+                StageNodeResult::Completed { node, .. } => node.node_id(),
+                StageNodeResult::Failed { node, .. } => node.node_id(),
+                StageNodeResult::Cancelled { node } => node.node_id(),
+            };
+            in_flight_deadlines.remove(node_id);
+            expired_in_flight.remove(node_id);
+
+            // A node reduced earlier (e.g. timed out while its task was
+            // still running) must not be reduced twice.
+            if session
+                .node_outcome(node_id)
+                .is_some_and(NodeOutcome::is_terminal)
+            {
+                continue;
+            }
 
             let was_failing = policy.failed_message().is_some();
             let mut reduction = StageReductionContext {
@@ -180,6 +305,94 @@ impl Runner {
         }
 
         self.cancellation.is_cancelled() && policy.failed_message().is_none()
+    }
+
+    /// Fail every in-flight node whose deadline has passed, arming its node
+    /// token so the still-running executor can abort cooperatively.
+    ///
+    /// Timeouts are node-level: the failure is recorded in the session (with
+    /// a timeout diagnostic) but not in the stage policy, so the run
+    /// continues with the remaining nodes.
+    #[allow(clippy::too_many_arguments)]
+    async fn expire_in_flight_nodes(
+        &self,
+        in_flight_deadlines: &mut HashMap<NodeId, Instant>,
+        expired_in_flight: &mut HashSet<NodeId>,
+        session: &mut RunSession,
+        started_at: &Timestamp,
+        artifact_store: &Arc<Mutex<ArtifactStore>>,
+        consumer_index: &PlanConsumerIndex,
+        policy: &mut StageExecutionPolicy,
+    ) {
+        let expired: Vec<NodeId> = in_flight_deadlines
+            .iter()
+            .filter(|(_, deadline)| Instant::now() >= **deadline)
+            .map(|(node_id, _)| node_id.clone())
+            .collect();
+        for node_id in expired {
+            in_flight_deadlines.remove(&node_id);
+            expired_in_flight.insert(node_id.clone());
+            let Some(node) = self
+                .plan
+                .nodes()
+                .iter()
+                .find(|n| n.node_id() == &node_id)
+                .cloned()
+            else {
+                continue;
+            };
+            // Cooperative: the node token lets the still-running executor
+            // abort at its next check point.
+            self.cancellation.cancel_node(&node_id);
+            let message = node_timeout_message(&node_id, self.options.default_node_timeout);
+            let mut reduction = StageReductionContext {
+                session,
+                started_at,
+                artifact_store,
+                consumer_index,
+                policy,
+            };
+            self.reduce_node_timed_out(&node, message, &mut reduction)
+                .await;
+        }
+    }
+
+    /// Mark every not-yet-terminal node in `node_ids[next_index..]` as
+    /// skipped with the given reason.
+    async fn skip_stage_remaining(
+        &self,
+        next_index: usize,
+        node_ids: &[NodeId],
+        reason: &str,
+        session: &mut RunSession,
+        started_at: &Timestamp,
+        artifact_store: &Arc<Mutex<ArtifactStore>>,
+    ) {
+        for node_id in &node_ids[next_index..] {
+            if session
+                .node_outcome(node_id)
+                .is_some_and(NodeOutcome::is_terminal)
+            {
+                continue;
+            }
+            let Some(node) = self
+                .plan
+                .nodes()
+                .iter()
+                .find(|n| n.node_id() == node_id)
+                .cloned()
+            else {
+                continue;
+            };
+            self.reduce_node_skipped(
+                &node,
+                reason.to_owned(),
+                session,
+                started_at,
+                artifact_store,
+            )
+            .await;
+        }
     }
 
     fn prepare_stage_node_work(
@@ -370,7 +583,13 @@ impl Runner {
                     reduction.artifact_store,
                 )
                 .await;
-                !already_failing
+                // Classify the cancellation: a run token cancellation, or an
+                // unprompted executor Cancelled (no node token armed), stops
+                // the whole run. A node-scoped cancellation — the host asked
+                // only this node to stop — lets the run continue.
+                let run_cancelled = self.cancellation.is_cancelled();
+                let node_cancelled = self.cancellation.is_node_cancelled(node.node_id());
+                !already_failing && (run_cancelled || !node_cancelled)
             }
         }
     }
@@ -396,6 +615,58 @@ impl Runner {
         reduction
             .policy
             .record_failure(node.node_id().clone(), message);
+        self.drop_consumed_single_use_values(node, reduction.consumer_index, reduction.session);
+        self.publish_snapshot(
+            reduction.session,
+            reduction.started_at,
+            reduction.artifact_store,
+        )
+        .await;
+    }
+
+    /// Record a node as cancelled without affecting the run (node-level
+    /// cancellation semantics). Used when a node is cancelled before it is
+    /// admitted into the stage.
+    async fn reduce_node_cancelled(
+        &self,
+        node: &ExecutionNode,
+        session: &mut RunSession,
+        started_at: &Timestamp,
+        artifact_store: &Arc<Mutex<ArtifactStore>>,
+    ) {
+        session.record_outcome(node.node_id().clone(), NodeOutcome::Cancelled);
+        self.emit_node_event(node, RunEventKind::NodeCancelled, &[]);
+        self.publish_snapshot(session, started_at, artifact_store)
+            .await;
+    }
+
+    /// Record a node as failed with a timeout diagnostic.
+    ///
+    /// Unlike [`Runner::reduce_node_failed`], the failure is **not**
+    /// recorded in the stage policy: a node that exceeded its deadline is a
+    /// node-level failure, and the run continues with the remaining nodes
+    /// (see
+    /// [`RuntimeOptions::default_node_timeout`](crate::runner::RuntimeOptions)).
+    /// Downstream nodes that depend on the timed-out node's outputs fail on
+    /// missing values at prepare time, which does fail the run.
+    async fn reduce_node_timed_out(
+        &self,
+        node: &ExecutionNode,
+        message: String,
+        reduction: &mut StageReductionContext<'_>,
+    ) {
+        let diagnostic = make_diagnostic(&self.run_id, node.node_id(), &message);
+        reduction.session.record_outcome(
+            node.node_id().clone(),
+            NodeOutcome::Failed {
+                message: message.clone(),
+            },
+        );
+        self.emit_node_event(
+            node,
+            RunEventKind::NodeFailed,
+            std::slice::from_ref(&diagnostic),
+        );
         self.drop_consumed_single_use_values(node, reduction.consumer_index, reduction.session);
         self.publish_snapshot(
             reduction.session,
