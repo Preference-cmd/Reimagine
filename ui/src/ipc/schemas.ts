@@ -90,6 +90,14 @@ export const WorkflowSchema = z.object({
 });
 export type Workflow = z.infer<typeof WorkflowSchema>;
 
+/* ───── Saved workflow summaries (from `list_workflows`) ───── */
+
+export const WorkflowFileSummarySchema = z.object({
+  id: z.string(),
+  modified_millis: z.number(),
+});
+export type WorkflowFileSummary = z.infer<typeof WorkflowFileSummarySchema>;
+
 /* ───── Misc ───── */
 
 export const RunIdSchema = z.string().regex(/^run_[a-z0-9]+$/);

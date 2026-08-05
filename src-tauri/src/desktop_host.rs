@@ -393,6 +393,70 @@ impl DesktopHostState {
             .collect())
     }
 
+    // ─── Workflow persistence ─────────────────────────────────────
+
+    /// Persist a workflow (JSON) to the workspace `workflows/` directory.
+    ///
+    /// The JSON must deserialize into `reimagine_core::workflow::Workflow`.
+    /// Registers the workflow as a session before writing, so it is also
+    /// immediately runnable.
+    pub async fn save_workflow(
+        &self,
+        workflow_id: &str,
+        workflow_value: serde_json::Value,
+    ) -> Result<PathBuf, AppHostError> {
+        use reimagine_core::workflow::Workflow;
+
+        workflow_id_from_str(workflow_id)?;
+        let workflow: Workflow =
+            serde_json::from_value(workflow_value).map_err(|e| AppHostError::WorkflowJson {
+                path: std::path::PathBuf::new(),
+                message: format!("invalid workflow json: {e}"),
+            })?;
+
+        let workflow_service = self.app_host.workspace().workflow_service();
+        workflow_service.register_workflow(workflow.clone());
+        workflow_service.save_workflow_snapshot(&workflow).await
+    }
+
+    /// Load a workflow (JSON) from the workspace `workflows/` directory.
+    ///
+    /// Registers the loaded workflow as a session and returns its JSON.
+    pub async fn load_workflow_json(
+        &self,
+        workflow_id: &str,
+    ) -> Result<serde_json::Value, AppHostError> {
+        let id = workflow_id_from_str(workflow_id)?;
+        let workflow_service = self.app_host.workspace().workflow_service();
+        workflow_service.load_workflow(&id).await?;
+        let workflow = workflow_service.snapshot(&id)?;
+        serde_json::to_value(workflow).map_err(|e| AppHostError::WorkflowJson {
+            path: std::path::PathBuf::new(),
+            message: format!("failed to serialize workflow: {e}"),
+        })
+    }
+
+    /// List workflow files persisted on disk (newest first).
+    ///
+    /// Returns JSON summaries `{ id, modified_millis }` so the adapter layer
+    /// never has to name the (crate-private) summary type.
+    pub fn list_saved_workflows(&self) -> Result<Vec<serde_json::Value>, AppHostError> {
+        let infos = self
+            .app_host
+            .workspace()
+            .workflow_service()
+            .list_saved_workflows()?;
+        infos
+            .into_iter()
+            .map(|info| {
+                serde_json::to_value(info).map_err(|e| AppHostError::WorkflowJson {
+                    path: std::path::PathBuf::new(),
+                    message: format!("failed to serialize workflow summary: {e}"),
+                })
+            })
+            .collect()
+    }
+
     /// Search HuggingFace models via the catalog.
     pub async fn search_models(
         &self,
@@ -549,4 +613,23 @@ impl DesktopHostState {
 
 pub fn default_workspace_path(app_data_dir: impl AsRef<Path>) -> PathBuf {
     app_data_dir.as_ref().join("workspace")
+}
+
+/// Validate a user-supplied workflow id before it reaches `WorkflowId::new`
+/// (which asserts — and would panic — on invalid input).
+fn workflow_id_from_str(
+    id: &str,
+) -> Result<reimagine_core::model::WorkflowId, AppHostError> {
+    let safe = !id.is_empty()
+        && id.is_ascii()
+        && !id.contains('/')
+        && !id.contains('\\')
+        && id != "."
+        && id != "..";
+    if !safe {
+        return Err(AppHostError::WorkflowIdPathUnsafe {
+            workflow_id: reimagine_core::model::WorkflowId::new("invalid-workflow-id"),
+        });
+    }
+    Ok(reimagine_core::model::WorkflowId::new(id))
 }

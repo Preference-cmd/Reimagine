@@ -16,6 +16,9 @@ export type SelectionInfo = {
 } | null;
 
 type WorkflowState = {
+  /** Stable workflow id — the file name in the workspace `workflows/` dir. */
+  id: string;
+  name: string;
   nodes: Node[];
   edges: FlowEdge[];
   // ── view state (excluded from undo history) ──────────────────────
@@ -27,6 +30,8 @@ type WorkflowState = {
   onConnect: (conn: Connection) => void;
   onNodeSelect: (s: SelectionInfo) => void;
   setPropertiesPanelOpen: (open: boolean) => void;
+  /** Replace the whole graph (used by workflow persistence on load). */
+  hydrate: (nodes: Node[], edges: FlowEdge[], workflowId: string, name: string) => void;
 };
 
 /* ───── Demo graph (matches ref.html layout, kept here as initial state) ───── */
@@ -156,6 +161,8 @@ export const useWorkflowStore = create<WorkflowState>()(
   temporal(
     (set, get) => {
       const initial = {
+        id: "main",
+        name: "Untitled Workflow",
         nodes: initialNodes,
         edges: initialEdges,
         selectedNode: null,
@@ -188,6 +195,8 @@ export const useWorkflowStore = create<WorkflowState>()(
           ),
         setPropertiesPanelOpen: (open: boolean) =>
           set({ propertiesPanelOpen: open }),
+        hydrate: (nodes: Node[], edges: FlowEdge[], workflowId: string, name: string) =>
+          set({ nodes, edges, id: workflowId, name }),
       };
       return initial;
     },

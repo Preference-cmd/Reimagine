@@ -9,6 +9,7 @@ import {
   type NodeDef,
   type RunWorkflowResponse,
   type Workflow,
+  type WorkflowFileSummary,
   NodeDefSchema,
 } from "./schemas";
 
@@ -65,6 +66,57 @@ export async function mockRunWorkflow(_workflow: Workflow): Promise<RunWorkflowR
 
 export async function mockCancelRun(_runId: string): Promise<void> {
   await delay(100);
+}
+
+/* ───── Workflow persistence mocks (localStorage-backed) ─────
+   Kept in localStorage so dev sessions survive reloads, mirroring the
+   on-disk `workflows/` behavior of the real backend. */
+
+const PERSISTENCE_KEY = "reimagine.mock.workflows";
+
+function mockReadAll(): Record<string, string> {
+  try {
+    return JSON.parse(localStorage.getItem(PERSISTENCE_KEY) ?? "{}");
+  } catch {
+    return {};
+  }
+}
+
+function mockWriteAll(all: Record<string, string>): void {
+  localStorage.setItem(PERSISTENCE_KEY, JSON.stringify(all));
+}
+
+export async function mockSaveWorkflow(input: {
+  workflowId: string;
+  workflowJson: unknown;
+}): Promise<string> {
+  await delay(50);
+  const all = mockReadAll();
+  all[input.workflowId] = JSON.stringify(input.workflowJson);
+  mockWriteAll(all);
+  return `mock:/workflows/${input.workflowId}.json`;
+}
+
+export async function mockLoadWorkflow(input: {
+  workflowId: string;
+}): Promise<unknown> {
+  await delay(50);
+  const raw = mockReadAll()[input.workflowId];
+  if (!raw) {
+    throw new Error(`mock workflow not found: ${input.workflowId}`);
+  }
+  return JSON.parse(raw);
+}
+
+export async function mockListWorkflows(): Promise<WorkflowFileSummary[]> {
+  await delay(30);
+  const all = mockReadAll();
+  return Object.entries(all).map(([id], index, entries) => ({
+    id,
+    // Entries are in insertion order, so the last-saved workflow gets the
+    // largest timestamp and sorts first (newest-first), like the backend.
+    modified_millis: entries.length - index,
+  }));
 }
 
 export async function mockListModels(): Promise<ModelInfo[]> {

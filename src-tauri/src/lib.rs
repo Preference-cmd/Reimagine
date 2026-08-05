@@ -304,6 +304,47 @@ fn approve_proposal(
         .map_err(|e| TauriCommandError::command(e.to_string()))
 }
 
+// ─── Workflow persistence commands ──────────────────────────────
+
+/// Save a workflow to the workspace `workflows/` directory as JSON.
+///
+/// `workflow_json` must be a full `reimagine_core::workflow::Workflow`
+/// payload. Returns the path the file was written to.
+#[tauri::command]
+async fn save_workflow(
+    state: tauri::State<'_, DesktopHostState>,
+    workflow_id: String,
+    workflow_json: serde_json::Value,
+) -> Result<String, TauriCommandError> {
+    state
+        .save_workflow(&workflow_id, workflow_json)
+        .await
+        .map(|path| path.display().to_string())
+        .map_err(|e| TauriCommandError::command(e.to_string()))
+}
+
+/// Load a workflow (JSON) from the workspace `workflows/` directory.
+#[tauri::command]
+async fn load_workflow(
+    state: tauri::State<'_, DesktopHostState>,
+    workflow_id: String,
+) -> Result<serde_json::Value, TauriCommandError> {
+    state
+        .load_workflow_json(&workflow_id)
+        .await
+        .map_err(|e| TauriCommandError::command(e.to_string()))
+}
+
+/// List saved workflows (newest first) as `{ id, modified_millis }` objects.
+#[tauri::command]
+fn list_workflows(
+    state: tauri::State<'_, DesktopHostState>,
+) -> Result<Vec<serde_json::Value>, TauriCommandError> {
+    state
+        .list_saved_workflows()
+        .map_err(|e| TauriCommandError::command(e.to_string()))
+}
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     tauri::Builder::default()
@@ -339,6 +380,10 @@ pub fn run() {
             preview_workflow_commands,
             apply_workflow_commands,
             approve_proposal,
+            // Workflow persistence commands
+            save_workflow,
+            load_workflow,
+            list_workflows,
             // Model download commands
             download_huggingface_model,
             // Catalog commands
@@ -381,6 +426,55 @@ mod tests {
             .expect("system clock before unix epoch")
             .as_nanos();
         std::env::temp_dir().join(format!("reimagine-tauri-host-{prefix}-{nonce}"))
+    }
+
+    #[test]
+    fn workflow_save_list_load_roundtrip() {
+        let base_path = temp_dir("workflow-persistence");
+        let state = tauri::async_runtime::block_on(DesktopHostState::bootstrap(&base_path))
+            .expect("desktop host state should bootstrap");
+
+        let workflow_json = serde_json::json!({
+            "schema_version": "reimagine.workflow.v1",
+            "id": "test-workflow",
+            "version": 1,
+            "metadata": { "name": "Roundtrip" },
+            "interface": { "inputs": [], "outputs": [] },
+            "nodes": [{
+                "id": "n1",
+                "type_id": "model",
+                "label": "Model",
+                "params": { "seed": { "type": "integer", "value": 42 } }
+            }],
+            "edges": [],
+            "layout": { "nodes": { "n1": { "x": 1.0, "y": 2.0 } } }
+        });
+
+        let saved_path = tauri::async_runtime::block_on(
+            state.save_workflow("test-workflow", workflow_json),
+        )
+        .expect("save workflow");
+        assert!(
+            saved_path.ends_with("test-workflow.json"),
+            "expected path to end with test-workflow.json, got {}",
+            saved_path.display()
+        );
+
+        let summaries = state.list_saved_workflows().expect("list workflows");
+        assert_eq!(summaries.len(), 1);
+        assert_eq!(summaries[0]["id"], "test-workflow");
+
+        let loaded = tauri::async_runtime::block_on(state.load_workflow_json("test-workflow"))
+            .expect("load workflow");
+        assert_eq!(loaded["id"], "test-workflow");
+        assert_eq!(loaded["metadata"]["name"], "Roundtrip");
+        assert_eq!(loaded["layout"]["nodes"]["n1"]["x"], 1.0);
+        assert_eq!(
+            loaded["nodes"][0]["params"]["seed"],
+            serde_json::json!({ "type": "integer", "value": 42 })
+        );
+
+        let _ = std::fs::remove_dir_all(&base_path);
     }
 
     #[test]

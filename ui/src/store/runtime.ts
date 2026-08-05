@@ -44,10 +44,12 @@ export const useRuntimeStore = create<RuntimeState>()((set, get) => ({
   diagnostics: [],
 
   startRun: async (workflowJson?: unknown) => {
+    // Defensive: a previous run's timer must never outlive a new run.
+    stopProgressTimer();
     set({ phase: "starting", diagnostics: [], progress: 0, elapsedMs: 0 });
 
     const startedAt = Date.now();
-    const progressTimer = setInterval(() => {
+    activeProgressTimer = setInterval(() => {
       set((s) => ({
         elapsedMs: Date.now() - startedAt,
         ...(s.phase === "running" ? { progress: Math.min(1, s.progress + 0.02) } : {}),
@@ -55,11 +57,17 @@ export const useRuntimeStore = create<RuntimeState>()((set, get) => ({
     }, 500);
 
     const handleEvent = (event: RunEventPayload) => {
+      const phase = eventKindToPhase(event.kind);
       set((s) => ({
         runId: event.runId,
         currentNode: event.nodeId ?? s.currentNode,
-        phase: eventKindToPhase(event.kind),
+        phase,
       }));
+      // Terminal states stop the clock — no more elapsedMs/progress ticks
+      // after the run finishes.
+      if (isTerminalPhase(phase)) {
+        stopProgressTimer();
+      }
     };
 
     try {
@@ -89,7 +97,7 @@ export const useRuntimeStore = create<RuntimeState>()((set, get) => ({
             source: d.source,
           })),
         });
-        clearInterval(progressTimer);
+        stopProgressTimer();
       }
     } catch (err) {
       set({
@@ -101,7 +109,7 @@ export const useRuntimeStore = create<RuntimeState>()((set, get) => ({
           source: "Runtime",
         }],
       });
-      clearInterval(progressTimer);
+      stopProgressTimer();
     }
   },
 
@@ -110,6 +118,7 @@ export const useRuntimeStore = create<RuntimeState>()((set, get) => ({
     if (!runId) return;
     try {
       await ipcCancelRun(runId);
+      stopProgressTimer();
       set({ phase: "cancelled" });
     } catch {
       // If cancel fails, just reset
@@ -117,14 +126,17 @@ export const useRuntimeStore = create<RuntimeState>()((set, get) => ({
     }
   },
 
-  reset: () => set({
-    phase: "idle",
-    runId: null,
-    currentNode: null,
-    progress: 0,
-    elapsedMs: 0,
-    diagnostics: [],
-  }),
+  reset: () => {
+    stopProgressTimer();
+    set({
+      phase: "idle",
+      runId: null,
+      currentNode: null,
+      progress: 0,
+      elapsedMs: 0,
+      diagnostics: [],
+    });
+  },
 }));
 
 function eventKindToPhase(kind: string): RuntimePhase {
@@ -135,5 +147,20 @@ function eventKindToPhase(kind: string): RuntimePhase {
     case "RunFailed": return "failed";
     case "RunCancelled": return "cancelled";
     default: return "running";
+  }
+}
+
+function isTerminalPhase(phase: RuntimePhase): boolean {
+  return phase === "completed" || phase === "failed" || phase === "cancelled";
+}
+
+/** Module-level timer guard so every terminal path (events, cancel, reset,
+    errors) can stop the interval, not just the callers that own the handle. */
+let activeProgressTimer: ReturnType<typeof setInterval> | null = null;
+
+function stopProgressTimer() {
+  if (activeProgressTimer !== null) {
+    clearInterval(activeProgressTimer);
+    activeProgressTimer = null;
   }
 }

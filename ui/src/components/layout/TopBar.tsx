@@ -11,6 +11,7 @@ import {
 import { cn } from "@/lib/utils";
 import { RuntimeIsland } from "./RuntimeIsland";
 import { useRuntimeStore } from "@/store/runtime";
+import { saveWorkflowNow } from "@/hooks/useWorkflowPersistence";
 
 function Logo({ className }: { className?: string }) {
   return (
@@ -113,7 +114,10 @@ export function TopBar({
           <TopBarButton ariaLabel="Go forward">
             <ChevronRight className="h-4 w-4" />
           </TopBarButton>
-          <TopBarButton ariaLabel="Save workflow">
+          <TopBarButton
+            ariaLabel="Save workflow"
+            onClick={() => void saveWorkflowNow()}
+          >
             <Save className="h-4 w-4" />
           </TopBarButton>
           <TopBarButton ariaLabel="Export workflow">

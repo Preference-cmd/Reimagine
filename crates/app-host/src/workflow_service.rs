@@ -1,6 +1,7 @@
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex, RwLock};
+use std::time::UNIX_EPOCH;
 
 use reimagine_config::{AppPaths, atomic_write};
 use reimagine_core::command::{
@@ -17,6 +18,16 @@ use reimagine_core::workflow::Workflow;
 
 use crate::proposal::WorkflowProposal;
 use crate::{AppHostError, AppHostResult};
+
+/// Summary of a workflow file persisted in the workspace `workflows/` dir.
+///
+/// Kept crate-internal: Tauri/Axum adapters serialize it to JSON via serde
+/// without needing to name the type.
+#[derive(Debug, Clone, serde::Serialize)]
+pub struct SavedWorkflowInfo {
+    id: String,
+    modified_millis: u64,
+}
 
 pub struct WorkflowService {
     app_paths: AppPaths,
@@ -164,6 +175,65 @@ impl WorkflowService {
 
     pub fn workflows_dir(&self) -> &Path {
         self.app_paths.workflows_dir()
+    }
+
+    /// List workflow files persisted on disk (newest first).
+    ///
+    /// Only lists files whose stem is a safe, ASCII workflow id; skips
+    /// anything else that might have been dropped into the directory.
+    #[allow(private_interfaces)]
+    pub fn list_saved_workflows(&self) -> AppHostResult<Vec<SavedWorkflowInfo>> {
+        let dir = self.app_paths.workflows_dir();
+        let entries = match std::fs::read_dir(dir) {
+            Ok(entries) => entries,
+            Err(error) => {
+                return Err(AppHostError::Io {
+                    path: dir.to_path_buf(),
+                    message: error.to_string(),
+                });
+            }
+        };
+        let mut out = Vec::new();
+        for entry in entries {
+            let entry = match entry {
+                Ok(entry) => entry,
+                Err(error) => {
+                    return Err(AppHostError::Io {
+                        path: dir.to_path_buf(),
+                        message: error.to_string(),
+                    });
+                }
+            };
+            let file_name = entry.file_name();
+            let Some(stem) = file_name
+                .to_str()
+                .and_then(|name| name.strip_suffix(".json"))
+            else {
+                continue;
+            };
+            if stem.is_empty()
+                || !stem.is_ascii()
+                || stem == "."
+                || stem == ".."
+                || stem.contains('/')
+                || stem.contains('\\')
+            {
+                continue;
+            }
+            let modified_millis = entry
+                .metadata()
+                .ok()
+                .and_then(|metadata| metadata.modified().ok())
+                .and_then(|modified| modified.duration_since(UNIX_EPOCH).ok())
+                .map(|duration| duration.as_millis() as u64)
+                .unwrap_or(0);
+            out.push(SavedWorkflowInfo {
+                id: stem.to_string(),
+                modified_millis,
+            });
+        }
+        out.sort_by(|a, b| b.modified_millis.cmp(&a.modified_millis));
+        Ok(out)
     }
 
     pub fn path_for_workflow_id(&self, workflow_id: &WorkflowId) -> AppHostResult<PathBuf> {

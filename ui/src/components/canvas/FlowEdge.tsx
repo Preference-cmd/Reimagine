@@ -77,6 +77,16 @@ export const FlowEdgeComponent: FC<EdgeProps<FlowEdge>> = ({
         </filter>
       </defs>
 
+      {/* Invisible wider hit area — receives pointer events so edges can be
+          selected/deleted, while the visual paths below stay non-interactive. */}
+      <path
+        d={path}
+        fill="none"
+        stroke="transparent"
+        strokeWidth={12}
+        pointerEvents="stroke"
+      />
+
       {/* Main line — thicker, with a soft glow */}
       <path
         d={path}
@@ -129,12 +139,6 @@ export const FlowEdgeComponent: FC<EdgeProps<FlowEdge>> = ({
           </text>
         </g>
       )}
-
-      <style>{`
-        @keyframes flow {
-          to { stroke-dashoffset: -32; }
-        }
-      `}</style>
     </>
   );
 };
