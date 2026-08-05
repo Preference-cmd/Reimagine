@@ -1,18 +1,28 @@
 import {
   type ArtifactMetadata,
+  type DownloadEventPayload,
+  type DownloadHuggingfaceModelArgs,
+  type ModelCard,
+  type ModelCatalogEntry,
+  type ModelDownloadOutput,
+  type ModelFilters,
   type ModelInfo,
   type NodeDef,
   type RunEventPayload,
   type RunWorkflowResponse,
   type Workflow,
+  DownloadHuggingfaceModelArgsSchema,
 } from "./schemas";
 import {
   mockCancelRun,
+  mockDownloadHuggingfaceModel,
+  mockGetModelCard,
   mockGetNodeDefs,
   mockListModels,
   mockOpenArtifact,
   mockResolveArtifact,
   mockRunWorkflow,
+  mockSearchModels,
 } from "./mock";
 
 const USE_MOCK = import.meta.env.DEV || import.meta.env.VITE_FORCE_MOCK === "1";
@@ -77,4 +87,45 @@ export async function openArtifact(artifactId: string): Promise<void> {
   }
   const { invoke } = await import("@tauri-apps/api/core");
   return invoke<void>("open_artifact", { artifactId });
+}
+
+export function searchModels(
+  query: string,
+  filters?: ModelFilters,
+): Promise<ModelCatalogEntry[]> {
+  return dispatch(
+    "search_models",
+    null,
+    { query, filters },
+    mockSearchModels,
+  );
+}
+
+export function getModelCard(repoId: string): Promise<ModelCard> {
+  return dispatch("get_model_card", null, { repoId }, mockGetModelCard);
+}
+
+export async function downloadHuggingfaceModel(
+  args: DownloadHuggingfaceModelArgs,
+  onEvent?: (event: DownloadEventPayload) => void,
+): Promise<ModelDownloadOutput> {
+  DownloadHuggingfaceModelArgsSchema.parse(args);
+  if (USE_MOCK) {
+    return mockDownloadHuggingfaceModel(args, onEvent);
+  }
+  const { Channel, invoke } = await import("@tauri-apps/api/core");
+  const channel = new Channel<DownloadEventPayload>();
+  if (onEvent) {
+    channel.onmessage = onEvent;
+  }
+  return invoke<ModelDownloadOutput>("download_huggingface_model", {
+    repoId: args.repoId,
+    revision: args.revision,
+    allowPatterns: args.allowPatterns,
+    targetRelativeDir: args.targetRelativeDir,
+    overwrite: args.overwrite,
+    autoDetect: args.autoDetect,
+    fromCatalog: args.fromCatalog,
+    channel,
+  });
 }

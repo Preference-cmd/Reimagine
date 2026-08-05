@@ -20,6 +20,7 @@ import type { Node } from "@xyflow/react";
 import { cn } from "@/lib/utils";
 import { listModels } from "@/ipc";
 import type { ModelInfo } from "@/ipc";
+import { ModelDownloadDialog } from "@/components/layout/ModelDownloadDialog";
 import { useRuntimeStore } from "@/store/runtime";
 import { useWorkflowStore } from "@/store/workflow";
 
@@ -121,6 +122,8 @@ export function ExplorerPanel({
   const [query, setQuery] = useState("");
   const [models, setModels] = useState<ModelInfo[]>([]);
   const [modelsLoading, setModelsLoading] = useState(false);
+  const [modelsReloadKey, setModelsReloadKey] = useState(0);
+  const [downloadOpen, setDownloadOpen] = useState(false);
 
   useEffect(() => {
     setQuery("");
@@ -145,7 +148,7 @@ export function ExplorerPanel({
     return () => {
       cancelled = true;
     };
-  }, [currentView, open]);
+  }, [currentView, modelsReloadKey, open]);
 
   const rows = useMemo(() => {
     if (currentView === "Graph") {
@@ -224,7 +227,13 @@ export function ExplorerPanel({
         </div>
 
         <div className="flex shrink-0 items-center gap-0.5">
-          <IconButton ariaLabel={`Add ${meta.title.toLowerCase()} item`} icon={Plus} />
+          {currentView === "Models" && (
+            <IconButton
+              ariaLabel="Install model"
+              icon={Plus}
+              onClick={() => setDownloadOpen(true)}
+            />
+          )}
           <IconButton ariaLabel="Hide explorer" icon={X} onClick={onClose} />
         </div>
       </div>
@@ -257,6 +266,13 @@ export function ExplorerPanel({
           </div>
         )}
       </div>
+
+      <ModelDownloadDialog
+        open={downloadOpen}
+        initialRepoId={null}
+        onClose={() => setDownloadOpen(false)}
+        onInstalled={() => setModelsReloadKey((key) => key + 1)}
+      />
     </div>
   );
 }

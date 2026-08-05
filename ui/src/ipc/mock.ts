@@ -1,5 +1,10 @@
 import {
   type ArtifactMetadata,
+  type DownloadEventPayload,
+  type DownloadHuggingfaceModelArgs,
+  type ModelCard,
+  type ModelCatalogEntry,
+  type ModelDownloadOutput,
   type ModelInfo,
   type NodeDef,
   type RunWorkflowResponse,
@@ -90,4 +95,99 @@ export async function mockResolveArtifact(
 
 export async function mockOpenArtifact(_artifactId: string): Promise<void> {
   await delay(100);
+}
+
+const MOCK_CATALOG: ModelCatalogEntry[] = [
+  {
+    id: "stabilityai/stable-diffusion-xl-base-1.0",
+    author: "stabilityai",
+    pipelineTag: "text-to-image",
+    tags: ["diffusers", "safetensors"],
+    downloads: 12_400_000,
+    likes: 10_200,
+    lastModified: "2024-01-15T00:00:00Z",
+    private: false,
+  },
+  {
+    id: "runwayml/stable-diffusion-v1-5",
+    author: "runwayml",
+    pipelineTag: "text-to-image",
+    tags: ["diffusers", "safetensors"],
+    downloads: 25_100_000,
+    likes: 21_300,
+    lastModified: "2023-10-01T00:00:00Z",
+    private: false,
+  },
+];
+
+const MOCK_CARD: ModelCard = {
+  entry: MOCK_CATALOG[0],
+  detectedFormat: "Diffusers",
+  estimatedDownloadSize: 6_940_000_000,
+  modelSummary:
+    "Stable Diffusion XL base is a latent diffusion model for text-to-image generation.",
+  fileCount: 12,
+  components: ["unet", "text_encoder", "text_encoder_2", "vae"],
+};
+
+export async function mockSearchModels(
+  input: { query: string; filters?: unknown },
+): Promise<ModelCatalogEntry[]> {
+  await delay(200);
+  const needle = input.query.trim().toLowerCase();
+  if (!needle) return [];
+  return MOCK_CATALOG.filter((entry) => entry.id.toLowerCase().includes(needle));
+}
+
+export async function mockGetModelCard(_input: {
+  repoId: string;
+}): Promise<ModelCard> {
+  await delay(150);
+  return MOCK_CARD;
+}
+
+export async function mockDownloadHuggingfaceModel(
+  args: DownloadHuggingfaceModelArgs,
+  onEvent?: (event: DownloadEventPayload) => void,
+): Promise<ModelDownloadOutput> {
+  const total = 6_940_000_000;
+  const chunk = 500_000_000;
+  let bytes = 0;
+  const id = rand("dl");
+  const repoId = args.repoId;
+
+  const emit = (status: string, extra: Partial<DownloadEventPayload> = {}) => {
+    onEvent?.({
+      id,
+      status,
+      repoId,
+      revision: args.revision ?? "main",
+      bytesDownloaded: 0,
+      ...extra,
+    });
+  };
+
+  emit("started", { totalBytes: total, message: "Fetching metadata" });
+  while (bytes < total) {
+    await delay(80);
+    bytes += chunk;
+    emit("in_progress", {
+      bytesDownloaded: Math.min(chunk, total - bytes + chunk),
+      totalBytes: total,
+      message: "Downloading model files",
+    });
+  }
+  emit("completed", { bytesDownloaded: total, totalBytes: total });
+
+  return {
+    effective: true,
+    provider: "hf",
+    repoId,
+    revision: args.revision ?? "main",
+    targetDir: args.targetRelativeDir,
+    files: [{ relativePath: "model_index.json", bytes: total, outcome: "downloaded" }],
+    totalBytes: total,
+    finishedAt: new Date().toISOString(),
+    detectedFormat: "Diffusers",
+  };
 }

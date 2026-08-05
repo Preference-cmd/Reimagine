@@ -179,3 +179,85 @@ export const ArtifactMetadataSchema = z.object({
   path: z.string(),
 });
 export type ArtifactMetadata = z.infer<typeof ArtifactMetadataSchema>;
+
+/* ───── Model catalog & download (mirror app-host dto/model_acquisition.rs) ───── */
+
+export const ModelFiltersSchema = z.object({
+  pipelineTag: z.string().nullable().optional(),
+  libraryName: z.string().nullable().optional(),
+  tags: z.array(z.string()).default([]),
+  sort: z
+    .enum(["downloads", "likes", "trending", "lastModified"])
+    .default("downloads"),
+  limit: z.number().default(20),
+});
+export type ModelFilters = z.infer<typeof ModelFiltersSchema>;
+
+export const ModelCatalogEntrySchema = z.object({
+  id: z.string(),
+  author: z.string().nullable().optional(),
+  pipelineTag: z.string().nullable().optional(),
+  tags: z.array(z.string()),
+  downloads: z.number(),
+  likes: z.number(),
+  lastModified: z.string().nullable().optional(),
+  private: z.boolean(),
+});
+export type ModelCatalogEntry = z.infer<typeof ModelCatalogEntrySchema>;
+
+export const ModelCardSchema = z.object({
+  entry: ModelCatalogEntrySchema,
+  detectedFormat: z.string(),
+  estimatedDownloadSize: z.number(),
+  modelSummary: z.string().nullable().optional(),
+  fileCount: z.number(),
+  components: z.array(z.string()),
+});
+export type ModelCard = z.infer<typeof ModelCardSchema>;
+
+export const DownloadEventPayloadSchema = z.object({
+  id: z.string(),
+  status: z.string(),
+  repoId: z.string(),
+  revision: z.string(),
+  bytesDownloaded: z.number(),
+  totalBytes: z.number().nullable().optional(),
+  message: z.string().nullable().optional(),
+  modelName: z.string().optional(),
+  detectedFormat: z.string().optional(),
+  estimatedSize: z.number().optional(),
+});
+export type DownloadEventPayload = z.infer<typeof DownloadEventPayloadSchema>;
+
+export const DownloadHuggingfaceModelArgsSchema = z.object({
+  repoId: z.string(),
+  revision: z.string().optional(),
+  allowPatterns: z.array(z.string()).optional(),
+  targetRelativeDir: z.string(),
+  overwrite: z.string().optional(),
+  autoDetect: z.boolean().optional(),
+  fromCatalog: z.boolean().optional(),
+});
+export type DownloadHuggingfaceModelArgs = z.infer<
+  typeof DownloadHuggingfaceModelArgsSchema
+>;
+
+export const FileEntrySchema = z.object({
+  relativePath: z.string(),
+  bytes: z.number(),
+  outcome: z.string(),
+});
+export type FileEntry = z.infer<typeof FileEntrySchema>;
+
+export const ModelDownloadOutputSchema = z.object({
+  effective: z.boolean(),
+  provider: z.string(),
+  repoId: z.string(),
+  revision: z.string(),
+  targetDir: z.string(),
+  files: z.array(FileEntrySchema),
+  totalBytes: z.number(),
+  finishedAt: z.string(),
+  detectedFormat: z.string().optional(),
+});
+export type ModelDownloadOutput = z.infer<typeof ModelDownloadOutputSchema>;
