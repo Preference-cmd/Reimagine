@@ -1495,7 +1495,7 @@ mod tests {
 
         // Insert 3 bundles
         for i in 0..3 {
-            let model = ModelId::new(&format!("model-{i}"));
+            let model = ModelId::new(format!("model-{i}"));
             let bundle = test_bundle(&format!("model-{i}"));
             cache.insert_bundle(model, bundle);
         }
