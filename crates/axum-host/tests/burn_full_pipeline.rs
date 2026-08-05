@@ -637,6 +637,10 @@ fn tiny_workflow_json() -> Value {
 }
 
 #[tokio::test]
+// The wgpu worker needs a GPU-backed adapter; CI's headless Ubuntu
+// runners have none (macOS job runs this for real). Runs locally and
+// on macos; ignored on Linux CI. Override with `cargo test -- --ignored`.
+#[cfg_attr(target_os = "linux", ignore = "requires GPU-backed wgpu worker")]
 async fn burn_full_pipeline_load_encode_latent_sample_decode_saves_png_via_axum() {
     use std::time::Instant;
 
