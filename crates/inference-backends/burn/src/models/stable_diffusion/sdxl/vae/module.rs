@@ -344,6 +344,245 @@ impl<B: Backend> SdxlVaeUpsampleConv<B> {
     }
 }
 
+/// Burn-native SDXL VAE encoder Module.
+///
+/// Mirror of [`SdxlVaeDecoder`] with reversed topology: conv_in takes
+/// RGB input, four down blocks halve the spatial resolution each
+/// (stride-2 conv downsamplers), and the encoder output is a 4-channel
+/// latent at 1/8 scale with no output activation (Gaussian moments
+/// convention). Snapshot keyspace follows the diffusers
+/// AutoencoderKL encoder dialect (`model.vae.encoder.*`).
+///
+/// The body lives behind an `encoder` field so its Burn snapshot
+/// names are prefixed with `encoder.` — this keeps the encoder
+/// subgraph in a distinct namespace from the decoder's unprefixed
+/// snapshots when both are loaded from the same VAE component file.
+#[derive(Module, Debug)]
+pub struct SdxlVaeEncoder<B: Backend> {
+    /// Encoder body. Snapshot prefix: `encoder.`.
+    pub encoder: SdxlVaeEncoderBody<B>,
+}
+
+impl<B: Backend> SdxlVaeEncoder<B> {
+    pub fn init(device: &B::Device) -> Self {
+        Self {
+            encoder: SdxlVaeEncoderBody::init(device),
+        }
+    }
+
+    /// Forward an RGB image (NCHW, normalized to [-1, 1]) to a
+    /// 4-channel latent at 1/8 spatial scale.
+    pub fn forward(&self, image: Tensor<B, 4>) -> Tensor<B, 4> {
+        self.encoder.forward(image)
+    }
+
+    #[cfg(test)]
+    pub fn has_conv_in(&self) -> bool {
+        self.encoder.has_conv_in()
+    }
+
+    #[cfg(test)]
+    pub fn has_mid_block(&self) -> bool {
+        self.encoder.has_mid_block()
+    }
+
+    #[cfg(test)]
+    pub fn down_block_count(&self) -> usize {
+        self.encoder.down_block_count()
+    }
+
+    #[cfg(test)]
+    pub fn total_down_block_resnet_count(&self) -> usize {
+        self.encoder.total_down_block_resnet_count()
+    }
+
+    #[cfg(test)]
+    pub fn has_output_projection(&self) -> bool {
+        self.encoder.has_output_projection()
+    }
+}
+
+/// Encoder body module. Snapshot names are `encoder.*` via the
+/// enclosing [`SdxlVaeEncoder`] field.
+#[derive(Module, Debug)]
+pub struct SdxlVaeEncoderBody<B: Backend> {
+    conv_in: Conv2d<B>,
+    down_blocks: Vec<SdxlVaeDownBlock<B>>,
+    mid_block: SdxlVaeMidBlock<B>,
+    conv_norm_out: GroupNorm<B>,
+    conv_out: Conv2d<B>,
+}
+
+impl<B: Backend> SdxlVaeEncoderBody<B> {
+    fn init(device: &B::Device) -> Self {
+        let down_block_specs = [
+            // down_block.0: 128 → 128, 2×res, downsampler
+            SdxlVaeDownBlockSpec {
+                in_channels: 128,
+                out_channels: 128,
+                num_resnets: 2,
+                has_downsampler: true,
+            },
+            // down_block.1: 128 → 256, 2×res (first resnet has skip), downsampler
+            SdxlVaeDownBlockSpec {
+                in_channels: 128,
+                out_channels: 256,
+                num_resnets: 2,
+                has_downsampler: true,
+            },
+            // down_block.2: 256 → 512, 2×res (first resnet has skip), downsampler
+            SdxlVaeDownBlockSpec {
+                in_channels: 256,
+                out_channels: 512,
+                num_resnets: 2,
+                has_downsampler: true,
+            },
+            // down_block.3: 512 → 512, 3×res, no downsampler
+            SdxlVaeDownBlockSpec {
+                in_channels: 512,
+                out_channels: 512,
+                num_resnets: 3,
+                has_downsampler: false,
+            },
+        ];
+
+        Self {
+            conv_in: Conv2dConfig::new([3, 128], [3, 3])
+                .with_padding(PaddingConfig2d::Explicit(1, 1, 1, 1))
+                .init(device),
+            down_blocks: down_block_specs
+                .into_iter()
+                .map(|spec| spec.build(device))
+                .collect(),
+            mid_block: SdxlVaeMidBlock::<B>::init(device),
+            conv_norm_out: GroupNormConfig::new(32, 512).init(device),
+            conv_out: Conv2dConfig::new([512, 4], [3, 3])
+                .with_padding(PaddingConfig2d::Explicit(1, 1, 1, 1))
+                .init(device),
+        }
+    }
+
+    /// Forward an RGB image (NCHW, normalized to [-1, 1]) to a
+    /// 4-channel latent at 1/8 spatial scale.
+    pub fn forward(&self, image: Tensor<B, 4>) -> Tensor<B, 4> {
+        let mut hidden = self.conv_in.forward(image);
+        for block in &self.down_blocks {
+            hidden = block.forward(hidden);
+        }
+        let hidden = self.mid_block.forward(hidden);
+        let hidden = activation::silu(self.conv_norm_out.forward(hidden));
+        self.conv_out.forward(hidden)
+    }
+
+    #[cfg(test)]
+    pub fn has_conv_in(&self) -> bool {
+        true
+    }
+
+    #[cfg(test)]
+    pub fn has_mid_block(&self) -> bool {
+        true
+    }
+
+    #[cfg(test)]
+    pub fn down_block_count(&self) -> usize {
+        self.down_blocks.len()
+    }
+
+    #[cfg(test)]
+    pub fn total_down_block_resnet_count(&self) -> usize {
+        self.down_blocks.iter().map(|b| b.resnet_count()).sum()
+    }
+
+    #[cfg(test)]
+    pub fn has_output_projection(&self) -> bool {
+        true
+    }
+}
+
+#[derive(Debug)]
+struct SdxlVaeDownBlockSpec {
+    in_channels: usize,
+    out_channels: usize,
+    num_resnets: usize,
+    has_downsampler: bool,
+}
+
+impl SdxlVaeDownBlockSpec {
+    fn build<B: Backend>(self, device: &B::Device) -> SdxlVaeDownBlock<B> {
+        let mut resnets = Vec::with_capacity(self.num_resnets);
+        let mut current_channels = self.in_channels;
+        for i in 0..self.num_resnets {
+            let out_channels = if i == 0 && self.in_channels != self.out_channels {
+                self.out_channels
+            } else {
+                current_channels
+            };
+            resnets.push(SdxlVaeResidualBlock::<B>::init(
+                current_channels,
+                out_channels,
+                device,
+            ));
+            current_channels = out_channels;
+        }
+
+        let downsamplers = if self.has_downsampler {
+            vec![SdxlVaeDownsampleConv {
+                conv: Conv2dConfig::new([self.out_channels, self.out_channels], [3, 3])
+                    .with_stride([2, 2])
+                    .with_padding(PaddingConfig2d::Explicit(1, 1, 1, 1))
+                    .init(device),
+            }]
+        } else {
+            Vec::new()
+        };
+
+        SdxlVaeDownBlock {
+            resnets,
+            downsamplers,
+        }
+    }
+}
+
+/// One of the four down_blocks in the SDXL VAE encoder.
+///
+/// Diffusers packages use `downsamplers.0.conv.*` when present;
+/// empty `downsamplers` means no spatial downsample in this block.
+#[derive(Module, Debug)]
+pub struct SdxlVaeDownBlock<B: Backend> {
+    resnets: Vec<SdxlVaeResidualBlock<B>>,
+    downsamplers: Vec<SdxlVaeDownsampleConv<B>>,
+}
+
+impl<B: Backend> SdxlVaeDownBlock<B> {
+    pub fn forward(&self, hidden: Tensor<B, 4>) -> Tensor<B, 4> {
+        let mut hidden = hidden;
+        for resnet in &self.resnets {
+            hidden = resnet.forward(hidden);
+        }
+        if let Some(downsampler) = self.downsamplers.first() {
+            hidden = downsampler.forward(hidden);
+        }
+        hidden
+    }
+
+    #[cfg(test)]
+    pub fn resnet_count(&self) -> usize {
+        self.resnets.len()
+    }
+}
+
+#[derive(Module, Debug)]
+struct SdxlVaeDownsampleConv<B: Backend> {
+    conv: Conv2d<B>,
+}
+
+impl<B: Backend> SdxlVaeDownsampleConv<B> {
+    pub fn forward(&self, hidden: Tensor<B, 4>) -> Tensor<B, 4> {
+        self.conv.forward(hidden)
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use burn_tensor::Tensor;
@@ -377,5 +616,32 @@ mod tests {
         assert_eq!(decoder.up_block_count(), 4);
         assert_eq!(decoder.total_up_block_resnet_count(), 12);
         assert!(decoder.has_output_projection());
+    }
+
+    #[test]
+    fn sdxl_vae_encoder_module_outputs_latent_shape_on_active_backend() {
+        let config = BurnBackendConfig::new("/models", "/output");
+        let device = active_device(config.device());
+        let encoder = super::SdxlVaeEncoder::<ActiveBurnBackend>::init(&device);
+        let image = Tensor::<ActiveBurnBackend, 4>::zeros([1, 3, 64, 64], &device);
+
+        let latent = encoder.forward(image);
+
+        // 64→8 from three downsampling stages, no downsample in last block.
+        assert_eq!(latent.shape().dims(), [1, 4, 8, 8]);
+    }
+
+    #[test]
+    fn sdxl_vae_encoder_module_exposes_full_profile_execution_plan() {
+        let config = BurnBackendConfig::new("/models", "/output");
+        let device = active_device(config.device());
+        let encoder = super::SdxlVaeEncoder::<ActiveBurnBackend>::init(&device);
+
+        assert!(encoder.has_conv_in());
+        assert!(encoder.has_mid_block());
+        assert_eq!(encoder.down_block_count(), 4);
+        // 2 resnets in the first three blocks, 3 in the last.
+        assert_eq!(encoder.total_down_block_resnet_count(), 9);
+        assert!(encoder.has_output_projection());
     }
 }

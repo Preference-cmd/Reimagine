@@ -100,6 +100,8 @@ async fn profile_reports_builtin_burn_default_instance_with_capabilities() {
             InferenceCapability::TextEncode,
             InferenceCapability::DiffusionSample,
             InferenceCapability::LatentDecode,
+            InferenceCapability::LatentEncode,
+            InferenceCapability::ImageImport,
             InferenceCapability::ImageSave,
             InferenceCapability::ImagePreview,
         ]
@@ -121,12 +123,13 @@ fn backend_kind_instance_and_capabilities_report_load_bundle_and_create_empty_la
     assert_eq!(capabilities.backend_kind().as_str(), "burn");
     // BE-33: capabilities are now dynamic — with an empty model cache
     // only the static base set (LoadBundle, CreateEmptyLatent,
-    // ImageSave, ImagePreview) is advertised; TextEncode,
-    // DiffusionSample, LatentDecode appear once the relevant
+    // ImageImport, ImageSave, ImagePreview) is advertised; TextEncode,
+    // DiffusionSample, LatentDecode/Encode appear once the relevant
     // components are loaded.
-    assert_eq!(capabilities.capability_supports().len(), 4);
+    assert_eq!(capabilities.capability_supports().len(), 5);
     assert!(capabilities.supports_capability(InferenceCapability::LoadBundle));
     assert!(capabilities.supports_capability(InferenceCapability::CreateEmptyLatent));
+    assert!(capabilities.supports_capability(InferenceCapability::ImageImport));
     assert!(!capabilities.supports_capability(InferenceCapability::DiffusionSample));
 }
 

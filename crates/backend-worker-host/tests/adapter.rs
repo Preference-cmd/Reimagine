@@ -339,6 +339,35 @@ async fn adapter_hint_transport_failure_is_reported_not_fatal() {
 }
 
 #[tokio::test]
+async fn adapter_applies_model_cache_budget_over_ipc() {
+    let worker = Arc::new(WorkerSupervisor::new(launch_spec()).start().await.unwrap());
+    let backend = ProcessInferenceBackend::new(worker);
+
+    backend
+        .set_model_cache_budget(VramBudget::unlimited().with_total_bytes(1 << 30))
+        .await
+        .expect("model cache budget should round-trip over IPC");
+}
+
+#[tokio::test]
+async fn adapter_model_cache_budget_failure_is_reported() {
+    let mut spec = launch_spec();
+    spec.environment
+        .push(("FAKE_BUDGET_FAIL".to_owned(), "1".to_owned()));
+    let worker = Arc::new(WorkerSupervisor::new(spec).start().await.unwrap());
+    let backend = ProcessInferenceBackend::new(worker);
+
+    let error = backend
+        .set_model_cache_budget(VramBudget::unlimited().with_total_bytes(1 << 30))
+        .await
+        .expect_err("worker backend error must surface to the caller");
+    assert!(
+        error.to_string().contains("forced_budget_error"),
+        "unexpected error: {error}"
+    );
+}
+
+#[tokio::test]
 async fn invocation_progress_is_forwarded_before_worker_terminal() {
     let mut spec = launch_spec();
     spec.environment

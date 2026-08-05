@@ -67,6 +67,8 @@ mod tests {
             "latent.create_empty",
             "diffusion.sample",
             "latent.decode",
+            "latent.encode",
+            "image.import",
             "image.save",
             "image.preview",
         ];

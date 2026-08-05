@@ -32,7 +32,7 @@ impl io::Read for QuicReadAdapter {
                 Ok(Some(n)) => Ok(n),
                 // Stream finished cleanly — signal EOF (0 bytes read).
                 Ok(None) => Ok(0),
-                Err(e) => Err(io::Error::new(io::ErrorKind::Other, e)),
+                Err(e) => Err(io::Error::other(e)),
             }
         })
     }
@@ -52,20 +52,12 @@ impl QuicWriteAdapter {
 
 impl io::Write for QuicWriteAdapter {
     fn write(&mut self, buf: &[u8]) -> io::Result<usize> {
-        self.runtime.block_on(async {
-            self.send
-                .write(buf)
-                .await
-                .map_err(|e| io::Error::new(io::ErrorKind::Other, e))
-        })
+        self.runtime
+            .block_on(async { self.send.write(buf).await.map_err(io::Error::other) })
     }
 
     fn flush(&mut self) -> io::Result<()> {
-        self.runtime.block_on(async {
-            self.send
-                .flush()
-                .await
-                .map_err(|e| io::Error::new(io::ErrorKind::Other, e))
-        })
+        self.runtime
+            .block_on(async { self.send.flush().await.map_err(io::Error::other) })
     }
 }

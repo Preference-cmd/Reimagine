@@ -21,8 +21,9 @@ use reimagine_backend_worker_protocol::{
 };
 use reimagine_core::model::NodeId;
 use reimagine_inference::{
-    CreateEmptyLatentRequest, DiffusionSampleRequest, ImagePreviewRequest, ImageSaveRequest,
-    InferenceBackend, LatentDecodeRequest, SamplerName, SchedulerName,
+    CreateEmptyLatentRequest, DiffusionSampleRequest, ImageImportRequest, ImagePreviewRequest,
+    ImageSaveRequest, InferenceBackend, LatentDecodeRequest, LatentEncodeRequest,
+    ResolvedImageSource, SamplerName, SchedulerName,
 };
 
 /// Helper to build a `ModelService` for tests with a mock `ModelAcquisitionService`.
@@ -275,6 +276,8 @@ async fn app_host_activates_selected_worker_from_injected_inventory() {
                 "text.encode".to_owned(),
                 "diffusion.sample".to_owned(),
                 "latent.decode".to_owned(),
+                "latent.encode".to_owned(),
+                "image.import".to_owned(),
                 "image.save".to_owned(),
                 "image.preview".to_owned(),
             ],
@@ -304,7 +307,7 @@ async fn app_host_activates_selected_worker_from_injected_inventory() {
         .flat_map(|backend| &backend.instances)
         .find(|profile| profile.instance.as_str() == instance.0)
         .expect("live selected profile");
-    assert_eq!(selected.capabilities.len(), 7);
+    assert_eq!(selected.capabilities.len(), 9);
     assert!(selected.diagnostics.is_empty());
     assert_eq!(host.resolved_backend_instance().as_str(), instance.0);
 }
@@ -461,6 +464,8 @@ async fn axum_workflow_reaches_png_through_process_backed_worker() {
                 "text.encode",
                 "diffusion.sample",
                 "latent.decode",
+                "latent.encode",
+                "image.import",
                 "image.save",
                 "image.preview",
             ]
@@ -672,6 +677,73 @@ async fn process_adapter_runs_tiny_sdxl_chain() {
 
     tiny_fixture::assert_png_artifact(output.path(), preview.as_str());
     tiny_fixture::assert_png_artifact(output.path(), saved.as_str());
+}
+
+#[tokio::test]
+async fn process_adapter_imports_and_encodes_image() {
+    let root = tempfile::tempdir().expect("package root");
+    let output = tempfile::tempdir().expect("output dir");
+    let worker = Arc::new(
+        WorkerSupervisor::new(process_launch_spec(root.path(), output.path()))
+            .start()
+            .await
+            .expect("start real Burn worker"),
+    );
+    let backend = ProcessInferenceBackend::new(worker);
+
+    let loaded = backend
+        .load_bundle(tiny_fixture::load_request(root.path()))
+        .await
+        .expect("load tiny fixture through process");
+
+    // Write a tiny PNG and import it through the process adapter.
+    let png_path = root.path().join("import.png");
+    let mut rgb = Vec::with_capacity(64 * 64 * 3);
+    for index in 0..64 * 64 {
+        rgb.extend_from_slice(&[
+            (index % 255) as u8,
+            ((index / 7) % 255) as u8,
+            ((index / 13) % 255) as u8,
+        ]);
+    }
+    {
+        let mut out = Vec::new();
+        let encoder = image::codecs::png::PngEncoder::new(&mut out);
+        image::ImageEncoder::write_image(encoder, &rgb, 64, 64, image::ColorType::Rgb8.into())
+            .expect("encode fixture PNG");
+        std::fs::write(&png_path, &out).expect("write fixture PNG");
+    }
+
+    let imported = backend
+        .image_import(ImageImportRequest::new(
+            ResolvedImageSource::new(&png_path, "image/png", Some("import.png".to_owned())),
+            tiny_fixture::run_id(),
+            tiny_fixture::workflow_id(),
+            tiny_fixture::workflow_version(),
+            NodeId::new("process-import"),
+        ))
+        .await
+        .expect("image.import through process")
+        .into_image();
+    assert_eq!((imported.width(), imported.height()), (64, 64));
+
+    let encoded = backend
+        .latent_encode(LatentEncodeRequest::new(
+            loaded.vae().clone(),
+            imported,
+            tiny_fixture::run_id(),
+            tiny_fixture::workflow_id(),
+            tiny_fixture::workflow_version(),
+            NodeId::new("process-encode"),
+        ))
+        .await
+        .expect("latent.encode through process")
+        .into_latent();
+    assert_eq!(
+        encoded.payload().shape().dims(),
+        &[1_usize, 4, 8, 8],
+        "64x64 image encodes to an SDXL-base 8x8 latent over IPC"
+    );
 }
 
 #[test]

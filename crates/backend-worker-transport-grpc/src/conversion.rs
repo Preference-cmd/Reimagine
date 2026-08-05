@@ -1,8 +1,9 @@
 use reimagine_backend_worker_protocol::{
     BackendExecutionError, BackendInstanceId, CancelAckFrame, CancelFrame, CleanupAckFrame,
     CleanupFrame, ControlId, CorrelationId, HealthAckFrame, HealthFrame, HostHello, ProgressFrame,
-    ProtocolVersion, RequestFrame, RequestId, ShutdownAckFrame, ShutdownFrame, TerminalFrame,
-    TerminalOutcome, WireMessage, WorkerHello, WorkerIdentity, WorkerIncarnationId,
+    ProtocolVersion, RequestFrame, RequestId, ShutdownAckFrame, ShutdownFrame, TensorDataFrame,
+    TensorMetadata, TensorTransferAckFrame, TensorTransferRequestFrame, TerminalFrame,
+    TerminalOutcome, TransferStatus, WireMessage, WorkerHello, WorkerIdentity, WorkerIncarnationId,
     WorkerInstallationId, WorkerInstanceProfile, WorkerProfile,
 };
 
@@ -59,6 +60,20 @@ impl TryFrom<&WireMessage> for proto::HostToWorker {
                 incarnation_id: s.incarnation_id.0.clone(),
                 control_id: s.control_id.0.clone(),
             }),
+            WireMessage::TensorTransferRequest(t) => {
+                proto::host_to_worker::Message::TensorTransferRequest(
+                    proto::TensorTransferRequest {
+                        source_token: t.source_token.clone(),
+                        target_worker_id: t.target_worker_id.clone(),
+                        tensor_metadata: Some(proto::TensorMetadata {
+                            dtype: t.tensor_metadata.dtype.clone(),
+                            shape: t.tensor_metadata.shape.clone(),
+                            size_bytes: t.tensor_metadata.size_bytes,
+                            backend_format: t.tensor_metadata.backend_format.clone(),
+                        }),
+                    },
+                )
+            }
             _ => return Err(format!("not a host-to-worker message: {:?}", msg.kind())),
         };
         Ok(proto::HostToWorker {
@@ -170,6 +185,29 @@ impl TryFrom<&WireMessage> for proto::WorkerToHost {
                     control_id: s.control_id.0.clone(),
                 })
             }
+            WireMessage::TensorTransferAck(a) => {
+                let (status, reason) = match &a.status {
+                    TransferStatus::Accepted => (proto::TransferStatus::Accepted, None),
+                    TransferStatus::Rejected { reason } => {
+                        (proto::TransferStatus::Rejected, Some(reason.clone()))
+                    }
+                    TransferStatus::Complete => (proto::TransferStatus::Complete, None),
+                };
+                proto::worker_to_host::Message::TensorTransferAck(proto::TensorTransferAck {
+                    correlation_id: a.correlation_id.0.clone(),
+                    status: status as i32,
+                    reason,
+                    target_token: a.target_token.clone(),
+                })
+            }
+            WireMessage::TensorData(d) => {
+                proto::worker_to_host::Message::TensorData(proto::TensorData {
+                    correlation_id: d.correlation_id.0.clone(),
+                    sequence: d.sequence,
+                    data: d.data.clone(),
+                    r#final: d.is_final,
+                })
+            }
             _ => return Err(format!("not a worker-to-host message: {:?}", msg.kind())),
         };
         Ok(proto::WorkerToHost {
@@ -227,6 +265,21 @@ impl TryFrom<proto::HostToWorker> for WireMessage {
                     incarnation_id: WorkerIncarnationId(s.incarnation_id),
                     control_id: ControlId(s.control_id),
                 }))
+            }
+            proto::host_to_worker::Message::TensorTransferRequest(t) => {
+                let metadata = t.tensor_metadata.ok_or("missing tensor_metadata")?;
+                Ok(WireMessage::TensorTransferRequest(
+                    TensorTransferRequestFrame {
+                        source_token: t.source_token,
+                        target_worker_id: t.target_worker_id,
+                        tensor_metadata: TensorMetadata {
+                            dtype: metadata.dtype,
+                            shape: metadata.shape,
+                            size_bytes: metadata.size_bytes,
+                            backend_format: metadata.backend_format,
+                        },
+                    },
+                ))
             }
         }
     }
@@ -345,6 +398,32 @@ impl TryFrom<proto::WorkerToHost> for WireMessage {
                     protocol_version: ProtocolVersion(u32_to_u16(s.protocol_version)),
                     incarnation_id: WorkerIncarnationId(s.incarnation_id),
                     control_id: ControlId(s.control_id),
+                }))
+            }
+            proto::worker_to_host::Message::TensorTransferAck(a) => {
+                let status = match proto::TransferStatus::try_from(a.status) {
+                    Ok(proto::TransferStatus::Accepted) => TransferStatus::Accepted,
+                    Ok(proto::TransferStatus::Rejected) => TransferStatus::Rejected {
+                        reason: a.reason.unwrap_or_default(),
+                    },
+                    Ok(proto::TransferStatus::Complete) => TransferStatus::Complete,
+                    Ok(proto::TransferStatus::Unspecified) => {
+                        return Err("unspecified tensor transfer ack status".into());
+                    }
+                    Err(_) => return Err(format!("unknown tensor transfer status {}", a.status)),
+                };
+                Ok(WireMessage::TensorTransferAck(TensorTransferAckFrame {
+                    correlation_id: CorrelationId(a.correlation_id),
+                    status,
+                    target_token: a.target_token,
+                }))
+            }
+            proto::worker_to_host::Message::TensorData(d) => {
+                Ok(WireMessage::TensorData(TensorDataFrame {
+                    correlation_id: CorrelationId(d.correlation_id),
+                    sequence: d.sequence,
+                    data: d.data,
+                    is_final: d.r#final,
                 }))
             }
         }
@@ -574,6 +653,50 @@ mod tests {
                     operation_options: json!({"batch_size": 1}),
                 }],
             },
+        });
+        let proto_msg: proto::WorkerToHost = (&original).try_into().unwrap();
+        let back: WireMessage = proto_msg.try_into().unwrap();
+        assert_eq!(format!("{:?}", original), format!("{:?}", back));
+    }
+
+    #[test]
+    fn tensor_transfer_request_roundtrip() {
+        let original = WireMessage::TensorTransferRequest(TensorTransferRequestFrame {
+            source_token: "token-1".into(),
+            target_worker_id: "worker-2".into(),
+            tensor_metadata: TensorMetadata {
+                dtype: "f16".into(),
+                shape: vec![1, 4, 64, 64],
+                size_bytes: 1024,
+                backend_format: "burn::nchw".into(),
+            },
+        });
+        let proto_msg: proto::HostToWorker = (&original).try_into().unwrap();
+        let back: WireMessage = proto_msg.try_into().unwrap();
+        assert_eq!(format!("{:?}", original), format!("{:?}", back));
+    }
+
+    #[test]
+    fn tensor_transfer_ack_roundtrip() {
+        let original = WireMessage::TensorTransferAck(TensorTransferAckFrame {
+            correlation_id: CorrelationId("corr-1".into()),
+            status: TransferStatus::Rejected {
+                reason: "token invalid".into(),
+            },
+            target_token: None,
+        });
+        let proto_msg: proto::WorkerToHost = (&original).try_into().unwrap();
+        let back: WireMessage = proto_msg.try_into().unwrap();
+        assert_eq!(format!("{:?}", original), format!("{:?}", back));
+    }
+
+    #[test]
+    fn tensor_data_roundtrip() {
+        let original = WireMessage::TensorData(TensorDataFrame {
+            correlation_id: CorrelationId("corr-1".into()),
+            sequence: 3,
+            data: vec![1, 2, 3, 4],
+            is_final: true,
         });
         let proto_msg: proto::WorkerToHost = (&original).try_into().unwrap();
         let back: WireMessage = proto_msg.try_into().unwrap();

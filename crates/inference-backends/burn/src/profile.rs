@@ -103,6 +103,8 @@ fn add_wgpu_instances(profile: BackendProfile) -> BackendProfile {
         .with_capability(InferenceCapability::TextEncode)
         .with_capability(InferenceCapability::DiffusionSample)
         .with_capability(InferenceCapability::LatentDecode)
+        .with_capability(InferenceCapability::LatentEncode)
+        .with_capability(InferenceCapability::ImageImport)
         .with_capability(InferenceCapability::ImageSave)
         .with_capability(InferenceCapability::ImagePreview);
         next = next.with_instance(instance_profile);
@@ -139,6 +141,8 @@ fn add_cuda_instance(profile: BackendProfile) -> BackendProfile {
     .with_capability(InferenceCapability::TextEncode)
     .with_capability(InferenceCapability::DiffusionSample)
     .with_capability(InferenceCapability::LatentDecode)
+    .with_capability(InferenceCapability::LatentEncode)
+    .with_capability(InferenceCapability::ImageImport)
     .with_capability(InferenceCapability::ImageSave)
     .with_capability(InferenceCapability::ImagePreview);
     profile.with_instance(instance_profile)
@@ -159,6 +163,8 @@ fn add_rocm_instance(profile: BackendProfile) -> BackendProfile {
     .with_capability(InferenceCapability::TextEncode)
     .with_capability(InferenceCapability::DiffusionSample)
     .with_capability(InferenceCapability::LatentDecode)
+    .with_capability(InferenceCapability::LatentEncode)
+    .with_capability(InferenceCapability::ImageImport)
     .with_capability(InferenceCapability::ImageSave)
     .with_capability(InferenceCapability::ImagePreview);
     profile.with_instance(instance_profile)

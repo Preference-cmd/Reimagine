@@ -18,9 +18,9 @@ use crate::error::BurnBackendError;
 use crate::models::stable_diffusion::sdxl::BurnSdxlComponentRole;
 use crate::models::stable_diffusion::sdxl::text_conditioning::cache::SdxlTextEncoderCache;
 use crate::operation::{
-    execute_diffusion_sample, execute_image_preview, execute_image_save,
-    execute_latent_create_empty, execute_latent_decode, execute_model_load_bundle,
-    execute_text_encode,
+    execute_diffusion_sample, execute_image_import, execute_image_preview, execute_image_save,
+    execute_latent_create_empty, execute_latent_decode, execute_latent_encode,
+    execute_model_load_bundle, execute_text_encode,
 };
 use crate::profile::{BACKEND_LABEL, BurnProfileProvider};
 use crate::resource::BurnBackendInstanceRuntimeHooks;
@@ -123,6 +123,9 @@ impl BurnBackend {
                 InferenceCapability::CreateEmptyLatent,
             ))
             .with_support(InferenceCapabilitySupport::new(
+                InferenceCapability::ImageImport,
+            ))
+            .with_support(InferenceCapabilitySupport::new(
                 InferenceCapability::ImageSave,
             ))
             .with_support(InferenceCapabilitySupport::new(
@@ -153,19 +156,11 @@ impl BurnBackend {
             caps = caps.with_support(InferenceCapabilitySupport::new(
                 InferenceCapability::LatentDecode,
             ));
+            caps = caps.with_support(InferenceCapabilitySupport::new(
+                InferenceCapability::LatentEncode,
+            ));
         }
         caps
-    }
-
-    fn not_implemented<T>(&self, capability: InferenceCapability) -> Result<T, InferenceError> {
-        Err(InferenceError::BackendNotImplemented {
-            capability,
-            backend_kind: BACKEND_LABEL.to_owned(),
-            message: Some(
-                "Burn backend skeleton is registered for discovery but does not execute inference yet"
-                    .to_owned(),
-            ),
-        })
     }
 }
 
@@ -264,16 +259,16 @@ impl InferenceBackend for BurnBackend {
 
     async fn latent_encode(
         &self,
-        _request: LatentEncodeRequest,
+        request: LatentEncodeRequest,
     ) -> Result<LatentEncodeResponse, InferenceError> {
-        self.not_implemented(InferenceCapability::LatentEncode)
+        map_err(execute_latent_encode(self, request))
     }
 
     async fn image_import(
         &self,
-        _request: ImageImportRequest,
+        request: ImageImportRequest,
     ) -> Result<ImageImportResponse, InferenceError> {
-        self.not_implemented(InferenceCapability::ImageImport)
+        map_err(execute_image_import(request, self))
     }
 
     async fn image_save(
@@ -399,11 +394,13 @@ mod tests {
         let caps = backend().capabilities();
         assert!(caps.supports_capability(InferenceCapability::LoadBundle));
         assert!(caps.supports_capability(InferenceCapability::CreateEmptyLatent));
+        assert!(caps.supports_capability(InferenceCapability::ImageImport));
         assert!(caps.supports_capability(InferenceCapability::ImageSave));
         assert!(caps.supports_capability(InferenceCapability::ImagePreview));
         assert!(!caps.supports_capability(InferenceCapability::TextEncode));
         assert!(!caps.supports_capability(InferenceCapability::DiffusionSample));
         assert!(!caps.supports_capability(InferenceCapability::LatentDecode));
+        assert!(!caps.supports_capability(InferenceCapability::LatentEncode));
     }
 
     #[test]
@@ -417,6 +414,7 @@ mod tests {
         assert!(caps.supports_capability(InferenceCapability::TextEncode));
         assert!(!caps.supports_capability(InferenceCapability::DiffusionSample));
         assert!(!caps.supports_capability(InferenceCapability::LatentDecode));
+        assert!(!caps.supports_capability(InferenceCapability::LatentEncode));
     }
 
     #[test]
@@ -430,5 +428,6 @@ mod tests {
         assert!(caps.supports_capability(InferenceCapability::TextEncode));
         assert!(caps.supports_capability(InferenceCapability::DiffusionSample));
         assert!(caps.supports_capability(InferenceCapability::LatentDecode));
+        assert!(caps.supports_capability(InferenceCapability::LatentEncode));
     }
 }

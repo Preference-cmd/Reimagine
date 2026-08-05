@@ -1,4 +1,4 @@
-//! Load SDXL VAE decoder weights through burn-store.
+//! Load SDXL VAE decoder and encoder weights through burn-store.
 
 use burn_store::{ApplyResult, KeyRemapper, PyTorchToBurnAdapter, SafetensorsStore};
 use burn_tensor::backend::Backend;
@@ -9,10 +9,16 @@ use crate::models::stable_diffusion::sdxl::load_diagnostics::{
 };
 use crate::runtime::BurnRuntime;
 
-use super::module::SdxlVaeDecoder;
+use super::module::{SdxlVaeDecoder, SdxlVaeEncoder};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum SdxlVaeDecoderLoadProfile {
+    TinySdxlE2e,
+    SdxlBase,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum SdxlVaeEncoderLoadProfile {
     TinySdxlE2e,
     SdxlBase,
 }
@@ -46,9 +52,40 @@ pub(crate) fn load_vae_decoder_module_from_path_with_profile<B: Backend>(
     Ok(result)
 }
 
+pub(crate) fn load_vae_encoder_module_from_path_with_profile<B: Backend>(
+    runtime: &BurnRuntime<B>,
+    module: &mut SdxlVaeEncoder<B>,
+    path: impl Into<std::path::PathBuf>,
+    profile: SdxlVaeEncoderLoadProfile,
+) -> Result<ApplyResult, BurnBackendError> {
+    let mut store = sdxl_vae_encoder_store_from_path(path);
+    let result = runtime
+        .load_module_store(module, &mut store)
+        .map_err(|source| BurnBackendError::InvalidRequest(source.to_string()))?;
+    validate_encoder_apply_result(profile, &result)?;
+    Ok(result)
+}
+
 fn sdxl_vae_store_from_path(path: impl Into<std::path::PathBuf>) -> SafetensorsStore {
     SafetensorsStore::from_file(path)
         .remap(sdxl_vae_key_remapper())
+        .with_from_adapter(PyTorchToBurnAdapter)
+        .allow_partial(true)
+        .validate(true)
+}
+
+/// Build the encoder store from the same VAE component file.
+///
+/// The file carries both `encoder.*` and `decoder.*` subgraphs. The
+/// encoder remapper normalizes every encoder key onto the
+/// `encoder.` snapshot namespace (the enclosing
+/// [`SdxlVaeEncoder`](super::module::SdxlVaeEncoder) module field),
+/// so the encoder's snapshots never collide with the decoder's
+/// unprefixed names. No path filter is needed: the two namespaces
+/// are disjoint after remapping.
+fn sdxl_vae_encoder_store_from_path(path: impl Into<std::path::PathBuf>) -> SafetensorsStore {
+    SafetensorsStore::from_file(path)
+        .remap(sdxl_vae_encoder_key_remapper())
         .with_from_adapter(PyTorchToBurnAdapter)
         .allow_partial(true)
         .validate(true)
@@ -89,6 +126,25 @@ fn validate_apply_result(
     result: &ApplyResult,
 ) -> Result<(), BurnBackendError> {
     validate_sdxl_apply_result(vae_load_policy(profile), result)
+}
+
+fn validate_encoder_apply_result(
+    profile: SdxlVaeEncoderLoadProfile,
+    result: &ApplyResult,
+) -> Result<(), BurnBackendError> {
+    validate_sdxl_apply_result(vae_encoder_load_policy(profile), result)
+}
+
+/// Remap diffusers AutoencoderKL *encoder* keys onto the encoder's
+/// `encoder.` snapshot namespace (the module field prefix). The
+/// decoder's `model.vae.decoder.` and unprefixed Burn-native keys
+/// stay in their own namespace and remain untouched.
+fn sdxl_vae_encoder_key_remapper() -> KeyRemapper {
+    KeyRemapper::new()
+        .add_pattern(r"^model\.vae\.encoder\.", "encoder.")
+        .expect("static VAE encoder prefix remapping regex should compile")
+        .add_pattern(r"^encoder\.", "encoder.")
+        .expect("static VAE encoder fixture prefix remapping regex should compile")
 }
 
 fn vae_load_policy(profile: SdxlVaeDecoderLoadProfile) -> SdxlLoadPolicy {
@@ -254,6 +310,151 @@ fn vae_load_policy(profile: SdxlVaeDecoderLoadProfile) -> SdxlLoadPolicy {
     }
 }
 
+fn vae_encoder_load_policy(profile: SdxlVaeEncoderLoadProfile) -> SdxlLoadPolicy {
+    match profile {
+        SdxlVaeEncoderLoadProfile::TinySdxlE2e => SdxlLoadPolicy::new("vae")
+            .with_required_snapshots(&["encoder.conv_out.weight", "encoder.conv_out.bias"])
+            .with_remapped_key_patterns(&[
+                "model.vae.encoder.conv_out -> encoder.conv_out",
+                "encoder.conv_out -> encoder.conv_out",
+            ]),
+        SdxlVaeEncoderLoadProfile::SdxlBase => SdxlLoadPolicy::new("vae")
+            .with_required_snapshots(&[
+                "encoder.conv_in.weight",
+                "encoder.conv_in.bias",
+                // down_blocks.0: 2 resnets @ 128, downsampler
+                "encoder.down_blocks.0.resnets.0.conv1.weight",
+                "encoder.down_blocks.0.resnets.0.conv1.bias",
+                "encoder.down_blocks.0.resnets.0.norm1.gamma",
+                "encoder.down_blocks.0.resnets.0.norm1.beta",
+                "encoder.down_blocks.0.resnets.0.norm2.gamma",
+                "encoder.down_blocks.0.resnets.0.norm2.beta",
+                "encoder.down_blocks.0.resnets.0.conv2.weight",
+                "encoder.down_blocks.0.resnets.0.conv2.bias",
+                "encoder.down_blocks.0.resnets.1.conv1.weight",
+                "encoder.down_blocks.0.resnets.1.conv1.bias",
+                "encoder.down_blocks.0.resnets.1.norm1.gamma",
+                "encoder.down_blocks.0.resnets.1.norm1.beta",
+                "encoder.down_blocks.0.resnets.1.norm2.gamma",
+                "encoder.down_blocks.0.resnets.1.norm2.beta",
+                "encoder.down_blocks.0.resnets.1.conv2.weight",
+                "encoder.down_blocks.0.resnets.1.conv2.bias",
+                "encoder.down_blocks.0.downsamplers.0.conv.weight",
+                "encoder.down_blocks.0.downsamplers.0.conv.bias",
+                // down_blocks.1: 2 resnets, first has skip 128→256, downsampler
+                "encoder.down_blocks.1.resnets.0.conv1.weight",
+                "encoder.down_blocks.1.resnets.0.conv1.bias",
+                "encoder.down_blocks.1.resnets.0.norm1.gamma",
+                "encoder.down_blocks.1.resnets.0.norm1.beta",
+                "encoder.down_blocks.1.resnets.0.norm2.gamma",
+                "encoder.down_blocks.1.resnets.0.norm2.beta",
+                "encoder.down_blocks.1.resnets.0.conv2.weight",
+                "encoder.down_blocks.1.resnets.0.conv2.bias",
+                "encoder.down_blocks.1.resnets.0.conv_shortcut.weight",
+                "encoder.down_blocks.1.resnets.0.conv_shortcut.bias",
+                "encoder.down_blocks.1.resnets.1.conv1.weight",
+                "encoder.down_blocks.1.resnets.1.conv1.bias",
+                "encoder.down_blocks.1.resnets.1.norm1.gamma",
+                "encoder.down_blocks.1.resnets.1.norm1.beta",
+                "encoder.down_blocks.1.resnets.1.norm2.gamma",
+                "encoder.down_blocks.1.resnets.1.norm2.beta",
+                "encoder.down_blocks.1.resnets.1.conv2.weight",
+                "encoder.down_blocks.1.resnets.1.conv2.bias",
+                "encoder.down_blocks.1.downsamplers.0.conv.weight",
+                "encoder.down_blocks.1.downsamplers.0.conv.bias",
+                // down_blocks.2: 2 resnets, first has skip 256→512, downsampler
+                "encoder.down_blocks.2.resnets.0.conv1.weight",
+                "encoder.down_blocks.2.resnets.0.conv1.bias",
+                "encoder.down_blocks.2.resnets.0.norm1.gamma",
+                "encoder.down_blocks.2.resnets.0.norm1.beta",
+                "encoder.down_blocks.2.resnets.0.norm2.gamma",
+                "encoder.down_blocks.2.resnets.0.norm2.beta",
+                "encoder.down_blocks.2.resnets.0.conv2.weight",
+                "encoder.down_blocks.2.resnets.0.conv2.bias",
+                "encoder.down_blocks.2.resnets.0.conv_shortcut.weight",
+                "encoder.down_blocks.2.resnets.0.conv_shortcut.bias",
+                "encoder.down_blocks.2.resnets.1.conv1.weight",
+                "encoder.down_blocks.2.resnets.1.conv1.bias",
+                "encoder.down_blocks.2.resnets.1.norm1.gamma",
+                "encoder.down_blocks.2.resnets.1.norm1.beta",
+                "encoder.down_blocks.2.resnets.1.norm2.gamma",
+                "encoder.down_blocks.2.resnets.1.norm2.beta",
+                "encoder.down_blocks.2.resnets.1.conv2.weight",
+                "encoder.down_blocks.2.resnets.1.conv2.bias",
+                "encoder.down_blocks.2.downsamplers.0.conv.weight",
+                "encoder.down_blocks.2.downsamplers.0.conv.bias",
+                // down_blocks.3: 3 resnets @ 512, NO downsampler
+                "encoder.down_blocks.3.resnets.0.conv1.weight",
+                "encoder.down_blocks.3.resnets.0.conv1.bias",
+                "encoder.down_blocks.3.resnets.0.norm1.gamma",
+                "encoder.down_blocks.3.resnets.0.norm1.beta",
+                "encoder.down_blocks.3.resnets.0.norm2.gamma",
+                "encoder.down_blocks.3.resnets.0.norm2.beta",
+                "encoder.down_blocks.3.resnets.0.conv2.weight",
+                "encoder.down_blocks.3.resnets.0.conv2.bias",
+                "encoder.down_blocks.3.resnets.1.conv1.weight",
+                "encoder.down_blocks.3.resnets.1.conv1.bias",
+                "encoder.down_blocks.3.resnets.1.norm1.gamma",
+                "encoder.down_blocks.3.resnets.1.norm1.beta",
+                "encoder.down_blocks.3.resnets.1.norm2.gamma",
+                "encoder.down_blocks.3.resnets.1.norm2.beta",
+                "encoder.down_blocks.3.resnets.1.conv2.weight",
+                "encoder.down_blocks.3.resnets.1.conv2.bias",
+                "encoder.down_blocks.3.resnets.2.conv1.weight",
+                "encoder.down_blocks.3.resnets.2.conv1.bias",
+                "encoder.down_blocks.3.resnets.2.norm1.gamma",
+                "encoder.down_blocks.3.resnets.2.norm1.beta",
+                "encoder.down_blocks.3.resnets.2.norm2.gamma",
+                "encoder.down_blocks.3.resnets.2.norm2.beta",
+                "encoder.down_blocks.3.resnets.2.conv2.weight",
+                "encoder.down_blocks.3.resnets.2.conv2.bias",
+                // mid_block: 2 resnets @ 512 + attention
+                "encoder.mid_block.resnets.0.conv1.weight",
+                "encoder.mid_block.resnets.0.conv1.bias",
+                "encoder.mid_block.resnets.0.norm1.gamma",
+                "encoder.mid_block.resnets.0.norm1.beta",
+                "encoder.mid_block.resnets.0.norm2.gamma",
+                "encoder.mid_block.resnets.0.norm2.beta",
+                "encoder.mid_block.resnets.0.conv2.weight",
+                "encoder.mid_block.resnets.0.conv2.bias",
+                "encoder.mid_block.resnets.1.conv1.weight",
+                "encoder.mid_block.resnets.1.conv1.bias",
+                "encoder.mid_block.resnets.1.norm1.gamma",
+                "encoder.mid_block.resnets.1.norm1.beta",
+                "encoder.mid_block.resnets.1.norm2.gamma",
+                "encoder.mid_block.resnets.1.norm2.beta",
+                "encoder.mid_block.resnets.1.conv2.weight",
+                "encoder.mid_block.resnets.1.conv2.bias",
+                "encoder.mid_block.attentions.0.group_norm.gamma",
+                "encoder.mid_block.attentions.0.group_norm.beta",
+                "encoder.mid_block.attentions.0.to_q.weight",
+                "encoder.mid_block.attentions.0.to_q.bias",
+                "encoder.mid_block.attentions.0.to_k.weight",
+                "encoder.mid_block.attentions.0.to_k.bias",
+                "encoder.mid_block.attentions.0.to_v.weight",
+                "encoder.mid_block.attentions.0.to_v.bias",
+                "encoder.mid_block.attentions.0.to_out.0.weight",
+                "encoder.mid_block.attentions.0.to_out.0.bias",
+                "encoder.conv_norm_out.gamma",
+                "encoder.conv_norm_out.beta",
+                "encoder.conv_out.weight",
+                "encoder.conv_out.bias",
+            ])
+            .with_remapped_key_patterns(&[
+                "model.vae.encoder.conv_in -> encoder.conv_in",
+                "model.vae.encoder.down_blocks -> encoder.down_blocks",
+                "model.vae.encoder.mid_block -> encoder.mid_block",
+                "model.vae.encoder.conv_norm_out -> encoder.conv_norm_out",
+                "model.vae.encoder.conv_out -> encoder.conv_out",
+                "encoder.conv_in -> encoder.conv_in",
+                "encoder.down_blocks -> encoder.down_blocks",
+                "encoder.mid_block -> encoder.mid_block",
+                "encoder.conv_norm_out -> encoder.conv_norm_out",
+                "encoder.conv_out -> encoder.conv_out",
+            ]),
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use std::borrow::Cow;
@@ -266,7 +467,7 @@ mod tests {
     use crate::models::stable_diffusion::sdxl::load_diagnostics::format_apply_report;
     use crate::runtime::BurnRuntime;
 
-    use super::SdxlVaeDecoder;
+    use super::{SdxlVaeDecoder, SdxlVaeEncoder};
 
     #[test]
     fn load_vae_decoder_module_from_path_applies_decoder_snapshots_through_burn_store() {
@@ -387,6 +588,114 @@ mod tests {
         );
     }
 
+    #[test]
+    fn load_vae_encoder_module_from_path_applies_encoder_snapshots_through_burn_store() {
+        let temp = tempfile::tempdir().expect("temp dir");
+        let vae_path = temp.path().join("vae.safetensors");
+        write_tiny_vae_encoder_component(&vae_path);
+        let config = BurnBackendConfig::new("/models", "/output");
+        let runtime = BurnRuntime::<ActiveBurnBackend>::new(active_device(config.device()));
+        let mut module = SdxlVaeEncoder::<ActiveBurnBackend>::init(runtime.device());
+
+        let result = super::load_vae_encoder_module_from_path_with_profile(
+            &runtime,
+            &mut module,
+            &vae_path,
+            super::SdxlVaeEncoderLoadProfile::SdxlBase,
+        )
+        .expect("tiny VAE encoder should load through burn-store");
+
+        assert!(result.errors.is_empty(), "unexpected load errors: {result}");
+        assert!(
+            result
+                .applied
+                .contains(&"encoder.conv_out.weight".to_string())
+        );
+        let output = module.forward(Tensor::<ActiveBurnBackend, 4>::zeros(
+            [1, 3, 32, 32],
+            runtime.device(),
+        ));
+        assert_eq!(output.shape().dims(), [1, 4, 4, 4]);
+    }
+
+    #[test]
+    fn load_vae_encoder_module_from_path_accepts_tiny_fixture_profile() {
+        let temp = tempfile::tempdir().expect("temp dir");
+        let vae_path = temp.path().join("tiny-vae.safetensors");
+        let mut tensors = full_sdxl_vae_encoder_fixture("encoder.");
+        tensors.extend([
+            tensor_view(
+                "encoder.conv_out.weight",
+                vec![4usize, 512, 3, 3],
+                vec![0.0f32; 4 * 512 * 3 * 3],
+            ),
+            tensor_view("encoder.conv_out.bias", vec![4usize], vec![0.0f32; 4]),
+        ]);
+        safetensors::tensor::serialize_to_file(tensors, None, &vae_path)
+            .expect("write tiny encoder safetensors");
+        let config = BurnBackendConfig::new("/models", "/output");
+        let runtime = BurnRuntime::<ActiveBurnBackend>::new(active_device(config.device()));
+        let mut module = SdxlVaeEncoder::<ActiveBurnBackend>::init(runtime.device());
+
+        let result = super::load_vae_encoder_module_from_path_with_profile(
+            &runtime,
+            &mut module,
+            &vae_path,
+            super::SdxlVaeEncoderLoadProfile::TinySdxlE2e,
+        )
+        .expect("tiny encoder fixture should load with the tiny profile");
+
+        assert!(result.errors.is_empty(), "unexpected load errors: {result}");
+    }
+
+    #[test]
+    fn full_vae_encoder_policy_rejects_conv_out_only_components() {
+        let report = format_apply_report(
+            super::vae_encoder_load_policy(super::SdxlVaeEncoderLoadProfile::SdxlBase),
+            &ApplyResult {
+                applied: vec!["conv_out.weight".to_owned(), "conv_out.bias".to_owned()],
+                skipped: Vec::new(),
+                missing: Vec::new(),
+                unused: Vec::new(),
+                errors: Vec::new(),
+            },
+        );
+
+        for expected in [
+            "required snapshot missing: encoder.conv_in.weight",
+            "required snapshot missing: encoder.down_blocks.0.resnets.0.conv1.weight",
+            "required snapshot missing: encoder.down_blocks.2.resnets.0.conv_shortcut.bias",
+        ] {
+            assert!(
+                report.contains(expected),
+                "missing `{expected}` in:\n{report}"
+            );
+        }
+    }
+
+    #[test]
+    fn tiny_vae_encoder_policy_accepts_conv_out_only_fixture_components() {
+        let report = format_apply_report(
+            super::vae_encoder_load_policy(super::SdxlVaeEncoderLoadProfile::TinySdxlE2e),
+            &ApplyResult {
+                applied: vec![
+                    "encoder.conv_out.weight".to_owned(),
+                    "encoder.conv_out.bias".to_owned(),
+                ],
+                skipped: Vec::new(),
+                missing: Vec::new(),
+                unused: Vec::new(),
+                errors: Vec::new(),
+            },
+        );
+
+        assert!(!report.contains("required snapshot missing"), "{report}");
+        assert!(
+            !report.contains("conv_in"),
+            "tiny fixture policy should not require full-profile encoder snapshots:\n{report}"
+        );
+    }
+
     fn write_tiny_vae_component(path: &std::path::Path) {
         // Build a compatible SdxlBase fixture for the test load.
         let mut tensors = full_sdxl_vae_fixture("model.vae.decoder.");
@@ -405,6 +714,28 @@ mod tests {
         ]);
         safetensors::tensor::serialize_to_file(tensors, None, path)
             .expect("write full VAE safetensors");
+    }
+
+    fn write_tiny_vae_encoder_component(path: &std::path::Path) {
+        // Encoder fixture in the diffusers `model.vae.encoder.`
+        // dialect. The decoder's keys are absent — the encoder store
+        // remaps encoder keys into the disjoint `encoder.` namespace.
+        let mut tensors = full_sdxl_vae_encoder_fixture("model.vae.encoder.");
+        tensors.extend([
+            tensor_view(
+                "model.vae.encoder.conv_out.weight",
+                // Conv2d weight: [out_channels=4, in_channels=512, 3, 3]
+                vec![4usize, 512, 3, 3],
+                vec![0.0f32; 4 * 512 * 3 * 3],
+            ),
+            tensor_view(
+                "model.vae.encoder.conv_out.bias",
+                vec![4usize],
+                vec![0.0f32; 4],
+            ),
+        ]);
+        safetensors::tensor::serialize_to_file(tensors, None, path)
+            .expect("write full VAE encoder safetensors");
     }
 
     fn write_mapped_vae_component(path: &std::path::Path) {
@@ -763,6 +1094,156 @@ mod tests {
             &format!("{prefix}conv_norm_out.beta"),
             vec![128],
             vec![0.0f32; 128],
+        ));
+        tensors
+    }
+
+    // Helper to generate full-profile VAE encoder fixture tensors.
+    // Covers the complete SdxlBase encoder policy: conv_in,
+    // down_blocks (2 resnets per block, downsamplers on the first
+    // three), mid_block (2 resnets + attention), conv_norm_out.
+    // conv_out is appended by the caller so each load test can shape
+    // it independently.
+    fn full_sdxl_vae_encoder_fixture(prefix: &str) -> Vec<(String, TestTensorView)> {
+        let mut tensors = vec![
+            // Conv2d weight: Burn layout [out_channels, in_channels, H, W] = [128, 3, 3, 3]
+            tensor_view(
+                &format!("{prefix}conv_in.weight"),
+                vec![128usize, 3, 3, 3],
+                vec![0.0f32; 128 * 3 * 3 * 3],
+            ),
+            // bias shape: [out_channels=128]
+            tensor_view(
+                &format!("{prefix}conv_in.bias"),
+                vec![128usize],
+                vec![0.0f32; 128],
+            ),
+        ];
+        // down_blocks: first three have downsamplers, last does not.
+        let blocks: [(usize, usize, usize, bool); 4] = [
+            (128, 128, 2, true),
+            (128, 256, 2, true),
+            (256, 512, 2, true),
+            (512, 512, 3, false),
+        ];
+        for (block_idx, (in_ch, out_ch, num_resnets, has_downsampler)) in
+            blocks.iter().copied().enumerate()
+        {
+            for resnet in 0..num_resnets {
+                let is_first_with_skip = resnet == 0 && in_ch != out_ch;
+                let res_in_ch = if is_first_with_skip { in_ch } else { out_ch };
+                for norm in ["norm1", "norm2"] {
+                    let ch = if norm == "norm1" { res_in_ch } else { out_ch };
+                    let key =
+                        format!("{prefix}down_blocks.{block_idx}.resnets.{resnet}.{norm}.gamma");
+                    tensors.push(tensor_view(&key, vec![ch], vec![1.0f32; ch]));
+                    let key =
+                        format!("{prefix}down_blocks.{block_idx}.resnets.{resnet}.{norm}.beta");
+                    tensors.push(tensor_view(&key, vec![ch], vec![0.0f32; ch]));
+                }
+                let key = format!("{prefix}down_blocks.{block_idx}.resnets.{resnet}.conv1.weight");
+                tensors.push(tensor_view(
+                    &key,
+                    vec![out_ch, res_in_ch, 3, 3],
+                    vec![0.0f32; out_ch * res_in_ch * 3 * 3],
+                ));
+                let key = format!("{prefix}down_blocks.{block_idx}.resnets.{resnet}.conv1.bias");
+                tensors.push(tensor_view(&key, vec![out_ch], vec![0.0f32; out_ch]));
+                let key = format!("{prefix}down_blocks.{block_idx}.resnets.{resnet}.conv2.weight");
+                tensors.push(tensor_view(
+                    &key,
+                    vec![out_ch, out_ch, 3, 3],
+                    vec![0.0f32; out_ch * out_ch * 3 * 3],
+                ));
+                let key = format!("{prefix}down_blocks.{block_idx}.resnets.{resnet}.conv2.bias");
+                tensors.push(tensor_view(&key, vec![out_ch], vec![0.0f32; out_ch]));
+                if is_first_with_skip {
+                    let key = format!(
+                        "{prefix}down_blocks.{block_idx}.resnets.{resnet}.conv_shortcut.weight"
+                    );
+                    tensors.push(tensor_view(
+                        &key,
+                        vec![out_ch, in_ch, 1, 1],
+                        vec![0.0f32; out_ch * in_ch],
+                    ));
+                    let key = format!(
+                        "{prefix}down_blocks.{block_idx}.resnets.{resnet}.conv_shortcut.bias"
+                    );
+                    tensors.push(tensor_view(&key, vec![out_ch], vec![0.0f32; out_ch]));
+                }
+            }
+            if has_downsampler {
+                let key = format!("{prefix}down_blocks.{block_idx}.downsamplers.0.conv.weight");
+                tensors.push(tensor_view(
+                    &key,
+                    vec![out_ch, out_ch, 3, 3],
+                    vec![0.0f32; out_ch * out_ch * 3 * 3],
+                ));
+                let key = format!("{prefix}down_blocks.{block_idx}.downsamplers.0.conv.bias");
+                tensors.push(tensor_view(&key, vec![out_ch], vec![0.0f32; out_ch]));
+            }
+        }
+        // mid_block: 2 resnets @ 512 + attention (same shape as decoder mid block)
+        for index in 0..2 {
+            for norm in ["norm1", "norm2"] {
+                tensors.push(tensor_view(
+                    &format!("{prefix}mid_block.resnets.{index}.{norm}.gamma"),
+                    vec![512usize],
+                    vec![1.0f32; 512],
+                ));
+                tensors.push(tensor_view(
+                    &format!("{prefix}mid_block.resnets.{index}.{norm}.beta"),
+                    vec![512usize],
+                    vec![0.0f32; 512],
+                ));
+            }
+            for conv in ["conv1", "conv2"] {
+                tensors.push(tensor_view(
+                    &format!("{prefix}mid_block.resnets.{index}.{conv}.weight"),
+                    vec![512, 512, 3, 3],
+                    vec![0.0f32; 512 * 512 * 3 * 3],
+                ));
+                tensors.push(tensor_view(
+                    &format!("{prefix}mid_block.resnets.{index}.{conv}.bias"),
+                    vec![512usize],
+                    vec![0.0f32; 512],
+                ));
+            }
+        }
+        for key in [
+            &format!("{prefix}mid_block.attentions.0.group_norm.gamma"),
+            &format!("{prefix}mid_block.attentions.0.group_norm.beta"),
+            &format!("{prefix}mid_block.attentions.0.to_q.weight"),
+            &format!("{prefix}mid_block.attentions.0.to_q.bias"),
+            &format!("{prefix}mid_block.attentions.0.to_k.weight"),
+            &format!("{prefix}mid_block.attentions.0.to_k.bias"),
+            &format!("{prefix}mid_block.attentions.0.to_v.weight"),
+            &format!("{prefix}mid_block.attentions.0.to_v.bias"),
+            &format!("{prefix}mid_block.attentions.0.to_out.0.weight"),
+            &format!("{prefix}mid_block.attentions.0.to_out.0.bias"),
+        ] {
+            if key.contains("weight") {
+                tensors.push(tensor_view(
+                    key,
+                    vec![512, 512, 1, 1],
+                    vec![0.0f32; 512 * 512],
+                ));
+            } else if key.contains(".bias") {
+                tensors.push(tensor_view(key, vec![512], vec![0.0f32; 512]));
+            } else {
+                tensors.push(tensor_view(key, vec![512], vec![1.0f32; 512]));
+            }
+        }
+        // conv_norm_out: GroupNorm 32 groups, 512 channels (encoder topology)
+        tensors.push(tensor_view(
+            &format!("{prefix}conv_norm_out.gamma"),
+            vec![512],
+            vec![1.0f32; 512],
+        ));
+        tensors.push(tensor_view(
+            &format!("{prefix}conv_norm_out.beta"),
+            vec![512],
+            vec![0.0f32; 512],
         ));
         tensors
     }

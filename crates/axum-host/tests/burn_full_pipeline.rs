@@ -686,6 +686,8 @@ async fn burn_full_pipeline_load_encode_latent_sample_decode_saves_png_via_axum(
                                 "text.encode",
                                 "diffusion.sample",
                                 "latent.decode",
+                                "latent.encode",
+                                "image.import",
                                 "image.save",
                                 "image.preview",
                             ]

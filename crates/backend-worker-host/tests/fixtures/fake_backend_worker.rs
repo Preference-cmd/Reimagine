@@ -353,6 +353,21 @@ fn spawn_request(
                     }
                 }
             }
+            "model.set_cache_budget" => {
+                if std::env::var_os("FAKE_BUDGET_FAIL").is_some() {
+                    TerminalOutcome::BackendError {
+                        error: BackendExecutionError {
+                            code: "forced_budget_error".to_owned(),
+                            message: "forced budget backend error".to_owned(),
+                            retryable: false,
+                        },
+                    }
+                } else {
+                    TerminalOutcome::Success {
+                        output: json!({ "applied": true }),
+                    }
+                }
+            }
             operation => TerminalOutcome::BackendError {
                 error: BackendExecutionError {
                     code: "unsupported_operation".to_owned(),

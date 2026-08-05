@@ -410,6 +410,12 @@ impl BurnImagePayload {
         self.tensor.0.shape().dims()
     }
 
+    pub fn into_active_tensor(
+        self,
+    ) -> Result<Tensor<ActiveBurnBackend, 4>, crate::error::BurnBackendError> {
+        Ok(*self.tensor.0)
+    }
+
     pub fn width(&self) -> u32 {
         self.width
     }

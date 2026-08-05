@@ -40,6 +40,8 @@ pub fn build(backend: &BurnBackend) -> (WorkerIdentity, WorkerProfile) {
             "text.encode".to_string(),
             "diffusion.sample".to_string(),
             "latent.decode".to_string(),
+            "latent.encode".to_string(),
+            "image.import".to_string(),
             "image.save".to_string(),
             "image.preview".to_string(),
         ],

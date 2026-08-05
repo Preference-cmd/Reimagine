@@ -125,6 +125,19 @@ fn comprehensive_handler() -> MessageHandler {
                         },
                     )),
                 }),
+                // TensorTransferRequest -> TensorTransferAck (accepted)
+                Some(proto::host_to_worker::Message::TensorTransferRequest(t)) => {
+                    Some(proto::WorkerToHost {
+                        message: Some(proto::worker_to_host::Message::TensorTransferAck(
+                            proto::TensorTransferAck {
+                                correlation_id: "corr-transfer".into(),
+                                status: proto::TransferStatus::Accepted as i32,
+                                reason: None,
+                                target_token: Some(t.source_token),
+                            },
+                        )),
+                    })
+                }
                 None => None,
             }
         })

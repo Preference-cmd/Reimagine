@@ -20,6 +20,7 @@ message HostToWorker {
     Health health = 4;
     Cleanup cleanup = 5;
     Shutdown shutdown = 6;
+    TensorTransferRequest tensor_transfer_request = 7;
   }
 }
 
@@ -64,6 +65,28 @@ message Shutdown {
   string control_id = 3;
 }
 
+// ── Tensor transfer messages ──────────────────────────────────────
+
+message TensorMetadata {
+  string dtype = 1;
+  repeated uint64 shape = 2;
+  uint64 size_bytes = 3;
+  string backend_format = 4;
+}
+
+message TensorTransferRequest {
+  string source_token = 1;
+  string target_worker_id = 2;
+  TensorMetadata tensor_metadata = 3;
+}
+
+enum TransferStatus {
+  TRANSFER_STATUS_UNSPECIFIED = 0;
+  TRANSFER_STATUS_ACCEPTED = 1;
+  TRANSFER_STATUS_REJECTED = 2;
+  TRANSFER_STATUS_COMPLETE = 3;
+}
+
 // ── Worker → Host messages ────────────────────────────────────────
 
 message WorkerToHost {
@@ -75,6 +98,8 @@ message WorkerToHost {
     HealthAck health_ack = 5;
     CleanupAck cleanup_ack = 6;
     ShutdownAck shutdown_ack = 7;
+    TensorTransferAck tensor_transfer_ack = 8;
+    TensorData tensor_data = 9;
   }
 }
 
@@ -170,6 +195,20 @@ message ShutdownAck {
   uint32 protocol_version = 1;
   string incarnation_id = 2;
   string control_id = 3;
+}
+
+message TensorTransferAck {
+  string correlation_id = 1;
+  TransferStatus status = 2;
+  optional string reason = 3;
+  optional string target_token = 4;
+}
+
+message TensorData {
+  string correlation_id = 1;
+  uint64 sequence = 2;
+  bytes data = 3;
+  bool final = 4;
 }
 
 // ── Health check messages ─────────────────────────────────────────

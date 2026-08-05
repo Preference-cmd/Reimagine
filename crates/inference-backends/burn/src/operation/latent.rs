@@ -26,8 +26,9 @@ use reimagine_core::model::{NodeId, RunId, TensorShape};
 use reimagine_inference::latent_space::validate_pixel_dimensions_against;
 use reimagine_inference::{
     BackendPayloadKey, BackendTensorHandle, CreateEmptyLatentRequest, CreateEmptyLatentResponse,
-    InferenceBackend, LatentContent, LatentDecodeRequest, LatentDecodeResponse, LatentSpaceError,
-    LatentSpaceMetadata, RuntimeImage, RuntimeLatent,
+    InferenceBackend, LatentContent, LatentDecodeRequest, LatentDecodeResponse,
+    LatentEncodeRequest, LatentEncodeResponse, LatentSpaceError, LatentSpaceMetadata, RuntimeImage,
+    RuntimeLatent,
 };
 
 use crate::backend::BurnBackend;
@@ -297,6 +298,130 @@ pub fn execute_latent_decode(
     Ok(LatentDecodeResponse::new(runtime_image))
 }
 
+/// `latent.encode` entry point for the Burn backend.
+///
+/// V1 accepts a stored RGB image payload and runs the Burn VAE
+/// encoder, storing the resulting latent payload in the shared
+/// BurnStore with `LatentContent::EncodedImage`.
+pub fn execute_latent_encode(
+    backend: &BurnBackend,
+    request: LatentEncodeRequest,
+) -> Result<LatentEncodeResponse, BurnBackendError> {
+    let image_handle = request.image();
+
+    // Validate backend affinity
+    let handle_backend = image_handle.payload().backend();
+    if handle_backend.as_str() != crate::profile::BACKEND_LABEL {
+        return Err(BurnBackendError::InvalidRequest(format!(
+            "latent.encode handle belongs to backend `{}`, expected `{}`",
+            handle_backend.as_str(),
+            crate::profile::BACKEND_LABEL
+        )));
+    }
+    if image_handle.payload().backend_instance() != &backend.backend_instance() {
+        return Err(BurnBackendError::InvalidRequest(format!(
+            "latent.encode handle belongs to backend instance `{}`, expected `{}`",
+            image_handle.payload().backend_instance(),
+            backend.backend_instance()
+        )));
+    }
+
+    // Validate the image payload metadata
+    if image_handle.color_space() != "rgb" {
+        return Err(BurnBackendError::InvalidRequest(format!(
+            "latent.encode only supports RGB images, got `{}`",
+            image_handle.color_space()
+        )));
+    }
+    if image_handle.batch() != 1 {
+        return Err(BurnBackendError::InvalidRequest(format!(
+            "latent.encode V1 only supports batch=1, got {}",
+            image_handle.batch()
+        )));
+    }
+    let width = image_handle.width();
+    let height = image_handle.height();
+    validate_pixel_dimensions_against(width, height, &LatentSpaceMetadata::sdxl_base())
+        .map_err(|err| map_latent_space_error("latent.encode", err))?;
+
+    // Get image payload from store
+    let image_payload = backend
+        .store()
+        .get_image(image_handle.payload().payload_key())?;
+
+    // Run VAE encode
+    let vae = request.vae();
+    let bundle = backend
+        .model_cache()
+        .get_bundle(vae.model_id())
+        .ok_or_else(|| {
+            BurnBackendError::InvalidRequest(
+                "latent.encode requires loaded bundle; call load_bundle first".to_string(),
+            )
+        })?;
+
+    let encoded =
+        crate::models::stable_diffusion::sdxl::vae::encode_image(&bundle, image_payload, backend)?;
+
+    // Check for WGPU validation errors that may have occurred during VAE encode
+    crate::wgpu_guard::check_global().map_err(|_| {
+        BurnBackendError::InvalidRequest(
+            "WGPU validation error during latent encode; GPU commands may not have executed correctly".to_string(),
+        )
+    })?;
+
+    // Store latent payload
+    let dims: [usize; 4] = encoded.dims();
+    let latent_height = dims[2] as u32;
+    let latent_width = dims[3] as u32;
+    let expected_height = height / 8;
+    let expected_width = width / 8;
+    if latent_height != expected_height || latent_width != expected_width {
+        return Err(BurnBackendError::InvalidRequest(format!(
+            "latent.encode produced latent shape [{}, {}], expected [{expected_height}, {expected_width}] for {width}x{height} input",
+            latent_height, latent_width
+        )));
+    }
+
+    let channels = LatentSpaceMetadata::sdxl_base().channels();
+    let latent_payload =
+        BurnLatentPayload::new_active(encoded, LatentSpaceMetadata::sdxl_base(), width, height, 1);
+
+    let latent_key = BackendPayloadKey::new(format!(
+        "latent:{}:{}",
+        request.run_id().as_str(),
+        request.node_id().as_str()
+    ));
+    backend
+        .store()
+        .insert_latent(request.run_id().clone(), latent_key.clone(), latent_payload);
+
+    // Build RuntimeLatent response
+    let latent = RuntimeLatent::new(
+        BackendTensorHandle::with_instance(
+            backend.backend_kind().clone(),
+            backend.backend_instance(),
+            latent_key,
+            LatentSpaceMetadata::sdxl_base().dtype(),
+            TensorShape::new(vec![
+                1,
+                channels as usize,
+                latent_height as usize,
+                latent_width as usize,
+            ]),
+            backend.device_label(),
+        ),
+        width,
+        height,
+        1,
+        channels,
+        LatentSpaceMetadata::sdxl_base(),
+        LatentContent::EncodedImage,
+    );
+
+    Ok(LatentEncodeResponse::new(latent))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -560,5 +685,140 @@ mod tests {
         assert!(stored.is_active_backend());
         assert_eq!(stored.dims(), [1, 3, 64, 64]);
         assert_eq!(stored.color_space(), "rgb");
+    }
+
+    // ------------------------------------------------------------------
+    // latent.encode
+    // ------------------------------------------------------------------
+
+    fn rgb_image(backend: &BurnBackend, width: u32, height: u32) -> RuntimeImage {
+        let tensor = Tensor::<crate::active_backend::ActiveBurnBackend, 4>::ones(
+            [1, 3, height as usize, width as usize],
+            backend.active_runtime().device(),
+        );
+        let payload = BurnImagePayload::new_active(tensor, width, height, 1, "rgb");
+        let key = BackendPayloadKey::new(format!("image:run-test:node-image-{width}x{height}"));
+        backend
+            .store()
+            .insert_image(RunId::new("run-test"), key.clone(), payload);
+        RuntimeImage::new(
+            BackendTensorHandle::with_instance(
+                backend.backend_kind().clone(),
+                backend.backend_instance(),
+                key,
+                reimagine_core::model::TensorDType::F32,
+                TensorShape::new(vec![1, 3, height as usize, width as usize]),
+                backend.device_label(),
+            ),
+            width,
+            height,
+            1,
+            "rgb",
+        )
+    }
+
+    fn encode_request(backend: &BurnBackend, image: RuntimeImage) -> LatentEncodeRequest {
+        LatentEncodeRequest::new(
+            burn_vae(backend, "sdxl-base"),
+            image,
+            RunId::new("run-test"),
+            WorkflowId::new("wf-test"),
+            WorkflowVersion::new(1),
+            NodeId::new("node-encode"),
+        )
+    }
+
+    #[test]
+    fn latent_encode_stores_encoded_image_latent_payload() {
+        let backend = test_backend();
+        seed_bundle(&backend, "sdxl-base");
+
+        let response = execute_latent_encode(
+            &backend,
+            encode_request(&backend, rgb_image(&backend, 64, 64)),
+        )
+        .expect("latent.encode");
+        let latent = response.into_latent();
+
+        assert_eq!(latent.content(), LatentContent::EncodedImage);
+        assert_eq!(latent.width(), 64);
+        assert_eq!(latent.height(), 64);
+        assert_eq!(latent.batch(), 1);
+        assert_eq!(latent.channels(), 4);
+        assert_eq!(latent.latent_space(), &LatentSpaceMetadata::sdxl_base());
+        assert_eq!(
+            latent.payload().shape().dims(),
+            vec![1_usize, 4, 8, 8].as_slice()
+        );
+
+        let stored = backend
+            .store()
+            .get_latent(latent.payload().payload_key())
+            .expect("stored encoded latent");
+        assert!(stored.is_active_backend());
+        assert_eq!(stored.dims(), [1, 4, 8, 8]);
+        assert_eq!(stored.latent_space(), &LatentSpaceMetadata::sdxl_base());
+        assert_eq!(stored.width(), 64);
+        assert_eq!(stored.height(), 64);
+        assert_eq!(stored.batch(), 1);
+    }
+
+    #[test]
+    fn latent_encode_rejects_non_rgb_image() {
+        let backend = test_backend();
+        seed_bundle(&backend, "sdxl-base");
+        let tensor = Tensor::<crate::active_backend::ActiveBurnBackend, 4>::zeros(
+            [1, 1, 64, 64],
+            backend.active_runtime().device(),
+        );
+        let payload = BurnImagePayload::new_active(tensor, 64, 64, 1, "grayscale");
+        let key = BackendPayloadKey::new("image:run-test:node-gray");
+        backend
+            .store()
+            .insert_image(RunId::new("run-test"), key.clone(), payload);
+        let image = RuntimeImage::new(
+            BackendTensorHandle::with_instance(
+                backend.backend_kind().clone(),
+                backend.backend_instance(),
+                key,
+                reimagine_core::model::TensorDType::F32,
+                TensorShape::new(vec![1, 1, 64, 64]),
+                backend.device_label(),
+            ),
+            64,
+            64,
+            1,
+            "grayscale",
+        );
+
+        let err = execute_latent_encode(&backend, encode_request(&backend, image)).unwrap_err();
+        assert!(err.to_string().contains("RGB"), "msg: {err}");
+    }
+
+    #[test]
+    fn latent_encode_rejects_dimensions_not_divisible_by_latent_scale() {
+        let backend = test_backend();
+        seed_bundle(&backend, "sdxl-base");
+
+        let err = execute_latent_encode(
+            &backend,
+            encode_request(&backend, rgb_image(&backend, 63, 64)),
+        )
+        .unwrap_err();
+        let msg = err.to_string();
+        assert!(msg.contains("divisible by latent-space"), "msg: {msg}");
+    }
+
+    #[test]
+    fn latent_encode_rejects_missing_bundle() {
+        let backend = test_backend();
+        // No bundle seeded for "sdxl-base" in the cache.
+
+        let err = execute_latent_encode(
+            &backend,
+            encode_request(&backend, rgb_image(&backend, 64, 64)),
+        )
+        .unwrap_err();
+        assert!(err.to_string().contains("load_bundle first"), "msg: {err}");
     }
 }

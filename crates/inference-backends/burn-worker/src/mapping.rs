@@ -22,10 +22,11 @@ use reimagine_core::model::{
     WorkflowVersion,
 };
 use reimagine_inference::{
-    CreateEmptyLatentRequest, DiffusionSampleRequest, ExecutionConditioning, ImagePreviewRequest,
-    ImageSaveRequest, InferenceBackend, LatentDecodeRequest, LoadBundleRequest, ModelFormat,
-    ModelSourceKind, ResolvedInferenceModel, ResolvedInferenceModelSource,
-    ResolvedInferenceModelSourceSet, ResourceHintSink, ResourceHints, TextEncodeRequest,
+    CreateEmptyLatentRequest, DiffusionSampleRequest, ExecutionConditioning, ImageImportRequest,
+    ImagePreviewRequest, ImageSaveRequest, InferenceBackend, LatentDecodeRequest,
+    LatentEncodeRequest, LoadBundleRequest, ModelFormat, ModelSourceKind, ResolvedInferenceModel,
+    ResolvedInferenceModelSource, ResolvedInferenceModelSourceSet, ResourceHintSink, ResourceHints,
+    TextEncodeRequest, VramBudget,
 };
 use reimagine_inference_burn::BurnBackend;
 
@@ -89,10 +90,15 @@ pub fn dispatch(
         "text.encode" => dispatch_text_encode(rt, backend, tokens, payload),
         "diffusion.sample" => dispatch_diffusion_sample(rt, backend, tokens, payload),
         "latent.decode" => dispatch_latent_decode(rt, backend, tokens, payload),
+        "latent.encode" => dispatch_latent_encode(rt, backend, tokens, payload),
+        "image.import" => dispatch_image_import(rt, backend, tokens, payload),
         "image.save" => dispatch_image_save(rt, backend, tokens, payload),
         "image.preview" => dispatch_image_preview(rt, backend, tokens, payload),
         request_operation::APPLY_RESOURCE_HINTS => {
             dispatch_apply_resource_hints(rt, backend, payload)
+        }
+        request_operation::SET_MODEL_CACHE_BUDGET => {
+            dispatch_set_model_cache_budget(backend, payload)
         }
         #[cfg(test)]
         "test.spin" => dispatch_test_spin(backend, payload),
@@ -129,6 +135,32 @@ fn dispatch_apply_resource_hints(
         Ok(()) => MappingResult::Success(serde_json::json!({ "applied": true })),
         Err(error) => backend_error(error),
     }
+}
+
+/// Handle `model.set_cache_budget` — apply a VRAM budget to the
+/// cross-run model cache.
+///
+/// The operation deserializes the wire payload into [`VramBudget`]
+/// and forwards it to `BurnModelCache::apply_vram_budget`, which
+/// evicts least-recently-used bundles to fit the budget. It is
+/// synchronous and cheap (no GPU work), so it does not need the
+/// tokio runtime.
+fn dispatch_set_model_cache_budget(
+    backend: &BurnBackend,
+    payload: &serde_json::Value,
+) -> MappingResult {
+    let budget = match serde_json::from_value::<VramBudget>(payload.clone()) {
+        Ok(budget) => budget,
+        Err(error) => {
+            return MappingResult::BackendError(BackendExecutionError {
+                code: "invalid_request".to_owned(),
+                message: format!("invalid vram budget payload: {error}"),
+                retryable: false,
+            });
+        }
+    };
+    backend.model_cache().apply_vram_budget(budget);
+    MappingResult::Success(serde_json::json!({ "applied": true }))
 }
 
 // ---------------------------------------------------------------------------
@@ -969,6 +1001,170 @@ fn dispatch_latent_decode(
 }
 
 // ---------------------------------------------------------------------------
+// latent_encode
+// ---------------------------------------------------------------------------
+
+/// Handle `latent_encode` — run the Burn VAE encoder on a stored image.
+fn dispatch_latent_encode(
+    rt: &tokio::runtime::Runtime,
+    backend: &BurnBackend,
+    tokens: &TokenGenerator,
+    payload: &serde_json::Value,
+) -> MappingResult {
+    let vae_token = match extract_string(payload, "vae_token") {
+        Ok(v) => v,
+        Err(e) => {
+            return MappingResult::BackendError(BackendExecutionError {
+                code: "invalid_request".to_string(),
+                message: e,
+                retryable: false,
+            });
+        }
+    };
+    let image_token = match extract_string(payload, "image_token") {
+        Ok(v) => v,
+        Err(e) => {
+            return MappingResult::BackendError(BackendExecutionError {
+                code: "invalid_request".to_string(),
+                message: e,
+                retryable: false,
+            });
+        }
+    };
+    let model_id = match extract_string(payload, "model_id") {
+        Ok(value) => ModelId::new(value),
+        Err(message) => return invalid_request(message),
+    };
+    let width = match extract_u32(payload, "width") {
+        Ok(value) => value,
+        Err(message) => return invalid_request(message),
+    };
+    let height = match extract_u32(payload, "height") {
+        Ok(value) => value,
+        Err(message) => return invalid_request(message),
+    };
+    let batch_size = match extract_u32(payload, "batch_size") {
+        Ok(value) => value,
+        Err(message) => return invalid_request(message),
+    };
+
+    let token = tokens.next();
+    let (run_id, workflow_id, workflow_version, node_id) = request_context(payload, token);
+    let backend_kind = backend.backend_kind().clone();
+    let backend_instance = backend.backend_instance();
+
+    // VAE handle
+    let vae_handle = reimagine_inference::RuntimeVaeHandle::with_instance(
+        model_id,
+        backend_kind.clone(),
+        backend_instance.clone(),
+        vae_token,
+    );
+
+    // Image handle — reconstruct from the token stored in the backend store
+    let image_payload = reimagine_inference::BackendTensorHandle::with_instance(
+        backend_kind,
+        backend_instance,
+        image_token.as_str(),
+        reimagine_core::model::TensorDType::F32,
+        reimagine_core::model::TensorShape::new(vec![
+            batch_size as usize,
+            3,
+            height as usize,
+            width as usize,
+        ]),
+        backend.device_label(),
+    );
+    let image =
+        reimagine_inference::RuntimeImage::new(image_payload, width, height, batch_size, "rgb");
+
+    let request = LatentEncodeRequest::new(
+        vae_handle,
+        image,
+        run_id,
+        workflow_id,
+        workflow_version,
+        node_id,
+    );
+
+    let response = match rt.block_on(backend.latent_encode(request)) {
+        Ok(r) => r,
+        Err(e) => return backend_error(e),
+    };
+
+    let latent = response.into_latent();
+    let latent_token = latent.payload().payload_key().as_str().to_string();
+
+    MappingResult::Success(serde_json::json!({
+        "latent_token": latent_token,
+        "width": latent.width(),
+        "height": latent.height(),
+        "batch_size": latent.batch(),
+        "channels": latent.channels(),
+    }))
+}
+
+// ---------------------------------------------------------------------------
+// image_import
+// ---------------------------------------------------------------------------
+
+/// Handle `image_import` — decode an image file into a stored image payload.
+fn dispatch_image_import(
+    rt: &tokio::runtime::Runtime,
+    backend: &BurnBackend,
+    tokens: &TokenGenerator,
+    payload: &serde_json::Value,
+) -> MappingResult {
+    let source_path = match extract_string(payload, "source_path") {
+        Ok(v) => v,
+        Err(e) => {
+            return MappingResult::BackendError(BackendExecutionError {
+                code: "invalid_request".to_string(),
+                message: e,
+                retryable: false,
+            });
+        }
+    };
+    let media_type = match extract_string(payload, "media_type") {
+        Ok(v) => v,
+        Err(e) => {
+            return MappingResult::BackendError(BackendExecutionError {
+                code: "invalid_request".to_string(),
+                message: e,
+                retryable: false,
+            });
+        }
+    };
+    let display_name = payload
+        .get("display_name")
+        .and_then(serde_json::Value::as_str)
+        .map(str::to_owned);
+
+    let token = tokens.next();
+    let (run_id, workflow_id, workflow_version, node_id) = request_context(payload, token);
+
+    let source =
+        reimagine_inference::ResolvedImageSource::new(source_path, media_type, display_name);
+    let request = ImageImportRequest::new(source, run_id, workflow_id, workflow_version, node_id);
+
+    let response = match rt.block_on(backend.image_import(request)) {
+        Ok(r) => r,
+        Err(e) => return backend_error(e),
+    };
+
+    let image = response.into_image();
+    let image_token = image.payload().payload_key().as_str().to_string();
+
+    MappingResult::Success(serde_json::json!({
+        "image_token": image_token,
+        "width": image.width(),
+        "height": image.height(),
+        "batch_size": image.batch(),
+        "color_space": image.color_space(),
+    }))
+}
+
+// ---------------------------------------------------------------------------
 // image_save
 // ---------------------------------------------------------------------------
 
@@ -1246,5 +1442,225 @@ mod tests {
             matches!(result, MappingResult::BackendError(_)),
             "malformed hints payload should be rejected, got {result:?}"
         );
+    }
+
+    #[test]
+    fn set_model_cache_budget_dispatch_applies_budget_to_cache() {
+        let backend = BurnBackend::new(reimagine_inference_burn::BurnBackendConfig::new(
+            "/tmp/models",
+            "/tmp/output",
+        ))
+        .unwrap();
+        let budget = VramBudget::unlimited().with_total_bytes(1 << 30);
+        let payload = serde_json::to_value(budget).unwrap();
+        let result = dispatch(
+            &tokio::runtime::Builder::new_current_thread()
+                .build()
+                .unwrap(),
+            &backend,
+            &TokenGenerator::new(),
+            request_operation::SET_MODEL_CACHE_BUDGET,
+            &payload,
+        );
+        assert!(
+            matches!(result, MappingResult::Success(_)),
+            "budget application should succeed, got {result:?}"
+        );
+    }
+
+    #[test]
+    fn set_model_cache_budget_rejects_malformed_payload() {
+        let backend = BurnBackend::new(reimagine_inference_burn::BurnBackendConfig::new(
+            "/tmp/models",
+            "/tmp/output",
+        ))
+        .unwrap();
+        let result = dispatch(
+            &tokio::runtime::Builder::new_current_thread()
+                .build()
+                .unwrap(),
+            &backend,
+            &TokenGenerator::new(),
+            request_operation::SET_MODEL_CACHE_BUDGET,
+            &serde_json::json!({ "total_bytes": "not-a-number" }),
+        );
+        assert!(
+            matches!(result, MappingResult::BackendError(_)),
+            "malformed budget payload should be rejected, got {result:?}"
+        );
+    }
+
+    #[test]
+    fn image_import_dispatch_decodes_png_into_worker_token() {
+        let temp = tempfile::tempdir().unwrap();
+        let png_path = temp.path().join("input.png");
+        let mut rgb = Vec::with_capacity(64 * 64 * 3);
+        rgb.resize(64 * 64 * 3, 128);
+        let png_bytes = {
+            let mut out = Vec::new();
+            let encoder = ::image::codecs::png::PngEncoder::new(&mut out);
+            ::image::ImageEncoder::write_image(
+                encoder,
+                &rgb,
+                64,
+                64,
+                ::image::ColorType::Rgb8.into(),
+            )
+            .expect("encode fixture PNG");
+            out
+        };
+        std::fs::write(&png_path, &png_bytes).unwrap();
+
+        let backend = BurnBackend::new(reimagine_inference_burn::BurnBackendConfig::new(
+            "/tmp/models",
+            "/tmp/output",
+        ))
+        .unwrap();
+        let result = dispatch(
+            &tokio::runtime::Builder::new_current_thread()
+                .build()
+                .unwrap(),
+            &backend,
+            &TokenGenerator::new(),
+            "image.import",
+            &serde_json::json!({
+                "source_path": png_path.to_string_lossy(),
+                "media_type": "image/png",
+                "display_name": "input.png",
+            }),
+        );
+        match result {
+            MappingResult::Success(output) => {
+                assert!(output.get("image_token").is_some());
+                assert_eq!(
+                    output.get("width").and_then(serde_json::Value::as_u64),
+                    Some(64)
+                );
+                assert_eq!(
+                    output.get("height").and_then(serde_json::Value::as_u64),
+                    Some(64)
+                );
+            }
+            other => panic!("expected import success, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn image_import_dispatch_rejects_missing_source_path() {
+        let backend = BurnBackend::new(reimagine_inference_burn::BurnBackendConfig::new(
+            "/tmp/models",
+            "/tmp/output",
+        ))
+        .unwrap();
+        let result = dispatch(
+            &tokio::runtime::Builder::new_current_thread()
+                .build()
+                .unwrap(),
+            &backend,
+            &TokenGenerator::new(),
+            "image.import",
+            &serde_json::json!({ "media_type": "image/png" }),
+        );
+        assert!(
+            matches!(result, MappingResult::BackendError(_)),
+            "malformed import payload should be rejected, got {result:?}"
+        );
+    }
+
+    #[test]
+    fn latent_encode_dispatch_rejects_missing_fields() {
+        let backend = BurnBackend::new(reimagine_inference_burn::BurnBackendConfig::new(
+            "/tmp/models",
+            "/tmp/output",
+        ))
+        .unwrap();
+        let result = dispatch(
+            &tokio::runtime::Builder::new_current_thread()
+                .build()
+                .unwrap(),
+            &backend,
+            &TokenGenerator::new(),
+            "latent.encode",
+            &serde_json::json!({ "vae_token": "vae-1" }),
+        );
+        assert!(
+            matches!(result, MappingResult::BackendError(_)),
+            "malformed encode payload should be rejected, got {result:?}"
+        );
+    }
+
+    #[test]
+    fn latent_encode_dispatch_reports_missing_bundle() {
+        let temp = tempfile::tempdir().unwrap();
+        let png_path = temp.path().join("input.png");
+        let mut rgb = Vec::with_capacity(8 * 8 * 3);
+        rgb.resize(8 * 8 * 3, 128);
+        let png_bytes = {
+            let mut out = Vec::new();
+            let encoder = ::image::codecs::png::PngEncoder::new(&mut out);
+            ::image::ImageEncoder::write_image(
+                encoder,
+                &rgb,
+                8,
+                8,
+                ::image::ColorType::Rgb8.into(),
+            )
+            .expect("encode fixture PNG");
+            out
+        };
+        std::fs::write(&png_path, &png_bytes).unwrap();
+
+        let backend = BurnBackend::new(reimagine_inference_burn::BurnBackendConfig::new(
+            "/tmp/models",
+            "/tmp/output",
+        ))
+        .unwrap();
+        let rt = tokio::runtime::Builder::new_current_thread()
+            .build()
+            .unwrap();
+        let tokens = TokenGenerator::new();
+
+        // Import a real image through the public dispatch path so a
+        // payload exists in the store.
+        let imported = dispatch(
+            &rt,
+            &backend,
+            &tokens,
+            "image.import",
+            &serde_json::json!({
+                "source_path": png_path.to_string_lossy(),
+                "media_type": "image/png",
+            }),
+        );
+        let image_token = match imported {
+            MappingResult::Success(output) => output["image_token"].as_str().unwrap().to_owned(),
+            other => panic!("expected import success, got {other:?}"),
+        };
+
+        // The bundle lookup must fail with a precise diagnostic
+        // before any VAE work.
+        let result = dispatch(
+            &rt,
+            &backend,
+            &tokens,
+            "latent.encode",
+            &serde_json::json!({
+                "vae_token": "vae-1",
+                "model_id": "missing-model",
+                "image_token": image_token,
+                "width": 8,
+                "height": 8,
+                "batch_size": 1,
+            }),
+        );
+        match result {
+            MappingResult::BackendError(error) => {
+                assert!(
+                    error.message.contains("load_bundle first"),
+                    "unexpected error: {error:?}"
+                );
+            }
+            other => panic!("expected missing-bundle error, got {other:?}"),
+        }
     }
 }

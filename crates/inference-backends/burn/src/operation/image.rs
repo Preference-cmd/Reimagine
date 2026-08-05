@@ -1,14 +1,16 @@
-//! `image.save` and `image.preview` operations for the Burn backend.
+//! `image.save`, `image.preview`, and `image.import` operations for
+//! the Burn backend.
 //!
-//! Retrieves a `BurnImagePayload` from the shared store, converts the
-//! float32 NCHW tensor to an interleaved RGB8 buffer, encodes it as
-//! PNG, and writes to the filesystem (save) or returns base64-encoded
-//! bytes (preview).
+//! Save/preview retrieve a `BurnImagePayload` from the shared store,
+//! convert the float32 NCHW tensor to an interleaved RGB8 buffer,
+//! encode it as PNG, and write to the filesystem (save) or return
+//! base64-encoded bytes (preview). Import decodes an image file into
+//! a `BurnImagePayload` stored under a deterministic run/node key.
 
 use reimagine_core::model::{ArtifactRef, RunId};
 use reimagine_inference::{
-    FilenamePrefix, ImagePreviewRequest, ImagePreviewResponse, ImageSaveRequest, ImageSaveResponse,
-    InferenceBackend,
+    FilenamePrefix, ImageImportRequest, ImageImportResponse, ImagePreviewRequest,
+    ImagePreviewResponse, ImageSaveRequest, ImageSaveResponse, InferenceBackend,
 };
 
 use crate::backend::BurnBackend;
@@ -17,6 +19,109 @@ use crate::error::BurnBackendError;
 // ---------------------------------------------------------------------------
 // Public entry points
 // ---------------------------------------------------------------------------
+
+pub fn execute_image_import(
+    request: ImageImportRequest,
+    backend: &BurnBackend,
+) -> Result<ImageImportResponse, BurnBackendError> {
+    let source = request.source();
+    if !source.media_type().starts_with("image/") {
+        return Err(BurnBackendError::InvalidRequest(format!(
+            "image.import source media type `{}` is not an image",
+            source.media_type()
+        )));
+    }
+
+    let bytes = std::fs::read(source.path()).map_err(|error| {
+        BurnBackendError::InvalidRequest(format!(
+            "image.import failed to read `{}`: {error}",
+            source.path().display()
+        ))
+    })?;
+
+    let decoded = ::image::load_from_memory(&bytes).map_err(|error| {
+        BurnBackendError::InvalidRequest(format!(
+            "image.import failed to decode `{}`: {error}",
+            source.path().display()
+        ))
+    })?;
+
+    let rgb = decoded.to_rgb8();
+    let width = rgb.width();
+    let height = rgb.height();
+    if width == 0 || height == 0 {
+        return Err(BurnBackendError::InvalidRequest(format!(
+            "image.import decoded empty image `{}`",
+            source.path().display()
+        )));
+    }
+
+    let nchw = interleaved_rgb8_to_nchw_f32(rgb.as_raw(), width as usize, height as usize)?;
+    let tensor = burn_tensor::Tensor::<crate::active_backend::ActiveBurnBackend, 4>::from_data(
+        burn_tensor::TensorData::new(nchw, [1, 3, height as usize, width as usize]),
+        backend.active_runtime().device(),
+    );
+    let image_payload = crate::store::BurnImagePayload::new_active(tensor, width, height, 1, "rgb");
+
+    let image_key = reimagine_inference::BackendPayloadKey::new(format!(
+        "image:{}:{}",
+        request.run_id().as_str(),
+        request.node_id().as_str()
+    ));
+    backend
+        .store()
+        .insert_image(request.run_id().clone(), image_key.clone(), image_payload);
+
+    let runtime_image = reimagine_inference::RuntimeImage::new(
+        reimagine_inference::BackendTensorHandle::with_instance(
+            backend.backend_kind().clone(),
+            backend.backend_instance(),
+            image_key,
+            reimagine_core::model::TensorDType::F32,
+            reimagine_core::model::TensorShape::new(vec![1, 3, height as usize, width as usize]),
+            backend.device_label(),
+        ),
+        width,
+        height,
+        1,
+        "rgb",
+    );
+
+    Ok(ImageImportResponse::new(runtime_image))
+}
+
+/// Convert interleaved RGB8 pixel data into NCHW F32 normalized to
+/// [0, 1].
+fn interleaved_rgb8_to_nchw_f32(
+    rgb: &[u8],
+    width: usize,
+    height: usize,
+) -> Result<Vec<f32>, BurnBackendError> {
+    let plane_len = width.checked_mul(height).ok_or_else(|| {
+        BurnBackendError::InvalidRequest(format!(
+            "image.import image dimensions overflow: {width}x{height}"
+        ))
+    })?;
+    let expected_len = plane_len.checked_mul(3).ok_or_else(|| {
+        BurnBackendError::InvalidRequest(format!(
+            "image.import RGB image byte length overflow: {width}x{height}"
+        ))
+    })?;
+    if rgb.len() != expected_len {
+        return Err(BurnBackendError::InvalidRequest(format!(
+            "image.import decoded data length {} does not match RGB shape [{height}, {width}]",
+            rgb.len()
+        )));
+    }
+
+    let mut nchw = vec![0.0f32; expected_len];
+    for (index, channel_byte) in rgb.iter().enumerate() {
+        let plane = index % 3;
+        let pixel = index / 3;
+        nchw[plane * plane_len + pixel] = f32::from(*channel_byte) / 255.0;
+    }
+    Ok(nchw)
+}
 
 pub fn execute_image_save(
     request: ImageSaveRequest,
@@ -307,6 +412,114 @@ mod tests {
             .expect("encoded PNG should decode");
         assert_eq!(decoded.width(), 32);
         assert_eq!(decoded.height(), 16);
+    }
+
+    #[test]
+    fn interleaves_rgb8_into_nchw_f32_planes() {
+        // 2x2 image: R, G, B, R | G, B, R, G | B, R, G, B interleaved
+        let rgb = vec![
+            255, 0, 0, 0, 255, 0, // pixel 0, 1
+            0, 0, 255, 255, 255, 255, // pixel 2, 3
+        ];
+        let nchw = interleaved_rgb8_to_nchw_f32(&rgb, 2, 2).unwrap();
+        // R plane
+        assert_eq!(nchw[0], 1.0);
+        assert_eq!(nchw[1], 0.0);
+        assert_eq!(nchw[2], 0.0);
+        assert_eq!(nchw[3], 1.0);
+        // G plane
+        assert_eq!(nchw[4], 0.0);
+        assert_eq!(nchw[5], 1.0);
+        assert_eq!(nchw[6], 0.0);
+        assert_eq!(nchw[7], 1.0);
+        // B plane
+        assert_eq!(nchw[8], 0.0);
+        assert_eq!(nchw[9], 0.0);
+        assert_eq!(nchw[10], 1.0);
+        assert_eq!(nchw[11], 1.0);
+    }
+
+    #[test]
+    fn rgb8_conversion_rejects_length_mismatch() {
+        let err = interleaved_rgb8_to_nchw_f32(&[0u8; 5], 2, 2).unwrap_err();
+        assert!(err.to_string().contains("does not match"), "{err}");
+    }
+
+    #[test]
+    fn image_import_decodes_png_into_stored_rgb_payload() {
+        use reimagine_core::model::{NodeId, RunId, WorkflowId, WorkflowVersion};
+        use reimagine_inference::ResolvedImageSource;
+
+        let backend = BurnBackend::new(crate::config::BurnBackendConfig::new("/models", "/output"))
+            .expect("test backend");
+        let temp = tempfile::tempdir().expect("temp dir");
+        let png_path = temp.path().join("input.png");
+
+        // Write a 64x64 solid-red PNG.
+        let mut rgb = Vec::with_capacity(64 * 64 * 3);
+        for _ in 0..64 * 64 {
+            rgb.extend_from_slice(&[255, 0, 0]);
+        }
+        let png_bytes = encode_rgb8_to_png(&rgb, 64, 64).expect("encode fixture PNG");
+        std::fs::write(&png_path, &png_bytes).expect("write fixture PNG");
+
+        let request = ImageImportRequest::new(
+            ResolvedImageSource::new(png_path, "image/png", Some("input.png".to_owned())),
+            RunId::new("run-import"),
+            WorkflowId::new("wf-import"),
+            WorkflowVersion::new(1),
+            NodeId::new("node-import"),
+        );
+
+        let response = execute_image_import(request, &backend).expect("image.import");
+        let image = response.into_image();
+        assert_eq!(image.width(), 64);
+        assert_eq!(image.height(), 64);
+        assert_eq!(image.batch(), 1);
+        assert_eq!(image.color_space(), "rgb");
+        assert_eq!(
+            image.payload().shape().dims(),
+            vec![1_usize, 3, 64, 64].as_slice()
+        );
+
+        let stored = backend
+            .store()
+            .get_image(image.payload().payload_key())
+            .expect("stored imported image");
+        assert_eq!(stored.dims(), [1, 3, 64, 64]);
+        assert_eq!(stored.color_space(), "rgb");
+        // Solid red → R channel 1.0 at every pixel.
+        let data = stored.to_data();
+        let values: Vec<f32> = data.to_vec::<f32>().expect("f32 data");
+        for pixel in 0..64 * 64 {
+            assert_eq!(values[pixel], 1.0, "pixel {pixel} red channel");
+            assert_eq!(values[64 * 64 + pixel], 0.0, "pixel {pixel} green channel");
+            assert_eq!(
+                values[2 * 64 * 64 + pixel],
+                0.0,
+                "pixel {pixel} blue channel"
+            );
+        }
+    }
+
+    #[test]
+    fn image_import_rejects_non_image_media_type() {
+        use reimagine_core::model::{NodeId, RunId, WorkflowId, WorkflowVersion};
+        use reimagine_inference::ResolvedImageSource;
+
+        let backend = BurnBackend::new(crate::config::BurnBackendConfig::new("/models", "/output"))
+            .expect("test backend");
+
+        let request = ImageImportRequest::new(
+            ResolvedImageSource::new("/tmp/whatever.txt", "text/plain", None),
+            RunId::new("run-import"),
+            WorkflowId::new("wf-import"),
+            WorkflowVersion::new(1),
+            NodeId::new("node-import"),
+        );
+
+        let err = execute_image_import(request, &backend).unwrap_err();
+        assert!(err.to_string().contains("not an image"), "msg: {err}");
     }
 
     #[test]

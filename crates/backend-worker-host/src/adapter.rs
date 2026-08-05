@@ -67,6 +67,27 @@ impl ProcessInferenceBackend {
         self.capabilities.iter().any(|c| c == cap.as_str())
     }
 
+    /// Set the worker's cross-run model cache VRAM budget over IPC.
+    ///
+    /// Serializes the [`VramBudget`] and sends it as a
+    /// `model.set_cache_budget` request operation. The operation is
+    /// advisory at the transport level but fatal on malformed
+    /// payloads or worker errors — callers decide whether a budget
+    /// failure should fail a drain/switch.
+    pub async fn set_model_cache_budget(
+        &self,
+        budget: reimagine_inference::VramBudget,
+    ) -> Result<(), InferenceError> {
+        let payload = serde_json::to_value(budget).map_err(|error| {
+            InferenceError::BackendExecutionFailed {
+                message: format!("model cache budget is not serializable: {error}"),
+            }
+        })?;
+        self.send_request(request_operation::SET_MODEL_CACHE_BUDGET, payload)
+            .await?;
+        Ok(())
+    }
+
     fn not_implemented(&self, capability: InferenceCapability) -> InferenceError {
         InferenceError::BackendNotImplemented {
             capability,
@@ -697,9 +718,79 @@ impl InferenceBackend for ProcessInferenceBackend {
 
     async fn latent_encode(
         &self,
-        _request: LatentEncodeRequest,
+        request: LatentEncodeRequest,
     ) -> Result<LatentEncodeResponse, InferenceError> {
-        Err(self.not_implemented(InferenceCapability::LatentEncode))
+        if !self.supports(&InferenceCapability::LatentEncode) {
+            return Err(self.not_implemented(InferenceCapability::LatentEncode));
+        }
+
+        let vae_token = self.resolve_token(request.vae().payload_key())?;
+        let image_token = self.resolve_token(request.image().payload().payload_key())?;
+
+        let output = self
+            .send_request(
+                InferenceCapability::LatentEncode.as_str(),
+                serde_json::json!({
+                    "vae_token": vae_token,
+                    "model_id": request.vae().model_id().as_str(),
+                    "image_token": image_token,
+                    "width": request.image().width(),
+                    "height": request.image().height(),
+                    "batch_size": request.image().batch(),
+                    "run_id": request.run_id().as_str(),
+                    "workflow_id": request.workflow_id().as_str(),
+                    "workflow_version": request.workflow_version().get(),
+                    "node_id": request.node_id().as_str(),
+                }),
+            )
+            .await?;
+
+        let latent_token = output
+            .get("latent_token")
+            .and_then(serde_json::Value::as_str)
+            .ok_or_else(|| InferenceError::InvalidResponse {
+                reason: "latent_encode response omitted latent_token".to_owned(),
+            })?;
+
+        let width = output
+            .get("width")
+            .and_then(serde_json::Value::as_u64)
+            .unwrap_or(1024) as u32;
+        let height = output
+            .get("height")
+            .and_then(serde_json::Value::as_u64)
+            .unwrap_or(1024) as u32;
+        let batch_size = output
+            .get("batch_size")
+            .and_then(serde_json::Value::as_u64)
+            .unwrap_or(1) as u32;
+        let channels = output
+            .get("channels")
+            .and_then(serde_json::Value::as_u64)
+            .unwrap_or(4) as u32;
+
+        let latent_payload = self.make_handle(
+            latent_token,
+            reimagine_core::model::TensorDType::F32,
+            TensorShape::new(vec![
+                batch_size as usize,
+                channels as usize,
+                (height / 8) as usize,
+                (width / 8) as usize,
+            ]),
+        );
+
+        let latent = RuntimeLatent::new(
+            latent_payload,
+            width,
+            height,
+            batch_size,
+            channels,
+            reimagine_inference::LatentSpaceMetadata::sdxl_base(),
+            LatentContent::EncodedImage,
+        );
+
+        Ok(LatentEncodeResponse::new(latent))
     }
 
     async fn image_save(
@@ -779,9 +870,76 @@ impl InferenceBackend for ProcessInferenceBackend {
 
     async fn image_import(
         &self,
-        _request: reimagine_inference::ImageImportRequest,
+        request: reimagine_inference::ImageImportRequest,
     ) -> Result<reimagine_inference::ImageImportResponse, InferenceError> {
-        Err(self.not_implemented(InferenceCapability::ImageImport))
+        if !self.supports(&InferenceCapability::ImageImport) {
+            return Err(self.not_implemented(InferenceCapability::ImageImport));
+        }
+
+        let output = self
+            .send_request(
+                InferenceCapability::ImageImport.as_str(),
+                serde_json::json!({
+                    "source_path": request.source().path().to_string_lossy(),
+                    "media_type": request.source().media_type(),
+                    "display_name": request.source().display_name(),
+                    "run_id": request.run_id().as_str(),
+                    "workflow_id": request.workflow_id().as_str(),
+                    "workflow_version": request.workflow_version().get(),
+                    "node_id": request.node_id().as_str(),
+                }),
+            )
+            .await?;
+
+        let image_token = output
+            .get("image_token")
+            .and_then(serde_json::Value::as_str)
+            .ok_or_else(|| InferenceError::InvalidResponse {
+                reason: "image_import response omitted image_token".to_owned(),
+            })?;
+
+        let width = output
+            .get("width")
+            .and_then(serde_json::Value::as_u64)
+            .ok_or_else(|| InferenceError::InvalidResponse {
+                reason: "image_import response omitted width".to_owned(),
+            })? as u32;
+        let height = output
+            .get("height")
+            .and_then(serde_json::Value::as_u64)
+            .ok_or_else(|| InferenceError::InvalidResponse {
+                reason: "image_import response omitted height".to_owned(),
+            })? as u32;
+        let batch_size = output
+            .get("batch_size")
+            .and_then(serde_json::Value::as_u64)
+            .unwrap_or(1) as u32;
+        let color_space = output
+            .get("color_space")
+            .and_then(serde_json::Value::as_str)
+            .unwrap_or("rgb")
+            .to_owned();
+
+        let image_payload = self.make_handle(
+            image_token,
+            reimagine_core::model::TensorDType::F32,
+            TensorShape::new(vec![
+                batch_size as usize,
+                3,
+                height as usize,
+                width as usize,
+            ]),
+        );
+
+        let image = reimagine_inference::RuntimeImage::new(
+            image_payload,
+            width,
+            height,
+            batch_size,
+            color_space,
+        );
+
+        Ok(reimagine_inference::ImageImportResponse::new(image))
     }
 }
 

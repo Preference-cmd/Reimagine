@@ -16,10 +16,11 @@ use reimagine_core::model::{
     WorkflowVersion,
 };
 use reimagine_inference::{
-    CreateEmptyLatentRequest, DiffusionSampleRequest, ExecutionValue, ImagePreviewRequest,
-    ImageSaveRequest, InferenceBackend, LatentDecodeRequest, LoadBundleRequest, ModelFormat,
-    ModelSourceKind, ResolvedInferenceModel, ResolvedInferenceModelSource,
-    ResolvedInferenceModelSourceSet, SamplerName, SchedulerName, TextEncodeRequest,
+    CreateEmptyLatentRequest, DiffusionSampleRequest, ExecutionValue, ImageImportRequest,
+    ImagePreviewRequest, ImageSaveRequest, InferenceBackend, LatentDecodeRequest,
+    LatentEncodeRequest, LoadBundleRequest, ModelFormat, ModelSourceKind, ResolvedImageSource,
+    ResolvedInferenceModel, ResolvedInferenceModelSource, ResolvedInferenceModelSourceSet,
+    SamplerName, SchedulerName, TextEncodeRequest,
 };
 use reimagine_inference_burn::models::stable_diffusion::sdxl::{
     BurnSdxlComponentRole, metadata_keys,
@@ -181,6 +182,71 @@ async fn tiny_sdxl_component_package_runs_public_burn_capability_chain() {
 
     assert_png_artifact(output.path(), preview.as_str());
     assert_png_artifact(output.path(), saved.as_str());
+}
+
+#[tokio::test]
+async fn tiny_sdxl_image_import_and_vae_encode_roundtrip() {
+    let root = tempfile::tempdir().expect("package root");
+    let output = tempfile::tempdir().expect("output dir");
+    let backend =
+        BurnBackend::new(BurnBackendConfig::new(root.path(), output.path())).expect("burn backend");
+
+    let loaded = backend
+        .load_bundle(load_request(root.path()))
+        .await
+        .expect("load tiny fixture bundle");
+
+    // Write a tiny PNG and import it.
+    let png_path = root.path().join("input.png");
+    let mut rgb = Vec::with_capacity(64 * 64 * 3);
+    for index in 0..64 * 64 {
+        rgb.extend_from_slice(&[
+            (index % 255) as u8,
+            ((index / 7) % 255) as u8,
+            ((index / 13) % 255) as u8,
+        ]);
+    }
+    let png_bytes = {
+        let mut out = Vec::new();
+        let encoder = image::codecs::png::PngEncoder::new(&mut out);
+        image::ImageEncoder::write_image(encoder, &rgb, 64, 64, image::ColorType::Rgb8.into())
+            .expect("encode fixture PNG");
+        out
+    };
+    std::fs::write(&png_path, &png_bytes).expect("write fixture PNG");
+
+    let imported = backend
+        .image_import(ImageImportRequest::new(
+            ResolvedImageSource::new(&png_path, "image/png", Some("input.png".to_owned())),
+            run_id(),
+            workflow_id(),
+            workflow_version(),
+            NodeId::new("image-import"),
+        ))
+        .await
+        .expect("image.import")
+        .into_image();
+    assert_eq!((imported.width(), imported.height()), (64, 64));
+
+    let encoded = backend
+        .latent_encode(LatentEncodeRequest::new(
+            loaded.vae().clone(),
+            imported,
+            run_id(),
+            workflow_id(),
+            workflow_version(),
+            NodeId::new("vae-encode"),
+        ))
+        .await
+        .expect("latent.encode")
+        .into_latent();
+    assert_eq!(
+        encoded.payload().shape().dims(),
+        &[1_usize, 4, 8, 8],
+        "64x64 image encodes to an SDXL-base 8x8 latent"
+    );
+    assert_eq!(encoded.width(), 64);
+    assert_eq!(encoded.height(), 64);
 }
 
 pub(crate) fn load_request(root: &Path) -> LoadBundleRequest {
@@ -554,6 +620,15 @@ fn write_vae_component(path: &Path) {
         zeros(3 * 128 * 3 * 3),
     ));
     tensors.push(tensor("conv_out.bias", vec![3], vec![0.0; 3]));
+    // Encoder subgraph (tiny profile): only conv_out is required, in
+    // the `encoder.` namespace so it never collides with the
+    // decoder's unprefixed snapshots.
+    tensors.push(tensor(
+        "encoder.conv_out.weight",
+        vec![4, 512, 3, 3],
+        zeros(4 * 512 * 3 * 3),
+    ));
+    tensors.push(tensor("encoder.conv_out.bias", vec![4], vec![0.0; 4]));
     write_tensors(path, BurnSdxlComponentRole::Vae, tensors);
 }
 
