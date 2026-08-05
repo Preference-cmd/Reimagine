@@ -1491,6 +1491,10 @@ mod tests {
     }
 
     #[test]
+    #[cfg_attr(
+        any(feature = "cuda", feature = "wgpu"),
+        ignore = "requires a GPU device; runs on flex (CPU) builds"
+    )]
     fn image_import_dispatch_decodes_png_into_worker_token() {
         let temp = tempfile::tempdir().unwrap();
         let png_path = temp.path().join("input.png");
@@ -1590,6 +1594,10 @@ mod tests {
     }
 
     #[test]
+    #[cfg_attr(
+        any(feature = "cuda", feature = "wgpu"),
+        ignore = "requires a GPU device; runs on flex (CPU) builds"
+    )]
     fn latent_encode_dispatch_reports_missing_bundle() {
         let temp = tempfile::tempdir().unwrap();
         let png_path = temp.path().join("input.png");
