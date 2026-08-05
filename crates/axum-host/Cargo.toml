@@ -45,3 +45,4 @@ reimagine-config = { path = "../config" }
 reimagine-inference = { path = "../inference" }
 reimagine-model-manager = { path = "../model-manager" }
 reimagine-nodes = { path = "../nodes" }
+safetensors = { workspace = true }
