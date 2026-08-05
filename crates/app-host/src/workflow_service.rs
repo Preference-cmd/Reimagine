@@ -232,7 +232,7 @@ impl WorkflowService {
                 modified_millis,
             });
         }
-        out.sort_by(|a, b| b.modified_millis.cmp(&a.modified_millis));
+        out.sort_by_key(|b| std::cmp::Reverse(b.modified_millis));
         Ok(out)
     }
 
