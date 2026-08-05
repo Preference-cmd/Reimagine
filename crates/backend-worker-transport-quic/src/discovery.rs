@@ -72,7 +72,7 @@ impl MdnsWorkerRegister {
             SERVICE_TYPE,
             &format!("{id}.local"),
             &format!("{id}.local"),
-            &addr.ip().to_string(),
+            addr.ip().to_string(),
             addr.port(),
             properties,
         )
