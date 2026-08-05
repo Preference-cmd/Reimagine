@@ -36,6 +36,7 @@ pub use artifact_access::{
     ArtifactAccess, ArtifactAccessError, media_type_for_reference, resolve_artifact_path,
 };
 pub use error::{AppHostError, AppHostResult};
+pub use inference::quic_worker::{QuicSwitchableWorker, QuicWorkerCandidate, QuicWorkerCandidateConfig};
 pub use inference::switch::{
     ProcessSwitchableWorker, RunCancellation, SwitchableWorker, WorkerSelectionHandle,
     WorkerSwitchError, WorkerSwitchService, WorkerSwitchTarget,
