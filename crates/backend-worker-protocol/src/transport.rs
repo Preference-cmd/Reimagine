@@ -30,6 +30,8 @@ pub enum TransportKind {
     Stdio,
     Quic,
     Grpc,
+    /// In-memory transport used by tests.
+    Mock,
 }
 
 /// Descriptive metadata about a transport connection.

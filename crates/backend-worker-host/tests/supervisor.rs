@@ -4,6 +4,7 @@ use std::time::Duration;
 
 use reimagine_backend_worker_host::{
     ExpectedWorkerIdentity, WorkerLaunchSpec, WorkerLimits, WorkerProcessState, WorkerSupervisor,
+    WorkerTransportConfig,
 };
 use reimagine_backend_worker_protocol::{BackendInstanceId, ProtocolRange, WorkerInstallationId};
 
@@ -23,6 +24,7 @@ fn launch_spec() -> WorkerLaunchSpec {
             ..WorkerLimits::default()
         },
         environment: Vec::new(),
+        transport: WorkerTransportConfig::Stdio,
     }
 }
 

@@ -41,4 +41,13 @@ pub struct WorkerLaunchSpec {
     pub supported_protocols: ProtocolRange,
     pub limits: WorkerLimits,
     pub environment: Vec<(String, String)>,
+    pub transport: WorkerTransportConfig,
+}
+
+/// The transport used to reach a worker.
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq, Serialize, Deserialize)]
+pub enum WorkerTransportConfig {
+    /// A local child process communicating over stdin/stdout.
+    #[default]
+    Stdio,
 }

@@ -241,6 +241,7 @@ fn process_launch_spec(
                 output_dir.display().to_string(),
             ),
         ],
+        transport: Default::default(),
     }
 }
 

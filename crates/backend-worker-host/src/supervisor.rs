@@ -14,7 +14,8 @@ use tokio::sync::{Mutex, mpsc, oneshot};
 use tokio::task::JoinHandle;
 use tokio::time::timeout;
 
-use crate::{ExpectedWorkerIdentity, WorkerHostError, WorkerLaunchSpec};
+use crate::transport::{StdioTransportFactory, WorkerConnection, WorkerTransportFactory};
+use crate::{ExpectedWorkerIdentity, WorkerHostError, WorkerLaunchSpec, WorkerTransportConfig};
 
 const STATE_STOPPED: u8 = 0;
 const STATE_READY: u8 = 1;
@@ -187,7 +188,7 @@ pub struct StartedWorker {
     transport: Arc<dyn WorkerTransport>,
     stderr_tail: Arc<Mutex<Vec<u8>>>,
     _reader_task: JoinHandle<()>,
-    _stderr_task: JoinHandle<()>,
+    _stderr_task: Option<JoinHandle<()>>,
 }
 
 impl StartedWorker {
@@ -432,6 +433,7 @@ async fn send_cancel(
 
 pub struct WorkerSupervisor {
     launch: WorkerLaunchSpec,
+    transport_factory: Arc<dyn WorkerTransportFactory>,
     state: Arc<AtomicU8>,
     current_generation: Arc<AtomicU64>,
 }
@@ -499,8 +501,18 @@ impl Drop for StartGuard {
 impl WorkerSupervisor {
     #[must_use]
     pub fn new(launch: WorkerLaunchSpec) -> Self {
+        let transport_factory = default_transport_factory(&launch.transport);
+        Self::new_with_factory(launch, transport_factory)
+    }
+
+    #[must_use]
+    pub fn new_with_factory(
+        launch: WorkerLaunchSpec,
+        transport_factory: Arc<dyn WorkerTransportFactory>,
+    ) -> Self {
         Self {
             launch,
+            transport_factory,
             state: Arc::new(AtomicU8::new(STATE_STOPPED)),
             current_generation: Arc::new(AtomicU64::new(0)),
         }
@@ -522,30 +534,35 @@ impl WorkerSupervisor {
             Arc::clone(&self.current_generation),
         )?;
         let generation = start_guard.generation();
-        let (transport, mut stdin, mut stdout, stderr) =
-            crate::StdioTransport::spawn(&self.launch.executable, &self.launch.environment)
-                .await
-                .map_err(|e| WorkerHostError::Spawn {
-                    path: self.launch.executable.clone(),
-                    message: e.to_string(),
-                })?;
-        let stderr_tail = Arc::new(Mutex::new(Vec::new()));
-        let stderr_task = spawn_stderr_drain(
+        let WorkerConnection {
+            transport,
+            mut reader,
+            mut writer,
             stderr,
-            Arc::clone(&stderr_tail),
-            self.launch.limits.maximum_stderr_bytes,
-        );
+        } = self
+            .transport_factory
+            .connect(&self.launch)
+            .await
+            .map_err(WorkerHostError::Transport)?;
+        let stderr_tail = Arc::new(Mutex::new(Vec::new()));
+        let stderr_task = stderr.map(|stderr| {
+            spawn_stderr_drain(
+                stderr,
+                Arc::clone(&stderr_tail),
+                self.launch.limits.maximum_stderr_bytes,
+            )
+        });
         let codec = FrameCodec::new(self.launch.limits.maximum_frame_bytes);
         let handshake = async {
             write_frame(
-                &mut stdin,
+                &mut writer,
                 &codec,
                 &WireMessage::HostHello(HostHello {
                     supported_protocols: self.launch.supported_protocols,
                 }),
             )
             .await?;
-            let message = read_frame(&mut stdout, &codec).await?;
+            let message = read_frame(&mut reader, &codec).await?;
             validate_message_direction(&message, MessageSender::Worker).map_err(|_| {
                 WorkerHostError::UnexpectedStartupMessage {
                     kind: message.kind(),
@@ -579,7 +596,7 @@ impl WorkerSupervisor {
         let controls = Arc::new(Mutex::new(HashMap::new()));
         let alive = Arc::new(AtomicBool::new(true));
         let inner = Arc::new(WorkerClientInner {
-            write: Mutex::new(Box::new(stdin)),
+            write: Mutex::new(writer),
             pending: Arc::clone(&pending),
             controls: Arc::clone(&controls),
             codec: FrameCodec::new(self.launch.limits.maximum_frame_bytes),
@@ -596,7 +613,7 @@ impl WorkerSupervisor {
         });
         start_guard.commit();
         let reader_task = tokio::spawn(reader_loop(
-            Box::new(stdout),
+            reader,
             FrameCodec::new(self.launch.limits.maximum_frame_bytes),
             pending,
             controls,
@@ -612,11 +629,17 @@ impl WorkerSupervisor {
         Ok(StartedWorker {
             hello,
             inner,
-            transport: Arc::new(transport),
+            transport,
             stderr_tail,
             _reader_task: reader_task,
             _stderr_task: stderr_task,
         })
+    }
+}
+
+fn default_transport_factory(config: &WorkerTransportConfig) -> Arc<dyn WorkerTransportFactory> {
+    match config {
+        WorkerTransportConfig::Stdio => Arc::new(StdioTransportFactory),
     }
 }
 
@@ -1003,7 +1026,7 @@ async fn read_exact_stage(
 }
 
 fn spawn_stderr_drain(
-    mut stderr: tokio::process::ChildStderr,
+    mut stderr: Box<dyn AsyncRead + Send + Unpin>,
     tail: Arc<Mutex<Vec<u8>>>,
     maximum_bytes: usize,
 ) -> JoinHandle<()> {
@@ -1021,4 +1044,262 @@ fn spawn_stderr_drain(
             }
         }
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use std::path::PathBuf;
+    use std::sync::Arc;
+
+    use async_trait::async_trait;
+    use reimagine_backend_worker_protocol::{
+        BackendExecutionError, BackendInstanceId, FrameCodec, HealthAckFrame, ProtocolRange,
+        ShutdownAckFrame, TerminalFrame, TerminalOutcome, TransportDescription, TransportError,
+        TransportKind, WireMessage, WorkerHello, WorkerIdentity, WorkerIncarnationId,
+        WorkerInstallationId, WorkerInstanceProfile, WorkerProfile, WorkerTransport,
+    };
+    use tokio::io::{AsyncReadExt, AsyncWriteExt, DuplexStream, duplex};
+
+    use super::WorkerSupervisor;
+    use crate::transport::{WorkerConnection, WorkerTransportFactory};
+    use crate::{
+        ExpectedWorkerIdentity, WorkerHostError, WorkerLaunchSpec, WorkerLimits,
+        WorkerProcessState, WorkerTransportConfig,
+    };
+
+    fn mock_launch_spec() -> WorkerLaunchSpec {
+        WorkerLaunchSpec {
+            executable: PathBuf::from("mock-worker"),
+            expected: ExpectedWorkerIdentity {
+                backend_instance_id: BackendInstanceId::from("fake:cpu:default"),
+                installation_id: WorkerInstallationId::from("fake-installation"),
+                backend_kind: "fake".to_owned(),
+                target: std::env::consts::ARCH.to_owned(),
+                manifest_digest: "test-manifest".to_owned(),
+            },
+            supported_protocols: ProtocolRange::new(1, 1),
+            limits: WorkerLimits::default(),
+            environment: Vec::new(),
+            transport: WorkerTransportConfig::Stdio,
+        }
+    }
+
+    struct MockWorkerTransport;
+
+    #[async_trait]
+    impl WorkerTransport for MockWorkerTransport {
+        fn description(&self) -> TransportDescription {
+            TransportDescription {
+                kind: TransportKind::Mock,
+                endpoint: "in-memory mock".to_owned(),
+            }
+        }
+
+        async fn shutdown(&self) -> Result<(), TransportError> {
+            Ok(())
+        }
+    }
+
+    struct MockWorkerTransportFactory;
+
+    #[async_trait]
+    impl WorkerTransportFactory for MockWorkerTransportFactory {
+        async fn connect(
+            &self,
+            spec: &WorkerLaunchSpec,
+        ) -> Result<WorkerConnection, TransportError> {
+            let (client, worker) = duplex(64 * 1024);
+            tokio::spawn(run_mock_worker(worker, spec.clone()));
+            let (reader, writer) = tokio::io::split(client);
+            Ok(WorkerConnection {
+                transport: Arc::new(MockWorkerTransport),
+                reader: Box::new(reader),
+                writer: Box::new(writer),
+                stderr: None,
+            })
+        }
+    }
+
+    struct FailingWorkerTransportFactory;
+
+    #[async_trait]
+    impl WorkerTransportFactory for FailingWorkerTransportFactory {
+        async fn connect(
+            &self,
+            _spec: &WorkerLaunchSpec,
+        ) -> Result<WorkerConnection, TransportError> {
+            Err(TransportError::ConnectionFailed(
+                "mock connect failure".to_owned(),
+            ))
+        }
+    }
+
+    async fn write_frame(
+        io: &mut DuplexStream,
+        codec: &FrameCodec,
+        message: &WireMessage,
+    ) -> std::io::Result<()> {
+        let payload = codec
+            .encode_payload(message)
+            .map_err(|error| std::io::Error::new(std::io::ErrorKind::InvalidData, error))?;
+        let declared = u32::try_from(payload.len()).map_err(|_| {
+            std::io::Error::new(std::io::ErrorKind::InvalidData, "payload too large")
+        })?;
+        io.write_all(&declared.to_be_bytes()).await?;
+        io.write_all(&payload).await?;
+        io.flush().await
+    }
+
+    async fn read_frame(
+        io: &mut DuplexStream,
+        codec: &FrameCodec,
+    ) -> Result<WireMessage, std::io::Error> {
+        let mut prefix = [0_u8; 4];
+        io.read_exact(&mut prefix).await?;
+        let declared = u32::from_be_bytes(prefix);
+        if declared > codec.maximum_frame_bytes() {
+            return Err(std::io::Error::new(
+                std::io::ErrorKind::InvalidData,
+                "frame too large",
+            ));
+        }
+        let mut payload = vec![0_u8; declared as usize];
+        io.read_exact(&mut payload).await?;
+        codec
+            .decode_payload(&payload)
+            .map_err(|error| std::io::Error::new(std::io::ErrorKind::InvalidData, error))
+    }
+
+    async fn run_mock_worker(mut io: DuplexStream, spec: WorkerLaunchSpec) {
+        let codec = FrameCodec::new(spec.limits.maximum_frame_bytes);
+        let Ok(WireMessage::HostHello(_)) = read_frame(&mut io, &codec).await else {
+            return;
+        };
+        let hello = WorkerHello {
+            selected_protocol: ProtocolRange::new(1, 1).minimum,
+            identity: WorkerIdentity {
+                backend_instance_id: spec.expected.backend_instance_id.clone(),
+                installation_id: spec.expected.installation_id.clone(),
+                incarnation_id: WorkerIncarnationId("mock-worker-1".to_owned()),
+                worker_version: "test".to_owned(),
+                backend_kind: spec.expected.backend_kind.clone(),
+                target: spec.expected.target.clone(),
+                manifest_digest: spec.expected.manifest_digest.clone(),
+            },
+            profile: WorkerProfile {
+                instances: vec![WorkerInstanceProfile {
+                    backend_instance_id: spec.expected.backend_instance_id.clone(),
+                    device_label: "mock".to_owned(),
+                    capabilities: vec!["echo".to_owned()],
+                    operation_options: serde_json::json!({}),
+                }],
+            },
+        };
+        if write_frame(&mut io, &codec, &WireMessage::WorkerHello(hello)).await.is_err() {
+            return;
+        }
+        loop {
+            let message = match read_frame(&mut io, &codec).await {
+                Ok(message) => message,
+                Err(_) => return,
+            };
+            match message {
+                WireMessage::Request(frame) => {
+                    let outcome = if frame.operation == "echo" {
+                        TerminalOutcome::Success {
+                            output: frame.payload.clone(),
+                        }
+                    } else {
+                        TerminalOutcome::BackendError {
+                            error: BackendExecutionError {
+                                code: "unsupported_operation".to_owned(),
+                                message: format!(
+                                    "unsupported mock operation `{}`",
+                                    frame.operation
+                                ),
+                                retryable: false,
+                            },
+                        }
+                    };
+                    let terminal = WireMessage::Terminal(TerminalFrame {
+                        protocol_version: frame.protocol_version,
+                        incarnation_id: frame.incarnation_id,
+                        request_id: frame.request_id,
+                        correlation_id: frame.correlation_id,
+                        outcome,
+                    });
+                    if write_frame(&mut io, &codec, &terminal).await.is_err() {
+                        return;
+                    }
+                }
+                WireMessage::Health(frame) => {
+                    let ack = WireMessage::HealthAck(HealthAckFrame {
+                        protocol_version: frame.protocol_version,
+                        incarnation_id: frame.incarnation_id,
+                        control_id: frame.control_id,
+                        healthy: true,
+                        message: None,
+                    });
+                    if write_frame(&mut io, &codec, &ack).await.is_err() {
+                        return;
+                    }
+                }
+                WireMessage::Shutdown(frame) => {
+                    let ack = WireMessage::ShutdownAck(ShutdownAckFrame {
+                        protocol_version: frame.protocol_version,
+                        incarnation_id: frame.incarnation_id,
+                        control_id: frame.control_id,
+                    });
+                    let _ = write_frame(&mut io, &codec, &ack).await;
+                    return;
+                }
+                _ => return,
+            }
+        }
+    }
+
+    #[tokio::test]
+    async fn supervisor_supervises_custom_transport_connection() {
+        let supervisor = WorkerSupervisor::new_with_factory(
+            mock_launch_spec(),
+            Arc::new(MockWorkerTransportFactory),
+        );
+        let worker = supervisor.start().await.unwrap();
+        assert_eq!(
+            worker.hello.identity.backend_instance_id,
+            BackendInstanceId::from("fake:cpu:default")
+        );
+
+        let result = worker
+            .request("echo", serde_json::json!({ "value": 7 }))
+            .await
+            .unwrap();
+        assert_eq!(
+            result.terminal.outcome,
+            TerminalOutcome::Success {
+                output: serde_json::json!({ "value": 7 })
+            }
+        );
+
+        let health = worker.health().await.unwrap();
+        assert!(health.healthy);
+
+        worker.shutdown().await.unwrap();
+        assert_eq!(supervisor.state(), WorkerProcessState::Stopped);
+    }
+
+    #[tokio::test]
+    async fn transport_connect_failure_reports_transport_error_and_stays_stopped() {
+        let supervisor = WorkerSupervisor::new_with_factory(
+            mock_launch_spec(),
+            Arc::new(FailingWorkerTransportFactory),
+        );
+        assert!(matches!(
+            supervisor.start().await,
+            Err(WorkerHostError::Transport(TransportError::ConnectionFailed(
+                _,
+            )))
+        ));
+        assert_eq!(supervisor.state(), WorkerProcessState::Stopped);
+    }
 }

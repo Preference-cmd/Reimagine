@@ -5,8 +5,57 @@ use async_trait::async_trait;
 use reimagine_backend_worker_protocol::{
     TransportDescription, TransportError, TransportKind, WorkerTransport,
 };
+use tokio::io::{AsyncRead, AsyncWrite};
 use tokio::process::{Child, Command};
 use tokio::sync::Mutex;
+
+use crate::launch::WorkerLaunchSpec;
+
+/// A connected worker transport with its protocol stream halves.
+///
+/// The supervisor performs the worker handshake and session handling
+/// over the generic halves; the transport handle owns the connection
+/// lifecycle (process kill for stdio, connection close for network
+/// transports).
+pub struct WorkerConnection {
+    /// Lifecycle handle for the connected transport.
+    pub transport: Arc<dyn WorkerTransport>,
+    /// Read half for worker protocol frames.
+    pub reader: Box<dyn AsyncRead + Send + Unpin>,
+    /// Write half for worker protocol frames.
+    pub writer: Box<dyn AsyncWrite + Send + Unpin>,
+    /// Optional stderr stream (only stdio transports have one).
+    pub stderr: Option<Box<dyn AsyncRead + Send + Unpin>>,
+}
+
+/// Resolves a worker launch spec into a connected transport.
+///
+/// Each transport kind (stdio process spawn, QUIC/gRPC connect)
+/// implements this seam; `WorkerSupervisor` is transport-agnostic
+/// and only observes [`WorkerConnection`].
+#[async_trait]
+pub trait WorkerTransportFactory: Send + Sync + 'static {
+    /// Connect to a worker described by `spec`.
+    async fn connect(&self, spec: &WorkerLaunchSpec) -> Result<WorkerConnection, TransportError>;
+}
+
+/// Stdio-backed factory that spawns local worker processes.
+#[derive(Clone, Copy, Default)]
+pub struct StdioTransportFactory;
+
+#[async_trait]
+impl WorkerTransportFactory for StdioTransportFactory {
+    async fn connect(&self, spec: &WorkerLaunchSpec) -> Result<WorkerConnection, TransportError> {
+        let (transport, stdin, stdout, stderr) =
+            StdioTransport::spawn(&spec.executable, &spec.environment).await?;
+        Ok(WorkerConnection {
+            transport: Arc::new(transport),
+            reader: Box::new(stdout),
+            writer: Box::new(stdin),
+            stderr: Some(Box::new(stderr)),
+        })
+    }
+}
 
 /// Stdio-based transport for local worker processes.
 ///

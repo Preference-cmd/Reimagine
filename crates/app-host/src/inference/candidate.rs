@@ -239,6 +239,7 @@ impl BackendCandidate for BurnBackendCandidate {
             supported_protocols: ProtocolRange::new(1, 1),
             limits: Default::default(),
             environment: Vec::new(),
+            transport: Default::default(),
         };
 
         // Start the worker process

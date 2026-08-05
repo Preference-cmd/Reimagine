@@ -32,7 +32,9 @@ pub use inventory::{
     InstallationRecord, InventoryError, InventoryResult, InventorySnapshot, InventoryStore,
     VersionPolicy,
 };
-pub use launch::{ExpectedWorkerIdentity, WorkerLaunchSpec, WorkerLimits};
+pub use launch::{
+    ExpectedWorkerIdentity, WorkerLaunchSpec, WorkerLimits, WorkerTransportConfig,
+};
 pub use leases::{WorkerAdmissionState, WorkerRunLeaseError, WorkerRunLeases};
 pub use package::{
     ExtractionLimits, PackageError, PackageExtractor, PackageFileEntry, PackageManifest,
@@ -43,7 +45,9 @@ pub use supervisor::{
     StartedWorker, WorkerProcessState, WorkerRequestCanceller, WorkerRequestHandle,
     WorkerRequestResult, WorkerSupervisor,
 };
-pub use transport::StdioTransport;
+pub use transport::{
+    StdioTransport, StdioTransportFactory, WorkerConnection, WorkerTransportFactory,
+};
 
 // Re-export worker protocol types used in our public API
 pub use reimagine_backend_worker_protocol::{

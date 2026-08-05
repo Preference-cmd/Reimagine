@@ -102,6 +102,7 @@ fn worker_provider(paths: &AppPaths, executable: PathBuf) -> Arc<StaticWorkerInv
                 paths.output_dir().display().to_string(),
             ),
         ],
+        transport: Default::default(),
     };
     let candidate = WorkerBackendCandidate::try_new(
         launch,

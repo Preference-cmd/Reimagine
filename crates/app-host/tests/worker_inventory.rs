@@ -35,6 +35,7 @@ fn missing_worker_candidate() -> WorkerBackendCandidate {
             supported_protocols: ProtocolRange::new(1, 1),
             limits: WorkerLimits::default(),
             environment: Vec::new(),
+            transport: Default::default(),
         },
         WorkerInstanceProfile {
             backend_instance_id: instance,

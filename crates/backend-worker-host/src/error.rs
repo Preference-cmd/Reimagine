@@ -1,7 +1,7 @@
 use std::fmt;
 use std::path::PathBuf;
 
-use reimagine_backend_worker_protocol::CodecError;
+use reimagine_backend_worker_protocol::{CodecError, TransportError};
 
 #[derive(Debug)]
 pub enum WorkerHostError {
@@ -9,6 +9,7 @@ pub enum WorkerHostError {
         path: PathBuf,
         message: String,
     },
+    Transport(TransportError),
     Io {
         operation: &'static str,
         message: String,
@@ -57,6 +58,7 @@ impl fmt::Display for WorkerHostError {
                     path.display()
                 )
             }
+            Self::Transport(error) => write!(formatter, "worker transport failed: {error}"),
             Self::Io { operation, message } => {
                 write!(formatter, "worker {operation} I/O failed: {message}")
             }
