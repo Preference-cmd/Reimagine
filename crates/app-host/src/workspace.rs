@@ -17,7 +17,7 @@ use crate::node_catalog::{NodeCatalogAlignment, NodeCatalogService};
 use crate::services::WorkspaceServices;
 use crate::tools::register_app_tools;
 use crate::{AgentService, AppHostError, BackendSelection, ModelService, WorkflowService};
-use crate::{EmptyWorkerInventoryProvider, WorkerInventoryProvider};
+use crate::{InstalledWorkerInventoryProvider, WorkerInventoryProvider};
 
 #[derive(Debug)]
 pub struct WorkspaceHost {
@@ -135,7 +135,7 @@ impl WorkspaceHost {
             backend_config,
             event_sink,
             agent_event_sink,
-            Arc::new(EmptyWorkerInventoryProvider),
+            Arc::new(InstalledWorkerInventoryProvider::for_base_path(&base_path)),
         )
         .await
     }
