@@ -2,8 +2,8 @@ use serde::{Deserialize, Serialize};
 
 use crate::{
     CancelAckFrame, CancelFrame, CleanupAckFrame, CleanupFrame, HealthAckFrame, HealthFrame,
-    HostHello, ProgressFrame, RequestFrame, ShutdownAckFrame, ShutdownFrame, TerminalFrame,
-    WorkerHello,
+    HostHello, ProgressFrame, RequestFrame, ShutdownAckFrame, ShutdownFrame, TensorDataFrame,
+    TensorTransferAckFrame, TensorTransferRequestFrame, TerminalFrame, WorkerHello,
 };
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
@@ -23,6 +23,9 @@ pub enum WireMessage {
     CleanupAck(CleanupAckFrame),
     Shutdown(ShutdownFrame),
     ShutdownAck(ShutdownAckFrame),
+    TensorTransferRequest(TensorTransferRequestFrame),
+    TensorTransferAck(TensorTransferAckFrame),
+    TensorData(TensorDataFrame),
 }
 
 impl WireMessage {
@@ -43,6 +46,9 @@ impl WireMessage {
             Self::CleanupAck(_) => "cleanup_ack",
             Self::Shutdown(_) => "shutdown",
             Self::ShutdownAck(_) => "shutdown_ack",
+            Self::TensorTransferRequest(_) => "tensor_transfer_request",
+            Self::TensorTransferAck(_) => "tensor_transfer_ack",
+            Self::TensorData(_) => "tensor_data",
         }
     }
 
@@ -63,6 +69,9 @@ impl WireMessage {
                 | "cleanup_ack"
                 | "shutdown"
                 | "shutdown_ack"
+                | "tensor_transfer_request"
+                | "tensor_transfer_ack"
+                | "tensor_data"
         )
     }
 }

@@ -42,6 +42,7 @@ impl From<io::Error> for CodecError {
     }
 }
 
+#[derive(Clone, Copy)]
 pub struct FrameCodec {
     maximum_frame_bytes: u32,
 }

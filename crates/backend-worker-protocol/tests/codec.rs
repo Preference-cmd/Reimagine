@@ -4,8 +4,9 @@ use reimagine_backend_worker_protocol::{
     BackendExecutionError, BackendInstanceId, CancelAckFrame, CancelFrame, CleanupAckFrame,
     CleanupFrame, CodecError, ControlId, CorrelationId, FrameCodec, HealthAckFrame, HealthFrame,
     HostHello, ProgressFrame, ProtocolRange, ProtocolVersion, RequestFrame, RequestId,
-    ShutdownAckFrame, ShutdownFrame, TerminalFrame, TerminalOutcome, WireMessage, WorkerHello,
-    WorkerIdentity, WorkerIncarnationId, WorkerInstallationId, WorkerInstanceProfile,
+    ShutdownAckFrame, ShutdownFrame, TensorDataFrame, TensorMetadata, TensorTransferAckFrame,
+    TensorTransferRequestFrame, TerminalFrame, TerminalOutcome, TransferStatus, WireMessage,
+    WorkerHello, WorkerIdentity, WorkerIncarnationId, WorkerInstallationId, WorkerInstanceProfile,
     WorkerProfile,
 };
 use serde_json::json;
@@ -268,6 +269,27 @@ fn every_wire_message_kind_roundtrips() {
             protocol_version: ProtocolVersion(2),
             incarnation_id: WorkerIncarnationId::from("inc-1"),
             control_id: ControlId::from("shutdown-1"),
+        }),
+        WireMessage::TensorTransferRequest(TensorTransferRequestFrame {
+            source_token: "src-tok-1".to_owned(),
+            target_worker_id: "worker-b".to_owned(),
+            tensor_metadata: TensorMetadata {
+                dtype: "f16".to_owned(),
+                shape: vec![1, 3, 512, 512],
+                size_bytes: 1_572_864,
+                backend_format: "burn::nchw".to_owned(),
+            },
+        }),
+        WireMessage::TensorTransferAck(TensorTransferAckFrame {
+            correlation_id: CorrelationId::from("c1"),
+            status: TransferStatus::Accepted,
+            target_token: Some("tgt-tok-1".to_owned()),
+        }),
+        WireMessage::TensorData(TensorDataFrame {
+            correlation_id: CorrelationId::from("c1"),
+            sequence: 0,
+            data: vec![0u8; 64],
+            is_final: true,
         }),
     ];
     let codec = FrameCodec::new(4096);

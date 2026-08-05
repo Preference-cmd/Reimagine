@@ -38,6 +38,9 @@ pub fn validate_message_direction(
                 | WireMessage::Health(_)
                 | WireMessage::Cleanup(_)
                 | WireMessage::Shutdown(_)
+                | WireMessage::TensorTransferRequest(_)
+                | WireMessage::TensorTransferAck(_)
+                | WireMessage::TensorData(_)
         ),
         MessageSender::Worker => matches!(
             message,
@@ -49,6 +52,9 @@ pub fn validate_message_direction(
                 | WireMessage::HealthAck(_)
                 | WireMessage::CleanupAck(_)
                 | WireMessage::ShutdownAck(_)
+                | WireMessage::TensorTransferRequest(_)
+                | WireMessage::TensorTransferAck(_)
+                | WireMessage::TensorData(_)
         ),
     };
     if allowed {
