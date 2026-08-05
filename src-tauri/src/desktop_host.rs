@@ -1,5 +1,5 @@
 use std::path::{Path, PathBuf};
-use std::sync::Arc;
+use std::sync::{Arc, RwLock};
 
 use reimagine_agent::{AgentEventSink, WorkspaceScope};
 use reimagine_app_host::dto::{
@@ -7,8 +7,9 @@ use reimagine_app_host::dto::{
     HealthResponse, ModelInfoDto, NodeCatalogResponse, RunWorkflowResponse,
 };
 use reimagine_app_host::{
-    AgentServiceTurnRequest, AppHost, AppHostError, WorkerBackendCandidate, WorkerInstallationDto,
-    WorkerManagementService, WorkerSelectionHandle, WorkerSwitchError, WorkspaceHost,
+    AgentServiceTurnRequest, AppHost, AppHostError, BackendSelection, WorkerBackendCandidate,
+    WorkerInstallationDto, WorkerManagementService, WorkerSelectionHandle, WorkerSwitchError,
+    WorkspaceHost,
 };
 use reimagine_backend_worker_host::{WorkerLaunchSpec, WorkerLimits};
 use reimagine_backend_worker_protocol::ProtocolRange;
@@ -24,14 +25,27 @@ use crate::download_event_hub::TauriDownloadEventHub;
 use crate::event_hub::{RunEventPayload, TauriRunEventHub};
 
 const WORKSPACE_SCOPE: &str = "reimagine-tauri-host";
+const APP_HOST_LOCK: &str = "desktop app_host lock poisoned";
 
-#[derive(Debug, Clone)]
+#[derive(Debug)]
 pub struct DesktopHostState {
-    app_host: AppHost,
+    app_host: RwLock<AppHost>,
     event_hub: Arc<TauriRunEventHub>,
     agent_event_hub: Arc<TauriAgentEventHub>,
     download_event_hub: Arc<TauriDownloadEventHub>,
     worker_management: Arc<WorkerManagementService>,
+}
+
+impl Clone for DesktopHostState {
+    fn clone(&self) -> Self {
+        Self {
+            app_host: RwLock::new(self.app_host.read().expect(APP_HOST_LOCK).clone()),
+            event_hub: self.event_hub.clone(),
+            agent_event_hub: self.agent_event_hub.clone(),
+            download_event_hub: self.download_event_hub.clone(),
+            worker_management: self.worker_management.clone(),
+        }
+    }
 }
 
 impl DesktopHostState {
@@ -53,19 +67,20 @@ impl DesktopHostState {
         let event_sink: BoxedRunEventSink = event_hub.clone();
         let agent_event_hub = Arc::new(TauriAgentEventHub::new());
         let agent_event_sink: Arc<dyn AgentEventSink> = agent_event_hub.clone();
-        let workspace = WorkspaceHost::try_with_defaults_and_event_sinks(
+        let workspace = WorkspaceHost::try_with_app_data_root_and_event_sinks(
             WorkspaceScope::new(WORKSPACE_SCOPE),
             &workspace_base_path,
+            &app_data_root,
             event_sink,
             agent_event_sink,
         )
         .await?;
 
         let download_event_hub = Arc::new(TauriDownloadEventHub::new());
-        let worker_management = Arc::new(WorkerManagementService::offline(app_data_root)?);
+        let worker_management = Arc::new(WorkerManagementService::offline(&app_data_root)?);
 
         Ok(Self {
-            app_host: AppHost::new(workspace),
+            app_host: RwLock::new(AppHost::new(workspace)),
             event_hub,
             agent_event_hub,
             download_event_hub,
@@ -74,8 +89,13 @@ impl DesktopHostState {
     }
 
     #[cfg(test)]
-    pub fn workspace_base_path(&self) -> &Path {
-        self.app_host.workspace().base_path()
+    pub fn workspace_base_path(&self) -> PathBuf {
+        self.app_host
+            .read()
+            .expect(APP_HOST_LOCK)
+            .workspace()
+            .base_path()
+            .to_path_buf()
     }
 
     #[allow(dead_code)]
@@ -84,17 +104,33 @@ impl DesktopHostState {
     }
 
     pub fn health(&self) -> HealthResponse {
-        HealthResponse::ok(self.app_host.workspace().workspace_scope().as_str())
+        HealthResponse::ok(
+            self.app_host
+                .read()
+                .expect(APP_HOST_LOCK)
+                .workspace()
+                .workspace_scope()
+                .as_str(),
+        )
     }
 
     pub fn compute_profile(&self) -> ComputeProfileDto {
-        self.app_host.workspace().compute_profile_dto()
+        self.app_host
+            .read()
+            .expect(APP_HOST_LOCK)
+            .workspace()
+            .compute_profile_dto()
     }
 
     /// Returns the workspace node catalog as a host‑neutral DTO.
     pub fn list_node_defs(&self) -> NodeCatalogResponse {
         use reimagine_app_host::dto::NodeDefDto;
-        let defs = self.app_host.workspace().list_node_defs();
+        let defs = self
+            .app_host
+            .read()
+            .expect(APP_HOST_LOCK)
+            .workspace()
+            .list_node_defs();
         NodeCatalogResponse {
             nodes: defs.into_iter().map(NodeDefDto::from).collect(),
         }
@@ -103,12 +139,11 @@ impl DesktopHostState {
     /// Returns the model list as a host‑neutral DTO.
     pub async fn list_models(&self) -> Result<Vec<ModelInfoDto>, AppHostError> {
         use reimagine_app_host::dto::ModelInfoDto;
-        let descriptors = self
-            .app_host
-            .workspace()
-            .model_service()
-            .list_models()
-            .await?;
+        let workspace = {
+            let app_host = self.app_host.read().expect(APP_HOST_LOCK);
+            Arc::clone(app_host.workspace())
+        };
+        let descriptors = workspace.model_service().list_models().await?;
         Ok(descriptors.into_iter().map(ModelInfoDto::from).collect())
     }
 
@@ -125,11 +160,13 @@ impl DesktopHostState {
                 path: std::path::PathBuf::new(),
                 message: e.to_string(),
             })?;
-        let workflow_id = self
-            .app_host
-            .workspace()
-            .workflow_service()
-            .register_workflow(workflow);
+        let workflow_id = {
+            let app_host = self.app_host.read().expect(APP_HOST_LOCK);
+            app_host
+                .workspace()
+                .workflow_service()
+                .register_workflow(workflow)
+        };
 
         // 2. Build run request
         let request = RunWorkflowRequest::new(
@@ -138,7 +175,11 @@ impl DesktopHostState {
         );
 
         // 3. Run the workflow
-        let result = self.app_host.workspace().run_workflow(request).await?;
+        let workspace = {
+            let app_host = self.app_host.read().expect(APP_HOST_LOCK);
+            Arc::clone(app_host.workspace())
+        };
+        let result = workspace.run_workflow(request).await?;
 
         match result {
             reimagine_app_host::RunWorkflowResult::Started {
@@ -183,6 +224,8 @@ impl DesktopHostState {
         use reimagine_core::model::RunId;
         let run_id = RunId::new(run_id_str);
         self.app_host
+            .read()
+            .expect(APP_HOST_LOCK)
             .workspace()
             .runtime_service()
             .cancel(&run_id)
@@ -195,7 +238,12 @@ impl DesktopHostState {
     pub fn resolve_artifact(&self, artifact_id: &str) -> Result<ArtifactMetadataDto, AppHostError> {
         use reimagine_core::model::ArtifactId;
         let id = ArtifactId::new(artifact_id);
-        let access = self.app_host.workspace().resolve_artifact(&id)?;
+        let access = self
+            .app_host
+            .read()
+            .expect(APP_HOST_LOCK)
+            .workspace()
+            .resolve_artifact(&id)?;
         Ok(ArtifactMetadataDto::from(access))
     }
 
@@ -203,7 +251,12 @@ impl DesktopHostState {
     pub fn open_artifact(&self, artifact_id: &str) -> Result<(), AppHostError> {
         use reimagine_core::model::ArtifactId;
         let id = ArtifactId::new(artifact_id);
-        let access = self.app_host.workspace().resolve_artifact(&id)?;
+        let access = self
+            .app_host
+            .read()
+            .expect(APP_HOST_LOCK)
+            .workspace()
+            .resolve_artifact(&id)?;
         opener::open(access.path.as_path()).map_err(|e| AppHostError::Io {
             path: access.path,
             message: format!("failed to open artifact: {e}"),
@@ -232,12 +285,20 @@ impl DesktopHostState {
         };
 
         // Validate provider exists in catalog before creating session
-        let agent_service = self.app_host.workspace().agent_service();
-        let catalog = agent_service.providers();
-        let provider_name = reimagine_agent::ProviderName::new(&provider);
-        if !catalog.contains(&provider_name) {
+        let (provider_known, agent_service, provider_name) = {
+            let app_host = self.app_host.read().expect(APP_HOST_LOCK);
+            let agent_service = app_host.workspace().agent_service();
+            let catalog = agent_service.providers();
+            let provider_name = reimagine_agent::ProviderName::new(&provider);
+            (
+                catalog.contains(&provider_name),
+                Arc::clone(agent_service),
+                provider_name,
+            )
+        };
+        if !provider_known {
             return Err(AppHostError::UnknownAgentProvider {
-                provider: provider_name.clone(),
+                provider: provider_name,
             });
         }
 
@@ -281,7 +342,10 @@ impl DesktopHostState {
                 message: format!("invalid input messages: {e}"),
             })?;
 
-        let agent_service = self.app_host.workspace().agent_service();
+        let agent_service = {
+            let app_host = self.app_host.read().expect(APP_HOST_LOCK);
+            Arc::clone(app_host.workspace().agent_service())
+        };
 
         // Validate session exists (fail-fast before subscription)
         let _session =
@@ -318,8 +382,14 @@ impl DesktopHostState {
                 message: format!("invalid command batch: {e}"),
             })?;
 
-        let node_catalog = self.app_host.workspace().node_catalog();
-        let workflow_service = self.app_host.workspace().workflow_service();
+        let (node_catalog, workflow_service) = {
+            let app_host = self.app_host.read().expect(APP_HOST_LOCK);
+            let workspace = app_host.workspace();
+            (
+                Arc::clone(workspace.node_catalog()),
+                Arc::clone(workspace.workflow_service()),
+            )
+        };
 
         workflow_service.preview_batch(
             &reimagine_core::model::WorkflowId::new(workflow_id),
@@ -345,8 +415,14 @@ impl DesktopHostState {
                 message: format!("invalid command batch: {e}"),
             })?;
 
-        let node_catalog = self.app_host.workspace().node_catalog();
-        let workflow_service = self.app_host.workspace().workflow_service();
+        let (node_catalog, workflow_service) = {
+            let app_host = self.app_host.read().expect(APP_HOST_LOCK);
+            let workspace = app_host.workspace();
+            (
+                Arc::clone(workspace.node_catalog()),
+                Arc::clone(workspace.workflow_service()),
+            )
+        };
 
         workflow_service.apply_batch(
             &reimagine_core::model::WorkflowId::new(workflow_id),
@@ -361,8 +437,14 @@ impl DesktopHostState {
     /// resulting `CommandResult`. Returns an error if no pending proposal
     /// exists for the workflow.
     pub fn approve_proposal(&self, workflow_id: String) -> Result<CommandResult, AppHostError> {
-        let node_catalog = self.app_host.workspace().node_catalog();
-        let workflow_service = self.app_host.workspace().workflow_service();
+        let (node_catalog, workflow_service) = {
+            let app_host = self.app_host.read().expect(APP_HOST_LOCK);
+            let workspace = app_host.workspace();
+            (
+                Arc::clone(workspace.node_catalog()),
+                Arc::clone(workspace.workflow_service()),
+            )
+        };
 
         workflow_service.apply_pending_proposal(
             &reimagine_core::model::WorkflowId::new(workflow_id),
@@ -374,7 +456,10 @@ impl DesktopHostState {
     /// List pending proposals from all workflows.
     #[allow(dead_code)]
     pub fn list_pending_proposals(&self) -> Result<Vec<serde_json::Value>, AppHostError> {
-        let workflow_service = self.app_host.workspace().workflow_service();
+        let workflow_service = {
+            let app_host = self.app_host.read().expect(APP_HOST_LOCK);
+            Arc::clone(app_host.workspace().workflow_service())
+        };
         let proposals = workflow_service.list_proposals();
         proposals
             .into_iter()
@@ -389,12 +474,15 @@ impl DesktopHostState {
 
     /// List available provider names for the agent UI selector.
     pub fn list_agent_providers(&self) -> Result<Vec<String>, AppHostError> {
-        let catalog = self.app_host.workspace().agent_service().providers();
-        Ok(catalog
-            .provider_names()
-            .into_iter()
-            .map(|p| p.to_string())
-            .collect())
+        let provider_names = {
+            let app_host = self.app_host.read().expect(APP_HOST_LOCK);
+            app_host
+                .workspace()
+                .agent_service()
+                .providers()
+                .provider_names()
+        };
+        Ok(provider_names.into_iter().map(|p| p.to_string()).collect())
     }
 
     // ─── Workflow persistence ─────────────────────────────────────
@@ -418,7 +506,10 @@ impl DesktopHostState {
                 message: format!("invalid workflow json: {e}"),
             })?;
 
-        let workflow_service = self.app_host.workspace().workflow_service();
+        let workflow_service = {
+            let app_host = self.app_host.read().expect(APP_HOST_LOCK);
+            Arc::clone(app_host.workspace().workflow_service())
+        };
         workflow_service.register_workflow(workflow.clone());
         workflow_service.save_workflow_snapshot(&workflow).await
     }
@@ -431,7 +522,10 @@ impl DesktopHostState {
         workflow_id: &str,
     ) -> Result<serde_json::Value, AppHostError> {
         let id = workflow_id_from_str(workflow_id)?;
-        let workflow_service = self.app_host.workspace().workflow_service();
+        let workflow_service = {
+            let app_host = self.app_host.read().expect(APP_HOST_LOCK);
+            Arc::clone(app_host.workspace().workflow_service())
+        };
         workflow_service.load_workflow(&id).await?;
         let workflow = workflow_service.snapshot(&id)?;
         serde_json::to_value(workflow).map_err(|e| AppHostError::WorkflowJson {
@@ -445,11 +539,11 @@ impl DesktopHostState {
     /// Returns JSON summaries `{ id, modified_millis }` so the adapter layer
     /// never has to name the (crate-private) summary type.
     pub fn list_saved_workflows(&self) -> Result<Vec<serde_json::Value>, AppHostError> {
-        let infos = self
-            .app_host
-            .workspace()
-            .workflow_service()
-            .list_saved_workflows()?;
+        let workflow_service = {
+            let app_host = self.app_host.read().expect(APP_HOST_LOCK);
+            Arc::clone(app_host.workspace().workflow_service())
+        };
+        let infos = workflow_service.list_saved_workflows()?;
         infos
             .into_iter()
             .map(|info| {
@@ -466,12 +560,11 @@ impl DesktopHostState {
         &self,
         query: &reimagine_model_acquisition::ModelSearchQuery,
     ) -> Result<Vec<reimagine_app_host::dto::ModelCatalogEntryDto>, AppHostError> {
-        let entries = self
-            .app_host
-            .workspace()
-            .model_service()
-            .search(query)
-            .await?;
+        let workspace = {
+            let app_host = self.app_host.read().expect(APP_HOST_LOCK);
+            Arc::clone(app_host.workspace())
+        };
+        let entries = workspace.model_service().search(query).await?;
         Ok(entries
             .into_iter()
             .map(reimagine_app_host::dto::ModelCatalogEntryDto::from)
@@ -483,12 +576,11 @@ impl DesktopHostState {
         &self,
         repo_id: &str,
     ) -> Result<reimagine_app_host::dto::ModelCardDto, AppHostError> {
-        let card = self
-            .app_host
-            .workspace()
-            .model_service()
-            .model_card(repo_id)
-            .await?;
+        let workspace = {
+            let app_host = self.app_host.read().expect(APP_HOST_LOCK);
+            Arc::clone(app_host.workspace())
+        };
+        let card = workspace.model_service().model_card(repo_id).await?;
         Ok(reimagine_app_host::dto::ModelCardDto::from(card))
     }
 
@@ -563,23 +655,24 @@ impl DesktopHostState {
             auto_detect: effective_auto_detect,
         };
 
-        let acq = self
-            .app_host
-            .workspace()
-            .services()
-            .model_acquisition_service()
-            .clone();
+        let acq = {
+            let app_host = self.app_host.read().expect(APP_HOST_LOCK);
+            Arc::clone(app_host.workspace().services().model_acquisition_service())
+        };
         let progress_sink = self.download_event_hub.sink_for(&download_id);
 
         // Notify started with catalog metadata when from_catalog.
         if use_smart_download {
-            if let Ok(card) = self
-                .app_host
-                .workspace()
-                .model_service()
-                .model_card(request.repo_id.as_str())
-                .await
-            {
+            if let Ok(card) = {
+                let workspace = {
+                    let app_host = self.app_host.read().expect(APP_HOST_LOCK);
+                    Arc::clone(app_host.workspace())
+                };
+                workspace
+                    .model_service()
+                    .model_card(request.repo_id.as_str())
+                    .await
+            } {
                 let model_name = card.entry.id.clone();
                 let detected_format = format!("{:?}", card.detected_format);
                 let estimated_size = card.estimated_download_size;
@@ -611,7 +704,30 @@ impl DesktopHostState {
     /// is exiting so that child worker processes are cleaned up instead of
     /// becoming orphans.
     pub async fn shutdown(&self) {
-        self.app_host.shutdown().await;
+        let app_host = self.app_host.read().expect(APP_HOST_LOCK).clone();
+        app_host.shutdown().await;
+    }
+
+    // ─── Re-bootstrap (BE-38 / B4-8) ──────────────────────────────
+
+    /// Drain in-flight runs and re-bootstrap the workspace with a new
+    /// backend selection.
+    ///
+    /// Returns the compute profile of the rebuilt workspace. The selection
+    /// is not persisted, so a restarted app boots with the configured
+    /// backend again.
+    pub async fn rebootstrap_backend(
+        &self,
+        selection: BackendSelection,
+    ) -> Result<ComputeProfileDto, AppHostError> {
+        let current = {
+            let app_host = self.app_host.read().expect(APP_HOST_LOCK);
+            Arc::clone(app_host.workspace())
+        };
+        let rebuilt = WorkspaceHost::rebuild_workspace(&current, selection).await?;
+        let profile = rebuilt.compute_profile_dto();
+        *self.app_host.write().expect(APP_HOST_LOCK) = AppHost::new(rebuilt);
+        Ok(profile)
     }
 
     // ─── Worker switching (BE-32) ────────────────────────────────
@@ -624,9 +740,11 @@ impl DesktopHostState {
         deadline: std::time::Duration,
     ) -> Result<WorkerSwitchResultDto, WorkerSwitchError> {
         let candidate = self.resolve_switch_candidate(target_instance)?;
-        let handle = self
-            .app_host
-            .workspace()
+        let workspace = {
+            let app_host = self.app_host.read().expect(APP_HOST_LOCK);
+            Arc::clone(app_host.workspace())
+        };
+        let handle = workspace
             .drain_and_switch_worker(candidate, deadline)
             .await?;
         Ok(WorkerSwitchResultDto::from(handle))
@@ -640,9 +758,11 @@ impl DesktopHostState {
         deadline: std::time::Duration,
     ) -> Result<WorkerSwitchResultDto, WorkerSwitchError> {
         let candidate = self.resolve_switch_candidate(target_instance)?;
-        let handle = self
-            .app_host
-            .workspace()
+        let workspace = {
+            let app_host = self.app_host.read().expect(APP_HOST_LOCK);
+            Arc::clone(app_host.workspace())
+        };
+        let handle = workspace
             .cancel_and_switch_worker(candidate, deadline)
             .await?;
         Ok(WorkerSwitchResultDto::from(handle))

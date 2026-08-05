@@ -52,6 +52,9 @@ pub enum AppHostError {
     InferenceBootstrap {
         message: String,
     },
+    RebootFailed {
+        message: String,
+    },
     Runtime(RuntimeServiceError),
     ModelManager(reimagine_model_manager::ModelManagerError),
     ModelAcquisition(reimagine_model_acquisition::ModelAcquisitionError),
@@ -114,6 +117,9 @@ impl std::fmt::Display for AppHostError {
             Self::InferenceBootstrap { message } => {
                 write!(f, "inference bootstrap failed: {message}")
             }
+            Self::RebootFailed { message } => {
+                write!(f, "re-bootstrap failed: {message}")
+            }
             Self::Runtime(error) => write!(f, "{error}"),
             Self::ModelManager(error) => write!(f, "{error}"),
             Self::ModelAcquisition(error) => {
@@ -149,9 +155,9 @@ impl AppHostError {
             Self::WorkflowVersionConflict { .. } => AppHostErrorCode::Conflict,
             Self::Io { .. } => AppHostErrorCode::Io,
             Self::WorkflowJson { .. } => AppHostErrorCode::WorkflowInvalid,
-            Self::BootstrapConfig(_) | Self::InferenceBootstrap { .. } => {
-                AppHostErrorCode::BootstrapFailed
-            }
+            Self::BootstrapConfig(_)
+            | Self::InferenceBootstrap { .. }
+            | Self::RebootFailed { .. } => AppHostErrorCode::BootstrapFailed,
             Self::Runtime(_) => AppHostErrorCode::InferenceError,
             Self::ModelManager(_) => AppHostErrorCode::ModelNotFound,
             Self::ModelAcquisition(error) => match error {

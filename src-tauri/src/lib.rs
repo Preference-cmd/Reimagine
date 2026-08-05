@@ -6,7 +6,7 @@ mod event_hub;
 use desktop_host::{DesktopHostState, WorkerSwitchResultDto, default_workspace_path};
 use event_hub::RunEventPayload;
 use reimagine_app_host::{
-    AppHostError, AppHostErrorCode, WorkerInstallationDto, WorkerSwitchError,
+    AppHostError, AppHostErrorCode, BackendSelection, WorkerInstallationDto, WorkerSwitchError,
     dto::{
         AgentEventPayload, AgentSessionInfo, AgentTurnResponse, ArtifactMetadataDto,
         ComputeProfileDto, DownloadEventPayload, HealthResponse, ModelCardDto,
@@ -328,6 +328,21 @@ fn list_worker_switch_targets(
         .map_err(app_host_command_error)
 }
 
+/// Drain in-flight runs (waiting up to the re-bootstrap deadline) and
+/// re-run the workspace bootstrap with `selection` (`"burn"` | `"candle"`).
+///
+/// Resolves to the compute profile of the rebuilt workspace.
+#[tauri::command]
+async fn rebootstrap_backend(
+    state: tauri::State<'_, DesktopHostState>,
+    selection: BackendSelection,
+) -> Result<ComputeProfileDto, TauriCommandError> {
+    state
+        .rebootstrap_backend(selection)
+        .await
+        .map_err(app_host_command_error)
+}
+
 // ─── Workflow command commands ───────────────────────────────────
 
 /// Preview a command batch (dry-run). Returns diagnostics without mutating.
@@ -453,6 +468,8 @@ pub fn run() {
             drain_and_switch_worker,
             cancel_and_switch_worker,
             list_worker_switch_targets,
+            // Re-bootstrap command
+            rebootstrap_backend,
         ])
         .build(tauri::generate_context!())
         .expect("error while building tauri application")
@@ -557,7 +574,7 @@ mod tests {
         let state = tauri::async_runtime::block_on(DesktopHostState::bootstrap(&base_path))
             .expect("desktop host state should bootstrap");
 
-        assert_eq!(state.workspace_base_path(), base_path.as_path());
+        assert_eq!(state.workspace_base_path(), base_path);
         assert!(
             state
                 .worker_management()
@@ -600,6 +617,28 @@ mod tests {
                 .any(|instance| instance.instance == "candle:cpu"),
             "expected compute profile to include the app-host candle CPU instance"
         );
+
+        let _ = std::fs::remove_dir_all(&base_path);
+    }
+
+    #[test]
+    fn desktop_host_rebootstrap_swaps_backend_and_keeps_workspace() {
+        use reimagine_app_host::BackendSelection;
+
+        let base_path = temp_dir("rebootstrap");
+        let state = tauri::async_runtime::block_on(DesktopHostState::bootstrap(&base_path))
+            .expect("desktop host state should bootstrap");
+
+        let profile =
+            tauri::async_runtime::block_on(state.rebootstrap_backend(BackendSelection::Burn))
+                .expect("rebootstrap to burn");
+
+        assert!(
+            !profile.backend_profiles.is_empty(),
+            "rebootstrap must return the rebuilt compute profile"
+        );
+        assert_eq!(state.workspace_base_path(), base_path);
+        assert_eq!(state.health().status, "ok");
 
         let _ = std::fs::remove_dir_all(&base_path);
     }

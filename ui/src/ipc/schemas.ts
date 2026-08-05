@@ -310,3 +310,23 @@ export const WorkerSwitchArgsSchema = z.object({
   deadlineSecs: z.number().positive().optional(),
 });
 export type WorkerSwitchArgs = z.infer<typeof WorkerSwitchArgsSchema>;
+
+/* ───── Backend re-bootstrap (BE-38 / B4-8) ───── */
+
+/** Backend kind accepted by `rebootstrap_backend`. */
+export const BackendSelectionSchema = z.enum(["burn", "candle"]);
+export type BackendSelection = z.infer<typeof BackendSelectionSchema>;
+
+export const RebootBackendArgsSchema = z.object({
+  selection: BackendSelectionSchema,
+});
+export type RebootBackendArgs = z.infer<typeof RebootBackendArgsSchema>;
+
+/** Compute profile returned by `rebootstrap_backend` (mirrors
+ *  `ComputeProfileDto`; wire shape is snake_case and intentionally loose —
+ *  the UI reads it for display only). */
+export const ComputeProfileSchema = z.object({
+  backend_profiles: z.array(z.any()),
+  diagnostics: z.array(z.any()),
+});
+export type ComputeProfile = z.infer<typeof ComputeProfileSchema>;

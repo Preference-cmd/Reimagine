@@ -1,6 +1,7 @@
 import {
   type ArtifactMetadata,
   type CommandError,
+  type ComputeProfile,
   type DownloadEventPayload,
   type DownloadHuggingfaceModelArgs,
   type ModelCard,
@@ -9,6 +10,7 @@ import {
   type ModelFilters,
   type ModelInfo,
   type NodeDef,
+  type RebootBackendArgs,
   type RunEventPayload,
   type RunWorkflowResponse,
   type Workflow,
@@ -18,6 +20,7 @@ import {
   type WorkerSwitchTarget,
   CommandErrorSchema,
   DownloadHuggingfaceModelArgsSchema,
+  RebootBackendArgsSchema,
   WorkerSwitchArgsSchema,
 } from "./schemas";
 import {
@@ -32,6 +35,7 @@ import {
   mockListWorkflows,
   mockLoadWorkflow,
   mockOpenArtifact,
+  mockRebootBackend,
   mockResolveArtifact,
   mockRunWorkflow,
   mockSaveWorkflow,
@@ -282,6 +286,20 @@ export function listWorkerSwitchTargets(): Promise<WorkerSwitchTarget[]> {
     null,
     undefined,
     mockListWorkerSwitchTargets,
+  );
+}
+
+/** Drain in-flight runs and re-bootstrap the workspace with `selection`
+ *  (a backend kind, `"burn"` | `"candle"`). Resolves to the new compute
+ *  profile. The selection is not persisted across app restarts. */
+export function rebootBackend(
+  args: RebootBackendArgs,
+): Promise<ComputeProfile> {
+  return dispatch(
+    "rebootstrap_backend",
+    RebootBackendArgsSchema,
+    args,
+    mockRebootBackend,
   );
 }
 

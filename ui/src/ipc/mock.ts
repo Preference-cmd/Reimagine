@@ -1,5 +1,6 @@
 import {
   type ArtifactMetadata,
+  type ComputeProfile,
   type DownloadEventPayload,
   type DownloadHuggingfaceModelArgs,
   type ModelCard,
@@ -7,6 +8,7 @@ import {
   type ModelDownloadOutput,
   type ModelInfo,
   type NodeDef,
+  type RebootBackendArgs,
   type RunEventPayload,
   type RunWorkflowResponse,
   type Workflow,
@@ -478,4 +480,23 @@ export async function mockCancelAndSwitchWorker(
 export async function mockListWorkerSwitchTargets(): Promise<WorkerSwitchTarget[]> {
   await delay(30);
   return [...MOCK_SWITCH_TARGETS];
+}
+
+export async function mockRebootBackend(
+  input: RebootBackendArgs,
+): Promise<ComputeProfile> {
+  await delay(400);
+  const backend = input.selection;
+  return {
+    backend_profiles: [
+      {
+        backend,
+        plugin: null,
+        extension: null,
+        instances: [],
+        diagnostics: [],
+      },
+    ],
+    diagnostics: [],
+  };
 }

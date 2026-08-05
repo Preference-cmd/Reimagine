@@ -2,6 +2,7 @@ use std::path::Path;
 use std::sync::Arc;
 
 use reimagine_agent::{AgentEventSink, AgentToolRegistry, WorkspaceScope};
+use reimagine_backend_worker_host::WorkerStorePaths;
 use reimagine_config::{AppConfig, AppPaths, ConfigDocument, InferenceBackendConfig};
 use reimagine_core::model::NodeDef;
 use reimagine_inference::WorkspaceComputeProfile;
@@ -19,7 +20,10 @@ use crate::tools::register_app_tools;
 use crate::{AgentService, AppHostError, BackendSelection, ModelService, WorkflowService};
 use crate::{InstalledWorkerInventoryProvider, WorkerInventoryProvider};
 
-#[derive(Debug)]
+/// How long a re-bootstrap waits for in-flight runs to drain before giving
+/// up and keeping the current backend in place.
+const REBOOTSTRAP_DRAIN_DEADLINE: std::time::Duration = std::time::Duration::from_secs(30);
+
 pub struct WorkspaceHost {
     workspace_scope: WorkspaceScope,
     config: Arc<AppConfig>,
@@ -34,6 +38,24 @@ pub struct WorkspaceHost {
     compute_profile: Arc<WorkspaceComputeProfile>,
     resolved_backend_instance: reimagine_inference::BackendInstance,
     worker_switch: Option<Arc<crate::WorkerSwitchService>>,
+    worker_inventory: Arc<dyn WorkerInventoryProvider>,
+    event_sink: BoxedRunEventSink,
+    agent_event_sink: Arc<dyn AgentEventSink>,
+}
+
+impl std::fmt::Debug for WorkspaceHost {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("WorkspaceHost")
+            .field("workspace_scope", &self.workspace_scope)
+            .field("config", &self.config)
+            .field("backend_config", &self.backend_config)
+            .field("runtime_service", &self.runtime_service)
+            .field("node_catalog", &self.node_catalog)
+            .field("compute_profile", &self.compute_profile)
+            .field("resolved_backend_instance", &self.resolved_backend_instance)
+            .field("worker_switch", &self.worker_switch)
+            .finish_non_exhaustive()
+    }
 }
 
 impl WorkspaceHost {
@@ -91,6 +113,10 @@ impl WorkspaceHost {
             compute_profile,
             resolved_backend_instance,
             worker_switch: None,
+            worker_inventory: Arc::new(crate::EmptyWorkerInventoryProvider),
+            event_sink: Arc::new(VecRunEventSink::new()),
+            agent_event_sink: Arc::new(reimagine_agent::VecAgentEventSink::new())
+                as Arc<dyn AgentEventSink>,
         }
     }
 
@@ -136,6 +162,58 @@ impl WorkspaceHost {
             event_sink,
             agent_event_sink,
             Arc::new(InstalledWorkerInventoryProvider::for_base_path(&base_path)),
+        )
+        .await
+    }
+
+    /// Bootstrap with the desktop host's `{workspace}.app-data` worker store
+    /// convention, loading the backend config from disk.
+    ///
+    /// The worker inventory is derived from `app_data_root` (the same root
+    /// [`crate::WorkerManagementService::offline`] uses), so a production
+    /// desktop host that passes its real app-data directory sees installed
+    /// workers.
+    pub async fn try_with_app_data_root_and_event_sinks(
+        workspace_scope: WorkspaceScope,
+        base_path: impl Into<std::path::PathBuf>,
+        app_data_root: impl Into<std::path::PathBuf>,
+        event_sink: BoxedRunEventSink,
+        agent_event_sink: Arc<dyn AgentEventSink>,
+    ) -> Result<Self, AppHostError> {
+        let base_path = base_path.into();
+        let config = AppConfig::new(AppPaths::new(&base_path));
+        let backend_config = load_backend_config_result(&config).await?;
+        Self::try_with_app_data_root_and_backend_config(
+            workspace_scope,
+            &base_path,
+            app_data_root,
+            backend_config,
+            event_sink,
+            agent_event_sink,
+        )
+        .await
+    }
+
+    /// Bootstrap with an explicit app-data root and an explicit backend
+    /// configuration (used by the re-bootstrap path).
+    pub async fn try_with_app_data_root_and_backend_config(
+        workspace_scope: WorkspaceScope,
+        base_path: impl Into<std::path::PathBuf>,
+        app_data_root: impl Into<std::path::PathBuf>,
+        backend_config: InferenceBackendConfig,
+        event_sink: BoxedRunEventSink,
+        agent_event_sink: Arc<dyn AgentEventSink>,
+    ) -> Result<Self, AppHostError> {
+        let config = AppConfig::new(AppPaths::new(base_path));
+        Self::with_backend_config_and_worker_inventory_inner(
+            workspace_scope,
+            config,
+            backend_config,
+            event_sink,
+            agent_event_sink,
+            Arc::new(InstalledWorkerInventoryProvider::new(
+                WorkerStorePaths::new(app_data_root),
+            )),
         )
         .await
     }
@@ -300,7 +378,7 @@ impl WorkspaceHost {
             &config,
             &backend_config,
             model_service,
-            worker_inventory,
+            Arc::clone(&worker_inventory),
         )
         .await
         .map_err(|error| AppHostError::InferenceBootstrap {
@@ -311,7 +389,7 @@ impl WorkspaceHost {
             RuntimeService::new(
                 bootstrapped.runtime.executor_registry,
                 bootstrapped.runtime.runtime_hooks.clone(),
-                event_sink,
+                Arc::clone(&event_sink),
                 Arc::new(reimagine_runtime::SystemClock),
             )
             .with_resource_hint_sink(
@@ -335,13 +413,16 @@ impl WorkspaceHost {
             bootstrapped.runtime.selected_instance,
         );
         host.worker_switch = worker_switch;
+        host.worker_inventory = Arc::clone(&worker_inventory);
+        host.event_sink = Arc::clone(&event_sink);
+        host.agent_event_sink = agent_event_sink;
         let registry = host.agent_service.registry().clone();
         let providers = host.agent_service.providers().clone();
         host.agent_service = Arc::new(AgentService::with_registry_providers_and_sink(
             host.workspace_scope.clone(),
             registry,
             providers,
-            agent_event_sink,
+            host.agent_event_sink.clone(),
         ));
         Ok(host)
     }
@@ -353,10 +434,11 @@ impl WorkspaceHost {
             self.workspace_scope.clone(),
             registry,
             providers,
-            event_sink,
+            Arc::clone(&event_sink),
         ));
         Self {
             agent_service,
+            agent_event_sink: event_sink,
             ..self
         }
     }
@@ -411,6 +493,81 @@ impl WorkspaceHost {
             .as_ref()
             .ok_or(crate::WorkerSwitchError::NoActiveWorker)?;
         workers.cancel_and_switch(Arc::new(target), deadline).await
+    }
+
+    /// Wait for in-flight runs on the active worker to complete (up to
+    /// `deadline`) and then shut the worker down gracefully.
+    ///
+    /// This is the drain half of the re-bootstrap path: it guarantees no
+    /// run is in flight when the old worker process is retired, without
+    /// cancelling anything. Hosts without a process worker (built-in
+    /// fallback backends) return immediately.
+    pub async fn drain_active_worker(
+        &self,
+        deadline: std::time::Duration,
+    ) -> Result<(), crate::WorkerSwitchError> {
+        let Some(worker_switch) = &self.worker_switch else {
+            return Ok(());
+        };
+        let handle = worker_switch.selected().await;
+        let active = worker_switch.resolve(&handle).await?;
+        let leases = active.run_leases();
+        leases.begin_draining();
+        if !leases.wait_until_empty(deadline).await {
+            leases.restore_ready();
+            return Err(crate::WorkerSwitchError::DrainTimeout {
+                instance: handle.instance().clone(),
+            });
+        }
+        worker_switch.shutdown_active(deadline).await
+    }
+
+    /// Re-run the bootstrap flow against `current` with `new_selection`.
+    ///
+    /// The new backend is composed (and its worker, if any, started) first;
+    /// only then are in-flight runs on the current backend drained. If the
+    /// drain does not finish within [`REBOOTSTRAP_DRAIN_DEADLINE`], the
+    /// freshly built workspace is shut down and the current one is left
+    /// untouched.
+    pub async fn rebuild_workspace(
+        current: &Self,
+        new_selection: BackendSelection,
+    ) -> Result<Self, AppHostError> {
+        let backend_config = backend_config_for_selection(&current.backend_config, new_selection);
+        let rebuilt = Self::with_backend_config_and_worker_inventory_inner(
+            current.workspace_scope.clone(),
+            (*current.config).clone(),
+            backend_config,
+            current.event_sink.clone(),
+            current.agent_event_sink.clone(),
+            Arc::clone(&current.worker_inventory),
+        )
+        .await?;
+        if let Err(error) = current
+            .drain_active_worker(REBOOTSTRAP_DRAIN_DEADLINE)
+            .await
+        {
+            rebuilt.shutdown().await;
+            return Err(AppHostError::RebootFailed {
+                message: error.to_string(),
+            });
+        }
+        Ok(rebuilt)
+    }
+
+    /// Drain in-flight runs and re-bootstrap the workspace with a new
+    /// backend selection (B4-8).
+    ///
+    /// This preserves the workspace paths and event sinks; it does not
+    /// persist the selection to `inference_backend.json`, so a restarted
+    /// app boots with the configured backend again.
+    pub async fn rebootstrap(
+        &mut self,
+        new_selection: BackendSelection,
+    ) -> Result<(), AppHostError> {
+        let rebuilt = Self::rebuild_workspace(self, new_selection).await?;
+        *self = rebuilt;
+        Ok(())
     }
     pub fn agent_service(&self) -> &Arc<AgentService> {
         &self.agent_service
@@ -531,9 +688,32 @@ async fn load_backend_config_result(
     Ok(backend_config)
 }
 
+/// Project a [`BackendSelection`] onto the persisted backend config,
+/// keeping device preferences but clearing the pinned instance so the
+/// bootstrap policy re-resolves against the live profile.
+fn backend_config_for_selection(
+    current: &InferenceBackendConfig,
+    selection: BackendSelection,
+) -> InferenceBackendConfig {
+    #[allow(deprecated)]
+    let backend = match selection {
+        BackendSelection::Burn => reimagine_config::InferenceBackendKind::Burn,
+        BackendSelection::Candle => reimagine_config::InferenceBackendKind::Candle,
+    };
+    InferenceBackendConfig {
+        backend,
+        selected_instance: None,
+        ..current.clone()
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+    use reimagine_backend_worker_host::{
+        ExpectedWorkerIdentity, InstallationRecord, InventoryStore, WorkerInstallationId,
+    };
+    use reimagine_backend_worker_protocol::BackendInstanceId;
     use reimagine_config::InferenceBackendKind;
     use reimagine_core::model::NodeTypeId;
     use reimagine_inference::BackendInstance;
@@ -546,6 +726,33 @@ mod tests {
             .as_nanos();
         let tid = std::thread::current().id();
         std::env::temp_dir().join(format!("reimagine-app-host-ws-{prefix}-{nonce:?}-{tid:?}"))
+    }
+
+    /// Seed a durable burn-worker installation record beneath `app_data_root`.
+    fn seed_worker_record(app_data_root: &std::path::Path, install_dir: &std::path::Path) {
+        let store = InventoryStore::new(WorkerStorePaths::new(app_data_root));
+        let exe = install_dir.join("burn-worker");
+        fs::write(&exe, "#!/bin/sh\n").unwrap();
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            fs::set_permissions(&exe, fs::Permissions::from_mode(0o755)).unwrap();
+        }
+        let record = InstallationRecord {
+            installation_id: WorkerInstallationId("install-burn-1".to_owned()),
+            version: "1.0.0".to_owned(),
+            identity: ExpectedWorkerIdentity {
+                backend_instance_id: BackendInstanceId("burn:wgpu:default".to_owned()),
+                installation_id: WorkerInstallationId("install-burn-1".to_owned()),
+                backend_kind: "burn".to_owned(),
+                target: "test".to_owned(),
+                manifest_digest: "seed".to_owned(),
+            },
+            installed_at: chrono::Utc::now(),
+            install_path: install_dir.display().to_string(),
+            manifest_profile: None,
+        };
+        store.add(&record).expect("seed inventory record");
     }
 
     #[test]
@@ -962,6 +1169,146 @@ mod tests {
         assert!(
             registry.get(&cpu_id).is_some(),
             "fallback to cpu must still register the built-in checkpoint loader executor"
+        );
+        let _ = fs::remove_dir_all(&base);
+    }
+
+    // ── App-data root wiring (BE-38) ──────────────────────────────
+
+    fn burn_worker_visible(profile: &reimagine_inference::WorkspaceComputeProfile) -> bool {
+        profile
+            .backend_profiles
+            .iter()
+            .flat_map(|backend| backend.instances.iter())
+            .any(|instance| instance.instance == BackendInstance::new("burn:wgpu:default"))
+    }
+
+    #[tokio::test]
+    async fn try_with_app_data_root_reads_worker_store_beneath_explicit_root() {
+        let base = temp_dir("app-data-root");
+        let app_data_root = base.join("app-data");
+        let install_dir = base.join("installed-worker");
+        fs::create_dir_all(&install_dir).unwrap();
+        seed_worker_record(&app_data_root, &install_dir);
+
+        // Selection pinned to the built-in candle instance so the seeded
+        // burn worker is never activated (no process spawn in tests).
+        let backend_config = InferenceBackendConfig {
+            backend: InferenceBackendKind::Candle,
+            candle_device: "cpu".to_string(),
+            selected_instance: Some("candle:cpu".to_string()),
+            ..InferenceBackendConfig::default()
+        };
+        let workspace = WorkspaceHost::try_with_app_data_root_and_backend_config(
+            WorkspaceScope::new("app-data-root"),
+            &base,
+            &app_data_root,
+            backend_config,
+            Arc::new(VecRunEventSink::new()),
+            Arc::new(reimagine_agent::VecAgentEventSink::new()),
+        )
+        .await
+        .expect("bootstrap with explicit app-data root");
+
+        assert_eq!(
+            workspace.resolved_backend_instance(),
+            &BackendInstance::new("candle:cpu")
+        );
+        assert!(
+            burn_worker_visible(&workspace.compute_profile()),
+            "profile must include the worker installed beneath the explicit app-data root"
+        );
+        let _ = fs::remove_dir_all(&base);
+    }
+
+    #[tokio::test]
+    async fn base_path_derived_bootstrap_does_not_see_explicit_app_data_store() {
+        let base = temp_dir("app-data-miss");
+        let app_data_root = base.join("app-data");
+        let install_dir = base.join("installed-worker");
+        fs::create_dir_all(&install_dir).unwrap();
+        seed_worker_record(&app_data_root, &install_dir);
+
+        // The legacy constructor derives the store from `{base}.app-data`,
+        // which is NOT the same directory as the explicit root — the seeded
+        // record must stay invisible.
+        let workspace =
+            WorkspaceHost::try_with_defaults(WorkspaceScope::new("app-data-miss"), &base)
+                .await
+                .expect("bootstrap with base-path-derived store");
+
+        assert!(
+            !burn_worker_visible(&workspace.compute_profile()),
+            "base-path-derived provider must not see a store beneath the explicit root"
+        );
+        let _ = fs::remove_dir_all(&base);
+    }
+
+    // ── Re-bootstrap path (B4-8) ──────────────────────────────────
+
+    #[tokio::test]
+    async fn rebootstrap_swaps_backend_and_preserves_workspace() {
+        let base = temp_dir("rebootstrap");
+        let mut workspace =
+            WorkspaceHost::try_with_defaults(WorkspaceScope::new("rebootstrap"), &base)
+                .await
+                .expect("initial bootstrap");
+
+        assert_eq!(
+            workspace.backend_config().backend,
+            InferenceBackendKind::Burn
+        );
+        workspace
+            .rebootstrap(BackendSelection::Burn)
+            .await
+            .expect("rebootstrap to the same backend must succeed (restart compute backend)");
+        assert_eq!(
+            workspace.backend_config().backend,
+            InferenceBackendKind::Burn
+        );
+        assert_eq!(workspace.base_path(), base);
+
+        #[allow(deprecated)]
+        workspace
+            .rebootstrap(BackendSelection::Candle)
+            .await
+            .expect("rebootstrap to candle");
+        assert_eq!(
+            workspace.backend_config().backend,
+            InferenceBackendKind::Candle
+        );
+        assert_eq!(workspace.base_path(), base);
+        assert_eq!(workspace.resolved_candle_device_label(), "cpu");
+
+        let profile = workspace.compute_profile();
+        assert_cpu_available(&profile);
+        let _ = fs::remove_dir_all(&base);
+    }
+
+    #[tokio::test]
+    async fn rebuild_workspace_builds_new_host_without_mutating_current() {
+        let base = temp_dir("rebuild");
+        let original = WorkspaceHost::try_with_defaults(WorkspaceScope::new("rebuild"), &base)
+            .await
+            .expect("initial bootstrap");
+
+        let rebuilt = WorkspaceHost::rebuild_workspace(&original, BackendSelection::Burn)
+            .await
+            .expect("rebuild");
+
+        assert_eq!(rebuilt.base_path(), base);
+        assert_eq!(rebuilt.backend_config().backend, InferenceBackendKind::Burn);
+        assert_eq!(
+            original.backend_config().backend,
+            InferenceBackendKind::Burn,
+            "rebuild must not mutate the current workspace"
+        );
+        assert!(
+            rebuilt
+                .runtime_service
+                .registry()
+                .get(&NodeTypeId::new("builtin.ksampler"))
+                .is_some()
         );
         let _ = fs::remove_dir_all(&base);
     }
