@@ -60,10 +60,10 @@ impl WorkerService for GrpcWorkerService {
                 match msg_result {
                     Ok(msg) => {
                         let response = handler(msg).await;
-                        if let Some(resp) = response {
-                            if tx.send(Ok(resp)).await.is_err() {
-                                break; // receiver dropped
-                            }
+                        if let Some(resp) = response
+                            && tx.send(Ok(resp)).await.is_err()
+                        {
+                            break; // receiver dropped
                         }
                     }
                     Err(status) => {

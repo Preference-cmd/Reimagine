@@ -160,7 +160,7 @@ impl TryFrom<&WireMessage> for proto::WorkerToHost {
                     protocol_version: u16_to_u32(c.protocol_version.0),
                     incarnation_id: c.incarnation_id.0.clone(),
                     control_id: c.control_id.0.clone(),
-                    released_objects: c.released_objects.clone(),
+                    released_objects: c.released_objects,
                 })
             }
             WireMessage::ShutdownAck(s) => {
