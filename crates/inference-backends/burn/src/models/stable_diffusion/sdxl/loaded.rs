@@ -64,6 +64,14 @@ impl BurnLoadedModelBundle {
         }
     }
 
+    /// Approximate byte size of all component weights in this bundle.
+    /// Used by `BurnModelCache` for LRU eviction budget calculations.
+    pub fn estimated_byte_size(&self) -> u64 {
+        match self {
+            Self::StableDiffusionSdxl(bundle) => bundle.estimated_byte_size(),
+        }
+    }
+
     pub fn load_bundle_response(
         &self,
         backend: Backend,
@@ -90,6 +98,14 @@ pub struct BurnLoadedSdxlBundle {
 }
 
 impl BurnLoadedSdxlBundle {
+    /// Approximate byte size of all component weights.
+    pub fn estimated_byte_size(&self) -> u64 {
+        self.components
+            .iter()
+            .map(|c| c.source_signature.size)
+            .sum()
+    }
+
     pub fn from_resolved(
         resolved: &ResolvedInferenceModel,
         source_set: &ResolvedInferenceModelSourceSet,

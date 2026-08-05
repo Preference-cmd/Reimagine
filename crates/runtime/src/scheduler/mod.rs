@@ -1,7 +1,11 @@
 //! Per-node state machine used by the scheduler and exposed via
 //! `RunSnapshot.node_states`.
 
+mod ready_set;
+
 use reimagine_core::model::NodeId;
+
+pub use ready_set::ReadySetScheduler;
 
 /// State of an individual node within a running or completed run.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, serde::Serialize, serde::Deserialize)]

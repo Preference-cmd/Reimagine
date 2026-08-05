@@ -21,6 +21,7 @@ use crate::request::latent::{CreateEmptyLatentRequest, LatentDecodeRequest};
 use crate::request::latent_encode::LatentEncodeRequest;
 use crate::request::model::LoadBundleRequest;
 use crate::request::text::TextEncodeRequest;
+use crate::resource_hints::ResourceHints;
 use crate::response::diffusion::DiffusionSampleResponse;
 use crate::response::image::{ImagePreviewResponse, ImageSaveResponse};
 use crate::response::image_import::ImageImportResponse;
@@ -191,5 +192,28 @@ pub trait InferenceBackend: Send + Sync + 'static {
         let result = self.image_preview(request).await;
         self.finish_invocation(_invocation);
         result
+    }
+
+    /// Apply resource hints for the upcoming stage.
+    ///
+    /// Backends that do not implement resource management continue to
+    /// work via this default no-op implementation.
+    async fn apply_resource_hints(
+        &self,
+        _hints: ResourceHints,
+    ) -> Result<(), InferenceError> {
+        Ok(())
+    }
+
+    /// Query current VRAM usage (bytes) for this backend instance.
+    ///
+    /// Returns `None` if the backend does not track VRAM usage.
+    fn current_vram_usage(&self) -> Option<u64> {
+        None
+    }
+
+    /// Query the number of loaded model bundles.
+    fn loaded_model_count(&self) -> usize {
+        0
     }
 }

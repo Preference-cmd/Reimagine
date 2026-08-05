@@ -1,4 +1,4 @@
-use reimagine_core::model::{NodeDef, SlotKind};
+use reimagine_core::model::{ComponentRole, ModelFamily, NodeDef, NodeResourceRequirements, SlotKind};
 
 use super::{BUILTIN_EMPTY_LATENT_IMAGE, BUILTIN_VAE_ENCODE, required_input, required_output};
 
@@ -21,4 +21,10 @@ pub fn vae_encode() -> NodeDef {
         .with_input_slot(required_input("vae", SlotKind::Vae, true))
         .with_input_slot(required_input("image", SlotKind::Image, true))
         .with_output_slot(required_output("latent", SlotKind::Latent))
+        .with_resource_requirements(
+            NodeResourceRequirements::new()
+                .model_family(ModelFamily::stable_diffusion())
+                .required_components(vec![ComponentRole::VaeEncoder])
+                .estimated_vram_bytes(335_544_320), // ~320 MB
+        )
 }

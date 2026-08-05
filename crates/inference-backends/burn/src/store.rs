@@ -3,11 +3,12 @@ use std::sync::{Arc, Mutex};
 
 use burn_tensor::{Tensor, TensorData};
 use reimagine_core::model::{ModelId, RunId};
-use reimagine_inference::{BackendPayloadKey, LatentSpaceMetadata};
+use reimagine_inference::{BackendPayloadKey, LatentSpaceMetadata, VramBudget};
 
 use crate::active_backend::ActiveBurnBackend;
 use crate::models::stable_diffusion::sdxl::{
-    BurnLoadedModelBundle, BurnSdxlSourceSignature, BurnSdxlTokenizedPromptPair,
+    BurnLoadedModelBundle, BurnLoadedSdxlBundle, BurnSdxlSourceSignature,
+    BurnSdxlTokenizedPromptPair,
 };
 
 /// Backend-owned latent payload wrapper.
@@ -793,10 +794,34 @@ impl From<StoreError> for crate::error::BurnBackendError {
     }
 }
 
-/// Cross-run cache for loaded model bundles.
-#[derive(Debug, Default)]
+/// Cross-run cache for loaded model bundles with LRU eviction.
+///
+/// When a VRAM budget is set via [`apply_vram_budget`], the cache
+/// evicts least-recently-used bundles to stay under budget.
+#[derive(Debug)]
 pub struct BurnModelCache {
-    bundles: Mutex<HashMap<ModelId, Arc<BurnLoadedModelBundle>>>,
+    inner: Mutex<BurnModelCacheInner>,
+}
+
+#[derive(Debug)]
+struct BurnModelCacheInner {
+    bundles: HashMap<ModelId, Arc<BurnLoadedModelBundle>>,
+    /// LRU order: oldest (evict first) at front, newest at back.
+    lru_order: Vec<ModelId>,
+    /// VRAM budget in bytes. `None` means unlimited.
+    capacity_bytes: Option<u64>,
+}
+
+impl Default for BurnModelCache {
+    fn default() -> Self {
+        Self {
+            inner: Mutex::new(BurnModelCacheInner {
+                bundles: HashMap::new(),
+                lru_order: Vec::new(),
+                capacity_bytes: None,
+            }),
+        }
+    }
 }
 
 impl BurnModelCache {
@@ -804,14 +829,26 @@ impl BurnModelCache {
         Self::default()
     }
 
+    /// Set the VRAM budget and evict LRU bundles if over budget.
+    pub fn apply_vram_budget(&self, budget: VramBudget) {
+        let mut inner = self.inner.lock().expect("model cache poisoned");
+        inner.capacity_bytes = budget.total_bytes;
+        Self::evict_if_over_budget(&mut inner);
+    }
+
     pub fn get_compatible_bundle(
         &self,
         model_id: &ModelId,
         signature: &BurnSdxlSourceSignature,
     ) -> Option<Arc<BurnLoadedModelBundle>> {
-        let bundles = self.bundles.lock().expect("model cache poisoned");
-        let bundle = bundles.get(model_id)?;
-        (bundle.source_signature() == signature).then(|| bundle.clone())
+        let mut inner = self.inner.lock().expect("model cache poisoned");
+        let bundle = inner.bundles.get(model_id)?;
+        if bundle.source_signature() != signature {
+            return None;
+        }
+        let bundle = bundle.clone();
+        Self::touch_lru(&mut inner.lru_order, model_id);
+        Some(bundle)
     }
 
     /// Return the bundle currently registered for a model id,
@@ -819,40 +856,83 @@ impl BurnModelCache {
     /// burn/08a text.encode preflight to confirm a bundle is
     /// loaded before the CLIP forward pass becomes real.
     pub fn get_bundle(&self, model_id: &ModelId) -> Option<Arc<BurnLoadedModelBundle>> {
-        self.bundles
-            .lock()
-            .expect("model cache poisoned")
-            .get(model_id)
-            .cloned()
+        let mut inner = self.inner.lock().expect("model cache poisoned");
+        let bundle = inner.bundles.get(model_id)?;
+        let bundle = bundle.clone();
+        Self::touch_lru(&mut inner.lru_order, model_id);
+        Some(bundle)
     }
 
     /// Check whether a bundle is currently registered for a
     /// model id. Used by the burn/08a preflight before the
     /// signature-bearing lookup.
     pub fn contains(&self, model_id: &ModelId) -> bool {
-        self.bundles
+        self.inner
             .lock()
             .expect("model cache poisoned")
+            .bundles
             .contains_key(model_id)
     }
 
     pub fn insert_bundle(&self, model_id: ModelId, bundle: Arc<BurnLoadedModelBundle>) {
-        self.bundles
-            .lock()
-            .expect("model cache poisoned")
-            .insert(model_id, bundle);
+        let mut inner = self.inner.lock().expect("model cache poisoned");
+        inner.bundles.insert(model_id.clone(), bundle);
+        Self::touch_lru(&mut inner.lru_order, &model_id);
+        Self::evict_if_over_budget(&mut inner);
     }
 
     pub fn bundle_count(&self) -> usize {
-        self.bundles.lock().expect("model cache poisoned").len()
+        self.inner.lock().expect("model cache poisoned").bundles.len()
+    }
+
+    /// Approximate total byte size of all cached bundles.
+    pub fn total_byte_size(&self) -> u64 {
+        self.inner
+            .lock()
+            .expect("model cache poisoned")
+            .bundles
+            .values()
+            .map(|b| b.estimated_byte_size())
+            .sum()
     }
 
     /// Remove all model bundles cached by this backend process.
     pub fn clear(&self) -> usize {
-        let mut bundles = self.bundles.lock().expect("model cache poisoned");
-        let removed = bundles.len();
-        bundles.clear();
+        let mut inner = self.inner.lock().expect("model cache poisoned");
+        let removed = inner.bundles.len();
+        inner.bundles.clear();
+        inner.lru_order.clear();
         removed
+    }
+
+    /// Move `model_id` to the end of the LRU order (most recently used).
+    fn touch_lru(lru_order: &mut Vec<ModelId>, model_id: &ModelId) {
+        lru_order.retain(|id| id != model_id);
+        lru_order.push(model_id.clone());
+    }
+
+    /// Evict least-recently-used bundles until under capacity.
+    fn evict_if_over_budget(inner: &mut BurnModelCacheInner) {
+        let Some(capacity) = inner.capacity_bytes else {
+            return;
+        };
+        while inner.total_bytes() > capacity && !inner.lru_order.is_empty() {
+            let victim_id = inner.lru_order.remove(0);
+            if let Some(bundle) = inner.bundles.remove(&victim_id) {
+                let bytes = bundle.estimated_byte_size();
+                tracing::info!(
+                    model_id = %victim_id,
+                    bytes,
+                    "evicted model from cache to fit VRAM budget"
+                );
+            }
+        }
+    }
+}
+
+impl BurnModelCacheInner {
+    fn total_bytes(&self) -> u64 {
+        self.bundles.values().map(|b| b.estimated_byte_size()).sum()
     }
 }
 
@@ -1322,5 +1402,113 @@ mod tests {
         // signature type through a public accessor.
         let debug = format!("{:?}", metadata.source_signature());
         assert!(debug.contains("components"), "debug: {debug}");
+    }
+
+    // --- LRU eviction tests ---
+
+    /// Build a minimal test bundle for cache testing.
+    /// Uses an empty SDXL bundle — byte size is 0, which is fine for testing cache logic.
+    fn test_bundle(model_id: &str) -> Arc<BurnLoadedModelBundle> {
+        let bundle = BurnLoadedSdxlBundle {
+            model_id: ModelId::new(model_id),
+            source_signature: BurnSdxlSourceSignature::empty(),
+            diffusion_payload_key: BackendPayloadKey::new("test"),
+            clip_payload_key: BackendPayloadKey::new("test"),
+            vae_payload_key: BackendPayloadKey::new("test"),
+            components: Vec::new(),
+        };
+        Arc::new(BurnLoadedModelBundle::StableDiffusionSdxl(Arc::new(bundle)))
+    }
+
+    #[test]
+    fn model_cache_insert_and_get() {
+        let cache = BurnModelCache::new();
+        let model = ModelId::new("model-a");
+        let bundle = test_bundle("model-a");
+        cache.insert_bundle(model.clone(), bundle.clone());
+
+        assert_eq!(cache.bundle_count(), 1);
+        assert!(cache.contains(&model));
+        assert!(cache.get_bundle(&model).is_some());
+    }
+
+    #[test]
+    fn model_cache_lru_eviction_unlimited_never_evicts() {
+        let cache = BurnModelCache::new();
+
+        // Insert 3 bundles
+        for i in 0..3 {
+            let model = ModelId::new(&format!("model-{i}"));
+            let bundle = test_bundle(&format!("model-{i}"));
+            cache.insert_bundle(model, bundle);
+        }
+        assert_eq!(cache.bundle_count(), 3);
+
+        // Unlimited budget = no eviction
+        cache.apply_vram_budget(VramBudget::unlimited());
+        assert_eq!(cache.bundle_count(), 3);
+    }
+
+    #[test]
+    fn model_cache_get_updates_lru_order() {
+        let cache = BurnModelCache::new();
+
+        // Insert 2 bundles
+        let model_a = ModelId::new("model-a");
+        let model_b = ModelId::new("model-b");
+        cache.insert_bundle(model_a.clone(), test_bundle("model-a"));
+        cache.insert_bundle(model_b.clone(), test_bundle("model-b"));
+
+        // Access model-a to make it most recently used
+        cache.get_bundle(&model_a);
+
+        // Both should still be present
+        assert_eq!(cache.bundle_count(), 2);
+        assert!(cache.contains(&model_a));
+        assert!(cache.contains(&model_b));
+    }
+
+    #[test]
+    fn model_cache_total_byte_size_empty_bundle() {
+        let cache = BurnModelCache::new();
+        // Empty bundles have 0 byte size
+        cache.insert_bundle(ModelId::new("model-a"), test_bundle("model-a"));
+        assert_eq!(cache.total_byte_size(), 0);
+    }
+
+    #[test]
+    fn model_cache_clear_removes_all() {
+        let cache = BurnModelCache::new();
+        cache.insert_bundle(ModelId::new("a"), test_bundle("a"));
+        cache.insert_bundle(ModelId::new("b"), test_bundle("b"));
+        assert_eq!(cache.clear(), 2);
+        assert_eq!(cache.bundle_count(), 0);
+    }
+
+    #[test]
+    fn model_cache_contains_tracks_entries() {
+        let cache = BurnModelCache::new();
+        let model = ModelId::new("model-x");
+        assert!(!cache.contains(&model));
+        cache.insert_bundle(model.clone(), test_bundle("model-x"));
+        assert!(cache.contains(&model));
+        cache.clear();
+        assert!(!cache.contains(&model));
+    }
+
+    #[test]
+    fn model_cache_get_compatible_bundle_checks_signature() {
+        let cache = BurnModelCache::new();
+        let model = ModelId::new("model-a");
+        cache.insert_bundle(model.clone(), test_bundle("model-a"));
+
+        // Empty signature matches empty signature
+        let result = cache.get_compatible_bundle(&model, &BurnSdxlSourceSignature::empty());
+        assert!(result.is_some());
+
+        // Non-matching signature returns None
+        let other_sig = BurnSdxlSourceSignature::empty();
+        let result = cache.get_compatible_bundle(&ModelId::new("nonexistent"), &other_sig);
+        assert!(result.is_none());
     }
 }

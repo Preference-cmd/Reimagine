@@ -1,4 +1,4 @@
-use reimagine_core::model::{NodeDef, SlotKind};
+use reimagine_core::model::{ComponentRole, ModelFamily, NodeDef, NodeResourceRequirements, SlotKind};
 
 use super::{BUILTIN_KSAMPLER, required_input, required_output};
 
@@ -15,4 +15,10 @@ pub fn ksampler() -> NodeDef {
         .with_input_slot(required_input("scheduler", SlotKind::Select, false))
         .with_input_slot(required_input("denoise", SlotKind::Float, false))
         .with_output_slot(required_output("latent", SlotKind::Latent))
+        .with_resource_requirements(
+            NodeResourceRequirements::new()
+                .model_family(ModelFamily::stable_diffusion())
+                .required_components(vec![ComponentRole::DiffusionModel])
+                .estimated_vram_bytes(3_758_096_384), // ~3.5 GB
+        )
 }

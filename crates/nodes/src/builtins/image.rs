@@ -1,4 +1,4 @@
-use reimagine_core::model::{NodeDef, NodeEffect, SlotKind};
+use reimagine_core::model::{ComponentRole, ModelFamily, NodeDef, NodeEffect, NodeResourceRequirements, SlotKind};
 
 use super::{
     BUILTIN_PREVIEW_IMAGE, BUILTIN_SAVE_IMAGE, BUILTIN_VAE_DECODE, required_input, required_output,
@@ -9,6 +9,12 @@ pub fn vae_decode() -> NodeDef {
         .with_input_slot(required_input("vae", SlotKind::Vae, true))
         .with_input_slot(required_input("latent", SlotKind::Latent, true))
         .with_output_slot(required_output("image", SlotKind::Image))
+        .with_resource_requirements(
+            NodeResourceRequirements::new()
+                .model_family(ModelFamily::stable_diffusion())
+                .required_components(vec![ComponentRole::VaeDecoder])
+                .estimated_vram_bytes(335_544_320), // ~320 MB
+        )
 }
 
 pub fn save_image() -> NodeDef {

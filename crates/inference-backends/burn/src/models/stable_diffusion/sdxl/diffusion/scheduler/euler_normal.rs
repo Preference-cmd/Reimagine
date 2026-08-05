@@ -14,6 +14,7 @@
 //! ```
 
 use burn_tensor::{Tensor, backend::Backend};
+use reimagine_inference::{DiffusionScheduler, InferenceError};
 
 use crate::error::BurnBackendError;
 
@@ -158,6 +159,80 @@ impl EulerNormalScheduler {
 
         let denoised = x - noise_pred.clone() * sigma_t_s;
         Ok(denoised * sqrt_ratio + noise_pred * sigma_prev_s)
+    }
+}
+
+// ---------------------------------------------------------------------------
+// DiffusionScheduler trait implementation
+// ---------------------------------------------------------------------------
+
+impl DiffusionScheduler for EulerNormalScheduler {
+    fn set_timesteps(&mut self, num_inference_steps: u32) -> Result<(), InferenceError> {
+        let n = num_inference_steps as usize;
+        if n == 0 {
+            return Err(InferenceError::BackendExecutionFailed {
+                message: "num_inference_steps must be at least 1".to_string(),
+            });
+        }
+
+        let betas = linspace(BETA_START, BETA_END, NUM_TRAIN_TSTEPS as usize);
+        let alphas: Vec<f64> = betas.iter().map(|b| 1.0 - b).collect();
+        let alphas_cumprod_full = cumprod(&alphas);
+        let sigmas_full: Vec<f64> = alphas_cumprod_full
+            .iter()
+            .map(|ac| ((1.0 - ac) / ac).sqrt())
+            .collect();
+
+        let step_ratio = NUM_TRAIN_TSTEPS as f64 / num_inference_steps as f64;
+        let mut indices: Vec<usize> = (0..n)
+            .map(|i| (i as f64 * step_ratio).round() as usize)
+            .collect();
+        indices.reverse();
+
+        self.timesteps = indices.iter().map(|&i| i as f64).collect();
+        self.sigmas = indices.iter().map(|&i| sigmas_full[i]).collect();
+        self.alphas_cumprod = indices.iter().map(|&i| alphas_cumprod_full[i]).collect();
+        self.init_noise_sigma = 1.0;
+
+        Ok(())
+    }
+
+    fn timesteps(&self) -> &[f64] {
+        &self.timesteps
+    }
+
+    fn sigmas(&self) -> &[f64] {
+        &self.sigmas
+    }
+
+    fn alphas_cumprod(&self) -> &[f64] {
+        &self.alphas_cumprod
+    }
+
+    fn init_noise_sigma(&self) -> f64 {
+        self.init_noise_sigma
+    }
+
+    fn sigma_at(&self, index: usize) -> Result<f64, InferenceError> {
+        self.sigmas.get(index).copied().ok_or_else(|| {
+            InferenceError::BackendExecutionFailed {
+                message: format!(
+                    "timestep index {index} out of range (sigmas len={})",
+                    self.sigmas.len()
+                ),
+            }
+        })
+    }
+
+    fn alpha_cumprod_at(&self, index: usize) -> Result<f64, InferenceError> {
+        self.alphas_cumprod.get(index).copied().ok_or_else(|| {
+            InferenceError::BackendExecutionFailed {
+                message: format!(
+                    "timestep index {index} out of range (alphas_cumprod len={})",
+                    self.alphas_cumprod.len()
+                ),
+            }
+        })
     }
 }
 

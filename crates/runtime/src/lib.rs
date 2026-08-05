@@ -43,7 +43,7 @@ pub use resources::NoopBackendInstanceRuntimeHooks;
 pub use run_inputs::RunInputs;
 pub use run_session::RunSession;
 pub use runner::{RuntimeOptions, RuntimeService, RuntimeServiceError};
-pub use scheduler::NodeState;
+pub use scheduler::{NodeState, ReadySetScheduler};
 pub use snapshot::{RunArtifactRef, RunSnapshot, RunSummary};
 pub use store::{RunStore, RunStoreInner};
 pub use value_store::{OutputKey, RunValueStore, RuntimeValueRecord};

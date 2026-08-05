@@ -266,4 +266,55 @@ impl InferenceBackend for BurnBackend {
     ) -> Result<ImagePreviewResponse, InferenceError> {
         execute_image_preview(request, self).map_err(burn_error_to_inference_error)
     }
+
+    // Override InferenceBackend defaults to delegate to same internal logic
+    // as ResourceHintSink, so both trait paths work.
+
+    async fn apply_resource_hints(
+        &self,
+        hints: ResourceHints,
+    ) -> Result<(), InferenceError> {
+        <Self as ResourceHintSink>::apply_resource_hints(self, hints).await
+    }
+
+    fn current_vram_usage(&self) -> Option<u64> {
+        <Self as ResourceHintSink>::current_vram_usage(self)
+    }
+
+    fn loaded_model_count(&self) -> usize {
+        <Self as ResourceHintSink>::loaded_model_count(self)
+    }
+}
+
+#[async_trait::async_trait]
+impl ResourceHintSink for BurnBackend {
+    async fn apply_resource_hints(
+        &self,
+        hints: ResourceHints,
+    ) -> Result<(), InferenceError> {
+        tracing::debug!(
+            run_id = %hints.run_id,
+            vram_budget = ?hints.vram_budget,
+            prefetch_models = hints.prefetch.next_model_ids.len(),
+            lifecycle_entries = hints.component_lifecycle.len(),
+            "applying resource hints to BurnBackend"
+        );
+
+        // Forward VRAM budget to model cache for LRU eviction
+        if let Some(budget) = hints.vram_budget {
+            self.model_cache.apply_vram_budget(budget);
+        }
+
+        Ok(())
+    }
+
+    fn current_vram_usage(&self) -> Option<u64> {
+        let model_bytes = self.model_cache.total_byte_size();
+        let payload_bytes = self.store.payload_byte_size() as u64;
+        Some(model_bytes + payload_bytes)
+    }
+
+    fn loaded_model_count(&self) -> usize {
+        self.model_cache.bundle_count()
+    }
 }

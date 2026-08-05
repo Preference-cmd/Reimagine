@@ -7,7 +7,7 @@ use reimagine_core::model::{ArtifactId, NodeId, RunId, WorkflowId, WorkflowVersi
 use reimagine_core::readiness::ExecutionPlan;
 use reimagine_inference::{
     BackendInstanceObservation, BackendInstanceRuntimeHooks, BackendInstanceSnapshot,
-    NodeExecutorRegistry,
+    NodeExecutorRegistry, VramBudget,
 };
 
 use super::orchestrator::Runner;
@@ -33,6 +33,18 @@ pub struct RuntimeOptions {
     /// also sequential. Values greater than one enable bounded same-stage
     /// concurrency. `Some(0)` is rejected by [`RuntimeService::run`].
     pub max_stage_concurrency: Option<usize>,
+    /// Use the dynamic ready-set scheduler instead of sequential stages.
+    ///
+    /// When `true`, nodes are dispatched as soon as their inputs are
+    /// satisfied rather than waiting for all nodes in a stage to complete.
+    /// This enables better GPU utilization for multi-branch workflows.
+    /// Default is `false` (sequential stages).
+    pub use_ready_set: bool,
+    /// VRAM budget sent to the backend via `ResourceHints` before each stage.
+    ///
+    /// `None` (default) means unlimited — the backend uses all available VRAM.
+    /// When set, the backend should evict cached models to stay under budget.
+    pub vram_budget: Option<VramBudget>,
 }
 
 /// Public errors returned from `RuntimeService` operations.

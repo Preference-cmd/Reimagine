@@ -48,10 +48,12 @@ mod profile;
 pub mod registry;
 mod request;
 mod resolver;
+mod resource_hints;
 mod resources;
 mod response;
 mod router;
 mod routing_request;
+mod scheduler;
 /// Test-only fake backend and canned-response helpers.
 ///
 /// Compiled for both unit tests and integration tests so downstream
@@ -113,6 +115,11 @@ pub use resolver::{
     ModelFormat, ModelResolver, ModelSourceKind, ResolvedInferenceModel,
     ResolvedInferenceModelSource, ResolvedInferenceModelSourceSet,
 };
+pub use resource_hints::{
+    ComponentLifecycleAction, ComponentLifecycleEntry, PrefetchHint, ResourceHints,
+    ResourceHintSink, VramBudget,
+};
+pub use scheduler::{DenoisingCallback, DiffusionSampler, DiffusionScheduler};
 pub use resources::{
     BackendInstanceObservation, BackendInstanceRuntimeHooks, BackendInstanceSnapshot,
     BackendResourceMechanism, BackendResourceObservation, BackendResourceSnapshot,
