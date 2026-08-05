@@ -1,6 +1,7 @@
 //! Burn inference backend adapter skeleton.
 
 pub use backend::BurnBackend;
+pub use cancellation::with_request_cancellation;
 pub use config::BurnBackendConfig;
 pub use device::BurnDevice;
 pub use error::BurnBackendError;
@@ -13,6 +14,7 @@ pub use resource::BurnBackendInstanceRuntimeHooks;
 
 mod active_backend;
 mod backend;
+mod cancellation;
 mod config;
 mod device;
 mod error;

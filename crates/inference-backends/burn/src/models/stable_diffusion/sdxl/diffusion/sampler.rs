@@ -68,6 +68,14 @@ impl SamplerForwardEvent {
         }
     }
 
+    pub(crate) fn branch(&self) -> SdxlCfgBranch {
+        self.branch
+    }
+
+    pub(crate) fn step_index(&self) -> usize {
+        self.step_index
+    }
+
     fn from_conditioning(
         branch: SdxlCfgBranch,
         step_index: usize,
@@ -86,14 +94,14 @@ impl SamplerForwardEvent {
     }
 }
 
-struct SdxlSamplerRequest<'a> {
-    unet: &'a SdxlUnet<ActiveBurnBackend>,
-    latent: Tensor<ActiveBurnBackend, 4>,
-    positive_conditioning: SdxlCfgConditioning,
-    negative_conditioning: SdxlCfgConditioning,
-    steps: u32,
-    cfg: f32,
-    seed: u64,
+pub(crate) struct SdxlSamplerRequest<'a> {
+    pub(crate) unet: &'a SdxlUnet<ActiveBurnBackend>,
+    pub(crate) latent: Tensor<ActiveBurnBackend, 4>,
+    pub(crate) positive_conditioning: SdxlCfgConditioning,
+    pub(crate) negative_conditioning: SdxlCfgConditioning,
+    pub(crate) steps: u32,
+    pub(crate) cfg: f32,
+    pub(crate) seed: u64,
 }
 
 /// Run the euler/normal classifier-free guidance loop over the Burn-native
@@ -101,6 +109,7 @@ struct SdxlSamplerRequest<'a> {
 ///
 /// The scheduler timestep value is the selected 1000-step training index
 /// passed to both CFG branches before the Euler sigma update for that index.
+#[allow(dead_code)] // test convenience wrapper; production uses the observer variant
 pub fn euler_normal_cfg_sample(
     unet: &SdxlUnet<ActiveBurnBackend>,
     latent: Tensor<ActiveBurnBackend, 4>,
@@ -120,13 +129,15 @@ pub fn euler_normal_cfg_sample(
             cfg,
             seed,
         },
-        |_| {},
+        |_| Ok(()),
+        None,
     )
 }
 
-fn euler_normal_cfg_sample_with_observer(
+pub(crate) fn euler_normal_cfg_sample_with_observer(
     request: SdxlSamplerRequest,
-    mut observe_forward: impl FnMut(SamplerForwardEvent),
+    mut observe_forward: impl FnMut(SamplerForwardEvent) -> Result<(), BurnBackendError>,
+    mut on_step: Option<&mut dyn FnMut(usize, f64) -> Result<(), BurnBackendError>>,
 ) -> Result<Tensor<ActiveBurnBackend, 4>, BurnBackendError> {
     let SdxlSamplerRequest {
         unet,
@@ -153,7 +164,7 @@ fn euler_normal_cfg_sample_with_observer(
             step,
             timestep_value,
             &negative_conditioning,
-        ));
+        ))?;
         let noise_uncond = unet.forward_with_added_conditioning(
             latent.clone(),
             timestep.clone(),
@@ -165,7 +176,7 @@ fn euler_normal_cfg_sample_with_observer(
             step,
             timestep_value,
             &positive_conditioning,
-        ));
+        ))?;
         let noise_text = unet.forward_with_added_conditioning(
             latent.clone(),
             timestep,
@@ -174,6 +185,11 @@ fn euler_normal_cfg_sample_with_observer(
         );
         let guided = noise_uncond.clone() + (noise_text - noise_uncond) * cfg;
         latent = scheduler.step_tensor(latent, guided, step)?;
+
+        // Invoke the optional per-step callback
+        if let Some(callback) = on_step.as_deref_mut() {
+            callback(step, timestep_value)?;
+        }
     }
 
     Ok(latent)
@@ -275,7 +291,11 @@ mod tests {
                 cfg: 7.5,
                 seed: 42,
             },
-            |event| observed.push(event),
+            |event| {
+                observed.push(event);
+                Ok(())
+            },
+            None,
         )
         .expect("active cfg sample with observer");
 
@@ -440,7 +460,11 @@ mod tests {
                 cfg: 7.5,
                 seed: 42,
             },
-            |event| observed.push(event),
+            |event| {
+                observed.push(event);
+                Ok(())
+            },
+            None,
         )
         .expect("multi-step cfg sample");
 
@@ -492,6 +516,58 @@ mod tests {
                 "step {step_idx}: second CFG branch must be positive"
             );
         }
+    }
+
+    #[test]
+    fn cfg_sampler_aborts_between_steps_when_observer_reports_cancellation() {
+        let device = active_device(BurnBackendConfig::new("/models", "/output").device());
+        let unet = SdxlUnet::<ActiveBurnBackend>::init(&device);
+        let latent = Tensor::<ActiveBurnBackend, 4>::zeros([1, 4, 8, 8], &device);
+        let positive = Tensor::<ActiveBurnBackend, 3>::ones([1, 77, 16], &device);
+        let negative = Tensor::<ActiveBurnBackend, 3>::zeros([1, 77, 16], &device);
+        let token = tokio_util::sync::CancellationToken::new();
+        let mut forwards = 0;
+
+        let sampled = euler_normal_cfg_sample_with_observer(
+            SdxlSamplerRequest {
+                unet: &unet,
+                latent,
+                positive_conditioning: SdxlCfgConditioning::new(
+                    positive,
+                    SdxlAddedConditioning::new(
+                        Tensor::<ActiveBurnBackend, 2>::ones([1, 8], &device),
+                        Tensor::<ActiveBurnBackend, 2>::ones([1, 6], &device),
+                    ),
+                ),
+                negative_conditioning: SdxlCfgConditioning::new(
+                    negative,
+                    SdxlAddedConditioning::new(
+                        Tensor::<ActiveBurnBackend, 2>::zeros([1, 8], &device),
+                        Tensor::<ActiveBurnBackend, 2>::zeros([1, 6], &device),
+                    ),
+                ),
+                steps: 8,
+                cfg: 7.5,
+                seed: 42,
+            },
+            |_event| {
+                forwards += 1;
+                if forwards == 2 {
+                    token.cancel();
+                }
+                if token.is_cancelled() {
+                    Err(BurnBackendError::Cancelled)
+                } else {
+                    Ok(())
+                }
+            },
+            None,
+        );
+
+        assert!(
+            matches!(sampled, Err(BurnBackendError::Cancelled)),
+            "sampler must abort between steps once cancellation is observed"
+        );
     }
 
     #[test]

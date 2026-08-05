@@ -7,8 +7,9 @@ use reimagine_inference::{
     InferenceBackend, InferenceBackendCapabilities, InferenceCapability,
     InferenceCapabilitySupport, InferenceError, LatentDecodeRequest, LatentDecodeResponse,
     LatentEncodeRequest, LatentEncodeResponse, LoadBundleRequest, LoadBundleResponse,
-    TextEncodeRequest, TextEncodeResponse,
+    ResourceHintSink, ResourceHints, TextEncodeRequest, TextEncodeResponse,
 };
+use tokio_util::sync::CancellationToken;
 
 use crate::active_backend::{ActiveBurnBackend, active_device};
 use crate::config::BurnBackendConfig;
@@ -71,6 +72,18 @@ impl BurnBackend {
 
     pub fn model_cache(&self) -> &Arc<BurnModelCache> {
         &self.model_cache
+    }
+
+    /// Backend-wide cancellation token, shared with the serve loop.
+    pub fn cancellation(&self) -> Arc<CancellationToken> {
+        self.active_runtime.cancellation().clone()
+    }
+
+    /// Whether the current operation should abort. A request-scoped
+    /// token installed via [`crate::with_request_cancellation`] takes
+    /// precedence over the backend-wide token.
+    pub fn is_cancelled(&self) -> bool {
+        crate::cancellation::is_cancelled(self.active_runtime.cancellation())
     }
 
     #[allow(dead_code)]
@@ -140,6 +153,7 @@ fn burn_error_to_inference_error(err: BurnBackendError) -> InferenceError {
         BurnBackendError::CacheIncompatible(message) => {
             InferenceError::ModelNotLoaded { model_id: message }
         }
+        BurnBackendError::Cancelled => InferenceError::Cancelled,
         other => InferenceError::BackendExecutionFailed {
             message: other.to_string(),
         },
@@ -203,7 +217,19 @@ impl InferenceBackend for BurnBackend {
         &self,
         request: DiffusionSampleRequest,
     ) -> Result<DiffusionSampleResponse, InferenceError> {
-        map_err(execute_diffusion_sample(self, request))
+        map_err(execute_diffusion_sample(self, request, None))
+    }
+
+    async fn diffusion_sample_with_invocation(
+        &self,
+        invocation: &reimagine_inference::InferenceInvocation,
+        request: DiffusionSampleRequest,
+    ) -> Result<DiffusionSampleResponse, InferenceError> {
+        self.admit_invocation(invocation)?;
+        let result =
+            execute_diffusion_sample(self, request, Some(invocation.progress().as_ref()));
+        self.finish_invocation(invocation);
+        map_err(result)
     }
 
     async fn latent_decode(

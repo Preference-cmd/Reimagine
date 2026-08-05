@@ -52,8 +52,22 @@ impl TokenGenerator {
 #[allow(dead_code)]
 pub enum MappingResult {
     Success(serde_json::Value),
+    Cancelled,
     BackendError(BackendExecutionError),
     NotImplemented,
+}
+
+/// Map a backend error into a [`MappingResult`], preserving
+/// cancellation so the serve loop can emit `TerminalOutcome::Cancelled`.
+fn backend_error(error: reimagine_inference::InferenceError) -> MappingResult {
+    match error {
+        reimagine_inference::InferenceError::Cancelled => MappingResult::Cancelled,
+        other => MappingResult::BackendError(BackendExecutionError {
+            code: "backend_error".to_string(),
+            message: other.to_string(),
+            retryable: false,
+        }),
+    }
 }
 
 /// Dispatch an incoming wire operation to the Burn backend.
@@ -75,6 +89,8 @@ pub fn dispatch(
         "latent.decode" => dispatch_latent_decode(rt, backend, tokens, payload),
         "image.save" => dispatch_image_save(rt, backend, tokens, payload),
         "image.preview" => dispatch_image_preview(rt, backend, tokens, payload),
+        #[cfg(test)]
+        "test.spin" => dispatch_test_spin(backend, payload),
         other => MappingResult::BackendError(BackendExecutionError {
             code: "unknown_operation".to_string(),
             message: format!("unknown operation: {other}"),
@@ -225,13 +241,7 @@ fn dispatch_create_empty_latent(
 
     let response = match rt.block_on(backend.create_empty_latent(request)) {
         Ok(r) => r,
-        Err(e) => {
-            return MappingResult::BackendError(BackendExecutionError {
-                code: "backend_error".to_string(),
-                message: e.to_string(),
-                retryable: false,
-            });
-        }
+        Err(e) => return backend_error(e),
     };
 
     let latent = response.into_latent();
@@ -408,13 +418,7 @@ fn dispatch_load_bundle(
 
     let response = match rt.block_on(backend.load_bundle(request)) {
         Ok(r) => r,
-        Err(e) => {
-            return MappingResult::BackendError(BackendExecutionError {
-                code: "backend_error".to_string(),
-                message: e.to_string(),
-                retryable: false,
-            });
-        }
+        Err(e) => return backend_error(e),
     };
 
     let model_token = response.model().payload_key().as_str().to_string();
@@ -502,13 +506,7 @@ fn dispatch_text_encode(
 
     let response = match rt.block_on(backend.text_encode(request)) {
         Ok(r) => r,
-        Err(e) => {
-            return MappingResult::BackendError(BackendExecutionError {
-                code: "backend_error".to_string(),
-                message: e.to_string(),
-                retryable: false,
-            });
-        }
+        Err(e) => return backend_error(e),
     };
 
     let conditioning = response.into_conditioning();
@@ -790,13 +788,7 @@ fn dispatch_diffusion_sample(
 
     let response = match rt.block_on(backend.diffusion_sample(request)) {
         Ok(r) => r,
-        Err(e) => {
-            return MappingResult::BackendError(BackendExecutionError {
-                code: "backend_error".to_string(),
-                message: e.to_string(),
-                retryable: false,
-            });
-        }
+        Err(e) => return backend_error(e),
     };
 
     let sampled_latent = response.into_latent();
@@ -931,13 +923,7 @@ fn dispatch_latent_decode(
 
     let response = match rt.block_on(backend.latent_decode(request)) {
         Ok(r) => r,
-        Err(e) => {
-            return MappingResult::BackendError(BackendExecutionError {
-                code: "backend_error".to_string(),
-                message: e.to_string(),
-                retryable: false,
-            });
-        }
+        Err(e) => return backend_error(e),
     };
 
     let image = response.into_image();
@@ -1023,13 +1009,7 @@ fn dispatch_image_save(
 
     let response = match rt.block_on(backend.image_save(request)) {
         Ok(r) => r,
-        Err(e) => {
-            return MappingResult::BackendError(BackendExecutionError {
-                code: "backend_error".to_string(),
-                message: e.to_string(),
-                retryable: false,
-            });
-        }
+        Err(e) => return backend_error(e),
     };
 
     let artifact = response.into_artifact();
@@ -1108,13 +1088,7 @@ fn dispatch_image_preview(
 
     let response = match rt.block_on(backend.image_preview(request)) {
         Ok(r) => r,
-        Err(e) => {
-            return MappingResult::BackendError(BackendExecutionError {
-                code: "backend_error".to_string(),
-                message: e.to_string(),
-                retryable: false,
-            });
-        }
+        Err(e) => return backend_error(e),
     };
 
     let artifact = response.into_artifact();
@@ -1123,6 +1097,27 @@ fn dispatch_image_preview(
     MappingResult::Success(serde_json::json!({
         "artifact_path": artifact_path,
     }))
+}
+
+/// Test-only `test.spin` operation: blocks for `duration_ms`
+/// (default 60s) while polling the request cancellation token, so
+/// serve-loop tests can hold a request in flight deterministically
+/// without model weights or GPU work.
+#[cfg(test)]
+fn dispatch_test_spin(backend: &BurnBackend, payload: &serde_json::Value) -> MappingResult {
+    let duration_ms = payload
+        .get("duration_ms")
+        .and_then(serde_json::Value::as_u64)
+        .unwrap_or(60_000);
+    let deadline = std::time::Instant::now() + std::time::Duration::from_millis(duration_ms);
+    while !backend.is_cancelled() && std::time::Instant::now() < deadline {
+        std::thread::sleep(std::time::Duration::from_millis(5));
+    }
+    if backend.is_cancelled() {
+        MappingResult::Cancelled
+    } else {
+        MappingResult::Success(serde_json::json!({ "spinner": "done" }))
+    }
 }
 
 #[cfg(test)]
@@ -1145,5 +1140,28 @@ mod tests {
         ))
         .unwrap();
         assert!(validate_model_path(&backend, outside.path()).is_err());
+    }
+
+    #[test]
+    fn test_spin_completes_without_cancellation() {
+        let backend = BurnBackend::new(reimagine_inference_burn::BurnBackendConfig::new(
+            "/tmp/models",
+            "/tmp/output",
+        ))
+        .unwrap();
+        let result = dispatch_test_spin(&backend, &serde_json::json!({ "duration_ms": 10 }));
+        assert!(matches!(result, MappingResult::Success(_)));
+    }
+
+    #[test]
+    fn test_spin_returns_cancelled_when_token_cancelled() {
+        let backend = BurnBackend::new(reimagine_inference_burn::BurnBackendConfig::new(
+            "/tmp/models",
+            "/tmp/output",
+        ))
+        .unwrap();
+        backend.cancellation().cancel();
+        let result = dispatch_test_spin(&backend, &serde_json::json!({}));
+        assert!(matches!(result, MappingResult::Cancelled));
     }
 }

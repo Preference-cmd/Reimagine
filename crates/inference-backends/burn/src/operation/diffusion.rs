@@ -11,8 +11,8 @@
 use reimagine_core::model::{NodeId, RunId, TensorShape};
 use reimagine_inference::{
     Backend, BackendPayloadKey, BackendTensorHandle, DiffusionSampleRequest,
-    DiffusionSampleResponse, ExecutionConditioning, InferenceBackend, LatentContent,
-    LatentSpaceMetadata, RuntimeLatent,
+    DiffusionSampleResponse, ExecutionConditioning, InferenceBackend, InferenceProgressSink,
+    LatentContent, LatentSpaceMetadata, RuntimeLatent,
 };
 
 use crate::backend::BurnBackend;
@@ -37,7 +37,10 @@ fn sampled_latent_key(run_id: &RunId, node_id: &NodeId) -> BackendPayloadKey {
 pub fn execute_diffusion_sample(
     backend: &BurnBackend,
     request: DiffusionSampleRequest,
+    progress: Option<&dyn InferenceProgressSink>,
 ) -> Result<DiffusionSampleResponse, BurnBackendError> {
+    crate::cancellation::ensure_not_cancelled(backend)?;
+
     // 1. Validate handles and loaded bundle
     let model_handle = request.model();
     validate_backend(
@@ -190,6 +193,7 @@ pub fn execute_diffusion_sample(
         cfg,
         seed,
         backend,
+        progress,
     )?;
     wgpu_guard.check().map_err(|_| {
         BurnBackendError::InvalidRequest(
@@ -474,7 +478,7 @@ mod tests {
             NodeId::new("node-sample"),
         );
 
-        let err = execute_diffusion_sample(&backend, request).unwrap_err();
+        let err = execute_diffusion_sample(&backend, request, None).unwrap_err();
         let msg = err.to_string();
         assert!(msg.contains("candle"), "msg: {msg}");
     }
@@ -530,7 +534,7 @@ mod tests {
             NodeId::new("node-sample"),
         );
 
-        let err = execute_diffusion_sample(&backend, request).unwrap_err();
+        let err = execute_diffusion_sample(&backend, request, None).unwrap_err();
         let msg = err.to_string();
         assert!(msg.contains("missing-model"), "msg: {msg}");
         assert!(msg.contains("load_bundle"), "msg: {msg}");
@@ -568,7 +572,7 @@ mod tests {
             NodeId::new("node-sample"),
         );
 
-        let err = execute_diffusion_sample(&backend, request).unwrap_err();
+        let err = execute_diffusion_sample(&backend, request, None).unwrap_err();
         let msg = err.to_string();
         assert!(msg.contains("denoise"), "msg: {msg}");
         assert!(msg.contains("1.0"), "msg: {msg}");
@@ -606,7 +610,7 @@ mod tests {
             NodeId::new("node-sample"),
         );
 
-        let err = execute_diffusion_sample(&backend, request).unwrap_err();
+        let err = execute_diffusion_sample(&backend, request, None).unwrap_err();
         let msg = err.to_string();
         assert!(msg.contains("ddpm"), "msg: {msg}");
     }
@@ -617,7 +621,7 @@ mod tests {
         seed_bundle(&backend, "sdxl-base");
 
         let request = build_request(&backend, "sdxl-base");
-        let response = execute_diffusion_sample(&backend, request).expect("diffusion.sample");
+        let response = execute_diffusion_sample(&backend, request, None).expect("diffusion.sample");
         let latent = response.into_latent();
 
         assert_eq!(latent.content(), LatentContent::Sampled);
@@ -648,7 +652,7 @@ mod tests {
             conditioning_payload_without_embeddings("sdxl-base"),
         );
 
-        let err = execute_diffusion_sample(&backend, request).unwrap_err();
+        let err = execute_diffusion_sample(&backend, request, None).unwrap_err();
         let msg = err.to_string();
 
         assert!(msg.contains("stored text encoder embeddings"), "msg: {msg}");
@@ -667,7 +671,7 @@ mod tests {
         );
         let before_payload_count = backend.store().payload_count();
 
-        let err = execute_diffusion_sample(&backend, request).unwrap_err();
+        let err = execute_diffusion_sample(&backend, request, None).unwrap_err();
         let msg = err.to_string();
 
         assert!(msg.contains("pooled"), "msg: {msg}");
@@ -677,6 +681,32 @@ mod tests {
                 .store()
                 .contains_payload(&BackendPayloadKey::new("diffusion:run-test:node-sample"))
         );
+    }
+
+    #[test]
+    fn diffusion_sample_aborts_when_cancelled_before_start() {
+        let backend = test_backend();
+        seed_bundle(&backend, "sdxl-base");
+
+        let request = build_request(&backend, "sdxl-base");
+        backend.cancellation().cancel();
+        let err = execute_diffusion_sample(&backend, request, None).unwrap_err();
+        assert!(matches!(err, BurnBackendError::Cancelled));
+    }
+
+    #[test]
+    fn diffusion_sample_uses_request_scope_cancellation() {
+        let backend = test_backend();
+        seed_bundle(&backend, "sdxl-base");
+        let token = std::sync::Arc::new(tokio_util::sync::CancellationToken::new());
+
+        let request = build_request(&backend, "sdxl-base");
+        let err = crate::cancellation::with_request_cancellation(token.clone(), || {
+            token.cancel();
+            execute_diffusion_sample(&backend, request, None)
+        })
+        .unwrap_err();
+        assert!(matches!(err, BurnBackendError::Cancelled));
     }
 
     #[test]
@@ -711,7 +741,7 @@ mod tests {
             WorkflowVersion::new(1),
             NodeId::new("node-sample"),
         );
-        let resp1 = execute_diffusion_sample(&backend, req1).expect("sample 1");
+        let resp1 = execute_diffusion_sample(&backend, req1, None).expect("sample 1");
         let latent1 = resp1.into_latent();
         let stored1 = backend
             .store()
@@ -736,7 +766,7 @@ mod tests {
             WorkflowVersion::new(1),
             NodeId::new("node-sample-2"),
         );
-        let resp2 = execute_diffusion_sample(&backend, req2).expect("sample 2");
+        let resp2 = execute_diffusion_sample(&backend, req2, None).expect("sample 2");
         let latent2 = resp2.into_latent();
         let stored2 = backend
             .store()

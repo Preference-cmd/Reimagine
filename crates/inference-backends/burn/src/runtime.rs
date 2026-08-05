@@ -1,19 +1,30 @@
+use std::sync::Arc;
+
 use burn_store::{ApplyResult, ModuleSnapshot, ModuleStore};
 use burn_tensor::backend::Backend;
+use tokio_util::sync::CancellationToken;
 
 #[derive(Debug, Clone)]
 pub(crate) struct BurnRuntime<B: Backend> {
     device: B::Device,
+    cancellation: Arc<CancellationToken>,
 }
 
 impl<B: Backend> BurnRuntime<B> {
     pub(crate) fn new(device: B::Device) -> Self {
-        Self { device }
+        Self {
+            device,
+            cancellation: Arc::new(CancellationToken::new()),
+        }
     }
 
     #[allow(dead_code)]
     pub(crate) fn device(&self) -> &B::Device {
         &self.device
+    }
+
+    pub(crate) fn cancellation(&self) -> &Arc<CancellationToken> {
+        &self.cancellation
     }
 
     #[allow(dead_code)]

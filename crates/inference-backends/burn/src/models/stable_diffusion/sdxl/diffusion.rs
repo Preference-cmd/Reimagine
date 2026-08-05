@@ -9,7 +9,7 @@ pub(crate) mod scheduler;
 pub mod unet;
 
 use burn_tensor::{Tensor, TensorData};
-use reimagine_inference::ConditioningMetadata;
+use reimagine_inference::{ConditioningMetadata, InferenceProgressSink, InferenceProgress};
 
 use crate::active_backend::ActiveBurnBackend;
 use crate::backend::BurnBackend;
@@ -35,6 +35,7 @@ pub fn sample_sdxl(
     cfg: f32,
     seed: u64,
     backend: &BurnBackend,
+    progress: Option<&dyn InferenceProgressSink>,
 ) -> Result<Tensor<ActiveBurnBackend, 4>, BurnBackendError> {
     let sdxl = match bundle {
         BurnLoadedModelBundle::StableDiffusionSdxl(bundle) => bundle.as_ref(),
@@ -52,14 +53,38 @@ pub fn sample_sdxl(
         negative_metadata,
         &unet,
     )?;
-    sampler::euler_normal_cfg_sample(
-        &unet,
-        latent,
-        sampler::SdxlCfgConditioning::new(positive, positive_added),
-        sampler::SdxlCfgConditioning::new(negative, negative_added),
-        steps,
-        cfg,
-        seed,
+    sampler::euler_normal_cfg_sample_with_observer(
+        sampler::SdxlSamplerRequest {
+            unet: &unet,
+            latent,
+            positive_conditioning: sampler::SdxlCfgConditioning::new(positive, positive_added),
+            negative_conditioning: sampler::SdxlCfgConditioning::new(negative, negative_added),
+            steps,
+            cfg,
+            seed,
+        },
+        |event| {
+            if crate::cancellation::is_cancelled(&backend.cancellation()) {
+                return Err(BurnBackendError::Cancelled);
+            }
+            if let Some(sink) = progress {
+                // Each step produces two events (negative + positive CFG branches).
+                // Report progress per step using the negative branch as the canonical trigger.
+                if event.branch() == sampler::SdxlCfgBranch::Negative {
+                    sink.report(InferenceProgress {
+                        sequence: event.step_index() as u64 * 2,
+                        completed: event.step_index() as u64,
+                        total: Some(steps as u64),
+                        message: Some(format!(
+                            "denoising step {}/{steps}",
+                            event.step_index() + 1
+                        )),
+                    });
+                }
+            }
+            Ok(())
+        },
+        None,
     )
 }
 

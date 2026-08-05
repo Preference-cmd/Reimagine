@@ -30,6 +30,7 @@ pub enum BurnBackendError {
     BackendNotImplemented(String),
     Tokenizer(BurnTokenizerError),
     SdxlContract(BurnSdxlContractError),
+    Cancelled,
 }
 
 impl std::fmt::Display for BurnBackendError {
@@ -75,6 +76,7 @@ impl std::fmt::Display for BurnBackendError {
             }
             Self::Tokenizer(error) => write!(f, "{error}"),
             Self::SdxlContract(error) => write!(f, "{error}"),
+            Self::Cancelled => write!(f, "Burn operation cancelled"),
         }
     }
 }

@@ -32,6 +32,7 @@ pub fn execute_text_encode(
     backend: &BurnBackend,
     request: TextEncodeRequest,
 ) -> Result<TextEncodeResponse, BurnBackendError> {
+    crate::cancellation::ensure_not_cancelled(backend)?;
     let run_id = request.run_id().clone();
     let preflight = build_preflight(backend, request)?;
     let model_id = preflight.metadata().model_id().to_string();
@@ -515,6 +516,24 @@ mod tests {
         let err = execute_text_encode(&backend, request).unwrap_err();
         let msg = err.to_string();
         assert!(msg.contains("Param(String)"), "msg: {msg}");
+    }
+
+    #[test]
+    fn text_encode_aborts_when_cancelled_before_encoding() {
+        let backend = backend();
+        seed_bundle(&backend, "sdxl-base");
+        backend.cancellation().cancel();
+        let clip = burn_clip(&backend, "sdxl-base", backend.backend_instance());
+        let request = build_request(
+            &backend,
+            clip,
+            reimagine_inference::ExecutionValue::Param(reimagine_core::model::ParamValue::String(
+                "hello".to_owned(),
+            )),
+        );
+
+        let err = execute_text_encode(&backend, request).unwrap_err();
+        assert!(matches!(err, BurnBackendError::Cancelled));
     }
 
     #[test]
