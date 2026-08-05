@@ -3,10 +3,10 @@ mod desktop_host;
 mod download_event_hub;
 mod event_hub;
 
-use desktop_host::{DesktopHostState, default_workspace_path};
+use desktop_host::{DesktopHostState, WorkerSwitchResultDto, default_workspace_path};
 use event_hub::RunEventPayload;
 use reimagine_app_host::{
-    AppHostError,
+    AppHostError, AppHostErrorCode, WorkerInstallationDto, WorkerSwitchError,
     dto::{
         AgentEventPayload, AgentSessionInfo, AgentTurnResponse, ArtifactMetadataDto,
         ComputeProfileDto, DownloadEventPayload, HealthResponse, ModelCardDto,
@@ -20,43 +20,77 @@ use tauri::{Manager, ipc::Channel};
 
 #[derive(Debug, Clone, Serialize)]
 struct TauriCommandError {
-    code: &'static str,
+    code: AppHostErrorCode,
     message: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    details: Option<serde_json::Value>,
 }
 
 impl TauriCommandError {
     fn bootstrap(message: impl Into<String>) -> Self {
         Self {
-            code: "bootstrap_failed",
+            code: AppHostErrorCode::BootstrapFailed,
             message: message.into(),
+            details: None,
         }
     }
 
     fn command(message: impl Into<String>) -> Self {
         Self {
-            code: "command_failed",
+            code: AppHostErrorCode::CommandFailed,
             message: message.into(),
+            details: None,
         }
     }
 
     fn unknown_provider(provider: impl Into<String>) -> Self {
         Self {
-            code: "unknown_provider",
+            code: AppHostErrorCode::UnknownProvider,
             message: format!(
                 "Provider '{}' is not configured. Add a provider in Settings.",
                 provider.into()
             ),
+            details: None,
         }
     }
 }
 
 impl std::fmt::Display for TauriCommandError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(f, "{}: {}", self.code, self.message)
+        write!(f, "{}: {}", self.code.as_str(), self.message)
     }
 }
 
 impl std::error::Error for TauriCommandError {}
+
+fn app_host_command_error(error: AppHostError) -> TauriCommandError {
+    if let AppHostError::UnknownAgentProvider { provider } = &error {
+        return TauriCommandError::unknown_provider(provider.to_string());
+    }
+    TauriCommandError {
+        code: error.code(),
+        message: error.to_string(),
+        details: error.details(),
+    }
+}
+
+fn worker_switch_command_error(error: WorkerSwitchError) -> TauriCommandError {
+    TauriCommandError {
+        code: reimagine_app_host::worker_switch_error_code(&error),
+        message: error.to_string(),
+        details: reimagine_app_host::worker_switch_error_details(&error),
+    }
+}
+
+fn switch_deadline(deadline_secs: Option<f64>) -> Result<std::time::Duration, TauriCommandError> {
+    match deadline_secs {
+        None => Ok(std::time::Duration::from_secs(30)),
+        Some(secs) if secs > 0.0 => Ok(std::time::Duration::from_secs_f64(secs)),
+        Some(_) => Err(TauriCommandError::command(
+            "deadline_secs must be a positive number of seconds",
+        )),
+    }
+}
 
 // ─── Existing commands ───────────────────────────────────────────
 
@@ -87,7 +121,7 @@ async fn list_models(
     state
         .list_models()
         .await
-        .map_err(|e| TauriCommandError::command(e.to_string()))
+        .map_err(app_host_command_error)
 }
 
 #[tauri::command]
@@ -99,7 +133,7 @@ async fn run_workflow(
     state
         .run_workflow(workflow, channel)
         .await
-        .map_err(|e| TauriCommandError::command(e.to_string()))
+        .map_err(app_host_command_error)
 }
 
 #[tauri::command]
@@ -109,7 +143,7 @@ async fn cancel_run(
 ) -> Result<(), TauriCommandError> {
     state
         .cancel_run(&run_id)
-        .map_err(|e| TauriCommandError::command(e.to_string()))
+        .map_err(app_host_command_error)
 }
 
 #[tauri::command]
@@ -119,7 +153,7 @@ async fn resolve_artifact(
 ) -> Result<ArtifactMetadataDto, TauriCommandError> {
     state
         .resolve_artifact(&artifact_id)
-        .map_err(|e| TauriCommandError::command(e.to_string()))
+        .map_err(app_host_command_error)
 }
 
 #[tauri::command]
@@ -129,7 +163,7 @@ async fn open_artifact(
 ) -> Result<(), TauriCommandError> {
     state
         .open_artifact(&artifact_id)
-        .map_err(|e| TauriCommandError::command(e.to_string()))
+        .map_err(app_host_command_error)
 }
 
 // ─── Agent commands ──────────────────────────────────────────────
@@ -146,15 +180,7 @@ fn create_agent_session(
 ) -> Result<AgentSessionInfo, TauriCommandError> {
     state
         .create_agent_session(mode, provider)
-        .map_err(|e| match e {
-            AppHostError::UnknownAgentProvider { provider } => {
-                TauriCommandError::unknown_provider(provider.to_string())
-            }
-            AppHostError::UnknownAgentMode { mode } => {
-                TauriCommandError::command(format!("unknown agent mode: {mode}"))
-            }
-            _ => TauriCommandError::command(e.to_string()),
-        })
+        .map_err(app_host_command_error)
 }
 
 /// Execute a single agent turn with live event streaming.
@@ -175,7 +201,7 @@ async fn agent_turn(
     state
         .agent_turn(session_id, turn_id, model, input, channel)
         .await
-        .map_err(|e| TauriCommandError::command(e.to_string()))
+        .map_err(app_host_command_error)
 }
 
 /// List available agent providers for the UI selector.
@@ -185,7 +211,7 @@ fn list_agent_providers(
 ) -> Result<Vec<String>, TauriCommandError> {
     state
         .list_agent_providers()
-        .map_err(|e| TauriCommandError::command(e.to_string()))
+        .map_err(app_host_command_error)
 }
 
 // ─── Model download commands ───────────────────────────────────────
@@ -218,7 +244,7 @@ async fn download_huggingface_model(
             channel,
         )
         .await
-        .map_err(|e| TauriCommandError::command(e.to_string()))
+        .map_err(app_host_command_error)
 }
 
 /// Search HuggingFace models via the catalog.
@@ -251,7 +277,7 @@ async fn search_models(
     state
         .search_models(&search_query)
         .await
-        .map_err(|e| TauriCommandError::command(e.to_string()))
+        .map_err(app_host_command_error)
 }
 
 /// Fetch the full model card for a HuggingFace repository.
@@ -263,7 +289,50 @@ async fn get_model_card(
     state
         .get_model_card(&repo_id)
         .await
-        .map_err(|e| TauriCommandError::command(e.to_string()))
+        .map_err(app_host_command_error)
+}
+
+// ─── Worker switch commands (BE-32) ─────────────────────────────
+
+/// Drain in-flight runs (waiting up to `deadline_secs`) and switch the
+/// active worker to the installed worker for `target` (a backend instance
+/// id such as `burn:wgpu:default`).
+#[tauri::command]
+async fn drain_and_switch_worker(
+    state: tauri::State<'_, DesktopHostState>,
+    target: String,
+    deadline_secs: Option<f64>,
+) -> Result<WorkerSwitchResultDto, TauriCommandError> {
+    let deadline = switch_deadline(deadline_secs)?;
+    state
+        .drain_and_switch_worker(&target, deadline)
+        .await
+        .map_err(worker_switch_command_error)
+}
+
+/// Cancel in-flight runs, then switch the active worker to the installed
+/// worker for `target`.
+#[tauri::command]
+async fn cancel_and_switch_worker(
+    state: tauri::State<'_, DesktopHostState>,
+    target: String,
+    deadline_secs: Option<f64>,
+) -> Result<WorkerSwitchResultDto, TauriCommandError> {
+    let deadline = switch_deadline(deadline_secs)?;
+    state
+        .cancel_and_switch_worker(&target, deadline)
+        .await
+        .map_err(worker_switch_command_error)
+}
+
+/// List installed workers usable as switch targets.
+#[tauri::command]
+fn list_worker_switch_targets(
+    state: tauri::State<'_, DesktopHostState>,
+) -> Result<Vec<WorkerInstallationDto>, TauriCommandError> {
+    state
+        .list_worker_switch_targets()
+        .map_err(app_host_command_error)
 }
 
 // ─── Workflow command commands ───────────────────────────────────
@@ -277,7 +346,7 @@ fn preview_workflow_commands(
 ) -> Result<CommandResult, TauriCommandError> {
     state
         .preview_workflow_commands(workflow_id, command_batch)
-        .map_err(|e| TauriCommandError::command(e.to_string()))
+        .map_err(app_host_command_error)
 }
 
 /// Apply a command batch directly.
@@ -290,7 +359,7 @@ fn apply_workflow_commands(
 ) -> Result<CommandResult, TauriCommandError> {
     state
         .apply_workflow_commands(workflow_id, command_batch, _approved_by)
-        .map_err(|e| TauriCommandError::command(e.to_string()))
+        .map_err(app_host_command_error)
 }
 
 /// Approve a pending workflow proposal (human approval of build-mode output).
@@ -301,7 +370,7 @@ fn approve_proposal(
 ) -> Result<CommandResult, TauriCommandError> {
     state
         .approve_proposal(workflow_id)
-        .map_err(|e| TauriCommandError::command(e.to_string()))
+        .map_err(app_host_command_error)
 }
 
 // ─── Workflow persistence commands ──────────────────────────────
@@ -320,7 +389,7 @@ async fn save_workflow(
         .save_workflow(&workflow_id, workflow_json)
         .await
         .map(|path| path.display().to_string())
-        .map_err(|e| TauriCommandError::command(e.to_string()))
+        .map_err(app_host_command_error)
 }
 
 /// Load a workflow (JSON) from the workspace `workflows/` directory.
@@ -332,7 +401,7 @@ async fn load_workflow(
     state
         .load_workflow_json(&workflow_id)
         .await
-        .map_err(|e| TauriCommandError::command(e.to_string()))
+        .map_err(app_host_command_error)
 }
 
 /// List saved workflows (newest first) as `{ id, modified_millis }` objects.
@@ -342,7 +411,7 @@ fn list_workflows(
 ) -> Result<Vec<serde_json::Value>, TauriCommandError> {
     state
         .list_saved_workflows()
-        .map_err(|e| TauriCommandError::command(e.to_string()))
+        .map_err(app_host_command_error)
 }
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
@@ -389,6 +458,10 @@ pub fn run() {
             // Catalog commands
             search_models,
             get_model_card,
+            // Worker switch commands
+            drain_and_switch_worker,
+            cancel_and_switch_worker,
+            list_worker_switch_targets,
         ])
         .build(tauri::generate_context!())
         .expect("error while building tauri application")
@@ -419,6 +492,7 @@ pub fn run() {
 #[cfg(test)]
 mod tests {
     use super::desktop_host::{DesktopHostState, default_workspace_path};
+    use super::{app_host_command_error, worker_switch_command_error, TauriCommandError};
 
     fn temp_dir(prefix: &str) -> std::path::PathBuf {
         let nonce = std::time::SystemTime::now()
@@ -708,5 +782,80 @@ mod tests {
         assert!(filters.tags.is_empty());
         assert_eq!(filters.sort, "downloads");
         assert_eq!(filters.limit, 20);
+    }
+
+    // ─── BE-31 structured error payload tests ────────────────────
+
+    #[test]
+    fn command_error_serializes_structured_payload() {
+        let error = TauriCommandError::command("boom");
+        let value = serde_json::to_value(&error).expect("serialize");
+        assert_eq!(value["code"], "command_failed");
+        assert_eq!(value["message"], "boom");
+        assert!(
+            value.get("details").is_none(),
+            "details should be omitted when absent"
+        );
+    }
+
+    #[test]
+    fn bootstrap_error_serializes_with_bootstrap_code() {
+        let error = TauriCommandError::bootstrap("setup failed");
+        let value = serde_json::to_value(&error).expect("serialize");
+        assert_eq!(value["code"], "bootstrap_failed");
+    }
+
+    #[test]
+    fn app_host_errors_map_to_structured_codes() {
+        use reimagine_app_host::AppHostError;
+        use reimagine_app_host::AppHostErrorCode;
+        use reimagine_core::model::RunId;
+
+        let error = AppHostError::UnknownRun {
+            run_id: RunId::new("run_x"),
+        };
+        let mapped = app_host_command_error(error);
+        assert_eq!(mapped.code, AppHostErrorCode::NotFound);
+        assert_eq!(
+            mapped.details.as_ref().expect("run details")["run_id"],
+            "run_x"
+        );
+
+        let mapped = app_host_command_error(AppHostError::WorkflowJson {
+            path: std::path::PathBuf::new(),
+            message: "bad json".to_owned(),
+        });
+        assert_eq!(mapped.code, AppHostErrorCode::WorkflowInvalid);
+    }
+
+    #[test]
+    fn unknown_agent_provider_keeps_friendly_message_and_code() {
+        use reimagine_app_host::AppHostError;
+        use reimagine_app_host::AppHostErrorCode;
+
+        let mapped = app_host_command_error(AppHostError::UnknownAgentProvider {
+            provider: reimagine_agent::ProviderName::new("openai"),
+        });
+        assert_eq!(mapped.code, AppHostErrorCode::UnknownProvider);
+        assert!(mapped.message.contains("Settings"));
+    }
+
+    #[test]
+    fn worker_switch_errors_map_to_worker_unavailable() {
+        use reimagine_app_host::AppHostErrorCode;
+        use reimagine_app_host::WorkerSwitchError;
+
+        let mapped = worker_switch_command_error(WorkerSwitchError::NoActiveWorker);
+        assert_eq!(mapped.code, AppHostErrorCode::WorkerUnavailable);
+        let value = serde_json::to_value(&mapped).expect("serialize");
+        assert_eq!(value["code"], "worker_unavailable");
+    }
+
+    #[test]
+    fn switch_deadline_validates_input() {
+        assert!(super::switch_deadline(None).is_ok());
+        assert!(super::switch_deadline(Some(5.0)).is_ok());
+        assert!(super::switch_deadline(Some(0.0)).is_err());
+        assert!(super::switch_deadline(Some(-1.0)).is_err());
     }
 }

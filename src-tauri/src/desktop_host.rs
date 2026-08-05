@@ -7,12 +7,16 @@ use reimagine_app_host::dto::{
     HealthResponse, ModelInfoDto, NodeCatalogResponse, RunWorkflowResponse,
 };
 use reimagine_app_host::{
-    AgentServiceTurnRequest, AppHost, AppHostError, WorkerManagementService, WorkspaceHost,
+    AgentServiceTurnRequest, AppHost, AppHostError, WorkerBackendCandidate, WorkerInstallationDto,
+    WorkerManagementService, WorkerSelectionHandle, WorkerSwitchError, WorkspaceHost,
 };
+use reimagine_backend_worker_host::{WorkerLaunchSpec, WorkerLimits};
+use reimagine_backend_worker_protocol::ProtocolRange;
 use reimagine_config::AppPaths;
 use reimagine_core::command::CommandResult;
 use reimagine_core::workflow::Workflow;
 use reimagine_runtime::BoxedRunEventSink;
+use serde::Serialize;
 use tauri::ipc::Channel;
 
 use crate::agent_event_hub::TauriAgentEventHub;
@@ -608,6 +612,146 @@ impl DesktopHostState {
     /// becoming orphans.
     pub async fn shutdown(&self) {
         self.app_host.shutdown().await;
+    }
+
+    // ─── Worker switching (BE-32) ────────────────────────────────
+
+    /// Drain in-flight runs (waiting up to `deadline`) and switch the active
+    /// worker to the installed worker for `target_instance`.
+    pub async fn drain_and_switch_worker(
+        &self,
+        target_instance: &str,
+        deadline: std::time::Duration,
+    ) -> Result<WorkerSwitchResultDto, WorkerSwitchError> {
+        let candidate = self.resolve_switch_candidate(target_instance)?;
+        let handle = self
+            .app_host
+            .workspace()
+            .drain_and_switch_worker(candidate, deadline)
+            .await?;
+        Ok(WorkerSwitchResultDto::from(handle))
+    }
+
+    /// Cancel in-flight runs and switch the active worker to the installed
+    /// worker for `target_instance`.
+    pub async fn cancel_and_switch_worker(
+        &self,
+        target_instance: &str,
+        deadline: std::time::Duration,
+    ) -> Result<WorkerSwitchResultDto, WorkerSwitchError> {
+        let candidate = self.resolve_switch_candidate(target_instance)?;
+        let handle = self
+            .app_host
+            .workspace()
+            .cancel_and_switch_worker(candidate, deadline)
+            .await?;
+        Ok(WorkerSwitchResultDto::from(handle))
+    }
+
+    /// List installed workers that can be used as switch targets.
+    pub fn list_worker_switch_targets(&self) -> Result<Vec<WorkerInstallationDto>, AppHostError> {
+        Ok(self.worker_management.list_installed()?)
+    }
+
+    fn resolve_switch_candidate(
+        &self,
+        target_instance: &str,
+    ) -> Result<WorkerBackendCandidate, WorkerSwitchError> {
+        let snapshot = self
+            .worker_management
+            .inventory()
+            .list()
+            .map_err(|error| WorkerSwitchError::Startup {
+                message: format!("worker inventory unavailable: {error}"),
+            })?;
+        let record = snapshot
+            .records
+            .iter()
+            .find(|record| record.identity.backend_instance_id.0 == target_instance)
+            .ok_or_else(|| WorkerSwitchError::Startup {
+                message: format!("no installed worker for backend instance `{target_instance}`"),
+            })?;
+        let executable = installed_worker_executable(&record.install_path).ok_or_else(|| {
+            WorkerSwitchError::Startup {
+                message: format!(
+                    "no executable found inside installed worker directory `{}`",
+                    record.install_path
+                ),
+            }
+        })?;
+        let manifest_profile = record.manifest_profile.clone().ok_or_else(|| {
+            WorkerSwitchError::Startup {
+                message: format!(
+                    "installed worker `{target_instance}` has no manifest profile; reinstall to populate it"
+                ),
+            }
+        })?;
+        let launch = WorkerLaunchSpec {
+            executable,
+            expected: record.identity.clone(),
+            supported_protocols: ProtocolRange::new(1, 1),
+            limits: WorkerLimits::default(),
+            environment: Vec::new(),
+            transport: Default::default(),
+        };
+        WorkerBackendCandidate::try_new(launch, manifest_profile).map_err(|error| {
+            WorkerSwitchError::Startup {
+                message: format!("installed worker `{target_instance}` is not launchable: {error}"),
+            }
+        })
+    }
+}
+
+/// Result of a worker switch, adapted from [`WorkerSelectionHandle`] for IPC.
+#[derive(Debug, Clone, Serialize)]
+pub struct WorkerSwitchResultDto {
+    pub instance: String,
+    pub incarnation_id: String,
+}
+
+impl From<WorkerSelectionHandle> for WorkerSwitchResultDto {
+    fn from(handle: WorkerSelectionHandle) -> Self {
+        Self {
+            instance: handle.instance().to_string(),
+            incarnation_id: handle.incarnation_id().0.clone(),
+        }
+    }
+}
+
+/// Find the worker executable inside an installed worker directory.
+///
+/// Installed packages contain exactly one executable (validated at install
+/// time), so the first executable file found is the worker binary.
+fn installed_worker_executable(install_path: &str) -> Option<std::path::PathBuf> {
+    fn visit(dir: &std::path::Path, found: &mut Option<std::path::PathBuf>) {
+        let Ok(entries) = std::fs::read_dir(dir) else {
+            return;
+        };
+        for entry in entries.flatten() {
+            let path = entry.path();
+            if path.is_dir() {
+                visit(&path, found);
+            } else if is_executable(&path) && found.is_none() {
+                *found = Some(path);
+            }
+        }
+    }
+    let mut found = None;
+    visit(std::path::Path::new(install_path), &mut found);
+    found
+}
+
+fn is_executable(path: &std::path::Path) -> bool {
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        std::fs::metadata(path)
+            .map(|metadata| metadata.permissions().mode() & 0o111 != 0)
+            .unwrap_or(false)
+    }
+    #[cfg(not(unix))]
+    {
+        path.is_file()
     }
 }
 

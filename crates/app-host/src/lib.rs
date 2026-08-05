@@ -12,6 +12,7 @@ mod app_host;
 pub mod artifact_access;
 pub mod dto;
 mod error;
+mod error_code;
 mod inference;
 mod inference_backend;
 mod model_acquisition_service;
@@ -36,14 +37,18 @@ pub use artifact_access::{
     ArtifactAccess, ArtifactAccessError, media_type_for_reference, resolve_artifact_path,
 };
 pub use error::{AppHostError, AppHostResult};
+pub use error_code::{
+    AppHostErrorCode, worker_switch_error_code, worker_switch_error_details,
+};
 pub use inference::quic_worker::{QuicSwitchableWorker, QuicWorkerCandidate, QuicWorkerCandidateConfig};
 pub use inference::switch::{
     ProcessSwitchableWorker, RunCancellation, SwitchableWorker, WorkerSelectionHandle,
     WorkerSwitchError, WorkerSwitchService, WorkerSwitchTarget,
 };
 pub use inference::worker::{
-    EmptyWorkerInventoryProvider, StaticWorkerInventoryProvider, WorkerActivationError,
-    WorkerBackendCandidate, WorkerInventoryProvider, WorkerInventorySnapshot,
+    EmptyWorkerInventoryProvider, InstalledWorkerInventoryProvider, StaticWorkerInventoryProvider,
+    WorkerActivationError, WorkerBackendCandidate, WorkerInventoryProvider,
+    WorkerInventorySnapshot,
 };
 pub use inference_backend::BackendSelection;
 pub use model_acquisition_service::ModelAcquisitionService;

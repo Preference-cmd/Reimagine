@@ -3,6 +3,7 @@ use reimagine_core::model::{RunId, WorkflowId, WorkflowVersion};
 use reimagine_runtime::RuntimeServiceError;
 
 use crate::artifact_access::ArtifactAccessError;
+use crate::error_code::AppHostErrorCode;
 
 pub type AppHostResult<T> = Result<T, AppHostError>;
 
@@ -129,6 +130,95 @@ impl std::fmt::Display for AppHostError {
             }
             Self::ArtifactAccess(error) => write!(f, "artifact access error: {error}"),
             Self::WorkerManagement(error) => write!(f, "worker management error: {error}"),
+        }
+    }
+}
+
+impl AppHostError {
+    /// Machine-readable classification for IPC error payloads.
+    pub fn code(&self) -> AppHostErrorCode {
+        match self {
+            Self::UnknownWorkflow { .. } => AppHostErrorCode::NotFound,
+            Self::NoPendingProposal { .. } => AppHostErrorCode::NotFound,
+            Self::ProposalStale { .. } => AppHostErrorCode::Conflict,
+            Self::UnknownAgentSession { .. } => AppHostErrorCode::NotFound,
+            Self::UnknownAgentProvider { .. } => AppHostErrorCode::UnknownProvider,
+            Self::UnknownAgentMode { .. } => AppHostErrorCode::CommandFailed,
+            Self::UnknownRun { .. } => AppHostErrorCode::NotFound,
+            Self::WorkflowIdPathUnsafe { .. } => AppHostErrorCode::PermissionDenied,
+            Self::WorkflowVersionConflict { .. } => AppHostErrorCode::Conflict,
+            Self::Io { .. } => AppHostErrorCode::Io,
+            Self::WorkflowJson { .. } => AppHostErrorCode::WorkflowInvalid,
+            Self::BootstrapConfig(_) | Self::InferenceBootstrap { .. } => {
+                AppHostErrorCode::BootstrapFailed
+            }
+            Self::Runtime(_) => AppHostErrorCode::InferenceError,
+            Self::ModelManager(_) => AppHostErrorCode::ModelNotFound,
+            Self::ModelAcquisition(error) => match error {
+                reimagine_model_acquisition::ModelAcquisitionError::ConfigInvalid { .. }
+                | reimagine_model_acquisition::ModelAcquisitionError::InvalidRequest { .. } => {
+                    AppHostErrorCode::CommandFailed
+                }
+                _ => AppHostErrorCode::ModelDownloadFailed,
+            },
+            #[cfg(feature = "candle")]
+            Self::CandleCheckpointImport(_) => AppHostErrorCode::CommandFailed,
+            Self::BurnCheckpointImport { .. } => AppHostErrorCode::CommandFailed,
+            Self::ArtifactAccess(error) => match error {
+                ArtifactAccessError::UnknownArtifact | ArtifactAccessError::FileGone => {
+                    AppHostErrorCode::NotFound
+                }
+                ArtifactAccessError::UnsafeReference => AppHostErrorCode::PermissionDenied,
+                ArtifactAccessError::UnsupportedMedia => AppHostErrorCode::CommandFailed,
+            },
+            Self::WorkerManagement(_) => AppHostErrorCode::WorkerUnavailable,
+        }
+    }
+
+    /// Optional structured context for the IPC error payload.
+    pub fn details(&self) -> Option<serde_json::Value> {
+        match self {
+            Self::UnknownWorkflow { workflow_id } => {
+                Some(serde_json::json!({ "workflow_id": workflow_id.to_string() }))
+            }
+            Self::NoPendingProposal { workflow_id } => {
+                Some(serde_json::json!({ "workflow_id": workflow_id.to_string() }))
+            }
+            Self::ProposalStale {
+                workflow_id,
+                proposal_base_version,
+                current_version,
+            } => Some(serde_json::json!({
+                "workflow_id": workflow_id.to_string(),
+                "proposal_base_version": proposal_base_version.to_string(),
+                "current_version": current_version.to_string(),
+            })),
+            Self::UnknownAgentSession { session_id } => {
+                Some(serde_json::json!({ "session_id": session_id.to_string() }))
+            }
+            Self::UnknownRun { run_id } => {
+                Some(serde_json::json!({ "run_id": run_id.to_string() }))
+            }
+            Self::WorkflowVersionConflict {
+                workflow_id,
+                expected,
+                actual,
+            } => Some(serde_json::json!({
+                "workflow_id": workflow_id.to_string(),
+                "expected": expected.to_string(),
+                "actual": actual.to_string(),
+            })),
+            Self::Io { path, .. } => {
+                Some(serde_json::json!({ "path": path.display().to_string() }))
+            }
+            Self::WorkflowJson { path, .. } => {
+                if path.as_os_str().is_empty() {
+                    None
+                } else {
+                    Some(serde_json::json!({ "path": path.display().to_string() }))
+                }
+            }
+            _ => None,
         }
     }
 }

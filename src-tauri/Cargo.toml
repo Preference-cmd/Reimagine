@@ -26,6 +26,8 @@ reimagine-config = { path = "../crates/config" }
 reimagine-core = { path = "../crates/core" }
 reimagine-model-acquisition = { path = "../crates/model-acquisition" }
 reimagine-runtime = { path = "../crates/runtime" }
+reimagine-backend-worker-host = { path = "../crates/backend-worker-host" }
+reimagine-backend-worker-protocol = { path = "../crates/backend-worker-protocol" }
 tauri = { workspace = true }
 tauri-plugin-opener = { workspace = true }
 serde = { workspace = true }

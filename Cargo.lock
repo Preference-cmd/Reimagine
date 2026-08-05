@@ -6793,6 +6793,8 @@ dependencies = [
  "opener",
  "reimagine-agent",
  "reimagine-app-host",
+ "reimagine-backend-worker-host",
+ "reimagine-backend-worker-protocol",
  "reimagine-config",
  "reimagine-core",
  "reimagine-model-acquisition",
