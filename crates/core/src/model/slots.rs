@@ -23,6 +23,74 @@ pub enum SlotKind {
     Null,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum SlotType {
+    Primitive,
+    Tensor,
+    ModelHandle,
+    Conditioning,
+    Artifact,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum SlotEditConstraint {
+    None,
+    Range,
+    Select,
+    Multiline,
+    FilePath,
+    Optional,
+}
+
+impl SlotKind {
+    pub fn slot_type(self) -> SlotType {
+        match self {
+            SlotKind::String
+            | SlotKind::Text
+            | SlotKind::Integer
+            | SlotKind::Float
+            | SlotKind::Bool
+            | SlotKind::Seed
+            | SlotKind::Select
+            | SlotKind::Path
+            | SlotKind::Null => SlotType::Primitive,
+            SlotKind::Latent => SlotType::Tensor,
+            SlotKind::ModelRef | SlotKind::Model | SlotKind::Clip | SlotKind::Vae => {
+                SlotType::ModelHandle
+            }
+            SlotKind::Conditioning => SlotType::Conditioning,
+            SlotKind::Image | SlotKind::Artifact => SlotType::Artifact,
+        }
+    }
+
+    pub fn edit_constraint(self) -> Option<SlotEditConstraint> {
+        match self {
+            SlotKind::Text => Some(SlotEditConstraint::Multiline),
+            SlotKind::Select => Some(SlotEditConstraint::Select),
+            SlotKind::Path => Some(SlotEditConstraint::FilePath),
+            _ => None,
+        }
+    }
+}
+
+impl From<(SlotType, SlotEditConstraint)> for SlotKind {
+    fn from((slot_type, constraint): (SlotType, SlotEditConstraint)) -> Self {
+        match slot_type {
+            SlotType::Primitive => match constraint {
+                SlotEditConstraint::Multiline => SlotKind::Text,
+                SlotEditConstraint::Select => SlotKind::Select,
+                SlotEditConstraint::FilePath => SlotKind::Path,
+                SlotEditConstraint::Range => SlotKind::Integer,
+                SlotEditConstraint::None | SlotEditConstraint::Optional => SlotKind::String,
+            },
+            SlotType::Tensor => SlotKind::Latent,
+            SlotType::ModelHandle => SlotKind::Model,
+            SlotType::Conditioning => SlotKind::Conditioning,
+            SlotType::Artifact => SlotKind::Artifact,
+        }
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize)]
 pub struct SlotConstraint {
     name: String,

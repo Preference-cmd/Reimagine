@@ -13,6 +13,11 @@ pub use ids::{
     ProposalId, RunId, SlotId, WorkflowId, WorkflowInputId, WorkflowOutputId, WorkflowVersion,
 };
 pub use models::{ModelFormat, ModelRef, ModelRole, ModelSeries, ModelVariant};
-pub use nodes::{NodeCatalog, NodeDef, NodeEffect};
-pub use slots::{InputSlotDef, OutputSlotDef, SlotConstraint, SlotKind, SlotUi};
+pub use nodes::{
+    BackendCapability, ComponentRole, ModelFamily, NodeCatalog, NodeDef, NodeEffect,
+    NodeResourceRequirements,
+};
+pub use slots::{
+    InputSlotDef, OutputSlotDef, SlotConstraint, SlotEditConstraint, SlotKind, SlotType, SlotUi,
+};
 pub use values::{NodeValue, ParamValue, TensorDType, TensorData, TensorShape};
