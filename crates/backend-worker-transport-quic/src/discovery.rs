@@ -29,7 +29,10 @@ impl DiscoveredWorker {
 
     /// Get the backend kind.
     pub fn backend_kind(&self) -> &str {
-        self.properties.get("backend").map(|s| s.as_str()).unwrap_or("unknown")
+        self.properties
+            .get("backend")
+            .map(|s| s.as_str())
+            .unwrap_or("unknown")
     }
 
     /// Get the device labels.
@@ -62,8 +65,8 @@ impl MdnsWorkerRegister {
         addr: SocketAddr,
         properties: HashMap<String, String>,
     ) -> Result<Self, Error> {
-        let daemon =
-            ServiceDaemon::new().map_err(|e| Error::ConnectionFailed(format!("mdns daemon: {e}")))?;
+        let daemon = ServiceDaemon::new()
+            .map_err(|e| Error::ConnectionFailed(format!("mdns daemon: {e}")))?;
 
         let service_info = ServiceInfo::new(
             SERVICE_TYPE,
@@ -112,8 +115,8 @@ pub struct MdnsWorkerDiscovery {
 impl MdnsWorkerDiscovery {
     /// Start browsing for workers.
     pub fn start() -> Result<Self, Error> {
-        let daemon =
-            ServiceDaemon::new().map_err(|e| Error::ConnectionFailed(format!("mdns daemon: {e}")))?;
+        let daemon = ServiceDaemon::new()
+            .map_err(|e| Error::ConnectionFailed(format!("mdns daemon: {e}")))?;
 
         let rx = daemon
             .browse(SERVICE_TYPE)
@@ -126,11 +129,10 @@ impl MdnsWorkerDiscovery {
             while let Ok(event) = rx.recv() {
                 match event {
                     ServiceEvent::ServiceResolved(info) => {
-                        let addr: Option<SocketAddr> = info
-                            .get_addresses()
-                            .iter()
-                            .next()
-                            .and_then(|addr| format!("{}:{}", addr, info.get_port()).parse().ok());
+                        let addr: Option<SocketAddr> =
+                            info.get_addresses().iter().next().and_then(|addr| {
+                                format!("{}:{}", addr, info.get_port()).parse().ok()
+                            });
                         if let Some(addr) = addr {
                             let properties: HashMap<String, String> = info
                                 .get_properties()
@@ -147,7 +149,10 @@ impl MdnsWorkerDiscovery {
                                 addr,
                                 properties,
                             };
-                            workers_clone.lock().unwrap().insert(worker.id.clone(), worker);
+                            workers_clone
+                                .lock()
+                                .unwrap()
+                                .insert(worker.id.clone(), worker);
                         }
                     }
                     ServiceEvent::ServiceRemoved { .. } => {
@@ -189,10 +194,16 @@ mod tests {
     #[test]
     fn discovered_worker_parsing() {
         let mut props = HashMap::new();
-        props.insert("endpoint".to_string(), "quic://192.168.1.100:9100".to_string());
+        props.insert(
+            "endpoint".to_string(),
+            "quic://192.168.1.100:9100".to_string(),
+        );
         props.insert("backend".to_string(), "burn".to_string());
         props.insert("devices".to_string(), "cuda:0,cuda:1".to_string());
-        props.insert("capabilities".to_string(), "load_bundle,text_encode".to_string());
+        props.insert(
+            "capabilities".to_string(),
+            "load_bundle,text_encode".to_string(),
+        );
 
         let worker = DiscoveredWorker {
             id: "test-worker._reimagine-worker._tcp.local.".to_string(),
@@ -200,7 +211,10 @@ mod tests {
             properties: props,
         };
 
-        assert_eq!(worker.quic_endpoint(), Some("192.168.1.100:9100".parse().unwrap()));
+        assert_eq!(
+            worker.quic_endpoint(),
+            Some("192.168.1.100:9100".parse().unwrap())
+        );
         assert_eq!(worker.backend_kind(), "burn");
         assert_eq!(worker.devices(), vec!["cuda:0", "cuda:1"]);
         assert_eq!(worker.capabilities(), vec!["load_bundle", "text_encode"]);

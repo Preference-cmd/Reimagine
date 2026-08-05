@@ -657,13 +657,11 @@ impl DesktopHostState {
         &self,
         target_instance: &str,
     ) -> Result<WorkerBackendCandidate, WorkerSwitchError> {
-        let snapshot = self
-            .worker_management
-            .inventory()
-            .list()
-            .map_err(|error| WorkerSwitchError::Startup {
+        let snapshot = self.worker_management.inventory().list().map_err(|error| {
+            WorkerSwitchError::Startup {
                 message: format!("worker inventory unavailable: {error}"),
-            })?;
+            }
+        })?;
         let record = snapshot
             .records
             .iter()
@@ -761,9 +759,7 @@ pub fn default_workspace_path(app_data_dir: impl AsRef<Path>) -> PathBuf {
 
 /// Validate a user-supplied workflow id before it reaches `WorkflowId::new`
 /// (which asserts — and would panic — on invalid input).
-fn workflow_id_from_str(
-    id: &str,
-) -> Result<reimagine_core::model::WorkflowId, AppHostError> {
+fn workflow_id_from_str(id: &str) -> Result<reimagine_core::model::WorkflowId, AppHostError> {
     let safe = !id.is_empty()
         && id.is_ascii()
         && !id.contains('/')

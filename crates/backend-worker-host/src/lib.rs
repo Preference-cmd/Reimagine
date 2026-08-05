@@ -32,9 +32,7 @@ pub use inventory::{
     InstallationRecord, InventoryError, InventoryResult, InventorySnapshot, InventoryStore,
     VersionPolicy,
 };
-pub use launch::{
-    ExpectedWorkerIdentity, WorkerLaunchSpec, WorkerLimits, WorkerTransportConfig,
-};
+pub use launch::{ExpectedWorkerIdentity, WorkerLaunchSpec, WorkerLimits, WorkerTransportConfig};
 pub use leases::{WorkerAdmissionState, WorkerRunLeaseError, WorkerRunLeases};
 pub use package::{
     ExtractionLimits, PackageError, PackageExtractor, PackageFileEntry, PackageManifest,

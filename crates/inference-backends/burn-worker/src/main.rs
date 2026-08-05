@@ -9,8 +9,7 @@ use reimagine_backend_worker_protocol::{
     FrameCodec, HostHello, ProtocolRange, ProtocolVersion, WireMessage,
 };
 use reimagine_backend_worker_transport_quic::{
-    listener::QuicWorkerListener, tls::SelfSignedCert,
-    discovery::MdnsWorkerRegister,
+    discovery::MdnsWorkerRegister, listener::QuicWorkerListener, tls::SelfSignedCert,
 };
 use reimagine_inference_burn::{BurnBackend, BurnBackendConfig};
 
@@ -222,22 +221,10 @@ fn run_quic_mode(rt: tokio::runtime::Runtime, backend: &BurnBackend, listen_url:
         .collect();
 
     let mut mdns_props = HashMap::new();
-    mdns_props.insert(
-        "endpoint".to_string(),
-        format!("quic://{actual_addr}"),
-    );
-    mdns_props.insert(
-        "backend".to_string(),
-        identity.backend_kind.clone(),
-    );
-    mdns_props.insert(
-        "devices".to_string(),
-        device_labels.join(","),
-    );
-    mdns_props.insert(
-        "capabilities".to_string(),
-        capabilities.join(","),
-    );
+    mdns_props.insert("endpoint".to_string(), format!("quic://{actual_addr}"));
+    mdns_props.insert("backend".to_string(), identity.backend_kind.clone());
+    mdns_props.insert("devices".to_string(), device_labels.join(","));
+    mdns_props.insert("capabilities".to_string(), capabilities.join(","));
 
     let mdns = match MdnsWorkerRegister::register(
         &identity.backend_instance_id.0,
@@ -328,17 +315,11 @@ fn run_quic_accept_loop(
                     // Handle each connection on a blocking thread, reusing
                     // the synchronous serve_loop with QUIC stream adapters.
                     tokio::task::spawn_blocking(move || {
-                        let incarnation =
-                            worker_hello.identity.incarnation_id.clone();
+                        let incarnation = worker_hello.identity.incarnation_id.clone();
 
-                        let read_adapter = quic_adapter::QuicReadAdapter::new(
-                            recv,
-                            Arc::clone(&serve_rt),
-                        );
-                        let mut write_adapter = quic_adapter::QuicWriteAdapter::new(
-                            send,
-                            serve_rt,
-                        );
+                        let read_adapter =
+                            quic_adapter::QuicReadAdapter::new(recv, Arc::clone(&serve_rt));
+                        let mut write_adapter = quic_adapter::QuicWriteAdapter::new(send, serve_rt);
 
                         let codec = FrameCodec::new(MAX_FRAME_BYTES);
 
@@ -381,16 +362,12 @@ fn run_quic_accept_loop(
 ///
 /// Accepts `quic://0.0.0.0:9100` or `quic://127.0.0.1:9100`.
 fn parse_quic_listen_url(url: &str) -> SocketAddr {
-    let stripped = url
-        .strip_prefix("quic://")
-        .unwrap_or(url);
+    let stripped = url.strip_prefix("quic://").unwrap_or(url);
 
-    stripped
-        .parse::<SocketAddr>()
-        .unwrap_or_else(|e| {
-            eprintln!("FATAL: invalid QUIC listen address '{url}': {e}");
-            std::process::exit(1);
-        })
+    stripped.parse::<SocketAddr>().unwrap_or_else(|e| {
+        eprintln!("FATAL: invalid QUIC listen address '{url}': {e}");
+        std::process::exit(1);
+    })
 }
 
 /// Parse the `:`-separated allowlist from an environment variable

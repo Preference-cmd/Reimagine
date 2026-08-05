@@ -198,10 +198,7 @@ pub trait InferenceBackend: Send + Sync + 'static {
     ///
     /// Backends that do not implement resource management continue to
     /// work via this default no-op implementation.
-    async fn apply_resource_hints(
-        &self,
-        _hints: ResourceHints,
-    ) -> Result<(), InferenceError> {
+    async fn apply_resource_hints(&self, _hints: ResourceHints) -> Result<(), InferenceError> {
         Ok(())
     }
 

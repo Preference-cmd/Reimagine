@@ -2,13 +2,12 @@ use std::net::SocketAddr;
 
 use quinn::Endpoint;
 use reimagine_backend_worker_protocol::{
-    HostHello, WorkerHello, WorkerIdentity, WorkerIncarnationId,
-    WorkerInstallationId, WorkerInstanceProfile, WorkerProfile, WireMessage,
-    negotiate_protocol, ProtocolRange,
+    HostHello, ProtocolRange, WireMessage, WorkerHello, WorkerIdentity, WorkerIncarnationId,
+    WorkerInstallationId, WorkerInstanceProfile, WorkerProfile, negotiate_protocol,
 };
 
-use crate::tls::SelfSignedCert;
 use crate::Error;
+use crate::tls::SelfSignedCert;
 
 /// A QUIC listener that accepts connections and performs the worker handshake.
 pub struct QuicWorkerListener {
@@ -35,7 +34,15 @@ impl QuicWorkerListener {
     /// `WorkerHello` after completing the handshake.
     pub async fn accept(
         &self,
-    ) -> Result<(quinn::Connection, quinn::SendStream, quinn::RecvStream, WorkerHello), Error> {
+    ) -> Result<
+        (
+            quinn::Connection,
+            quinn::SendStream,
+            quinn::RecvStream,
+            WorkerHello,
+        ),
+        Error,
+    > {
         let incoming = self
             .endpoint
             .accept()
@@ -63,19 +70,23 @@ impl QuicWorkerListener {
             .map_err(|e| Error::Io(format!("deserialize host_hello: {e}")))?
         {
             WireMessage::HostHello(h) => h,
-            other => return Err(Error::Io(format!("expected HostHello, got {:?}", other.kind()))),
+            other => {
+                return Err(Error::Io(format!(
+                    "expected HostHello, got {:?}",
+                    other.kind()
+                )));
+            }
         };
 
-        let selected = negotiate_protocol(
-            host_hello.supported_protocols,
-            ProtocolRange::new(1, 1),
-        )
-        .map_err(|e| Error::Protocol(e.to_string()))?;
+        let selected = negotiate_protocol(host_hello.supported_protocols, ProtocolRange::new(1, 1))
+            .map_err(|e| Error::Protocol(e.to_string()))?;
 
         let worker_hello = WorkerHello {
             selected_protocol: selected,
             identity: WorkerIdentity {
-                backend_instance_id: reimagine_backend_worker_protocol::BackendInstanceId::from("fake:cpu:default"),
+                backend_instance_id: reimagine_backend_worker_protocol::BackendInstanceId::from(
+                    "fake:cpu:default",
+                ),
                 installation_id: WorkerInstallationId::from("fake-installation"),
                 incarnation_id: WorkerIncarnationId(format!("fake-quic-{}", std::process::id())),
                 worker_version: env!("CARGO_PKG_VERSION").to_owned(),
@@ -85,7 +96,9 @@ impl QuicWorkerListener {
             },
             profile: WorkerProfile {
                 instances: vec![WorkerInstanceProfile {
-                    backend_instance_id: reimagine_backend_worker_protocol::BackendInstanceId::from("fake:cpu:default"),
+                    backend_instance_id: reimagine_backend_worker_protocol::BackendInstanceId::from(
+                        "fake:cpu:default",
+                    ),
                     device_label: "cpu".to_owned(),
                     capabilities: vec![
                         "echo".to_owned(),

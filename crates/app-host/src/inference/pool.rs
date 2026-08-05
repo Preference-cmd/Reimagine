@@ -1,3 +1,9 @@
+//! Worker pool types for the connection topology manager (T9).
+//!
+//! These types land ahead of the T13 integration that consumes them;
+//! the pool is not yet constructed at any call site.
+#![allow(dead_code)]
+
 use std::collections::HashMap;
 
 use reimagine_backend_worker_protocol::TransportKind;

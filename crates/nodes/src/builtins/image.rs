@@ -1,4 +1,6 @@
-use reimagine_core::model::{ComponentRole, ModelFamily, NodeDef, NodeEffect, NodeResourceRequirements, SlotKind};
+use reimagine_core::model::{
+    ComponentRole, ModelFamily, NodeDef, NodeEffect, NodeResourceRequirements, SlotKind,
+};
 
 use super::{
     BUILTIN_PREVIEW_IMAGE, BUILTIN_SAVE_IMAGE, BUILTIN_VAE_DECODE, required_input, required_output,

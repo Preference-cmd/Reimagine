@@ -214,14 +214,15 @@ impl DiffusionScheduler for EulerNormalScheduler {
     }
 
     fn sigma_at(&self, index: usize) -> Result<f64, InferenceError> {
-        self.sigmas.get(index).copied().ok_or_else(|| {
-            InferenceError::BackendExecutionFailed {
+        self.sigmas
+            .get(index)
+            .copied()
+            .ok_or_else(|| InferenceError::BackendExecutionFailed {
                 message: format!(
                     "timestep index {index} out of range (sigmas len={})",
                     self.sigmas.len()
                 ),
-            }
-        })
+            })
     }
 
     fn alpha_cumprod_at(&self, index: usize) -> Result<f64, InferenceError> {

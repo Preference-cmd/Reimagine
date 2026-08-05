@@ -4,6 +4,10 @@
 //! policy, and a [`RouterRef`] and produces an [`InferenceRouter`] for
 //! the runtime. It supports dynamic worker registration and atomic
 //! router swaps via [`arc_swap`].
+//!
+//! Landed with T10 ahead of the T13 `WorkspaceHost` integration that
+//! constructs it; no call site builds one yet.
+#![allow(dead_code)]
 
 use std::sync::Arc;
 
@@ -105,10 +109,7 @@ impl ConnectionTopologyManager {
 
     /// Register a new worker endpoint in the pool and hot-swap the
     /// router.
-    pub fn register_endpoint(
-        &mut self,
-        endpoint: WorkerEndpoint,
-    ) -> Result<(), TopologyError> {
+    pub fn register_endpoint(&mut self, endpoint: WorkerEndpoint) -> Result<(), TopologyError> {
         let id = endpoint.id.clone();
         if self.pool.get(&id).is_some() {
             return Err(TopologyError::DuplicateEndpoint(id));
@@ -182,8 +183,7 @@ impl ConnectionTopologyManager {
                     backend_label.as_str(),
                     worker.endpoint.id
                 ));
-                let descriptor =
-                    BackendInstanceDescriptor::new(instance_id, backend_label.clone());
+                let descriptor = BackendInstanceDescriptor::new(instance_id, backend_label.clone());
                 registry.register(descriptor, backend);
             }
         }
@@ -252,7 +252,10 @@ mod tests {
     impl WorkerBackendFactory for FakeWorkerBackendFactory {
         fn build_backend(&self, endpoint: &WorkerEndpoint) -> Option<Arc<dyn InferenceBackend>> {
             let backends = self.backends.lock().unwrap();
-            backends.get(&endpoint.id).cloned().map(|b| b as Arc<dyn InferenceBackend>)
+            backends
+                .get(&endpoint.id)
+                .cloned()
+                .map(|b| b as Arc<dyn InferenceBackend>)
         }
 
         fn backend_label(&self) -> Backend {
@@ -290,11 +293,8 @@ mod tests {
     #[test]
     fn new_manager_builds_initial_router_from_empty_pool() {
         let factory = Arc::new(FakeWorkerBackendFactory::new());
-        let manager = ConnectionTopologyManager::new(
-            WorkerPool::new(),
-            noop_selection_policy(),
-            factory,
-        );
+        let manager =
+            ConnectionTopologyManager::new(WorkerPool::new(), noop_selection_policy(), factory);
         assert_eq!(manager.active_workers(), 0);
         assert!(manager.all_endpoints().is_empty());
         // The router should exist and have zero registered backends.

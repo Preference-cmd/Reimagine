@@ -1,8 +1,8 @@
 use std::sync::Arc;
 
 use quinn::crypto::rustls::QuicClientConfig;
-use rustls::pki_types::{CertificateDer, PrivatePkcs8KeyDer};
 use rustls::ClientConfig;
+use rustls::pki_types::{CertificateDer, PrivatePkcs8KeyDer};
 
 use crate::Error;
 
@@ -24,18 +24,17 @@ impl SelfSignedCert {
 
     /// Build a rustls `ServerConfig` for use with quinn.
     pub fn server_config(&self) -> Result<rustls::ServerConfig, Error> {
-        let mut server_config =
-            rustls::ServerConfig::builder_with_provider(Arc::new(
-                rustls::crypto::ring::default_provider(),
-            ))
-            .with_safe_default_protocol_versions()
-            .map_err(|e| Error::Tls(e.to_string()))?
-            .with_no_client_auth()
-            .with_single_cert(
-                vec![self.cert_der.clone()],
-                rustls::pki_types::PrivateKeyDer::Pkcs8(self.key_der.clone_key()),
-            )
-            .map_err(|e| Error::Tls(e.to_string()))?;
+        let mut server_config = rustls::ServerConfig::builder_with_provider(Arc::new(
+            rustls::crypto::ring::default_provider(),
+        ))
+        .with_safe_default_protocol_versions()
+        .map_err(|e| Error::Tls(e.to_string()))?
+        .with_no_client_auth()
+        .with_single_cert(
+            vec![self.cert_der.clone()],
+            rustls::pki_types::PrivateKeyDer::Pkcs8(self.key_der.clone_key()),
+        )
+        .map_err(|e| Error::Tls(e.to_string()))?;
         server_config.alpn_protocols = vec![b"reimagine-worker-v1".to_vec()];
         Ok(server_config)
     }
@@ -43,14 +42,15 @@ impl SelfSignedCert {
     /// Build a rustls `ClientConfig` that trusts this certificate.
     pub fn client_config(&self) -> Result<rustls::ClientConfig, Error> {
         let mut roots = rustls::RootCertStore::empty();
-        roots.add(self.cert_der.clone()).map_err(|e| Error::Tls(e.to_string()))?;
-        let mut client_config = ClientConfig::builder_with_provider(Arc::new(
-            rustls::crypto::ring::default_provider(),
-        ))
-        .with_safe_default_protocol_versions()
-        .map_err(|e| Error::Tls(e.to_string()))?
-        .with_root_certificates(roots)
-        .with_no_client_auth();
+        roots
+            .add(self.cert_der.clone())
+            .map_err(|e| Error::Tls(e.to_string()))?;
+        let mut client_config =
+            ClientConfig::builder_with_provider(Arc::new(rustls::crypto::ring::default_provider()))
+                .with_safe_default_protocol_versions()
+                .map_err(|e| Error::Tls(e.to_string()))?
+                .with_root_certificates(roots)
+                .with_no_client_auth();
         client_config.alpn_protocols = vec![b"reimagine-worker-v1".to_vec()];
         Ok(client_config)
     }
@@ -62,9 +62,8 @@ pub fn server_endpoint(
     cert: &SelfSignedCert,
 ) -> Result<quinn::Endpoint, Error> {
     let server_config = cert.server_config()?;
-    let quic_server_config =
-        quinn::crypto::rustls::QuicServerConfig::try_from(server_config)
-            .map_err(|e| Error::Tls(e.to_string()))?;
+    let quic_server_config = quinn::crypto::rustls::QuicServerConfig::try_from(server_config)
+        .map_err(|e| Error::Tls(e.to_string()))?;
     let server_config = quinn::ServerConfig::with_crypto(Arc::new(quic_server_config));
     quinn::Endpoint::server(server_config, listen_addr)
         .map_err(|e| Error::ConnectionFailed(format!("failed to bind: {e}")))
@@ -78,8 +77,8 @@ pub fn client_endpoint(
     let client_config = cert.client_config()?;
     let quic_client_config =
         QuicClientConfig::try_from(client_config).map_err(|e| Error::Tls(e.to_string()))?;
-    let mut endpoint =
-        quinn::Endpoint::client(bind_addr).map_err(|e| Error::ConnectionFailed(format!("failed to bind: {e}")))?;
+    let mut endpoint = quinn::Endpoint::client(bind_addr)
+        .map_err(|e| Error::ConnectionFailed(format!("failed to bind: {e}")))?;
     endpoint.set_default_client_config(quinn::ClientConfig::new(Arc::new(quic_client_config)));
     Ok(endpoint)
 }

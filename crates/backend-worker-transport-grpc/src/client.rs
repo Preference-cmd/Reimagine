@@ -30,8 +30,8 @@ pub async fn connect(endpoint: &str) -> Result<GrpcTransport, tonic::Status> {
 mod tests {
     use super::*;
     use crate::proto;
-    use crate::server::{GrpcWorkerService, MessageHandler};
     use crate::proto::worker_service_server::WorkerServiceServer;
+    use crate::server::{GrpcWorkerService, MessageHandler};
     use reimagine_backend_worker_protocol::WorkerTransport;
     use std::sync::Arc;
 
@@ -39,23 +39,19 @@ mod tests {
         Arc::new(|msg| {
             Box::pin(async move {
                 match msg.message {
-                    Some(proto::host_to_worker::Message::Request(r)) => {
-                        Some(proto::WorkerToHost {
-                            message: Some(proto::worker_to_host::Message::Terminal(
-                                proto::Terminal {
-                                    protocol_version: r.protocol_version,
-                                    incarnation_id: r.incarnation_id,
-                                    request_id: r.request_id,
-                                    correlation_id: r.correlation_id,
-                                    outcome: Some(proto::TerminalOutcome {
-                                        outcome: Some(proto::terminal_outcome::Outcome::Success(
-                                            proto::Success { output: r.payload },
-                                        )),
-                                    }),
-                                },
-                            )),
-                        })
-                    }
+                    Some(proto::host_to_worker::Message::Request(r)) => Some(proto::WorkerToHost {
+                        message: Some(proto::worker_to_host::Message::Terminal(proto::Terminal {
+                            protocol_version: r.protocol_version,
+                            incarnation_id: r.incarnation_id,
+                            request_id: r.request_id,
+                            correlation_id: r.correlation_id,
+                            outcome: Some(proto::TerminalOutcome {
+                                outcome: Some(proto::terminal_outcome::Outcome::Success(
+                                    proto::Success { output: r.payload },
+                                )),
+                            }),
+                        })),
+                    }),
                     _ => None,
                 }
             })
@@ -74,9 +70,7 @@ mod tests {
 
         tokio::spawn(server);
 
-        let transport = connect(&format!("http://{addr}"))
-            .await
-            .unwrap();
+        let transport = connect(&format!("http://{addr}")).await.unwrap();
 
         assert_eq!(
             transport.description().kind,

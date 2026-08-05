@@ -7,7 +7,7 @@ use reimagine_inference::{BackendPayloadKey, LatentSpaceMetadata, VramBudget};
 
 use crate::active_backend::ActiveBurnBackend;
 use crate::models::stable_diffusion::sdxl::{
-    BurnLoadedModelBundle, BurnLoadedSdxlBundle, BurnSdxlComponentRole, BurnSdxlSourceSignature,
+    BurnLoadedModelBundle, BurnSdxlComponentRole, BurnSdxlSourceSignature,
     BurnSdxlTokenizedPromptPair,
 };
 
@@ -898,7 +898,11 @@ impl BurnModelCache {
     }
 
     pub fn bundle_count(&self) -> usize {
-        self.inner.lock().expect("model cache poisoned").bundles.len()
+        self.inner
+            .lock()
+            .expect("model cache poisoned")
+            .bundles
+            .len()
     }
 
     /// Approximate total byte size of all cached bundles.
@@ -957,6 +961,7 @@ mod tests {
     use super::*;
     use crate::active_backend::{ActiveBurnBackend, active_device};
     use crate::config::BurnBackendConfig;
+    use crate::models::stable_diffusion::sdxl::BurnLoadedSdxlBundle;
     use burn_tensor::Tensor;
 
     fn sdxl_latent_space() -> LatentSpaceMetadata {
@@ -1473,7 +1478,9 @@ mod tests {
         ]);
         cache.insert_bundle(
             ModelId::new("clip-only"),
-            Arc::new(BurnLoadedModelBundle::StableDiffusionSdxl(Arc::new(clip_only))),
+            Arc::new(BurnLoadedModelBundle::StableDiffusionSdxl(Arc::new(
+                clip_only,
+            ))),
         );
 
         assert!(cache.has_component_role(BurnSdxlComponentRole::TextEncoder));

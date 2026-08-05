@@ -50,9 +50,7 @@ impl QuicTransport {
     }
 
     /// Open a bidirectional stream for sending and receiving.
-    pub async fn open_bi(
-        &self,
-    ) -> Result<(quinn::SendStream, quinn::RecvStream), TransportError> {
+    pub async fn open_bi(&self) -> Result<(quinn::SendStream, quinn::RecvStream), TransportError> {
         self.connection
             .open_bi()
             .await
@@ -75,8 +73,7 @@ impl WorkerTransport for QuicTransport {
     }
 
     async fn shutdown(&self) -> Result<(), TransportError> {
-        self.connection
-            .close(0u32.into(), b"shutdown");
+        self.connection.close(0u32.into(), b"shutdown");
         Ok(())
     }
 }
@@ -119,10 +116,9 @@ mod tests {
 
         // Client trusts the server's certificate
         let client_addr = SocketAddr::new(Ipv4Addr::LOCALHOST.into(), 0);
-        let transport =
-            QuicTransport::connect(client_addr, listen_addr, "localhost", &cert)
-                .await
-                .unwrap();
+        let transport = QuicTransport::connect(client_addr, listen_addr, "localhost", &cert)
+            .await
+            .unwrap();
 
         // Verify description
         assert_eq!(transport.description().kind, TransportKind::Quic);

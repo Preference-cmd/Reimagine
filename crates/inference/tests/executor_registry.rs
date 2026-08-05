@@ -8,8 +8,8 @@ use std::sync::Arc;
 
 use reimagine_core::model::NodeTypeId;
 use reimagine_inference::{
-    InferenceCapability, NodeExecutionOutputs, NodeExecutor, NodeExecutorError,
-    NodeExecutorRegistry, NodeExecutionContext,
+    InferenceCapability, NodeExecutionContext, NodeExecutionOutputs, NodeExecutor,
+    NodeExecutorError, NodeExecutorRegistry,
 };
 
 struct DummyExecutor;
@@ -44,15 +44,39 @@ impl NodeExecutor for CapableExecutor {
 fn builtin_registration_builds_capability_index() {
     let mut registry = NodeExecutorRegistry::default();
     for (type_id, capabilities) in [
-        ("builtin.checkpoint_loader", &[InferenceCapability::LoadBundle][..]),
-        ("builtin.load_image", &[InferenceCapability::ImageImport][..]),
-        ("builtin.clip_text_encode", &[InferenceCapability::TextEncode][..]),
-        ("builtin.empty_latent_image", &[InferenceCapability::CreateEmptyLatent][..]),
-        ("builtin.vae_encode", &[InferenceCapability::LatentEncode][..]),
-        ("builtin.ksampler", &[InferenceCapability::DiffusionSample][..]),
-        ("builtin.vae_decode", &[InferenceCapability::LatentDecode][..]),
+        (
+            "builtin.checkpoint_loader",
+            &[InferenceCapability::LoadBundle][..],
+        ),
+        (
+            "builtin.load_image",
+            &[InferenceCapability::ImageImport][..],
+        ),
+        (
+            "builtin.clip_text_encode",
+            &[InferenceCapability::TextEncode][..],
+        ),
+        (
+            "builtin.empty_latent_image",
+            &[InferenceCapability::CreateEmptyLatent][..],
+        ),
+        (
+            "builtin.vae_encode",
+            &[InferenceCapability::LatentEncode][..],
+        ),
+        (
+            "builtin.ksampler",
+            &[InferenceCapability::DiffusionSample][..],
+        ),
+        (
+            "builtin.vae_decode",
+            &[InferenceCapability::LatentDecode][..],
+        ),
         ("builtin.save_image", &[InferenceCapability::ImageSave][..]),
-        ("builtin.preview_image", &[InferenceCapability::ImagePreview][..]),
+        (
+            "builtin.preview_image",
+            &[InferenceCapability::ImagePreview][..],
+        ),
         ("builtin.string", &[][..]),
     ] {
         registry

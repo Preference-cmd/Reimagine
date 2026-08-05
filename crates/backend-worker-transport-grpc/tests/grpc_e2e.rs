@@ -5,17 +5,17 @@
 
 use std::sync::Arc;
 
+use reimagine_backend_worker_protocol::{
+    BackendExecutionError, BackendInstanceId, CancelAckFrame, CancelFrame, CleanupAckFrame,
+    CleanupFrame, ControlId, CorrelationId, HealthAckFrame, HealthFrame, HostHello, ProgressFrame,
+    ProtocolRange, ProtocolVersion, RequestFrame, RequestId, ShutdownAckFrame, ShutdownFrame,
+    TerminalFrame, TerminalOutcome, WireMessage, WorkerIdentity, WorkerIncarnationId,
+    WorkerInstallationId, WorkerInstanceProfile, WorkerProfile, WorkerTransport as _,
+};
+use reimagine_backend_worker_transport_grpc::client;
 use reimagine_backend_worker_transport_grpc::proto;
 use reimagine_backend_worker_transport_grpc::proto::worker_service_server::WorkerServiceServer;
 use reimagine_backend_worker_transport_grpc::server::{GrpcWorkerService, MessageHandler};
-use reimagine_backend_worker_transport_grpc::client;
-use reimagine_backend_worker_protocol::{
-    BackendExecutionError, BackendInstanceId, CancelAckFrame, CancelFrame, CleanupAckFrame,
-    CleanupFrame, ControlId, CorrelationId, HealthAckFrame, HealthFrame, HostHello, ProtocolRange,
-    ProtocolVersion, ProgressFrame, RequestFrame, RequestId, ShutdownAckFrame, ShutdownFrame,
-    TerminalFrame, TerminalOutcome, WorkerIncarnationId, WorkerInstallationId, WorkerInstanceProfile,
-    WorkerProfile, WorkerTransport as _, WorkerIdentity, WireMessage,
-};
 
 /// Start a gRPC server with the given handler and return the endpoint URL.
 async fn start_server(handler: MessageHandler) -> String {
@@ -38,107 +38,93 @@ fn comprehensive_handler() -> MessageHandler {
         Box::pin(async move {
             match msg.message {
                 // HostHello -> WorkerHello
-                Some(proto::host_to_worker::Message::HostHello(h)) => {
-                    Some(proto::WorkerToHost {
-                        message: Some(proto::worker_to_host::Message::WorkerHello(
-                            proto::WorkerHello {
-                                selected_protocol: std::cmp::min(h.protocol_max, 1),
-                                identity: Some(proto::WorkerIdentity {
+                Some(proto::host_to_worker::Message::HostHello(h)) => Some(proto::WorkerToHost {
+                    message: Some(proto::worker_to_host::Message::WorkerHello(
+                        proto::WorkerHello {
+                            selected_protocol: std::cmp::min(h.protocol_max, 1),
+                            identity: Some(proto::WorkerIdentity {
+                                backend_instance_id: "burn:cuda:0".into(),
+                                installation_id: "install-1".into(),
+                                incarnation_id: "inc-1".into(),
+                                worker_version: "0.1.0".into(),
+                                backend_kind: "burn".into(),
+                                target: "aarch64".into(),
+                                manifest_digest: "abc123".into(),
+                            }),
+                            profile: Some(proto::WorkerProfile {
+                                instances: vec![proto::WorkerInstanceProfile {
                                     backend_instance_id: "burn:cuda:0".into(),
-                                    installation_id: "install-1".into(),
-                                    incarnation_id: "inc-1".into(),
-                                    worker_version: "0.1.0".into(),
-                                    backend_kind: "burn".into(),
-                                    target: "aarch64".into(),
-                                    manifest_digest: "abc123".into(),
-                                }),
-                                profile: Some(proto::WorkerProfile {
-                                    instances: vec![proto::WorkerInstanceProfile {
-                                        backend_instance_id: "burn:cuda:0".into(),
-                                        device_label: "cuda:0".into(),
-                                        capabilities: vec!["echo".into()],
-                                        operation_options: serde_json::to_vec(
-                                            &serde_json::json!({"batch_size": 1}),
-                                        )
-                                        .unwrap(),
-                                    }],
-                                }),
-                            },
-                        )),
-                    })
-                }
+                                    device_label: "cuda:0".into(),
+                                    capabilities: vec!["echo".into()],
+                                    operation_options: serde_json::to_vec(
+                                        &serde_json::json!({"batch_size": 1}),
+                                    )
+                                    .unwrap(),
+                                }],
+                            }),
+                        },
+                    )),
+                }),
                 // Request -> Terminal (echo)
-                Some(proto::host_to_worker::Message::Request(r)) => {
-                    Some(proto::WorkerToHost {
-                        message: Some(proto::worker_to_host::Message::Terminal(
-                            proto::Terminal {
-                                protocol_version: r.protocol_version,
-                                incarnation_id: r.incarnation_id,
-                                request_id: r.request_id,
-                                correlation_id: r.correlation_id,
-                                outcome: Some(proto::TerminalOutcome {
-                                    outcome: Some(proto::terminal_outcome::Outcome::Success(
-                                        proto::Success { output: r.payload },
-                                    )),
-                                }),
-                            },
-                        )),
-                    })
-                }
+                Some(proto::host_to_worker::Message::Request(r)) => Some(proto::WorkerToHost {
+                    message: Some(proto::worker_to_host::Message::Terminal(proto::Terminal {
+                        protocol_version: r.protocol_version,
+                        incarnation_id: r.incarnation_id,
+                        request_id: r.request_id,
+                        correlation_id: r.correlation_id,
+                        outcome: Some(proto::TerminalOutcome {
+                            outcome: Some(proto::terminal_outcome::Outcome::Success(
+                                proto::Success { output: r.payload },
+                            )),
+                        }),
+                    })),
+                }),
                 // Cancel -> CancelAck
-                Some(proto::host_to_worker::Message::Cancel(c)) => {
-                    Some(proto::WorkerToHost {
-                        message: Some(proto::worker_to_host::Message::CancelAck(
-                            proto::CancelAck {
-                                protocol_version: c.protocol_version,
-                                incarnation_id: c.incarnation_id,
-                                request_id: c.request_id,
-                                correlation_id: c.correlation_id,
-                                accepted: true,
-                                already_terminal: false,
-                            },
-                        )),
-                    })
-                }
+                Some(proto::host_to_worker::Message::Cancel(c)) => Some(proto::WorkerToHost {
+                    message: Some(proto::worker_to_host::Message::CancelAck(
+                        proto::CancelAck {
+                            protocol_version: c.protocol_version,
+                            incarnation_id: c.incarnation_id,
+                            request_id: c.request_id,
+                            correlation_id: c.correlation_id,
+                            accepted: true,
+                            already_terminal: false,
+                        },
+                    )),
+                }),
                 // Health -> HealthAck
-                Some(proto::host_to_worker::Message::Health(h)) => {
-                    Some(proto::WorkerToHost {
-                        message: Some(proto::worker_to_host::Message::HealthAck(
-                            proto::HealthAck {
-                                protocol_version: h.protocol_version,
-                                incarnation_id: h.incarnation_id,
-                                control_id: h.control_id,
-                                healthy: true,
-                                message: Some("all good".into()),
-                            },
-                        )),
-                    })
-                }
+                Some(proto::host_to_worker::Message::Health(h)) => Some(proto::WorkerToHost {
+                    message: Some(proto::worker_to_host::Message::HealthAck(
+                        proto::HealthAck {
+                            protocol_version: h.protocol_version,
+                            incarnation_id: h.incarnation_id,
+                            control_id: h.control_id,
+                            healthy: true,
+                            message: Some("all good".into()),
+                        },
+                    )),
+                }),
                 // Cleanup -> CleanupAck
-                Some(proto::host_to_worker::Message::Cleanup(c)) => {
-                    Some(proto::WorkerToHost {
-                        message: Some(proto::worker_to_host::Message::CleanupAck(
-                            proto::CleanupAck {
-                                protocol_version: c.protocol_version,
-                                incarnation_id: c.incarnation_id,
-                                control_id: c.control_id,
-                                released_objects: c.object_ids.len() as u64,
-                            },
-                        )),
-                    })
-                }
+                Some(proto::host_to_worker::Message::Cleanup(c)) => Some(proto::WorkerToHost {
+                    message: Some(proto::worker_to_host::Message::CleanupAck(
+                        proto::CleanupAck {
+                            protocol_version: c.protocol_version,
+                            incarnation_id: c.incarnation_id,
+                            control_id: c.control_id,
+                            released_objects: c.object_ids.len() as u64,
+                        },
+                    )),
+                }),
                 // Shutdown -> ShutdownAck
-                Some(proto::host_to_worker::Message::Shutdown(s)) => {
-                    Some(proto::WorkerToHost {
-                        message: Some(proto::worker_to_host::Message::ShutdownAck(
-                            proto::ShutdownAck {
-                                protocol_version: s.protocol_version,
-                                incarnation_id: s.incarnation_id,
-                                control_id: s.control_id,
-                            },
-                        )),
-                    })
-                }
+                Some(proto::host_to_worker::Message::Shutdown(s)) => Some(proto::WorkerToHost {
+                    message: Some(proto::worker_to_host::Message::ShutdownAck(
+                        proto::ShutdownAck {
+                            protocol_version: s.protocol_version,
+                            incarnation_id: s.incarnation_id,
+                            control_id: s.control_id,
+                        },
+                    )),
+                }),
                 None => None,
             }
         })
@@ -447,28 +433,26 @@ async fn grpc_all_worker_to_host_wiremessage_types() {
     // round-trip preserves all fields.
 
     // 1. WorkerHello
-    let wire = WireMessage::WorkerHello(
-        reimagine_backend_worker_protocol::WorkerHello {
-            selected_protocol: ProtocolVersion(1),
-            identity: WorkerIdentity {
-                backend_instance_id: BackendInstanceId("burn:cuda:0".into()),
-                installation_id: WorkerInstallationId("install-1".into()),
-                incarnation_id: WorkerIncarnationId("inc-1".into()),
-                worker_version: "0.1.0".into(),
-                backend_kind: "burn".into(),
-                target: "aarch64".into(),
-                manifest_digest: "abc123".into(),
-            },
-            profile: WorkerProfile {
-                instances: vec![WorkerInstanceProfile {
-                    backend_instance_id: BackendInstanceId("burn:cuda:0".into()),
-                    device_label: "cuda:0".into(),
-                    capabilities: vec!["echo".into()],
-                    operation_options: serde_json::json!({"batch_size": 1}),
-                }],
-            },
+    let wire = WireMessage::WorkerHello(reimagine_backend_worker_protocol::WorkerHello {
+        selected_protocol: ProtocolVersion(1),
+        identity: WorkerIdentity {
+            backend_instance_id: BackendInstanceId("burn:cuda:0".into()),
+            installation_id: WorkerInstallationId("install-1".into()),
+            incarnation_id: WorkerIncarnationId("inc-1".into()),
+            worker_version: "0.1.0".into(),
+            backend_kind: "burn".into(),
+            target: "aarch64".into(),
+            manifest_digest: "abc123".into(),
         },
-    );
+        profile: WorkerProfile {
+            instances: vec![WorkerInstanceProfile {
+                backend_instance_id: BackendInstanceId("burn:cuda:0".into()),
+                device_label: "cuda:0".into(),
+                capabilities: vec!["echo".into()],
+                operation_options: serde_json::json!({"batch_size": 1}),
+            }],
+        },
+    });
     let proto_msg: proto::WorkerToHost = (&wire).try_into().unwrap();
     let back: WireMessage = proto_msg.try_into().unwrap();
     assert_eq!(format!("{wire:?}"), format!("{back:?}"));

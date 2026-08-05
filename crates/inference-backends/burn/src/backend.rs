@@ -15,8 +15,8 @@ use crate::active_backend::{ActiveBurnBackend, active_device};
 use crate::config::BurnBackendConfig;
 use crate::device::BurnDevice;
 use crate::error::BurnBackendError;
-use crate::models::stable_diffusion::sdxl::text_conditioning::cache::SdxlTextEncoderCache;
 use crate::models::stable_diffusion::sdxl::BurnSdxlComponentRole;
+use crate::models::stable_diffusion::sdxl::text_conditioning::cache::SdxlTextEncoderCache;
 use crate::operation::{
     execute_diffusion_sample, execute_image_preview, execute_image_save,
     execute_latent_create_empty, execute_latent_decode, execute_model_load_bundle,
@@ -250,8 +250,7 @@ impl InferenceBackend for BurnBackend {
         request: DiffusionSampleRequest,
     ) -> Result<DiffusionSampleResponse, InferenceError> {
         self.admit_invocation(invocation)?;
-        let result =
-            execute_diffusion_sample(self, request, Some(invocation.progress().as_ref()));
+        let result = execute_diffusion_sample(self, request, Some(invocation.progress().as_ref()));
         self.finish_invocation(invocation);
         map_err(result)
     }
@@ -294,10 +293,7 @@ impl InferenceBackend for BurnBackend {
     // Override InferenceBackend defaults to delegate to same internal logic
     // as ResourceHintSink, so both trait paths work.
 
-    async fn apply_resource_hints(
-        &self,
-        hints: ResourceHints,
-    ) -> Result<(), InferenceError> {
+    async fn apply_resource_hints(&self, hints: ResourceHints) -> Result<(), InferenceError> {
         <Self as ResourceHintSink>::apply_resource_hints(self, hints).await
     }
 
@@ -312,10 +308,7 @@ impl InferenceBackend for BurnBackend {
 
 #[async_trait::async_trait]
 impl ResourceHintSink for BurnBackend {
-    async fn apply_resource_hints(
-        &self,
-        hints: ResourceHints,
-    ) -> Result<(), InferenceError> {
+    async fn apply_resource_hints(&self, hints: ResourceHints) -> Result<(), InferenceError> {
         tracing::debug!(
             run_id = %hints.run_id,
             vram_budget = ?hints.vram_budget,

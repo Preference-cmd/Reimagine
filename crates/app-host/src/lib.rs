@@ -37,10 +37,10 @@ pub use artifact_access::{
     ArtifactAccess, ArtifactAccessError, media_type_for_reference, resolve_artifact_path,
 };
 pub use error::{AppHostError, AppHostResult};
-pub use error_code::{
-    AppHostErrorCode, worker_switch_error_code, worker_switch_error_details,
+pub use error_code::{AppHostErrorCode, worker_switch_error_code, worker_switch_error_details};
+pub use inference::quic_worker::{
+    QuicSwitchableWorker, QuicWorkerCandidate, QuicWorkerCandidateConfig,
 };
-pub use inference::quic_worker::{QuicSwitchableWorker, QuicWorkerCandidate, QuicWorkerCandidateConfig};
 pub use inference::switch::{
     ProcessSwitchableWorker, RunCancellation, SwitchableWorker, WorkerSelectionHandle,
     WorkerSwitchError, WorkerSwitchService, WorkerSwitchTarget,

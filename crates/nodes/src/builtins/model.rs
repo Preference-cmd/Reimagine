@@ -1,4 +1,6 @@
-use reimagine_core::model::{ComponentRole, ModelFamily, NodeDef, NodeResourceRequirements, SlotKind};
+use reimagine_core::model::{
+    ComponentRole, ModelFamily, NodeDef, NodeResourceRequirements, SlotKind,
+};
 
 use super::{BUILTIN_CHECKPOINT_LOADER, required_input, required_output};
 

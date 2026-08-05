@@ -4,14 +4,13 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use reimagine_app_host::{
-    QuicWorkerCandidate, QuicWorkerCandidateConfig, SwitchableWorker, WorkerSwitchService,
-    WorkerSwitchError, WorkerSwitchTarget,
+    QuicWorkerCandidate, QuicWorkerCandidateConfig, SwitchableWorker, WorkerSwitchError,
+    WorkerSwitchService, WorkerSwitchTarget,
 };
 use reimagine_backend_worker_host::{WorkerProcessState, WorkerRunLeases};
 use reimagine_backend_worker_protocol::{
-    HostHello, ProtocolRange, ProtocolVersion, WorkerHello, WorkerIdentity, WorkerIncarnationId,
-    WorkerInstallationId, WorkerInstanceProfile, WorkerProfile, WireMessage,
-    BackendInstanceId,
+    BackendInstanceId, HostHello, ProtocolRange, WireMessage, WorkerHello, WorkerIdentity,
+    WorkerIncarnationId, WorkerInstallationId, WorkerInstanceProfile, WorkerProfile,
 };
 use reimagine_backend_worker_transport_quic::tls::SelfSignedCert;
 use reimagine_core::model::RunId;
@@ -68,7 +67,9 @@ impl reimagine_app_host::RunCancellation for NoopRunCancellation {
 
 /// Start a minimal QUIC "server" that accepts one connection,
 /// reads HostHello, sends WorkerHello, and keeps the connection alive.
-async fn start_test_quic_server(cert: &SelfSignedCert) -> (SocketAddr, tokio::task::JoinHandle<()>) {
+async fn start_test_quic_server(
+    cert: &SelfSignedCert,
+) -> (SocketAddr, tokio::task::JoinHandle<()>) {
     let endpoint = reimagine_backend_worker_transport_quic::tls::server_endpoint(
         "127.0.0.1:0".parse().unwrap(),
         cert,
@@ -87,7 +88,8 @@ async fn start_test_quic_server(cert: &SelfSignedCert) -> (SocketAddr, tokio::ta
         let len = u32::from_be_bytes(prefix) as usize;
         let mut payload = vec![0u8; len];
         recv.read_exact(&mut payload).await.expect("read payload");
-        let _host_hello: HostHello = match serde_json::from_slice::<WireMessage>(&payload).unwrap() {
+        let _host_hello: HostHello = match serde_json::from_slice::<WireMessage>(&payload).unwrap()
+        {
             WireMessage::HostHello(h) => h,
             other => panic!("expected HostHello, got {:?}", other.kind()),
         };

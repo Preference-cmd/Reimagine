@@ -14,9 +14,10 @@ use crate::proto::worker_service_server::WorkerService;
 /// `WorkerToHost` response. Returning `None` means no response is
 /// needed (e.g. for one-way messages).
 pub type MessageHandler = Arc<
-    dyn Fn(proto::HostToWorker) -> std::pin::Pin<
-            Box<dyn Future<Output = Option<proto::WorkerToHost>> + Send>,
-        > + Send
+    dyn Fn(
+            proto::HostToWorker,
+        ) -> std::pin::Pin<Box<dyn Future<Output = Option<proto::WorkerToHost>> + Send>>
+        + Send
         + Sync,
 >;
 
@@ -99,23 +100,19 @@ mod tests {
             Box::pin(async move {
                 // Echo back any request as a simple progress message
                 match msg.message {
-                    Some(proto::host_to_worker::Message::Request(r)) => {
-                        Some(proto::WorkerToHost {
-                            message: Some(proto::worker_to_host::Message::Terminal(
-                                proto::Terminal {
-                                    protocol_version: r.protocol_version,
-                                    incarnation_id: r.incarnation_id,
-                                    request_id: r.request_id,
-                                    correlation_id: r.correlation_id,
-                                    outcome: Some(proto::TerminalOutcome {
-                                        outcome: Some(proto::terminal_outcome::Outcome::Success(
-                                            proto::Success { output: r.payload },
-                                        )),
-                                    }),
-                                },
-                            )),
-                        })
-                    }
+                    Some(proto::host_to_worker::Message::Request(r)) => Some(proto::WorkerToHost {
+                        message: Some(proto::worker_to_host::Message::Terminal(proto::Terminal {
+                            protocol_version: r.protocol_version,
+                            incarnation_id: r.incarnation_id,
+                            request_id: r.request_id,
+                            correlation_id: r.correlation_id,
+                            outcome: Some(proto::TerminalOutcome {
+                                outcome: Some(proto::terminal_outcome::Outcome::Success(
+                                    proto::Success { output: r.payload },
+                                )),
+                            }),
+                        })),
+                    }),
                     _ => None,
                 }
             })
@@ -134,12 +131,11 @@ mod tests {
 
         tokio::spawn(server);
 
-        let mut client =
-            crate::proto::worker_service_client::WorkerServiceClient::connect(format!(
-                "http://{addr}"
-            ))
-            .await
-            .unwrap();
+        let mut client = crate::proto::worker_service_client::WorkerServiceClient::connect(
+            format!("http://{addr}"),
+        )
+        .await
+        .unwrap();
 
         let resp = client
             .health_check(proto::HealthRequest {})

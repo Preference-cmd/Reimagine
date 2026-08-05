@@ -1,12 +1,11 @@
 use std::net::{Ipv4Addr, SocketAddr};
 
 use reimagine_backend_worker_protocol::{
-    RequestFrame, RequestId, CorrelationId, ProtocolVersion,
-    WireMessage, TerminalOutcome, WorkerTransport,
+    CorrelationId, ProtocolVersion, RequestFrame, RequestId, TerminalOutcome, WireMessage,
+    WorkerTransport,
 };
-use reimagine_backend_worker_transport_quic::{QuicTransport, tls::SelfSignedCert};
 use reimagine_backend_worker_transport_quic::listener::QuicWorkerListener;
-use tokio::io::{AsyncReadExt, AsyncWriteExt};
+use reimagine_backend_worker_transport_quic::{QuicTransport, tls::SelfSignedCert};
 
 async fn read_wire_message(recv: &mut quinn::RecvStream) -> Result<WireMessage, String> {
     let mut prefix = [0u8; 4];
@@ -21,7 +20,10 @@ async fn read_wire_message(recv: &mut quinn::RecvStream) -> Result<WireMessage, 
     serde_json::from_slice(&payload).map_err(|e| format!("deserialize: {e}"))
 }
 
-async fn write_wire_message(send: &mut quinn::SendStream, message: &WireMessage) -> Result<(), String> {
+async fn write_wire_message(
+    send: &mut quinn::SendStream,
+    message: &WireMessage,
+) -> Result<(), String> {
     let json = serde_json::to_vec(message).map_err(|e| format!("serialize: {e}"))?;
     send.write_all(&(json.len() as u32).to_be_bytes())
         .await
@@ -37,11 +39,8 @@ async fn quic_worker_listener_handshake_and_request() {
     let cert = SelfSignedCert::generate("localhost").unwrap();
 
     // Start a QUIC worker listener
-    let listener = QuicWorkerListener::start(
-        SocketAddr::new(Ipv4Addr::LOCALHOST.into(), 0),
-        &cert,
-    )
-    .unwrap();
+    let listener =
+        QuicWorkerListener::start(SocketAddr::new(Ipv4Addr::LOCALHOST.into(), 0), &cert).unwrap();
     let listen_addr = listener.local_addr().unwrap();
 
     // Server task: accept connection, handle requests
@@ -55,15 +54,16 @@ async fn quic_worker_listener_handshake_and_request() {
         if let WireMessage::Request(req) = request {
             assert_eq!(req.operation, "echo");
             // Send a terminal response
-            let response = WireMessage::Terminal(reimagine_backend_worker_protocol::TerminalFrame {
-                protocol_version: req.protocol_version,
-                incarnation_id: req.incarnation_id,
-                request_id: req.request_id,
-                correlation_id: req.correlation_id,
-                outcome: TerminalOutcome::Success {
-                    output: serde_json::json!({ "echoed": req.payload }),
-                },
-            });
+            let response =
+                WireMessage::Terminal(reimagine_backend_worker_protocol::TerminalFrame {
+                    protocol_version: req.protocol_version,
+                    incarnation_id: req.incarnation_id,
+                    request_id: req.request_id,
+                    correlation_id: req.correlation_id,
+                    outcome: TerminalOutcome::Success {
+                        output: serde_json::json!({ "echoed": req.payload }),
+                    },
+                });
             write_wire_message(&mut send, &response).await.unwrap();
         }
 

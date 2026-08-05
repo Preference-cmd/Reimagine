@@ -118,10 +118,7 @@ fn get_node_defs(
 async fn list_models(
     state: tauri::State<'_, DesktopHostState>,
 ) -> Result<Vec<ModelInfoDto>, TauriCommandError> {
-    state
-        .list_models()
-        .await
-        .map_err(app_host_command_error)
+    state.list_models().await.map_err(app_host_command_error)
 }
 
 #[tauri::command]
@@ -141,9 +138,7 @@ async fn cancel_run(
     state: tauri::State<'_, DesktopHostState>,
     run_id: String,
 ) -> Result<(), TauriCommandError> {
-    state
-        .cancel_run(&run_id)
-        .map_err(app_host_command_error)
+    state.cancel_run(&run_id).map_err(app_host_command_error)
 }
 
 #[tauri::command]
@@ -209,9 +204,7 @@ async fn agent_turn(
 fn list_agent_providers(
     state: tauri::State<'_, DesktopHostState>,
 ) -> Result<Vec<String>, TauriCommandError> {
-    state
-        .list_agent_providers()
-        .map_err(app_host_command_error)
+    state.list_agent_providers().map_err(app_host_command_error)
 }
 
 // ─── Model download commands ───────────────────────────────────────
@@ -409,9 +402,7 @@ async fn load_workflow(
 fn list_workflows(
     state: tauri::State<'_, DesktopHostState>,
 ) -> Result<Vec<serde_json::Value>, TauriCommandError> {
-    state
-        .list_saved_workflows()
-        .map_err(app_host_command_error)
+    state.list_saved_workflows().map_err(app_host_command_error)
 }
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
@@ -492,7 +483,7 @@ pub fn run() {
 #[cfg(test)]
 mod tests {
     use super::desktop_host::{DesktopHostState, default_workspace_path};
-    use super::{app_host_command_error, worker_switch_command_error, TauriCommandError};
+    use super::{TauriCommandError, app_host_command_error, worker_switch_command_error};
 
     fn temp_dir(prefix: &str) -> std::path::PathBuf {
         let nonce = std::time::SystemTime::now()
@@ -524,10 +515,9 @@ mod tests {
             "layout": { "nodes": { "n1": { "x": 1.0, "y": 2.0 } } }
         });
 
-        let saved_path = tauri::async_runtime::block_on(
-            state.save_workflow("test-workflow", workflow_json),
-        )
-        .expect("save workflow");
+        let saved_path =
+            tauri::async_runtime::block_on(state.save_workflow("test-workflow", workflow_json))
+                .expect("save workflow");
         assert!(
             saved_path.ends_with("test-workflow.json"),
             "expected path to end with test-workflow.json, got {}",

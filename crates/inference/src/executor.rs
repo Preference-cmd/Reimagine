@@ -9,8 +9,8 @@
 
 use std::collections::HashMap;
 
-use crate::capability::InferenceCapability;
 use crate::ExecutionOutput;
+use crate::capability::InferenceCapability;
 use reimagine_core::model::NodeTypeId;
 
 // Re-export the context type so executor modules can import it
@@ -204,10 +204,7 @@ impl NodeExecutorRegistry {
 
     /// Node type ids whose registered executor requires the given
     /// capability, in registration order.
-    pub fn query_by_capability(
-        &self,
-        capability: InferenceCapability,
-    ) -> Vec<NodeTypeId> {
+    pub fn query_by_capability(&self, capability: InferenceCapability) -> Vec<NodeTypeId> {
         self.by_capability
             .get(&capability)
             .cloned()
@@ -290,9 +287,11 @@ mod tests {
             registry.query_by_capability(InferenceCapability::DiffusionSample),
             vec![NodeTypeId::new("builtin.ksampler")]
         );
-        assert!(registry
-            .query_by_capability(InferenceCapability::TextEncode)
-            .is_empty());
+        assert!(
+            registry
+                .query_by_capability(InferenceCapability::TextEncode)
+                .is_empty()
+        );
     }
 
     #[test]
@@ -341,7 +340,10 @@ mod tests {
     fn has_capability_reflects_registered_executors() {
         let mut registry = NodeExecutorRegistry::default();
         registry
-            .register("builtin.ksampler", capable(&[InferenceCapability::DiffusionSample]))
+            .register(
+                "builtin.ksampler",
+                capable(&[InferenceCapability::DiffusionSample]),
+            )
             .expect("register");
 
         assert!(registry.has_capability(InferenceCapability::DiffusionSample));
@@ -367,7 +369,10 @@ mod tests {
         registry
             .register(
                 "builtin.vae_encode",
-                capable(&[InferenceCapability::DiffusionSample, InferenceCapability::LatentDecode]),
+                capable(&[
+                    InferenceCapability::DiffusionSample,
+                    InferenceCapability::LatentDecode,
+                ]),
             )
             .expect("register");
         registry

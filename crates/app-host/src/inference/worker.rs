@@ -2,12 +2,10 @@ use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
 use reimagine_backend_worker_host::{
-    InstallationRecord, InventoryStore, ProcessInferenceBackend, WorkerHostError,
-    WorkerLaunchSpec, WorkerLimits, WorkerStorePaths, WorkerSupervisor,
+    InstallationRecord, InventoryStore, ProcessInferenceBackend, WorkerHostError, WorkerLaunchSpec,
+    WorkerLimits, WorkerStorePaths, WorkerSupervisor,
 };
-use reimagine_backend_worker_protocol::{
-    BackendInstanceId, ProtocolRange, WorkerInstanceProfile,
-};
+use reimagine_backend_worker_protocol::{BackendInstanceId, ProtocolRange, WorkerInstanceProfile};
 use reimagine_core::diagnostic::{
     Diagnostic, DiagnosticCode, DiagnosticSeverity, DiagnosticSourceName, DiagnosticTarget,
     DiagnosticTargetDomain,
@@ -464,7 +462,9 @@ mod tests {
         let temp = tempfile::tempdir().unwrap();
         let install_dir = installed_dir(&temp, "burn-wgpu-v1");
         let store = InventoryStore::new(WorkerStorePaths::new(temp.path()));
-        store.add(&test_record("burn-wgpu-v1", &install_dir)).unwrap();
+        store
+            .add(&test_record("burn-wgpu-v1", &install_dir))
+            .unwrap();
 
         let provider = InstalledWorkerInventoryProvider::new(store.store_paths().clone());
         let snapshot = provider.snapshot();
@@ -508,8 +508,7 @@ mod tests {
     #[test]
     fn installed_provider_returns_empty_snapshot_for_missing_store() {
         let temp = tempfile::tempdir().unwrap();
-        let provider =
-            InstalledWorkerInventoryProvider::new(WorkerStorePaths::new(temp.path()));
+        let provider = InstalledWorkerInventoryProvider::new(WorkerStorePaths::new(temp.path()));
         assert!(provider.snapshot().candidates().is_empty());
     }
 

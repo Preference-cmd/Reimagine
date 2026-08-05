@@ -1,4 +1,6 @@
-use reimagine_core::model::{ComponentRole, ModelFamily, NodeCatalog, NodeEffect, NodeTypeId, ParamValue, SlotKind};
+use reimagine_core::model::{
+    ComponentRole, ModelFamily, NodeCatalog, NodeEffect, NodeTypeId, ParamValue, SlotKind,
+};
 use reimagine_core::validation::validate_structure;
 use reimagine_core::workflow::{Workflow, WorkflowNode};
 use reimagine_nodes::{
@@ -173,47 +175,75 @@ fn model_dependent_nodes_declare_resource_requirements() {
     let checkpoint = catalog
         .get(&NodeTypeId::new(BUILTIN_CHECKPOINT_LOADER))
         .unwrap();
-    let reqs = checkpoint.resource_requirements().expect("checkpoint has resource requirements");
-    assert_eq!(reqs.get_model_family(), Some(&ModelFamily::stable_diffusion()));
-    assert_eq!(reqs.get_required_components(), &[ComponentRole::CheckpointBundle]);
+    let reqs = checkpoint
+        .resource_requirements()
+        .expect("checkpoint has resource requirements");
+    assert_eq!(
+        reqs.get_model_family(),
+        Some(&ModelFamily::stable_diffusion())
+    );
+    assert_eq!(
+        reqs.get_required_components(),
+        &[ComponentRole::CheckpointBundle]
+    );
     assert_eq!(reqs.get_estimated_vram_bytes(), Some(6_442_450_944));
 
     // clip_text_encode: TextEncoder + SecondaryTextEncoder, ~1.5 GB
     let clip = catalog
         .get(&NodeTypeId::new(BUILTIN_CLIP_TEXT_ENCODE))
         .unwrap();
-    let reqs = clip.resource_requirements().expect("clip has resource requirements");
-    assert_eq!(reqs.get_model_family(), Some(&ModelFamily::stable_diffusion()));
+    let reqs = clip
+        .resource_requirements()
+        .expect("clip has resource requirements");
+    assert_eq!(
+        reqs.get_model_family(),
+        Some(&ModelFamily::stable_diffusion())
+    );
     assert_eq!(
         reqs.get_required_components(),
-        &[ComponentRole::TextEncoder, ComponentRole::SecondaryTextEncoder]
+        &[
+            ComponentRole::TextEncoder,
+            ComponentRole::SecondaryTextEncoder
+        ]
     );
     assert_eq!(reqs.get_estimated_vram_bytes(), Some(1_610_612_736));
 
     // ksampler: DiffusionModel, ~3.5 GB
-    let sampler = catalog
-        .get(&NodeTypeId::new(BUILTIN_KSAMPLER))
-        .unwrap();
-    let reqs = sampler.resource_requirements().expect("ksampler has resource requirements");
-    assert_eq!(reqs.get_model_family(), Some(&ModelFamily::stable_diffusion()));
-    assert_eq!(reqs.get_required_components(), &[ComponentRole::DiffusionModel]);
+    let sampler = catalog.get(&NodeTypeId::new(BUILTIN_KSAMPLER)).unwrap();
+    let reqs = sampler
+        .resource_requirements()
+        .expect("ksampler has resource requirements");
+    assert_eq!(
+        reqs.get_model_family(),
+        Some(&ModelFamily::stable_diffusion())
+    );
+    assert_eq!(
+        reqs.get_required_components(),
+        &[ComponentRole::DiffusionModel]
+    );
     assert_eq!(reqs.get_estimated_vram_bytes(), Some(3_758_096_384));
 
     // vae_decode: VaeDecoder, ~320 MB
-    let vae_decode = catalog
-        .get(&NodeTypeId::new(BUILTIN_VAE_DECODE))
-        .unwrap();
-    let reqs = vae_decode.resource_requirements().expect("vae_decode has resource requirements");
-    assert_eq!(reqs.get_model_family(), Some(&ModelFamily::stable_diffusion()));
+    let vae_decode = catalog.get(&NodeTypeId::new(BUILTIN_VAE_DECODE)).unwrap();
+    let reqs = vae_decode
+        .resource_requirements()
+        .expect("vae_decode has resource requirements");
+    assert_eq!(
+        reqs.get_model_family(),
+        Some(&ModelFamily::stable_diffusion())
+    );
     assert_eq!(reqs.get_required_components(), &[ComponentRole::VaeDecoder]);
     assert_eq!(reqs.get_estimated_vram_bytes(), Some(335_544_320));
 
     // vae_encode: VaeEncoder, ~320 MB
-    let vae_encode = catalog
-        .get(&NodeTypeId::new(BUILTIN_VAE_ENCODE))
-        .unwrap();
-    let reqs = vae_encode.resource_requirements().expect("vae_encode has resource requirements");
-    assert_eq!(reqs.get_model_family(), Some(&ModelFamily::stable_diffusion()));
+    let vae_encode = catalog.get(&NodeTypeId::new(BUILTIN_VAE_ENCODE)).unwrap();
+    let reqs = vae_encode
+        .resource_requirements()
+        .expect("vae_encode has resource requirements");
+    assert_eq!(
+        reqs.get_model_family(),
+        Some(&ModelFamily::stable_diffusion())
+    );
     assert_eq!(reqs.get_required_components(), &[ComponentRole::VaeEncoder]);
     assert_eq!(reqs.get_estimated_vram_bytes(), Some(335_544_320));
 }

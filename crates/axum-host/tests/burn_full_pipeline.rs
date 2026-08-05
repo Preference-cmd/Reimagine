@@ -243,17 +243,9 @@ mod tiny_fixture {
 
     fn diffusion_tensors() -> Vec<(String, F32TensorView)> {
         vec![
-            tensor(
-                "conv_in.weight",
-                vec![4, 4, 3, 3],
-                zeros(4 * 4 * 3 * 3),
-            ),
+            tensor("conv_in.weight", vec![4, 4, 3, 3], zeros(4 * 4 * 3 * 3)),
             tensor("conv_in.bias", vec![4], vec![0.0; 4]),
-            tensor(
-                "conv_out.weight",
-                vec![4, 4, 3, 3],
-                zeros(4 * 4 * 3 * 3),
-            ),
+            tensor("conv_out.weight", vec![4, 4, 3, 3], zeros(4 * 4 * 3 * 3)),
             tensor("conv_out.bias", vec![4], vec![0.0; 4]),
         ]
     }
@@ -678,27 +670,29 @@ async fn burn_full_pipeline_load_encode_latent_sample_decode_saves_png_via_axum(
             backend_config,
             recorder.clone() as Arc<dyn RunEventSink>,
             Arc::new(StaticWorkerInventoryProvider::new(
-                WorkerInventorySnapshot::new(vec![WorkerBackendCandidate::try_new(
-                    worker_launch_spec(&paths, executable),
-                    WorkerInstanceProfile {
-                        backend_instance_id: BackendInstanceId::from(INSTANCE_LABEL),
-                        device_label: "wgpu:default".to_owned(),
-                        capabilities: vec![
-                            "model.load_bundle",
-                            "latent.create_empty",
-                            "text.encode",
-                            "diffusion.sample",
-                            "latent.decode",
-                            "image.save",
-                            "image.preview",
-                        ]
-                        .into_iter()
-                        .map(str::to_owned)
-                        .collect(),
-                        operation_options: serde_json::json!({}),
-                    },
-                )
-                .expect("worker candidate")]),
+                WorkerInventorySnapshot::new(vec![
+                    WorkerBackendCandidate::try_new(
+                        worker_launch_spec(&paths, executable),
+                        WorkerInstanceProfile {
+                            backend_instance_id: BackendInstanceId::from(INSTANCE_LABEL),
+                            device_label: "wgpu:default".to_owned(),
+                            capabilities: vec![
+                                "model.load_bundle",
+                                "latent.create_empty",
+                                "text.encode",
+                                "diffusion.sample",
+                                "latent.decode",
+                                "image.save",
+                                "image.preview",
+                            ]
+                            .into_iter()
+                            .map(str::to_owned)
+                            .collect(),
+                            operation_options: serde_json::json!({}),
+                        },
+                    )
+                    .expect("worker candidate"),
+                ]),
             )),
         )
         .await
@@ -754,7 +748,10 @@ async fn burn_full_pipeline_load_encode_latent_sample_decode_saves_png_via_axum(
         .get("run_id")
         .and_then(|v| v.as_str())
         .expect("run response must include run_id");
-    assert_eq!(run_json.get("outcome").and_then(|v| v.as_str()), Some("started"));
+    assert_eq!(
+        run_json.get("outcome").and_then(|v| v.as_str()),
+        Some("started")
+    );
 
     // 3. Poll for a terminal state.
     let deadline = Instant::now() + Duration::from_secs(300);
@@ -773,7 +770,10 @@ async fn burn_full_pipeline_load_encode_latent_sample_decode_saves_png_via_axum(
             .or_else(|| poll_json.get("state"))
             .and_then(|v| v.as_str())
             .map(|s| s.to_lowercase());
-        if matches!(state.as_deref(), Some("completed") | Some("failed") | Some("cancelled")) {
+        if matches!(
+            state.as_deref(),
+            Some("completed") | Some("failed") | Some("cancelled")
+        ) {
             break poll_json;
         }
         assert!(
@@ -792,7 +792,8 @@ async fn burn_full_pipeline_load_encode_latent_sample_decode_saves_png_via_axum(
         .unwrap_or("unknown")
         .to_lowercase();
     assert_eq!(
-        terminal_state, "completed",
+        terminal_state,
+        "completed",
         "full pipeline run must complete; summary: {}",
         serde_json::to_string_pretty(&summary).unwrap_or_default()
     );
@@ -851,7 +852,11 @@ async fn burn_full_pipeline_load_encode_latent_sample_decode_saves_png_via_axum(
     // 6. Download the artifact and verify PNG format + dimensions.
     let artifact_response = app
         .clone()
-        .oneshot(json_request("GET", &format!("/artifacts/{artifact_id}"), None))
+        .oneshot(json_request(
+            "GET",
+            &format!("/artifacts/{artifact_id}"),
+            None,
+        ))
         .await
         .unwrap();
     assert_eq!(artifact_response.status(), axum::http::StatusCode::OK);

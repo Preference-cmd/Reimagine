@@ -1,16 +1,19 @@
 use reimagine_backend_worker_protocol::{
-    CancelAckFrame, CancelFrame, CleanupAckFrame, CleanupFrame, ControlId,
-    CorrelationId, HealthAckFrame, HealthFrame, HostHello, ProtocolVersion,
-    ProgressFrame, RequestFrame, RequestId, ShutdownAckFrame, ShutdownFrame,
-    TerminalFrame, TerminalOutcome, WireMessage, WorkerHello, WorkerIdentity,
-    WorkerIncarnationId, WorkerInstallationId, WorkerInstanceProfile, WorkerProfile,
-    BackendInstanceId, BackendExecutionError,
+    BackendExecutionError, BackendInstanceId, CancelAckFrame, CancelFrame, CleanupAckFrame,
+    CleanupFrame, ControlId, CorrelationId, HealthAckFrame, HealthFrame, HostHello, ProgressFrame,
+    ProtocolVersion, RequestFrame, RequestId, ShutdownAckFrame, ShutdownFrame, TerminalFrame,
+    TerminalOutcome, WireMessage, WorkerHello, WorkerIdentity, WorkerIncarnationId,
+    WorkerInstallationId, WorkerInstanceProfile, WorkerProfile,
 };
 
 use crate::proto;
 
-fn u16_to_u32(v: u16) -> u32 { v as u32 }
-fn u32_to_u16(v: u32) -> u16 { v as u16 }
+fn u16_to_u32(v: u16) -> u32 {
+    v as u32
+}
+fn u32_to_u16(v: u32) -> u16 {
+    v as u16
+}
 
 // ── WireMessage → Proto ──────────────────────────────────────────
 
@@ -25,51 +28,42 @@ impl TryFrom<&WireMessage> for proto::HostToWorker {
                     protocol_max: u16_to_u32(h.supported_protocols.maximum.0),
                 })
             }
-            WireMessage::Request(r) => {
-                proto::host_to_worker::Message::Request(proto::Request {
-                    protocol_version: u16_to_u32(r.protocol_version.0),
-                    incarnation_id: r.incarnation_id.0.clone(),
-                    request_id: r.request_id.0.clone(),
-                    correlation_id: r.correlation_id.0.clone(),
-                    operation: r.operation.clone(),
-                    payload: serde_json::to_vec(&r.payload)
-                        .map_err(|e| e.to_string())?,
-                })
-            }
-            WireMessage::Cancel(c) => {
-                proto::host_to_worker::Message::Cancel(proto::Cancel {
-                    protocol_version: u16_to_u32(c.protocol_version.0),
-                    incarnation_id: c.incarnation_id.0.clone(),
-                    request_id: c.request_id.0.clone(),
-                    correlation_id: c.correlation_id.0.clone(),
-                })
-            }
-            WireMessage::Health(h) => {
-                proto::host_to_worker::Message::Health(proto::Health {
-                    protocol_version: u16_to_u32(h.protocol_version.0),
-                    incarnation_id: h.incarnation_id.0.clone(),
-                    control_id: h.control_id.0.clone(),
-                })
-            }
-            WireMessage::Cleanup(c) => {
-                proto::host_to_worker::Message::Cleanup(proto::Cleanup {
-                    protocol_version: u16_to_u32(c.protocol_version.0),
-                    incarnation_id: c.incarnation_id.0.clone(),
-                    control_id: c.control_id.0.clone(),
-                    run_id: c.run_id.clone(),
-                    object_ids: c.object_ids.clone(),
-                })
-            }
-            WireMessage::Shutdown(s) => {
-                proto::host_to_worker::Message::Shutdown(proto::Shutdown {
-                    protocol_version: u16_to_u32(s.protocol_version.0),
-                    incarnation_id: s.incarnation_id.0.clone(),
-                    control_id: s.control_id.0.clone(),
-                })
-            }
+            WireMessage::Request(r) => proto::host_to_worker::Message::Request(proto::Request {
+                protocol_version: u16_to_u32(r.protocol_version.0),
+                incarnation_id: r.incarnation_id.0.clone(),
+                request_id: r.request_id.0.clone(),
+                correlation_id: r.correlation_id.0.clone(),
+                operation: r.operation.clone(),
+                payload: serde_json::to_vec(&r.payload).map_err(|e| e.to_string())?,
+            }),
+            WireMessage::Cancel(c) => proto::host_to_worker::Message::Cancel(proto::Cancel {
+                protocol_version: u16_to_u32(c.protocol_version.0),
+                incarnation_id: c.incarnation_id.0.clone(),
+                request_id: c.request_id.0.clone(),
+                correlation_id: c.correlation_id.0.clone(),
+            }),
+            WireMessage::Health(h) => proto::host_to_worker::Message::Health(proto::Health {
+                protocol_version: u16_to_u32(h.protocol_version.0),
+                incarnation_id: h.incarnation_id.0.clone(),
+                control_id: h.control_id.0.clone(),
+            }),
+            WireMessage::Cleanup(c) => proto::host_to_worker::Message::Cleanup(proto::Cleanup {
+                protocol_version: u16_to_u32(c.protocol_version.0),
+                incarnation_id: c.incarnation_id.0.clone(),
+                control_id: c.control_id.0.clone(),
+                run_id: c.run_id.clone(),
+                object_ids: c.object_ids.clone(),
+            }),
+            WireMessage::Shutdown(s) => proto::host_to_worker::Message::Shutdown(proto::Shutdown {
+                protocol_version: u16_to_u32(s.protocol_version.0),
+                incarnation_id: s.incarnation_id.0.clone(),
+                control_id: s.control_id.0.clone(),
+            }),
             _ => return Err(format!("not a host-to-worker message: {:?}", msg.kind())),
         };
-        Ok(proto::HostToWorker { message: Some(message) })
+        Ok(proto::HostToWorker {
+            message: Some(message),
+        })
     }
 }
 
@@ -91,30 +85,31 @@ impl TryFrom<&WireMessage> for proto::WorkerToHost {
                         manifest_digest: h.identity.manifest_digest.clone(),
                     }),
                     profile: Some(proto::WorkerProfile {
-                        instances: h.profile.instances.iter().map(|i| {
-                            proto::WorkerInstanceProfile {
+                        instances: h
+                            .profile
+                            .instances
+                            .iter()
+                            .map(|i| proto::WorkerInstanceProfile {
                                 backend_instance_id: i.backend_instance_id.0.clone(),
                                 device_label: i.device_label.clone(),
                                 capabilities: i.capabilities.clone(),
                                 operation_options: serde_json::to_vec(&i.operation_options)
                                     .unwrap_or_default(),
-                            }
-                        }).collect(),
+                            })
+                            .collect(),
                     }),
                 })
             }
-            WireMessage::Progress(p) => {
-                proto::worker_to_host::Message::Progress(proto::Progress {
-                    protocol_version: u16_to_u32(p.protocol_version.0),
-                    incarnation_id: p.incarnation_id.0.clone(),
-                    request_id: p.request_id.0.clone(),
-                    correlation_id: p.correlation_id.0.clone(),
-                    sequence: p.sequence,
-                    completed: p.completed,
-                    total: p.total,
-                    message: p.message.clone(),
-                })
-            }
+            WireMessage::Progress(p) => proto::worker_to_host::Message::Progress(proto::Progress {
+                protocol_version: u16_to_u32(p.protocol_version.0),
+                incarnation_id: p.incarnation_id.0.clone(),
+                request_id: p.request_id.0.clone(),
+                correlation_id: p.correlation_id.0.clone(),
+                sequence: p.sequence,
+                completed: p.completed,
+                total: p.total,
+                message: p.message.clone(),
+            }),
             WireMessage::CancelAck(c) => {
                 proto::worker_to_host::Message::CancelAck(proto::CancelAck {
                     protocol_version: u16_to_u32(c.protocol_version.0),
@@ -177,7 +172,9 @@ impl TryFrom<&WireMessage> for proto::WorkerToHost {
             }
             _ => return Err(format!("not a worker-to-host message: {:?}", msg.kind())),
         };
-        Ok(proto::WorkerToHost { message: Some(message) })
+        Ok(proto::WorkerToHost {
+            message: Some(message),
+        })
     }
 }
 
@@ -189,16 +186,14 @@ impl TryFrom<proto::HostToWorker> for WireMessage {
     fn try_from(msg: proto::HostToWorker) -> Result<Self, Self::Error> {
         let inner = msg.message.ok_or("missing message")?;
         match inner {
-            proto::host_to_worker::Message::HostHello(h) => {
-                Ok(WireMessage::HostHello(HostHello {
-                    supported_protocols: reimagine_backend_worker_protocol::ProtocolRange::new(
-                        u32_to_u16(h.protocol_min), u32_to_u16(h.protocol_max),
-                    ),
-                }))
-            }
+            proto::host_to_worker::Message::HostHello(h) => Ok(WireMessage::HostHello(HostHello {
+                supported_protocols: reimagine_backend_worker_protocol::ProtocolRange::new(
+                    u32_to_u16(h.protocol_min),
+                    u32_to_u16(h.protocol_max),
+                ),
+            })),
             proto::host_to_worker::Message::Request(r) => {
-                let payload = serde_json::from_slice(&r.payload)
-                    .map_err(|e| e.to_string())?;
+                let payload = serde_json::from_slice(&r.payload).map_err(|e| e.to_string())?;
                 Ok(WireMessage::Request(RequestFrame {
                     protocol_version: ProtocolVersion(u32_to_u16(r.protocol_version)),
                     incarnation_id: WorkerIncarnationId(r.incarnation_id),
@@ -208,30 +203,24 @@ impl TryFrom<proto::HostToWorker> for WireMessage {
                     payload,
                 }))
             }
-            proto::host_to_worker::Message::Cancel(c) => {
-                Ok(WireMessage::Cancel(CancelFrame {
-                    protocol_version: ProtocolVersion(u32_to_u16(c.protocol_version)),
-                    incarnation_id: WorkerIncarnationId(c.incarnation_id),
-                    request_id: RequestId(c.request_id),
-                    correlation_id: CorrelationId(c.correlation_id),
-                }))
-            }
-            proto::host_to_worker::Message::Health(h) => {
-                Ok(WireMessage::Health(HealthFrame {
-                    protocol_version: ProtocolVersion(u32_to_u16(h.protocol_version)),
-                    incarnation_id: WorkerIncarnationId(h.incarnation_id),
-                    control_id: ControlId(h.control_id),
-                }))
-            }
-            proto::host_to_worker::Message::Cleanup(c) => {
-                Ok(WireMessage::Cleanup(CleanupFrame {
-                    protocol_version: ProtocolVersion(u32_to_u16(c.protocol_version)),
-                    incarnation_id: WorkerIncarnationId(c.incarnation_id),
-                    control_id: ControlId(c.control_id),
-                    run_id: c.run_id,
-                    object_ids: c.object_ids,
-                }))
-            }
+            proto::host_to_worker::Message::Cancel(c) => Ok(WireMessage::Cancel(CancelFrame {
+                protocol_version: ProtocolVersion(u32_to_u16(c.protocol_version)),
+                incarnation_id: WorkerIncarnationId(c.incarnation_id),
+                request_id: RequestId(c.request_id),
+                correlation_id: CorrelationId(c.correlation_id),
+            })),
+            proto::host_to_worker::Message::Health(h) => Ok(WireMessage::Health(HealthFrame {
+                protocol_version: ProtocolVersion(u32_to_u16(h.protocol_version)),
+                incarnation_id: WorkerIncarnationId(h.incarnation_id),
+                control_id: ControlId(h.control_id),
+            })),
+            proto::host_to_worker::Message::Cleanup(c) => Ok(WireMessage::Cleanup(CleanupFrame {
+                protocol_version: ProtocolVersion(u32_to_u16(c.protocol_version)),
+                incarnation_id: WorkerIncarnationId(c.incarnation_id),
+                control_id: ControlId(c.control_id),
+                run_id: c.run_id,
+                object_ids: c.object_ids,
+            })),
             proto::host_to_worker::Message::Shutdown(s) => {
                 Ok(WireMessage::Shutdown(ShutdownFrame {
                     protocol_version: ProtocolVersion(u32_to_u16(s.protocol_version)),
@@ -264,16 +253,21 @@ impl TryFrom<proto::WorkerToHost> for WireMessage {
                         manifest_digest: identity.manifest_digest,
                     },
                     profile: WorkerProfile {
-                        instances: profile.instances.into_iter().map(|i| {
-                            let operation_options = serde_json::from_slice(&i.operation_options)
-                                .unwrap_or(serde_json::Value::Null);
-                            WorkerInstanceProfile {
-                                backend_instance_id: BackendInstanceId(i.backend_instance_id),
-                                device_label: i.device_label,
-                                capabilities: i.capabilities,
-                                operation_options,
-                            }
-                        }).collect(),
+                        instances: profile
+                            .instances
+                            .into_iter()
+                            .map(|i| {
+                                let operation_options =
+                                    serde_json::from_slice(&i.operation_options)
+                                        .unwrap_or(serde_json::Value::Null);
+                                WorkerInstanceProfile {
+                                    backend_instance_id: BackendInstanceId(i.backend_instance_id),
+                                    device_label: i.device_label,
+                                    capabilities: i.capabilities,
+                                    operation_options,
+                                }
+                            })
+                            .collect(),
                     },
                 }))
             }
@@ -303,8 +297,8 @@ impl TryFrom<proto::WorkerToHost> for WireMessage {
                 let outcome_proto = t.outcome.ok_or("missing outcome")?;
                 let outcome = match outcome_proto.outcome {
                     Some(proto::terminal_outcome::Outcome::Success(s)) => {
-                        let output = serde_json::from_slice(&s.output)
-                            .unwrap_or(serde_json::Value::Null);
+                        let output =
+                            serde_json::from_slice(&s.output).unwrap_or(serde_json::Value::Null);
                         TerminalOutcome::Success { output }
                     }
                     Some(proto::terminal_outcome::Outcome::Cancelled(_)) => {
@@ -316,7 +310,7 @@ impl TryFrom<proto::WorkerToHost> for WireMessage {
                                 code: e.code,
                                 message: e.message,
                                 retryable: e.retryable,
-                            }
+                            },
                         }
                     }
                     None => return Err("missing terminal outcome".into()),
@@ -394,7 +388,9 @@ mod tests {
             incarnation_id: WorkerIncarnationId("inc-1".into()),
             request_id: RequestId("req-1".into()),
             correlation_id: CorrelationId("corr-1".into()),
-            outcome: TerminalOutcome::Success { output: json!({"ok": true}) },
+            outcome: TerminalOutcome::Success {
+                output: json!({"ok": true}),
+            },
         });
         let proto_msg: proto::WorkerToHost = (&original).try_into().unwrap();
         let back: WireMessage = proto_msg.try_into().unwrap();

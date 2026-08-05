@@ -453,11 +453,12 @@ mod tests {
     fn refresh_capabilities_requeries_backend_state() {
         let mut reg = InferenceBackendRegistry::new();
         let backend = Arc::new(StatefulBackend::new(Backend::new("burn")));
-        let descriptor = BackendInstanceDescriptor::new(
-            BackendInstance::new("burn:main"),
-            Backend::new("burn"),
+        let descriptor =
+            BackendInstanceDescriptor::new(BackendInstance::new("burn:main"), Backend::new("burn"));
+        reg.register(
+            descriptor,
+            Arc::clone(&backend) as Arc<dyn InferenceBackend>,
         );
-        reg.register(descriptor, Arc::clone(&backend) as Arc<dyn InferenceBackend>);
 
         let before = reg.refresh_capabilities();
         assert!(!before.by_kind()[0].supports_capability(InferenceCapability::TextEncode));
@@ -470,9 +471,9 @@ mod tests {
 
         let after = reg.refresh_capabilities();
         assert!(after.by_kind()[0].supports_capability(InferenceCapability::TextEncode));
-        assert!(reg
-            .merged_capabilities()
-            .by_kind()[0]
-            .supports_capability(InferenceCapability::TextEncode));
+        assert!(
+            reg.merged_capabilities().by_kind()[0]
+                .supports_capability(InferenceCapability::TextEncode)
+        );
     }
 }

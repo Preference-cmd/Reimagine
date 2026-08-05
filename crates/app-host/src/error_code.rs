@@ -1,6 +1,6 @@
 use serde::Serialize;
 
-use crate::{AppHostError, WorkerSwitchError};
+use crate::WorkerSwitchError;
 
 /// Machine-readable failure classification carried in IPC error payloads.
 ///
@@ -195,7 +195,10 @@ mod tests {
                 instance: reimagine_inference::BackendInstance::new("burn:wgpu:default"),
             },
         ] {
-            assert_eq!(worker_switch_error_code(&error), AppHostErrorCode::WorkerUnavailable);
+            assert_eq!(
+                worker_switch_error_code(&error),
+                AppHostErrorCode::WorkerUnavailable
+            );
         }
     }
 

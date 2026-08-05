@@ -9,7 +9,7 @@ pub(crate) mod scheduler;
 pub mod unet;
 
 use burn_tensor::{Tensor, TensorData};
-use reimagine_inference::{ConditioningMetadata, InferenceProgressSink, InferenceProgress};
+use reimagine_inference::{ConditioningMetadata, InferenceProgress, InferenceProgressSink};
 
 use crate::active_backend::ActiveBurnBackend;
 use crate::backend::BurnBackend;
@@ -75,10 +75,7 @@ pub fn sample_sdxl(
                         sequence: event.step_index() as u64 * 2,
                         completed: event.step_index() as u64,
                         total: Some(steps as u64),
-                        message: Some(format!(
-                            "denoising step {}/{steps}",
-                            event.step_index() + 1
-                        )),
+                        message: Some(format!("denoising step {}/{steps}", event.step_index() + 1)),
                     });
                 }
             }

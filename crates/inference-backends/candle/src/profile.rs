@@ -139,9 +139,8 @@ fn probe_metal_instance(
     // device list) instead of returning Err on hosts without Metal support.
     // Wrap in catch_unwind so the deprecated Candle backend never takes down
     // workspace bootstrap.
-    let metal_result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-        Device::new_metal(0)
-    }));
+    let metal_result =
+        std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| Device::new_metal(0)));
 
     match metal_result {
         Ok(Ok(_device)) => CandleProfileProvider::attach_capabilities(

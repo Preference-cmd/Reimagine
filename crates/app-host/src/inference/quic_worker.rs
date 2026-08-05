@@ -4,7 +4,7 @@ use async_trait::async_trait;
 use reimagine_backend_worker_host::{WorkerProcessState, WorkerRunLeases};
 use reimagine_backend_worker_protocol::{WorkerHello, WorkerIncarnationId, WorkerTransport};
 use reimagine_backend_worker_transport_quic::{
-    discovery::DiscoveredWorker, tls::SelfSignedCert, QuicTransport,
+    QuicTransport, discovery::DiscoveredWorker, tls::SelfSignedCert,
 };
 use reimagine_inference::{
     Backend, BackendInstance, BackendInstanceSnapshot, DeviceProfile, InferenceBackend,
@@ -147,9 +147,7 @@ impl QuicWorkerCandidate {
     }
 
     /// Perform the QUIC handshake and return the transport and hello.
-    async fn connect(
-        &self,
-    ) -> Result<(Arc<QuicTransport>, WorkerHello), WorkerSwitchError> {
+    async fn connect(&self) -> Result<(Arc<QuicTransport>, WorkerHello), WorkerSwitchError> {
         let transport = QuicTransport::connect(
             self.config.bind_addr,
             self.config.server_addr,
@@ -162,20 +160,24 @@ impl QuicWorkerCandidate {
         })?;
 
         // Perform the handshake: send HostHello, receive WorkerHello
-        let (mut send, mut recv) = transport.open_bi().await.map_err(|error| {
-            WorkerSwitchError::Startup {
-                message: format!("QUIC open_bi failed: {error}"),
-            }
-        })?;
+        let (mut send, mut recv) =
+            transport
+                .open_bi()
+                .await
+                .map_err(|error| WorkerSwitchError::Startup {
+                    message: format!("QUIC open_bi failed: {error}"),
+                })?;
 
         // Send HostHello
         use reimagine_backend_worker_protocol::{HostHello, ProtocolRange, WireMessage};
         let host_hello = HostHello {
             supported_protocols: ProtocolRange::new(1, 1),
         };
-        let hello_json = serde_json::to_vec(&WireMessage::HostHello(host_hello))
-            .map_err(|error| WorkerSwitchError::Startup {
-                message: format!("serialize HostHello: {error}"),
+        let hello_json =
+            serde_json::to_vec(&WireMessage::HostHello(host_hello)).map_err(|error| {
+                WorkerSwitchError::Startup {
+                    message: format!("serialize HostHello: {error}"),
+                }
             })?;
         send.write_all(&(hello_json.len() as u32).to_be_bytes())
             .await
@@ -202,19 +204,17 @@ impl QuicWorkerCandidate {
             .map_err(|error| WorkerSwitchError::Startup {
                 message: format!("read WorkerHello payload: {error}"),
             })?;
-        let worker_hello: WorkerHello =
-            match serde_json::from_slice::<WireMessage>(&payload).map_err(|error| {
-                WorkerSwitchError::Startup {
-                    message: format!("deserialize WorkerHello: {error}"),
-                }
+        let worker_hello: WorkerHello = match serde_json::from_slice::<WireMessage>(&payload)
+            .map_err(|error| WorkerSwitchError::Startup {
+                message: format!("deserialize WorkerHello: {error}"),
             })? {
-                WireMessage::WorkerHello(h) => h,
-                other => {
-                    return Err(WorkerSwitchError::Startup {
-                        message: format!("expected WorkerHello, got {:?}", other.kind()),
-                    });
-                }
-            };
+            WireMessage::WorkerHello(h) => h,
+            other => {
+                return Err(WorkerSwitchError::Startup {
+                    message: format!("expected WorkerHello, got {:?}", other.kind()),
+                });
+            }
+        };
 
         Ok((Arc::new(transport), worker_hello))
     }

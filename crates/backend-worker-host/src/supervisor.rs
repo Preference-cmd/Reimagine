@@ -7,7 +7,7 @@ use reimagine_backend_worker_protocol::{
     CancelAckFrame, CancelFrame, CleanupAckFrame, CleanupFrame, CodecError, ControlId,
     CorrelationId, FrameCodec, HealthAckFrame, HealthFrame, HostHello, MessageSender,
     ProgressFrame, ProtocolVersion, RequestFrame, RequestId, ShutdownFrame, TerminalFrame,
-    WorkerTransport, WireMessage, WorkerHello, WorkerIncarnationId, validate_message_direction,
+    WireMessage, WorkerHello, WorkerIncarnationId, WorkerTransport, validate_message_direction,
 };
 use tokio::io::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt};
 use tokio::sync::{Mutex, mpsc, oneshot};
@@ -1195,7 +1195,10 @@ mod tests {
                 }],
             },
         };
-        if write_frame(&mut io, &codec, &WireMessage::WorkerHello(hello)).await.is_err() {
+        if write_frame(&mut io, &codec, &WireMessage::WorkerHello(hello))
+            .await
+            .is_err()
+        {
             return;
         }
         loop {
@@ -1296,9 +1299,9 @@ mod tests {
         );
         assert!(matches!(
             supervisor.start().await,
-            Err(WorkerHostError::Transport(TransportError::ConnectionFailed(
-                _,
-            )))
+            Err(WorkerHostError::Transport(
+                TransportError::ConnectionFailed(_,)
+            ))
         ));
         assert_eq!(supervisor.state(), WorkerProcessState::Stopped);
     }

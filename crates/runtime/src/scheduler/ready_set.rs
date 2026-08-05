@@ -42,9 +42,7 @@ impl ReadySetScheduler {
 
         // Initialize all nodes with empty dependency lists
         for node in nodes {
-            node_dependencies
-                .entry(node.node_id().clone())
-                .or_default();
+            node_dependencies.entry(node.node_id().clone()).or_default();
         }
 
         // Collect edge-sourced dependencies
@@ -67,9 +65,7 @@ impl ReadySetScheduler {
                 } = binding.source()
                 {
                     let dep = OutputKey::new(from_node_id.clone(), from_slot_id.clone());
-                    let deps = node_dependencies
-                        .entry(node.node_id().clone())
-                        .or_default();
+                    let deps = node_dependencies.entry(node.node_id().clone()).or_default();
                     if !deps.contains(&dep) {
                         deps.push(dep);
                     }
@@ -187,8 +183,7 @@ impl ReadySetScheduler {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use reimagine_core::model::{EdgeId, NodeTypeId, SlotId, WorkflowId, WorkflowVersion};
-    use reimagine_core::readiness::{ExecutionPlan, ExecutionStage, RunTarget, RunTargetSelection};
+    use reimagine_core::model::{EdgeId, NodeTypeId, SlotId};
 
     fn node(node_id: &str, slots: &[&str]) -> ExecutionNode {
         ExecutionNode::new(
@@ -317,10 +312,7 @@ mod tests {
             node("c", &["out"]),
             node("d", &["in"]),
         ];
-        let edges = vec![
-            edge("a", "out", "b", "in"),
-            edge("c", "out", "d", "in"),
-        ];
+        let edges = vec![edge("a", "out", "b", "in"), edge("c", "out", "d", "in")];
         let mut sched = ReadySetScheduler::from_plan(&nodes, &edges);
 
         // Mark a as failed
