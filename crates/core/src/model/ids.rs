@@ -1,5 +1,11 @@
 macro_rules! id_type {
     ($name:ident) => {
+        id_type!(@inner $name, false);
+    };
+    ($name:ident, allow_slash) => {
+        id_type!(@inner $name, true);
+    };
+    (@inner $name:ident, $allow_slash:expr) => {
         #[derive(
             Debug,
             Clone,
@@ -18,8 +24,13 @@ macro_rules! id_type {
                 let s = id.into();
                 assert!(!s.is_empty(), "ID must not be empty");
                 assert!(s.is_ascii(), "ID must be ASCII");
+                let banned: &[char] = if $allow_slash {
+                    &['\\', '\0']
+                } else {
+                    &['/', '\\', '\0']
+                };
                 assert!(
-                    !s.contains(['/', '\\', '\0']),
+                    !s.contains(banned),
                     "ID contains invalid characters"
                 );
                 Self(s)
@@ -58,8 +69,12 @@ id_type!(SlotId);
 id_type!(WorkflowInputId);
 id_type!(WorkflowOutputId);
 id_type!(RunId);
-id_type!(ArtifactId);
-id_type!(DiagnosticId);
+// ArtifactId may carry path-like segments (the artifact reference is
+// validated for path safety separately by the artifact access layer).
+id_type!(ArtifactId, allow_slash);
+// DiagnosticId mirrors `DiagnosticCode`, whose namespace separator is "/"
+// (e.g. "CONFIG/MISSING_FILE", "AGENT/TOOL_PERMISSION_DENIED").
+id_type!(DiagnosticId, allow_slash);
 id_type!(HistoryEntryId);
 id_type!(CommandBatchId);
 id_type!(ProposalId);

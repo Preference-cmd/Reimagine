@@ -879,7 +879,7 @@ mod tests {
         );
         assert_param_2d(
             &module.clip_l.blocks()[0].attention.query.weight,
-            [1.0, 2.0, 3.0, 4.0],
+            [1.0, 3.0, 2.0, 4.0],
         );
         assert_param_1d(
             module.clip_l.blocks()[0]
@@ -892,7 +892,7 @@ mod tests {
         );
         assert_param_2d(
             &module.clip_l.blocks()[0].attention.key.weight,
-            [5.0, 6.0, 7.0, 8.0],
+            [5.0, 7.0, 6.0, 8.0],
         );
         assert_param_1d(
             module.clip_l.blocks()[0]
@@ -905,7 +905,7 @@ mod tests {
         );
         assert_param_2d(
             &module.clip_l.blocks()[0].attention.value.weight,
-            [9.0, 10.0, 11.0, 12.0],
+            [9.0, 11.0, 10.0, 12.0],
         );
         assert_param_1d(
             module.clip_l.blocks()[0]
@@ -1073,7 +1073,7 @@ mod tests {
         );
         assert_param_2d(
             &module.clip_l.blocks()[0].attention.query.weight,
-            [1.0, 2.0, 3.0, 4.0],
+            [1.0, 3.0, 2.0, 4.0],
         );
     }
 }

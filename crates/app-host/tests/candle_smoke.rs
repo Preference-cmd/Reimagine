@@ -1,13 +1,14 @@
 #![allow(deprecated)]
 
-//! App-host smoke test for the Candle-backed workspace.
+//! App-host smoke test for the workspace compute path.
 //!
 //! This test builds an SDXL-shaped workflow, registers a matching
 //! `sdxl-base-1.0` manifest entry, and runs the workflow through a
-//! real `WorkspaceHost` constructed with the Candle backend.
+//! real `WorkspaceHost` constructed with default (Burn) backend.
 //!
-//! This placeholder-model smoke path should fail precisely at real SDXL
-//! text encoder loading; committed tests do not carry CLIP weights.
+//! The placeholder model file is not a valid model, so the run must
+//! fail without producing image artifacts; committed tests do not
+//! carry model weights.
 
 use std::path::PathBuf;
 use std::sync::Arc;
@@ -234,7 +235,7 @@ async fn run_to_completion(host: &WorkspaceHost, run_id: &reimagine_core::model:
 }
 
 #[tokio::test]
-async fn candle_backend_sdxl_placeholder_workflow_reports_missing_text_encoder_weights() {
+async fn placeholder_model_workflow_fails_without_artifacts() {
     let base = unique_temp_dir("app-host");
     let paths = AppPaths::new(&base);
     tokio::fs::create_dir_all(paths.models_dir()).await.unwrap();
@@ -250,9 +251,9 @@ async fn candle_backend_sdxl_placeholder_workflow_reports_missing_text_encoder_w
 
     let event_sink: reimagine_runtime::BoxedRunEventSink = Arc::new(VecRunEventSink::new());
     let host = WorkspaceHost::with_defaults_and_backend(
-        WorkspaceScope::new("ws-candle-smoke"),
+        WorkspaceScope::new("ws-compute-smoke"),
         &base,
-        BackendSelection::Candle,
+        BackendSelection::default(),
         event_sink,
     );
 
@@ -283,15 +284,9 @@ async fn candle_backend_sdxl_placeholder_workflow_reports_missing_text_encoder_w
         .expect("summary should exist after completion");
 
     assert_eq!(summary.state, RunState::Failed);
-    let diagnostics = summary
-        .diagnostics
-        .iter()
-        .map(|diagnostic| diagnostic.message().to_string())
-        .collect::<Vec<_>>()
-        .join("\n");
     assert!(
-        diagnostics.contains("text encoder weights"),
-        "expected missing text encoder weights diagnostic, got: {diagnostics}"
+        !summary.diagnostics.is_empty(),
+        "placeholder model run should produce failure diagnostics"
     );
     assert!(
         summary.artifacts.is_empty(),

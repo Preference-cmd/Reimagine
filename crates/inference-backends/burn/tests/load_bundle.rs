@@ -373,7 +373,15 @@ async fn load_bundle_rejects_missing_component_without_cache_mutation() {
         .await
         .expect_err("missing required component should fail");
 
-    assert_backend_execution_failed_contains(err, "missing Burn SDXL component");
+    match err {
+        InferenceError::ModelNotLoaded { model_id } => {
+            assert_eq!(
+                model_id, "diffusion",
+                "missing Diffusion should be reported"
+            );
+        }
+        other => panic!("expected ModelNotLoaded, got {other:?}"),
+    }
     assert_eq!(backend.model_cache().bundle_count(), 0);
 }
 
@@ -459,10 +467,15 @@ async fn load_bundle_rejects_file_contract_version_mismatch_without_replacing_ca
         .await
         .expect_err("replacement with invalid contract should fail");
 
-    assert_backend_execution_failed_contains(
-        err,
-        "unsupported Burn SDXL component contract version",
-    );
+    match err {
+        InferenceError::ComponentValidation { reason, .. } => {
+            assert!(
+                reason.contains("unsupported Burn SDXL component contract version"),
+                "expected contract version diagnostic, got: {reason}"
+            );
+        }
+        other => panic!("expected ComponentValidation, got {other:?}"),
+    }
     assert_eq!(backend.model_cache().bundle_count(), 1);
 }
 

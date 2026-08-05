@@ -535,15 +535,15 @@ mod tests {
     }
 
     #[test]
-    fn workspace_with_defaults_uses_candle() {
+    fn workspace_with_defaults_uses_burn() {
         let base = temp_dir("defaults");
         let workspace = WorkspaceHost::with_defaults(WorkspaceScope::new("test-defaults"), &base);
         assert_eq!(workspace.base_path(), base);
         assert_eq!(
             workspace.backend_config().backend,
-            InferenceBackendKind::Candle
+            InferenceBackendKind::Burn
         );
-        assert_eq!(workspace.backend_config().candle_device, "cpu");
+        assert_eq!(workspace.backend_config().burn_device, "cpu");
         let _ = fs::remove_dir_all(&base);
     }
 
@@ -570,15 +570,15 @@ mod tests {
     }
 
     #[test]
-    fn missing_config_file_defaults_to_candle() {
+    fn missing_config_file_defaults_to_burn() {
         let base = temp_dir("no-config");
         let workspace = WorkspaceHost::with_defaults(WorkspaceScope::new("test-no-config"), &base);
         assert_eq!(workspace.base_path(), base);
         assert_eq!(
             workspace.backend_config().backend,
-            InferenceBackendKind::Candle
+            InferenceBackendKind::Burn
         );
-        assert_eq!(workspace.backend_config().candle_device, "cpu");
+        assert_eq!(workspace.backend_config().burn_device, "cpu");
         let _ = fs::remove_dir_all(&base);
     }
 
@@ -665,9 +665,9 @@ mod tests {
                 .expect("missing config should succeed with defaults");
         assert_eq!(
             workspace.backend_config().backend,
-            InferenceBackendKind::Candle
+            InferenceBackendKind::Burn
         );
-        assert_eq!(workspace.backend_config().candle_device, "cpu");
+        assert_eq!(workspace.backend_config().burn_device, "cpu");
         let _ = fs::remove_dir_all(&base);
     }
 

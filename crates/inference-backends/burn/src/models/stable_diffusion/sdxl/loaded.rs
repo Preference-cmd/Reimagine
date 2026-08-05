@@ -383,18 +383,21 @@ fn resolve_components(
         )));
     }
 
-    let source_count = source_set.sources().len();
-    if !(3..=4).contains(&source_count) {
-        return Err(BurnBackendError::UnsupportedSourceLayout(format!(
-            "Burn model `{model_id}` requires 3 or 4 converted SplitComponent sources, found {source_count}",
-        )));
-    }
-
     let mut components = Vec::new();
     let mut seen = Vec::new();
 
     for source in source_set.sources() {
-        let component = inspect_source(model_id, source)?;
+        components.push(inspect_source(model_id, source)?);
+    }
+
+    let source_count = components.len();
+    if source_count > 4 {
+        return Err(BurnBackendError::UnsupportedSourceLayout(format!(
+            "Burn model `{model_id}` requires at least Diffusion and Vae split components, found {source_count} source(s)",
+        )));
+    }
+
+    for component in &components {
         let role = component.component_role;
         if seen.contains(&role) {
             return Err(BurnBackendError::DuplicateComponent(
@@ -402,7 +405,6 @@ fn resolve_components(
             ));
         }
         seen.push(role);
-        components.push(component);
     }
 
     // Require at least the core Diffusion and Vae components.
@@ -421,7 +423,6 @@ fn resolve_components(
 
     Ok(components)
 }
-
 fn inspect_source(
     model_id: &ModelId,
     source: &ResolvedInferenceModelSource,

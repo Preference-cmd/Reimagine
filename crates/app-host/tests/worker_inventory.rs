@@ -68,11 +68,16 @@ async fn inventory_profile_does_not_start_unselected_worker() {
         .iter()
         .find(|profile| profile.backend.as_str() == "burn")
         .expect("Burn profile");
-    assert!(matches!(
-        burn.instances[0].status,
-        reimagine_inference::BackendInstanceStatus::Available
-    ));
-    assert!(burn.instances[0].diagnostics.is_empty());
+    assert!(
+        burn.instances.is_empty(),
+        "no installed Burn worker, so the profile must not expose live instances"
+    );
+    assert!(
+        burn.diagnostics
+            .iter()
+            .any(|diagnostic| diagnostic.code().as_str() == "APP_HOST/LOCAL_WORKER_NOT_INSTALLED"),
+        "profile should carry a not-installed diagnostic"
+    );
     assert!(matches!(
         workspace.selected_worker().await,
         Err(reimagine_app_host::WorkerSwitchError::NoActiveWorker)

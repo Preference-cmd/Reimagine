@@ -336,7 +336,7 @@ fn burn_provenance() -> (Plugin, Extension) {
 fn no_worker_diagnostic() -> Diagnostic {
     Diagnostic::new(
         DiagnosticId::new("app-host-burn-worker-not-installed"),
-        DiagnosticCode::new("APP_HOST/BURN_WORKER_NOT_INSTALLED"),
+        DiagnosticCode::new("APP_HOST/LOCAL_WORKER_NOT_INSTALLED"),
         DiagnosticSeverity::Warning,
         DiagnosticSourceName::new("app-host"),
         "no local Burn worker is installed; install a compatible worker before selecting local Burn execution",
@@ -369,7 +369,7 @@ mod tests {
             assert!(profile.instances.is_empty());
             assert_eq!(
                 profile.diagnostics[0].code().as_str(),
-                "APP_HOST/BURN_WORKER_NOT_INSTALLED"
+                "APP_HOST/LOCAL_WORKER_NOT_INSTALLED"
             );
         }
     }

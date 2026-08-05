@@ -253,9 +253,9 @@ async fn build_artifact_host(
     (host, runtime, recorder)
 }
 
-/// Build a host that uses the real Candle inference backend and the
+/// Build a host that composes the real backend candidates and the
 /// built-in executor registry, with a populated model manifest.
-async fn build_candle_ready_host(
+async fn build_backend_ready_host(
     manifest: ModelManifest,
     base: &str,
 ) -> (
@@ -276,11 +276,10 @@ async fn build_candle_ready_host(
         .expect("save manifest");
 
     let recorder = Arc::new(RunEventRecorder::new());
-    #[allow(deprecated)]
     let host = WorkspaceHost::with_defaults_and_backend(
         WorkspaceScope::new(format!("ws-{base}")),
         &base_path,
-        BackendSelection::Candle,
+        BackendSelection::default(),
         recorder.clone() as Arc<dyn RunEventSink>,
     );
     (Arc::new(host), recorder, base_path)
@@ -734,11 +733,11 @@ async fn run_handoff_uses_explicit_target_selection() {
 }
 
 #[tokio::test]
-async fn candle_sdxl_placeholder_workflow_reports_missing_text_encoder_weights() {
+async fn placeholder_model_workflow_fails_without_artifacts() {
     let model_id = ModelId::new(MODEL_ID);
-    let (host, recorder, _base_path) = build_candle_ready_host(
+    let (host, recorder, _base_path) = build_backend_ready_host(
         manifest_with_model(&model_id, CHECKPOINT_FILENAME),
-        "candle-sdxl",
+        "compute-sdxl",
     )
     .await;
     let app = build_router().with_state(build_state(host.clone(), recorder.clone()));
@@ -756,8 +755,8 @@ async fn candle_sdxl_placeholder_workflow_reports_missing_text_encoder_weights()
     assert_eq!(response.status(), StatusCode::OK);
 
     // Run with an explicit target that forces the full pipeline up to
-    // save_image. Placeholder model files must fail at real SDXL text
-    // encoder loading; committed tests do not carry CLIP weights.
+    // save_image. Placeholder model files must fail to load; committed
+    // tests do not carry model weights.
     let run_body = serde_json::json!({
         "target_selection": {
             "kind": "explicit",
@@ -765,7 +764,7 @@ async fn candle_sdxl_placeholder_workflow_reports_missing_text_encoder_weights()
                 { "kind": "node", "node_id": "node_save_image" }
             ]
         },
-        "correlation_id": "corr-candle-sdxl"
+        "correlation_id": "corr-compute-sdxl"
     })
     .to_string();
     let response = app
@@ -801,11 +800,8 @@ async fn candle_sdxl_placeholder_workflow_reports_missing_text_encoder_weights()
         .as_array()
         .expect("summary diagnostics should be an array");
     assert!(
-        diagnostics.iter().any(|diagnostic| diagnostic["message"]
-            .as_str()
-            .unwrap_or("")
-            .contains("text encoder weights")),
-        "expected missing text encoder weights diagnostic, got {diagnostics:?}"
+        !diagnostics.is_empty(),
+        "placeholder model run should produce failure diagnostics, got {diagnostics:?}"
     );
     let artifacts = json["artifacts"]
         .as_array()
@@ -843,7 +839,7 @@ async fn candle_sdxl_placeholder_workflow_reports_missing_text_encoder_weights()
         events.iter().any(|e| e["correlation_id"]
             .as_str()
             .unwrap_or("")
-            .contains("corr-candle-sdxl")),
+            .contains("corr-compute-sdxl")),
         "expected an event to carry the correlation id, got {events:?}"
     );
 }

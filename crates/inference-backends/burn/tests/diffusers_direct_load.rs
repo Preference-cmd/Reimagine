@@ -344,8 +344,12 @@ async fn diffusers_direct_load_infers_diffusion_from_unet_directory() {
     let temp = tempfile::tempdir().expect("tempdir");
     let backend = backend();
 
-    let role = BurnSdxlComponentRole::Diffusion;
-    let sources = vec![diffusers_source(temp.path(), role)];
+    // The unet/ directory must be inferred as Diffusion; the minimal
+    // Diffusion + Vae set keeps the load valid.
+    let sources = vec![
+        diffusers_source(temp.path(), BurnSdxlComponentRole::Diffusion),
+        diffusers_source(temp.path(), BurnSdxlComponentRole::Vae),
+    ];
 
     let response = backend
         .load_bundle(load_request(temp.path(), sources))
@@ -363,8 +367,12 @@ async fn diffusers_direct_load_infers_vae_from_vae_directory() {
     let temp = tempfile::tempdir().expect("tempdir");
     let backend = backend();
 
-    let role = BurnSdxlComponentRole::Vae;
-    let sources = vec![diffusers_source(temp.path(), role)];
+    // The vae/ directory must be inferred as Vae; the minimal
+    // Diffusion + Vae set keeps the load valid.
+    let sources = vec![
+        diffusers_source(temp.path(), BurnSdxlComponentRole::Vae),
+        diffusers_source(temp.path(), BurnSdxlComponentRole::Diffusion),
+    ];
 
     let response = backend
         .load_bundle(load_request(temp.path(), sources))
@@ -383,8 +391,13 @@ async fn diffusers_direct_load_infers_text_encoder_from_directory() {
     let temp = tempfile::tempdir().expect("tempdir");
     let backend = backend();
 
-    let role = BurnSdxlComponentRole::TextEncoder;
-    let sources = vec![diffusers_source(temp.path(), role)];
+    // The text_encoder/ directory must be inferred as TextEncoder; the
+    // minimal Diffusion + Vae set keeps the load valid.
+    let sources = vec![
+        diffusers_source(temp.path(), BurnSdxlComponentRole::TextEncoder),
+        diffusers_source(temp.path(), BurnSdxlComponentRole::Diffusion),
+        diffusers_source(temp.path(), BurnSdxlComponentRole::Vae),
+    ];
 
     let response = backend
         .load_bundle(load_request(temp.path(), sources))
@@ -403,8 +416,13 @@ async fn diffusers_direct_load_infers_text_encoder_2_from_directory() {
     let temp = tempfile::tempdir().expect("tempdir");
     let backend = backend();
 
-    let role = BurnSdxlComponentRole::TextEncoder2;
-    let sources = vec![diffusers_source(temp.path(), role)];
+    // The text_encoder_2/ directory must be inferred as TextEncoder2;
+    // the minimal Diffusion + Vae set keeps the load valid.
+    let sources = vec![
+        diffusers_source(temp.path(), BurnSdxlComponentRole::TextEncoder2),
+        diffusers_source(temp.path(), BurnSdxlComponentRole::Diffusion),
+        diffusers_source(temp.path(), BurnSdxlComponentRole::Vae),
+    ];
 
     let response = backend
         .load_bundle(load_request(temp.path(), sources))
@@ -603,26 +621,18 @@ async fn diffusers_direct_load_rejects_too_many_components() {
     let temp = tempfile::tempdir().expect("tempdir");
     let backend = backend();
 
-    // Create 4 valid diffusers sources plus a duplicate Diffusion source
-    // in a different directory name (which will fail infer_role_from_path
-    // before we even hit the count check, so we test with 5 real sources).
+    // Create 4 valid diffusers sources plus a second UNet (a duplicate
+    // Diffusion source in the same directory), for 5 sources total.
     let mut sources: Vec<_> = BurnSdxlComponentRole::all()
         .into_iter()
         .map(|role| diffusers_source(temp.path(), role))
         .collect();
 
-    // Add a 5th source with a different directory that maps to Diffusion.
-    let extra_unet_path = temp.path().join("extra_unet").join("model.safetensors");
-    std::fs::create_dir_all(extra_unet_path.parent().expect("extra parent")).expect("extra dir");
-    let extra_tensors: Vec<(String, ZeroTensorView)> =
-        vec![("conv_in.weight".into(), tensor_view_f32(vec![4, 4, 3, 3]))];
-    serialize_to_file(extra_tensors, None, &extra_unet_path).expect("write extra unet");
-    sources.push(ResolvedInferenceModelSource::new(
-        ModelSourceKind::SplitComponent,
-        ModelRole::DiffusionModel,
-        extra_unet_path,
-        ModelFormat::SafeTensors,
+    sources.push(diffusers_source(
+        temp.path(),
+        BurnSdxlComponentRole::Diffusion,
     ));
+    assert_eq!(sources.len(), 5, "must have 5 sources");
 
     let model = resolved_model(temp.path(), sources);
 
@@ -637,7 +647,10 @@ async fn diffusers_direct_load_rejects_too_many_components() {
         .await
         .expect_err("5-component layout should be rejected");
 
-    assert_load_error_contains(err, "requires 3 or 4 converted SplitComponent sources");
+    assert_load_error_contains(
+        err,
+        "requires at least Diffusion and Vae split components, found 5 source(s)",
+    );
 }
 
 /// Verify that the validation gate rejects a 1-component layout
@@ -665,5 +678,10 @@ async fn diffusers_direct_load_rejects_too_few_components() {
         .await
         .expect_err("1-component layout should be rejected");
 
-    assert_load_error_contains(err, "requires 3 or 4 converted SplitComponent sources");
+    match err {
+        InferenceError::ModelNotLoaded { model_id } => {
+            assert_eq!(model_id, "vae", "missing Vae should be reported");
+        }
+        other => panic!("expected ModelNotLoaded, got {other:?}"),
+    }
 }
