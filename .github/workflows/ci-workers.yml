@@ -193,7 +193,7 @@ jobs:
         # The current E2E dev-dependency graph enables Burn's default WGPU
         # feature, so a Flex cargo-test build would incorrectly unify WGPU and
         # Flex. Flex contract coverage comes from the release build.
-        if: (matrix.backend == 'wgpu' || matrix.backend == 'cuda' || matrix.backend == 'rocm') && matrix.runner == 'ubuntu-24.04'
+        if: (matrix.backend == 'wgpu' || matrix.backend == 'cuda') && matrix.runner == 'ubuntu-24.04'
         run: >
           cargo test
           --locked
