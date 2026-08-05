@@ -96,6 +96,10 @@ impl Workflow {
         &self.interface
     }
 
+    pub(crate) fn interface_mut(&mut self) -> &mut WorkflowInterface {
+        &mut self.interface
+    }
+
     pub fn nodes(&self) -> &[WorkflowNode] {
         &self.nodes
     }

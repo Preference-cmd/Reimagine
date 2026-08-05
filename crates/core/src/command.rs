@@ -4,10 +4,11 @@ use crate::diagnostic::{CorrelationId, Diagnostic};
 use crate::event::Timestamp;
 use crate::model::{
     CommandBatchId, EdgeId, HistoryEntryId, NodeId, NodeTypeId, ParamValue, ProposalId, SlotId,
-    WorkflowVersion,
+    SlotKind, WorkflowInputId, WorkflowOutputId, WorkflowVersion,
 };
 use crate::workflow::{
-    Endpoint, Position, WorkflowEdge, WorkflowLayout, WorkflowMetadata, WorkflowNode,
+    Endpoint, Position, WorkflowEdge, WorkflowInputDef, WorkflowLayout, WorkflowMetadata,
+    WorkflowNode, WorkflowOutputDef,
 };
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, serde::Serialize, serde::Deserialize)]
@@ -118,6 +119,22 @@ pub enum WorkflowCommand {
     },
     SetWorkflowMetadata {
         metadata: WorkflowMetadata,
+    },
+    AddWorkflowInput {
+        input_id: WorkflowInputId,
+        slot: SlotId,
+        kind: SlotKind,
+    },
+    RemoveWorkflowInput {
+        input_id: WorkflowInputId,
+    },
+    AddWorkflowOutput {
+        output_id: WorkflowOutputId,
+        slot: SlotId,
+        kind: SlotKind,
+    },
+    RemoveWorkflowOutput {
+        output_id: WorkflowOutputId,
     },
 }
 
@@ -238,6 +255,20 @@ pub enum WorkflowChange {
     WorkflowMetadataSet {
         before: WorkflowMetadata,
         after: WorkflowMetadata,
+    },
+    WorkflowInputAdded {
+        input: WorkflowInputDef,
+    },
+    WorkflowInputRemoved {
+        input: WorkflowInputDef,
+        removed_edges: Vec<WorkflowEdge>,
+    },
+    WorkflowOutputAdded {
+        output: WorkflowOutputDef,
+    },
+    WorkflowOutputRemoved {
+        output: WorkflowOutputDef,
+        removed_edges: Vec<WorkflowEdge>,
     },
     VersionAdvanced {
         before: WorkflowVersion,

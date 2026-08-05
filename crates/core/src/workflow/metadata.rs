@@ -116,6 +116,14 @@ impl WorkflowInterface {
         self
     }
 
+    pub(crate) fn add_input(&mut self, input: WorkflowInputDef) {
+        self.inputs.push(input);
+    }
+
+    pub(crate) fn add_output(&mut self, output: WorkflowOutputDef) {
+        self.outputs.push(output);
+    }
+
     pub fn inputs(&self) -> &[WorkflowInputDef] {
         &self.inputs
     }
@@ -130,6 +138,16 @@ impl WorkflowInterface {
 
     pub fn output(&self, id: &WorkflowOutputId) -> Option<&WorkflowOutputDef> {
         self.outputs.iter().find(|output| output.id() == id)
+    }
+
+    pub(crate) fn remove_input(&mut self, id: &WorkflowInputId) -> Option<WorkflowInputDef> {
+        let index = self.inputs.iter().position(|input| input.id() == id)?;
+        Some(self.inputs.remove(index))
+    }
+
+    pub(crate) fn remove_output(&mut self, id: &WorkflowOutputId) -> Option<WorkflowOutputDef> {
+        let index = self.outputs.iter().position(|output| output.id() == id)?;
+        Some(self.outputs.remove(index))
     }
 }
 

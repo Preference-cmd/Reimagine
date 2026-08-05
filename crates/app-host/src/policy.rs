@@ -18,8 +18,10 @@ impl WorkflowCommandPolicy {
     ///
     /// V1 rules:
     /// - All commands must be low-risk, reversible, editor-only changes.
-    /// - `MoveNode`, `ApplyLayout`, `SetNodeLabel`, and
-    ///   `SetWorkflowMetadata` are allowed.
+    /// - `MoveNode`, `ApplyLayout`, `SetNodeLabel`,
+    ///   `SetWorkflowMetadata`, and the workflow interface commands
+    ///   (`AddWorkflowInput`, `RemoveWorkflowInput`, `AddWorkflowOutput`,
+    ///   `RemoveWorkflowOutput`) are allowed.
     /// - Graph/data semantic changes must go through proposals in V1.
     pub fn allows_auto_apply(&self, commands: &[WorkflowCommand]) -> bool {
         commands.iter().all(Self::is_editor_only)
@@ -32,6 +34,10 @@ impl WorkflowCommandPolicy {
                 | WorkflowCommand::ApplyLayout { .. }
                 | WorkflowCommand::SetNodeLabel { .. }
                 | WorkflowCommand::SetWorkflowMetadata { .. }
+                | WorkflowCommand::AddWorkflowInput { .. }
+                | WorkflowCommand::RemoveWorkflowInput { .. }
+                | WorkflowCommand::AddWorkflowOutput { .. }
+                | WorkflowCommand::RemoveWorkflowOutput { .. }
         )
     }
 
@@ -55,7 +61,7 @@ impl Default for WorkflowCommandPolicy {
 mod tests {
     use super::*;
     use reimagine_core::command::WorkflowCommand;
-    use reimagine_core::model::{NodeId, NodeTypeId};
+    use reimagine_core::model::{NodeId, NodeTypeId, SlotId, WorkflowInputId, WorkflowOutputId};
 
     #[test]
     fn allows_low_risk_editor_commands() {
@@ -78,6 +84,30 @@ mod tests {
             position: None,
         }];
         assert!(!policy.allows_auto_apply(&commands));
+    }
+
+    #[test]
+    fn allows_workflow_interface_commands() {
+        let policy = WorkflowCommandPolicy::new();
+        let commands = vec![
+            WorkflowCommand::AddWorkflowInput {
+                input_id: WorkflowInputId::new("in1"),
+                slot: SlotId::new("prompt"),
+                kind: reimagine_core::model::SlotKind::String,
+            },
+            WorkflowCommand::AddWorkflowOutput {
+                output_id: WorkflowOutputId::new("out1"),
+                slot: SlotId::new("image"),
+                kind: reimagine_core::model::SlotKind::Image,
+            },
+            WorkflowCommand::RemoveWorkflowInput {
+                input_id: WorkflowInputId::new("in1"),
+            },
+            WorkflowCommand::RemoveWorkflowOutput {
+                output_id: WorkflowOutputId::new("out1"),
+            },
+        ];
+        assert!(policy.allows_auto_apply(&commands));
     }
 
     #[test]

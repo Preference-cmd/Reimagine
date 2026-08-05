@@ -7,7 +7,11 @@ use reimagine_core::command::{
     CommandActor, CommandActorKind, CommandBatch, CommandProvenance, CommandResult,
     CommandResultStatus,
 };
-use reimagine_core::model::{NodeCatalog, WorkflowId};
+use reimagine_core::diagnostic::{
+    Diagnostic, DiagnosticCode, DiagnosticSeverity, DiagnosticSourceName, DiagnosticTarget,
+    DiagnosticTargetDomain,
+};
+use reimagine_core::model::{DiagnosticId, NodeCatalog, WorkflowId};
 use reimagine_core::session::WorkflowSession;
 use reimagine_core::workflow::Workflow;
 
@@ -195,11 +199,30 @@ impl WorkflowService {
             let guard = session.lock().expect("workflow session poisoned");
             let current_version = guard.version();
             if current_version != proposal.base_version() {
-                return Err(AppHostError::ProposalStale {
-                    workflow_id: workflow_id.clone(),
-                    proposal_base_version: proposal.base_version(),
+                let diagnostic = Diagnostic::new(
+                    DiagnosticId::new(format!(
+                        "app-host:proposal-stale:{}",
+                        proposal.proposal_id().as_str()
+                    )),
+                    DiagnosticCode::new("APP_HOST/PROPOSAL_STALE"),
+                    DiagnosticSeverity::Error,
+                    DiagnosticSourceName::new("app-host"),
+                    format!(
+                        "proposal base version {} does not match current workflow version {}; \
+                         refusing stale approval",
+                        proposal.base_version().get(),
+                        current_version.get(),
+                    ),
+                    DiagnosticTarget::new(DiagnosticTargetDomain::new("workflow"))
+                        .with_id(workflow_id.as_str()),
+                );
+                return Ok(CommandResult::new(
+                    CommandResultStatus::Rejected,
                     current_version,
-                });
+                    Vec::new(),
+                    vec![diagnostic],
+                    None,
+                ));
             }
         }
 

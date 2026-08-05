@@ -8,11 +8,12 @@ use reimagine_core::diagnostic::CorrelationId;
 use reimagine_core::event::Timestamp;
 use reimagine_core::model::{
     CommandBatchId, EdgeId, NodeCatalog, NodeDef, NodeId, NodeTypeId, ParamValue, SlotId, SlotKind,
-    WorkflowVersion,
+    WorkflowInputId, WorkflowOutputId, WorkflowVersion,
 };
 use reimagine_core::session::WorkflowSession;
 use reimagine_core::workflow::{
-    Endpoint, Position, Workflow, WorkflowEdge, WorkflowLayout, WorkflowMetadata, WorkflowNode,
+    Endpoint, Position, Workflow, WorkflowEdge, WorkflowInputDef, WorkflowInterface,
+    WorkflowLayout, WorkflowMetadata, WorkflowNode, WorkflowOutputDef,
 };
 
 #[test]
@@ -699,6 +700,291 @@ fn undo_and_redo_restore_snapshots_and_advance_version() {
     );
 }
 
+#[test]
+fn add_workflow_input_and_output_updates_interface() {
+    let catalog = test_catalog();
+    let mut session = WorkflowSession::new(empty_workflow("workflow-interface", 1));
+
+    let result = session.apply_batch(
+        &catalog,
+        CommandBatch::new(
+            CommandBatchId::new("batch-interface-add"),
+            CommandActor::new(CommandActorKind::Importer),
+            WorkflowVersion::new(1),
+            CommandProvenance::Direct,
+            Timestamp::new("2026-06-09T17:00:00Z"),
+            vec![
+                WorkflowCommand::AddWorkflowInput {
+                    input_id: WorkflowInputId::new("in-prompt"),
+                    slot: SlotId::new("prompt"),
+                    kind: SlotKind::String,
+                },
+                WorkflowCommand::AddWorkflowOutput {
+                    output_id: WorkflowOutputId::new("out-image"),
+                    slot: SlotId::new("image"),
+                    kind: SlotKind::Image,
+                },
+            ],
+        ),
+    );
+
+    assert_eq!(result.status(), CommandResultStatus::Applied);
+    assert_eq!(result.workflow_version(), WorkflowVersion::new(2));
+    assert!(result.diagnostics().is_empty());
+    let interface = session.workflow().interface();
+    assert_eq!(interface.inputs().len(), 1);
+    assert_eq!(interface.outputs().len(), 1);
+    assert_eq!(
+        interface.input(&WorkflowInputId::new("in-prompt")),
+        Some(&WorkflowInputDef::new(
+            WorkflowInputId::new("in-prompt"),
+            SlotId::new("prompt"),
+            SlotKind::String,
+        ))
+    );
+    assert_eq!(
+        interface.output(&WorkflowOutputId::new("out-image")),
+        Some(&WorkflowOutputDef::new(
+            WorkflowOutputId::new("out-image"),
+            SlotId::new("image"),
+            SlotKind::Image,
+        ))
+    );
+    assert_eq!(
+        result.changes(),
+        &[
+            WorkflowChange::WorkflowInputAdded {
+                input: WorkflowInputDef::new(
+                    WorkflowInputId::new("in-prompt"),
+                    SlotId::new("prompt"),
+                    SlotKind::String,
+                ),
+            },
+            WorkflowChange::WorkflowOutputAdded {
+                output: WorkflowOutputDef::new(
+                    WorkflowOutputId::new("out-image"),
+                    SlotId::new("image"),
+                    SlotKind::Image,
+                ),
+            },
+            WorkflowChange::VersionAdvanced {
+                before: WorkflowVersion::new(1),
+                after: WorkflowVersion::new(2),
+            },
+        ]
+    );
+}
+
+#[test]
+fn remove_workflow_input_removes_referencing_edges_and_undo_restores() {
+    let catalog = test_catalog();
+    let mut session = WorkflowSession::new(workflow_with_interface_input());
+
+    let result = session.apply_batch(
+        &catalog,
+        CommandBatch::new(
+            CommandBatchId::new("batch-interface-remove"),
+            CommandActor::new(CommandActorKind::Human),
+            WorkflowVersion::new(1),
+            CommandProvenance::Direct,
+            Timestamp::new("2026-06-09T17:15:00Z"),
+            vec![WorkflowCommand::RemoveWorkflowInput {
+                input_id: WorkflowInputId::new("in-prompt"),
+            }],
+        ),
+    );
+
+    assert_eq!(result.status(), CommandResultStatus::Applied);
+    assert!(result.diagnostics().is_empty());
+    assert!(session.workflow().interface().inputs().is_empty());
+    assert_eq!(session.workflow().interface().outputs().len(), 0);
+    assert!(
+        session
+            .workflow()
+            .edges()
+            .iter()
+            .all(|edge| !matches!(edge.from(), Endpoint::WorkflowInput { .. }))
+    );
+    assert_eq!(
+        result.changes(),
+        &[
+            WorkflowChange::WorkflowInputRemoved {
+                input: WorkflowInputDef::new(
+                    WorkflowInputId::new("in-prompt"),
+                    SlotId::new("prompt"),
+                    SlotKind::String,
+                ),
+                removed_edges: vec![WorkflowEdge::new(
+                    EdgeId::new("edge-in"),
+                    Endpoint::workflow_input(WorkflowInputId::new("in-prompt")),
+                    Endpoint::node_slot(NodeId::new("node_consumer"), SlotId::new("dynamic_value")),
+                )],
+            },
+            WorkflowChange::VersionAdvanced {
+                before: WorkflowVersion::new(1),
+                after: WorkflowVersion::new(2),
+            },
+        ]
+    );
+
+    let undo = session.undo().expect("undo result");
+    assert_eq!(undo.status(), CommandResultStatus::Applied);
+    assert_eq!(undo.workflow_version(), WorkflowVersion::new(3));
+    assert_eq!(session.version(), WorkflowVersion::new(3));
+    assert_eq!(
+        session
+            .workflow()
+            .interface()
+            .input(&WorkflowInputId::new("in-prompt")),
+        Some(&WorkflowInputDef::new(
+            WorkflowInputId::new("in-prompt"),
+            SlotId::new("prompt"),
+            SlotKind::String,
+        ))
+    );
+    assert_eq!(session.workflow().edges().len(), 1);
+}
+
+#[test]
+fn remove_workflow_output_removes_referencing_edges() {
+    let catalog = test_catalog();
+    let mut session = WorkflowSession::new(workflow_with_interface_output());
+
+    let result = session.apply_batch(
+        &catalog,
+        CommandBatch::new(
+            CommandBatchId::new("batch-interface-output-remove"),
+            CommandActor::new(CommandActorKind::Human),
+            WorkflowVersion::new(1),
+            CommandProvenance::Direct,
+            Timestamp::new("2026-06-09T17:30:00Z"),
+            vec![WorkflowCommand::RemoveWorkflowOutput {
+                output_id: WorkflowOutputId::new("out-image"),
+            }],
+        ),
+    );
+
+    assert_eq!(result.status(), CommandResultStatus::Applied);
+    assert!(session.workflow().interface().outputs().is_empty());
+    assert!(
+        session
+            .workflow()
+            .edges()
+            .iter()
+            .all(|edge| !matches!(edge.to(), Endpoint::WorkflowOutput { .. }))
+    );
+    assert_eq!(
+        result.changes(),
+        &[
+            WorkflowChange::WorkflowOutputRemoved {
+                output: WorkflowOutputDef::new(
+                    WorkflowOutputId::new("out-image"),
+                    SlotId::new("image"),
+                    SlotKind::Image,
+                ),
+                removed_edges: vec![WorkflowEdge::new(
+                    EdgeId::new("edge-out"),
+                    Endpoint::node_slot(NodeId::new("node_source"), SlotId::new("value")),
+                    Endpoint::workflow_output(WorkflowOutputId::new("out-image")),
+                )],
+            },
+            WorkflowChange::VersionAdvanced {
+                before: WorkflowVersion::new(1),
+                after: WorkflowVersion::new(2),
+            },
+        ]
+    );
+}
+
+#[test]
+fn add_workflow_input_rejects_duplicate_id_and_taken_slot() {
+    let catalog = test_catalog();
+    let mut session = WorkflowSession::new(workflow_with_interface_input());
+    let snapshot = session.workflow().clone();
+
+    let result = session.apply_batch(
+        &catalog,
+        CommandBatch::new(
+            CommandBatchId::new("batch-interface-dup"),
+            CommandActor::new(CommandActorKind::Human),
+            WorkflowVersion::new(1),
+            CommandProvenance::Direct,
+            Timestamp::new("2026-06-09T17:45:00Z"),
+            vec![
+                WorkflowCommand::AddWorkflowInput {
+                    input_id: WorkflowInputId::new("in-prompt"),
+                    slot: SlotId::new("other"),
+                    kind: SlotKind::String,
+                },
+                WorkflowCommand::AddWorkflowInput {
+                    input_id: WorkflowInputId::new("in-other"),
+                    slot: SlotId::new("prompt"),
+                    kind: SlotKind::String,
+                },
+            ],
+        ),
+    );
+
+    assert_eq!(result.status(), CommandResultStatus::Rejected);
+    assert!(result.changes().is_empty());
+    assert_eq!(session.workflow(), &snapshot);
+    assert!(session.history().entries().is_empty());
+    assert!(
+        result
+            .diagnostics()
+            .iter()
+            .any(|diag| diag.code().as_str() == "CORE/WORKFLOW_INPUT_DUPLICATE")
+    );
+    assert!(
+        result
+            .diagnostics()
+            .iter()
+            .any(|diag| diag.code().as_str() == "CORE/WORKFLOW_INPUT_SLOT_TAKEN")
+    );
+}
+
+#[test]
+fn remove_missing_workflow_input_and_output_rejects() {
+    let catalog = test_catalog();
+    let mut session = WorkflowSession::new(empty_workflow("workflow-interface", 1));
+    let snapshot = session.workflow().clone();
+
+    let result = session.apply_batch(
+        &catalog,
+        CommandBatch::new(
+            CommandBatchId::new("batch-interface-missing"),
+            CommandActor::new(CommandActorKind::Human),
+            WorkflowVersion::new(1),
+            CommandProvenance::Direct,
+            Timestamp::new("2026-06-09T18:00:00Z"),
+            vec![
+                WorkflowCommand::RemoveWorkflowInput {
+                    input_id: WorkflowInputId::new("in-ghost"),
+                },
+                WorkflowCommand::RemoveWorkflowOutput {
+                    output_id: WorkflowOutputId::new("out-ghost"),
+                },
+            ],
+        ),
+    );
+
+    assert_eq!(result.status(), CommandResultStatus::Rejected);
+    assert!(result.changes().is_empty());
+    assert_eq!(session.workflow(), &snapshot);
+    assert!(
+        result
+            .diagnostics()
+            .iter()
+            .any(|diag| diag.code().as_str() == "CORE/WORKFLOW_INPUT_MISSING")
+    );
+    assert!(
+        result
+            .diagnostics()
+            .iter()
+            .any(|diag| diag.code().as_str() == "CORE/WORKFLOW_OUTPUT_MISSING")
+    );
+}
+
 #[derive(Clone)]
 struct TestCatalog {
     defs: HashMap<NodeTypeId, NodeDef>,
@@ -849,4 +1135,46 @@ fn workflow_with_static_edge_override() -> Workflow {
                 .with_node(NodeId::new("node_int_source"), Position::new(10.0, 10.0))
                 .with_node(NodeId::new("node_consumer"), Position::new(120.0, 10.0)),
         )
+}
+
+fn workflow_with_interface_input() -> Workflow {
+    Workflow::new("workflow-interface-input", WorkflowVersion::new(1))
+        .with_interface(WorkflowInterface::new().with_input(WorkflowInputDef::new(
+            WorkflowInputId::new("in-prompt"),
+            SlotId::new("prompt"),
+            SlotKind::String,
+        )))
+        .with_node(
+            WorkflowNode::new(
+                NodeId::new("node_consumer"),
+                NodeTypeId::new("builtin.consumer"),
+            )
+            .with_label("Consumer"),
+        )
+        .with_edge(WorkflowEdge::new(
+            EdgeId::new("edge-in"),
+            Endpoint::workflow_input(WorkflowInputId::new("in-prompt")),
+            Endpoint::node_slot(NodeId::new("node_consumer"), SlotId::new("dynamic_value")),
+        ))
+}
+
+fn workflow_with_interface_output() -> Workflow {
+    Workflow::new("workflow-interface-output", WorkflowVersion::new(1))
+        .with_interface(WorkflowInterface::new().with_output(WorkflowOutputDef::new(
+            WorkflowOutputId::new("out-image"),
+            SlotId::new("image"),
+            SlotKind::Image,
+        )))
+        .with_node(
+            WorkflowNode::new(
+                NodeId::new("node_source"),
+                NodeTypeId::new("builtin.source"),
+            )
+            .with_label("Source"),
+        )
+        .with_edge(WorkflowEdge::new(
+            EdgeId::new("edge-out"),
+            Endpoint::node_slot(NodeId::new("node_source"), SlotId::new("value")),
+            Endpoint::workflow_output(WorkflowOutputId::new("out-image")),
+        ))
 }

@@ -6,9 +6,14 @@ use crate::diagnostic::{
     DiagnosticTarget, DiagnosticTargetDomain,
 };
 use crate::history::{HistoryEntry, WorkflowHistory};
-use crate::model::{DiagnosticId, EdgeId, HistoryEntryId, NodeCatalog, NodeId, WorkflowVersion};
+use crate::model::{
+    DiagnosticId, EdgeId, HistoryEntryId, NodeCatalog, NodeId, WorkflowInputId, WorkflowOutputId,
+    WorkflowVersion,
+};
 use crate::validation::validate_structure;
-use crate::workflow::{Endpoint, Workflow, WorkflowEdge, WorkflowNode};
+use crate::workflow::{
+    Endpoint, Workflow, WorkflowEdge, WorkflowInputDef, WorkflowNode, WorkflowOutputDef,
+};
 
 pub struct WorkflowSession {
     workflow: Workflow,
@@ -514,6 +519,136 @@ fn apply_command(
                 after: before,
             }]);
         }
+        WorkflowCommand::AddWorkflowInput {
+            input_id,
+            slot,
+            kind,
+        } => {
+            if workflow.interface().input(input_id).is_some() {
+                diagnostics.push(interface_diagnostic(
+                    format!("workflow-input-duplicate-{input_id}"),
+                    "CORE/WORKFLOW_INPUT_DUPLICATE",
+                    "workflow input id already exists",
+                    input_id.as_str(),
+                    correlation_id,
+                ));
+                return;
+            }
+            if workflow
+                .interface()
+                .inputs()
+                .iter()
+                .any(|input| input.slot() == slot)
+            {
+                diagnostics.push(interface_diagnostic(
+                    format!("workflow-input-slot-taken-{slot}"),
+                    "CORE/WORKFLOW_INPUT_SLOT_TAKEN",
+                    "workflow input slot is already used",
+                    slot.as_str(),
+                    correlation_id,
+                ));
+                return;
+            }
+            let input = WorkflowInputDef::new(input_id.clone(), slot.clone(), *kind);
+            workflow.interface_mut().add_input(input.clone());
+            forward_changes.push(WorkflowChange::WorkflowInputAdded {
+                input: input.clone(),
+            });
+            inverse_steps.push(vec![WorkflowChange::WorkflowInputRemoved {
+                input,
+                removed_edges: Vec::new(),
+            }]);
+        }
+        WorkflowCommand::RemoveWorkflowInput { input_id } => {
+            let Some(input) = workflow.interface_mut().remove_input(input_id) else {
+                diagnostics.push(interface_diagnostic(
+                    format!("workflow-input-missing-{input_id}"),
+                    "CORE/WORKFLOW_INPUT_MISSING",
+                    "workflow input does not exist",
+                    input_id.as_str(),
+                    correlation_id,
+                ));
+                return;
+            };
+            let removed_edges = remove_edges_for_workflow_input(workflow, input_id);
+            forward_changes.push(WorkflowChange::WorkflowInputRemoved {
+                input: input.clone(),
+                removed_edges: removed_edges.clone(),
+            });
+            let mut inverse = vec![WorkflowChange::WorkflowInputAdded { input }];
+            inverse.extend(
+                removed_edges
+                    .iter()
+                    .cloned()
+                    .map(|edge| WorkflowChange::EdgeAdded { edge }),
+            );
+            inverse_steps.push(inverse);
+        }
+        WorkflowCommand::AddWorkflowOutput {
+            output_id,
+            slot,
+            kind,
+        } => {
+            if workflow.interface().output(output_id).is_some() {
+                diagnostics.push(interface_diagnostic(
+                    format!("workflow-output-duplicate-{output_id}"),
+                    "CORE/WORKFLOW_OUTPUT_DUPLICATE",
+                    "workflow output id already exists",
+                    output_id.as_str(),
+                    correlation_id,
+                ));
+                return;
+            }
+            if workflow
+                .interface()
+                .outputs()
+                .iter()
+                .any(|output| output.slot() == slot)
+            {
+                diagnostics.push(interface_diagnostic(
+                    format!("workflow-output-slot-taken-{slot}"),
+                    "CORE/WORKFLOW_OUTPUT_SLOT_TAKEN",
+                    "workflow output slot is already used",
+                    slot.as_str(),
+                    correlation_id,
+                ));
+                return;
+            }
+            let output = WorkflowOutputDef::new(output_id.clone(), slot.clone(), *kind);
+            workflow.interface_mut().add_output(output.clone());
+            forward_changes.push(WorkflowChange::WorkflowOutputAdded {
+                output: output.clone(),
+            });
+            inverse_steps.push(vec![WorkflowChange::WorkflowOutputRemoved {
+                output,
+                removed_edges: Vec::new(),
+            }]);
+        }
+        WorkflowCommand::RemoveWorkflowOutput { output_id } => {
+            let Some(output) = workflow.interface_mut().remove_output(output_id) else {
+                diagnostics.push(interface_diagnostic(
+                    format!("workflow-output-missing-{output_id}"),
+                    "CORE/WORKFLOW_OUTPUT_MISSING",
+                    "workflow output does not exist",
+                    output_id.as_str(),
+                    correlation_id,
+                ));
+                return;
+            };
+            let removed_edges = remove_edges_for_workflow_output(workflow, output_id);
+            forward_changes.push(WorkflowChange::WorkflowOutputRemoved {
+                output: output.clone(),
+                removed_edges: removed_edges.clone(),
+            });
+            let mut inverse = vec![WorkflowChange::WorkflowOutputAdded { output }];
+            inverse.extend(
+                removed_edges
+                    .iter()
+                    .cloned()
+                    .map(|edge| WorkflowChange::EdgeAdded { edge }),
+            );
+            inverse_steps.push(inverse);
+        }
     }
 }
 
@@ -554,6 +689,52 @@ fn remove_edges_for_node(workflow: &mut Workflow, node_id: &NodeId) -> Vec<Workf
         if endpoint_references_node(edge.from(), node_id)
             || endpoint_references_node(edge.to(), node_id)
         {
+            removed.push(edge);
+        } else {
+            kept.push(edge);
+        }
+    }
+
+    *workflow.edges_mut() = kept;
+    removed
+}
+
+fn remove_edges_for_workflow_input(
+    workflow: &mut Workflow,
+    input_id: &WorkflowInputId,
+) -> Vec<WorkflowEdge> {
+    let mut removed = Vec::new();
+    let mut kept = Vec::new();
+
+    for edge in workflow.edges().iter().cloned() {
+        if matches!(
+            edge.from(),
+            Endpoint::WorkflowInput { workflow_input }
+                if *workflow_input == *input_id
+        ) {
+            removed.push(edge);
+        } else {
+            kept.push(edge);
+        }
+    }
+
+    *workflow.edges_mut() = kept;
+    removed
+}
+
+fn remove_edges_for_workflow_output(
+    workflow: &mut Workflow,
+    output_id: &WorkflowOutputId,
+) -> Vec<WorkflowEdge> {
+    let mut removed = Vec::new();
+    let mut kept = Vec::new();
+
+    for edge in workflow.edges().iter().cloned() {
+        if matches!(
+            edge.to(),
+            Endpoint::WorkflowOutput { workflow_output }
+                if *workflow_output == *output_id
+        ) {
             removed.push(edge);
         } else {
             kept.push(edge);
@@ -655,6 +836,22 @@ fn edge_duplicate_diagnostic(
         "CORE/WORKFLOW_EDGE_DUPLICATE",
         message,
         DiagnosticTarget::new(DiagnosticTargetDomain::new("workflow")).with_id(edge_id),
+        correlation_id,
+    )
+}
+
+fn interface_diagnostic(
+    id: String,
+    code: &str,
+    message: &str,
+    target_id: &str,
+    correlation_id: Option<&CorrelationId>,
+) -> Diagnostic {
+    simple_diagnostic(
+        id,
+        code,
+        message,
+        DiagnosticTarget::new(DiagnosticTargetDomain::new("workflow")).with_id(target_id),
         correlation_id,
     )
 }
