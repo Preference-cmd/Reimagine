@@ -338,6 +338,21 @@ fn spawn_request(
                     }
                 }
             }
+            "resource.apply_hints" => {
+                if std::env::var_os("FAKE_HINTS_FAIL").is_some() {
+                    TerminalOutcome::BackendError {
+                        error: BackendExecutionError {
+                            code: "forced_hints_error".to_owned(),
+                            message: "forced hints backend error".to_owned(),
+                            retryable: false,
+                        },
+                    }
+                } else {
+                    TerminalOutcome::Success {
+                        output: json!({ "applied": true }),
+                    }
+                }
+            }
             operation => TerminalOutcome::BackendError {
                 error: BackendExecutionError {
                     code: "unsupported_operation".to_owned(),

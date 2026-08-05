@@ -2747,6 +2747,98 @@ impl reimagine_inference::BackendInstanceObservation for SpyBackend {
     }
 }
 
+/// A resource-hint sink that records every hints payload it receives.
+#[derive(Default)]
+struct RecordingHintSink {
+    applied: Mutex<Vec<reimagine_inference::ResourceHints>>,
+}
+
+#[async_trait]
+impl reimagine_inference::ResourceHintSink for RecordingHintSink {
+    async fn apply_resource_hints(
+        &self,
+        hints: reimagine_inference::ResourceHints,
+    ) -> Result<(), reimagine_inference::InferenceError> {
+        self.applied.lock().unwrap().push(hints);
+        Ok(())
+    }
+}
+
+#[test]
+fn runtime_sends_resource_hints_before_each_stage() {
+    let rt = test_runtime();
+    rt.block_on(async {
+        let mut registry = NodeExecutorRegistry::default();
+        registry
+            .register(
+                "mock.echo",
+                Arc::new(MockExecutor {
+                    label: "hello".to_owned(),
+                    count: Arc::new(AtomicUsize::new(0)),
+                    delay: Duration::ZERO,
+                    fail_with: None,
+                }),
+            )
+            .expect("register executor");
+
+        let hint_sink = Arc::new(RecordingHintSink::default());
+        let service = RuntimeService::new(
+            registry,
+            Arc::new(NoopBackendInstanceRuntimeHooks::default()),
+            Arc::new(VecRunEventSink::new()),
+            Arc::new(FixedClock),
+        )
+        .with_resource_hint_sink(Some(hint_sink.clone()));
+
+        let plan = ExecutionPlan::new(
+            WorkflowId::new("workflow-hints"),
+            WorkflowVersion::new(1),
+            RunTargetSelection::AllDefaultTargets,
+            vec![RunTarget::Node {
+                node_id: NodeId::new("node_a"),
+            }],
+            vec![
+                ExecutionNode::new(
+                    NodeId::new("node_a"),
+                    NodeTypeId::new("mock.echo"),
+                    Vec::new(),
+                    vec![SlotId::new("out")],
+                ),
+                ExecutionNode::new(
+                    NodeId::new("node_b"),
+                    NodeTypeId::new("mock.echo"),
+                    Vec::new(),
+                    vec![SlotId::new("out")],
+                ),
+            ],
+            Vec::new(),
+            Vec::new(),
+            vec![
+                ExecutionStage::new(0, vec![NodeId::new("node_a")]),
+                ExecutionStage::new(1, vec![NodeId::new("node_b")]),
+            ],
+        );
+
+        let mut options = RuntimeOptions::default();
+        options.vram_budget =
+            Some(reimagine_inference::VramBudget::unlimited().with_total_bytes(1 << 30));
+        let handle = service
+            .run(Arc::new(plan), Default::default(), options)
+            .expect("start run");
+        run_to_completion(&service, &handle);
+
+        let applied = hint_sink.applied.lock().unwrap().clone();
+        assert_eq!(applied.len(), 2, "one hint payload per stage");
+        for hints in &applied {
+            assert_eq!(hints.run_id, *handle.run_id());
+            assert_eq!(
+                hints.vram_budget.expect("budget must flow").total_bytes,
+                Some(1 << 30)
+            );
+        }
+    });
+}
+
 #[test]
 fn single_use_value_with_fan_out_one_is_dropped_after_unique_consumer() {
     let rt = test_runtime();

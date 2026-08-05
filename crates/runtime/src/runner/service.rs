@@ -7,7 +7,7 @@ use reimagine_core::model::{ArtifactId, NodeId, RunId, WorkflowId, WorkflowVersi
 use reimagine_core::readiness::ExecutionPlan;
 use reimagine_inference::{
     BackendInstanceObservation, BackendInstanceRuntimeHooks, BackendInstanceSnapshot,
-    NodeExecutorRegistry, VramBudget,
+    NodeExecutorRegistry, ResourceHintSink, VramBudget,
 };
 
 use super::orchestrator::Runner;
@@ -99,6 +99,7 @@ pub struct RuntimeService {
     store: RunStore,
     registry: NodeExecutorRegistry,
     backend: Arc<dyn BackendInstanceRuntimeHooks>,
+    hint_sink: Option<Arc<dyn ResourceHintSink>>,
     sink: Arc<dyn RunEventSink>,
     clock: Arc<dyn Clock>,
     next_run_seq: Arc<AtomicU64>,
@@ -135,11 +136,24 @@ impl RuntimeService {
             store: RunStore::new(),
             registry,
             backend,
+            hint_sink: None,
             sink,
             clock,
             next_run_seq: Arc::new(AtomicU64::new(0)),
             next_event_seq: Arc::new(AtomicU64::new(0)),
         }
+    }
+
+    /// Wire a backend [`ResourceHintSink`] so runs transmit resource
+    /// hints before each stage.
+    ///
+    /// Defaults to no sink, in which case the runner skips hint
+    /// transmission entirely. Backend wiring code (e.g. worker-backed
+    /// inference) sets this to the concrete backend instance.
+    #[must_use]
+    pub fn with_resource_hint_sink(mut self, sink: Option<Arc<dyn ResourceHintSink>>) -> Self {
+        self.hint_sink = sink;
+        self
     }
 
     pub fn with_defaults(registry: NodeExecutorRegistry, sink: Arc<dyn RunEventSink>) -> Self {
@@ -235,6 +249,7 @@ impl RuntimeService {
             store: self.store.clone(),
             registry: self.registry.clone_for_runner(),
             backend: self.backend.clone(),
+            hint_sink: self.hint_sink.clone(),
             sink: self.sink.clone(),
             clock: self.clock.clone(),
             next_event_seq: self.next_event_seq.clone(),

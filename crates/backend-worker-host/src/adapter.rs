@@ -2,6 +2,7 @@ use std::future::Future;
 use std::sync::Arc;
 
 use reimagine_backend_worker_protocol::TerminalOutcome;
+use reimagine_backend_worker_protocol::request_operation;
 use reimagine_core::model::{ArtifactRef, TensorShape};
 use reimagine_inference::{
     Backend, BackendInstance, BackendTensorHandle, CreateEmptyLatentRequest,
@@ -11,7 +12,8 @@ use reimagine_inference::{
     InferenceBackendCapabilities, InferenceCapability, InferenceCapabilitySupport, InferenceError,
     InferenceInvocation, InferenceProgress, LatentContent, LatentDecodeRequest,
     LatentDecodeResponse, LatentEncodeRequest, LatentEncodeResponse, LoadBundleRequest,
-    LoadBundleResponse, RuntimeLatent, TextEncodeRequest, TextEncodeResponse,
+    LoadBundleResponse, ResourceHintSink, ResourceHints, RuntimeLatent, TextEncodeRequest,
+    TextEncodeResponse,
 };
 
 use crate::StartedWorker;
@@ -217,6 +219,14 @@ impl InferenceBackend for ProcessInferenceBackend {
             caps = caps.with_support(InferenceCapabilitySupport::new(capability));
         }
         caps
+    }
+
+    // Delegate to the `ResourceHintSink` implementation so both trait
+    // paths (hint sink extension and the `InferenceBackend` default)
+    // transmit hints over IPC.
+
+    async fn apply_resource_hints(&self, hints: ResourceHints) -> Result<(), InferenceError> {
+        <Self as ResourceHintSink>::apply_resource_hints(self, hints).await
     }
 
     async fn load_bundle_with_invocation(
@@ -772,5 +782,26 @@ impl InferenceBackend for ProcessInferenceBackend {
         _request: reimagine_inference::ImageImportRequest,
     ) -> Result<reimagine_inference::ImageImportResponse, InferenceError> {
         Err(self.not_implemented(InferenceCapability::ImageImport))
+    }
+}
+
+#[async_trait::async_trait]
+impl ResourceHintSink for ProcessInferenceBackend {
+    /// Serialize [`ResourceHints`] and transmit them to the worker as a
+    /// `resource.apply_hints` request operation.
+    ///
+    /// Hints are advisory: this returns the transport/backend error to
+    /// the caller (the runner logs and continues), and is intentionally
+    /// not gated on an advertised capability so that a run never fails
+    /// because of hint transmission.
+    async fn apply_resource_hints(&self, hints: ResourceHints) -> Result<(), InferenceError> {
+        let payload = serde_json::to_value(&hints).map_err(|error| {
+            InferenceError::BackendExecutionFailed {
+                message: format!("resource hints are not serializable: {error}"),
+            }
+        })?;
+        self.send_request(request_operation::APPLY_RESOURCE_HINTS, payload)
+            .await?;
+        Ok(())
     }
 }

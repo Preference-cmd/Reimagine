@@ -6,7 +6,8 @@ use reimagine_core::event::RunEventKind;
 use reimagine_core::model::{NodeId, RunId, WorkflowVersion};
 use reimagine_core::readiness::ExecutionPlan;
 use reimagine_inference::{
-    BackendInstanceRuntimeHooks, BackendRunLifecycleRequest, NodeExecutorRegistry, ResourceHints,
+    BackendInstanceRuntimeHooks, BackendRunLifecycleRequest, NodeExecutorRegistry,
+    ResourceHintSink, ResourceHints,
 };
 use tokio::sync::Mutex;
 
@@ -33,6 +34,9 @@ pub(super) struct Runner {
     pub(super) store: RunStore,
     pub(super) registry: Arc<NodeExecutorRegistry>,
     pub(super) backend: Arc<dyn BackendInstanceRuntimeHooks>,
+    /// Optional backend resource-hint sink. When absent, hints are
+    /// skipped (the default runtime configuration has no sink wired).
+    pub(super) hint_sink: Option<Arc<dyn ResourceHintSink>>,
     pub(super) sink: Arc<dyn RunEventSink>,
     pub(super) clock: Arc<dyn Clock>,
     pub(super) next_event_seq: Arc<AtomicU64>,
@@ -97,14 +101,10 @@ impl Runner {
                 return session;
             }
 
-            // Build and log resource hints for this stage
+            // Build and send resource hints for this stage
             let next_node_ids = stages.get(i + 1).map(|s| s.node_ids()).unwrap_or(&[]);
             let hints = self.build_resource_hints(stage.node_ids(), next_node_ids);
-            tracing::debug!(
-                run_id = %self.run_id,
-                vram_budget = ?hints.vram_budget,
-                "resource hints built for stage"
-            );
+            self.send_resource_hints(&hints).await;
 
             if self
                 .run_stage(
@@ -169,12 +169,7 @@ impl Runner {
         for node_id in batch {
             match session.node_outcome(node_id) {
                 Some(NodeOutcome::Completed) => {
-                    if let Some(node) = self
-                        .plan
-                        .nodes()
-                        .iter()
-                        .find(|n| n.node_id() == node_id)
-                    {
+                    if let Some(node) = self.plan.nodes().iter().find(|n| n.node_id() == node_id) {
                         for slot in node.output_slots() {
                             ready_set.mark_output(OutputKey::new(node_id.clone(), slot.clone()));
                         }
@@ -195,7 +190,11 @@ impl Runner {
     /// component lifecycle hints are left empty — populating them requires
     /// access to `NodeDef` resource requirements, which will be wired when
     /// the runtime gains a `NodeCatalog` reference.
-    fn build_resource_hints(&self, _stage_node_ids: &[NodeId], _next_stage_node_ids: &[NodeId]) -> ResourceHints {
+    fn build_resource_hints(
+        &self,
+        _stage_node_ids: &[NodeId],
+        _next_stage_node_ids: &[NodeId],
+    ) -> ResourceHints {
         let mut hints = ResourceHints::new(self.run_id.clone());
 
         if let Some(budget) = self.options.vram_budget {
@@ -203,6 +202,39 @@ impl Runner {
         }
 
         hints
+    }
+
+    /// Send resource hints to the backend before a stage.
+    ///
+    /// Resource hints are advisory: when no sink is wired, the transport
+    /// fails, or the worker does not support the operation, the stage
+    /// still runs without them. Failures are logged, never propagated.
+    async fn send_resource_hints(&self, hints: &ResourceHints) {
+        let Some(sink) = &self.hint_sink else {
+            tracing::debug!(
+                run_id = %self.run_id,
+                vram_budget = ?hints.vram_budget,
+                "no resource hint sink wired; skipping hints for stage"
+            );
+            return;
+        };
+        match sink.apply_resource_hints(hints.clone()).await {
+            Ok(()) => {
+                tracing::debug!(
+                    run_id = %self.run_id,
+                    vram_budget = ?hints.vram_budget,
+                    "resource hints applied for stage"
+                );
+            }
+            Err(error) => {
+                tracing::warn!(
+                    run_id = %self.run_id,
+                    %error,
+                    vram_budget = ?hints.vram_budget,
+                    "failed to apply resource hints; continuing stage without hints"
+                );
+            }
+        }
     }
 
     /// Run to completion using the dynamic ready-set scheduler.
@@ -232,11 +264,7 @@ impl Runner {
 
             // Send resource hints for initial batch
             let hints = self.build_resource_hints(&initial, &[]);
-            tracing::debug!(
-                run_id = %self.run_id,
-                vram_budget = ?hints.vram_budget,
-                "resource hints built for initial ready-set batch"
-            );
+            self.send_resource_hints(&hints).await;
 
             if self
                 .run_stage(
@@ -276,12 +304,7 @@ impl Runner {
             // Peek at next ready nodes for lookahead
             let next_ready = ready_set.ready_nodes();
             let hints = self.build_resource_hints(&batch, &next_ready);
-            tracing::debug!(
-                run_id = %self.run_id,
-                vram_budget = ?hints.vram_budget,
-                batch_len = batch.len(),
-                "resource hints built for ready-set batch"
-            );
+            self.send_resource_hints(&hints).await;
 
             if self
                 .run_stage(

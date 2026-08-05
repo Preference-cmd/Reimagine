@@ -32,3 +32,22 @@ pub struct RequestFrame {
     pub operation: String,
     pub payload: Value,
 }
+
+/// Known request operations carried by a [`RequestFrame`] `operation`.
+///
+/// New capabilities are added as request operations (an operation
+/// string plus a JSON `payload` shape) rather than as new
+/// [`WireMessage`](crate::WireMessage) variants: the generic
+/// `Request { operation, payload }` shape is shared by every worker
+/// transport (stdio, QUIC, gRPC) and requires no protocol-schema or
+/// conversion changes.
+pub mod request_operation {
+    /// Apply resource-management hints (VRAM budget, prefetch intent,
+    /// component lifecycle) for the upcoming stage.
+    ///
+    /// Payload is a JSON-serialized
+    /// `reimagine_inference::ResourceHints`. The operation is
+    /// advisory: backends that do not support it respond with an
+    /// `unknown_operation` backend error and the caller must continue.
+    pub const APPLY_RESOURCE_HINTS: &str = "resource.apply_hints";
+}

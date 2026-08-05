@@ -16,6 +16,7 @@ use std::path::PathBuf;
 use std::sync::atomic::{AtomicU64, Ordering};
 
 use reimagine_backend_worker_protocol::BackendExecutionError;
+use reimagine_backend_worker_protocol::request_operation;
 use reimagine_core::model::{
     ModelId, ModelRole, ModelSeries, ModelVariant, NodeId, ParamValue, RunId, WorkflowId,
     WorkflowVersion,
@@ -24,7 +25,7 @@ use reimagine_inference::{
     CreateEmptyLatentRequest, DiffusionSampleRequest, ExecutionConditioning, ImagePreviewRequest,
     ImageSaveRequest, InferenceBackend, LatentDecodeRequest, LoadBundleRequest, ModelFormat,
     ModelSourceKind, ResolvedInferenceModel, ResolvedInferenceModelSource,
-    ResolvedInferenceModelSourceSet, TextEncodeRequest,
+    ResolvedInferenceModelSourceSet, ResourceHintSink, ResourceHints, TextEncodeRequest,
 };
 use reimagine_inference_burn::BurnBackend;
 
@@ -49,6 +50,7 @@ impl TokenGenerator {
 }
 
 /// Result of a mapped operation.
+#[derive(Debug)]
 #[allow(dead_code)]
 pub enum MappingResult {
     Success(serde_json::Value),
@@ -89,6 +91,9 @@ pub fn dispatch(
         "latent.decode" => dispatch_latent_decode(rt, backend, tokens, payload),
         "image.save" => dispatch_image_save(rt, backend, tokens, payload),
         "image.preview" => dispatch_image_preview(rt, backend, tokens, payload),
+        request_operation::APPLY_RESOURCE_HINTS => {
+            dispatch_apply_resource_hints(rt, backend, payload)
+        }
         #[cfg(test)]
         "test.spin" => dispatch_test_spin(backend, payload),
         other => MappingResult::BackendError(BackendExecutionError {
@@ -96,6 +101,33 @@ pub fn dispatch(
             message: format!("unknown operation: {other}"),
             retryable: false,
         }),
+    }
+}
+
+/// Handle `resource.apply_hints` — forward resource-management hints
+/// (VRAM budget, prefetch intent, component lifecycle) to the backend.
+///
+/// The operation is advisory and cheap: it deserializes the wire
+/// payload into [`ResourceHints`] and forwards it to the backend's
+/// [`ResourceHintSink`] implementation.
+fn dispatch_apply_resource_hints(
+    rt: &tokio::runtime::Runtime,
+    backend: &BurnBackend,
+    payload: &serde_json::Value,
+) -> MappingResult {
+    let hints = match serde_json::from_value::<ResourceHints>(payload.clone()) {
+        Ok(hints) => hints,
+        Err(error) => {
+            return MappingResult::BackendError(BackendExecutionError {
+                code: "invalid_request".to_owned(),
+                message: format!("invalid resource hints payload: {error}"),
+                retryable: false,
+            });
+        }
+    };
+    match rt.block_on(ResourceHintSink::apply_resource_hints(backend, hints)) {
+        Ok(()) => MappingResult::Success(serde_json::json!({ "applied": true })),
+        Err(error) => backend_error(error),
     }
 }
 
@@ -1163,5 +1195,56 @@ mod tests {
         backend.cancellation().cancel();
         let result = dispatch_test_spin(&backend, &serde_json::json!({}));
         assert!(matches!(result, MappingResult::Cancelled));
+    }
+
+    #[test]
+    fn apply_resource_hints_dispatch_applies_vram_budget() {
+        let rt = tokio::runtime::Builder::new_current_thread()
+            .build()
+            .unwrap();
+        let backend = BurnBackend::new(reimagine_inference_burn::BurnBackendConfig::new(
+            "/tmp/models",
+            "/tmp/output",
+        ))
+        .unwrap();
+        let hints = reimagine_inference::ResourceHints::new(RunId::new("run-hints"))
+            .with_vram_budget(
+                reimagine_inference::VramBudget::unlimited().with_total_bytes(1 << 30),
+            );
+        let payload = serde_json::to_value(&hints).unwrap();
+        let result = dispatch(
+            &rt,
+            &backend,
+            &TokenGenerator::new(),
+            request_operation::APPLY_RESOURCE_HINTS,
+            &payload,
+        );
+        assert!(
+            matches!(result, MappingResult::Success(_)),
+            "hint application should succeed, got {result:?}"
+        );
+    }
+
+    #[test]
+    fn apply_resource_hints_rejects_malformed_payload() {
+        let rt = tokio::runtime::Builder::new_current_thread()
+            .build()
+            .unwrap();
+        let backend = BurnBackend::new(reimagine_inference_burn::BurnBackendConfig::new(
+            "/tmp/models",
+            "/tmp/output",
+        ))
+        .unwrap();
+        let result = dispatch(
+            &rt,
+            &backend,
+            &TokenGenerator::new(),
+            request_operation::APPLY_RESOURCE_HINTS,
+            &serde_json::json!({ "run_id": 42 }),
+        );
+        assert!(
+            matches!(result, MappingResult::BackendError(_)),
+            "malformed hints payload should be rejected, got {result:?}"
+        );
     }
 }

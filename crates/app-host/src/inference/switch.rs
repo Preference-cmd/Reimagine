@@ -11,7 +11,7 @@ use reimagine_core::model::RunId;
 use reimagine_inference::{
     Backend, BackendInstance, BackendInstanceObservation, BackendInstanceSnapshot,
     BackendRunLifecycle, BackendRunLifecycleReport, BackendRunLifecycleRequest, DeviceProfile,
-    InferenceBackend, InferenceRouter, RouterRef,
+    InferenceBackend, InferenceRouter, ResourceHintSink, RouterRef,
 };
 use tokio::sync::{Mutex, RwLock};
 
@@ -112,6 +112,9 @@ pub trait SwitchableWorker: Send + Sync + 'static {
     fn inference_backend(&self) -> Option<Arc<dyn InferenceBackend>> {
         None
     }
+    fn resource_hint_sink(&self) -> Option<Arc<dyn ResourceHintSink>> {
+        None
+    }
     async fn cleanup_run(&self, run_id: &RunId) -> Result<(), WorkerSwitchError> {
         self.run_leases().release(run_id);
         Ok(())
@@ -193,6 +196,11 @@ impl SwitchableWorker for ProcessSwitchableWorker {
     fn inference_backend(&self) -> Option<Arc<dyn InferenceBackend>> {
         let backend: Arc<dyn InferenceBackend> = self.backend.clone();
         Some(backend)
+    }
+
+    fn resource_hint_sink(&self) -> Option<Arc<dyn ResourceHintSink>> {
+        let sink: Arc<dyn ResourceHintSink> = self.backend.clone();
+        Some(sink)
     }
 
     async fn cleanup_run(&self, run_id: &RunId) -> Result<(), WorkerSwitchError> {
@@ -288,6 +296,7 @@ pub struct WorkerSwitchService {
     transaction: Mutex<()>,
     run_cancellation: SyncRwLock<Arc<dyn RunCancellation>>,
     router_ref: SyncRwLock<Option<RouterRef>>,
+    active_hint_sink: SyncRwLock<Option<Arc<dyn ResourceHintSink>>>,
 }
 
 impl std::fmt::Debug for WorkerSwitchService {
@@ -372,7 +381,27 @@ impl WorkerSwitchService {
             transaction: Mutex::new(()),
             run_cancellation: SyncRwLock::new(run_cancellation),
             router_ref: SyncRwLock::new(None),
+            active_hint_sink: SyncRwLock::new(None),
         }
+    }
+
+    /// The resource-hint sink of the currently active worker, if any.
+    ///
+    /// Synchronous — usable from non-async bootstrap paths. Updated on
+    /// worker switch; a stale sink after shutdown is tolerated because
+    /// hint transmission is non-fatal.
+    pub fn active_hint_sink(&self) -> Option<Arc<dyn ResourceHintSink>> {
+        self.active_hint_sink
+            .read()
+            .expect("active hint sink poisoned")
+            .clone()
+    }
+
+    fn set_active_hint_sink(&self, active: &Arc<dyn SwitchableWorker>) {
+        *self
+            .active_hint_sink
+            .write()
+            .expect("active hint sink poisoned") = active.resource_hint_sink();
     }
 
     /// Attach a `RouterRef` so that hot-swap can atomically replace the router.
@@ -445,6 +474,7 @@ impl WorkerSwitchService {
         state.generation = state.generation.wrapping_add(1);
         let selected = selection_handle(&state);
         drop(state);
+        self.set_active_hint_sink(&Arc::clone(&self.state.read().await.active));
         let _ = previous.shutdown().await;
         Ok(selected)
     }
@@ -513,6 +543,7 @@ impl WorkerSwitchService {
         state.generation = state.generation.wrapping_add(1);
         let selected = selection_handle(&state);
         drop(state);
+        self.set_active_hint_sink(&Arc::clone(&self.state.read().await.active));
         let _ = previous.shutdown().await;
         Ok(selected)
     }

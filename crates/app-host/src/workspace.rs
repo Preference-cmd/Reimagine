@@ -239,13 +239,20 @@ impl WorkspaceHost {
 
         let bootstrapped = bootstrap_inference(&config, &backend_config, model_service.clone())
             .expect("default backend composition should build a usable Candle fallback");
-        let runtime_service = Arc::new(RuntimeService::new(
-            bootstrapped.runtime.executor_registry,
-            bootstrapped.runtime.runtime_hooks.clone(),
-            event_sink,
-            Arc::new(reimagine_runtime::SystemClock),
-        ));
         let worker_switch = bootstrapped.runtime.worker_switch.clone();
+        let runtime_service = Arc::new(
+            RuntimeService::new(
+                bootstrapped.runtime.executor_registry,
+                bootstrapped.runtime.runtime_hooks.clone(),
+                event_sink,
+                Arc::new(reimagine_runtime::SystemClock),
+            )
+            .with_resource_hint_sink(
+                worker_switch
+                    .as_ref()
+                    .and_then(|worker_switch| worker_switch.active_hint_sink()),
+            ),
+        );
         if let Some(worker_switch) = &worker_switch {
             let cancellation: Arc<dyn crate::RunCancellation> = runtime_service.clone();
             worker_switch.set_run_cancellation(cancellation);
@@ -299,13 +306,20 @@ impl WorkspaceHost {
         .map_err(|error| AppHostError::InferenceBootstrap {
             message: error.to_string(),
         })?;
-        let runtime_service = Arc::new(RuntimeService::new(
-            bootstrapped.runtime.executor_registry,
-            bootstrapped.runtime.runtime_hooks.clone(),
-            event_sink,
-            Arc::new(reimagine_runtime::SystemClock),
-        ));
         let worker_switch = bootstrapped.runtime.worker_switch.clone();
+        let runtime_service = Arc::new(
+            RuntimeService::new(
+                bootstrapped.runtime.executor_registry,
+                bootstrapped.runtime.runtime_hooks.clone(),
+                event_sink,
+                Arc::new(reimagine_runtime::SystemClock),
+            )
+            .with_resource_hint_sink(
+                worker_switch
+                    .as_ref()
+                    .and_then(|worker_switch| worker_switch.active_hint_sink()),
+            ),
+        );
         if let Some(worker_switch) = &worker_switch {
             let cancellation: Arc<dyn crate::RunCancellation> = runtime_service.clone();
             worker_switch.set_run_cancellation(cancellation);

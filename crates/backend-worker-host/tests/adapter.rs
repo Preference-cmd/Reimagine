@@ -3,7 +3,7 @@ use std::sync::{Arc, Mutex};
 
 use reimagine_backend_worker_host::{
     ExpectedWorkerIdentity, ProcessInferenceBackend, WorkerLaunchSpec, WorkerLimits,
-    WorkerSupervisor,
+    WorkerSupervisor, WorkerTransportConfig,
 };
 use reimagine_backend_worker_protocol::{BackendInstanceId, ProtocolRange, WorkerInstallationId};
 use reimagine_core::model::{NodeId, RunId, WorkflowId, WorkflowVersion};
@@ -12,6 +12,7 @@ use reimagine_inference::{
     InferenceError, InferenceInvocation, NoopInferenceProgressSink, NoopNodeCancellation,
 };
 use reimagine_inference::{InferenceProgress, InferenceProgressSink};
+use reimagine_inference::{ResourceHintSink, ResourceHints, VramBudget};
 
 #[derive(Default)]
 struct RecordingProgressSink(Mutex<Vec<InferenceProgress>>);
@@ -38,6 +39,7 @@ fn launch_spec() -> WorkerLaunchSpec {
         supported_protocols: ProtocolRange::new(1, 1),
         limits: WorkerLimits::default(),
         environment: Vec::new(),
+        transport: WorkerTransportConfig::Stdio,
     }
 }
 
@@ -296,6 +298,44 @@ async fn worker_crash_after_cancel_request_is_transport_lost_not_cancelled() {
         InferenceError::BackendExecutionFailed { .. }
     ));
     assert!(error.to_string().contains("transport lost"));
+}
+
+#[tokio::test]
+async fn adapter_applies_resource_hints_over_ipc() {
+    let worker = Arc::new(WorkerSupervisor::new(launch_spec()).start().await.unwrap());
+    let backend = ProcessInferenceBackend::new(worker);
+
+    let hints = ResourceHints::new(RunId::new("run-hints"))
+        .with_vram_budget(VramBudget::unlimited().with_total_bytes(1 << 30));
+    ResourceHintSink::apply_resource_hints(&backend, hints)
+        .await
+        .expect("hints via ResourceHintSink path should round-trip over IPC");
+
+    let hints = ResourceHints::new(RunId::new("run-hints-2"))
+        .with_vram_budget(VramBudget::unlimited().with_total_bytes(1 << 28));
+    InferenceBackend::apply_resource_hints(&backend, hints)
+        .await
+        .expect("hints via InferenceBackend path should round-trip over IPC");
+}
+
+#[tokio::test]
+async fn adapter_hint_transport_failure_is_reported_not_fatal() {
+    let mut spec = launch_spec();
+    spec.environment
+        .push(("FAKE_HINTS_FAIL".to_owned(), "1".to_owned()));
+    let worker = Arc::new(WorkerSupervisor::new(spec).start().await.unwrap());
+    let backend = ProcessInferenceBackend::new(worker);
+
+    let error = ResourceHintSink::apply_resource_hints(
+        &backend,
+        ResourceHints::new(RunId::new("run-hints-fail")),
+    )
+    .await
+    .expect_err("worker backend error must surface to the caller");
+    assert!(
+        error.to_string().contains("forced_hints_error"),
+        "unexpected error: {error}"
+    );
 }
 
 #[tokio::test]

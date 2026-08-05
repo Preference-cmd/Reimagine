@@ -29,7 +29,9 @@ pub use handshake::{
 pub use identity::{BackendInstanceId, WorkerIdentity, WorkerIncarnationId, WorkerInstallationId};
 pub use lifecycle::{CancelDisposition, LifecycleError, RequestTracker, TransportLost};
 pub use progress::ProgressFrame;
-pub use request::{CorrelationId, RequestFrame, RequestId};
+pub use request::{
+    request_operation, CorrelationId, RequestFrame, RequestId,
+};
 pub use response::{TerminalFrame, TerminalOutcome};
 pub use tensor_transfer::{
     TensorDataFrame, TensorMetadata, TensorTransferAckFrame, TensorTransferRequestFrame,
