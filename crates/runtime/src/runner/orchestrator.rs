@@ -92,7 +92,7 @@ impl Runner {
     ) -> RunSession {
         let started_at = self.clock.now();
         let mut policy = StageExecutionPolicy::new();
-        let stages: Vec<_> = self.plan.stages().iter().cloned().collect();
+        let stages = self.plan.stages().to_vec();
 
         for (i, stage) in stages.iter().enumerate() {
             if self.cancellation.is_cancelled() {

@@ -111,12 +111,12 @@ impl ReadySetScheduler {
             .node_dependencies
             .keys()
             .filter(|id| self.is_ready(id))
-            .copied()
             .take(max)
+            .cloned()
             .collect();
 
         for id in &ready {
-            self.dispatched.insert(*id);
+            self.dispatched.insert(id.clone());
         }
 
         ready
