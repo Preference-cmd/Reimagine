@@ -14,7 +14,10 @@ export type SocketKind = z.infer<typeof SocketKindSchema>;
 
 export const SocketSpecSchema = z.object({
   id: z.string(),
-  kind: SocketKindSchema,
+  // Open string: the backend catalog emits kinds beyond the four socket
+  // colors (clip, vae, model_ref, string, artifact, …). The canvas maps
+  // these to the closest visual token at render time.
+  kind: z.string(),
   label: z.string(),
 });
 export type SocketSpec = z.infer<typeof SocketSpecSchema>;
@@ -45,14 +48,7 @@ export type ParamSpec = z.infer<typeof ParamSpecSchema>;
 
 /* ───── Node definition (registry payload from Rust) ───── */
 
-export const NodeCategorySchema = z.enum([
-  "loaders",
-  "conditioning",
-  "latent",
-  "sampling",
-  "vae",
-  "output",
-]);
+export const NodeCategorySchema = z.string();
 export type NodeCategory = z.infer<typeof NodeCategorySchema>;
 
 export const NodeDefSchema = z.object({
@@ -269,3 +265,48 @@ export const ModelDownloadOutputSchema = z.object({
   detectedFormat: z.string().optional(),
 });
 export type ModelDownloadOutput = z.infer<typeof ModelDownloadOutputSchema>;
+
+/* ───── Structured command errors (BE-31) ───── */
+
+/** Structured error payload returned by Tauri commands.
+ *
+ * `code` is the snake_case `AppHostErrorCode` (e.g. `worker_unavailable`,
+ * `model_not_found`, `workflow_invalid`) that callers should branch on.
+ * `details` carries machine-readable context (ids, instance names) and is
+ * absent on legacy payloads and for errors without context. */
+export const CommandErrorSchema = z.object({
+  code: z.string(),
+  message: z.string(),
+  details: z.record(z.string(), z.unknown()).nullable().optional(),
+});
+export type CommandError = z.infer<typeof CommandErrorSchema>;
+
+/* ───── Worker switching (BE-32) ───── */
+
+/** Active worker after a switch (mirrors `WorkerSwitchResultDto`). */
+export const WorkerSwitchResultSchema = z.object({
+  instance: z.string(),
+  incarnationId: z.string(),
+});
+export type WorkerSwitchResult = z.infer<typeof WorkerSwitchResultSchema>;
+
+/** Installed worker usable as a switch target (mirrors `WorkerInstallationDto`). */
+export const WorkerSwitchTargetSchema = z.object({
+  installationId: z.string(),
+  version: z.string(),
+  backendInstanceId: z.string(),
+  backendKind: z.string(),
+  target: z.string(),
+  installedAt: z.string(),
+  installPath: z.string(),
+  manifestDigest: z.string(),
+});
+export type WorkerSwitchTarget = z.infer<typeof WorkerSwitchTargetSchema>;
+
+export const WorkerSwitchArgsSchema = z.object({
+  /** Backend instance id of the installed worker, e.g. `burn:wgpu:default`. */
+  target: z.string(),
+  /** Drain/cancel deadline in seconds (defaults to 30 on the backend). */
+  deadlineSecs: z.number().positive().optional(),
+});
+export type WorkerSwitchArgs = z.infer<typeof WorkerSwitchArgsSchema>;

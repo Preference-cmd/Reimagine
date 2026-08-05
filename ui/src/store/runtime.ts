@@ -1,6 +1,7 @@
 import { create } from "zustand";
 import type { RunEventPayload } from "@/ipc/schemas";
 import { runWorkflow as ipcRunWorkflow, cancelRun as ipcCancelRun } from "@/ipc";
+import { useArtifactStore } from "./artifacts";
 
 export type RuntimePhase =
   | "idle"
@@ -57,6 +58,9 @@ export const useRuntimeStore = create<RuntimeState>()((set, get) => ({
     }, 500);
 
     const handleEvent = (event: RunEventPayload) => {
+      // F5-4: artifact/run lifecycle events drive the inline preview cache.
+      useArtifactStore.getState().handleEvent(event);
+
       const phase = eventKindToPhase(event.kind);
       set((s) => ({
         runId: event.runId,

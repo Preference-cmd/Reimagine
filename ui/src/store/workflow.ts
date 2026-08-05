@@ -9,11 +9,15 @@ import {
 } from "@xyflow/react";
 
 import type { FlowEdge, FlowEdgeData } from "@/components/canvas/FlowEdge";
+import type { ParamValue } from "@/lib/nodes";
 
 export type SelectionInfo = {
   id: string;
   type: string | null;
 } | null;
+
+/** Patch of typed parameter values keyed by param id (F2-4). */
+export type ParamPatch = Record<string, ParamValue>;
 
 type WorkflowState = {
   /** Stable workflow id — the file name in the workspace `workflows/` dir. */
@@ -30,6 +34,10 @@ type WorkflowState = {
   onConnect: (conn: Connection) => void;
   onNodeSelect: (s: SelectionInfo) => void;
   setPropertiesPanelOpen: (open: boolean) => void;
+  /** Merge typed parameter values into a node's `data.params` (F2-4). */
+  updateNodeParams: (nodeId: string, patch: ParamPatch) => void;
+  /** Edit the legacy free-text `data.prompt` field (F2-4). */
+  updateNodePrompt: (nodeId: string, prompt: string) => void;
   /** Replace the whole graph (used by workflow persistence on load). */
   hydrate: (nodes: Node[], edges: FlowEdge[], workflowId: string, name: string) => void;
 };
@@ -57,7 +65,17 @@ const initialNodes: Node[] = [
         { id: "negative", kind: "conditioning", label: "negative", dotColor: "#ff0080" },
       ],
       parameters: [
-        { id: "model", label: "", value: "sdxl_base_1.0.safetensors" },
+        {
+          id: "checkpoint",
+          label: "",
+          value: "sdxl_base_1.0.safetensors",
+          kind: "select",
+          options: [
+            "sdxl_base_1.0.safetensors",
+            "dreamshaper_8.safetensors",
+            "rev_animated.safetensors",
+          ],
+        },
       ],
     },
   },
@@ -100,11 +118,23 @@ const initialNodes: Node[] = [
         { id: "image", kind: "image", label: "image", dotColor: "#50e3c2" },
       ],
       parameters: [
-        { id: "seed", label: "Seed", value: "12345", tag: "Fixed" },
-        { id: "steps", label: "Steps", value: "30" },
-        { id: "cfg", label: "CFG scale", value: "8.0" },
-        { id: "sampler", label: "Sampler", value: "dpm++ 2M" },
-        { id: "scheduler", label: "Scheduler", value: "karras" },
+        { id: "seed", label: "Seed", value: "12345", tag: "Fixed", kind: "int" },
+        { id: "steps", label: "Steps", value: "30", kind: "int" },
+        { id: "cfg", label: "CFG scale", value: "8.0", kind: "float", min: 1, max: 20 },
+        {
+          id: "sampler",
+          label: "Sampler",
+          value: "dpm++ 2M",
+          kind: "select",
+          options: ["euler", "euler a", "dpm++ 2M", "dpm++ SDE", "ddim"],
+        },
+        {
+          id: "scheduler",
+          label: "Scheduler",
+          value: "karras",
+          kind: "select",
+          options: ["normal", "karras", "exponential", "sgm_uniform"],
+        },
       ],
     },
   },
@@ -195,6 +225,30 @@ export const useWorkflowStore = create<WorkflowState>()(
           ),
         setPropertiesPanelOpen: (open: boolean) =>
           set({ propertiesPanelOpen: open }),
+        updateNodeParams: (nodeId: string, patch: ParamPatch) =>
+          set((s) => ({
+            nodes: s.nodes.map((node) => {
+              if (node.id !== nodeId) return node;
+              const existing =
+                (node.data as { params?: ParamPatch } | undefined)?.params ??
+                {};
+              return {
+                ...node,
+                data: {
+                  ...node.data,
+                  params: { ...existing, ...patch },
+                },
+              };
+            }),
+          })),
+        updateNodePrompt: (nodeId: string, prompt: string) =>
+          set((s) => ({
+            nodes: s.nodes.map((node) =>
+              node.id === nodeId
+                ? { ...node, data: { ...node.data, prompt } }
+                : node,
+            ),
+          })),
         hydrate: (nodes: Node[], edges: FlowEdge[], workflowId: string, name: string) =>
           set({ nodes, edges, id: workflowId, name }),
       };

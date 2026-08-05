@@ -1,5 +1,6 @@
 import {
   type ArtifactMetadata,
+  type CommandError,
   type DownloadEventPayload,
   type DownloadHuggingfaceModelArgs,
   type ModelCard,
@@ -12,14 +13,22 @@ import {
   type RunWorkflowResponse,
   type Workflow,
   type WorkflowFileSummary,
+  type WorkerSwitchArgs,
+  type WorkerSwitchResult,
+  type WorkerSwitchTarget,
+  CommandErrorSchema,
   DownloadHuggingfaceModelArgsSchema,
+  WorkerSwitchArgsSchema,
 } from "./schemas";
 import {
+  mockCancelAndSwitchWorker,
   mockCancelRun,
   mockDownloadHuggingfaceModel,
+  mockDrainAndSwitchWorker,
   mockGetModelCard,
   mockGetNodeDefs,
   mockListModels,
+  mockListWorkerSwitchTargets,
   mockListWorkflows,
   mockLoadWorkflow,
   mockOpenArtifact,
@@ -117,7 +126,7 @@ export async function runWorkflow(
       }
       return invoke<RunWorkflowResponse>("run_workflow", { workflow, channel });
     },
-    () => mockRunWorkflow(workflow),
+    () => mockRunWorkflow(workflow, onEvent),
   );
 }
 
@@ -237,4 +246,53 @@ export function listWorkflows(): Promise<WorkflowFileSummary[]> {
     undefined,
     mockListWorkflows,
   );
+}
+
+/* ───── Worker switching (BE-32) ───── */
+
+/** Drain in-flight runs (waiting up to `deadlineSecs`) then switch the active
+ *  worker to the installed worker for `args.target` (a backend instance id). */
+export function drainAndSwitchWorker(
+  args: WorkerSwitchArgs,
+): Promise<WorkerSwitchResult> {
+  return dispatch(
+    "drain_and_switch_worker",
+    WorkerSwitchArgsSchema,
+    args,
+    mockDrainAndSwitchWorker,
+  );
+}
+
+/** Cancel in-flight runs, then switch the active worker to `args.target`. */
+export function cancelAndSwitchWorker(
+  args: WorkerSwitchArgs,
+): Promise<WorkerSwitchResult> {
+  return dispatch(
+    "cancel_and_switch_worker",
+    WorkerSwitchArgsSchema,
+    args,
+    mockCancelAndSwitchWorker,
+  );
+}
+
+/** List installed workers usable as switch targets. */
+export function listWorkerSwitchTargets(): Promise<WorkerSwitchTarget[]> {
+  return dispatch(
+    "list_worker_switch_targets",
+    null,
+    undefined,
+    mockListWorkerSwitchTargets,
+  );
+}
+
+/**
+ * Normalize a thrown IPC error into the structured BE-31 shape.
+ *
+ * Returns null when the error is not a structured command error (e.g. a
+ * transport-level failure); callers can then treat it as a generic failure.
+ */
+export function toCommandError(error: unknown): CommandError | null {
+  if (!error || typeof error !== "object") return null;
+  const parsed = CommandErrorSchema.safeParse(error);
+  return parsed.success ? parsed.data : null;
 }

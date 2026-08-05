@@ -8,6 +8,7 @@ import {
   getOverlayPolicy,
 } from "./overlayLayout";
 import { NodeCanvas } from "@/components/canvas/NodeCanvas";
+import { useNodeRegistryStore } from "@/store/nodeRegistry";
 const THEME_STORAGE_KEY = "reimagine.theme";
 
 function readStoredTheme(): ThemeMode {
@@ -38,6 +39,12 @@ export function AppShell() {
     document.documentElement.classList.toggle("dark", themeMode === "dark");
     window.localStorage.setItem(THEME_STORAGE_KEY, themeMode);
   }, [themeMode]);
+
+  // F2-1: fetch the backend node catalog once at startup. Failure is
+  // handled inside the registry store (canvas falls back to GenericNode).
+  useEffect(() => {
+    void useNodeRegistryStore.getState().load();
+  }, []);
 
   return (
     <div className="overlay-root relative h-full w-full bg-background text-foreground">

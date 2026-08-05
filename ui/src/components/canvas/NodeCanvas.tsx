@@ -11,11 +11,15 @@ import {
 } from "@xyflow/react";
 import "@xyflow/react/dist/style.css";
 
-import { useCallback, useState } from "react";
+import { useCallback, useMemo, useState } from "react";
 import { ChevronDown, Maximize2, Minus, Plus } from "lucide-react";
 import { BaseNode, type ParamRow, type SocketSlot } from "./BaseNode";
 import { edgeTypes } from "./FlowEdge";
+import { GenericNode } from "./GenericNode";
+import { NodePreview } from "./NodePreview";
 import { useWorkflowStore, onNodeSelect } from "@/store/workflow";
+import { useNodeRegistryStore } from "@/store/nodeRegistry";
+import { useNodeArtifact } from "@/hooks/useNodeArtifact";
 
 /* ───── Demo node data ───── */
 
@@ -94,9 +98,11 @@ const ImageGeneratorNode = ({ data, selected }: NodeProps) => {
   );
 };
 
-/* Image output node — single image input and a preview in the inner card. */
-const ImageOutputNode = ({ data, selected }: NodeProps) => {
+/* Image output node — single image input and a preview in the inner card.
+   Shows the latest run artifact inline (F5-4) once a run produces one. */
+const ImageOutputNode = ({ data, selected, id }: NodeProps) => {
   const d = data as unknown as DemoNodeData;
+  const preview = useNodeArtifact(id);
   return (
     <BaseNode
       title={d.title}
@@ -105,11 +111,17 @@ const ImageOutputNode = ({ data, selected }: NodeProps) => {
       selected={selected}
     >
       <div className="relative">
-        <img
-          className="aspect-square w-full rounded-md border border-control-border object-cover"
-          src="https://images.unsplash.com/photo-1530595467537-0b5996c41f2d?w=320&q=70"
-          alt="generated"
-        />
+        <div className="aspect-square w-full overflow-hidden rounded-md border border-control-border">
+          {preview?.status === "ready" && preview.url ? (
+            <img
+              className="h-full w-full object-cover"
+              src={preview.url}
+              alt={preview.artifactId}
+            />
+          ) : (
+            <NodePreview preview={preview} />
+          )}
+        </div>
         <div className="absolute inset-x-2 bottom-2 truncate rounded bg-preview-scrim px-2 py-1 text-caption text-white backdrop-blur-md">
           Preview
         </div>
@@ -118,9 +130,13 @@ const ImageOutputNode = ({ data, selected }: NodeProps) => {
   );
 };
 
-/* ───── NodeTypes registry ───── */
+/* ───── NodeTypes registry (F2-1) ─────
+   Hand-crafted components stay for the types they cover; every catalog
+   type without a dedicated component maps to GenericNode, and unknown
+   types (catalog fetch failure, stale persisted graphs) fall through to
+   GenericNode via the `default` slot so the canvas never crashes. */
 
-const nodeTypes: NodeTypes = {
+const handCraftedNodeTypes: NodeTypes = {
   prompt: PromptNode,
   model: ModelNode,
   imageGenerator: ImageGeneratorNode,
@@ -182,7 +198,19 @@ export function NodeCanvas({ themeMode }: { themeMode: "light" | "dark" }) {
   const onNodesChange = useWorkflowStore((s) => s.onNodesChange);
   const onEdgesChange = useWorkflowStore((s) => s.onEdgesChange);
   const onConnect = useWorkflowStore((s) => s.onConnect);
+  const catalogDefs = useNodeRegistryStore((s) => s.defs);
   const [zoom, setZoom] = useState(1);
+
+  /* Schema-driven registry: hand-crafted first, catalog types via
+     GenericNode, unknown types via the `default` slot (F2-1). */
+  const nodeTypes = useMemo(() => {
+    const registry: NodeTypes = { ...handCraftedNodeTypes };
+    for (const def of catalogDefs.values()) {
+      if (!registry[def.type]) registry[def.type] = GenericNode;
+    }
+    registry.default = GenericNode;
+    return registry;
+  }, [catalogDefs]);
 
   const handleSelection = useCallback(
     ({ nodes: selected }: { nodes: Array<{ id: string; type?: string | null }> }) => {
