@@ -135,8 +135,16 @@ fn probe_metal_instance(
     let device = DeviceProfile::new("metal").with_kind(DeviceKind::Gpu);
     let instance_id = BackendInstance::new(METAL_INSTANCE);
 
-    match Device::new_metal(0) {
-        Ok(_device) => CandleProfileProvider::attach_capabilities(
+    // Candle's Device::new_metal can panic (e.g. swap_remove on an empty
+    // device list) instead of returning Err on hosts without Metal support.
+    // Wrap in catch_unwind so the deprecated Candle backend never takes down
+    // workspace bootstrap.
+    let metal_result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        Device::new_metal(0)
+    }));
+
+    match metal_result {
+        Ok(Ok(_device)) => CandleProfileProvider::attach_capabilities(
             BackendInstanceProfile::new(
                 instance_id,
                 backend.clone(),
@@ -145,7 +153,7 @@ fn probe_metal_instance(
             ),
             capabilities,
         ),
-        Err(err) => {
+        Ok(Err(err)) => {
             let reason = err.to_string();
             CandleProfileProvider::attach_capabilities(
                 BackendInstanceProfile::new(
@@ -157,6 +165,19 @@ fn probe_metal_instance(
                 capabilities,
             )
             .with_diagnostic(backend_device_unavailable("metal", &reason))
+        }
+        Err(_panic) => {
+            let reason = "candle::Device::new_metal panicked (no Metal support?)";
+            CandleProfileProvider::attach_capabilities(
+                BackendInstanceProfile::new(
+                    instance_id,
+                    backend.clone(),
+                    device,
+                    BackendInstanceStatus::Unavailable,
+                ),
+                capabilities,
+            )
+            .with_diagnostic(backend_device_unavailable("metal", reason))
         }
     }
 }
