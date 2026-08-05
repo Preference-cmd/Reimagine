@@ -32,6 +32,8 @@ type Props = {
   parameters?: ParamRow[];
   children?: ReactNode;
   selected?: boolean;
+  /** Node disabled state (F3-1): dims the node; dragging is handled via the flow node's `draggable` flag. */
+  disabled?: boolean;
 };
 
 /**
@@ -56,6 +58,7 @@ export function BaseNode({
   parameters = [],
   children,
   selected,
+  disabled = false,
 }: Props) {
   const hasSockets = inputs.length > 0 || outputs.length > 0;
   const hasBody = children != null || parameters.length > 0;
@@ -63,7 +66,11 @@ export function BaseNode({
 
   return (
     <div
-      className={cn("node-base", selected && "node-base--selected")}
+      className={cn(
+        "node-base",
+        selected && "node-base--selected",
+        disabled && "node-base--disabled",
+      )}
       style={{ "--node-tone": tone } as CSSProperties}
     >
       {/* Header — own sub-container */}

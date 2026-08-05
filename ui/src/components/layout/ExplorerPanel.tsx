@@ -23,6 +23,10 @@ import type { ModelInfo } from "@/ipc";
 import { ModelDownloadDialog } from "@/components/layout/ModelDownloadDialog";
 import { useRuntimeStore } from "@/store/runtime";
 import { useWorkflowStore } from "@/store/workflow";
+import { useNodeRegistryStore } from "@/store/nodeRegistry";
+import { groupDefsByCategory } from "@/store/uiStore";
+import { NODE_DRAG_MIME } from "@/lib/nodeFactory";
+import { categoryTone } from "@/lib/nodes";
 
 function formatBytes(bytes: number | null): string {
   if (bytes == null || bytes <= 0) return "0 B";
@@ -260,6 +264,8 @@ export function ExplorerPanel({
           ))}
         </ul>
 
+        {currentView === "Graph" && <AddNodeSection query={query} />}
+
         {filteredRows.length === 0 && (
           <div className="mx-1 mt-2 rounded-lg bg-control-hover/60 px-3 py-2 text-caption text-on-surface-variant">
             No matches.
@@ -402,6 +408,93 @@ function IconButton({
     </button>
   );
 }
+
+/* ───── Add Node (F2-2): catalog defs grouped by category, draggable ───── */
+
+function AddNodeSection({ query }: { query: string }) {
+  const defList = useNodeRegistryStore((s) => s.defList);
+  const status = useNodeRegistryStore((s) => s.status);
+
+  const groups = useMemo(() => {
+    const needle = query.trim().toLowerCase();
+    return groupDefsByCategory(defList)
+      .map(([category, defs]): [string, typeof defs] => {
+        const filtered = defs.filter(
+          (def) =>
+            !needle ||
+            def.displayName.toLowerCase().includes(needle) ||
+            def.type.toLowerCase().includes(needle) ||
+            category.toLowerCase().includes(needle),
+        );
+        return [category, filtered];
+      })
+      .filter(([, defs]) => defs.length > 0);
+  }, [defList, query]);
+
+  return (
+    <div className="mt-3">
+      <div className="flex items-center gap-1.5 px-1">
+        <span className="flex h-4 w-4 items-center justify-center rounded bg-control-hover text-on-surface-variant">
+          <Plus className="h-3 w-3" />
+        </span>
+        <span className="text-caption font-semibold text-on-surface">
+          Add Node
+        </span>
+        <span className="text-caption text-on-surface-variant/70">
+          drag to canvas
+        </span>
+      </div>
+
+      {(status === "loading" || status === "idle") && (
+        <div className="mx-1 mt-1.5 rounded-lg bg-control-hover/60 px-3 py-2 text-caption text-on-surface-variant">
+          Loading catalog…
+        </div>
+      )}
+      {status === "error" && (
+        <div className="mx-1 mt-1.5 rounded-lg bg-control-hover/60 px-3 py-2 text-caption text-on-surface-variant">
+          Node catalog unavailable.
+        </div>
+      )}
+
+      {status === "ready" &&
+        groups.map(([category, defs]) => (
+          <div key={category} className="mt-1.5">
+            <div className="px-2 text-caption font-medium text-on-surface-variant/80">
+              {category}
+            </div>
+            <ul className="mt-0.5 space-y-0.5">
+              {defs.map((def) => (
+                <li key={def.type}>
+                  <button
+                    type="button"
+                    draggable
+                    onDragStart={(event) => {
+                      event.dataTransfer.setData(NODE_DRAG_MIME, def.type);
+                      event.dataTransfer.effectAllowed = "copy";
+                    }}
+                    className="grid w-full cursor-grab grid-cols-[minmax(0,1fr)] items-center gap-2 rounded-lg px-2 py-1.5 text-left transition-colors hover:bg-control-hover focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary/20 active:cursor-grabbing"
+                  >
+                    <span className="flex min-w-0 items-center gap-1.5 text-caption font-medium text-on-surface">
+                      <span
+                        className="h-1.5 w-1.5 shrink-0 rounded-full"
+                        style={{ backgroundColor: categoryTone(category) }}
+                      />
+                      <span className="truncate">{def.displayName}</span>
+                    </span>
+                    <span className="truncate pl-3 text-caption text-on-surface-variant/70">
+                      {def.type}
+                    </span>
+                  </button>
+                </li>
+              ))}
+            </ul>
+          </div>
+        ))}
+    </div>
+  );
+}
+
+/* ───── Rows / helpers ───── */
 
 function graphRows(
   nodes: Node[],

@@ -1,4 +1,5 @@
 import { useEffect, useState } from "react";
+import { Toaster } from "sonner";
 import { TopBar } from "./TopBar";
 import { SideRail } from "./SideRail";
 import { ExplorerPanel } from "./ExplorerPanel";
@@ -8,7 +9,11 @@ import {
   getOverlayPolicy,
 } from "./overlayLayout";
 import { NodeCanvas } from "@/components/canvas/NodeCanvas";
+import { ContextMenuPanel } from "@/components/canvas/ContextMenuPanel";
+import { RenameNodeDialog } from "@/components/canvas/RenameNodeDialog";
+import { CommandPalette } from "@/components/palette/CommandPalette";
 import { useNodeRegistryStore } from "@/store/nodeRegistry";
+import { useUIStore } from "@/store/uiStore";
 const THEME_STORAGE_KEY = "reimagine.theme";
 
 function readStoredTheme(): ThemeMode {
@@ -28,9 +33,12 @@ function readStoredTheme(): ThemeMode {
  *     cannot scroll the viewport.
  *   - TopBar, SideRail, ExplorerPanel, and PropertiesPanel are siblings
  *     outside that clipping layer so tooltips/menus/popovers can escape.
+ *   - CommandPalette / ContextMenuPanel / RenameNodeDialog render last so
+ *     they sit above every overlay (F3-1/F3-3).
  */
 export function AppShell() {
-  const [activePanel, setActivePanel] = useState<string | null>(null);
+  const activePanel = useUIStore((s) => s.activePanel);
+  const setActivePanel = useUIStore((s) => s.setActivePanel);
   const [themeMode, setThemeMode] = useState<ThemeMode>(readStoredTheme);
   const overlayPolicy = getOverlayPolicy(activePanel);
 
@@ -73,6 +81,22 @@ export function AppShell() {
       />
 
       {!overlayPolicy.suppressContextPanels && <PropertiesPanel />}
+
+      <CommandPalette />
+      <ContextMenuPanel />
+      <RenameNodeDialog />
+      <Toaster
+        theme={themeMode}
+        position="bottom-center"
+        toastOptions={{
+          className: "!font-sans",
+          classNames: {
+            toast: "!rounded-xl !border-outline !bg-surface-container-high !text-on-surface",
+            title: "!text-body-sm !font-medium",
+            description: "!text-caption !text-on-surface-variant",
+          },
+        }}
+      />
     </div>
   );
 }

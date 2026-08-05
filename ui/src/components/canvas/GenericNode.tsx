@@ -20,6 +20,7 @@ type GenericNodeData = {
   outputs?: SocketSlot[];
   parameters?: unknown[];
   params?: Record<string, unknown>;
+  disabled?: unknown;
 };
 
 const PREVIEW_TYPES = new Set([
@@ -76,6 +77,7 @@ export function GenericNode({ id, type, data, selected }: NodeProps) {
       outputs={outputs}
       parameters={rows}
       selected={selected}
+      disabled={d.disabled === true}
     >
       {showPreview && (
         <div

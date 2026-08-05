@@ -10,6 +10,7 @@ import {
 
 import type { FlowEdge, FlowEdgeData } from "@/components/canvas/FlowEdge";
 import type { ParamValue } from "@/lib/nodes";
+import { uniqueNodeId } from "@/lib/nodeFactory";
 
 export type SelectionInfo = {
   id: string;
@@ -31,7 +32,10 @@ type WorkflowState = {
   // mutations (all flow through zundo's temporal middleware)
   onNodesChange: (changes: NodeChange[]) => void;
   onEdgesChange: (changes: EdgeChange[]) => void;
-  onConnect: (conn: Connection) => void;
+  onConnect: (
+    conn: Connection,
+    kinds?: { sourceKind: string; targetKind: string },
+  ) => void;
   onNodeSelect: (s: SelectionInfo) => void;
   setPropertiesPanelOpen: (open: boolean) => void;
   /** Merge typed parameter values into a node's `data.params` (F2-4). */
@@ -40,6 +44,14 @@ type WorkflowState = {
   updateNodePrompt: (nodeId: string, prompt: string) => void;
   /** Replace the whole graph (used by workflow persistence on load). */
   hydrate: (nodes: Node[], edges: FlowEdge[], workflowId: string, name: string) => void;
+  // ── graph mutations (F2-2/F2-3/F3-1) ───────────────────────────────
+  addNode: (node: Node) => void;
+  removeNodes: (ids: string[]) => void;
+  duplicateNode: (id: string) => void;
+  toggleNodeDisabled: (id: string) => void;
+  renameNode: (id: string, title: string) => void;
+  removeEdges: (ids: string[]) => void;
+  disconnectNodeEdges: (id: string) => void;
 };
 
 /* ───── Demo graph (matches ref.html layout, kept here as initial state) ───── */
@@ -205,11 +217,18 @@ export const useWorkflowStore = create<WorkflowState>()(
           const s = get();
           set({ edges: applyEdgeChanges(changes, s.edges) as FlowEdge[] });
         },
-        onConnect: (conn: Connection) => {
+        onConnect: (
+          conn: Connection,
+          kinds?: { sourceKind: string; targetKind: string },
+        ) => {
           const s = get();
           const data: FlowEdgeData = {
-            sourceKind: deriveKind(s.nodes, conn.source, conn.sourceHandle),
-            targetKind: deriveKind(s.nodes, conn.target, conn.targetHandle),
+            sourceKind:
+              kinds?.sourceKind ??
+              deriveKind(s.nodes, conn.source, conn.sourceHandle),
+            targetKind:
+              kinds?.targetKind ??
+              deriveKind(s.nodes, conn.target, conn.targetHandle),
           };
           const newEdges = rfAddEdge(
             { ...conn, type: "flow", data },
@@ -251,6 +270,68 @@ export const useWorkflowStore = create<WorkflowState>()(
           })),
         hydrate: (nodes: Node[], edges: FlowEdge[], workflowId: string, name: string) =>
           set({ nodes, edges, id: workflowId, name }),
+        addNode: (node: Node) =>
+          set((s) => ({ nodes: [...s.nodes, node] })),
+        removeNodes: (ids: string[]) =>
+          set((s) => {
+            const removed = new Set(ids);
+            return {
+              nodes: s.nodes.filter((node) => !removed.has(node.id)),
+              edges: s.edges.filter(
+                (edge) =>
+                  !removed.has(edge.source) && !removed.has(edge.target),
+              ),
+              selectedNode:
+                s.selectedNode && removed.has(s.selectedNode.id)
+                  ? null
+                  : s.selectedNode,
+            };
+          }),
+        duplicateNode: (id: string) =>
+          set((s) => {
+            const source = s.nodes.find((node) => node.id === id);
+            if (!source) return {};
+            const clone = structuredClone(source);
+            clone.id = uniqueNodeId(s.nodes, source.type ?? "node");
+            clone.position = {
+              x: source.position.x + 24,
+              y: source.position.y + 24,
+            };
+            clone.selected = false;
+            return { nodes: [...s.nodes, clone] };
+          }),
+        toggleNodeDisabled: (id: string) =>
+          set((s) => ({
+            nodes: s.nodes.map((node) => {
+              if (node.id !== id) return node;
+              const disabled = !Boolean(
+                (node.data as { disabled?: unknown } | undefined)?.disabled,
+              );
+              return {
+                ...node,
+                draggable: !disabled,
+                data: { ...node.data, disabled },
+              };
+            }),
+          })),
+        renameNode: (id: string, title: string) =>
+          set((s) => ({
+            nodes: s.nodes.map((node) =>
+              node.id === id
+                ? { ...node, data: { ...node.data, title } }
+                : node,
+            ),
+          })),
+        removeEdges: (ids: string[]) =>
+          set((s) => ({
+            edges: s.edges.filter((edge) => !ids.includes(edge.id)),
+          })),
+        disconnectNodeEdges: (id: string) =>
+          set((s) => ({
+            edges: s.edges.filter(
+              (edge) => edge.source !== id && edge.target !== id,
+            ),
+          })),
       };
       return initial;
     },

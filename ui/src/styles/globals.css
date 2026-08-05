@@ -157,6 +157,10 @@
     border-color: var(--node-tone);
     box-shadow: var(--shadow-node-selected);
   }
+  .node-base--disabled {
+    opacity: 0.55;
+    filter: saturate(0.7);
+  }
 
   /* Header — bare title row, no background, no bottom divider. The
      tone dot + title sit directly on the node-base glass; the body's
@@ -184,6 +188,24 @@
   .node-base__inner {
     border-radius: 8px;
     padding: 4px 2px;
+  }
+
+  /* Socket compatibility feedback while dragging a connection (F2-3):
+     the target handle carries `connectingto` + `valid`/`invalid` classes
+     computed by React Flow from `isValidConnection`. Compatible targets
+     glow; incompatible targets (and their whole node) dim. */
+  .react-flow__handle.connectingto {
+    box-shadow:
+      0 0 0 5px color-mix(in srgb, var(--color-control-active) 20%, transparent),
+      0 0 12px 2px var(--color-control-active);
+    transform: translateY(-50%) scale(1.25);
+  }
+  .react-flow__handle.connectingto:not(.valid) {
+    box-shadow: none;
+    opacity: 0.3;
+  }
+  .react-flow__node:has(.react-flow__handle.connectingto:not(.valid)) {
+    opacity: 0.45;
   }
 
   /* MiniMap containment. react-flow's MiniMap renders an internal SVG

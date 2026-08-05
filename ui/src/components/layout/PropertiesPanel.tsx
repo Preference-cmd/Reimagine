@@ -36,6 +36,7 @@ export function PropertiesPanel() {
   const nodes = useWorkflowStore((s) => s.nodes);
   const open = useWorkflowStore((s) => s.propertiesPanelOpen);
   const setOpen = useWorkflowStore((s) => s.setPropertiesPanelOpen);
+  const defs = useNodeRegistryStore((s) => s.defs);
 
   if (!open || !selectedNode) {
     return null;
@@ -49,7 +50,6 @@ export function PropertiesPanel() {
   const outputs = readArray(data.outputs);
   const prompt = readString(data.prompt);
 
-  const defs = useNodeRegistryStore((s) => s.defs);
   const def = node ? selectNodeDef(defs, node.type) : undefined;
   const specs = node ? paramSpecsFor(node, def) : [];
 

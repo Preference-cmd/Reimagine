@@ -3,6 +3,7 @@ import {
   Background,
   BackgroundVariant,
   MiniMap,
+  ReactFlowProvider,
   useReactFlow,
   type FitViewOptions,
   type NodeProps,
@@ -11,15 +12,27 @@ import {
 } from "@xyflow/react";
 import "@xyflow/react/dist/style.css";
 
-import { useCallback, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 import { ChevronDown, Maximize2, Minus, Plus } from "lucide-react";
+import { toast } from "sonner";
 import { BaseNode, type ParamRow, type SocketSlot } from "./BaseNode";
 import { edgeTypes } from "./FlowEdge";
 import { GenericNode } from "./GenericNode";
 import { NodePreview } from "./NodePreview";
-import { useWorkflowStore, onNodeSelect } from "@/store/workflow";
+import {
+  useWorkflowStore,
+  onNodeSelect,
+} from "@/store/workflow";
 import { useNodeRegistryStore } from "@/store/nodeRegistry";
 import { useNodeArtifact } from "@/hooks/useNodeArtifact";
+import { checkConnection } from "@/lib/socketCompat";
+import { createNodeAt, NODE_DRAG_MIME } from "@/lib/nodeFactory";
+import {
+  flowPositionFor,
+  registerFlowInstance,
+  selectAllNodes,
+} from "@/lib/flowInstance";
+import { useUIStore } from "@/store/uiStore";
 
 /* ───── Demo node data ───── */
 
@@ -30,6 +43,7 @@ type DemoNodeData = {
   outputs?: SocketSlot[];
   prompt?: string;
   parameters?: ParamRow[];
+  disabled?: unknown;
 };
 
 /* Prompt node — Positive / Negative. The body is free text + a faux
@@ -42,6 +56,7 @@ const PromptNode = ({ data, selected }: NodeProps) => {
       title={d.title}
       tone={d.tone}
       selected={selected}
+      disabled={d.disabled === true}
     >
       {d.prompt && (
         <>
@@ -69,6 +84,7 @@ const ModelNode = ({ data, selected }: NodeProps) => {
       tone={d.tone}
       outputs={d.outputs}
       selected={selected}
+      disabled={d.disabled === true}
     >
       <div className="flex items-center justify-end">
         <span className="flex items-center gap-1.5 rounded-md bg-surface-container-high px-2.5 py-1.5 text-body-sm font-medium leading-none text-on-surface">
@@ -94,6 +110,7 @@ const ImageGeneratorNode = ({ data, selected }: NodeProps) => {
       outputs={d.outputs}
       parameters={d.parameters}
       selected={selected}
+      disabled={d.disabled === true}
     />
   );
 };
@@ -109,6 +126,7 @@ const ImageOutputNode = ({ data, selected, id }: NodeProps) => {
       tone={d.tone}
       inputs={d.inputs}
       selected={selected}
+      disabled={d.disabled === true}
     >
       <div className="relative">
         <div className="aspect-square w-full overflow-hidden rounded-md border border-control-border">
@@ -190,17 +208,34 @@ function ZoomControls({ zoom }: { zoom: number }) {
   );
 }
 
-/* ───── Component ───── */
+/* ───── Canvas flow (inside ReactFlowProvider) ───── */
 
-export function NodeCanvas({ themeMode }: { themeMode: "light" | "dark" }) {
+function CanvasFlow({ themeMode }: { themeMode: "light" | "dark" }) {
   const nodes = useWorkflowStore((s) => s.nodes);
   const edges = useWorkflowStore((s) => s.edges);
   const onNodesChange = useWorkflowStore((s) => s.onNodesChange);
   const onEdgesChange = useWorkflowStore((s) => s.onEdgesChange);
   const onConnect = useWorkflowStore((s) => s.onConnect);
+  const removeNodes = useWorkflowStore((s) => s.removeNodes);
+  const duplicateNode = useWorkflowStore((s) => s.duplicateNode);
+  const toggleNodeDisabled = useWorkflowStore((s) => s.toggleNodeDisabled);
+  const disconnectNodeEdges = useWorkflowStore((s) => s.disconnectNodeEdges);
+  const removeEdges = useWorkflowStore((s) => s.removeEdges);
   const catalogDefs = useNodeRegistryStore((s) => s.defs);
+  const openContextMenu = useUIStore((s) => s.openContextMenu);
+  const closeContextMenu = useUIStore((s) => s.closeContextMenu);
+  const openNodePalette = useUIStore((s) => s.openNodePalette);
+  const startRename = useUIStore((s) => s.startRename);
+  const instance = useReactFlow();
+  const { fitView, screenToFlowPosition } = instance;
   const [zoom, setZoom] = useState(1);
 
+  /* Register the flow instance for out-of-tree callers (palette, explorer,
+     context menus) — F2-2/F3-3. The instance object is stable for the
+     provider's lifetime, so an effect-only registration is enough. */
+  useEffect(() => {
+    registerFlowInstance(instance);
+  }, [instance]);
   /* Schema-driven registry: hand-crafted first, catalog types via
      GenericNode, unknown types via the `default` slot (F2-1). */
   const nodeTypes = useMemo(() => {
@@ -211,6 +246,222 @@ export function NodeCanvas({ themeMode }: { themeMode: "light" | "dark" }) {
     registry.default = GenericNode;
     return registry;
   }, [catalogDefs]);
+
+  /* Live connection validation (F2-3) — feeds React Flow's validity
+     highlighting on handles during a drag, and the onConnect gate. */
+  const isValidConnection = useCallback(
+    (connection: Parameters<typeof checkConnection>[0]): boolean =>
+      checkConnection(connection, nodes, catalogDefs).ok,
+    [catalogDefs, nodes],
+  );
+
+  const handleConnect = useCallback(
+    (conn: Parameters<typeof onConnect>[0]) => {
+      const result = checkConnection(conn, nodes, catalogDefs);
+      if (!result.ok) {
+        const label = (kind: string | null) =>
+          kind ? `"${kind}"` : "unknown";
+        toast.error("Connection type mismatch", {
+          description: `Cannot connect ${label(result.sourceKind)} to ${label(result.targetKind)}.`,
+        });
+        return;
+      }
+      onConnect(conn, {
+        sourceKind: result.sourceKind ?? "latent",
+        targetKind: result.targetKind ?? "latent",
+      });
+    },
+    [catalogDefs, nodes, onConnect],
+  );
+
+  /* Rejected connections never reach `onConnect` (React Flow gates them
+     via `isValidConnection`), so surface the rejection here (F2-3). */
+  const handleConnectEnd = useCallback(
+    (
+      _event: MouseEvent | TouchEvent,
+      state: {
+        isValid?: boolean | null;
+        fromNode?: { id: string } | null;
+        fromHandle?: { id?: string | null } | null;
+        toNode?: { id: string } | null;
+        toHandle?: { id?: string | null } | null;
+      },
+    ) => {
+      if (state.isValid !== false || !state.fromNode || !state.toNode) return;
+      const result = checkConnection(
+        {
+          source: state.fromNode.id,
+          sourceHandle: state.fromHandle?.id ?? null,
+          target: state.toNode.id,
+          targetHandle: state.toHandle?.id ?? null,
+        },
+        nodes,
+        catalogDefs,
+      );
+      if (result.ok) return;
+      const label = (kind: string | null) =>
+        kind ? `"${kind}"` : "unknown";
+      toast.error("Connection type mismatch", {
+        description: `Cannot connect ${label(result.sourceKind)} to ${label(result.targetKind)}.`,
+      });
+    },
+    [catalogDefs, nodes],
+  );
+
+  /* ── Drag-and-drop node creation (F2-2) ── */
+
+  const handleDragOver = useCallback((event: React.DragEvent) => {
+    event.preventDefault();
+    event.dataTransfer.dropEffect = "copy";
+  }, []);
+
+  const handleDrop = useCallback(
+    (event: React.DragEvent) => {
+      event.preventDefault();
+      const typeId = event.dataTransfer.getData(NODE_DRAG_MIME);
+      if (!typeId) return;
+      const position = screenToFlowPosition({
+        x: event.clientX,
+        y: event.clientY,
+      });
+      if (!createNodeAt(typeId, position)) {
+        toast.error("Unknown node type", {
+          description: `"${typeId}" is not in the node catalog.`,
+        });
+      }
+    },
+    [screenToFlowPosition],
+  );
+
+  /* ── Double-click canvas → node picker at cursor (F2-2) ── */
+
+  const handleCanvasDoubleClick = useCallback(
+    (event: React.MouseEvent) => {
+      const target = event.target as HTMLElement | null;
+      if (
+        target?.closest(
+          ".react-flow__node, .react-flow__edge, .react-flow__minimap",
+        )
+      ) {
+        return;
+      }
+      closeContextMenu();
+      openNodePalette(
+        screenToFlowPosition({ x: event.clientX, y: event.clientY }),
+      );
+    },
+    [closeContextMenu, openNodePalette, screenToFlowPosition],
+  );
+
+  /* ── Context menus (F3-1) ── */
+
+  const handlePaneContextMenu = useCallback(
+    (event: React.MouseEvent | MouseEvent) => {
+      event.preventDefault();
+      const x = Math.min(event.clientX, window.innerWidth - 176);
+      const y = Math.min(event.clientY, window.innerHeight - 240);
+      openContextMenu(x, y, [
+        {
+          id: "add-node",
+          label: "Add Node…",
+          shortcut: "Double-click",
+          onSelect: () =>
+            openNodePalette(flowPositionFor({ x: event.clientX, y: event.clientY })),
+        },
+        {
+          id: "paste",
+          label: "Paste",
+          disabled: true,
+          onSelect: () => {},
+        },
+        {
+          id: "select-all",
+          label: "Select All",
+          shortcut: "⌘A",
+          onSelect: selectAllNodes,
+        },
+        {
+          id: "fit-view",
+          label: "Fit View",
+          shortcut: "⌘0",
+          onSelect: () => void fitView({ duration: 200, padding: 0.22 }),
+        },
+      ]);
+    },
+    [fitView, openContextMenu, openNodePalette],
+  );
+
+  const handleNodeContextMenu = useCallback(
+    (event: React.MouseEvent, node: { id: string; data?: unknown }) => {
+      event.preventDefault();
+      const data = node.data as { disabled?: unknown; title?: unknown } | undefined;
+      const disabled = data?.disabled === true;
+      const title =
+        typeof data?.title === "string" && data.title ? data.title : node.id;
+      const x = Math.min(event.clientX, window.innerWidth - 176);
+      const y = Math.min(event.clientY, window.innerHeight - 240);
+      openContextMenu(x, y, [
+        {
+          id: "duplicate",
+          label: "Duplicate",
+          shortcut: "⌘D",
+          onSelect: () => duplicateNode(node.id),
+        },
+        {
+          id: "toggle-disable",
+          label: disabled ? "Enable" : "Disable",
+          onSelect: () => toggleNodeDisabled(node.id),
+        },
+        {
+          id: "rename",
+          label: "Rename…",
+          onSelect: () => startRename({ id: node.id, title }),
+        },
+        {
+          id: "disconnect",
+          label: "Disconnect All",
+          onSelect: () => disconnectNodeEdges(node.id),
+        },
+        {
+          id: "delete",
+          label: "Delete",
+          danger: true,
+          shortcut: "⌫",
+          onSelect: () => removeNodes([node.id]),
+        },
+      ]);
+    },
+    [
+      disconnectNodeEdges,
+      duplicateNode,
+      openContextMenu,
+      removeNodes,
+      startRename,
+      toggleNodeDisabled,
+    ],
+  );
+
+  const handleEdgeContextMenu = useCallback(
+    (event: React.MouseEvent, edge: { id: string }) => {
+      event.preventDefault();
+      const x = Math.min(event.clientX, window.innerWidth - 176);
+      const y = Math.min(event.clientY, window.innerHeight - 240);
+      openContextMenu(x, y, [
+        {
+          id: "disconnect",
+          label: "Disconnect",
+          onSelect: () => removeEdges([edge.id]),
+        },
+        {
+          id: "delete",
+          label: "Delete",
+          danger: true,
+          onSelect: () => removeEdges([edge.id]),
+        },
+      ]);
+    },
+    [openContextMenu, removeEdges],
+  );
 
   const handleSelection = useCallback(
     ({ nodes: selected }: { nodes: Array<{ id: string; type?: string | null }> }) => {
@@ -234,9 +485,19 @@ export function NodeCanvas({ themeMode }: { themeMode: "light" | "dark" }) {
         defaultEdgeOptions={{ type: "flow" }}
         onNodesChange={onNodesChange}
         onEdgesChange={onEdgesChange}
-        onConnect={onConnect}
+        onConnect={handleConnect}
+        onConnectEnd={handleConnectEnd}
+        isValidConnection={isValidConnection}
         onSelectionChange={handleSelection}
         onMove={handleMove}
+        onDrop={handleDrop}
+        onDragOver={handleDragOver}
+        onPaneContextMenu={handlePaneContextMenu}
+        onNodeContextMenu={handleNodeContextMenu}
+        onEdgeContextMenu={handleEdgeContextMenu}
+        onNodeDragStart={closeContextMenu}
+        onDoubleClick={handleCanvasDoubleClick}
+        zoomOnDoubleClick={false}
         fitView
         fitViewOptions={canvasFitViewOptions}
         proOptions={{ hideAttribution: true }}
@@ -262,5 +523,15 @@ export function NodeCanvas({ themeMode }: { themeMode: "light" | "dark" }) {
         />
       </ReactFlow>
     </div>
+  );
+}
+
+/* ───── Component ───── */
+
+export function NodeCanvas({ themeMode }: { themeMode: "light" | "dark" }) {
+  return (
+    <ReactFlowProvider>
+      <CanvasFlow themeMode={themeMode} />
+    </ReactFlowProvider>
   );
 }
