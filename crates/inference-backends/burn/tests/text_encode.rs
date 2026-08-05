@@ -289,12 +289,15 @@ fn latent_value() -> ExecutionValue {
 // ---------------------------------------------------------------------------
 
 #[tokio::test]
-async fn text_encode_is_advertised_as_a_burn_capability() {
+async fn text_encode_is_not_advertised_with_empty_model_cache() {
+    // BE-33: capabilities are dynamic — with an empty model cache
+    // TextEncode is not advertised; it appears once a CLIP component
+    // is loaded (verified in backend capability tests).
     let backend = backend();
     let capabilities = backend.capabilities();
     assert!(
-        capabilities.supports_capability(InferenceCapability::TextEncode),
-        "burn/08f adds TextEncode capability"
+        !capabilities.supports_capability(InferenceCapability::TextEncode),
+        "empty cache must not advertise TextEncode (BE-33)"
     );
 }
 

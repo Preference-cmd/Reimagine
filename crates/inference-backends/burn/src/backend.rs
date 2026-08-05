@@ -16,6 +16,7 @@ use crate::config::BurnBackendConfig;
 use crate::device::BurnDevice;
 use crate::error::BurnBackendError;
 use crate::models::stable_diffusion::sdxl::text_conditioning::cache::SdxlTextEncoderCache;
+use crate::models::stable_diffusion::sdxl::BurnSdxlComponentRole;
 use crate::operation::{
     execute_diffusion_sample, execute_image_preview, execute_image_save,
     execute_latent_create_empty, execute_latent_decode, execute_model_load_bundle,
@@ -112,6 +113,50 @@ impl BurnBackend {
         )
     }
 
+    /// Capabilities that never depend on loaded model state.
+    fn static_capabilities(&self) -> InferenceBackendCapabilities {
+        InferenceBackendCapabilities::new(self.backend_kind().clone())
+            .with_support(InferenceCapabilitySupport::new(
+                InferenceCapability::LoadBundle,
+            ))
+            .with_support(InferenceCapabilitySupport::new(
+                InferenceCapability::CreateEmptyLatent,
+            ))
+            .with_support(InferenceCapabilitySupport::new(
+                InferenceCapability::ImageSave,
+            ))
+            .with_support(InferenceCapabilitySupport::new(
+                InferenceCapability::ImagePreview,
+            ))
+    }
+
+    /// Capability report narrowed to what the model cache actually
+    /// has loaded. Component-dependent capabilities are only
+    /// advertised once the corresponding model component is cached;
+    /// the report never advertises more than the static base set.
+    fn dynamic_capabilities(&self) -> InferenceBackendCapabilities {
+        let mut caps = self.static_capabilities();
+        let cache = self.model_cache();
+        if cache.has_component_role(BurnSdxlComponentRole::TextEncoder)
+            || cache.has_component_role(BurnSdxlComponentRole::TextEncoder2)
+        {
+            caps = caps.with_support(InferenceCapabilitySupport::new(
+                InferenceCapability::TextEncode,
+            ));
+        }
+        if cache.has_component_role(BurnSdxlComponentRole::Diffusion) {
+            caps = caps.with_support(InferenceCapabilitySupport::new(
+                InferenceCapability::DiffusionSample,
+            ));
+        }
+        if cache.has_component_role(BurnSdxlComponentRole::Vae) {
+            caps = caps.with_support(InferenceCapabilitySupport::new(
+                InferenceCapability::LatentDecode,
+            ));
+        }
+        caps
+    }
+
     fn not_implemented<T>(&self, capability: InferenceCapability) -> Result<T, InferenceError> {
         Err(InferenceError::BackendNotImplemented {
             capability,
@@ -168,28 +213,7 @@ impl InferenceBackend for BurnBackend {
     }
 
     fn capabilities(&self) -> InferenceBackendCapabilities {
-        InferenceBackendCapabilities::new(self.backend_kind().clone())
-            .with_support(InferenceCapabilitySupport::new(
-                InferenceCapability::LoadBundle,
-            ))
-            .with_support(InferenceCapabilitySupport::new(
-                InferenceCapability::CreateEmptyLatent,
-            ))
-            .with_support(InferenceCapabilitySupport::new(
-                InferenceCapability::TextEncode,
-            ))
-            .with_support(InferenceCapabilitySupport::new(
-                InferenceCapability::DiffusionSample,
-            ))
-            .with_support(InferenceCapabilitySupport::new(
-                InferenceCapability::LatentDecode,
-            ))
-            .with_support(InferenceCapabilitySupport::new(
-                InferenceCapability::ImageSave,
-            ))
-            .with_support(InferenceCapabilitySupport::new(
-                InferenceCapability::ImagePreview,
-            ))
+        self.dynamic_capabilities()
     }
 
     async fn load_bundle(
@@ -316,5 +340,102 @@ impl ResourceHintSink for BurnBackend {
 
     fn loaded_model_count(&self) -> usize {
         self.model_cache.bundle_count()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::models::stable_diffusion::sdxl::{
+        BurnLoadedModelBundle, BurnLoadedSdxlBundle, BurnSdxlComponentRole,
+    };
+    use reimagine_core::model::ModelId;
+    use reimagine_inference::BackendPayloadKey;
+    use std::path::PathBuf;
+
+    fn backend() -> BurnBackend {
+        BurnBackend::new(BurnBackendConfig::new("/models", "/output")).expect("burn backend")
+    }
+
+    fn clip_only_bundle(model_id: &str) -> Arc<BurnLoadedModelBundle> {
+        let bundle = BurnLoadedSdxlBundle::for_test_only(
+            ModelId::new(model_id),
+            BackendPayloadKey::new("clip"),
+        )
+        .with_test_components(vec![
+            (
+                BurnSdxlComponentRole::TextEncoder,
+                PathBuf::from("text_encoder/model.safetensors"),
+            ),
+            (
+                BurnSdxlComponentRole::TextEncoder2,
+                PathBuf::from("text_encoder_2/model.safetensors"),
+            ),
+        ]);
+        Arc::new(BurnLoadedModelBundle::StableDiffusionSdxl(Arc::new(bundle)))
+    }
+
+    fn full_bundle(model_id: &str) -> Arc<BurnLoadedModelBundle> {
+        let bundle = BurnLoadedSdxlBundle::for_test_only(
+            ModelId::new(model_id),
+            BackendPayloadKey::new("clip"),
+        )
+        .with_test_components(vec![
+            (
+                BurnSdxlComponentRole::TextEncoder,
+                PathBuf::from("text_encoder/model.safetensors"),
+            ),
+            (
+                BurnSdxlComponentRole::TextEncoder2,
+                PathBuf::from("text_encoder_2/model.safetensors"),
+            ),
+            (
+                BurnSdxlComponentRole::Diffusion,
+                PathBuf::from("unet/model.safetensors"),
+            ),
+            (
+                BurnSdxlComponentRole::Vae,
+                PathBuf::from("vae/model.safetensors"),
+            ),
+        ]);
+        Arc::new(BurnLoadedModelBundle::StableDiffusionSdxl(Arc::new(bundle)))
+    }
+
+    #[test]
+    fn capabilities_empty_cache_advertises_only_component_independent_ops() {
+        let caps = backend().capabilities();
+        assert!(caps.supports_capability(InferenceCapability::LoadBundle));
+        assert!(caps.supports_capability(InferenceCapability::CreateEmptyLatent));
+        assert!(caps.supports_capability(InferenceCapability::ImageSave));
+        assert!(caps.supports_capability(InferenceCapability::ImagePreview));
+        assert!(!caps.supports_capability(InferenceCapability::TextEncode));
+        assert!(!caps.supports_capability(InferenceCapability::DiffusionSample));
+        assert!(!caps.supports_capability(InferenceCapability::LatentDecode));
+    }
+
+    #[test]
+    fn capabilities_clip_only_bundle_advertises_text_encode_only() {
+        let backend = backend();
+        backend
+            .model_cache()
+            .insert_bundle(ModelId::new("clip-only"), clip_only_bundle("clip-only"));
+
+        let caps = backend.capabilities();
+        assert!(caps.supports_capability(InferenceCapability::TextEncode));
+        assert!(!caps.supports_capability(InferenceCapability::DiffusionSample));
+        assert!(!caps.supports_capability(InferenceCapability::LatentDecode));
+    }
+
+    #[test]
+    fn capabilities_full_bundle_advertises_component_dependent_ops() {
+        let backend = backend();
+        backend
+            .model_cache()
+            .insert_bundle(ModelId::new("sdxl"), full_bundle("sdxl"));
+
+        let caps = backend.capabilities();
+        assert!(caps.supports_capability(InferenceCapability::TextEncode));
+        assert!(caps.supports_capability(InferenceCapability::DiffusionSample));
+        assert!(caps.supports_capability(InferenceCapability::LatentDecode));
     }
 }

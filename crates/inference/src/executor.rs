@@ -9,6 +9,7 @@
 
 use std::collections::HashMap;
 
+use crate::capability::InferenceCapability;
 use crate::ExecutionOutput;
 use reimagine_core::model::NodeTypeId;
 
@@ -71,6 +72,17 @@ pub trait NodeExecutor: Send + Sync + 'static {
         &self,
         context: NodeExecutionContext,
     ) -> Result<NodeExecutionOutputs, NodeExecutorError>;
+
+    /// Inference capabilities this executor requires from the backend
+    /// to run.
+    ///
+    /// V1 executors that invoke a typed backend capability method
+    /// declare the capability here so the [`NodeExecutorRegistry`]
+    /// can build its capability index during registration. Executors
+    /// that only transform values declare none.
+    fn required_capabilities(&self) -> &'static [InferenceCapability] {
+        &[]
+    }
 }
 
 /// Convenience type alias for boxed node executors.
@@ -103,15 +115,21 @@ impl std::error::Error for NodeExecutorRegistryError {}
 /// Hosts assemble a registry at workspace startup and hand it to the
 /// `RuntimeService`. The registry owns the executors; the runtime only
 /// borrows them.
+///
+/// A secondary index maps each [`InferenceCapability`] to the node
+/// type ids whose executors require it, so callers can validate that
+/// every required capability is available before starting execution.
 #[derive(Default)]
 pub struct NodeExecutorRegistry {
     executors: HashMap<NodeTypeId, BoxedNodeExecutor>,
+    by_capability: HashMap<InferenceCapability, Vec<NodeTypeId>>,
 }
 
 impl std::fmt::Debug for NodeExecutorRegistry {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("NodeExecutorRegistry")
             .field("type_ids", &self.executors.keys().collect::<Vec<_>>())
+            .field("capabilities", &self.capability_union())
             .finish()
     }
 }
@@ -119,16 +137,42 @@ impl std::fmt::Debug for NodeExecutorRegistry {
 impl NodeExecutorRegistry {
     /// Register a new executor. Returns an error if a duplicate type id is
     /// provided.
+    ///
+    /// The capability index is built from the executor's declared
+    /// [`NodeExecutor::required_capabilities`].
     pub fn register(
         &mut self,
         type_id: impl Into<NodeTypeId>,
         executor: BoxedNodeExecutor,
+    ) -> Result<(), NodeExecutorRegistryError> {
+        let capabilities = executor.required_capabilities();
+        self.register_with_capabilities(type_id, executor, capabilities)
+    }
+
+    /// Register a new executor with explicit capability requirements.
+    ///
+    /// This is for callers that know an executor's requirements
+    /// statically and want the index populated without the executor
+    /// itself overriding
+    /// [`NodeExecutor::required_capabilities`]. The index records
+    /// exactly the supplied capabilities.
+    pub fn register_with_capabilities(
+        &mut self,
+        type_id: impl Into<NodeTypeId>,
+        executor: BoxedNodeExecutor,
+        capabilities: &[InferenceCapability],
     ) -> Result<(), NodeExecutorRegistryError> {
         let type_id = type_id.into();
         if self.executors.contains_key(&type_id) {
             return Err(NodeExecutorRegistryError::AlreadyRegistered {
                 type_id: type_id.to_string(),
             });
+        }
+        for capability in capabilities {
+            let bucket = self.by_capability.entry(*capability).or_default();
+            if !bucket.contains(&type_id) {
+                bucket.push(type_id.clone());
+            }
         }
         self.executors.insert(type_id, executor);
         Ok(())
@@ -158,12 +202,202 @@ impl NodeExecutorRegistry {
         self.executors.is_empty()
     }
 
+    /// Node type ids whose registered executor requires the given
+    /// capability, in registration order.
+    pub fn query_by_capability(
+        &self,
+        capability: InferenceCapability,
+    ) -> Vec<NodeTypeId> {
+        self.by_capability
+            .get(&capability)
+            .cloned()
+            .unwrap_or_default()
+    }
+
+    /// Returns `true` if at least one registered executor requires
+    /// the given capability.
+    pub fn has_capability(&self, capability: InferenceCapability) -> bool {
+        self.by_capability.contains_key(&capability)
+    }
+
+    /// Union of capabilities required by the registered executors,
+    /// in [`InferenceCapability::all_v1`] order.
+    pub fn capability_union(&self) -> Vec<InferenceCapability> {
+        InferenceCapability::all_v1()
+            .iter()
+            .copied()
+            .filter(|capability| self.by_capability.contains_key(capability))
+            .collect()
+    }
+
     /// Build a shallow, shareable snapshot of the registry for a runner task.
     /// The cloned registry shares each `Arc<dyn NodeExecutor>` with the
     /// original so executors are not duplicated.
     pub fn clone_for_runner(&self) -> std::sync::Arc<NodeExecutorRegistry> {
         std::sync::Arc::new(NodeExecutorRegistry {
             executors: self.executors.clone(),
+            by_capability: self.by_capability.clone(),
         })
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::sync::Arc;
+
+    struct CapableExecutor(&'static [InferenceCapability]);
+
+    #[async_trait::async_trait]
+    impl NodeExecutor for CapableExecutor {
+        async fn execute(
+            &self,
+            _context: NodeExecutionContext,
+        ) -> Result<NodeExecutionOutputs, NodeExecutorError> {
+            Ok(Vec::new())
+        }
+
+        fn required_capabilities(&self) -> &'static [InferenceCapability] {
+            self.0
+        }
+    }
+
+    fn capable(capabilities: &'static [InferenceCapability]) -> BoxedNodeExecutor {
+        Arc::new(CapableExecutor(capabilities))
+    }
+
+    #[test]
+    fn register_builds_capability_index_from_executor_declarations() {
+        let mut registry = NodeExecutorRegistry::default();
+        registry
+            .register(
+                "builtin.checkpoint_loader",
+                capable(&[InferenceCapability::LoadBundle]),
+            )
+            .expect("register");
+        registry
+            .register(
+                "builtin.ksampler",
+                capable(&[InferenceCapability::DiffusionSample]),
+            )
+            .expect("register");
+
+        assert_eq!(
+            registry.query_by_capability(InferenceCapability::LoadBundle),
+            vec![NodeTypeId::new("builtin.checkpoint_loader")]
+        );
+        assert_eq!(
+            registry.query_by_capability(InferenceCapability::DiffusionSample),
+            vec![NodeTypeId::new("builtin.ksampler")]
+        );
+        assert!(registry
+            .query_by_capability(InferenceCapability::TextEncode)
+            .is_empty());
+    }
+
+    #[test]
+    fn register_with_capabilities_indexes_explicit_capabilities() {
+        let mut registry = NodeExecutorRegistry::default();
+        registry
+            .register_with_capabilities(
+                "builtin.clip_text_encode",
+                capable(&[]),
+                &[InferenceCapability::TextEncode],
+            )
+            .expect("register");
+
+        assert_eq!(
+            registry.query_by_capability(InferenceCapability::TextEncode),
+            vec![NodeTypeId::new("builtin.clip_text_encode")]
+        );
+    }
+
+    #[test]
+    fn query_by_capability_returns_all_matching_type_ids_in_registration_order() {
+        let mut registry = NodeExecutorRegistry::default();
+        registry
+            .register(
+                "builtin.ksampler",
+                capable(&[InferenceCapability::DiffusionSample]),
+            )
+            .expect("register");
+        registry
+            .register(
+                "builtin.ksampler_advanced",
+                capable(&[InferenceCapability::DiffusionSample]),
+            )
+            .expect("register");
+
+        assert_eq!(
+            registry.query_by_capability(InferenceCapability::DiffusionSample),
+            vec![
+                NodeTypeId::new("builtin.ksampler"),
+                NodeTypeId::new("builtin.ksampler_advanced"),
+            ]
+        );
+    }
+
+    #[test]
+    fn has_capability_reflects_registered_executors() {
+        let mut registry = NodeExecutorRegistry::default();
+        registry
+            .register("builtin.ksampler", capable(&[InferenceCapability::DiffusionSample]))
+            .expect("register");
+
+        assert!(registry.has_capability(InferenceCapability::DiffusionSample));
+        assert!(!registry.has_capability(InferenceCapability::TextEncode));
+        assert!(!registry.has_capability(InferenceCapability::ImageSave));
+    }
+
+    #[test]
+    fn capability_union_deduplicates_and_uses_v1_order() {
+        let mut registry = NodeExecutorRegistry::default();
+        registry
+            .register(
+                "builtin.ksampler",
+                capable(&[InferenceCapability::DiffusionSample]),
+            )
+            .expect("register");
+        registry
+            .register(
+                "builtin.vae_decode",
+                capable(&[InferenceCapability::LatentDecode]),
+            )
+            .expect("register");
+        registry
+            .register(
+                "builtin.vae_encode",
+                capable(&[InferenceCapability::DiffusionSample, InferenceCapability::LatentDecode]),
+            )
+            .expect("register");
+        registry
+            .register("builtin.string", capable(&[]))
+            .expect("register");
+
+        assert_eq!(
+            registry.capability_union(),
+            vec![
+                InferenceCapability::DiffusionSample,
+                InferenceCapability::LatentDecode,
+            ]
+        );
+    }
+
+    #[test]
+    fn clone_for_runner_preserves_capability_index() {
+        let mut registry = NodeExecutorRegistry::default();
+        registry
+            .register(
+                "builtin.ksampler",
+                capable(&[InferenceCapability::DiffusionSample]),
+            )
+            .expect("register");
+
+        let runner = registry.clone_for_runner();
+        assert!(runner.has_capability(InferenceCapability::DiffusionSample));
+        assert_eq!(
+            runner.query_by_capability(InferenceCapability::DiffusionSample),
+            vec![NodeTypeId::new("builtin.ksampler")]
+        );
     }
 }

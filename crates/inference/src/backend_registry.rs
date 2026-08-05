@@ -118,7 +118,24 @@ impl InferenceBackendRegistry {
 
     /// Merge every registered backend's capability report into a
     /// single combined report.
+    ///
+    /// Backends whose reports depend on mutable state (e.g. the Burn
+    /// backend, which narrows its report to the model components
+    /// currently loaded) are re-queried on every call.
     pub fn merged_capabilities(&self) -> MergedInferenceBackendCapabilities {
+        self.refresh_capabilities()
+    }
+
+    /// Re-query every registered backend's capability report.
+    ///
+    /// The report is always computed from the backends' current
+    /// [`InferenceBackend::capabilities`] responses, so this picks up
+    /// state changes such as a Burn `LoadBundle` that newly enables
+    /// `text.encode`, `diffusion.sample`, or `latent.decode`. Callers
+    /// that hold capability reports across `LoadBundle` calls should
+    /// invoke this afterwards; the router re-queries per request and
+    /// never needs it.
+    pub fn refresh_capabilities(&self) -> MergedInferenceBackendCapabilities {
         let mut merged = MergedInferenceBackendCapabilities::default();
         for entry in &self.entries {
             merged.add(entry.backend.capabilities());
@@ -348,5 +365,114 @@ mod tests {
         let merged = reg.merged_capabilities();
         assert_eq!(merged.kind_count(), 1);
         assert_eq!(merged.by_kind().len(), 1);
+    }
+
+    struct StatefulBackend {
+        kind: Backend,
+        state: std::sync::Mutex<InferenceBackendCapabilities>,
+    }
+
+    impl StatefulBackend {
+        fn new(kind: Backend) -> Self {
+            Self {
+                kind: kind.clone(),
+                state: std::sync::Mutex::new(InferenceBackendCapabilities::new(kind)),
+            }
+        }
+
+        fn set(&self, caps: InferenceBackendCapabilities) {
+            *self.state.lock().unwrap() = caps;
+        }
+    }
+
+    #[async_trait::async_trait]
+    impl InferenceBackend for StatefulBackend {
+        fn backend_kind(&self) -> &Backend {
+            &self.kind
+        }
+        fn capabilities(&self) -> InferenceBackendCapabilities {
+            self.state.lock().unwrap().clone()
+        }
+        async fn load_bundle(
+            &self,
+            _request: LoadBundleRequest,
+        ) -> Result<LoadBundleResponse, InferenceError> {
+            unimplemented!()
+        }
+        async fn text_encode(
+            &self,
+            _request: TextEncodeRequest,
+        ) -> Result<TextEncodeResponse, InferenceError> {
+            unimplemented!()
+        }
+        async fn create_empty_latent(
+            &self,
+            _request: CreateEmptyLatentRequest,
+        ) -> Result<CreateEmptyLatentResponse, InferenceError> {
+            unimplemented!()
+        }
+        async fn diffusion_sample(
+            &self,
+            _request: DiffusionSampleRequest,
+        ) -> Result<DiffusionSampleResponse, InferenceError> {
+            unimplemented!()
+        }
+        async fn latent_decode(
+            &self,
+            _request: LatentDecodeRequest,
+        ) -> Result<LatentDecodeResponse, InferenceError> {
+            unimplemented!()
+        }
+        async fn latent_encode(
+            &self,
+            _request: LatentEncodeRequest,
+        ) -> Result<LatentEncodeResponse, InferenceError> {
+            unimplemented!()
+        }
+        async fn image_import(
+            &self,
+            _request: ImageImportRequest,
+        ) -> Result<ImageImportResponse, InferenceError> {
+            unimplemented!()
+        }
+        async fn image_save(
+            &self,
+            _request: ImageSaveRequest,
+        ) -> Result<ImageSaveResponse, InferenceError> {
+            unimplemented!()
+        }
+        async fn image_preview(
+            &self,
+            _request: ImagePreviewRequest,
+        ) -> Result<ImagePreviewResponse, InferenceError> {
+            unimplemented!()
+        }
+    }
+
+    #[test]
+    fn refresh_capabilities_requeries_backend_state() {
+        let mut reg = InferenceBackendRegistry::new();
+        let backend = Arc::new(StatefulBackend::new(Backend::new("burn")));
+        let descriptor = BackendInstanceDescriptor::new(
+            BackendInstance::new("burn:main"),
+            Backend::new("burn"),
+        );
+        reg.register(descriptor, Arc::clone(&backend) as Arc<dyn InferenceBackend>);
+
+        let before = reg.refresh_capabilities();
+        assert!(!before.by_kind()[0].supports_capability(InferenceCapability::TextEncode));
+
+        backend.set(
+            InferenceBackendCapabilities::new(Backend::new("burn")).with_support(
+                InferenceCapabilitySupport::new(InferenceCapability::TextEncode),
+            ),
+        );
+
+        let after = reg.refresh_capabilities();
+        assert!(after.by_kind()[0].supports_capability(InferenceCapability::TextEncode));
+        assert!(reg
+            .merged_capabilities()
+            .by_kind()[0]
+            .supports_capability(InferenceCapability::TextEncode));
     }
 }

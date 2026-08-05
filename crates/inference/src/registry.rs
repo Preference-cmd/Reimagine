@@ -10,6 +10,7 @@
 
 use std::sync::Arc;
 
+use crate::capability::InferenceCapability;
 use crate::executors::image_import::{ImageSourceResolver, LoadImageExecutor};
 use crate::{ModelResolver, RouterRef};
 use reimagine_core::model::NodeTypeId;
@@ -43,63 +44,72 @@ pub fn register_builtin_inference_executors(
     registry.register(NodeTypeId::new("builtin.string"), Arc::new(StringExecutor))?;
 
     // builtin.checkpoint_loader — model.load_bundle
-    registry.register(
+    registry.register_with_capabilities(
         NodeTypeId::new("builtin.checkpoint_loader"),
         Arc::new(CheckpointLoaderExecutor::new(
             Arc::clone(&inference),
             Arc::clone(&resolver),
         )),
+        &[InferenceCapability::LoadBundle],
     )?;
 
     // builtin.load_image — image.import
-    registry.register(
+    registry.register_with_capabilities(
         NodeTypeId::new("builtin.load_image"),
         Arc::new(LoadImageExecutor::new(
             Arc::clone(&inference),
             Arc::clone(&image_source_resolver),
         )),
+        &[InferenceCapability::ImageImport],
     )?;
 
     // builtin.clip_text_encode — text.encode
-    registry.register(
+    registry.register_with_capabilities(
         NodeTypeId::new("builtin.clip_text_encode"),
         Arc::new(ClipTextEncodeExecutor::new(Arc::clone(&inference))),
+        &[InferenceCapability::TextEncode],
     )?;
 
     // builtin.empty_latent_image — latent.create_empty
-    registry.register(
+    registry.register_with_capabilities(
         NodeTypeId::new("builtin.empty_latent_image"),
         Arc::new(EmptyLatentImageExecutor::new(Arc::clone(&inference))),
+        &[InferenceCapability::CreateEmptyLatent],
     )?;
 
     // builtin.vae_encode — latent.encode
-    registry.register(
+    registry.register_with_capabilities(
         NodeTypeId::new("builtin.vae_encode"),
         Arc::new(VaeEncodeExecutor::new(Arc::clone(&inference))),
+        &[InferenceCapability::LatentEncode],
     )?;
 
     // builtin.ksampler — diffusion.sample
-    registry.register(
+    registry.register_with_capabilities(
         NodeTypeId::new("builtin.ksampler"),
         Arc::new(KSamplerExecutor::new(Arc::clone(&inference))),
+        &[InferenceCapability::DiffusionSample],
     )?;
 
     // builtin.vae_decode — latent.decode
-    registry.register(
+    registry.register_with_capabilities(
         NodeTypeId::new("builtin.vae_decode"),
         Arc::new(VaeDecodeExecutor::new(Arc::clone(&inference))),
+        &[InferenceCapability::LatentDecode],
     )?;
 
     // builtin.save_image — image.save
-    registry.register(
+    registry.register_with_capabilities(
         NodeTypeId::new("builtin.save_image"),
         Arc::new(SaveImageExecutor::new(Arc::clone(&inference))),
+        &[InferenceCapability::ImageSave],
     )?;
 
     // builtin.preview_image — image.preview
-    registry.register(
+    registry.register_with_capabilities(
         NodeTypeId::new("builtin.preview_image"),
         Arc::new(PreviewImageExecutor::new(Arc::clone(&inference))),
+        &[InferenceCapability::ImagePreview],
     )?;
 
     Ok(())

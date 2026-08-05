@@ -119,13 +119,15 @@ fn backend_kind_instance_and_capabilities_report_load_bundle_and_create_empty_la
         BackendInstance::new(expected_cpu_instance())
     );
     assert_eq!(capabilities.backend_kind().as_str(), "burn");
-    // burn/08b-d-f merged text.encode, burn/10 adds
-    // DiffusionSample, burn/11 adds LatentDecode,
-    // burn/12 adds ImageSave/ImagePreview. ImageImport is intentionally
-    // omitted until the backend implements it.
-    assert_eq!(capabilities.capability_supports().len(), 7);
+    // BE-33: capabilities are now dynamic — with an empty model cache
+    // only the static base set (LoadBundle, CreateEmptyLatent,
+    // ImageSave, ImagePreview) is advertised; TextEncode,
+    // DiffusionSample, LatentDecode appear once the relevant
+    // components are loaded.
+    assert_eq!(capabilities.capability_supports().len(), 4);
     assert!(capabilities.supports_capability(InferenceCapability::LoadBundle));
     assert!(capabilities.supports_capability(InferenceCapability::CreateEmptyLatent));
+    assert!(!capabilities.supports_capability(InferenceCapability::DiffusionSample));
 }
 
 #[tokio::test]

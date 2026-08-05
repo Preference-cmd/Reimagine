@@ -7,7 +7,7 @@ use reimagine_inference::{BackendPayloadKey, LatentSpaceMetadata, VramBudget};
 
 use crate::active_backend::ActiveBurnBackend;
 use crate::models::stable_diffusion::sdxl::{
-    BurnLoadedModelBundle, BurnLoadedSdxlBundle, BurnSdxlSourceSignature,
+    BurnLoadedModelBundle, BurnLoadedSdxlBundle, BurnSdxlComponentRole, BurnSdxlSourceSignature,
     BurnSdxlTokenizedPromptPair,
 };
 
@@ -874,6 +874,22 @@ impl BurnModelCache {
             .contains_key(model_id)
     }
 
+    /// Whether any cached bundle contains a component with the given
+    /// role.
+    ///
+    /// Capability reporting uses this to advertise only operations
+    /// that can actually run with what is currently loaded (e.g. no
+    /// `diffusion.sample` until a Diffusion component is cached).
+    pub fn has_component_role(&self, role: BurnSdxlComponentRole) -> bool {
+        let inner = self.inner.lock().expect("model cache poisoned");
+        inner.bundles.values().any(|bundle| match bundle.as_ref() {
+            BurnLoadedModelBundle::StableDiffusionSdxl(bundle) => bundle
+                .components()
+                .iter()
+                .any(|component| component.component_role == role),
+        })
+    }
+
     pub fn insert_bundle(&self, model_id: ModelId, bundle: Arc<BurnLoadedModelBundle>) {
         let mut inner = self.inner.lock().expect("model cache poisoned");
         inner.bundles.insert(model_id.clone(), bundle);
@@ -1430,6 +1446,40 @@ mod tests {
         assert_eq!(cache.bundle_count(), 1);
         assert!(cache.contains(&model));
         assert!(cache.get_bundle(&model).is_some());
+    }
+
+    #[test]
+    fn model_cache_reports_loaded_component_roles() {
+        let cache = BurnModelCache::new();
+        let empty = test_bundle("empty");
+        cache.insert_bundle(ModelId::new("empty"), empty);
+        assert!(!cache.has_component_role(BurnSdxlComponentRole::TextEncoder));
+        assert!(!cache.has_component_role(BurnSdxlComponentRole::Diffusion));
+        assert!(!cache.has_component_role(BurnSdxlComponentRole::Vae));
+
+        let clip_only = BurnLoadedSdxlBundle::for_test_only(
+            ModelId::new("clip-only"),
+            BackendPayloadKey::new("clip"),
+        )
+        .with_test_components(vec![
+            (
+                BurnSdxlComponentRole::TextEncoder,
+                std::path::PathBuf::from("text_encoder/model.safetensors"),
+            ),
+            (
+                BurnSdxlComponentRole::TextEncoder2,
+                std::path::PathBuf::from("text_encoder_2/model.safetensors"),
+            ),
+        ]);
+        cache.insert_bundle(
+            ModelId::new("clip-only"),
+            Arc::new(BurnLoadedModelBundle::StableDiffusionSdxl(Arc::new(clip_only))),
+        );
+
+        assert!(cache.has_component_role(BurnSdxlComponentRole::TextEncoder));
+        assert!(cache.has_component_role(BurnSdxlComponentRole::TextEncoder2));
+        assert!(!cache.has_component_role(BurnSdxlComponentRole::Diffusion));
+        assert!(!cache.has_component_role(BurnSdxlComponentRole::Vae));
     }
 
     #[test]
