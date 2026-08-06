@@ -43,8 +43,11 @@ pub use resources::NoopBackendInstanceRuntimeHooks;
 pub use run_inputs::RunInputs;
 pub use run_session::RunSession;
 pub use runner::{RuntimeOptions, RuntimeService, RuntimeServiceError};
-pub use scheduler::{NodeState, ReadySetScheduler};
-pub use snapshot::{RunArtifactRef, RunSnapshot, RunSummary};
+pub use scheduler::{
+    AdmissionDecision, DEFAULT_NODE_ESTIMATED_VRAM_BYTES, MemoryBudget, NodeState,
+    ReadySetScheduler,
+};
+pub use snapshot::{RunArtifactRef, RunSnapshot, RunSnapshotUpdate, RunSummary};
 pub use store::{RunStore, RunStoreInner};
 pub use value_store::{OutputKey, RunValueStore, RuntimeValueRecord};
 
@@ -53,7 +56,7 @@ pub use value::{
     Backend, BackendPayloadKey, BackendTensorHandle, BackendTensorMetadata, ConditioningMetadata,
     ExecutionConditioning, ExecutionOutput, ExecutionValue, ExecutionValueKind,
     ExecutionValueRetention, RuntimeClipHandle, RuntimeConditioning, RuntimeImage, RuntimeLatent,
-    RuntimeModelHandle, RuntimeVaeHandle,
+    RuntimeModelHandle, RuntimeVaeHandle, StageId,
 };
 
 // Executor contract re-exports from `reimagine_inference`. Existing

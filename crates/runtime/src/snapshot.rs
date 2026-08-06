@@ -9,6 +9,52 @@ use reimagine_core::model::{ArtifactId, ArtifactRef, NodeId, RunId, WorkflowId, 
 use crate::handle::RunState;
 use crate::scheduler::NodeState;
 
+/// Incremental update to a [`RunSnapshot`], produced by [`crate::store::RunStore`]
+/// on every store mutation.
+///
+/// Hosts subscribe through `RunStore::delta_stream` / `RunStore::subscribe`:
+/// - [`RunSnapshotUpdate::Full`] is emitted at subscribe time as a baseline
+///   for late joiners.
+/// - [`RunSnapshotUpdate::Delta`] carries only the node states and artifacts
+///   that changed since the previous snapshot, so hosts can merge into a
+///   local cache without receiving the full snapshot on every transition.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum RunSnapshotUpdate {
+    /// Nodes that changed and artifacts that appeared since the previous
+    /// snapshot. Run-level state changes (e.g. terminal transitions) are not
+    /// part of the delta; they are observable through the full snapshots on
+    /// the watch channel.
+    Delta {
+        run_id: RunId,
+        /// Only nodes whose state changed (or that appeared) since the last
+        /// snapshot. Removed nodes are not representable and are omitted.
+        changed_nodes: HashMap<NodeId, NodeState>,
+        /// Artifacts that appeared since the last snapshot, in creation order.
+        new_artifacts: Vec<RunArtifactRef>,
+        timestamp: Timestamp,
+    },
+    /// Full snapshot, used as the subscribe-time baseline for delta streams.
+    Full(RunSnapshot),
+}
+
+impl RunSnapshotUpdate {
+    /// Run this update belongs to.
+    pub fn run_id(&self) -> &RunId {
+        match self {
+            Self::Delta { run_id, .. } => run_id,
+            Self::Full(snapshot) => &snapshot.run_id,
+        }
+    }
+
+    /// Timestamp of the update.
+    pub fn timestamp(&self) -> &Timestamp {
+        match self {
+            Self::Delta { timestamp, .. } => timestamp,
+            Self::Full(snapshot) => &snapshot.updated_at,
+        }
+    }
+}
+
 /// Host-neutral reference to an artifact produced during a run.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct RunArtifactRef {
