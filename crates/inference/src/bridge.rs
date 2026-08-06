@@ -25,8 +25,24 @@ pub enum BridgeSupport {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum BridgePlan {
     Direct,
-    Bridgeable { bridge_kind: String, cost: String },
-    Unsupported { reason: String },
+    Bridgeable {
+        bridge_kind: String,
+        cost: String,
+    },
+    /// The value must move to another worker (T16+).
+    ///
+    /// `estimated_cost` is a human-readable estimate (e.g. `"~2.4ms"`
+    /// or `"~$0.0003"`), formatted by the policy that produced the
+    /// plan. The inference crate deliberately keeps this opaque so it
+    /// does not depend on the transfer-planning crate.
+    CrossWorker {
+        source_worker: String,
+        target_worker: String,
+        estimated_cost: String,
+    },
+    Unsupported {
+        reason: String,
+    },
 }
 
 /// Bridge policy decides whether a value owned by `source_backend`

@@ -17,6 +17,7 @@ async-trait = { workspace = true }
 reimagine-agent = { path = "../agent" }
 reimagine-backend-worker-host = { path = "../backend-worker-host" }
 reimagine-backend-worker-protocol = { path = "../backend-worker-protocol" }
+reimagine-backend-worker-transfer = { path = "../backend-worker-transfer" }
 reimagine-backend-worker-transport-grpc = { path = "../backend-worker-transport-grpc" }
 reimagine-backend-worker-transport-quic = { path = "../backend-worker-transport-quic" }
 reimagine-config = { path = "../config" }

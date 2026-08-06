@@ -144,7 +144,9 @@ impl InferenceRouter {
                 &other_descriptor.backend,
                 capability,
             ) {
-                BridgePlan::Direct | BridgePlan::Bridgeable { .. } => {}
+                BridgePlan::Direct
+                | BridgePlan::Bridgeable { .. }
+                | BridgePlan::CrossWorker { .. } => {}
                 BridgePlan::Unsupported { reason } => {
                     return Err(InferenceError::BackendBridgeUnsupported {
                         source: other.to_string(),
@@ -397,6 +399,7 @@ mod tests {
         InferenceBackendCapabilities, InferenceCapability, InferenceCapabilitySupport,
     };
     use crate::request::latent::CreateEmptyLatentRequest;
+    use crate::request::latent_encode::LatentEncodeRequest;
     use crate::response::latent::CreateEmptyLatentResponse;
     use reimagine_core::model::{NodeId, RunId, WorkflowId, WorkflowVersion};
 
@@ -410,6 +413,30 @@ mod tests {
             Self {
                 kind: Backend::new(label),
                 supports_text: false,
+            }
+        }
+    }
+
+    /// Test bridge policy that prices every cross-backend transfer as
+    /// a cross-worker move (T16).
+    #[derive(Debug, Clone, Copy)]
+    struct CrossWorkerBridgePolicy;
+
+    impl BackendBridgePolicy for CrossWorkerBridgePolicy {
+        fn plan_transfer(
+            &self,
+            source_backend: &Backend,
+            target_backend: &Backend,
+            _capability: InferenceCapability,
+        ) -> BridgePlan {
+            if source_backend == target_backend {
+                BridgePlan::Direct
+            } else {
+                BridgePlan::CrossWorker {
+                    source_worker: format!("worker-{source_backend}"),
+                    target_worker: format!("worker-{target_backend}"),
+                    estimated_cost: "~2.0ms".to_owned(),
+                }
             }
         }
     }
@@ -827,5 +854,84 @@ mod tests {
         assert_eq!(invocation.run_id().as_str(), "invocation-run");
         assert_eq!(invocation.node_id().as_str(), "invocation-node");
         assert_eq!(response.latent().width(), 64);
+    }
+
+    fn registry_with_two_backend_kinds() -> Arc<InferenceBackendRegistry> {
+        let mut reg = InferenceBackendRegistry::new();
+        reg.register(
+            BackendInstanceDescriptor::new(BackendInstance::new("a"), Backend::new("a")),
+            Arc::new(EchoBackend::new("a")),
+        );
+        reg.register(
+            BackendInstanceDescriptor::new(BackendInstance::new("b"), Backend::new("b")),
+            Arc::new(EchoBackend::new("b")),
+        );
+        Arc::new(reg)
+    }
+
+    fn latent_encode_request_on_two_backends() -> LatentEncodeRequest {
+        let vae = crate::RuntimeVaeHandle::new(
+            reimagine_core::model::ModelId::new("sdxl"),
+            Backend::new("a"),
+            "vae-key",
+        );
+        let image = crate::RuntimeImage::new(
+            crate::BackendTensorHandle::new(
+                Backend::new("b"),
+                crate::BackendPayloadKey::new("image-key"),
+                reimagine_core::model::TensorDType::F32,
+                reimagine_core::model::TensorShape::new(vec![1, 3, 64, 64]),
+                "cpu",
+            ),
+            64,
+            64,
+            1,
+            "rgb",
+        );
+        LatentEncodeRequest::new(
+            vae,
+            image,
+            RunId::new("r"),
+            WorkflowId::new("w"),
+            WorkflowVersion::new(1),
+            NodeId::new("n"),
+        )
+    }
+
+    #[tokio::test]
+    async fn reject_all_bridge_policy_blocks_conflicting_cross_backend_affinities() {
+        let router = InferenceRouter::new(
+            registry_with_two_backend_kinds(),
+            Arc::new(RejectAllBridgePolicy),
+        );
+        let invocation = noop_invocation();
+        let err = router
+            .latent_encode_with_invocation(&invocation, latent_encode_request_on_two_backends())
+            .await
+            .unwrap_err();
+        assert!(matches!(
+            err,
+            InferenceError::BackendBridgeUnsupported { .. }
+        ));
+    }
+
+    #[tokio::test]
+    async fn cross_worker_bridge_plan_does_not_block_affinity_resolution() {
+        let router = InferenceRouter::new(
+            registry_with_two_backend_kinds(),
+            Arc::new(CrossWorkerBridgePolicy),
+        );
+        let invocation = noop_invocation();
+        let err = router
+            .latent_encode_with_invocation(&invocation, latent_encode_request_on_two_backends())
+            .await
+            .unwrap_err();
+        // The CrossWorker plan passed the bridge gate; the call then
+        // fails only on capability support (EchoBackend does not
+        // advertise latent.encode), never on the bridge policy.
+        assert!(matches!(
+            err,
+            InferenceError::CandidateBackendLacksCapability { .. }
+        ));
     }
 }
