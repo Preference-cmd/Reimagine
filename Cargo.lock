@@ -6922,6 +6922,7 @@ dependencies = [
  "reimagine-agent",
  "reimagine-backend-worker-host",
  "reimagine-backend-worker-protocol",
+ "reimagine-backend-worker-transport-grpc",
  "reimagine-backend-worker-transport-quic",
  "reimagine-config",
  "reimagine-core",
@@ -6937,6 +6938,8 @@ dependencies = [
  "sha2 0.10.9",
  "tempfile",
  "tokio",
+ "tokio-stream",
+ "tonic",
  "tracing",
 ]
 
