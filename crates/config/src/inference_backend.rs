@@ -1,4 +1,8 @@
-use reimagine_core::diagnostic::Diagnostic;
+use reimagine_core::diagnostic::{
+    Diagnostic, DiagnosticCode, DiagnosticSeverity, DiagnosticSourceName, DiagnosticTarget,
+    DiagnosticTargetDomain,
+};
+use reimagine_core::model::DiagnosticId;
 use serde::{Deserialize, Serialize};
 
 use crate::{ConfigDocument, ConfigValidationContext};
@@ -52,6 +56,19 @@ pub struct WorkerEndpointConfig {
 
 fn default_worker_transport() -> String {
     "quic".to_string()
+}
+
+impl Default for WorkerEndpointConfig {
+    fn default() -> Self {
+        Self {
+            id: String::new(),
+            transport: default_worker_transport(),
+            address: String::new(),
+            capabilities: Vec::new(),
+            device_label: String::new(),
+            fingerprint: None,
+        }
+    }
 }
 
 /// Persisted inference backend configuration.
@@ -129,13 +146,46 @@ impl ConfigDocument for InferenceBackendConfig {
     const SCHEMA_VERSION: &'static str = "1";
 
     fn validate(&self, _context: &ConfigValidationContext) -> Vec<Diagnostic> {
-        Vec::new()
+        let mut diagnostics = Vec::new();
+        let mut seen = std::collections::HashSet::new();
+        for worker in &self.workers {
+            if worker.id.trim().is_empty() {
+                diagnostics.push(worker_diagnostic(
+                    "<unknown>",
+                    "worker entry has an empty id",
+                ));
+            } else if !seen.insert(&worker.id) {
+                diagnostics.push(worker_diagnostic(&worker.id, "duplicate worker id"));
+            }
+            if worker.address.trim().is_empty() {
+                let id = if worker.id.is_empty() {
+                    "<unknown>"
+                } else {
+                    &worker.id
+                };
+                diagnostics.push(worker_diagnostic(id, "worker has an empty address"));
+            }
+        }
+        diagnostics
     }
+}
+
+fn worker_diagnostic(id: &str, message: &str) -> Diagnostic {
+    Diagnostic::new(
+        DiagnosticId::new(format!("config:inference_backend:worker:{id}")),
+        DiagnosticCode::new("CONFIG/INFERENCE_BACKEND_WORKER_INVALID"),
+        DiagnosticSeverity::Error,
+        DiagnosticSourceName::new("config"),
+        format!("worker `{id}`: {message}"),
+        DiagnosticTarget::new(DiagnosticTargetDomain::new("config"))
+            .with_id("inference_backend.json"),
+    )
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::ConfigKey;
 
     #[test]
     fn default_is_burn() {
@@ -232,6 +282,90 @@ mod tests {
         let json = r#"{ "workers": [{ "id": "w", "address": "quic://10.0.0.2:9100" }] }"#;
         let cfg: InferenceBackendConfig = serde_json::from_str(json).unwrap();
         assert_eq!(cfg.workers[0].transport, "quic");
+    }
+
+    #[test]
+    fn validate_rejects_empty_and_duplicate_worker_ids() {
+        let cfg = InferenceBackendConfig {
+            workers: vec![
+                WorkerEndpointConfig {
+                    id: String::new(),
+                    ..WorkerEndpointConfig::default()
+                },
+                WorkerEndpointConfig {
+                    id: "w".to_owned(),
+                    ..WorkerEndpointConfig::default()
+                },
+                WorkerEndpointConfig {
+                    id: "w".to_owned(),
+                    address: "quic://10.0.0.2:9100".to_owned(),
+                    ..WorkerEndpointConfig::default()
+                },
+            ],
+            ..InferenceBackendConfig::default()
+        };
+        let context = ConfigValidationContext::new(
+            ConfigKey::new("inference_backend.json").unwrap(),
+            "test/inference_backend.json",
+        );
+        let diagnostics = cfg.validate(&context);
+        assert_eq!(diagnostics.len(), 4);
+        assert_eq!(
+            diagnostics
+                .iter()
+                .filter(|d| d.message().contains("empty id"))
+                .count(),
+            1
+        );
+        assert_eq!(
+            diagnostics
+                .iter()
+                .filter(|d| d.message().contains("duplicate worker id"))
+                .count(),
+            1
+        );
+        assert_eq!(
+            diagnostics
+                .iter()
+                .filter(|d| d.message().contains("empty address"))
+                .count(),
+            2
+        );
+    }
+
+    #[test]
+    fn validate_rejects_empty_address() {
+        let cfg = InferenceBackendConfig {
+            workers: vec![WorkerEndpointConfig {
+                id: "w".to_owned(),
+                ..WorkerEndpointConfig::default()
+            }],
+            ..InferenceBackendConfig::default()
+        };
+        let context = ConfigValidationContext::new(
+            ConfigKey::new("inference_backend.json").unwrap(),
+            "test/inference_backend.json",
+        );
+        let diagnostics = cfg.validate(&context);
+        assert_eq!(diagnostics.len(), 1);
+        assert!(diagnostics[0].message().contains("empty address"));
+    }
+
+    #[test]
+    fn validate_passes_well_formed_workers() {
+        let cfg = InferenceBackendConfig {
+            workers: vec![WorkerEndpointConfig {
+                id: "w".to_owned(),
+                address: "quic://10.0.0.2:9100".to_owned(),
+                ..WorkerEndpointConfig::default()
+            }],
+            ..InferenceBackendConfig::default()
+        };
+        let context = ConfigValidationContext::new(
+            ConfigKey::new("inference_backend.json").unwrap(),
+            "test/inference_backend.json",
+        );
+        assert!(cfg.validate(&context).is_empty());
     }
 
     #[test]

@@ -39,6 +39,13 @@ use super::topology::{ConnectionTopologyManager, TopologyError};
 /// Default poll interval for reconciling discovered endpoints.
 pub const DEFAULT_DISCOVERY_INTERVAL: Duration = Duration::from_secs(10);
 
+/// Minimum poll interval (guards against `Duration::ZERO` busy loops).
+const MIN_DISCOVERY_INTERVAL: Duration = Duration::from_millis(1);
+
+/// The mDNS service type advertised by Reimagine workers (must match
+/// `SERVICE_TYPE` in `reimagine-backend-worker-transport-quic`).
+const MDNS_SERVICE_TYPE: &str = "_reimagine-worker._tcp.local.";
+
 /// A pluggable source of worker endpoints.
 ///
 /// `start`/`stop` are idempotent; a source that has not been started
@@ -133,6 +140,23 @@ impl WorkerDiscovery for MdnsDiscovery {
     }
 }
 
+/// Normalize an mDNS service fullname to a bare worker id.
+///
+/// Fullnames look like `worker-a.local._reimagine-worker._tcp.local.`;
+/// config-declared ids are bare (`worker-a`), so stripping the service
+/// suffix (and the conventional `.local` instance tail) makes mDNS and
+/// config ids comparable — which is what lets a pinned config endpoint
+/// override an unauthenticated mDNS advertisement for the same worker.
+fn normalize_mdns_id(fullname: &str) -> String {
+    let instance = fullname
+        .strip_suffix(&format!(".{MDNS_SERVICE_TYPE}"))
+        .unwrap_or(fullname);
+    instance
+        .strip_suffix(".local")
+        .unwrap_or(instance)
+        .to_owned()
+}
+
 /// Map a discovered mDNS worker to a [`WorkerEndpoint`].
 ///
 /// # Trust gating (T19)
@@ -160,7 +184,7 @@ fn mdns_endpoint(worker: DiscoveredWorker) -> WorkerEndpoint {
         .unwrap_or_else(|| "remote".to_owned());
     let fingerprint = worker.fingerprint().map(str::to_owned);
     WorkerEndpoint {
-        id: worker.id,
+        id: normalize_mdns_id(&worker.id),
         transport_kind: TransportKind::Quic,
         address,
         capabilities,
@@ -182,6 +206,7 @@ fn mdns_endpoint(worker: DiscoveredWorker) -> WorkerEndpoint {
 /// trust flow.
 pub struct ConfigDiscovery {
     endpoints: Vec<WorkerEndpoint>,
+    started: std::sync::Mutex<bool>,
 }
 
 impl ConfigDiscovery {
@@ -195,13 +220,19 @@ impl ConfigDiscovery {
             .iter()
             .map(config_endpoint)
             .collect::<Result<Vec<_>, _>>()?;
-        Ok(Self { endpoints })
+        Ok(Self {
+            endpoints,
+            started: std::sync::Mutex::new(false),
+        })
     }
 
     /// Build from a pre-resolved endpoint list (test/programmatic seam).
     #[must_use]
     pub fn from_endpoints(endpoints: Vec<WorkerEndpoint>) -> Self {
-        Self { endpoints }
+        Self {
+            endpoints,
+            started: std::sync::Mutex::new(false),
+        }
     }
 
     /// The configured endpoints.
@@ -213,14 +244,29 @@ impl ConfigDiscovery {
 
 impl WorkerDiscovery for ConfigDiscovery {
     fn start(&self) -> Result<(), String> {
+        *self
+            .started
+            .lock()
+            .map_err(|_| "config discovery lock poisoned".to_owned())? = true;
         Ok(())
     }
 
     fn stop(&self) -> Result<(), String> {
+        *self
+            .started
+            .lock()
+            .map_err(|_| "config discovery lock poisoned".to_owned())? = false;
         Ok(())
     }
 
     fn discovered(&self) -> Vec<WorkerEndpoint> {
+        let started = match self.started.lock() {
+            Ok(guard) => *guard,
+            Err(_) => return Vec::new(),
+        };
+        if !started {
+            return Vec::new();
+        }
         self.endpoints.clone()
     }
 }
@@ -262,11 +308,12 @@ fn config_endpoint(cfg: &WorkerEndpointConfig) -> Result<WorkerEndpoint, String>
 /// 2. Registers endpoints that are not yet in the pool;
 /// 3. Deregisters endpoints that the orchestrator previously registered
 ///    and which have vanished — never endpoints registered by other
-///    subsystems (tracked via a `known` id set).
+///    subsystems (tracked via a `known` id → address map; an address
+///    mismatch means another subsystem re-registered the id).
 pub struct DiscoveryOrchestrator {
     sources: Vec<Arc<dyn WorkerDiscovery>>,
     topology: Arc<Mutex<ConnectionTopologyManager>>,
-    known: std::sync::Mutex<HashSet<String>>,
+    known: std::sync::Mutex<HashMap<String, String>>,
     interval: Duration,
 }
 
@@ -285,7 +332,8 @@ impl DiscoveryOrchestrator {
     ///
     /// `interval` is injectable so tests can use short poll periods
     /// without sleeping; [`DEFAULT_DISCOVERY_INTERVAL`] is the
-    /// production default.
+    /// production default. Intervals below [`MIN_DISCOVERY_INTERVAL`]
+    /// are clamped to avoid busy loops.
     pub fn new(
         sources: Vec<Arc<dyn WorkerDiscovery>>,
         topology: Arc<Mutex<ConnectionTopologyManager>>,
@@ -294,8 +342,8 @@ impl DiscoveryOrchestrator {
         Self {
             sources,
             topology,
-            known: std::sync::Mutex::new(HashSet::new()),
-            interval,
+            known: std::sync::Mutex::new(HashMap::new()),
+            interval: interval.max(MIN_DISCOVERY_INTERVAL),
         }
     }
 
@@ -332,18 +380,33 @@ impl DiscoveryOrchestrator {
 
         // Deregister workers this orchestrator registered that vanished.
         let gone = {
-            let mut known = self.known.lock().expect("discovery known set poisoned");
-            let gone: Vec<String> = known
+            // A poisoned lock still carries the last known state; keep
+            // reconciling instead of panicking in the poll loop.
+            let mut known = self
+                .known
+                .lock()
+                .unwrap_or_else(|poisoned| poisoned.into_inner());
+            let gone: Vec<(String, String)> = known
                 .iter()
-                .filter(|id| !discovered_ids.contains(*id))
-                .cloned()
+                .filter(|(id, _addr)| !discovered_ids.contains(*id))
+                .map(|(id, addr)| (id.clone(), addr.clone()))
                 .collect();
-            for id in &gone {
+            for (id, _addr) in &gone {
                 known.remove(id);
             }
             gone
         };
-        for id in gone {
+        for (id, addr) in gone {
+            // Only deregister if the pooled endpoint is still the one
+            // this orchestrator registered: another subsystem may have
+            // re-registered the same id with a different endpoint.
+            let still_ours = topology
+                .pool()
+                .get(&id)
+                .is_none_or(|entry| entry.endpoint.address == addr);
+            if !still_ours {
+                continue;
+            }
             match topology.deregister_endpoint(&id) {
                 Ok(()) => report.deregistered += 1,
                 // Already removed by another subsystem: nothing to do.
@@ -359,11 +422,11 @@ impl DiscoveryOrchestrator {
             if topology.pool().get(&id).is_some() {
                 continue;
             }
-            match topology.register_endpoint(endpoint) {
+            match topology.register_endpoint(endpoint.clone()) {
                 Ok(()) => {
                     report.registered += 1;
                     if let Ok(mut known) = self.known.lock() {
-                        known.insert(id);
+                        known.insert(id, endpoint.address);
                     }
                 }
                 Err(TopologyError::DuplicateEndpoint(_)) => {}
@@ -531,7 +594,9 @@ mod tests {
     #[test]
     fn mdns_mapping_produces_untrusted_quic_endpoint() {
         let endpoint = mdns_endpoint(discovered_worker("worker-a", Some("aabbcc")));
-        assert_eq!(endpoint.id, "worker-a._reimagine-worker._tcp.local.");
+        // The service fullname is normalized to a bare id so config
+        // (pinned) and mDNS entries for the same worker deduplicate.
+        assert_eq!(endpoint.id, "worker-a");
         assert_eq!(endpoint.transport_kind, TransportKind::Quic);
         assert_eq!(endpoint.address, "quic://192.168.1.100:9100");
         assert_eq!(
@@ -544,6 +609,24 @@ mod tests {
         assert!(!endpoint.trusted);
         assert_eq!(endpoint.metadata["source"], "mdns");
         assert_eq!(endpoint.metadata["fingerprint"], "aabbcc");
+    }
+
+    #[test]
+    fn mdns_id_normalization_handles_real_fullname_form() {
+        // Real fullnames are `{instance}.{service_type}` where the
+        // instance carries the conventional `.local` tail.
+        assert_eq!(
+            normalize_mdns_id("worker-a.local._reimagine-worker._tcp.local."),
+            "worker-a"
+        );
+        // Custom instance names (no `.local`) only strip the service
+        // suffix.
+        assert_eq!(
+            normalize_mdns_id("gpu-rack-3._reimagine-worker._tcp.local."),
+            "gpu-rack-3"
+        );
+        // Unrecognized shapes are preserved as-is.
+        assert_eq!(normalize_mdns_id("worker-a"), "worker-a");
     }
 
     #[test]
@@ -588,6 +671,9 @@ mod tests {
             ..InferenceBackendConfig::default()
         };
         let source = ConfigDiscovery::from_config(&config).unwrap();
+        // A source that has not been started reports no endpoints.
+        assert!(source.discovered().is_empty());
+        source.start().unwrap();
         let endpoints = source.discovered();
         assert_eq!(endpoints.len(), 2);
 
@@ -606,6 +692,10 @@ mod tests {
             endpoints[1].metadata["fingerprint"],
             serde_json::Value::Null
         );
+
+        // stop() hides the endpoints again.
+        source.stop().unwrap();
+        assert!(source.discovered().is_empty());
     }
 
     #[test]
@@ -622,6 +712,7 @@ mod tests {
             ..InferenceBackendConfig::default()
         };
         let source = ConfigDiscovery::from_config(&config).unwrap();
+        source.start().unwrap();
         assert_eq!(source.discovered()[0].transport_kind, TransportKind::Grpc);
     }
 
@@ -793,6 +884,45 @@ mod tests {
         assert_eq!(pool.pool().len(), 2);
         assert!(pool.pool().get("w1").is_some());
         assert!(pool.pool().get("w2").is_some());
+    }
+
+    #[tokio::test]
+    async fn orchestrator_does_not_deregister_foreign_re_registration() {
+        // The orchestrator registered w1, then another subsystem
+        // re-registered the same id with a different endpoint (e.g. a
+        // manual connect). When w1 vanishes from discovery, the
+        // orchestrator must NOT deregister the foreign registration.
+        let source = MockDiscovery::new(vec![test_endpoint("w1", false)]);
+        source.start().unwrap();
+        let topology = topology_manager();
+        let orchestrator =
+            DiscoveryOrchestrator::new(vec![source.clone()], topology.clone(), Duration::ZERO);
+        orchestrator.reconcile_once().await;
+        assert_eq!(topology.lock().await.pool().len(), 1);
+
+        // Foreign re-registration with a different address (deregister
+        // + register — the pool API rejects duplicate ids).
+        topology.lock().await.deregister_endpoint("w1").unwrap();
+        let mut foreign = test_endpoint("w1", true);
+        foreign.address = "quic://10.0.0.99:9100".to_owned();
+        topology.lock().await.register_endpoint(foreign).unwrap();
+
+        source.set(Vec::new());
+        let report = orchestrator.reconcile_once().await;
+        assert_eq!(report.deregistered, 0);
+        let pool = topology.lock().await;
+        assert_eq!(pool.pool().len(), 1);
+        assert_eq!(
+            pool.pool().get("w1").unwrap().endpoint.address,
+            "quic://10.0.0.99:9100"
+        );
+    }
+
+    #[test]
+    fn orchestrator_clamps_zero_interval() {
+        let orchestrator =
+            DiscoveryOrchestrator::new(Vec::new(), topology_manager(), Duration::ZERO);
+        assert_eq!(orchestrator.interval(), Duration::from_millis(1));
     }
 
     #[test]

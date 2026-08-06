@@ -169,8 +169,12 @@ impl MdnsWorkerDiscovery {
                                 .insert(worker.id.clone(), worker);
                         }
                     }
-                    ServiceEvent::ServiceRemoved { .. } => {
-                        // Handle removal if needed
+                    ServiceEvent::ServiceRemoved(fullname, _service_type) => {
+                        // The first argument is the service fullname
+                        // (the same key used on insert above), so a
+                        // vanished worker is removed from the map and
+                        // `discovered()` reflects reality.
+                        workers_clone.lock().unwrap().remove(&fullname);
                     }
                     _ => {}
                 }
@@ -192,11 +196,12 @@ impl MdnsWorkerDiscovery {
         self.workers.lock().unwrap().values().cloned().collect()
     }
 
-    /// Stop browsing.
+    /// Stop browsing and drop all discovered workers.
     pub fn stop(&self) -> Result<(), Error> {
         self.daemon
             .stop_browse(SERVICE_TYPE)
             .map_err(|e| Error::ConnectionFailed(format!("mdns stop browse: {e}")))?;
+        self.workers.lock().unwrap().clear();
         Ok(())
     }
 }
