@@ -66,17 +66,14 @@ pub async fn connect(endpoint: &str) -> Result<GrpcTransport, tonic::Status> {
 pub async fn connect_with(endpoint: &str, auth: &GrpcAuth) -> Result<GrpcTransport, tonic::Status> {
     crate::tls::ensure_crypto_provider();
     // Never send a bearer token in cleartext: a token without TLS is a
-    // credential leak. Callers must pair tokens with a `tls` mode
-    // (or accept the risk by spelling out the endpoint as http:// AND
-    // setting auth.tls = Some(GrpcTls::InsecureSkipVerify) — the
-    // explicit dev escape hatch, which also fails this check for
-    // https:// endpoints only if the caller chooses to).
-    if auth.token.is_some()
-        && auth.tls.is_none()
-        && !endpoint.to_ascii_lowercase().starts_with("https://")
-    {
+    // credential leak. The tonic TLS connector only engages for the
+    // `https://` scheme, so a configured `tls` mode alone is not enough
+    // — the endpoint itself must be https. Callers must pair tokens
+    // with an https:// endpoint (the explicit dev escape hatch is
+    // `GrpcTls::InsecureSkipVerify`, still over https).
+    if auth.token.is_some() && !endpoint.to_ascii_lowercase().starts_with("https://") {
         return Err(tonic::Status::unauthenticated(
-            "bearer token configured but transport is not TLS (refusing cleartext token)",
+            "bearer token configured but endpoint is not https (refusing cleartext token)",
         ));
     }
     let mut channel_builder = Channel::from_shared(endpoint.to_owned())

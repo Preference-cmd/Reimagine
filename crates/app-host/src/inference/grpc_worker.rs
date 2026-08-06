@@ -183,10 +183,21 @@ impl GrpcWorkerCandidate {
     /// Connect to the worker and perform the gRPC handshake
     /// (`HostHello` -> `WorkerHello`), validating protocol agreement.
     async fn connect(&self) -> Result<(Arc<GrpcTransport>, WorkerHello), WorkerSwitchError> {
-        if self.config.auth.tls.is_none() && !is_loopback_endpoint(&self.config.endpoint) {
+        // Policy guard: remote (non-loopback) endpoints require TLS.
+        // The tonic TLS connector only engages for the `https://`
+        // scheme, so both a `tls` mode AND an https endpoint are
+        // required — anything else would downgrade to cleartext.
+        let https_scheme = self
+            .config
+            .endpoint
+            .to_ascii_lowercase()
+            .starts_with("https://");
+        if !is_loopback_endpoint(&self.config.endpoint)
+            && (self.config.auth.tls.is_none() || !https_scheme)
+        {
             return Err(WorkerSwitchError::Startup {
                 message: format!(
-                    "refusing cleartext gRPC connection to non-loopback endpoint `{}`: TLS is required for remote (cloud) workers",
+                    "refusing cleartext gRPC connection to non-loopback endpoint `{}`: TLS (`auth.tls` + https:// endpoint) is required for remote (cloud) workers",
                     self.config.endpoint
                 ),
             });

@@ -13,8 +13,13 @@ use crate::proto;
 /// Wraps a tonic bidirectional `Communication` stream. The host sends
 /// `HostToWorker` messages via an mpsc channel and receives
 /// `WorkerToHost` messages from a `tonic::Streaming` receiver.
+///
+/// The send half is held as `Mutex<Option<_>>` so [`WorkerTransport::shutdown`]
+/// can actually close the stream (dropping the sender ends the outbound
+/// stream, which ends the worker's read loop and the HTTP/2 connection);
+/// sends after shutdown fail with a closed-transport error.
 pub struct GrpcTransport {
-    sender: mpsc::Sender<proto::HostToWorker>,
+    sender: Mutex<Option<mpsc::Sender<proto::HostToWorker>>>,
     receiver: Mutex<tonic::Streaming<proto::WorkerToHost>>,
     endpoint: String,
 }
@@ -34,7 +39,7 @@ impl GrpcTransport {
         endpoint: String,
     ) -> Self {
         Self {
-            sender,
+            sender: Mutex::new(Some(sender)),
             receiver: Mutex::new(receiver),
             endpoint,
         }
@@ -51,7 +56,11 @@ impl GrpcTransport {
 
     /// Send a `HostToWorker` message to the worker.
     pub async fn send(&self, msg: proto::HostToWorker) -> Result<(), TransportError> {
-        self.sender
+        let mut guard = self.sender.lock().await;
+        let sender = guard
+            .as_ref()
+            .ok_or_else(|| TransportError::Io("transport is closed".to_owned()))?;
+        sender
             .send(msg)
             .await
             .map_err(|e| TransportError::Io(format!("send failed: {e}")))
@@ -87,12 +96,11 @@ impl WorkerTransport for GrpcTransport {
     }
 
     async fn shutdown(&self) -> Result<(), TransportError> {
-        // Dropping the sender signals the server that no more messages
-        // are coming, which will cause the server's read loop to end.
-        // We can't drop the sender here since we only have &self, so
-        // we close the channel by cloning and dropping the clone.
-        // Actually, mpsc::Sender::close is not available, so we
-        // just return Ok. The caller should drop the transport.
+        // Dropping the mpsc sender ends the outbound stream; the
+        // worker-side read loop observes the stream end and exits,
+        // closing the HTTP/2 connection. The transport refuses further
+        // sends (see [`Self::send`]).
+        self.sender.lock().await.take();
         Ok(())
     }
 }

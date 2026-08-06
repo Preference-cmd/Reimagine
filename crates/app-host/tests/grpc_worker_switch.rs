@@ -414,13 +414,66 @@ async fn grpc_candidate_connects_with_tls_and_token() {
 }
 
 #[tokio::test]
+async fn grpc_candidate_rejects_wrong_ca() {
+    // MITM simulation: the client pins a CA that did not sign the
+    // server's certificate — the TLS handshake must fail.
+    let server_identity =
+        reimagine_backend_worker_transport_grpc::tls::generate_self_signed_identity("localhost")
+            .unwrap();
+    let attacker_identity =
+        reimagine_backend_worker_transport_grpc::tls::generate_self_signed_identity("localhost")
+            .unwrap();
+    let (endpoint, server_handle) = start_test_grpc_server(
+        None,
+        Some((server_identity.cert_pem.clone(), server_identity.key_pem)),
+    )
+    .await;
+
+    let candidate = GrpcWorkerCandidate::new(GrpcWorkerCandidateConfig {
+        endpoint,
+        auth: GrpcAuth {
+            token: None,
+            tls: Some(GrpcTls::TrustCert {
+                ca_pem: attacker_identity.cert_pem,
+                domain: "localhost".to_owned(),
+            }),
+        },
+        connect_retries: 0,
+        ..GrpcWorkerCandidateConfig::default()
+    });
+    let error = match candidate.start().await {
+        Ok(_) => panic!("wrong CA must be rejected"),
+        Err(error) => error,
+    };
+    assert!(matches!(error, WorkerSwitchError::Startup { .. }));
+
+    server_handle.abort();
+}
+
+#[tokio::test]
 async fn grpc_worker_shutdown_closes_transport() {
     let (endpoint, server_handle) = start_test_grpc_server(None, None).await;
 
-    let candidate = GrpcWorkerCandidate::with_defaults(endpoint, GrpcAuth::plain());
-    let grpc_worker = candidate.start().await.expect("start gRPC worker");
+    let transport = Arc::new(
+        client::connect_with(&endpoint, &GrpcAuth::plain())
+            .await
+            .unwrap(),
+    );
+    let hello = grpc_handshake(&transport).await;
+    let grpc_worker = GrpcSwitchableWorker::new(hello, transport.clone());
 
     grpc_worker.shutdown().await.expect("shutdown");
+
+    // After shutdown the transport is closed: sending must fail with a
+    // closed-transport error.
+    let err = transport
+        .send(proto::HostToWorker { message: None })
+        .await
+        .expect_err("send after shutdown must fail");
+    assert!(
+        err.to_string().contains("closed"),
+        "expected closed-transport error, got: {err}"
+    );
 
     server_handle.abort();
 }
