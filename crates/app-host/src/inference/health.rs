@@ -227,6 +227,7 @@ mod tests {
             address: "local".to_owned(),
             capabilities: vec!["echo".to_owned()],
             device_label: "cpu".to_owned(),
+            trusted: true,
             metadata: serde_json::json!({}),
         }
     }

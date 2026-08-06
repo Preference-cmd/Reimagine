@@ -12,6 +12,48 @@ pub enum InferenceBackendKind {
     Candle,
 }
 
+/// A manually configured static worker endpoint (T12 `ConfigDiscovery`).
+///
+/// This is also the natural home for pre-shared certificate fingerprints
+/// from the T19 trust model: a `fingerprint` turns the endpoint into a
+/// *trusted* one (verifiable identity) without interactive confirmation.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct WorkerEndpointConfig {
+    /// Stable worker id, unique across the topology pool.
+    pub id: String,
+
+    /// Transport kind string, e.g. `"quic"`.
+    ///
+    /// Intentionally a string rather than a protocol-owned enum so the
+    /// config crate remains independent of worker-protocol types (same
+    /// pattern as `selected_instance`).
+    #[serde(default = "default_worker_transport")]
+    pub transport: String,
+
+    /// Connectable address, e.g. `"quic://192.168.1.10:9100"`.
+    pub address: String,
+
+    /// Advertised worker capabilities.
+    #[serde(default)]
+    pub capabilities: Vec<String>,
+
+    /// Human-readable device label, e.g. `"cuda:0"`.
+    #[serde(default)]
+    pub device_label: String,
+
+    /// Pre-shared certificate fingerprint (SHA-256 hex, T19).
+    ///
+    /// `Some` pins the worker's identity, so the endpoint is trusted
+    /// without a TOFU round-trip. `None` means the endpoint still needs
+    /// the T19 trust flow before connecting.
+    #[serde(default)]
+    pub fingerprint: Option<String>,
+}
+
+fn default_worker_transport() -> String {
+    "quic".to_string()
+}
+
 /// Persisted inference backend configuration.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct InferenceBackendConfig {
@@ -45,6 +87,14 @@ pub struct InferenceBackendConfig {
     /// Backend instances that should not be selected by the app-host policy.
     #[serde(default)]
     pub disabled_instances: Vec<String>,
+
+    /// Static worker endpoints for discovery (T12 `ConfigDiscovery`).
+    ///
+    /// Manual/static configuration of remote workers; discovered via the
+    /// discovery orchestrator alongside mDNS. A `fingerprint` per endpoint
+    /// pre-shares the T19 cert pin, marking the endpoint trusted.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub workers: Vec<WorkerEndpointConfig>,
 }
 
 fn default_schema_version() -> String {
@@ -69,6 +119,7 @@ impl Default for InferenceBackendConfig {
             selected_instance: None,
             priority_order: Vec::new(),
             disabled_instances: Vec::new(),
+            workers: Vec::new(),
         }
     }
 }
@@ -142,6 +193,45 @@ mod tests {
         assert_eq!(cfg.selected_instance, None);
         assert!(cfg.priority_order.is_empty());
         assert!(cfg.disabled_instances.is_empty());
+        assert!(cfg.workers.is_empty());
+    }
+
+    #[test]
+    fn static_workers_deserialize_with_defaults() {
+        let json = r#"{
+            "workers": [
+                { "id": "worker-a", "address": "quic://192.168.1.10:9100" },
+                {
+                    "id": "worker-b",
+                    "transport": "quic",
+                    "address": "quic://192.168.1.11:9100",
+                    "capabilities": ["load_bundle", "text_encode"],
+                    "device_label": "cuda:0",
+                    "fingerprint": "aabbcc"
+                }
+            ]
+        }"#;
+        let cfg: InferenceBackendConfig = serde_json::from_str(json).unwrap();
+        assert_eq!(cfg.workers.len(), 2);
+        assert_eq!(cfg.workers[0].id, "worker-a");
+        assert_eq!(cfg.workers[0].transport, "quic");
+        assert_eq!(cfg.workers[0].address, "quic://192.168.1.10:9100");
+        assert!(cfg.workers[0].capabilities.is_empty());
+        assert_eq!(cfg.workers[0].device_label, "");
+        assert_eq!(cfg.workers[0].fingerprint, None);
+        assert_eq!(
+            cfg.workers[1].capabilities,
+            vec!["load_bundle", "text_encode"]
+        );
+        assert_eq!(cfg.workers[1].device_label, "cuda:0");
+        assert_eq!(cfg.workers[1].fingerprint.as_deref(), Some("aabbcc"));
+    }
+
+    #[test]
+    fn static_workers_default_to_quic_transport() {
+        let json = r#"{ "workers": [{ "id": "w", "address": "quic://10.0.0.2:9100" }] }"#;
+        let cfg: InferenceBackendConfig = serde_json::from_str(json).unwrap();
+        assert_eq!(cfg.workers[0].transport, "quic");
     }
 
     #[test]
