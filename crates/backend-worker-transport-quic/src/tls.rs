@@ -5,6 +5,7 @@ use rustls::ClientConfig;
 use rustls::pki_types::{CertificateDer, PrivatePkcs8KeyDer};
 
 use crate::Error;
+use crate::trust::CertFingerprint;
 
 /// Self-signed certificate for LAN development.
 pub struct SelfSignedCert {
@@ -20,6 +21,15 @@ impl SelfSignedCert {
         let cert_der = CertificateDer::from(cert.cert);
         let key_der = PrivatePkcs8KeyDer::from(cert.key_pair.serialize_der());
         Ok(Self { cert_der, key_der })
+    }
+
+    /// Stable SHA-256 fingerprint of this certificate (hex-encoded).
+    ///
+    /// Published via mDNS as the `fingerprint` TXT record and used as
+    /// the TOFU/pinning value on the host side.
+    #[must_use]
+    pub fn fingerprint(&self) -> CertFingerprint {
+        CertFingerprint::of_der(&self.cert_der)
     }
 
     /// Build a rustls `ServerConfig` for use with quinn.
@@ -56,6 +66,22 @@ impl SelfSignedCert {
     }
 }
 
+/// Build a rustls `ClientConfig` using a custom server-cert verifier
+/// (e.g. TOFU/pinning via [`crate::trust::FingerprintServerVerifier`]).
+pub fn client_config_with_verifier(
+    verifier: Arc<dyn rustls::client::danger::ServerCertVerifier>,
+) -> Result<rustls::ClientConfig, Error> {
+    let mut client_config =
+        ClientConfig::builder_with_provider(Arc::new(rustls::crypto::ring::default_provider()))
+            .with_safe_default_protocol_versions()
+            .map_err(|e| Error::Tls(e.to_string()))?
+            .dangerous()
+            .with_custom_certificate_verifier(verifier)
+            .with_no_client_auth();
+    client_config.alpn_protocols = vec![b"reimagine-worker-v1".to_vec()];
+    Ok(client_config)
+}
+
 /// Build a quinn `Endpoint` configured as a server.
 pub fn server_endpoint(
     listen_addr: std::net::SocketAddr,
@@ -75,6 +101,24 @@ pub fn client_endpoint(
     cert: &SelfSignedCert,
 ) -> Result<quinn::Endpoint, Error> {
     let client_config = cert.client_config()?;
+    endpoint_for_config(bind_addr, client_config)
+}
+
+/// Build a quinn `Endpoint` configured as a client with a custom
+/// server-cert verifier (TOFU/pinning).
+pub fn client_endpoint_with_verifier(
+    bind_addr: std::net::SocketAddr,
+    verifier: Arc<dyn rustls::client::danger::ServerCertVerifier>,
+) -> Result<quinn::Endpoint, Error> {
+    let client_config = client_config_with_verifier(verifier)?;
+    endpoint_for_config(bind_addr, client_config)
+}
+
+/// Build a quinn client `Endpoint` from a rustls `ClientConfig`.
+pub(crate) fn endpoint_for_config(
+    bind_addr: std::net::SocketAddr,
+    client_config: ClientConfig,
+) -> Result<quinn::Endpoint, Error> {
     let quic_client_config =
         QuicClientConfig::try_from(client_config).map_err(|e| Error::Tls(e.to_string()))?;
     let mut endpoint = quinn::Endpoint::client(bind_addr)

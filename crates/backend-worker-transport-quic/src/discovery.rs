@@ -10,6 +10,11 @@ use crate::Error;
 /// The mDNS service type for Reimagine GPU workers.
 const SERVICE_TYPE: &str = "_reimagine-worker._tcp.local.";
 
+/// TXT records published/consumed by the discovery protocol:
+/// `endpoint=quic://<ip>:<port>`, `backend=<kind>`,
+/// `devices=<comma-separated>`, `capabilities=<comma-separated>`,
+/// `fingerprint=<sha256-of-cert-der, hex>` (T19 trust model).
+
 /// A discovered worker on the LAN.
 #[derive(Debug, Clone)]
 pub struct DiscoveredWorker {
@@ -49,6 +54,16 @@ impl DiscoveredWorker {
             .get("capabilities")
             .map(|c| c.split(',').collect())
             .unwrap_or_default()
+    }
+
+    /// The certificate fingerprint advertised by the worker, if any.
+    ///
+    /// Published as the `fingerprint` TXT record (SHA-256 over the
+    /// worker's self-signed certificate DER, hex-encoded). A host can
+    /// pre-validate this against its pinned keys before connecting.
+    #[must_use]
+    pub fn fingerprint(&self) -> Option<&str> {
+        self.properties.get("fingerprint").map(String::as_str)
     }
 }
 
