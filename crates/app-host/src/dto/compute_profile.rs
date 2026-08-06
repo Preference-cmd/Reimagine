@@ -26,6 +26,14 @@ pub struct ComputeProfileDto {
     pub backend_profiles: Vec<BackendProfileDto>,
     /// Top-level diagnostics that do not belong to a single backend.
     pub diagnostics: Vec<DiagnosticDto>,
+    /// Workers registered in the connection topology manager (T13).
+    ///
+    /// Local inventory workers surface as ordinary backend profiles;
+    /// this list carries the *topology pool* — discovered QUIC/gRPC
+    /// endpoints that are registered but not necessarily connected.
+    /// Empty when no topology manager is configured.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub topology_workers: Vec<TopologyWorkerDto>,
 }
 
 impl From<WorkspaceComputeProfile> for ComputeProfileDto {
@@ -37,7 +45,80 @@ impl From<WorkspaceComputeProfile> for ComputeProfileDto {
                 .map(BackendProfileDto::from)
                 .collect(),
             diagnostics: value.diagnostics.into_iter().map(Into::into).collect(),
+            topology_workers: Vec::new(),
         }
+    }
+}
+
+impl ComputeProfileDto {
+    /// Attach the topology pool's registered workers (T13).
+    #[must_use]
+    pub fn with_topology_workers(mut self, workers: Vec<TopologyWorkerDto>) -> Self {
+        self.topology_workers = workers;
+        self
+    }
+}
+
+/// Host-neutral projection of a worker registered in the topology pool
+/// (T9/T13). `state` is a stable wire string: `"Connecting"` /
+/// `"Ready"` / `"Draining"` / `"Failed"` / `"Offline"`.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct TopologyWorkerDto {
+    /// Stable worker id (unique across the pool).
+    pub id: String,
+    /// Transport kind string: `"stdio"` / `"quic"` / `"grpc"`.
+    pub transport: String,
+    /// Connectable address (e.g. `quic://192.168.1.10:9100`).
+    pub address: String,
+    /// Whether the endpoint's identity is verified (T19 trust gate).
+    pub trusted: bool,
+    /// Human-readable device label (e.g. `"cuda:0"`).
+    pub device_label: String,
+    /// Advertised capabilities.
+    pub capabilities: Vec<String>,
+    /// Pool state wire string (see struct docs).
+    pub state: String,
+}
+
+/// Project a topology [`WorkerPool`] into wire-stable worker DTOs.
+pub fn topology_workers_from_pool(
+    pool: &crate::inference::pool::WorkerPool,
+) -> Vec<TopologyWorkerDto> {
+    pool.all_endpoints()
+        .into_iter()
+        .map(|endpoint| {
+            let pooled = pool.get(&endpoint.id);
+            TopologyWorkerDto {
+                id: endpoint.id.clone(),
+                transport: transport_label(endpoint.transport_kind).to_string(),
+                address: endpoint.address.clone(),
+                trusted: endpoint.trusted,
+                device_label: endpoint.device_label.clone(),
+                capabilities: endpoint.capabilities.clone(),
+                state: pooled
+                    .map(|entry| state_label(entry.state).to_string())
+                    .unwrap_or_else(|| "Offline".to_owned()),
+            }
+        })
+        .collect()
+}
+
+fn transport_label(kind: reimagine_backend_worker_protocol::TransportKind) -> &'static str {
+    match kind {
+        reimagine_backend_worker_protocol::TransportKind::Stdio => "stdio",
+        reimagine_backend_worker_protocol::TransportKind::Quic => "quic",
+        reimagine_backend_worker_protocol::TransportKind::Grpc => "grpc",
+        reimagine_backend_worker_protocol::TransportKind::Mock => "mock",
+    }
+}
+
+fn state_label(state: crate::inference::pool::WorkerState) -> &'static str {
+    match state {
+        crate::inference::pool::WorkerState::Connecting => "Connecting",
+        crate::inference::pool::WorkerState::Ready => "Ready",
+        crate::inference::pool::WorkerState::Draining => "Draining",
+        crate::inference::pool::WorkerState::Failed => "Failed",
+        crate::inference::pool::WorkerState::Offline => "Offline",
     }
 }
 

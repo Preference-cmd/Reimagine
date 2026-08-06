@@ -28,6 +28,8 @@ pub(crate) enum BackendCandidateError {
     Candle(reimagine_inference_candle::CandleBackendError),
     BurnWorker(WorkerHostError),
     ExecutorRegistration(reimagine_inference::NodeExecutorRegistryError),
+    /// Topology/discovery bootstrap failure (T13).
+    Topology(String),
 }
 
 impl std::fmt::Display for BackendCandidateError {
@@ -37,6 +39,7 @@ impl std::fmt::Display for BackendCandidateError {
             Self::Candle(error) => write!(f, "{error}"),
             Self::BurnWorker(error) => write!(f, "Burn worker error: {error}"),
             Self::ExecutorRegistration(error) => write!(f, "executor registration failed: {error}"),
+            Self::Topology(message) => write!(f, "topology bootstrap failed: {message}"),
         }
     }
 }
