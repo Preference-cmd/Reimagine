@@ -328,8 +328,10 @@ impl NodeExecutor for StuckExecutor {
 
 fn run_to_completion(service: &RuntimeService, handle: &RunHandle) {
     let run_id = handle.run_id().clone();
-    // Spin until the run has reached a terminal state.
-    let deadline = std::time::Instant::now() + Duration::from_secs(2);
+    // Spin until the run has reached a terminal state. Generous deadline:
+    // slow executors in tests use up to 2s delays; the previous 2s window
+    // raced the executor delay on loaded CI runners.
+    let deadline = std::time::Instant::now() + Duration::from_secs(10);
     loop {
         if let Some(summary) = service.summary(&run_id) {
             assert!(summary.state.is_terminal(), "summary must be terminal");
