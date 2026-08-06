@@ -212,10 +212,10 @@ impl TrustedKeyStore {
         }
         std::fs::rename(&tmp, &self.path)
             .map_err(|e| Error::Store(format!("failed to rename {}: {e}", tmp.display())))?;
-        if let Some(parent) = self.path.parent() {
-            if let Ok(dir) = std::fs::File::open(parent) {
-                let _ = dir.sync_all();
-            }
+        if let Some(parent) = self.path.parent()
+            && let Ok(dir) = std::fs::File::open(parent)
+        {
+            let _ = dir.sync_all();
         }
         Ok(())
     }
