@@ -96,13 +96,15 @@ impl Default for MonitorEntry {
     }
 }
 
+type StateChangeHook = Box<dyn Fn(&str, WorkerState) + Send + Sync>;
+
 /// Periodic health monitor over a shared worker pool.
 pub struct HealthMonitor {
     pool: Arc<Mutex<WorkerPool>>,
     probe: Arc<dyn WorkerHealthProbe>,
     entries: Mutex<HashMap<String, MonitorEntry>>,
     /// Called after a state flip (e.g. router rebuild hook).
-    on_state_change: Option<Box<dyn Fn(&str, WorkerState) + Send + Sync>>,
+    on_state_change: Option<StateChangeHook>,
 }
 
 impl std::fmt::Debug for HealthMonitor {
@@ -125,10 +127,7 @@ impl HealthMonitor {
     }
 
     /// Register a hook fired after any pool state flip.
-    pub fn with_state_change_hook(
-        mut self,
-        hook: Box<dyn Fn(&str, WorkerState) + Send + Sync>,
-    ) -> Self {
+    pub fn with_state_change_hook(mut self, hook: StateChangeHook) -> Self {
         self.on_state_change = Some(hook);
         self
     }
