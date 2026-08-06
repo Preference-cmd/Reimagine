@@ -43,6 +43,7 @@ export const ParamSpecSchema = z.object({
   options: z.array(z.string()).optional(),
   min: z.number().optional(),
   max: z.number().optional(),
+  step: z.number().optional(),
 });
 export type ParamSpec = z.infer<typeof ParamSpecSchema>;
 

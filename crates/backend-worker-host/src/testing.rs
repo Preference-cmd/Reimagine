@@ -515,7 +515,11 @@ fn write_versioned_metadata(
     version: u64,
     metadata: &impl serde::Serialize,
 ) {
-    let bytes = serde_json::to_vec_pretty(metadata).expect("serialize metadata");
+    // Compact serialization: the TUF metadata records the exact byte
+    // length of each file (recorded from `serde_json::to_vec` in
+    // `generate_full_catalog`), so the on-disk form must match it —
+    // pretty-printing produced files longer than the recorded length.
+    let bytes = serde_json::to_vec(metadata).expect("serialize metadata");
     // Versioned form: {version}.{name}.json  e.g. "1.snapshot.json"
     // (matching CatalogClient::meta_url which produces base/{version}.{name})
     std::fs::write(dir.join(format!("{version}.{name}.json")), &bytes)

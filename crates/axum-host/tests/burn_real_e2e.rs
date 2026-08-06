@@ -643,20 +643,20 @@ async fn burn_real_sdxl_smoke_workflow_runs_through_axum_to_png_artifact() {
             .and_then(|v| v.as_array())
             .expect("/runs/:id/events must include an events array");
         let completed_event_present = events.iter().any(|e| {
-            e.get("kind").and_then(|v| v.as_str()) == Some("run.completed")
-                || e.get("event").and_then(|v| v.as_str()) == Some("run.completed")
+            e.get("kind").and_then(|v| v.as_str()) == Some("RunCompleted")
+                || e.get("event").and_then(|v| v.as_str()) == Some("RunCompleted")
         });
         assert!(
             completed_event_present,
-            "events must include run.completed evidence"
+            "events must include RunCompleted evidence"
         );
         let artifact_event_present = events.iter().any(|e| {
-            e.get("kind").and_then(|v| v.as_str()) == Some("artifact.created")
-                || e.get("event").and_then(|v| v.as_str()) == Some("artifact.created")
+            e.get("kind").and_then(|v| v.as_str()) == Some("ArtifactCreated")
+                || e.get("event").and_then(|v| v.as_str()) == Some("ArtifactCreated")
         });
         assert!(
             artifact_event_present,
-            "events must include artifact.created evidence"
+            "events must include ArtifactCreated evidence"
         );
 
         // 6. Download the artifact via HTTP and validate PNG 256x256.

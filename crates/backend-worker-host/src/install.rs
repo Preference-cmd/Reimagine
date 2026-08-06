@@ -104,7 +104,7 @@ impl InstallEngine {
             timeout: self.config.self_check_timeout,
             ..self::self_check::SelfCheckConfig::default()
         });
-        self_check.run_check(&executable_path, &expected_identity)?;
+        let manifest_profile = self_check.run_check(&executable_path, &expected_identity)?;
 
         let now = chrono::Utc::now();
         let record = InstallationRecord {
@@ -113,7 +113,7 @@ impl InstallEngine {
             identity: expected_identity.clone(),
             installed_at: now,
             install_path: target_path.to_string_lossy().to_string(),
-            manifest_profile: None,
+            manifest_profile,
         };
 
         // 7. Mark verified, including the durable inventory intent.

@@ -84,6 +84,18 @@ pub struct ParamSpecDto {
     pub kind: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub default: Option<serde_json::Value>,
+    /// Select options from the slot's `options` constraint (comma-separated
+    /// constraint value), when the node declares them.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub options: Option<Vec<String>>,
+    /// Inclusive numeric bounds from the slot's `min`/`max`/`step`
+    /// constraints, when the node declares them.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub min: Option<f64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub max: Option<f64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub step: Option<f64>,
 }
 
 impl From<&InputSlotDef> for ParamSpecDto {
@@ -96,8 +108,32 @@ impl From<&InputSlotDef> for ParamSpecDto {
             default: value
                 .default_value()
                 .and_then(|v| serde_json::to_value(v).ok()),
+            options: constraint_value(value, "options").map(|raw| {
+                raw.split(',')
+                    .map(str::trim)
+                    .filter(|option| !option.is_empty())
+                    .map(str::to_owned)
+                    .collect()
+            }),
+            min: parse_constraint_number(value, "min"),
+            max: parse_constraint_number(value, "max"),
+            step: parse_constraint_number(value, "step"),
         }
     }
+}
+
+/// Read the value of a named slot constraint, if present.
+fn constraint_value<'a>(slot: &'a InputSlotDef, name: &str) -> Option<&'a str> {
+    slot.constraints()
+        .iter()
+        .find(|constraint| constraint.name() == name)
+        .map(|constraint| constraint.value())
+}
+
+/// Parse a numeric slot constraint (`min`/`max`/`step`). Unparseable
+/// values are treated as absent rather than failing the whole DTO.
+fn parse_constraint_number(slot: &InputSlotDef, name: &str) -> Option<f64> {
+    constraint_value(slot, name).and_then(|raw| raw.parse::<f64>().ok())
 }
 
 fn slot_label(ui_label: Option<&str>, fallback: &str) -> String {
@@ -125,4 +161,83 @@ fn slot_kind_label(kind: SlotKind) -> String {
         SlotKind::Null => "null",
     }
     .to_string()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use reimagine_core::model::{InputSlotDef, NodeDef, NodeTypeId, ParamValue, SlotConstraint};
+
+    #[test]
+    fn param_spec_dto_carries_options_and_numeric_bounds() {
+        let def = NodeDef::new(NodeTypeId::new("test.node"), "Test", "Test")
+            .with_input_slot(
+                InputSlotDef::new("sampler", SlotKind::Select)
+                    .required(true)
+                    .with_constraint(SlotConstraint::new(
+                        "options",
+                        "euler,euler a,dpm++ 2M, ddim",
+                    )),
+            )
+            .with_input_slot(
+                InputSlotDef::new("cfg", SlotKind::Float)
+                    .required(true)
+                    .with_constraint(SlotConstraint::new("min", "1"))
+                    .with_constraint(SlotConstraint::new("max", "20"))
+                    .with_constraint(SlotConstraint::new("step", "0.1")),
+            );
+        let dto = NodeDefDto::from(def);
+
+        let sampler = dto
+            .parameters
+            .iter()
+            .find(|param| param.id == "sampler")
+            .expect("sampler param");
+        assert_eq!(sampler.kind, "select");
+        assert_eq!(
+            sampler.options.as_deref(),
+            Some(
+                &["euler", "euler a", "dpm++ 2M", "ddim"]
+                    .iter()
+                    .map(|s| s.to_string())
+                    .collect::<Vec<String>>()[..],
+            ),
+            "options must be split on commas and trimmed"
+        );
+
+        let cfg = dto
+            .parameters
+            .iter()
+            .find(|param| param.id == "cfg")
+            .expect("cfg param");
+        assert_eq!(cfg.min, Some(1.0));
+        assert_eq!(cfg.max, Some(20.0));
+        assert_eq!(cfg.step, Some(0.1));
+
+        let json = serde_json::to_value(&dto).expect("DTO serializes");
+        let sampler_json = &json["parameters"][0];
+        assert_eq!(sampler_json["options"][1], "euler a");
+        assert_eq!(json["parameters"][1]["min"], 1.0);
+    }
+
+    #[test]
+    fn param_spec_dto_omits_missing_constraints() {
+        let def = NodeDef::new(NodeTypeId::new("test.plain"), "Plain", "Test").with_input_slot(
+            InputSlotDef::new("value", SlotKind::String)
+                .with_default_value(ParamValue::String("hello".to_owned())),
+        );
+        let plain = NodeDefDto::from(def).parameters.into_iter().next().unwrap();
+        assert_eq!(plain.id, "value");
+        assert_eq!(plain.options, None);
+        assert_eq!(plain.min, None);
+        assert_eq!(plain.max, None);
+        assert_eq!(plain.step, None);
+
+        let json = serde_json::to_value(&plain).expect("DTO serializes");
+        assert!(
+            json.get("options").is_none(),
+            "absent options must not serialize"
+        );
+        assert!(json.get("min").is_none(), "absent min must not serialize");
+    }
 }

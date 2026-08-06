@@ -6,7 +6,7 @@ use std::time::{Duration, Instant};
 use tracing;
 
 use super::error::{InstallError, InstallResult};
-use crate::ExpectedWorkerIdentity;
+use crate::{ExpectedWorkerIdentity, WorkerInstanceProfile};
 
 /// Configuration for the self-check step.
 #[derive(Clone, Debug)]
@@ -36,6 +36,16 @@ impl Default for SelfCheckConfig {
 /// - Captures stderr within a bounded buffer
 /// - Uses a strict timeout with SIGKILL escalation
 /// - Verifies identity fields match the expected values
+///
+/// # Output contract
+///
+/// The worker prints one JSON object per line to stdout:
+/// 1. An `ExpectedWorkerIdentity` (required, backward compatible)
+/// 2. A `WorkerInstanceProfile` (optional; older workers omit it)
+///
+/// The captured profile is returned so the caller can persist it on the
+/// `InstallationRecord` (the host uses it to project capabilities
+/// without booting the worker).
 pub struct SelfCheckRunner {
     config: SelfCheckConfig,
 }
@@ -49,12 +59,14 @@ impl SelfCheckRunner {
     /// Run the worker self-check.
     ///
     /// The worker is expected to produce output containing its identity
-    /// metadata. This is validated against the provided `expected` identity.
+    /// metadata. This is validated against the provided `expected`
+    /// identity. When the worker also reports its instance profile on a
+    /// second line, it is returned; otherwise `None`.
     pub fn run_check(
         &self,
         executable_path: &Path,
         expected: &ExpectedWorkerIdentity,
-    ) -> InstallResult<()> {
+    ) -> InstallResult<Option<WorkerInstanceProfile>> {
         let mut child = Command::new(executable_path)
             .arg("--version")
             .env_clear()
@@ -105,14 +117,25 @@ impl SelfCheckRunner {
             });
         }
 
-        let actual =
-            serde_json::from_str::<ExpectedWorkerIdentity>(stdout.trim()).map_err(|e| {
-                InstallError::SelfCheckIdentityMismatch {
+        let mut lines = stdout
+            .lines()
+            .map(str::trim)
+            .filter(|line| !line.is_empty());
+        let identity_line =
+            lines
+                .next()
+                .ok_or_else(|| InstallError::SelfCheckIdentityMismatch {
                     field: "identity_json".to_string(),
                     expected: format!("{expected:?}"),
-                    actual: format!("invalid JSON ({e}): {stdout}"),
-                }
-            })?;
+                    actual: "no output".to_string(),
+                })?;
+        let actual: ExpectedWorkerIdentity = serde_json::from_str(identity_line).map_err(|e| {
+            InstallError::SelfCheckIdentityMismatch {
+                field: "identity_json".to_string(),
+                expected: format!("{expected:?}"),
+                actual: format!("invalid JSON ({e}): {stdout}"),
+            }
+        })?;
         if &actual != expected {
             return Err(InstallError::SelfCheckIdentityMismatch {
                 field: "identity".to_string(),
@@ -121,13 +144,39 @@ impl SelfCheckRunner {
             });
         }
 
+        let manifest_profile = match lines.next() {
+            Some(profile_line) => {
+                let profile: WorkerInstanceProfile = serde_json::from_str(profile_line).map_err(
+                    |e| InstallError::SelfCheckFailed {
+                        message: format!(
+                            "invalid profile JSON on second self-check line ({e}): {profile_line}"
+                        ),
+                    },
+                )?;
+                if profile.backend_instance_id != expected.backend_instance_id {
+                    return Err(InstallError::SelfCheckIdentityMismatch {
+                        field: "profile.backend_instance_id".to_string(),
+                        expected: expected.backend_instance_id.0.clone(),
+                        actual: profile.backend_instance_id.0,
+                    });
+                }
+                Some(profile)
+            }
+            None => None,
+        };
+
         tracing::info!(
-            "self-check passed for worker `{}` at `{}`",
+            "self-check passed for worker `{}` at `{}`{}",
             expected.installation_id.0,
-            executable_path.display()
+            executable_path.display(),
+            if manifest_profile.is_some() {
+                " (captured manifest profile)"
+            } else {
+                ""
+            }
         );
 
-        Ok(())
+        Ok(manifest_profile)
     }
 }
 
@@ -184,6 +233,103 @@ mod tests {
         assert!(matches!(
             runner.run_check(&executable, &expected),
             Err(InstallError::SelfCheckTimeout)
+        ));
+    }
+
+    fn test_identity() -> ExpectedWorkerIdentity {
+        ExpectedWorkerIdentity {
+            backend_instance_id: crate::BackendInstanceId("burn:wgpu:default".to_owned()),
+            installation_id: crate::WorkerInstallationId("profile-worker".to_owned()),
+            backend_kind: "burn".to_owned(),
+            target: "test-target".to_owned(),
+            manifest_digest: "digest".to_owned(),
+        }
+    }
+
+    fn test_profile() -> WorkerInstanceProfile {
+        WorkerInstanceProfile {
+            backend_instance_id: crate::BackendInstanceId("burn:wgpu:default".to_owned()),
+            device_label: "wgpu:default".to_owned(),
+            capabilities: vec![
+                "latent.create_empty".to_owned(),
+                "diffusion.sample".to_owned(),
+            ],
+            operation_options: serde_json::json!({}),
+        }
+    }
+
+    #[cfg(unix)]
+    fn write_self_check_binary(
+        temp: &tempfile::TempDir,
+        name: &str,
+        output: &str,
+    ) -> std::path::PathBuf {
+        use std::os::unix::fs::PermissionsExt;
+        let executable = temp.path().join(name);
+        let script = format!(
+            "#!/bin/sh\ncat <<'REIMAGINE_SELF_CHECK_EOF'\n{output}REIMAGINE_SELF_CHECK_EOF\n"
+        );
+        std::fs::write(&executable, script).unwrap();
+        std::fs::set_permissions(&executable, std::fs::Permissions::from_mode(0o755)).unwrap();
+        executable
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn self_check_captures_profile_from_second_line() {
+        let temp = tempfile::tempdir().unwrap();
+        let expected = test_identity();
+        let profile = test_profile();
+        let output = format!(
+            "{}\n{}\n",
+            serde_json::to_string(&expected).unwrap(),
+            serde_json::to_string(&profile).unwrap()
+        );
+        let executable = write_self_check_binary(&temp, "profile-worker", &output);
+        let runner = SelfCheckRunner::new(SelfCheckConfig::default());
+
+        let captured = runner
+            .run_check(&executable, &expected)
+            .expect("self-check");
+        assert_eq!(captured, Some(profile));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn self_check_with_identity_only_output_yields_no_profile() {
+        let temp = tempfile::tempdir().unwrap();
+        let expected = test_identity();
+        let output = format!("{}\n", serde_json::to_string(&expected).unwrap());
+        let executable = write_self_check_binary(&temp, "identity-only-worker", &output);
+        let runner = SelfCheckRunner::new(SelfCheckConfig::default());
+
+        let captured = runner
+            .run_check(&executable, &expected)
+            .expect("self-check");
+        assert_eq!(captured, None);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn self_check_rejects_profile_with_wrong_backend_instance() {
+        let temp = tempfile::tempdir().unwrap();
+        let expected = test_identity();
+        let mut profile = test_profile();
+        profile.backend_instance_id = crate::BackendInstanceId("burn:wgpu:other".to_owned());
+        let output = format!(
+            "{}\n{}\n",
+            serde_json::to_string(&expected).unwrap(),
+            serde_json::to_string(&profile).unwrap()
+        );
+        let executable = write_self_check_binary(&temp, "mismatched-profile-worker", &output);
+        let runner = SelfCheckRunner::new(SelfCheckConfig::default());
+
+        let error = runner
+            .run_check(&executable, &expected)
+            .expect_err("mismatch");
+        assert!(matches!(
+            error,
+            InstallError::SelfCheckIdentityMismatch { field, .. } if field == "profile.backend_instance_id"
         ));
     }
 }

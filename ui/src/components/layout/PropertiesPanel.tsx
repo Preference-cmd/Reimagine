@@ -205,7 +205,9 @@ function ParamField({ nodeId, spec }: { nodeId: string; spec: ParamSpecLike }) {
             type="number"
             className={controlClass}
             value={String(value ?? "")}
-            step={1}
+            step={spec.step ?? 1}
+            min={spec.min}
+            max={spec.max}
             onChange={(e) => commit(e.target.value)}
           />
         </div>
@@ -266,10 +268,12 @@ function FloatField({
   const numeric =
     typeof value === "number" ? value : parseFloat(String(value ?? ""));
   const current = Number.isFinite(numeric) ? numeric : Number(spec.default ?? 0);
-  // The backend DTO does not serialize min/max yet; fall back to a range
-  // that always contains the current value.
+  // Constraint data (min/max/step) comes from the backend DTO when the
+  // node declares it; fall back to a range that always contains the
+  // current value and a small default step.
   const min = spec.min ?? Math.min(0, current - 1);
   const max = spec.max ?? Math.max(1, current * 2);
+  const step = spec.step ?? 0.01;
 
   return (
     <div className="space-y-1.5">
@@ -282,7 +286,7 @@ function FloatField({
       <Slider
         min={min}
         max={max}
-        step={0.01}
+        step={step}
         value={[current]}
         onValueChange={([next]) => onCommit(next)}
         className="py-1"
@@ -303,7 +307,8 @@ function SelectField({
   const options = spec.options ?? [];
   const current = String(value ?? spec.default ?? "");
 
-  // No option list available (backend DTO gap) — degrade to a text field.
+  // No option list available (node declares no options constraint) —
+  // degrade to a text field.
   if (options.length === 0) {
     return (
       <div className="space-y-1">
