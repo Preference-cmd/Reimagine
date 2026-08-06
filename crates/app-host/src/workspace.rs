@@ -11,7 +11,10 @@ use reimagine_runtime::{BoxedRunEventSink, RuntimeService, VecRunEventSink};
 
 #[cfg(test)]
 use crate::inference::compose::compose_inference_runtime;
-use crate::inference::compose::{bootstrap_inference, bootstrap_inference_with_worker_inventory};
+use crate::inference::compose::{
+    BootstrapInference, ComposedInferenceRuntime, bootstrap_inference,
+    bootstrap_inference_with_worker_inventory,
+};
 use crate::inference::selection::resolved_candle_device_label;
 use crate::model_acquisition_service::ModelAcquisitionService;
 use crate::node_catalog::{NodeCatalogAlignment, NodeCatalogService};
@@ -315,8 +318,21 @@ impl WorkspaceHost {
             acquisition_service.clone(),
         ));
 
-        let bootstrapped = bootstrap_inference(&config, &backend_config, model_service.clone())
-            .expect("default backend composition should build a usable Candle fallback");
+        let bootstrapped =
+            match bootstrap_inference(&config, &backend_config, model_service.clone()) {
+                Ok(bootstrapped) => bootstrapped,
+                Err(error) => {
+                    tracing::error!(
+                        %error,
+                        "inference bootstrap failed on the synchronous construction path; \
+                         continuing with an empty executor registry"
+                    );
+                    BootstrapInference {
+                        runtime: ComposedInferenceRuntime::degraded(),
+                        compute_profile: WorkspaceComputeProfile::new(),
+                    }
+                }
+            };
         let worker_switch = bootstrapped.runtime.worker_switch.clone();
         let runtime_service = Arc::new(
             RuntimeService::new(

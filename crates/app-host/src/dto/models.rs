@@ -65,13 +65,10 @@ fn format_display_name(series: &str, variant: &str) -> String {
 fn capitalize_words(s: &str) -> String {
     s.split_whitespace()
         .map(|w| {
-            if w.is_empty() {
-                String::new()
-            } else {
-                let mut chars = w.chars();
-                let first = chars.next().unwrap().to_uppercase().to_string();
-                let rest: String = chars.collect();
-                first + rest.as_str()
+            let mut chars = w.chars();
+            match chars.next() {
+                Some(first) => first.to_uppercase().to_string() + chars.as_str(),
+                None => String::new(),
             }
         })
         .collect::<Vec<_>>()

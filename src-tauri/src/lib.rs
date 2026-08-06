@@ -422,7 +422,7 @@ fn list_workflows(
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
-    tauri::Builder::default()
+    match tauri::Builder::default()
         .plugin(tauri_plugin_opener::init())
         .setup(|app| {
             let app_data_dir = app
@@ -472,8 +472,8 @@ pub fn run() {
             rebootstrap_backend,
         ])
         .build(tauri::generate_context!())
-        .expect("error while building tauri application")
-        .run(|app_handle, event| {
+    {
+        Ok(app) => app.run(|app_handle, event| {
             if let tauri::RunEvent::ExitRequested { .. } = event {
                 let state = app_handle.state::<DesktopHostState>();
                 let state = state.inner().clone();
@@ -494,7 +494,12 @@ pub fn run() {
                     .join()
                 });
             }
-        });
+        }),
+        Err(error) => {
+            eprintln!("[reimagine] failed to build the application: {error}");
+            std::process::exit(1);
+        }
+    }
 }
 
 #[cfg(test)]

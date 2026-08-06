@@ -118,14 +118,23 @@ impl Runner {
     /// Unwrap the run session from its shared wrapper.
     ///
     /// Every parallel stage task has completed (its `Arc` clone dropped)
-    /// when this is called, so the unwrap cannot fail in practice.
-    fn into_session(session: Arc<Mutex<RunSession>>) -> RunSession {
-        Arc::try_unwrap(session)
-            .ok()
-            .expect("run session still shared after all stage tasks completed")
-            .into_inner()
+    /// when this is called, so the fast path cannot fail in practice. If
+    /// the wrapper is somehow still shared, fall back to a locked clone:
+    /// all stage tasks have joined, so the session is quiescent and the
+    /// clone is a consistent snapshot.
+    async fn into_session(session: Arc<Mutex<RunSession>>) -> RunSession {
+        match Arc::try_unwrap(session) {
+            Ok(inner) => inner.into_inner(),
+            Err(shared) => {
+                tracing::error!(
+                    target: "reimagine_runtime",
+                    "run session still shared after all stage tasks completed; using quiescent snapshot"
+                );
+                let guard = shared.lock().await;
+                (*guard).clone()
+            }
+        }
     }
-
     async fn run_to_completion(
         self: &Arc<Self>,
         session: Arc<Mutex<RunSession>>,
@@ -143,7 +152,7 @@ impl Runner {
                 self.handle_cancellation(&mut session_guard, &started_at, &artifact_store)
                     .await;
                 drop(session_guard);
-                return Self::into_session(session);
+                return Self::into_session(session).await;
             }
 
             // Send resource hints for the group's stages, in stage order.
@@ -172,7 +181,7 @@ impl Runner {
                 self.handle_cancellation(&mut session_guard, &started_at, &artifact_store)
                     .await;
                 drop(session_guard);
-                return Self::into_session(session);
+                return Self::into_session(session).await;
             }
         }
 
@@ -199,7 +208,7 @@ impl Runner {
             .await;
         drop(session_guard);
         self.store.finalize(&self.run_id);
-        Self::into_session(session)
+        Self::into_session(session).await
     }
 
     /// Partition the plan's stages into maximal groups of consecutive
@@ -475,7 +484,7 @@ impl Runner {
                 self.handle_cancellation(&mut session_guard, &started_at, &artifact_store)
                     .await;
                 drop(session_guard);
-                return Self::into_session(session);
+                return Self::into_session(session).await;
             }
 
             // Send resource hints for initial batch
@@ -498,7 +507,7 @@ impl Runner {
                 self.handle_cancellation(&mut session_guard, &started_at, &artifact_store)
                     .await;
                 drop(session_guard);
-                return Self::into_session(session);
+                return Self::into_session(session).await;
             }
             {
                 let session_guard = session.lock().await;
@@ -514,7 +523,7 @@ impl Runner {
                 self.handle_cancellation(&mut session_guard, &started_at, &artifact_store)
                     .await;
                 drop(session_guard);
-                return Self::into_session(session);
+                return Self::into_session(session).await;
             }
 
             // Find newly ready nodes from outputs produced in the last batch
@@ -547,7 +556,7 @@ impl Runner {
                 self.handle_cancellation(&mut session_guard, &started_at, &artifact_store)
                     .await;
                 drop(session_guard);
-                return Self::into_session(session);
+                return Self::into_session(session).await;
             }
             {
                 let session_guard = session.lock().await;
@@ -579,7 +588,7 @@ impl Runner {
             .await;
         drop(session_guard);
         self.store.finalize(&self.run_id);
-        Self::into_session(session)
+        Self::into_session(session).await
     }
 
     /// Drop `StageScoped` values whose plan stage has fully completed

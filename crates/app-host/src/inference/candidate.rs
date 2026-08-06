@@ -27,6 +27,7 @@ pub(crate) enum BackendCandidateError {
     #[cfg(feature = "candle")]
     Candle(reimagine_inference_candle::CandleBackendError),
     BurnWorker(WorkerHostError),
+    ExecutorRegistration(reimagine_inference::NodeExecutorRegistryError),
 }
 
 impl std::fmt::Display for BackendCandidateError {
@@ -35,6 +36,7 @@ impl std::fmt::Display for BackendCandidateError {
             #[cfg(feature = "candle")]
             Self::Candle(error) => write!(f, "{error}"),
             Self::BurnWorker(error) => write!(f, "Burn worker error: {error}"),
+            Self::ExecutorRegistration(error) => write!(f, "executor registration failed: {error}"),
         }
     }
 }

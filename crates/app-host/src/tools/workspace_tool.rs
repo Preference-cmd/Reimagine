@@ -150,11 +150,11 @@ pub(super) fn register_workspace_tool<I, O, H>(
     O: Serialize + Send + 'static,
     H: WorkspaceToolHandler<I, O>,
 {
-    registry
-        .register_arc(Arc::new(WorkspaceTool::<I, O, H>::new(
-            services, spec, handler,
-        )))
-        .expect("duplicate tool registration in app-host built-ins");
+    if let Err(error) = registry.register_arc(Arc::new(WorkspaceTool::<I, O, H>::new(
+        services, spec, handler,
+    ))) {
+        tracing::error!(%error, "failed to register workspace tool; skipping it");
+    }
 }
 
 fn object_schema() -> serde_json::Value {
