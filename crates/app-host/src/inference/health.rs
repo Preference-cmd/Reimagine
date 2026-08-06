@@ -251,13 +251,11 @@ mod tests {
             Ok(results
                 .first()
                 .cloned()
-                .unwrap_or_else(|| {
-                    Ok(HealthProbeResult {
-                        healthy: true,
-                        latency_ms: Some(1),
-                        message: None,
-                    })
-                })
+                .unwrap_or(Ok(HealthProbeResult {
+                    healthy: true,
+                    latency_ms: Some(1),
+                    message: None,
+                }))
                 .unwrap_or_else(|e| HealthProbeResult {
                     healthy: false,
                     latency_ms: None,
