@@ -6,6 +6,7 @@
 
 pub(crate) mod candidate;
 pub(crate) mod compose;
+pub mod discovery;
 pub(crate) mod grpc_worker;
 pub mod health;
 pub(crate) mod image_source_resolver;
