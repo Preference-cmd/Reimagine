@@ -6,6 +6,16 @@ use rustls::crypto::WebPkiSupportedAlgorithms;
 use rustls::pki_types::{CertificateDer, ServerName, UnixTime};
 use rustls::{DigitallySignedStruct, SignatureScheme};
 
+/// Ensure the process-level rustls crypto provider is installed.
+///
+/// rustls 0.23 requires an explicit process-wide provider before any
+/// connection is built; the `ring` feature supplies one but does not
+/// install it automatically. Idempotent: a second call returns `Err`
+/// (already installed) which we ignore.
+pub fn ensure_crypto_provider() {
+    let _ = rustls::crypto::ring::default_provider().install_default();
+}
+
 /// A self-signed certificate identity in PEM form, for
 /// `tonic::transport::Identity::from_pem`.
 #[derive(Debug, Clone)]
@@ -21,6 +31,7 @@ pub struct SelfSignedIdentity {
 /// Clients can either pin the certificate (compare against the worker's
 /// advertised fingerprint) or trust it directly via its PEM form.
 pub fn generate_self_signed_identity(hostname: &str) -> Result<SelfSignedIdentity, String> {
+    ensure_crypto_provider();
     let certified = rcgen::generate_simple_self_signed(vec![hostname.to_owned()])
         .map_err(|e| format!("failed to generate self-signed certificate: {e}"))?;
     Ok(SelfSignedIdentity {

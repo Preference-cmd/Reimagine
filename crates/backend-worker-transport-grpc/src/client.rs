@@ -60,6 +60,7 @@ pub async fn connect(endpoint: &str) -> Result<GrpcTransport, tonic::Status> {
 /// `endpoint` should be a URI like `http://127.0.0.1:50051` (plain) or
 /// `https://worker.example:50051` (when `auth.tls` is set).
 pub async fn connect_with(endpoint: &str, auth: &GrpcAuth) -> Result<GrpcTransport, tonic::Status> {
+    crate::tls::ensure_crypto_provider();
     let mut channel_builder = Channel::from_shared(endpoint.to_owned())
         .map_err(|e| tonic::Status::internal(format!("invalid endpoint: {e}")))?;
 
