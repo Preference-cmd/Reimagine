@@ -38,6 +38,9 @@ pub use artifact_access::{
 };
 pub use error::{AppHostError, AppHostResult};
 pub use error_code::{AppHostErrorCode, worker_switch_error_code, worker_switch_error_details};
+pub use inference::grpc_worker::{
+    GrpcSwitchableWorker, GrpcWorkerCandidate, GrpcWorkerCandidateConfig,
+};
 pub use inference::quic_worker::{
     QuicSwitchableWorker, QuicWorkerCandidate, QuicWorkerCandidateConfig,
 };
@@ -61,6 +64,7 @@ pub use node_catalog::{NodeCatalogAlignment, NodeCatalogService};
 pub use policy::WorkflowCommandPolicy;
 pub use proposal::{ProposalReceipt, ProposalStatus, WorkflowProposal};
 pub use readiness::SnapshotExternalReadinessProvider;
+pub use reimagine_backend_worker_transport_grpc::{GrpcAuth, GrpcTls};
 pub use reimagine_inference::{BackendInstance, WorkspaceComputeProfile};
 pub use run_workflow::{RunWorkflowRequest, RunWorkflowResult, run_id_of};
 pub use services::WorkspaceServices;

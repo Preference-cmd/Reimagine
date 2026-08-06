@@ -17,6 +17,7 @@ async-trait = { workspace = true }
 reimagine-agent = { path = "../agent" }
 reimagine-backend-worker-host = { path = "../backend-worker-host" }
 reimagine-backend-worker-protocol = { path = "../backend-worker-protocol" }
+reimagine-backend-worker-transport-grpc = { path = "../backend-worker-transport-grpc" }
 reimagine-backend-worker-transport-quic = { path = "../backend-worker-transport-quic" }
 reimagine-config = { path = "../config" }
 reimagine-core = { path = "../core" }
@@ -37,4 +38,6 @@ tracing = { workspace = true }
 [dev-dependencies]
 chrono = { workspace = true }
 tempfile = { workspace = true }
-tokio = { workspace = true, features = ["macros", "rt", "rt-multi-thread"] }
+tokio = { workspace = true, features = ["macros", "net", "rt", "rt-multi-thread"] }
+tokio-stream = "0.1"
+tonic = { version = "0.14", features = ["transport", "tls-ring"] }
