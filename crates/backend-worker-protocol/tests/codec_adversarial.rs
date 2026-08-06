@@ -413,14 +413,9 @@ fn deeply_nested_json_is_rejected_without_panicking() {
     let codec = FrameCodec::new(1024 * 1024);
     // 10_000 levels of nesting: serde_json's recursion limit must reject
     // this with an error, never a stack overflow or allocation blow-up.
-    let mut payload = b"[".to_vec();
-    for _ in 0..10_000 {
-        payload.push(b'[');
-    }
+    let mut payload = vec![b'['; 10_001];
     payload.extend_from_slice(b"0");
-    for _ in 0..10_000 {
-        payload.push(b']');
-    }
+    payload.extend(std::iter::repeat_n(b']', 10_000));
 
     let mut encoded = (payload.len() as u32).to_be_bytes().to_vec();
     encoded.extend_from_slice(&payload);
