@@ -7004,6 +7004,7 @@ name = "reimagine-backend-worker-protocol"
 version = "0.1.0"
 dependencies = [
  "async-trait",
+ "rand 0.8.7",
  "serde",
  "serde_json",
 ]

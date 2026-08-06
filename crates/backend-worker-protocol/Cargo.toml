@@ -12,6 +12,9 @@ async-trait = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }
 
+[dev-dependencies]
+rand = "0.8"
+
 [[bin]]
 name = "fake-backend-worker"
 path = "tests/fixtures/fake_backend_worker.rs"
