@@ -8,6 +8,10 @@
 use reimagine_backend_worker_protocol::TensorMetadata;
 use reimagine_backend_worker_protocol::transport::TransportKind;
 
+pub mod executor;
+
+pub use executor::{TransferChannel, TransferExecutor};
+
 /// A worker the planner can route between.
 ///
 /// Deliberately lightweight (no app-host types) so this crate stays
