@@ -14,7 +14,6 @@ const SERVICE_TYPE: &str = "_reimagine-worker._tcp.local.";
 /// `endpoint=quic://<ip>:<port>`, `backend=<kind>`,
 /// `devices=<comma-separated>`, `capabilities=<comma-separated>`,
 /// `fingerprint=<sha256-of-cert-der, hex>` (T19 trust model).
-
 /// A discovered worker on the LAN.
 #[derive(Debug, Clone)]
 pub struct DiscoveredWorker {

@@ -57,7 +57,6 @@ impl Default for AcceptAnyServerVerifier {
 
 impl AcceptAnyServerVerifier {
     /// Create an accept-any verifier.
-    #[must_use]
     pub fn new() -> Self {
         Self {
             algorithms: rustls::crypto::ring::default_provider().signature_verification_algorithms,

@@ -69,7 +69,6 @@ pub fn check_bearer(metadata: &MetadataMap, expected: Option<&str>) -> Result<()
 /// to every outgoing request (including streaming ones).
 ///
 /// `None` produces an identity interceptor (plain mode).
-#[must_use]
 pub fn bearer_interceptor(
     token: Option<String>,
 ) -> impl Fn(tonic::Request<()>) -> Result<tonic::Request<()>, Status> + Clone {
