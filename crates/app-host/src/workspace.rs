@@ -558,16 +558,36 @@ impl WorkspaceHost {
     /// Drain in-flight runs and re-bootstrap the workspace with a new
     /// backend selection (B4-8).
     ///
-    /// This preserves the workspace paths and event sinks; it does not
-    /// persist the selection to `inference_backend.json`, so a restarted
-    /// app boots with the configured backend again.
+    /// This preserves the workspace paths and event sinks. On success the
+    /// new selection is persisted to `inference_backend.json`, so a
+    /// restarted app boots with the re-bootstrapped backend. If the
+    /// in-memory swap succeeds but the config write fails, the error
+    /// reports the persist failure while the workspace is already swapped.
     pub async fn rebootstrap(
         &mut self,
         new_selection: BackendSelection,
     ) -> Result<(), AppHostError> {
         let rebuilt = Self::rebuild_workspace(self, new_selection).await?;
+        let persisted = rebuilt.backend_config.clone();
         *self = rebuilt;
+        self.persist_backend_config(&persisted).await?;
         Ok(())
+    }
+
+    /// Persist a backend config to `inference_backend.json` through the
+    /// workspace's config handle.
+    async fn persist_backend_config(
+        &self,
+        backend_config: &InferenceBackendConfig,
+    ) -> Result<(), AppHostError> {
+        let handle = self.config.config::<InferenceBackendConfig>()?;
+        handle
+            .save(backend_config)
+            .await
+            .map(|_| ())
+            .map_err(|error| AppHostError::RebootFailed {
+                message: format!("failed to persist backend selection: {error}"),
+            })
     }
     pub fn agent_service(&self) -> &Arc<AgentService> {
         &self.agent_service
@@ -1279,6 +1299,18 @@ mod tests {
         );
         assert_eq!(workspace.base_path(), base);
         assert_eq!(workspace.resolved_candle_device_label(), "cpu");
+
+        // The selection must be persisted so a restarted app boots with it.
+        let config_path = base.join("config").join(InferenceBackendConfig::KEY);
+        let persisted: InferenceBackendConfig = serde_json::from_str(
+            &std::fs::read_to_string(&config_path).expect("persisted backend config file"),
+        )
+        .expect("persisted config parses");
+        assert_eq!(
+            persisted.backend,
+            InferenceBackendKind::Candle,
+            "rebootstrap must persist the new selection to inference_backend.json"
+        );
 
         let profile = workspace.compute_profile();
         assert_cpu_available(&profile);

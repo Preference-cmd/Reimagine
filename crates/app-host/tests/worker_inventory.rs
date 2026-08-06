@@ -162,3 +162,96 @@ async fn no_worker_bootstrap_keeps_editing_available_and_explicit_burn_pinned() 
 
     let _ = tokio::fs::remove_dir_all(base).await;
 }
+
+/// BE-32 switch-target resolution over a durable installation record:
+/// once the install pipeline persists `manifest_profile` on the record,
+/// the desktop-host resolution steps (read record → find executable →
+/// build candidate) succeed for an actually-installed worker.
+#[test]
+fn installed_record_with_manifest_profile_resolves_switch_candidate() {
+    use reimagine_backend_worker_host::{InstallationRecord, InventoryStore, WorkerStorePaths};
+
+    let temp = tempfile::tempdir().expect("temp dir");
+    let install_dir = temp.path().join("installed").join("burn-wgpu-v1");
+    std::fs::create_dir_all(&install_dir).expect("install dir");
+    std::fs::write(
+        install_dir.join("reimagine-inference-burn-worker"),
+        b"binary",
+    )
+    .expect("worker binary");
+
+    let instance = BackendInstanceId("burn:wgpu:default".to_owned());
+    let profile = WorkerInstanceProfile {
+        backend_instance_id: instance.clone(),
+        device_label: "wgpu:default".to_owned(),
+        capabilities: vec![
+            "latent.create_empty".to_owned(),
+            "diffusion.sample".to_owned(),
+        ],
+        operation_options: serde_json::json!({}),
+    };
+    let record = InstallationRecord {
+        installation_id: WorkerInstallationId("burn-wgpu-v1".to_owned()),
+        version: "1.0.0".to_owned(),
+        identity: ExpectedWorkerIdentity {
+            backend_instance_id: instance.clone(),
+            installation_id: WorkerInstallationId("burn-wgpu-v1".to_owned()),
+            backend_kind: "burn".to_owned(),
+            target: "test-target".to_owned(),
+            manifest_digest: "digest".to_owned(),
+        },
+        installed_at: chrono::Utc::now(),
+        install_path: install_dir.to_string_lossy().into_owned(),
+        manifest_profile: Some(profile.clone()),
+    };
+
+    let store = InventoryStore::new(WorkerStorePaths::new(temp.path().to_path_buf()));
+    store.add(&record).expect("inventory add");
+
+    // Mirror `desktop_host::resolve_switch_candidate` over the durable record.
+    let stored = store
+        .get(&record.installation_id.0)
+        .expect("installed record");
+    let executable = installed_worker_executable(&stored.install_path)
+        .expect("executable resolved from install dir");
+    let manifest_profile = stored
+        .manifest_profile
+        .clone()
+        .expect("install pipeline must persist the manifest profile");
+    let candidate = WorkerBackendCandidate::try_new(
+        WorkerLaunchSpec {
+            executable,
+            expected: stored.identity.clone(),
+            supported_protocols: ProtocolRange::new(1, 1),
+            limits: WorkerLimits::default(),
+            environment: Vec::new(),
+            transport: Default::default(),
+        },
+        manifest_profile,
+    )
+    .expect("installed worker must resolve to a switch candidate");
+
+    assert_eq!(candidate.backend_instance().as_str(), "burn:wgpu:default");
+    assert_eq!(candidate.manifest_profile().device_label, "wgpu:default");
+    assert!(
+        candidate
+            .manifest_profile()
+            .capabilities
+            .contains(&"diffusion.sample".to_owned())
+    );
+}
+
+fn installed_worker_executable(install_dir: &str) -> Option<std::path::PathBuf> {
+    let files = std::fs::read_dir(install_dir)
+        .ok()?
+        .filter_map(Result::ok)
+        .map(|entry| entry.path())
+        .filter(|path| path.is_file())
+        .collect::<Vec<_>>();
+    let preferred = files.iter().find(|path| {
+        path.file_name()
+            .and_then(|name| name.to_str())
+            .is_some_and(|name| name.contains("burn-worker"))
+    });
+    preferred.cloned().or_else(|| files.into_iter().next())
+}

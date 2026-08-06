@@ -183,8 +183,8 @@ export async function mockListModels(): Promise<ModelInfo[]> {
 export async function mockGetNodeDefs(): Promise<NodeDef[]> {
   await delay(120);
   // Mirrors crates/nodes builtins — same type ids, categories, socket kinds
-  // and param kinds, plus the options/min/max the backend DTO does not
-  // serialize yet (frontend fills those gaps in dev only).
+  // and param kinds, plus options/min/max/step matching the constraint data
+  // the real backend DTO now serializes.
   return MOCK_NODE_DEFS.map((def) => NodeDefSchema.parse(def));
 }
 
@@ -267,7 +267,7 @@ const MOCK_NODE_DEFS: NodeDef[] = [
     outputs: [{ id: "latent", kind: "latent", label: "latent" }],
     parameters: [
       { id: "seed", label: "Seed", kind: "int", default: 12345 },
-      { id: "steps", label: "Steps", kind: "int", default: 30 },
+      { id: "steps", label: "Steps", kind: "int", default: 30, min: 1, max: 100 },
       { id: "cfg", label: "CFG scale", kind: "float", default: 8.0, min: 1, max: 20 },
       { id: "sampler", label: "Sampler", kind: "select", default: "dpm++ 2M", options: SAMPLERS },
       { id: "scheduler", label: "Scheduler", kind: "select", default: "karras", options: SCHEDULERS },

@@ -15,8 +15,8 @@ export type ParamValue = string | number | boolean;
 
 /** A catalog param spec, enriched with legacy-row fallbacks. */
 export type ParamSpecLike = ParamSpec & {
-  /** Select options — the backend DTO does not serialize `options` yet,
-      so legacy row hints fill in when present. */
+  /** Select options — the backend DTO serializes them when the node
+      declares constraints; legacy row hints fill in when absent. */
   options?: string[];
 };
 
@@ -119,9 +119,9 @@ function isSocketSlot(value: unknown): value is SocketSlot {
  * Effective editable parameter list for a node.
  *
  * Catalog-driven nodes use the backend `ParamSpec[]` (authoritative
- * kinds); legacy demo rows are merged in to carry options the DTO
- * does not serialize yet. Nodes without a catalog entry fall back to
- * their legacy rows with kinds inferred from the current value.
+ * kinds and constraint data); legacy demo rows are merged in only to
+ * fill gaps the DTO leaves unset. Nodes without a catalog entry fall
+ * back to their legacy rows with kinds inferred from the current value.
  */
 export function paramSpecsFor(node: NodeLike, def?: NodeDef): ParamSpecLike[] {
   const rows = readParamRows(node.data);
