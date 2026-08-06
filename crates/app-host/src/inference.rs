@@ -4,6 +4,7 @@
 //! executor-facing runtime/router wiring that sits between app-host bootstrap
 //! and the generic runtime service.
 
+pub(crate) mod bridge;
 pub(crate) mod candidate;
 pub(crate) mod compose;
 pub mod discovery;

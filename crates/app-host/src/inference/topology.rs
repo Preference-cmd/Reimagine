@@ -13,9 +13,10 @@ use std::sync::Arc;
 
 use reimagine_inference::{
     Backend, BackendInstance, BackendInstanceDescriptor, InferenceBackend,
-    InferenceBackendRegistry, InferenceRouter, RejectAllBridgePolicy, RouterRef,
+    InferenceBackendRegistry, InferenceRouter, RouterRef,
 };
 
+use super::bridge::TopologyAwareBridgePolicy;
 use super::pool::{WorkerEndpoint, WorkerPool, WorkerState};
 
 /// Factory that creates an [`InferenceBackend`] from a [`WorkerEndpoint`].
@@ -80,9 +81,11 @@ impl ConnectionTopologyManager {
     /// and backend factory.
     ///
     /// The initial router reflects the current pool state (which may
-    /// be empty). The bridge policy is always
-    /// [`RejectAllBridgePolicy`]; cross-backend transfers are not
-    /// supported in V1.
+    /// be empty). The router's bridge policy is the
+    /// [`TopologyAwareBridgePolicy`] built from the pool's ready
+    /// workers; with an empty pool it degrades to
+    /// [`reimagine_inference::RejectAllBridgePolicy`]-identical
+    /// behavior (T16).
     pub fn new(
         pool: WorkerPool,
         selection_policy: Arc<dyn reimagine_inference::BackendSelectionPolicy>,
@@ -191,7 +194,7 @@ impl ConnectionTopologyManager {
         InferenceRouter::with_policy(
             Arc::new(registry),
             selection_policy,
-            Arc::new(RejectAllBridgePolicy),
+            Arc::new(TopologyAwareBridgePolicy::from_pool(pool, &backend_label)),
         )
     }
 }
@@ -210,9 +213,9 @@ mod tests {
     use super::*;
     use reimagine_backend_worker_protocol::TransportKind;
     use reimagine_inference::{
-        Backend, BackendInstance, CannedCapabilityResponse, CreateEmptyLatentRequest,
-        CreateEmptyLatentResponse, FakeBackend, InferenceBackend, LatentContent,
-        LatentSpaceMetadata, RuntimeLatent, StaticBackendSelectionPolicy,
+        Backend, BackendInstance, BridgePlan, CannedCapabilityResponse, CreateEmptyLatentRequest,
+        CreateEmptyLatentResponse, FakeBackend, InferenceBackend, InferenceCapability,
+        LatentContent, LatentSpaceMetadata, RuntimeLatent, StaticBackendSelectionPolicy,
     };
     use std::collections::HashMap;
     use std::sync::Mutex;
@@ -494,5 +497,60 @@ mod tests {
         manager.mark_ready("w1").unwrap();
         let ref_ptr_after = Arc::as_ptr(&manager.router) as *const ();
         assert_eq!(ref_ptr, ref_ptr_after, "RouterRef Arc should be stable");
+    }
+
+    #[test]
+    fn router_bridge_policy_degrades_to_reject_all_without_ready_workers() {
+        let factory = Arc::new(FakeWorkerBackendFactory::new());
+        let manager =
+            ConnectionTopologyManager::new(WorkerPool::new(), noop_selection_policy(), factory);
+        let router = manager.router_ref().load();
+        assert_eq!(
+            router.bridge_policy().plan_transfer(
+                &Backend::new("fake"),
+                &Backend::new("fake"),
+                InferenceCapability::DiffusionSample,
+            ),
+            BridgePlan::Direct
+        );
+        assert!(matches!(
+            router.bridge_policy().plan_transfer(
+                &Backend::new("fake"),
+                &Backend::new("burn"),
+                InferenceCapability::DiffusionSample,
+            ),
+            BridgePlan::Unsupported { .. }
+        ));
+    }
+
+    #[test]
+    fn router_bridge_policy_is_topology_aware_after_worker_ready() {
+        let factory = Arc::new(FakeWorkerBackendFactory::new());
+        factory.register_fake("w1", make_fake_backend_for("w1"));
+
+        let mut manager = ConnectionTopologyManager::new(
+            WorkerPool::new(),
+            noop_selection_policy(),
+            Arc::clone(&factory) as Arc<dyn WorkerBackendFactory>,
+        );
+        manager.register_endpoint(test_endpoint("w1")).unwrap();
+        manager.mark_ready("w1").unwrap();
+
+        let router = manager.router_ref().load();
+        // A single ready worker makes the label mapping unambiguous;
+        // the installed policy is the topology-aware one, so an
+        // unmapped cross-backend plan fails with a mapping diagnostic
+        // rather than the reject-all message.
+        let plan = router.bridge_policy().plan_transfer(
+            &Backend::new("fake"),
+            &Backend::new("burn"),
+            InferenceCapability::DiffusionSample,
+        );
+        match plan {
+            BridgePlan::Unsupported { reason } => {
+                assert!(reason.contains("mapped"), "{reason}");
+            }
+            other => panic!("expected Unsupported, got {other:?}"),
+        }
     }
 }

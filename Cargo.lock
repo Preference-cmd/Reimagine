@@ -6922,6 +6922,7 @@ dependencies = [
  "reimagine-agent",
  "reimagine-backend-worker-host",
  "reimagine-backend-worker-protocol",
+ "reimagine-backend-worker-transfer",
  "reimagine-backend-worker-transport-grpc",
  "reimagine-backend-worker-transport-quic",
  "reimagine-config",
