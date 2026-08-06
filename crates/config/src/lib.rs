@@ -18,7 +18,7 @@ pub use atomic_write::atomic_write;
 pub use document::{ConfigDocument, ConfigValidationContext};
 pub use error::{ConfigError, ConfigResult};
 pub use handle::ConfigHandle;
-pub use inference_backend::{InferenceBackendConfig, InferenceBackendKind};
+pub use inference_backend::{InferenceBackendConfig, InferenceBackendKind, WorkerEndpointConfig};
 pub use key::ConfigKey;
 pub use paths::AppPaths;
 pub use report::ConfigReport;

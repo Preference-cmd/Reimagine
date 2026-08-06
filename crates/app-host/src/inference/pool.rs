@@ -17,6 +17,14 @@ pub struct WorkerEndpoint {
     pub address: String,
     pub capabilities: Vec<String>,
     pub device_label: String,
+    /// Whether the endpoint's identity is verified (a pinned certificate
+    /// fingerprint is held for it).
+    ///
+    /// `false` means the endpoint was discovered (e.g. via mDNS) but not
+    /// yet verified — connecting must go through the T19 trust flow
+    /// (`connect_with_trust` + `TrustedKeyStore`, never an unauthenticated
+    /// auto-connect). See `crate::inference::discovery`.
+    pub trusted: bool,
     pub metadata: serde_json::Value,
 }
 
@@ -138,6 +146,7 @@ mod tests {
             address: "local".to_owned(),
             capabilities: vec!["echo".to_owned()],
             device_label: "cpu".to_owned(),
+            trusted: true,
             metadata: serde_json::json!({}),
         }
     }
