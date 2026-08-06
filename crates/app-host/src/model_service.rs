@@ -568,13 +568,12 @@ impl ModelService {
 
         let (mut manifest, _) = self.load_manifest().await?;
         // Check if descriptor already exists — if so skip.
-        if manifest.models().iter().any(|d| d.id() == descriptor.id()) {
-            let existing = manifest
-                .models()
-                .iter()
-                .find(|d| d.id() == descriptor.id())
-                .cloned()
-                .unwrap();
+        if let Some(existing) = manifest
+            .models()
+            .iter()
+            .find(|d| d.id() == descriptor.id())
+            .cloned()
+        {
             return Ok(existing);
         }
         manifest.upsert_model(descriptor.clone());

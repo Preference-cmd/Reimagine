@@ -13,6 +13,9 @@
 //! types from `reimagine_inference` directly.
 
 #![deny(unsafe_code)]
+// BE-39: no panicking `unwrap()` in non-test code. Test modules are
+// exempt because the lint fires on `#[cfg(test)]` code too.
+#![cfg_attr(not(test), deny(clippy::unwrap_used))]
 
 mod artifacts;
 mod cancellation;

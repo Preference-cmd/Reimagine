@@ -141,9 +141,12 @@ fn primary_source_path_and_format(
             return Ok((matching.path().to_path_buf(), matching.format()));
         }
         if requested_role == ModelRole::CheckpointBundle {
-            let primary = components
-                .first()
-                .expect("non-empty component list has a first component");
+            let Some(primary) = components.first() else {
+                return Err(format!(
+                    "model {} declares a split component list with no entries; cannot resolve a CheckpointBundle primary path",
+                    descriptor.id()
+                ));
+            };
             return Ok((primary.path().to_path_buf(), primary.format()));
         }
         let available_roles: Vec<String> = components

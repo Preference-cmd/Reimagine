@@ -38,6 +38,21 @@ pub(crate) struct ComposedInferenceRuntime {
     pub(crate) worker_switch: Option<Arc<super::switch::WorkerSwitchService>>,
 }
 
+impl ComposedInferenceRuntime {
+    /// A runtime with no registered backends or executors, used when
+    /// backend bootstrap fails on the legacy synchronous construction
+    /// path. Runs fail with explicit "no executor" errors instead of
+    /// panicking the host.
+    pub(crate) fn degraded() -> Self {
+        Self {
+            executor_registry: NodeExecutorRegistry::default(),
+            runtime_hooks: Arc::new(CompositeBackendInstanceRuntimeHooks::new(Vec::new())),
+            selected_instance: BackendInstance::new("none"),
+            worker_switch: None,
+        }
+    }
+}
+
 pub(crate) struct BootstrapInference {
     pub(crate) runtime: ComposedInferenceRuntime,
     pub(crate) compute_profile: WorkspaceComputeProfile,
@@ -261,7 +276,7 @@ async fn compose_inference_runtime_with_workers(
         )),
         Arc::new(InputImageSourceResolver::new(config.paths())),
     )
-    .expect("register executors");
+    .map_err(BackendCandidateError::ExecutorRegistration)?;
     Ok(ComposedInferenceRuntime {
         executor_registry,
         runtime_hooks: Arc::new(CompositeBackendInstanceRuntimeHooks::new(hooks)),
@@ -342,7 +357,7 @@ fn compose_inference_runtime_with_candidates(
         )),
         image_source_resolver,
     )
-    .expect("register executors");
+    .map_err(BackendCandidateError::ExecutorRegistration)?;
 
     Ok(ComposedInferenceRuntime {
         executor_registry,

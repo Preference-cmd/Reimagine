@@ -12,7 +12,10 @@ use crate::value_store::RunValueStore;
 /// Internal runner-task session. Tracks the intermediate value store, the
 /// cancellation token, and the per-node outcome map.
 ///
-/// Hosts never see this. The runner task owns the only session.
+/// Hosts never see this. The runner task owns the only session. `Clone`
+/// supports a defensive snapshot in the (unreachable) case where the
+/// shared wrapper survives the joining of every stage task.
+#[derive(Clone)]
 pub struct RunSession {
     run_id: RunId,
     workflow_id: WorkflowId,

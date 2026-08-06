@@ -79,7 +79,7 @@ impl RuntimeValueRecord {
 /// completes, `RunScoped` values live until terminal cleanup, and
 /// `WorkspaceScoped` values are treated as opaque run-owned handles
 /// whose drop is detached from any backend cache eviction.
-#[derive(Debug, Default)]
+#[derive(Debug, Default, Clone)]
 pub struct RunValueStore {
     records: HashMap<OutputKey, RuntimeValueRecord>,
 }
