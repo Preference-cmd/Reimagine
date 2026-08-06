@@ -498,5 +498,6 @@ export async function mockRebootBackend(
       },
     ],
     diagnostics: [],
+    topology_workers: [],
   };
 }

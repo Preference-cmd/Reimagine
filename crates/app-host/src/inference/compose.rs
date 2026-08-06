@@ -56,6 +56,13 @@ impl ComposedInferenceRuntime {
 pub(crate) struct BootstrapInference {
     pub(crate) runtime: ComposedInferenceRuntime,
     pub(crate) compute_profile: WorkspaceComputeProfile,
+    /// Connection topology manager (T13). `None` when no remote
+    /// workers are configured — single-worker mode is unchanged.
+    pub(crate) topology:
+        Option<Arc<tokio::sync::Mutex<super::topology::ConnectionTopologyManager>>>,
+    /// Discovery orchestrator driving the topology pool (T12/T13).
+    /// `None` when no topology manager is configured.
+    pub(crate) discovery: Option<Arc<super::discovery::DiscoveryOrchestrator>>,
 }
 
 struct WorkerCompositionSelection {
@@ -105,10 +112,87 @@ pub(crate) async fn bootstrap_inference_with_worker_inventory(
         selection,
     )
     .await?;
+    let (topology, discovery) = build_topology(backend_config)?;
     Ok(BootstrapInference {
         runtime,
         compute_profile: workspace_profile,
+        topology,
+        discovery,
     })
+}
+
+/// Construct the connection topology manager + discovery orchestrator
+/// (T13).
+///
+/// Returns `(None, None)` when `backend_config.workers` is empty —
+/// today's single-worker mode must stay byte-identical (graceful
+/// degradation). When remote workers are configured, a topology
+/// manager is created with an empty pool and a discovery orchestrator
+/// (config endpoints + mDNS) starts polling it in the background.
+///
+/// # Trust gate (T19)
+///
+/// Discovery only *registers* endpoints in the pool — it never
+/// connects. Untrusted (mDNS-discovered) workers are surfaced in the
+/// compute profile but are not routable until the T19 trust flow has
+/// pinned their certificate.
+fn build_topology(
+    backend_config: &InferenceBackendConfig,
+) -> Result<
+    (
+        Option<Arc<tokio::sync::Mutex<super::topology::ConnectionTopologyManager>>>,
+        Option<Arc<super::discovery::DiscoveryOrchestrator>>,
+    ),
+    BackendCandidateError,
+> {
+    if backend_config.workers.is_empty() {
+        return Ok((None, None));
+    }
+    struct NoopBackendFactory;
+    impl crate::inference::topology::WorkerBackendFactory for NoopBackendFactory {
+        fn build_backend(
+            &self,
+            _endpoint: &crate::inference::pool::WorkerEndpoint,
+        ) -> Option<Arc<dyn reimagine_inference::InferenceBackend>> {
+            // T13 registers endpoints without connecting: routing to
+            // remote workers happens through the worker switch service
+            // after the T19 trust flow, not through a factory-built
+            // backend at bootstrap.
+            None
+        }
+
+        fn backend_label(&self) -> reimagine_inference::Backend {
+            reimagine_inference::Backend::new("topology")
+        }
+    }
+    let manager = Arc::new(tokio::sync::Mutex::new(
+        super::topology::ConnectionTopologyManager::new(
+            super::pool::WorkerPool::new(),
+            Arc::new(StaticBackendSelectionPolicy::new(Vec::new())),
+            Arc::new(NoopBackendFactory),
+        ),
+    ));
+    let config_source = Arc::new(
+        super::discovery::ConfigDiscovery::from_config(backend_config)
+            .map_err(BackendCandidateError::Topology)?,
+    );
+    let mdns_source = Arc::new(super::discovery::MdnsDiscovery::new());
+    let orchestrator = Arc::new(super::discovery::DiscoveryOrchestrator::new(
+        vec![config_source, mdns_source],
+        Arc::clone(&manager),
+        super::discovery::DEFAULT_DISCOVERY_INTERVAL,
+    ));
+    for result in orchestrator.start() {
+        if let Err(error) = result {
+            tracing::warn!(error, "[app-host] discovery source failed to start");
+        }
+    }
+    orchestrator.clone().run();
+    tracing::info!(
+        "[app-host] topology discovery started for {} configured worker(s)",
+        backend_config.workers.len()
+    );
+    Ok((Some(manager), Some(orchestrator)))
 }
 
 fn bootstrap_inference_with_candidates(
@@ -136,6 +220,8 @@ fn bootstrap_inference_with_candidates(
     Ok(BootstrapInference {
         runtime,
         compute_profile: workspace_profile,
+        topology: None,
+        discovery: None,
     })
 }
 

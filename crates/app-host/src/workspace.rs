@@ -42,6 +42,9 @@ pub struct WorkspaceHost {
     resolved_backend_instance: reimagine_inference::BackendInstance,
     worker_switch: Option<Arc<crate::WorkerSwitchService>>,
     worker_inventory: Arc<dyn WorkerInventoryProvider>,
+    topology:
+        Option<Arc<tokio::sync::Mutex<crate::inference::topology::ConnectionTopologyManager>>>,
+    discovery: Option<Arc<crate::inference::discovery::DiscoveryOrchestrator>>,
     event_sink: BoxedRunEventSink,
     agent_event_sink: Arc<dyn AgentEventSink>,
 }
@@ -117,6 +120,8 @@ impl WorkspaceHost {
             resolved_backend_instance,
             worker_switch: None,
             worker_inventory: Arc::new(crate::EmptyWorkerInventoryProvider),
+            topology: None,
+            discovery: None,
             event_sink: Arc::new(VecRunEventSink::new()),
             agent_event_sink: Arc::new(reimagine_agent::VecAgentEventSink::new())
                 as Arc<dyn AgentEventSink>,
@@ -330,6 +335,8 @@ impl WorkspaceHost {
                     BootstrapInference {
                         runtime: ComposedInferenceRuntime::degraded(),
                         compute_profile: WorkspaceComputeProfile::new(),
+                        topology: None,
+                        discovery: None,
                     }
                 }
             };
@@ -430,6 +437,8 @@ impl WorkspaceHost {
         );
         host.worker_switch = worker_switch;
         host.worker_inventory = Arc::clone(&worker_inventory);
+        host.topology = bootstrapped.topology;
+        host.discovery = bootstrapped.discovery;
         host.event_sink = Arc::clone(&event_sink);
         host.agent_event_sink = agent_event_sink;
         let registry = host.agent_service.registry().clone();
@@ -661,6 +670,21 @@ impl WorkspaceHost {
         (*self.compute_profile).clone()
     }
 
+    /// The connection topology manager (T13), when remote workers are
+    /// configured. `None` in single-worker mode.
+    pub fn topology(
+        &self,
+    ) -> Option<&Arc<tokio::sync::Mutex<crate::inference::topology::ConnectionTopologyManager>>>
+    {
+        self.topology.as_ref()
+    }
+
+    /// The discovery orchestrator (T12/T13), when a topology manager
+    /// exists.
+    pub fn discovery(&self) -> Option<&Arc<crate::inference::discovery::DiscoveryOrchestrator>> {
+        self.discovery.as_ref()
+    }
+
     /// Return the host-neutral
     /// [`crate::dto::ComputeProfileDto`] projection of the workspace's
     /// most recent compute profile.
@@ -671,7 +695,16 @@ impl WorkspaceHost {
     /// backend-native handles. The returned DTO is the V1 wire contract
     /// for `GET /compute-profile` and the equivalent Tauri command.
     pub fn compute_profile_dto(&self) -> crate::dto::ComputeProfileDto {
-        self.compute_profile().into()
+        let mut dto: crate::dto::ComputeProfileDto = self.compute_profile().clone().into();
+        if let Some(topology) = &self.topology {
+            // try_lock: the discovery poll loop may hold the lock; a
+            // busy lock just means this snapshot omits topology workers.
+            if let Ok(guard) = topology.try_lock() {
+                dto =
+                    dto.with_topology_workers(crate::dto::topology_workers_from_pool(guard.pool()));
+            }
+        }
+        dto
     }
 
     /// Return the resolved Candle device label used to construct the

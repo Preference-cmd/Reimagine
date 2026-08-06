@@ -329,5 +329,22 @@ export type RebootBackendArgs = z.infer<typeof RebootBackendArgsSchema>;
 export const ComputeProfileSchema = z.object({
   backend_profiles: z.array(z.any()),
   diagnostics: z.array(z.any()),
+  /** Topology pool workers (T13): discovered QUIC/gRPC endpoints that
+   *  are registered but not necessarily connected. Optional — absent
+   *  when no topology manager is configured. */
+  topology_workers: z
+    .array(
+      z.object({
+        id: z.string(),
+        transport: z.string(),
+        address: z.string(),
+        trusted: z.boolean(),
+        device_label: z.string(),
+        capabilities: z.array(z.string()),
+        state: z.string(),
+      }),
+    )
+    .optional()
+    .default([]),
 });
 export type ComputeProfile = z.infer<typeof ComputeProfileSchema>;

@@ -34,7 +34,7 @@ pub use agent::{
 pub use artifacts::{ArtifactDto, ArtifactMetadataDto};
 pub use compute_profile::{
     BackendInstanceProfileDto, BackendProfileDto, ComputeProfileDto, DTypeProfileDto,
-    DeviceProfileDto, MemoryProfileDto,
+    DeviceProfileDto, MemoryProfileDto, TopologyWorkerDto, topology_workers_from_pool,
 };
 pub use health::HealthResponse;
 pub use model_acquisition::{
