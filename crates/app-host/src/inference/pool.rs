@@ -1,7 +1,8 @@
 //! Worker pool types for the connection topology manager (T9).
 //!
 //! These types land ahead of the T13 integration that consumes them;
-//! the pool is not yet constructed at any call site.
+//! the pool is not yet constructed at any call site (T11's HealthMonitor
+//! exercises the state/health types; remaining items wait for T13).
 #![allow(dead_code)]
 
 use std::collections::HashMap;

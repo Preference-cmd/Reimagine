@@ -22,6 +22,7 @@ members = [
     "crates/backend-worker-host",
     "crates/backend-worker-transport-quic",
     "crates/backend-worker-transport-grpc",
+    "crates/backend-worker-transfer",
 ]
 
 [workspace.package]

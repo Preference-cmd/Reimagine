@@ -7010,6 +7010,17 @@ dependencies = [
 ]
 
 [[package]]
+name = "reimagine-backend-worker-transfer"
+version = "0.1.0"
+dependencies = [
+ "reimagine-backend-worker-protocol",
+ "serde",
+ "serde_json",
+ "tempfile",
+ "tracing",
+]
+
+[[package]]
 name = "reimagine-backend-worker-transport-grpc"
 version = "0.1.0"
 dependencies = [

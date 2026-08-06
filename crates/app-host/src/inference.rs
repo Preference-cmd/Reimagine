@@ -6,6 +6,7 @@
 
 pub(crate) mod candidate;
 pub(crate) mod compose;
+pub mod health;
 pub(crate) mod image_source_resolver;
 pub mod pool;
 pub(crate) mod quic_worker;
