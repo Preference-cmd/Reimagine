@@ -21,10 +21,10 @@ async fn start_worker(cert: &SelfSignedCert) -> SocketAddr {
     .unwrap();
     let addr = endpoint.local_addr().unwrap();
     tokio::spawn(async move {
-        if let Some(incoming) = endpoint.accept().await {
-            if let Ok(conn) = incoming.await {
-                let _ = conn.closed().await;
-            }
+        if let Some(incoming) = endpoint.accept().await
+            && let Ok(conn) = incoming.await
+        {
+            let _ = conn.closed().await;
         }
     });
     addr
