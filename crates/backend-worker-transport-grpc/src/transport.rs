@@ -56,7 +56,7 @@ impl GrpcTransport {
 
     /// Send a `HostToWorker` message to the worker.
     pub async fn send(&self, msg: proto::HostToWorker) -> Result<(), TransportError> {
-        let mut guard = self.sender.lock().await;
+        let guard = self.sender.lock().await;
         let sender = guard
             .as_ref()
             .ok_or_else(|| TransportError::Io("transport is closed".to_owned()))?;
