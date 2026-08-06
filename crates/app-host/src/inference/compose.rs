@@ -58,8 +58,7 @@ pub(crate) struct BootstrapInference {
     pub(crate) compute_profile: WorkspaceComputeProfile,
     /// Connection topology manager (T13). `None` when no remote
     /// workers are configured — single-worker mode is unchanged.
-    pub(crate) topology:
-        Option<Arc<tokio::sync::Mutex<super::topology::ConnectionTopologyManager>>>,
+    pub(crate) topology: Option<TopologyHandle>,
     /// Discovery orchestrator driving the topology pool (T12/T13).
     /// `None` when no topology manager is configured.
     pub(crate) discovery: Option<Arc<super::discovery::DiscoveryOrchestrator>>,
@@ -121,6 +120,11 @@ pub(crate) async fn bootstrap_inference_with_worker_inventory(
     })
 }
 
+/// Shared handle to the connection topology manager (T13): the
+/// discovery orchestrator and the workspace host both hold this.
+pub(crate) type TopologyHandle =
+    Arc<tokio::sync::Mutex<super::topology::ConnectionTopologyManager>>;
+
 /// Construct the connection topology manager + discovery orchestrator
 /// (T13).
 ///
@@ -140,7 +144,7 @@ fn build_topology(
     backend_config: &InferenceBackendConfig,
 ) -> Result<
     (
-        Option<Arc<tokio::sync::Mutex<super::topology::ConnectionTopologyManager>>>,
+        Option<TopologyHandle>,
         Option<Arc<super::discovery::DiscoveryOrchestrator>>,
     ),
     BackendCandidateError,
