@@ -11,7 +11,7 @@ use reimagine_core::model::RunId;
 use reimagine_inference::{
     Backend, BackendInstance, BackendInstanceObservation, BackendInstanceSnapshot,
     BackendRunLifecycle, BackendRunLifecycleReport, BackendRunLifecycleRequest, DeviceProfile,
-    InferenceBackend, InferenceRouter, ResourceHintSink, RouterRef,
+    InferenceBackend, InferenceRouter, ResourceHintSink, RouterRef, VramBudget,
 };
 use tokio::sync::{Mutex, RwLock};
 
@@ -115,6 +115,14 @@ pub trait SwitchableWorker: Send + Sync + 'static {
     fn resource_hint_sink(&self) -> Option<Arc<dyn ResourceHintSink>> {
         None
     }
+    /// Apply a model-cache VRAM budget to this worker's backend,
+    /// evicting cross-run cached models as needed.
+    ///
+    /// Best-effort: the default implementation is a no-op, and switch
+    /// paths treat failures as non-fatal.
+    async fn set_model_cache_budget(&self, _budget: VramBudget) -> Result<(), WorkerSwitchError> {
+        Ok(())
+    }
     async fn cleanup_run(&self, run_id: &RunId) -> Result<(), WorkerSwitchError> {
         self.run_leases().release(run_id);
         Ok(())
@@ -201,6 +209,16 @@ impl SwitchableWorker for ProcessSwitchableWorker {
     fn resource_hint_sink(&self) -> Option<Arc<dyn ResourceHintSink>> {
         let sink: Arc<dyn ResourceHintSink> = self.backend.clone();
         Some(sink)
+    }
+
+    async fn set_model_cache_budget(&self, budget: VramBudget) -> Result<(), WorkerSwitchError> {
+        self.backend
+            .set_model_cache_budget(budget)
+            .await
+            .map_err(|error| WorkerSwitchError::Shutdown {
+                instance: self.instance.clone(),
+                message: format!("worker rejected model cache budget: {error}"),
+            })
     }
 
     async fn cleanup_run(&self, run_id: &RunId) -> Result<(), WorkerSwitchError> {
@@ -469,6 +487,11 @@ impl WorkerSwitchService {
             });
         }
 
+        // The old worker is fully drained and about to idle: shrink
+        // its model cache so it frees VRAM before it is shut down.
+        // Non-fatal — the switch proceeds regardless.
+        retire_worker_model_cache(previous.as_ref()).await;
+
         let mut state = self.state.write().await;
         state.active = target;
         state.generation = state.generation.wrapping_add(1);
@@ -485,6 +508,10 @@ impl WorkerSwitchService {
     /// process is force-killed via the drop-based cleanup.
     pub async fn shutdown_active(&self, deadline: Duration) -> Result<(), WorkerSwitchError> {
         let active = Arc::clone(&self.state.read().await.active);
+        // Evict the worker's cross-run model cache first so VRAM is
+        // released even if the graceful shutdown hangs or the process
+        // lingers. Non-fatal.
+        retire_worker_model_cache(active.as_ref()).await;
         match tokio::time::timeout(deadline, active.shutdown()).await {
             Ok(result) => result,
             Err(_elapsed) => {
@@ -538,6 +565,11 @@ impl WorkerSwitchService {
             });
         }
 
+        // The old worker is fully drained and about to idle: shrink
+        // its model cache so it frees VRAM before it is shut down.
+        // Non-fatal — the switch proceeds regardless.
+        retire_worker_model_cache(previous.as_ref()).await;
+
         let mut state = self.state.write().await;
         state.active = target;
         state.generation = state.generation.wrapping_add(1);
@@ -546,6 +578,43 @@ impl WorkerSwitchService {
         self.set_active_hint_sink(&Arc::clone(&self.state.read().await.active));
         let _ = previous.shutdown().await;
         Ok(selected)
+    }
+}
+
+/// Budget applied to a retiring worker's model cache.
+///
+/// A zero-byte budget forces the worker's cache to evict every
+/// cross-run bundle, freeing VRAM before the worker idles or is shut
+/// down. In-flight runs are unaffected: the cache only holds
+/// cross-run bundles, and runs hold their own `Arc` references.
+const RETIRING_CACHE_BUDGET: VramBudget = VramBudget {
+    total_bytes: Some(0),
+    reserved_bytes: 0,
+};
+
+/// Shrink a retiring worker's model cache so it frees VRAM before it
+/// idles.
+///
+/// Best-effort and non-fatal, consistent with the hint-sink
+/// philosophy: failures are logged and the switch proceeds. Bounded
+/// by a short timeout so a hung worker cannot stall the switch
+/// transaction.
+async fn retire_worker_model_cache(worker: &dyn SwitchableWorker) {
+    match tokio::time::timeout(
+        Duration::from_secs(3),
+        worker.set_model_cache_budget(RETIRING_CACHE_BUDGET),
+    )
+    .await
+    {
+        Ok(Ok(())) => {}
+        Ok(Err(error)) => eprintln!(
+            "[app-host] failed to retire model cache of worker `{}`: {error}",
+            worker.instance(),
+        ),
+        Err(_elapsed) => eprintln!(
+            "[app-host] retiring model cache of worker `{}` timed out",
+            worker.instance(),
+        ),
     }
 }
 
