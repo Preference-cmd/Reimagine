@@ -7,9 +7,7 @@ use reimagine_backend_worker_transport_grpc::client::{self, GrpcAuth, GrpcTls};
 use reimagine_backend_worker_transport_grpc::proto;
 use reimagine_backend_worker_transport_grpc::proto::worker_service_server::WorkerServiceServer;
 use reimagine_backend_worker_transport_grpc::server::{GrpcWorkerService, MessageHandler};
-use reimagine_backend_worker_transport_grpc::tls::{
-    AcceptAnyServerVerifier, generate_self_signed_identity,
-};
+use reimagine_backend_worker_transport_grpc::tls::generate_self_signed_identity;
 use tonic::transport::{Identity, ServerTlsConfig};
 
 /// A worker handler that echoes requests back as successful terminals.
