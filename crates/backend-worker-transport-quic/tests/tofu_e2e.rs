@@ -21,10 +21,10 @@ async fn start_worker(cert: &SelfSignedCert) -> SocketAddr {
     .unwrap();
     let addr = endpoint.local_addr().unwrap();
     tokio::spawn(async move {
-        if let Some(incoming) = endpoint.accept().await
-            && let Ok(conn) = incoming.await
-        {
-            let _ = conn.closed().await;
+        while let Some(incoming) = endpoint.accept().await {
+            if let Ok(conn) = incoming.await {
+                let _ = conn.closed().await;
+            }
         }
     });
     addr
@@ -54,25 +54,27 @@ async fn tofu_records_first_connect_and_pins_later_connects() {
     let dir = tempfile::tempdir().unwrap();
     let store = Mutex::new(TrustedKeyStore::load(dir.path().join("trusted-keys.json")).unwrap());
 
-    // First connect: TOFU records the fingerprint.
+    // First connect: TOFU records the fingerprint under the composite
+    // key worker_id@endpoint_addr.
     let endpoint = connect_ok(addr, ConnectTrust::new(&store, "worker-1")).await;
     assert!(endpoint.contains("quic://"));
 
+    let pin_key = format!("worker-1@{}", addr.ip());
     let pin = store
         .lock()
         .unwrap()
-        .pinned("worker-1")
+        .pinned(&pin_key)
         .expect("pin should be recorded")
         .clone();
     assert_eq!(pin, cert.fingerprint());
 
     // Reload from disk: the pin persisted.
     let reloaded = TrustedKeyStore::load(dir.path().join("trusted-keys.json")).unwrap();
-    assert_eq!(reloaded.pinned("worker-1"), Some(&cert.fingerprint()));
+    assert_eq!(reloaded.pinned(&pin_key), Some(&cert.fingerprint()));
 
-    // Second connect (new listener, same cert): pin matches, connects.
-    let addr2 = start_worker(&cert).await;
-    connect_ok(addr2, ConnectTrust::new(&store, "worker-1")).await;
+    // Second connect to the SAME endpoint: the recorded pin matches and
+    // the handshake succeeds (pinning verified, not re-recorded).
+    connect_ok(addr, ConnectTrust::new(&store, "worker-1")).await;
 }
 
 #[tokio::test]
@@ -80,12 +82,13 @@ async fn changed_cert_is_rejected_after_pin() {
     let dir = tempfile::tempdir().unwrap();
     let store = Mutex::new(TrustedKeyStore::load(dir.path().join("trusted-keys.json")).unwrap());
 
-    // First worker: TOFU records cert A.
+    // First worker: TOFU records cert A under worker-1@127.0.0.1.
     let cert_a = SelfSignedCert::generate("localhost").unwrap();
     let addr_a = start_worker(&cert_a).await;
     connect_ok(addr_a, ConnectTrust::new(&store, "worker-1")).await;
 
-    // Attacker/rotated worker presents cert B from a different endpoint.
+    // Attacker/rotated worker presents cert B from a different endpoint
+    // but the same host (same composite pin key).
     let cert_b = SelfSignedCert::generate("localhost").unwrap();
     let addr_b = start_worker(&cert_b).await;
 

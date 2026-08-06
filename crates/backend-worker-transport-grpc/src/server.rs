@@ -42,6 +42,9 @@ impl GrpcWorkerService {
     /// Create a new server with the given message handler and no token
     /// requirement (open/plain mode, backward compatible).
     pub fn new(handler: MessageHandler) -> Self {
+        tracing::warn!(
+            "gRPC worker serving WITHOUT bearer-token auth; set REIMAGINE_WORKER_TOKEN on the worker"
+        );
         Self::with_token(handler, None)
     }
 

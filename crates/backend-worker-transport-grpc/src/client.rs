@@ -36,6 +36,10 @@ impl GrpcAuth {
 
     /// Read the token from the `REIMAGINE_WORKER_TOKEN` environment
     /// variable (empty/unset => no token).
+    ///
+    /// Note: `connect_with` refuses to send a configured token over a
+    /// plain `http://` endpoint (see [`GrpcAuth`] docs); pair this with
+    /// a `tls` setting for real cloud deployments.
     #[must_use]
     pub fn from_env() -> Self {
         Self {
@@ -61,6 +65,20 @@ pub async fn connect(endpoint: &str) -> Result<GrpcTransport, tonic::Status> {
 /// `https://worker.example:50051` (when `auth.tls` is set).
 pub async fn connect_with(endpoint: &str, auth: &GrpcAuth) -> Result<GrpcTransport, tonic::Status> {
     crate::tls::ensure_crypto_provider();
+    // Never send a bearer token in cleartext: a token without TLS is a
+    // credential leak. Callers must pair tokens with a `tls` mode
+    // (or accept the risk by spelling out the endpoint as http:// AND
+    // setting auth.tls = Some(GrpcTls::InsecureSkipVerify) — the
+    // explicit dev escape hatch, which also fails this check for
+    // https:// endpoints only if the caller chooses to).
+    if auth.token.is_some()
+        && auth.tls.is_none()
+        && !endpoint.to_ascii_lowercase().starts_with("https://")
+    {
+        return Err(tonic::Status::unauthenticated(
+            "bearer token configured but transport is not TLS (refusing cleartext token)",
+        ));
+    }
     let mut channel_builder = Channel::from_shared(endpoint.to_owned())
         .map_err(|e| tonic::Status::internal(format!("invalid endpoint: {e}")))?;
 

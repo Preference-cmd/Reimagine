@@ -7,7 +7,9 @@ use reimagine_backend_worker_transport_grpc::client::{self, GrpcAuth, GrpcTls};
 use reimagine_backend_worker_transport_grpc::proto;
 use reimagine_backend_worker_transport_grpc::proto::worker_service_server::WorkerServiceServer;
 use reimagine_backend_worker_transport_grpc::server::{GrpcWorkerService, MessageHandler};
-use reimagine_backend_worker_transport_grpc::tls::generate_self_signed_identity;
+use reimagine_backend_worker_transport_grpc::tls::{
+    AcceptAnyServerVerifier, generate_self_signed_identity,
+};
 use tonic::transport::{Identity, ServerTlsConfig};
 
 /// A worker handler that echoes requests back as successful terminals.
@@ -65,10 +67,34 @@ async fn health_check(
     auth: &GrpcAuth,
 ) -> Result<proto::HealthResponse, tonic::Status> {
     // HealthCheck is exercised directly (non-streaming path) with the
-    // same token interceptor the client transport uses.
-    let channel = tonic::transport::Channel::from_shared(endpoint.to_owned())
-        .unwrap()
-        .connect_lazy();
+    // same token interceptor the client transport uses. Apply the same
+    // TLS modes as client::connect_with so https endpoints work.
+    let mut channel_builder = tonic::transport::Channel::from_shared(endpoint.to_owned()).unwrap();
+    if let Some(tls) = &auth.tls {
+        let tls_config = tonic::transport::ClientTlsConfig::new().domain_name(match tls {
+            GrpcTls::TrustCert { domain, .. } | GrpcTls::InsecureSkipVerify { domain } => {
+                domain.clone()
+            }
+        });
+        match tls {
+            GrpcTls::TrustCert { ca_pem, .. } => {
+                channel_builder = channel_builder
+                    .tls_config(
+                        tls_config.ca_certificate(tonic::transport::Certificate::from_pem(ca_pem)),
+                    )
+                    .unwrap();
+            }
+            GrpcTls::InsecureSkipVerify { .. } => {
+                let verifier: Arc<dyn rustls::client::danger::ServerCertVerifier> = Arc::new(
+                    reimagine_backend_worker_transport_grpc::tls::AcceptAnyServerVerifier::new(),
+                );
+                channel_builder = channel_builder
+                    .tls_config_with_verifier(tls_config, verifier)
+                    .unwrap();
+            }
+        }
+    }
+    let channel = channel_builder.connect_lazy();
     let mut client = proto::worker_service_client::WorkerServiceClient::with_interceptor(
         channel,
         reimagine_backend_worker_transport_grpc::auth::bearer_interceptor(auth.token.clone()),
@@ -113,14 +139,40 @@ async fn auth_rejects_missing_and_wrong_token() {
 }
 
 #[tokio::test]
-async fn auth_accepts_correct_token() {
+async fn auth_refuses_cleartext_token_transport() {
+    // MAJOR-2 guard: a configured token must never travel over plain
+    // HTTP; connect_with refuses before any request is sent.
     let (endpoint, _) = start_server(Some("s3cret".to_owned()), None).await;
-
-    let transport = client::connect_with(
+    let error = client::connect_with(
         &endpoint,
         &GrpcAuth {
             token: Some("s3cret".to_owned()),
             tls: None,
+        },
+    )
+    .await
+    .expect_err("plain HTTP + token must be refused");
+    assert_eq!(error.code(), tonic::Code::Unauthenticated);
+}
+
+#[tokio::test]
+async fn auth_accepts_correct_token() {
+    let identity = generate_self_signed_identity("localhost").unwrap();
+    let (endpoint, _) = start_server(
+        Some("s3cret".to_owned()),
+        Some((identity.cert_pem, identity.key_pem)),
+    )
+    .await;
+
+    // A token requires TLS (cleartext-token guard); the dev escape
+    // hatch (InsecureSkipVerify) satisfies the guard for this test.
+    let transport = client::connect_with(
+        &endpoint,
+        &GrpcAuth {
+            token: Some("s3cret".to_owned()),
+            tls: Some(GrpcTls::InsecureSkipVerify {
+                domain: "localhost".to_owned(),
+            }),
         },
     )
     .await
@@ -146,17 +198,44 @@ async fn auth_accepts_correct_token() {
         Some(proto::worker_to_host::Message::Terminal(_))
     ));
 
-    // HealthCheck with token succeeds.
+    // HealthCheck with token succeeds (TLS server ⇒ TLS client).
     let health = health_check(
         &endpoint,
         &GrpcAuth {
             token: Some("s3cret".to_owned()),
-            tls: None,
+            tls: Some(GrpcTls::InsecureSkipVerify {
+                domain: "localhost".to_owned(),
+            }),
         },
     )
     .await
     .unwrap();
     assert!(health.healthy);
+}
+
+#[tokio::test]
+async fn tls_trusted_cert_rejects_wrong_ca() {
+    // A client trusting a DIFFERENT CA must be rejected by the server's
+    // self-signed identity (webpki chain verification).
+    let identity = generate_self_signed_identity("localhost").unwrap();
+    let other = generate_self_signed_identity("localhost").unwrap();
+    let (endpoint, _) = start_server(None, Some((identity.cert_pem, identity.key_pem))).await;
+
+    let error = client::connect_with(
+        &endpoint,
+        &GrpcAuth {
+            token: None,
+            tls: Some(GrpcTls::TrustCert {
+                ca_pem: other.cert_pem,
+                domain: "localhost".to_owned(),
+            }),
+        },
+    )
+    .await
+    .expect_err("wrong CA must be rejected");
+    // The transport error surfaces through connect_with's mapping
+    // (Internal "connect failed: ..."); any non-success is the point.
+    assert_ne!(error.code(), tonic::Code::Ok, "got {error:?}");
 }
 
 #[tokio::test]

@@ -34,8 +34,18 @@ impl<'a> ConnectTrust<'a> {
     /// TOFU trust against `store`, keyed by `worker_id`.
     ///
     /// `worker_id` should be the stable endpoint/worker identifier the
-    /// orchestrator uses for this worker (e.g. the mDNS instance id or
-    /// the endpoint address), so the same pin is reused across connects.
+    /// orchestrator uses for this worker (e.g. the mDNS instance id).
+    /// Pins are stored under the composite key `worker_id@endpoint_addr`
+    /// (see [`connect_with_trust`]) so a worker that moves addresses
+    /// re-pins instead of silently reusing a stale pin.
+    ///
+    /// # Security note (T12 auto-connect)
+    /// TOFU records the first certificate it sees for a key with no
+    /// out-of-band confirmation. mDNS is unauthenticated, so an attacker
+    /// can advertise a spoofed worker and win the first-connect race.
+    /// Auto-connect flows MUST use [`ConnectTrust::require_pin`] with an
+    /// explicit user trust action for unknown workers; TOFU is only safe
+    /// for operator-initiated connects.
     #[must_use]
     pub fn new(store: &'a Mutex<TrustedKeyStore>, worker_id: &'a str) -> Self {
         Self {
@@ -123,6 +133,22 @@ impl QuicTransport {
         trust: ConnectTrust<'_>,
     ) -> Result<Self, TransportError> {
         let skip_pinning = trust.skip_pinning || insecure_skip_pinning_from_env();
+        if skip_pinning && trust.skip_pinning {
+            tracing::warn!(
+                "QUIC cert pinning bypassed (insecure_skip) for worker '{}'",
+                trust.worker_id
+            );
+        }
+        if skip_pinning && insecure_skip_pinning_from_env() {
+            tracing::warn!("QUIC cert pinning bypassed by REIMAGINE_INSECURE_SKIP_PINNING env");
+        }
+
+        // Composite key: worker identity + endpoint IP. The IP component
+        // makes pins specific to the host the orchestrator connected to
+        // (a worker that moves IPs re-pins); port changes (restarts) do
+        // not invalidate the pin. T12 must still gate auto-connect
+        // behind require_pin — see ConnectTrust docs.
+        let pin_key = format!("{}@{}", trust.worker_id, server_addr.ip());
 
         let expected: Option<CertFingerprint> = if skip_pinning {
             None
@@ -130,7 +156,7 @@ impl QuicTransport {
             let guard = trust.store.lock().map_err(|e| {
                 TransportError::ConnectionFailed(format!("trust store lock poisoned: {e}"))
             })?;
-            match (guard.pinned(trust.worker_id), trust.policy) {
+            match (guard.pinned(&pin_key), trust.policy) {
                 (Some(fingerprint), _) => Some(fingerprint.clone()),
                 (None, TrustPolicy::RequirePin) => {
                     return Err(TransportError::ConnectionFailed(format!(
@@ -155,6 +181,10 @@ impl QuicTransport {
 
         // TOFU: record the presented fingerprint now that the handshake
         // succeeded. On pin-mismatch the handshake above already failed.
+        //
+        // The store lock is held across the record: a concurrent
+        // first-connect that already recorded a *different* fingerprint
+        // for this key must not be overwritten (last-writer-wins race).
         if expected.is_none() && !skip_pinning {
             let fingerprint = captured
                 .lock()
@@ -168,7 +198,19 @@ impl QuicTransport {
             let mut guard = trust.store.lock().map_err(|e| {
                 TransportError::ConnectionFailed(format!("trust store lock poisoned: {e}"))
             })?;
-            guard.trust(trust.worker_id, &fingerprint).map_err(|e| {
+            if let Some(existing) = guard.pinned(&pin_key)
+                && existing != &fingerprint
+            {
+                return Err(TransportError::ConnectionFailed(format!(
+                    "worker '{}' presented fingerprint {} but {} is already pinned for {}@{}",
+                    trust.worker_id,
+                    fingerprint.as_str(),
+                    existing.as_str(),
+                    trust.worker_id,
+                    server_addr.ip()
+                )));
+            }
+            guard.trust(&pin_key, &fingerprint).map_err(|e| {
                 TransportError::ConnectionFailed(format!("failed to pin certificate: {e}"))
             })?;
         }

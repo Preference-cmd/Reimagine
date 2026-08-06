@@ -54,6 +54,12 @@ impl CertFingerprint {
         let digest = sha2::Sha256::digest(der.as_ref());
         Self(hex::encode(digest))
     }
+
+    /// The hex string form of this fingerprint.
+    #[must_use]
+    pub fn as_str(&self) -> &str {
+        &self.0
+    }
 }
 
 /// `true` when [`INSECURE_SKIP_PINNING_ENV`] is set to a truthy value.
@@ -137,6 +143,11 @@ impl TrustedKeyStore {
     }
 
     /// Record or replace the pin for `worker_id` and persist.
+    ///
+    /// Callers that raced a first-connect must re-check [`Self::pinned`]
+    /// under the same lock before calling this; a concurrent first-trust
+    /// that recorded a different fingerprint for the same id would
+    /// otherwise be silently overwritten (last-writer-wins).
     pub fn trust(&mut self, worker_id: &str, fingerprint: &CertFingerprint) -> Result<(), Error> {
         self.keys.insert(worker_id.to_owned(), fingerprint.clone());
         self.persist()
@@ -175,9 +186,22 @@ impl TrustedKeyStore {
         };
         let bytes = serde_json::to_vec_pretty(&file)
             .map_err(|e| Error::Store(format!("serialize trusted-keys: {e}")))?;
-        let tmp = self.path.with_extension("json.tmp");
+        // Unique temp name + O_EXCL: a fixed name would let a second
+        // principal race a symlink into the store directory; the parent
+        // dir is user-owned today, but harden the window anyway.
+        let tmp = self.path.with_file_name(format!(
+            "{}.{}.tmp",
+            self.path
+                .file_name()
+                .map(|n| n.to_string_lossy().into_owned())
+                .unwrap_or_else(|| "trusted-keys".to_owned()),
+            std::process::id(),
+        ));
         {
-            let mut handle = std::fs::File::create(&tmp)
+            let mut handle = std::fs::OpenOptions::new()
+                .write(true)
+                .create_new(true)
+                .open(&tmp)
                 .map_err(|e| Error::Store(format!("failed to create {}: {e}", tmp.display())))?;
             handle
                 .write_all(&bytes)
@@ -188,6 +212,11 @@ impl TrustedKeyStore {
         }
         std::fs::rename(&tmp, &self.path)
             .map_err(|e| Error::Store(format!("failed to rename {}: {e}", tmp.display())))?;
+        if let Some(parent) = self.path.parent() {
+            if let Ok(dir) = std::fs::File::open(parent) {
+                let _ = dir.sync_all();
+            }
+        }
         Ok(())
     }
 }
