@@ -226,3 +226,62 @@ fn run_value_store_collapse_keeps_value_and_retention_in_one_record() {
     assert!(store.is_empty());
     assert!(!store.contains(&key_b));
 }
+
+#[test]
+fn drop_stage_scoped_removes_only_values_scoped_to_that_stage() {
+    use reimagine_runtime::{ExecutionValueRetention, StageId};
+
+    let mut store = RunValueStore::new();
+    let key_stage1 = OutputKey::new(NodeId::new("a"), SlotId::new("latent"));
+    let key_stage2 = OutputKey::new(NodeId::new("b"), SlotId::new("latent"));
+    let key_single = OutputKey::new(NodeId::new("c"), SlotId::new("out"));
+    let key_run = OutputKey::new(NodeId::new("d"), SlotId::new("out"));
+    let value = Arc::new(ExecutionValue::Param(ParamValue::String("x".to_owned())));
+
+    store.insert_with_retention(
+        key_stage1.clone(),
+        value.clone(),
+        ExecutionValueRetention::StageScoped(StageId::new(1)),
+    );
+    store.insert_with_retention(
+        key_stage2.clone(),
+        value.clone(),
+        ExecutionValueRetention::StageScoped(StageId::new(2)),
+    );
+    store.insert_with_retention(
+        key_single.clone(),
+        value.clone(),
+        ExecutionValueRetention::SingleUse,
+    );
+    store.insert_with_retention(
+        key_run.clone(),
+        value.clone(),
+        ExecutionValueRetention::RunScoped,
+    );
+    store.insert_with_retention(
+        key_run.clone(),
+        value.clone(),
+        ExecutionValueRetention::WorkspaceScoped,
+    );
+
+    // Dropping stage 1 removes only the value scoped to stage 1.
+    store.drop_stage_scoped(StageId::new(1));
+    assert!(!store.contains(&key_stage1));
+    assert!(store.contains(&key_stage2));
+    assert!(store.contains(&key_single));
+    assert!(store.contains(&key_run));
+
+    // Dropping a stage with no values is a no-op.
+    store.drop_stage_scoped(StageId::new(9));
+    assert_eq!(store.len(), 3);
+
+    // Dropping stage 2 leaves the non-stage-scoped policies untouched.
+    store.drop_stage_scoped(StageId::new(2));
+    assert!(!store.contains(&key_stage2));
+    assert!(store.contains(&key_single));
+    assert!(store.contains(&key_run));
+    assert_eq!(
+        store.retention(&key_run),
+        Some(ExecutionValueRetention::WorkspaceScoped)
+    );
+}

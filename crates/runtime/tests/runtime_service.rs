@@ -24,10 +24,10 @@ use reimagine_core::readiness::{
     ExecutionStage, RunTarget, RunTargetSelection,
 };
 use reimagine_runtime::{
-    CancellationToken, Clock, ExecutionValue, NodeExecutionContext, NodeExecutor,
-    NodeExecutorError, NodeExecutorRegistry, NoopBackendInstanceRuntimeHooks, RunEventSink,
-    RunHandle, RunInputs, RuntimeError, RuntimeOptions, RuntimeService, RuntimeServiceError,
-    VecRunEventSink,
+    CancellationToken, Clock, DEFAULT_NODE_ESTIMATED_VRAM_BYTES, ExecutionValue,
+    ExecutionValueRetention, MemoryBudget, NodeExecutionContext, NodeExecutor, NodeExecutorError,
+    NodeExecutorRegistry, NoopBackendInstanceRuntimeHooks, RunEventSink, RunHandle, RunInputs,
+    RuntimeError, RuntimeOptions, RuntimeService, RuntimeServiceError, StageId, VecRunEventSink,
 };
 
 /// A clock that always returns the same string timestamp.
@@ -4112,5 +4112,800 @@ fn explicit_target_run_uses_active_plan_fan_out_not_workflow_fan_out() {
         assert_eq!(consumer_count.load(Ordering::SeqCst), 1);
         // The unselected branch was never scheduled.
         assert_eq!(other_branch_count.load(Ordering::SeqCst), 0);
+    });
+}
+
+// ---------------------------------------------------------------------------
+// BE-18: StageScoped value retention.
+// ---------------------------------------------------------------------------
+
+/// Producer that emits a `StageScoped(stage)` value and registers a weak
+/// handle so tests can observe the value's lifetime.
+struct StageScopedProducer {
+    slot: String,
+    label: String,
+    stage: StageId,
+    count: Arc<AtomicUsize>,
+    weak_slot: Arc<Mutex<Option<Weak<ExecutionValue>>>>,
+}
+
+#[async_trait]
+impl NodeExecutor for StageScopedProducer {
+    async fn execute(
+        &self,
+        _context: NodeExecutionContext,
+    ) -> Result<Vec<reimagine_runtime::ExecutionOutput>, NodeExecutorError> {
+        self.count.fetch_add(1, Ordering::SeqCst);
+        let value = Arc::new(ExecutionValue::Param(ParamValue::String(
+            self.label.clone(),
+        )));
+        *self.weak_slot.lock().unwrap() = Some(Arc::downgrade(&value));
+        Ok(vec![reimagine_runtime::ExecutionOutput::new(
+            SlotId::new(self.slot.clone()),
+            value,
+            ExecutionValueRetention::StageScoped(self.stage),
+        )])
+    }
+}
+
+/// Executor that records whether the value behind a weak handle is still
+/// alive at the moment the node runs.
+struct LivenessProbeExecutor {
+    count: Arc<AtomicUsize>,
+    weak_slot: Arc<Mutex<Option<Weak<ExecutionValue>>>>,
+    observed_live: Arc<Mutex<Vec<bool>>>,
+}
+
+#[async_trait]
+impl NodeExecutor for LivenessProbeExecutor {
+    async fn execute(
+        &self,
+        _context: NodeExecutionContext,
+    ) -> Result<Vec<reimagine_runtime::ExecutionOutput>, NodeExecutorError> {
+        self.count.fetch_add(1, Ordering::SeqCst);
+        let live = self
+            .weak_slot
+            .lock()
+            .unwrap()
+            .as_ref()
+            .and_then(Weak::upgrade)
+            .is_some();
+        self.observed_live.lock().unwrap().push(live);
+        Ok(Vec::new())
+    }
+}
+
+/// Producer that emits a `RunScoped` value and registers a weak handle so
+/// tests can observe that run-scoped values survive stage completions.
+struct WeakRunScopedProducer {
+    slot: String,
+    label: String,
+    count: Arc<AtomicUsize>,
+    weak_slot: Arc<Mutex<Option<Weak<ExecutionValue>>>>,
+}
+
+#[async_trait]
+impl NodeExecutor for WeakRunScopedProducer {
+    async fn execute(
+        &self,
+        _context: NodeExecutionContext,
+    ) -> Result<Vec<reimagine_runtime::ExecutionOutput>, NodeExecutorError> {
+        self.count.fetch_add(1, Ordering::SeqCst);
+        let value = Arc::new(ExecutionValue::Param(ParamValue::String(
+            self.label.clone(),
+        )));
+        *self.weak_slot.lock().unwrap() = Some(Arc::downgrade(&value));
+        Ok(vec![reimagine_runtime::ExecutionOutput::run_scoped(
+            SlotId::new(self.slot.clone()),
+            value,
+        )])
+    }
+}
+
+#[test]
+fn stage_scoped_value_is_dropped_when_its_stage_completes() {
+    let rt = test_runtime();
+    rt.block_on(async {
+        let mut registry = NodeExecutorRegistry::default();
+        let p1_weak = Arc::new(Mutex::new(None::<Weak<ExecutionValue>>));
+        let p3_weak = Arc::new(Mutex::new(None::<Weak<ExecutionValue>>));
+        let run_weak = Arc::new(Mutex::new(None::<Weak<ExecutionValue>>));
+        let probe_p1 = Arc::new(Mutex::new(Vec::new()));
+        let probe_p3 = Arc::new(Mutex::new(Vec::new()));
+        let probe_run = Arc::new(Mutex::new(Vec::new()));
+
+        // Stage 0 producers: p1 -> StageScoped(stage 1), p2 -> RunScoped.
+        registry
+            .register(
+                "mock.stage_scoped_p1",
+                Arc::new(StageScopedProducer {
+                    slot: "out".to_owned(),
+                    label: "p1".to_owned(),
+                    stage: StageId::new(1),
+                    count: Arc::new(AtomicUsize::new(0)),
+                    weak_slot: p1_weak.clone(),
+                }),
+            )
+            .unwrap();
+        registry
+            .register(
+                "mock.run_scoped_p2",
+                Arc::new(WeakRunScopedProducer {
+                    slot: "out".to_owned(),
+                    label: "p2".to_owned(),
+                    count: Arc::new(AtomicUsize::new(0)),
+                    weak_slot: run_weak.clone(),
+                }),
+            )
+            .unwrap();
+
+        // Stage 1: p3 -> StageScoped(stage 2), consumed in stage 2.
+        registry
+            .register(
+                "mock.stage_scoped_p3",
+                Arc::new(StageScopedProducer {
+                    slot: "out".to_owned(),
+                    label: "p3".to_owned(),
+                    stage: StageId::new(2),
+                    count: Arc::new(AtomicUsize::new(0)),
+                    weak_slot: p3_weak.clone(),
+                }),
+            )
+            .unwrap();
+        // c1 probes p1 (StageScoped(1)) during stage 1 — must be live.
+        registry
+            .register(
+                "mock.probe_c1",
+                Arc::new(LivenessProbeExecutor {
+                    count: Arc::new(AtomicUsize::new(0)),
+                    weak_slot: p1_weak.clone(),
+                    observed_live: probe_p1.clone(),
+                }),
+            )
+            .unwrap();
+        // c2 probes p1 (StageScoped(1)) during stage 2 — must be dead,
+        // and consumes p3 (StageScoped(2)) — must still be live.
+        registry
+            .register(
+                "mock.probe_c2",
+                Arc::new(LivenessProbeExecutor {
+                    count: Arc::new(AtomicUsize::new(0)),
+                    weak_slot: p1_weak.clone(),
+                    observed_live: probe_p1.clone(),
+                }),
+            )
+            .unwrap();
+        // c3 probes p3 (StageScoped(2)) during stage 3 — must be dead.
+        registry
+            .register(
+                "mock.probe_c3",
+                Arc::new(LivenessProbeExecutor {
+                    count: Arc::new(AtomicUsize::new(0)),
+                    weak_slot: p3_weak.clone(),
+                    observed_live: probe_p3.clone(),
+                }),
+            )
+            .unwrap();
+        // c4 probes the RunScoped value during stage 3 — still live.
+        registry
+            .register(
+                "mock.probe_c4",
+                Arc::new(LivenessProbeExecutor {
+                    count: Arc::new(AtomicUsize::new(0)),
+                    weak_slot: run_weak.clone(),
+                    observed_live: probe_run.clone(),
+                }),
+            )
+            .unwrap();
+
+        let service = RuntimeService::new(
+            registry,
+            Arc::new(NoopBackendInstanceRuntimeHooks::default()),
+            Arc::new(VecRunEventSink::new()),
+            Arc::new(FixedClock),
+        );
+
+        let plan = ExecutionPlan::new(
+            WorkflowId::new("workflow-stage-scoped"),
+            WorkflowVersion::new(1),
+            RunTargetSelection::AllDefaultTargets,
+            vec![RunTarget::Node {
+                node_id: NodeId::new("c4"),
+            }],
+            vec![
+                ExecutionNode::new(
+                    NodeId::new("p1"),
+                    NodeTypeId::new("mock.stage_scoped_p1"),
+                    Vec::new(),
+                    vec![SlotId::new("out")],
+                ),
+                ExecutionNode::new(
+                    NodeId::new("p2"),
+                    NodeTypeId::new("mock.run_scoped_p2"),
+                    Vec::new(),
+                    vec![SlotId::new("out")],
+                ),
+                ExecutionNode::new(
+                    NodeId::new("p3"),
+                    NodeTypeId::new("mock.stage_scoped_p3"),
+                    Vec::new(),
+                    vec![SlotId::new("out")],
+                ),
+                ExecutionNode::new(
+                    NodeId::new("c1"),
+                    NodeTypeId::new("mock.probe_c1"),
+                    vec![ExecutionInputBinding::new(
+                        SlotId::new("in"),
+                        ExecutionInputSource::Edge {
+                            edge_id: reimagine_core::model::EdgeId::new("e-p1-c1"),
+                            from_node_id: NodeId::new("p1"),
+                            from_slot_id: SlotId::new("out"),
+                        },
+                    )],
+                    Vec::new(),
+                ),
+                ExecutionNode::new(
+                    NodeId::new("c2"),
+                    NodeTypeId::new("mock.probe_c2"),
+                    vec![ExecutionInputBinding::new(
+                        SlotId::new("in"),
+                        ExecutionInputSource::Edge {
+                            edge_id: reimagine_core::model::EdgeId::new("e-p3-c2"),
+                            from_node_id: NodeId::new("p3"),
+                            from_slot_id: SlotId::new("out"),
+                        },
+                    )],
+                    Vec::new(),
+                ),
+                ExecutionNode::new(
+                    NodeId::new("c3"),
+                    NodeTypeId::new("mock.probe_c3"),
+                    Vec::new(),
+                    Vec::new(),
+                ),
+                ExecutionNode::new(
+                    NodeId::new("c4"),
+                    NodeTypeId::new("mock.probe_c4"),
+                    Vec::new(),
+                    Vec::new(),
+                ),
+            ],
+            vec![
+                ExecutionEdge::new(
+                    reimagine_core::model::EdgeId::new("e-p1-c1"),
+                    NodeId::new("p1"),
+                    SlotId::new("out"),
+                    NodeId::new("c1"),
+                    SlotId::new("in"),
+                ),
+                ExecutionEdge::new(
+                    reimagine_core::model::EdgeId::new("e-p3-c2"),
+                    NodeId::new("p3"),
+                    SlotId::new("out"),
+                    NodeId::new("c2"),
+                    SlotId::new("in"),
+                ),
+            ],
+            Vec::new(),
+            vec![
+                ExecutionStage::new(0, vec![NodeId::new("p1"), NodeId::new("p2")]),
+                ExecutionStage::new(1, vec![NodeId::new("p3"), NodeId::new("c1")]),
+                ExecutionStage::new(2, vec![NodeId::new("c2")]),
+                ExecutionStage::new(3, vec![NodeId::new("c3"), NodeId::new("c4")]),
+            ],
+        );
+
+        let handle = service
+            .run(
+                Arc::new(plan),
+                Default::default(),
+                RuntimeOptions::default(),
+            )
+            .unwrap();
+        run_to_completion(&service, &handle);
+
+        let summary = service.summary(handle.run_id()).unwrap();
+        assert_eq!(summary.state, reimagine_runtime::RunState::Completed);
+
+        // c1 (stage 1) saw p1's StageScoped(1) value still alive.
+        let c1_probe = probe_p1.lock().unwrap().first().copied().expect("c1 probe");
+        assert!(
+            c1_probe,
+            "stage-scoped value must be live during its own stage"
+        );
+        // c2 (stage 2) saw p1's value dead — stage 1 completed.
+        let c2_probe = probe_p1.lock().unwrap().get(1).copied().expect("c2 probe");
+        assert!(
+            !c2_probe,
+            "stage-scoped value must be dropped after its stage completes"
+        );
+        // c3 (stage 3) saw p3's StageScoped(2) value dead — stage 2 completed.
+        let c3_probe = probe_p3.lock().unwrap().first().copied().expect("c3 probe");
+        assert!(
+            !c3_probe,
+            "stage-scoped value must be dropped after its stage completes"
+        );
+        // c4 (stage 3) saw the RunScoped value still live mid-run.
+        let c4_probe = probe_run
+            .lock()
+            .unwrap()
+            .first()
+            .copied()
+            .expect("c4 probe");
+        assert!(
+            c4_probe,
+            "RunScoped value must survive mid-run stage completions"
+        );
+    });
+}
+
+// ---------------------------------------------------------------------------
+// BE-36: Memory budget & backpressure.
+// ---------------------------------------------------------------------------
+
+#[test]
+fn memory_budget_reject_fails_node_with_out_of_memory_diagnostic() {
+    let rt = test_runtime();
+    rt.block_on(async {
+        let mut registry = NodeExecutorRegistry::default();
+        registry
+            .register(
+                "mock.echo",
+                Arc::new(MockExecutor {
+                    label: "hello".to_owned(),
+                    count: Arc::new(AtomicUsize::new(0)),
+                    delay: Duration::ZERO,
+                    fail_with: None,
+                }),
+            )
+            .expect("register executor");
+        let service = RuntimeService::new(
+            registry,
+            Arc::new(NoopBackendInstanceRuntimeHooks::default()),
+            Arc::new(VecRunEventSink::new()),
+            Arc::new(FixedClock),
+        );
+
+        // Every node's estimate (2 GiB) exceeds the 1 GiB hard ceiling.
+        let budget = MemoryBudget::new(512 * 1024 * 1024, 1024 * 1024 * 1024);
+        let mut options = RuntimeOptions::default();
+        options.memory_budget = Some(Arc::new(budget));
+        let handle = service
+            .run(
+                Arc::new(one_node_plan("mock.echo", "node_a")),
+                Default::default(),
+                options,
+            )
+            .expect("start run");
+        run_to_completion(&service, &handle);
+
+        let summary = service.summary(handle.run_id()).unwrap();
+        assert_eq!(summary.state, reimagine_runtime::RunState::Failed);
+        let snapshot = service.snapshot(handle.run_id()).unwrap();
+        assert_eq!(
+            snapshot.node_states.get(&NodeId::new("node_a")).copied(),
+            Some(reimagine_runtime::NodeState::Failed)
+        );
+        let oom = snapshot
+            .diagnostics
+            .iter()
+            .find(|d| d.message().contains("out of memory"))
+            .expect("out-of-memory diagnostic must be emitted");
+        assert!(
+            oom.message().contains("requested"),
+            "unexpected diagnostic: {}",
+            oom.message()
+        );
+    });
+}
+
+#[test]
+fn memory_budget_backpressure_waits_for_an_inflight_node() {
+    let rt = test_runtime();
+    rt.block_on(async {
+        let mut registry = NodeExecutorRegistry::default();
+        let entered = Arc::new(AtomicUsize::new(0));
+        let max_seen = Arc::new(AtomicUsize::new(0));
+        let release = Arc::new(AtomicBool::new(false));
+        registry
+            .register(
+                "mock.blocking",
+                Arc::new(BlockingConcurrencyExecutor {
+                    entered: entered.clone(),
+                    max_seen: max_seen.clone(),
+                    release: release.clone(),
+                }),
+            )
+            .expect("register executor");
+        let service = RuntimeService::new(
+            registry,
+            Arc::new(NoopBackendInstanceRuntimeHooks::default()),
+            Arc::new(VecRunEventSink::new()),
+            Arc::new(FixedClock),
+        );
+
+        // Soft watermark: one node estimate. Hard ceiling: two estimates.
+        // The first node admits; the second backpressures until the first
+        // completes, even though intra-stage concurrency is 2.
+        let budget = MemoryBudget::new(
+            DEFAULT_NODE_ESTIMATED_VRAM_BYTES,
+            2 * DEFAULT_NODE_ESTIMATED_VRAM_BYTES,
+        );
+        let mut options = RuntimeOptions::default();
+        options.max_stage_concurrency = Some(2);
+        options.memory_budget = Some(Arc::new(budget));
+        let handle = service
+            .run(
+                Arc::new(two_node_same_stage_plan("mock.blocking", "a", "b")),
+                Default::default(),
+                options,
+            )
+            .expect("start run");
+
+        // First node admitted and in flight; the second must stay queued.
+        wait_for_condition(Duration::from_secs(2), || {
+            entered.load(Ordering::SeqCst) >= 1
+        });
+        std::thread::sleep(Duration::from_millis(100));
+        assert_eq!(
+            max_seen.load(Ordering::SeqCst),
+            1,
+            "budget backpressure must prevent the second node from being admitted"
+        );
+
+        release.store(true, Ordering::SeqCst);
+        run_to_completion(&service, &handle);
+
+        assert_eq!(
+            max_seen.load(Ordering::SeqCst),
+            1,
+            "the two nodes must never overlap under a one-node budget"
+        );
+        let summary = service.summary(handle.run_id()).unwrap();
+        assert_eq!(summary.state, reimagine_runtime::RunState::Completed);
+        assert_eq!(entered.load(Ordering::SeqCst), 0, "both nodes must finish");
+    });
+}
+
+#[test]
+fn memory_budget_none_leaves_stage_concurrency_unchanged() {
+    let rt = test_runtime();
+    rt.block_on(async {
+        let mut registry = NodeExecutorRegistry::default();
+        let entered = Arc::new(AtomicUsize::new(0));
+        let max_seen = Arc::new(AtomicUsize::new(0));
+        let release = Arc::new(AtomicBool::new(false));
+        registry
+            .register(
+                "mock.blocking",
+                Arc::new(BlockingConcurrencyExecutor {
+                    entered: entered.clone(),
+                    max_seen: max_seen.clone(),
+                    release: release.clone(),
+                }),
+            )
+            .expect("register executor");
+        let service = RuntimeService::new(
+            registry,
+            Arc::new(NoopBackendInstanceRuntimeHooks::default()),
+            Arc::new(VecRunEventSink::new()),
+            Arc::new(FixedClock),
+        );
+
+        let mut options = RuntimeOptions::default();
+        options.max_stage_concurrency = Some(2);
+        options.memory_budget = None;
+        let handle = service
+            .run(
+                Arc::new(two_node_same_stage_plan("mock.blocking", "a", "b")),
+                Default::default(),
+                options,
+            )
+            .expect("start run");
+
+        wait_for_condition(Duration::from_secs(2), || {
+            max_seen.load(Ordering::SeqCst) >= 2
+        });
+        release.store(true, Ordering::SeqCst);
+        run_to_completion(&service, &handle);
+        assert_eq!(max_seen.load(Ordering::SeqCst), 2);
+    });
+}
+
+#[test]
+fn runtime_rejects_invalid_memory_budget_and_stage_group_concurrency() {
+    let rt = test_runtime();
+    rt.block_on(async {
+        let mut registry = NodeExecutorRegistry::default();
+        registry
+            .register(
+                "mock.echo",
+                Arc::new(MockExecutor {
+                    label: "hello".to_owned(),
+                    count: Arc::new(AtomicUsize::new(0)),
+                    delay: Duration::ZERO,
+                    fail_with: None,
+                }),
+            )
+            .expect("register executor");
+        let service = RuntimeService::new(
+            registry,
+            Arc::new(NoopBackendInstanceRuntimeHooks::default()),
+            Arc::new(VecRunEventSink::new()),
+            Arc::new(FixedClock),
+        );
+
+        let mut options = RuntimeOptions::default();
+        options.max_stage_group_concurrency = Some(0);
+        let error = service
+            .run(
+                Arc::new(one_node_plan("mock.echo", "node_a")),
+                Default::default(),
+                options,
+            )
+            .expect_err("zero group concurrency must be rejected");
+        assert!(
+            matches!(
+                error,
+                RuntimeServiceError::InvalidStageGroupConcurrency { value: 0 }
+            ),
+            "unexpected error: {error:?}"
+        );
+
+        let mut options = RuntimeOptions::default();
+        options.memory_budget = Some(Arc::new(MemoryBudget::new(200, 100)));
+        let error = service
+            .run(
+                Arc::new(one_node_plan("mock.echo", "node_a")),
+                Default::default(),
+                options,
+            )
+            .expect_err("budget with hard < soft must be rejected");
+        assert!(
+            matches!(
+                error,
+                RuntimeServiceError::InvalidMemoryBudget {
+                    soft_limit: 200,
+                    hard_limit: 100,
+                }
+            ),
+            "unexpected error: {error:?}"
+        );
+    });
+}
+
+// ---------------------------------------------------------------------------
+// BE-35: Stage-level parallelism.
+// ---------------------------------------------------------------------------
+
+/// Plan with two independent branches a->b and c->d laid out as stages
+/// [a, c], [b], [d].
+///
+/// Stage 1 ({b}) and stage 2 ({d}) are consecutive stages with no
+/// transitive cross-stage dependency — the planner's wave leveling never
+/// produces this shape, but it is a valid topological plan, and it is
+/// exactly the shape stage-group parallelism exists for.
+fn independent_branch_stage_plan(branch_type: &str, fast_type: &str) -> ExecutionPlan {
+    ExecutionPlan::new(
+        WorkflowId::new("workflow-stage-groups"),
+        WorkflowVersion::new(1),
+        RunTargetSelection::AllDefaultTargets,
+        vec![
+            RunTarget::Node {
+                node_id: NodeId::new("a"),
+            },
+            RunTarget::Node {
+                node_id: NodeId::new("b"),
+            },
+            RunTarget::Node {
+                node_id: NodeId::new("c"),
+            },
+            RunTarget::Node {
+                node_id: NodeId::new("d"),
+            },
+        ],
+        vec![
+            ExecutionNode::new(
+                NodeId::new("a"),
+                NodeTypeId::new(fast_type),
+                Vec::new(),
+                vec![SlotId::new("out")],
+            ),
+            ExecutionNode::new(
+                NodeId::new("b"),
+                NodeTypeId::new(branch_type),
+                vec![ExecutionInputBinding::new(
+                    SlotId::new("in"),
+                    ExecutionInputSource::Edge {
+                        edge_id: reimagine_core::model::EdgeId::new("e-ab"),
+                        from_node_id: NodeId::new("a"),
+                        from_slot_id: SlotId::new("out"),
+                    },
+                )],
+                vec![SlotId::new("out")],
+            ),
+            ExecutionNode::new(
+                NodeId::new("c"),
+                NodeTypeId::new(fast_type),
+                Vec::new(),
+                vec![SlotId::new("out")],
+            ),
+            ExecutionNode::new(
+                NodeId::new("d"),
+                NodeTypeId::new(branch_type),
+                vec![ExecutionInputBinding::new(
+                    SlotId::new("in"),
+                    ExecutionInputSource::Edge {
+                        edge_id: reimagine_core::model::EdgeId::new("e-cd"),
+                        from_node_id: NodeId::new("c"),
+                        from_slot_id: SlotId::new("out"),
+                    },
+                )],
+                vec![SlotId::new("out")],
+            ),
+        ],
+        vec![
+            ExecutionEdge::new(
+                reimagine_core::model::EdgeId::new("e-ab"),
+                NodeId::new("a"),
+                SlotId::new("out"),
+                NodeId::new("b"),
+                SlotId::new("in"),
+            ),
+            ExecutionEdge::new(
+                reimagine_core::model::EdgeId::new("e-cd"),
+                NodeId::new("c"),
+                SlotId::new("out"),
+                NodeId::new("d"),
+                SlotId::new("in"),
+            ),
+        ],
+        Vec::new(),
+        vec![
+            ExecutionStage::new(0, vec![NodeId::new("a"), NodeId::new("c")]),
+            ExecutionStage::new(1, vec![NodeId::new("b")]),
+            ExecutionStage::new(2, vec![NodeId::new("d")]),
+        ],
+    )
+}
+
+#[test]
+fn independent_stages_run_concurrently_with_stage_group_parallelism() {
+    let rt = test_runtime();
+    rt.block_on(async {
+        let mut registry = NodeExecutorRegistry::default();
+        let entered = Arc::new(AtomicUsize::new(0));
+        let max_seen = Arc::new(AtomicUsize::new(0));
+        let release = Arc::new(AtomicBool::new(false));
+        registry
+            .register(
+                "mock.branch",
+                Arc::new(BlockingConcurrencyExecutor {
+                    entered: entered.clone(),
+                    max_seen: max_seen.clone(),
+                    release: release.clone(),
+                }),
+            )
+            .expect("register branch executor");
+        registry
+            .register(
+                "mock.fast",
+                Arc::new(MockExecutor {
+                    label: "fast".to_owned(),
+                    count: Arc::new(AtomicUsize::new(0)),
+                    delay: Duration::ZERO,
+                    fail_with: None,
+                }),
+            )
+            .expect("register fast executor");
+        let service = RuntimeService::new(
+            registry,
+            Arc::new(NoopBackendInstanceRuntimeHooks::default()),
+            Arc::new(VecRunEventSink::new()),
+            Arc::new(FixedClock),
+        );
+
+        let mut options = RuntimeOptions::default();
+        options.max_stage_group_concurrency = Some(2);
+        let handle = service
+            .run(
+                Arc::new(independent_branch_stage_plan("mock.branch", "mock.fast")),
+                Default::default(),
+                options,
+            )
+            .expect("start run");
+
+        // b (stage 1) and d (stage 2) are in independent stages but must
+        // be in flight together: the group [1, 2] runs concurrently.
+        wait_for_condition(Duration::from_secs(2), || {
+            max_seen.load(Ordering::SeqCst) >= 2
+        });
+        release.store(true, Ordering::SeqCst);
+        run_to_completion(&service, &handle);
+
+        assert_eq!(
+            max_seen.load(Ordering::SeqCst),
+            2,
+            "b and d must have been in flight together"
+        );
+        let snapshot = service.snapshot(handle.run_id()).unwrap();
+        for node_id in ["a", "b", "c", "d"] {
+            assert_eq!(
+                snapshot.node_states.get(&NodeId::new(node_id)).copied(),
+                Some(reimagine_runtime::NodeState::Completed),
+                "node {node_id} must complete"
+            );
+        }
+        assert_eq!(
+            service.summary(handle.run_id()).unwrap().state,
+            reimagine_runtime::RunState::Completed
+        );
+    });
+}
+
+#[test]
+fn stage_group_parallelism_is_off_by_default() {
+    let rt = test_runtime();
+    rt.block_on(async {
+        let mut registry = NodeExecutorRegistry::default();
+        let entered = Arc::new(AtomicUsize::new(0));
+        let max_seen = Arc::new(AtomicUsize::new(0));
+        let release = Arc::new(AtomicBool::new(false));
+        registry
+            .register(
+                "mock.branch",
+                Arc::new(BlockingConcurrencyExecutor {
+                    entered: entered.clone(),
+                    max_seen: max_seen.clone(),
+                    release: release.clone(),
+                }),
+            )
+            .expect("register branch executor");
+        registry
+            .register(
+                "mock.fast",
+                Arc::new(MockExecutor {
+                    label: "fast".to_owned(),
+                    count: Arc::new(AtomicUsize::new(0)),
+                    delay: Duration::ZERO,
+                    fail_with: None,
+                }),
+            )
+            .expect("register fast executor");
+        let service = RuntimeService::new(
+            registry,
+            Arc::new(NoopBackendInstanceRuntimeHooks::default()),
+            Arc::new(VecRunEventSink::new()),
+            Arc::new(FixedClock),
+        );
+
+        // Default options: no stage-group parallelism — b and d run
+        // strictly sequentially.
+        let handle = service
+            .run(
+                Arc::new(independent_branch_stage_plan("mock.branch", "mock.fast")),
+                Default::default(),
+                RuntimeOptions::default(),
+            )
+            .expect("start run");
+
+        wait_for_condition(Duration::from_secs(2), || {
+            entered.load(Ordering::SeqCst) >= 1
+        });
+        std::thread::sleep(Duration::from_millis(100));
+        assert_eq!(
+            max_seen.load(Ordering::SeqCst),
+            1,
+            "stages must stay sequential without max_stage_group_concurrency"
+        );
+
+        release.store(true, Ordering::SeqCst);
+        run_to_completion(&service, &handle);
+
+        assert_eq!(max_seen.load(Ordering::SeqCst), 1);
+        assert_eq!(
+            service.summary(handle.run_id()).unwrap().state,
+            reimagine_runtime::RunState::Completed
+        );
     });
 }

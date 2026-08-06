@@ -19,6 +19,7 @@ use crate::events::RunEventSink;
 use crate::handle::{RunHandle, RunState};
 use crate::resources::NoopBackendInstanceRuntimeHooks;
 use crate::run_inputs::RunInputs;
+use crate::scheduler::MemoryBudget;
 use crate::snapshot::{RunArtifactRef, RunSnapshot, RunSummary};
 use crate::store::RunStore;
 
@@ -41,6 +42,34 @@ pub struct RuntimeOptions {
     /// This enables better GPU utilization for multi-branch workflows.
     /// Default is `false` (sequential stages).
     pub use_ready_set: bool,
+    /// Best-effort run memory budget gating node admission (BE-36).
+    ///
+    /// When set, each node's estimated VRAM footprint is admitted
+    /// against the budget before it is spawned: crossing the soft
+    /// watermark adds backpressure (the stage waits for an in-flight
+    /// node to complete before admitting more), and crossing the hard
+    /// ceiling fails the node with an out-of-memory-style diagnostic
+    /// (which, like any node failure, fails the run fail-fast). The
+    /// budget is advisory — estimates fall back to
+    /// [`DEFAULT_NODE_ESTIMATED_VRAM_BYTES`] — and shared across all
+    /// stages and stage groups of the run.
+    ///
+    /// `None` (default) disables budget gating entirely.
+    pub memory_budget: Option<Arc<MemoryBudget>>,
+    /// Maximum number of independent stages admitted concurrently
+    /// (BE-35 stage-level parallelism).
+    ///
+    /// The orchestrator groups consecutive stages with no transitive
+    /// cross-stage data dependencies into `ParallelStageGroup`s. With
+    /// this option at least 2, up to this many member stages of a group
+    /// execute concurrently on a `JoinSet`; groups themselves still
+    /// execute in stage order, so value-store merges and
+    /// `StageScoped` drops stay deterministic.
+    ///
+    /// `None` preserves V1's strictly sequential stage execution.
+    /// `Some(1)` is also sequential. `Some(0)` is rejected by
+    /// [`RuntimeService::run`].
+    pub max_stage_group_concurrency: Option<usize>,
     /// VRAM budget sent to the backend via `ResourceHints` before each stage.
     ///
     /// `None` (default) means unlimited — the backend uses all available VRAM.
@@ -65,6 +94,8 @@ impl Default for RuntimeOptions {
             correlation_id: None,
             max_stage_concurrency: None,
             use_ready_set: false,
+            memory_budget: None,
+            max_stage_group_concurrency: None,
             vram_budget: None,
             default_node_timeout: Some(Duration::from_secs(5 * 60)),
         }
@@ -74,11 +105,29 @@ impl Default for RuntimeOptions {
 /// Public errors returned from `RuntimeService` operations.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum RuntimeServiceError {
-    UnknownRun { run_id: String },
-    EmptyPlan { run_id: String },
-    MissingExecutor { run_id: String, type_id: String },
-    EventSink { message: String },
-    InvalidStageConcurrency { value: usize },
+    UnknownRun {
+        run_id: String,
+    },
+    EmptyPlan {
+        run_id: String,
+    },
+    MissingExecutor {
+        run_id: String,
+        type_id: String,
+    },
+    EventSink {
+        message: String,
+    },
+    InvalidStageConcurrency {
+        value: usize,
+    },
+    InvalidStageGroupConcurrency {
+        value: usize,
+    },
+    InvalidMemoryBudget {
+        soft_limit: usize,
+        hard_limit: usize,
+    },
 }
 
 impl std::fmt::Display for RuntimeServiceError {
@@ -99,6 +148,19 @@ impl std::fmt::Display for RuntimeServiceError {
                     "invalid max_stage_concurrency: {value}; expected at least 1"
                 )
             }
+            Self::InvalidStageGroupConcurrency { value } => {
+                write!(
+                    f,
+                    "invalid max_stage_group_concurrency: {value}; expected at least 1"
+                )
+            }
+            Self::InvalidMemoryBudget {
+                soft_limit,
+                hard_limit,
+            } => write!(
+                f,
+                "invalid memory budget: hard_limit {hard_limit} is below soft_limit {soft_limit}"
+            ),
         }
     }
 }
@@ -210,6 +272,17 @@ impl RuntimeService {
         }
         if options.max_stage_concurrency == Some(0) {
             return Err(RuntimeServiceError::InvalidStageConcurrency { value: 0 });
+        }
+        if options.max_stage_group_concurrency == Some(0) {
+            return Err(RuntimeServiceError::InvalidStageGroupConcurrency { value: 0 });
+        }
+        if let Some(budget) = &options.memory_budget
+            && budget.hard_limit() < budget.soft_limit()
+        {
+            return Err(RuntimeServiceError::InvalidMemoryBudget {
+                soft_limit: budget.soft_limit(),
+                hard_limit: budget.hard_limit(),
+            });
         }
         for node in plan.nodes() {
             if self.registry.get(node.type_id()).is_none() {

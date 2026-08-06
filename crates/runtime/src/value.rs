@@ -23,7 +23,7 @@ pub use reimagine_inference::{
     Backend, BackendPayloadKey, BackendTensorHandle, BackendTensorMetadata, ConditioningMetadata,
     ExecutionConditioning, ExecutionOutput, ExecutionValue, ExecutionValueKind,
     ExecutionValueRetention, RuntimeClipHandle, RuntimeImage, RuntimeLatent, RuntimeModelHandle,
-    RuntimeVaeHandle,
+    RuntimeVaeHandle, StageId,
 };
 
 /// Compatibility alias for [`ExecutionValue`].

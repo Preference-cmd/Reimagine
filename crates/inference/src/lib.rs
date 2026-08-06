@@ -54,6 +54,13 @@ mod response;
 mod router;
 mod routing_request;
 mod scheduler;
+/// Test-only scripted backend and hold/delay primitives.
+///
+/// Compiled for both unit tests and integration tests so downstream
+/// `tests/` files can script error propagation without enabling a
+/// feature flag. Production code must not depend on this module.
+#[doc(hidden)]
+pub mod scripted_backend;
 /// Test-only fake backend and canned-response helpers.
 ///
 /// Compiled for both unit tests and integration tests so downstream
@@ -67,7 +74,7 @@ pub use execution_value::{
     BackendPayloadKey, BackendTensorHandle, BackendTensorMetadata, ConditioningMetadata,
     DynExecutionValue, ExecutionConditioning, ExecutionOutput, ExecutionValue, ExecutionValueKind,
     ExecutionValueRetention, RuntimeClipHandle, RuntimeImage, RuntimeLatent, RuntimeModelHandle,
-    RuntimeVaeHandle,
+    RuntimeVaeHandle, StageId,
 };
 
 pub use latent_content::{LatentContent, LatentContentError};
@@ -145,6 +152,8 @@ pub use executor::{
 pub use executors::image_import::{ImageSourceResolver, LoadImageExecutor};
 pub use node_context::{NodeExecutionContext, NodeInputs, NodeParams};
 pub use registry::register_builtin_inference_executors;
+#[doc(hidden)]
+pub use scripted_backend::{ScriptExhaustion, ScriptedBackend, ScriptedHold};
 #[doc(hidden)]
 pub use testing::{
     CannedCapabilityResponse, FakeBackend, NoopArtifactPublisher, NoopNodeCancellation,

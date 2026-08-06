@@ -33,6 +33,6 @@ pub use handles::{
     BackendTensorHandle, RuntimeClipHandle, RuntimeImage, RuntimeLatent, RuntimeModelHandle,
     RuntimeVaeHandle,
 };
-pub use output::{ExecutionOutput, ExecutionValueRetention};
+pub use output::{ExecutionOutput, ExecutionValueRetention, StageId};
 pub use tensor::BackendTensorMetadata;
 pub use value::{DynExecutionValue, ExecutionValue, ExecutionValueKind};

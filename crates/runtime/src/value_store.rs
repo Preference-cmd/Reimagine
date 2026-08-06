@@ -4,7 +4,7 @@ use std::collections::HashMap;
 use std::sync::Arc;
 
 use reimagine_core::model::{NodeId, SlotId};
-use reimagine_inference::ExecutionValueRetention;
+use reimagine_inference::{ExecutionValueRetention, StageId};
 
 use crate::value::ExecutionValue;
 
@@ -153,6 +153,22 @@ impl RunValueStore {
     /// Remove and return the value for the given key.
     pub fn remove(&mut self, key: &OutputKey) -> Option<Arc<ExecutionValue>> {
         self.records.remove(key).map(|r| r.into_value())
+    }
+
+    /// Drop every record whose declared retention is
+    /// [`ExecutionValueRetention::StageScoped`] for the given stage.
+    ///
+    /// Called by the runner once the named stage completes: producers
+    /// scoped the value to that stage, so no consumer in a later stage
+    /// may reference it. Values scoped to other stages — and values with
+    /// any other retention policy — are left untouched.
+    pub fn drop_stage_scoped(&mut self, stage: StageId) {
+        self.records.retain(|_, record| {
+            !matches!(
+                record.retention(),
+                ExecutionValueRetention::StageScoped(scoped) if scoped == stage
+            )
+        });
     }
 
     /// Drop every stored record, releasing the runtime's run-scoped

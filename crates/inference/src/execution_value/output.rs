@@ -16,6 +16,40 @@ use reimagine_core::model::SlotId;
 
 use super::value::ExecutionValue;
 
+/// Identifies an execution stage by its index within the plan's stage
+/// list.
+///
+/// Used by [`ExecutionValueRetention::StageScoped`] to name the stage
+/// after which a value may be released. Stage indices are stable for the
+/// lifetime of the [`ExecutionPlan`](reimagine_core::readiness::ExecutionPlan)
+/// that declared the stages.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub struct StageId(usize);
+
+impl StageId {
+    /// Build a stage id from the stage's index in the plan.
+    pub fn new(index: usize) -> Self {
+        Self(index)
+    }
+
+    /// The stage index this id names.
+    pub fn index(&self) -> usize {
+        self.0
+    }
+}
+
+impl From<usize> for StageId {
+    fn from(index: usize) -> Self {
+        Self(index)
+    }
+}
+
+impl std::fmt::Display for StageId {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "stage-{}", self.0)
+    }
+}
+
 /// Retention category declared by the producer of an [`ExecutionValue`].
 ///
 /// Runtime uses the category to decide when the value (and the backend
@@ -31,6 +65,14 @@ pub enum ExecutionValueRetention {
     /// are intentionally out of scope for issue 02; the runtime stores
     /// the policy but does not act on it yet.
     SingleUse,
+    /// The value lives until the named stage completes, then is dropped.
+    ///
+    /// Sits between `SingleUse` and `RunScoped` (B2-3 / BE-18): any node
+    /// in stages up to and including the named stage may consume the
+    /// value, and the runtime releases it as soon as that stage finishes
+    /// — earlier than `RunScoped` for intermediate tensors, without the
+    /// fan-out tracking `SingleUse` requires.
+    StageScoped(StageId),
     /// The value lives for the duration of a single run.
     ///
     /// This is the V1 default for most executor outputs (latents,
@@ -50,6 +92,7 @@ impl ExecutionValueRetention {
     pub fn as_str(&self) -> &'static str {
         match self {
             Self::SingleUse => "single_use",
+            Self::StageScoped(_) => "stage_scoped",
             Self::RunScoped => "run_scoped",
             Self::WorkspaceScoped => "workspace_scoped",
         }
