@@ -225,6 +225,7 @@ fn run_quic_mode(rt: tokio::runtime::Runtime, backend: &BurnBackend, listen_url:
     mdns_props.insert("backend".to_string(), identity.backend_kind.clone());
     mdns_props.insert("devices".to_string(), device_labels.join(","));
     mdns_props.insert("capabilities".to_string(), capabilities.join(","));
+    mdns_props.insert("fingerprint".to_string(), cert.fingerprint().0);
 
     let mdns = match MdnsWorkerRegister::register(
         &identity.backend_instance_id.0,

@@ -15,6 +15,7 @@ use std::path::{Path, PathBuf};
 ///   inventory/
 ///     index.json
 ///     {installation_id}.json
+///   trusted-keys.json
 /// ```
 #[derive(Clone, Debug)]
 pub struct WorkerStorePaths {
@@ -100,6 +101,15 @@ impl WorkerStorePaths {
         self.inventory_dir().join("index.json")
     }
 
+    /// Path for the TOFU trusted-keys (certificate pinning) store.
+    ///
+    /// Maps worker identity/endpoint ids to pinned SHA-256 certificate
+    /// fingerprints; consumed by the QUIC transport trust model (T19).
+    #[must_use]
+    pub fn trusted_keys_path(&self) -> PathBuf {
+        self.root().join("trusted-keys.json")
+    }
+
     /// The application data root (read-only accessor).
     #[must_use]
     pub fn app_data_root(&self) -> &Path {
@@ -166,6 +176,15 @@ mod tests {
         assert_eq!(
             paths.install_lock_path(),
             std::path::Path::new("/data/workers/.install.lock")
+        );
+    }
+
+    #[test]
+    fn trusted_keys_path_is_under_root() {
+        let paths = WorkerStorePaths::new("/data");
+        assert_eq!(
+            paths.trusted_keys_path(),
+            std::path::Path::new("/data/workers/trusted-keys.json")
         );
     }
 }

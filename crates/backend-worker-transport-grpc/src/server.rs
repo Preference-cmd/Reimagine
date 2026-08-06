@@ -5,6 +5,7 @@ use futures_core::Stream;
 use tokio::sync::mpsc;
 use tonic::{Request, Response, Status, Streaming};
 
+use crate::auth::check_bearer;
 use crate::proto;
 use crate::proto::worker_service_server::WorkerService;
 
@@ -28,14 +29,35 @@ use std::future::Future;
 /// Accepts a bidirectional `Communication` stream, reads
 /// `HostToWorker` messages, dispatches them through the provided
 /// handler, and sends `WorkerToHost` responses back.
+///
+/// When a bearer token is configured, every RPC (including
+/// `HealthCheck`) must carry `authorization: Bearer <token>`; requests
+/// without a matching token are rejected with `Status::unauthenticated`.
 pub struct GrpcWorkerService {
     handler: MessageHandler,
+    token: Option<String>,
 }
 
 impl GrpcWorkerService {
-    /// Create a new server with the given message handler.
+    /// Create a new server with the given message handler and no token
+    /// requirement (open/plain mode, backward compatible).
     pub fn new(handler: MessageHandler) -> Self {
-        Self { handler }
+        tracing::warn!(
+            "gRPC worker serving WITHOUT bearer-token auth; set REIMAGINE_WORKER_TOKEN on the worker"
+        );
+        Self::with_token(handler, None)
+    }
+
+    /// Create a server that requires `authorization: Bearer <token>` on
+    /// every RPC. `token == None` keeps the open (plain) mode.
+    #[must_use]
+    pub fn with_token(handler: MessageHandler, token: Option<String>) -> Self {
+        Self { handler, token }
+    }
+
+    /// Authorize a request against the configured token.
+    fn authorize(&self, metadata: &tonic::metadata::MetadataMap) -> Result<(), Status> {
+        check_bearer(metadata, self.token.as_deref())
     }
 }
 
@@ -49,6 +71,7 @@ impl WorkerService for GrpcWorkerService {
         &self,
         request: Request<Streaming<proto::HostToWorker>>,
     ) -> Result<Response<Self::CommunicationStream>, Status> {
+        self.authorize(request.metadata())?;
         let mut inbound = request.into_inner();
         let handler = Arc::clone(&self.handler);
         let (tx, rx) = mpsc::channel(64);
@@ -80,8 +103,9 @@ impl WorkerService for GrpcWorkerService {
 
     async fn health_check(
         &self,
-        _request: Request<proto::HealthRequest>,
+        request: Request<proto::HealthRequest>,
     ) -> Result<Response<proto::HealthResponse>, Status> {
+        self.authorize(request.metadata())?;
         Ok(Response::new(proto::HealthResponse {
             healthy: true,
             message: "ok".into(),
