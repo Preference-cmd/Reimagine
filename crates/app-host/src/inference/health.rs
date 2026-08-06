@@ -247,7 +247,7 @@ mod tests {
     #[async_trait::async_trait]
     impl WorkerHealthProbe for FakeProbe {
         async fn probe(&self, _endpoint: &WorkerEndpoint) -> Result<HealthProbeResult, String> {
-            let mut results = self.results.lock().expect("probe results poisoned");
+            let results = self.results.lock().expect("probe results poisoned");
             Ok(results
                 .first()
                 .cloned()
