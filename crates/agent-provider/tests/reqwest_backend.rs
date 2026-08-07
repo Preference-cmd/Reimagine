@@ -1,18 +1,9 @@
-//! Wiremock-driven integration tests for `RealRigBackend`.
+//! Wiremock-driven integration tests for `ReqwestBackend`.
 //!
 //! These tests stand up a local `wiremock` server and point the
-//! Rig-backed client at it via the `base_url` config. They assert
+//! reqwest-backed client at it via the `base_url` config. They assert
 //! the request shape (URL, method, auth header, body) and the
 //! response translation back into `AgentResponse` / `Vec<ModelInfo>`.
-//!
-//! The Anthropic test is intentionally a request-shape test, not a
-//! full round-trip, because V1 `AnthropicConfig` does not carry a
-//! `base_url`. The rig Anthropic client therefore targets
-//! `https://api.anthropic.com`. The test asserts that the body
-//! serializes well enough to leave the process by observing a
-//! transport-level error from the network layer. The full live
-//! round-trip is covered by manual smoke docs in a follow-up V1.5
-//! issue that will add `base_url` to `AnthropicConfig`.
 
 use std::sync::Arc;
 
@@ -25,7 +16,7 @@ use reimagine_agent::{
 };
 use reimagine_agent_provider::{
     AnthropicConfig, CompletionBackend, OpenAiCompatibleConfig, ProviderAdapterError,
-    RealRigBackend, arc_real_backend_with_http_client,
+    ReqwestBackend, arc_real_backend_with_http_client,
 };
 
 const OPENAI_KEY: &str = "sk-test-openai";
@@ -35,15 +26,9 @@ fn openai_cfg_for(server: &MockServer) -> OpenAiCompatibleConfig {
     OpenAiCompatibleConfig::new(format!("{}/v1", server.uri()), OPENAI_KEY, "gpt-4o-mini")
 }
 
-#[allow(dead_code)]
-fn anthropic_cfg() -> AnthropicConfig {
-    // AnthropicConfig is a V1 shape that does not carry base_url;
-    // the rig Anthropic Client::builder() uses the constant
-    // https://api.anthropic.com. Adding a base_url to AnthropicConfig
-    // is a V1.5 concern tracked separately; the anthropic dispatcher
-    // tests use a non-wiremock approach (see
-    // `anthropic_complete_carries_required_fields`).
+fn anthropic_cfg_for(server: &MockServer) -> AnthropicConfig {
     AnthropicConfig::new(ANTHROPIC_KEY, "claude-3-5-sonnet-latest")
+        .with_base_url(server.uri())
 }
 
 fn build_request(model: &str) -> AgentRequest {
@@ -104,10 +89,7 @@ async fn openai_complete_returns_translated_response() {
         .mount(&server)
         .await;
 
-    // `rig::http_client::ReqwestClient` is a re-export of `reqwest::Client`,
-    // so we can build one via the rig path. Tests in this crate use
-    // the rig re-export to avoid adding a new dev-dep.
-    let http = rig::http_client::ReqwestClient::new();
+    let http = reqwest::Client::new();
 
     let backend: Arc<dyn CompletionBackend> = arc_real_backend_with_http_client(
         ProviderName::new("openai-test"),
@@ -133,19 +115,6 @@ async fn openai_complete_returns_translated_response() {
 
 #[tokio::test]
 async fn openai_complete_maps_non_2xx_to_api_error() {
-    // The rig `ReqwestClient::send` seam converts non-2xx upstream
-    // responses into `http_client::Error::InvalidStatusCodeWithMessage`
-    // at the transport layer (see rig-core 0.31
-    // `http_client/mod.rs::send`). That error reaches our dispatcher
-    // as a `ProviderAdapterError::Transport`, not `Api`, so the
-    // dispatcher's `if !resp.status().is_success()` branch never runs
-    // for this seam. We therefore assert the observable variant —
-    // `Transport` carrying the upstream status + body — which is
-    // still a hard failure path (the response does NOT silently
-    // succeed). If a future change moves non-2xx mapping into our
-    // dispatcher (e.g. by switching to a custom `HttpClientExt` that
-    // passes non-2xx through), the `Api` branch below becomes
-    // reachable and we can prefer that assertion.
     let server = MockServer::start().await;
 
     Mock::given(method("POST"))
@@ -154,7 +123,7 @@ async fn openai_complete_maps_non_2xx_to_api_error() {
         .mount(&server)
         .await;
 
-    let http = rig::http_client::ReqwestClient::new();
+    let http = reqwest::Client::new();
     let backend: Arc<dyn CompletionBackend> = arc_real_backend_with_http_client(
         ProviderName::new("openai-test"),
         openai_cfg_for(&server),
@@ -165,26 +134,11 @@ async fn openai_complete_maps_non_2xx_to_api_error() {
         .await
         .expect_err("expected non-2xx response to surface as an error");
     match err {
-        // Preferred: dispatcher maps non-2xx to Api. Unreachable on
-        // the rig ReqwestClient seam today, but kept here for
-        // forward compatibility.
         ProviderAdapterError::Api { code, message } => {
             assert_eq!(code, "401");
             assert!(message.contains("invalid api key"));
         }
-        // Actual: rig's HTTP seam turns non-2xx into a transport
-        // error carrying the upstream status + body.
-        ProviderAdapterError::Transport(m) => {
-            assert!(
-                m.contains("401"),
-                "expected status 401 in transport message, got: {m}"
-            );
-            assert!(
-                m.contains("invalid api key"),
-                "expected upstream body in transport message, got: {m}"
-            );
-        }
-        other => panic!("expected Api or Transport error, got {other:?}"),
+        other => panic!("expected Api error, got {other:?}"),
     }
 }
 
@@ -205,7 +159,7 @@ async fn openai_list_models_returns_translated_listing() {
         .mount(&server)
         .await;
 
-    let http = rig::http_client::ReqwestClient::new();
+    let http = reqwest::Client::new();
     let backend: Arc<dyn CompletionBackend> = arc_real_backend_with_http_client(
         ProviderName::new("openai-test"),
         openai_cfg_for(&server),
@@ -223,49 +177,106 @@ async fn openai_list_models_returns_translated_listing() {
 }
 
 #[tokio::test]
-#[ignore = "hits real https://api.anthropic.com; run on demand with: cargo test -p reimagine-agent-provider --test rig_backend -- --ignored anthropic_complete_carries_required_fields"]
-async fn anthropic_complete_carries_required_fields() {
-    // This test is a request-shape test, not a full round-trip: we
-    // exercise the anthropic dispatcher and assert that the request
-    // body is well-formed enough to reach the network layer. The
-    // test relies on the underlying rig::Client targeting the real
-    // `https://api.anthropic.com` because AnthropicConfig does not
-    // yet carry a base_url. In a sandboxed environment where DNS or
-    // outbound HTTPS is blocked, this surfaces as a Transport error.
-    // If the upstream is reachable, we get an Api 401 instead; the
-    // test asserts on the error variant present in this environment.
-    //
-    // This test is marked `#[ignore]`d unconditionally — it makes a
-    // real outbound HTTPS call, which is both a hidden flake risk
-    // and a sandbox-fragility issue. Run it on demand with:
-    //
-    //   cargo test -p reimagine-agent-provider --test rig_backend -- --ignored anthropic_complete_carries_required_fields
-    let cfg = anthropic_cfg();
-    let http = rig::http_client::ReqwestClient::new();
-    let backend =
-        RealRigBackend::anthropic_with_http_client(ProviderName::new("anthropic-test"), cfg, http);
-    let result = backend
-        .complete(build_request("claude-3-5-sonnet-latest"))
+async fn anthropic_complete_returns_translated_response() {
+    let server = MockServer::start().await;
+
+    Mock::given(method("POST"))
+        .and(path("/v1/messages"))
+        .and(header("x-api-key", ANTHROPIC_KEY))
+        .and(header("anthropic-version", "2023-06-01"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+            "id": "msg_123",
+            "type": "message",
+            "role": "assistant",
+            "content": [{"type": "text", "text": "hello from claude"}],
+            "model": "claude-3-5-sonnet-latest",
+            "stop_reason": "end_turn",
+            "usage": {"input_tokens": 10, "output_tokens": 20}
+        })))
+        .mount(&server)
         .await;
-    // The body must serialize successfully and we must reach the
-    // network layer. Either Transport (DNS / TLS / connect failure)
-    // or Api (upstream 401 because the test key is bogus) is
-    // acceptable evidence that the body left the process.
-    match result {
-        Err(ProviderAdapterError::Transport(_)) => { /* expected in sandbox */ }
-        Err(ProviderAdapterError::Api { code, message: _ }) => {
-            assert!(
-                code == "401" || code == "403" || code == "400",
-                "unexpected Api status: {code}"
-            );
+
+    let http = reqwest::Client::new();
+    let backend = ReqwestBackend::anthropic_with_http_client(
+        ProviderName::new("anthropic-test"),
+        anthropic_cfg_for(&server),
+        http,
+    );
+
+    let resp = backend
+        .complete(build_request("claude-3-5-sonnet-latest"))
+        .await
+        .expect("upstream returned 2xx");
+    assert_eq!(resp.message().content(), "hello from claude");
+    assert_eq!(resp.stop_reason(), Some("end_turn"));
+    let usage = resp.usage().expect("usage present");
+    assert_eq!(usage.input_tokens(), Some(10));
+    assert_eq!(usage.output_tokens(), Some(20));
+}
+
+#[tokio::test]
+async fn anthropic_complete_maps_non_2xx_to_api_error() {
+    let server = MockServer::start().await;
+
+    Mock::given(method("POST"))
+        .and(path("/v1/messages"))
+        .respond_with(ResponseTemplate::new(401).set_body_json(json!({
+            "type": "error",
+            "error": {"type": "authentication_error", "message": "invalid key"}
+        })))
+        .mount(&server)
+        .await;
+
+    let http = reqwest::Client::new();
+    let backend = ReqwestBackend::anthropic_with_http_client(
+        ProviderName::new("anthropic-test"),
+        anthropic_cfg_for(&server),
+        http,
+    );
+
+    let err = backend
+        .complete(build_request("claude-3-5-sonnet-latest"))
+        .await
+        .expect_err("expected non-2xx");
+    match err {
+        ProviderAdapterError::Api { code, message } => {
+            assert_eq!(code, "401");
+            assert!(message.contains("authentication_error"));
         }
-        Err(ProviderAdapterError::Serialization(m)) => {
-            panic!("unexpected serialization error: {m}")
-        }
-        Err(ProviderAdapterError::Configuration(m)) => {
-            panic!("unexpected configuration error: {m}")
-        }
-        Err(other) => panic!("unexpected error variant: {other:?}"),
-        Ok(response) => panic!("unexpected upstream response: {response:?}"),
+        other => panic!("expected Api error, got {other:?}"),
+    }
+}
+
+#[tokio::test]
+async fn anthropic_list_models_returns_translated_listing() {
+    let server = MockServer::start().await;
+
+    Mock::given(method("GET"))
+        .and(path("/v1/models"))
+        .and(header("x-api-key", ANTHROPIC_KEY))
+        .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+            "data": [
+                { "id": "claude-3-5-sonnet-latest", "type": "model" },
+                { "id": "claude-3-haiku-latest", "type": "model" }
+            ]
+        })))
+        .mount(&server)
+        .await;
+
+    let http = reqwest::Client::new();
+    let backend = ReqwestBackend::anthropic_with_http_client(
+        ProviderName::new("anthropic-test"),
+        anthropic_cfg_for(&server),
+        http,
+    );
+
+    let models = backend.list_models().await.expect("list ok");
+    assert_eq!(models.len(), 2);
+    assert_eq!(models[0].name().as_str(), "claude-3-5-sonnet-latest");
+    assert_eq!(models[1].name().as_str(), "claude-3-haiku-latest");
+    for m in &models {
+        assert!(m.capabilities().contains(&ModelCapability::Chat));
+        assert!(m.capabilities().contains(&ModelCapability::ToolUse));
+        assert_eq!(m.provider().map(|p| p.as_str()), Some("anthropic-test"));
     }
 }

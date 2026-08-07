@@ -50,14 +50,14 @@ impl AnthropicProvider {
         }
     }
 
-    /// Construct with the production `RealRigBackend`. Unit tests
+    /// Construct with the production `ReqwestBackend`. Unit tests
     /// inject a fake backend; the default suite does not require live
     /// provider credentials.
     pub fn new(name: ProviderName, config: AnthropicConfig) -> Self {
         Self {
             name: name.clone(),
             config: config.clone(),
-            backend: crate::rig::arc_real_anthropic_backend(name, config),
+            backend: crate::reqwest_backend::arc_real_anthropic_backend(name, config),
         }
     }
 

@@ -1,7 +1,8 @@
 //! Concrete provider adapters for `reimagine_agent::AgentProvider`.
 //!
-//! V1 supports Rig-backed OpenAI-compatible and Anthropic providers behind
-//! a small `CompletionBackend` seam so tests avoid live network calls.
+//! V1 supports reqwest-backed OpenAI-compatible and Anthropic providers
+//! behind a small `CompletionBackend` seam so tests avoid live network
+//! calls.
 //!
 //! See `docs/architecture/modules/agent-provider.md` for the design source.
 
@@ -12,7 +13,7 @@ mod backend;
 mod config;
 mod error;
 mod openai_compatible;
-mod rig;
+pub mod reqwest_backend;
 pub mod translation;
 
 pub use anthropic::AnthropicProvider;
@@ -23,8 +24,8 @@ pub use config::{
 };
 pub use error::ProviderAdapterError;
 pub use openai_compatible::OpenAiCompatibleProvider;
-pub use rig::{
-    RealRigBackend, arc_real_anthropic_backend, arc_real_anthropic_backend_with_http_client,
+pub use reqwest_backend::{
+    ReqwestBackend, arc_real_anthropic_backend, arc_real_anthropic_backend_with_http_client,
     arc_real_backend, arc_real_backend_with_http_client,
 };
 

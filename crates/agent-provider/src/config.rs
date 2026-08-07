@@ -70,9 +70,12 @@ impl OpenAiCompatibleConfig {
 }
 
 /// Anthropic provider config. V1 keeps this minimal: API key + default
-/// model. The adapter hardcodes the Anthropic API base URL.
+/// model. `base_url` is optional; when `None`, the adapter defaults to
+/// `https://api.anthropic.com`.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct AnthropicConfig {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    base_url: Option<String>,
     api_key: String,
     default_model: String,
 }
@@ -80,9 +83,19 @@ pub struct AnthropicConfig {
 impl AnthropicConfig {
     pub fn new(api_key: impl Into<String>, default_model: impl Into<String>) -> Self {
         Self {
+            base_url: None,
             api_key: api_key.into(),
             default_model: default_model.into(),
         }
+    }
+
+    pub fn with_base_url(mut self, base_url: impl Into<String>) -> Self {
+        self.base_url = Some(base_url.into());
+        self
+    }
+
+    pub fn base_url(&self) -> Option<&str> {
+        self.base_url.as_deref()
     }
 
     pub fn api_key(&self) -> &str {
@@ -141,7 +154,7 @@ impl ProviderConfig {
             name: name.into(),
             enabled: true,
             kind: ProviderKind::Anthropic,
-            base_url: None,
+            base_url: inner.base_url().map(|s| s.to_string()),
             api_key: Some(inner.api_key().to_string()),
             default_model: Some(inner.default_model().to_string()),
             openai_compatible: None,

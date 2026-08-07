@@ -3,7 +3,7 @@
 //! The concrete adapters (OpenAI-compatible, Anthropic) implement
 //! `AgentProvider` by delegating network calls to a `CompletionBackend`.
 //! Tests use `FakeCompletionBackend` to script behavior without live
-//! network. The real Rig-backed backend lives in `rig.rs`.
+//! network. The real reqwest-backed backend lives in `reqwest_backend.rs`.
 //!
 //! `CompletionBackend` is intentionally NOT exported as the
 //! Reimagine provider abstraction — that role belongs to
