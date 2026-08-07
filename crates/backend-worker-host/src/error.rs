@@ -32,6 +32,10 @@ pub enum WorkerHostError {
         expected: String,
         actual: String,
     },
+    CapabilityMismatch {
+        requested: String,
+        available: Vec<String>,
+    },
     RequestTimeout {
         request_id: String,
     },
@@ -85,6 +89,14 @@ impl fmt::Display for WorkerHostError {
             } => write!(
                 formatter,
                 "worker identity field `{field}` expected `{expected}` but received `{actual}`"
+            ),
+            Self::CapabilityMismatch {
+                requested,
+                available,
+            } => write!(
+                formatter,
+                "worker does not support capability `{requested}`; available: [{}]",
+                available.join(", ")
             ),
             Self::RequestTimeout { request_id } => {
                 write!(formatter, "worker request `{request_id}` timed out")

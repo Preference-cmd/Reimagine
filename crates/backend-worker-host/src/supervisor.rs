@@ -205,6 +205,24 @@ impl StartedWorker {
         &self.inner.incarnation_id
     }
 
+    /// Returns the capabilities advertised by the worker during handshake.
+    #[must_use]
+    pub fn capabilities(&self) -> Vec<String> {
+        self.hello
+            .profile
+            .instances
+            .iter()
+            .find(|p| p.backend_instance_id == self.hello.identity.backend_instance_id)
+            .map(|p| p.capabilities.clone())
+            .unwrap_or_default()
+    }
+
+    /// Check whether the worker advertises a specific capability.
+    #[must_use]
+    pub fn has_capability(&self, cap: &str) -> bool {
+        self.capabilities().iter().any(|c| c == cap)
+    }
+
     pub async fn stderr_tail(&self) -> Vec<u8> {
         self.stderr_tail.lock().await.clone()
     }
@@ -592,6 +610,18 @@ impl WorkerSupervisor {
         let hello = timeout(self.launch.limits.startup_timeout, handshake)
             .await
             .map_err(|_| WorkerHostError::StartupTimeout)??;
+        let worker_caps: Vec<String> = hello
+            .profile
+            .instances
+            .iter()
+            .find(|p| p.backend_instance_id == hello.identity.backend_instance_id)
+            .map(|p| p.capabilities.clone())
+            .unwrap_or_default();
+        tracing::info!(
+            worker = %hello.identity.backend_instance_id.0,
+            capabilities = ?worker_caps,
+            "worker handshake complete"
+        );
         let pending = Arc::new(Mutex::new(HashMap::new()));
         let controls = Arc::new(Mutex::new(HashMap::new()));
         let alive = Arc::new(AtomicBool::new(true));
