@@ -58,10 +58,7 @@ export const useNodeRegistryStore = create<NodeRegistryState>()((set, get) => ({
       });
     } catch (err) {
       // Empty catalog → every node renders via GenericNode fallback.
-      console.warn(
-        "[nodeRegistry] catalog fetch failed; falling back to GenericNode",
-        err,
-      );
+      console.warn("[nodeRegistry] catalog fetch failed; falling back to GenericNode", err);
       set({ status: "error", error: String(err) });
     }
   },

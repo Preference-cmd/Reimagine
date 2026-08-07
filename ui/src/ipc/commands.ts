@@ -56,8 +56,7 @@ function tauriAvailable(): boolean {
   try {
     return (
       typeof window !== "undefined" &&
-      typeof (window as { __TAURI_INTERNALS__?: unknown }).__TAURI_INTERNALS__ !==
-        "undefined"
+      typeof (window as { __TAURI_INTERNALS__?: unknown }).__TAURI_INTERNALS__ !== "undefined"
     );
   } catch {
     return false;
@@ -67,9 +66,7 @@ function tauriAvailable(): boolean {
 /** Best-effort detection of "Tauri isn't here" errors from @tauri-apps/api. */
 function isTauriUnavailable(error: unknown): boolean {
   if (!error || typeof error !== "object") return false;
-  const message = String(
-    (error as { message?: unknown }).message ?? error,
-  );
+  const message = String((error as { message?: unknown }).message ?? error);
   return (
     message.includes("__TAURI_INTERNALS__") ||
     message.includes("Tauri") ||
@@ -102,10 +99,7 @@ async function dispatch<TIn, TOut>(
 }
 
 /** Shared fallback for commands that need a Channel or custom invoke shape. */
-async function invokeWithFallback<T>(
-  real: () => Promise<T>,
-  mock: () => Promise<T>,
-): Promise<T> {
+async function invokeWithFallback<T>(real: () => Promise<T>, mock: () => Promise<T>): Promise<T> {
   if (FORCE_MOCK) return mock();
   try {
     return await real();
@@ -152,9 +146,7 @@ export function getNodeDefs(): Promise<NodeDef[]> {
   return dispatch("get_node_defs", null, undefined, mockGetNodeDefs);
 }
 
-export async function resolveArtifact(
-  artifactId: string,
-): Promise<ArtifactMetadata> {
+export async function resolveArtifact(artifactId: string): Promise<ArtifactMetadata> {
   return invokeWithFallback(
     async () => {
       const { invoke } = await import("@tauri-apps/api/core");
@@ -174,16 +166,8 @@ export async function openArtifact(artifactId: string): Promise<void> {
   );
 }
 
-export function searchModels(
-  query: string,
-  filters?: ModelFilters,
-): Promise<ModelCatalogEntry[]> {
-  return dispatch(
-    "search_models",
-    null,
-    { query, filters },
-    mockSearchModels,
-  );
+export function searchModels(query: string, filters?: ModelFilters): Promise<ModelCatalogEntry[]> {
+  return dispatch("search_models", null, { query, filters }, mockSearchModels);
 }
 
 export function getModelCard(repoId: string): Promise<ModelCard> {
@@ -220,45 +204,25 @@ export async function downloadHuggingfaceModel(
 /* ───── Workflow persistence (F1-1/F1-2) ───── */
 
 /** Save a workflow to the workspace `workflows/` dir; resolves to the file path. */
-export function saveWorkflow(
-  workflowId: string,
-  workflowJson: unknown,
-): Promise<string> {
-  return dispatch(
-    "save_workflow",
-    null,
-    { workflowId, workflowJson },
-    mockSaveWorkflow,
-  );
+export function saveWorkflow(workflowId: string, workflowJson: unknown): Promise<string> {
+  return dispatch("save_workflow", null, { workflowId, workflowJson }, mockSaveWorkflow);
 }
 
 /** Load a saved workflow (backend `Workflow` JSON) by id. */
 export function loadWorkflow(workflowId: string): Promise<unknown> {
-  return dispatch(
-    "load_workflow",
-    null,
-    { workflowId },
-    mockLoadWorkflow,
-  );
+  return dispatch("load_workflow", null, { workflowId }, mockLoadWorkflow);
 }
 
 /** List saved workflows (newest first). */
 export function listWorkflows(): Promise<WorkflowFileSummary[]> {
-  return dispatch(
-    "list_workflows",
-    null,
-    undefined,
-    mockListWorkflows,
-  );
+  return dispatch("list_workflows", null, undefined, mockListWorkflows);
 }
 
 /* ───── Worker switching (BE-32) ───── */
 
 /** Drain in-flight runs (waiting up to `deadlineSecs`) then switch the active
  *  worker to the installed worker for `args.target` (a backend instance id). */
-export function drainAndSwitchWorker(
-  args: WorkerSwitchArgs,
-): Promise<WorkerSwitchResult> {
+export function drainAndSwitchWorker(args: WorkerSwitchArgs): Promise<WorkerSwitchResult> {
   return dispatch(
     "drain_and_switch_worker",
     WorkerSwitchArgsSchema,
@@ -268,9 +232,7 @@ export function drainAndSwitchWorker(
 }
 
 /** Cancel in-flight runs, then switch the active worker to `args.target`. */
-export function cancelAndSwitchWorker(
-  args: WorkerSwitchArgs,
-): Promise<WorkerSwitchResult> {
+export function cancelAndSwitchWorker(args: WorkerSwitchArgs): Promise<WorkerSwitchResult> {
   return dispatch(
     "cancel_and_switch_worker",
     WorkerSwitchArgsSchema,
@@ -281,26 +243,14 @@ export function cancelAndSwitchWorker(
 
 /** List installed workers usable as switch targets. */
 export function listWorkerSwitchTargets(): Promise<WorkerSwitchTarget[]> {
-  return dispatch(
-    "list_worker_switch_targets",
-    null,
-    undefined,
-    mockListWorkerSwitchTargets,
-  );
+  return dispatch("list_worker_switch_targets", null, undefined, mockListWorkerSwitchTargets);
 }
 
 /** Drain in-flight runs and re-bootstrap the workspace with `selection`
  *  (a backend kind, `"burn"` | `"candle"`). Resolves to the new compute
  *  profile. The selection is not persisted across app restarts. */
-export function rebootBackend(
-  args: RebootBackendArgs,
-): Promise<ComputeProfile> {
-  return dispatch(
-    "rebootstrap_backend",
-    RebootBackendArgsSchema,
-    args,
-    mockRebootBackend,
-  );
+export function rebootBackend(args: RebootBackendArgs): Promise<ComputeProfile> {
+  return dispatch("rebootstrap_backend", RebootBackendArgsSchema, args, mockRebootBackend);
 }
 
 /**

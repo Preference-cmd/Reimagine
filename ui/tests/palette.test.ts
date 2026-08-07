@@ -1,4 +1,4 @@
-import { expect, test } from "bun:test";
+import { expect, test } from "vitest";
 
 import { fuzzyScore, filterEntries, type PaletteEntry } from "../src/lib/palette";
 
@@ -22,9 +22,7 @@ test("non-subsequences score zero; matching is case-insensitive", () => {
 });
 
 test("word-boundary starts beat mid-word matches", () => {
-  expect(fuzzyScore("lat", "lat_image")).toBeGreaterThan(
-    fuzzyScore("lat", "collateral"),
-  );
+  expect(fuzzyScore("lat", "lat_image")).toBeGreaterThan(fuzzyScore("lat", "collateral"));
 });
 
 /* ───── Entry filtering ───── */
@@ -57,12 +55,8 @@ test("prefix matches rank first, keyword subsequences extend the search", () => 
 });
 
 test("keywords and hints extend the search surface", () => {
-  expect(filterEntries("execute", entries).map((e) => e.id)).toEqual([
-    "run-workflow",
-  ]);
-  expect(filterEntries("empty_latent", entries).map((e) => e.id)).toEqual([
-    "node-latent",
-  ]);
+  expect(filterEntries("execute", entries).map((e) => e.id)).toEqual(["run-workflow"]);
+  expect(filterEntries("empty_latent", entries).map((e) => e.id)).toEqual(["node-latent"]);
   expect(filterEntries("persist", entries).map((e) => e.id)).toEqual(["save"]);
 });
 

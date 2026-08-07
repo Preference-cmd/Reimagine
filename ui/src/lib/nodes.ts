@@ -107,9 +107,7 @@ function isSocketSlot(value: unknown): value is SocketSlot {
   if (typeof value !== "object" || value == null) return false;
   const slot = value as Record<string, unknown>;
   return (
-    typeof slot.id === "string" &&
-    typeof slot.label === "string" &&
-    typeof slot.kind === "string"
+    typeof slot.id === "string" && typeof slot.label === "string" && typeof slot.kind === "string"
   );
 }
 
@@ -132,10 +130,7 @@ export function paramSpecsFor(node: NodeLike, def?: NodeDef): ParamSpecLike[] {
       const row = rows.find((r) => r.id === spec.id);
       return {
         ...spec,
-        options:
-          (spec.options?.length ?? 0) > 0
-            ? spec.options
-            : row?.options ?? undefined,
+        options: (spec.options?.length ?? 0) > 0 ? spec.options : (row?.options ?? undefined),
         default: spec.default ?? row?.value,
         min: spec.min ?? row?.min,
         max: spec.max ?? row?.max,
@@ -169,11 +164,7 @@ export function paramValueFor(
 
 /** Coerce a raw JSON value to a frontend ParamValue (or undefined). */
 export function normalizeParamValue(value: unknown): ParamValue | undefined {
-  if (
-    typeof value === "string" ||
-    typeof value === "number" ||
-    typeof value === "boolean"
-  ) {
+  if (typeof value === "string" || typeof value === "number" || typeof value === "boolean") {
     return value;
   }
   return undefined;
@@ -201,10 +192,7 @@ export function formatParamValue(value: unknown): string {
 }
 
 /** Coerce a control value to the kind's canonical type for storage. */
-export function coerceParamValue(
-  value: string | number | boolean,
-  kind: ParamKind,
-): ParamValue {
+export function coerceParamValue(value: string | number | boolean, kind: ParamKind): ParamValue {
   switch (kind) {
     case "int": {
       const n = typeof value === "number" ? value : Number(value);
@@ -239,12 +227,12 @@ function readParamRows(data: unknown): ParamRowLike[] {
       label,
       value: String(value ?? ""),
     };
-  if (typeof record.kind === "string") row.kind = record.kind as ParamKind;
-  if (Array.isArray(record.options) && record.options.every((o) => typeof o === "string")) {
-    row.options = record.options;
-  }
-  if (typeof record.min === "number") row.min = record.min;
-  if (typeof record.max === "number") row.max = record.max;
-  return [row];
+    if (typeof record.kind === "string") row.kind = record.kind as ParamKind;
+    if (Array.isArray(record.options) && record.options.every((o) => typeof o === "string")) {
+      row.options = record.options;
+    }
+    if (typeof record.min === "number") row.min = record.min;
+    if (typeof record.max === "number") row.max = record.max;
+    return [row];
   });
 }

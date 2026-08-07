@@ -17,14 +17,7 @@ type Props = Omit<HandleProps, "type" | "position"> & {
  * the type badge ("F", "V", etc.) is rendered as a separate element
  * inside the socket row, between the handle and the label.
  */
-export function Socket({
-  kind,
-  side,
-  connected = false,
-  dotColor,
-  style,
-  ...rest
-}: Props) {
+export function Socket({ kind, side, connected = false, dotColor, style, ...rest }: Props) {
   const color = dotColor || SOCKET_COLORS[kind];
 
   return (
@@ -39,13 +32,9 @@ export function Socket({
       style={{
         top: "50%",
         transform: "translateY(-50%)",
-        ...(side === "left"
-          ? { left: "-19px", right: "auto" }
-          : { right: "-19px", left: "auto" }),
+        ...(side === "left" ? { left: "-19px", right: "auto" } : { right: "-19px", left: "auto" }),
         backgroundColor: color,
-        boxShadow: connected
-          ? `0 0 0 2px ${color}22`
-          : "none",
+        boxShadow: connected ? `0 0 0 2px ${color}22` : "none",
         ...style,
       }}
       isConnectable

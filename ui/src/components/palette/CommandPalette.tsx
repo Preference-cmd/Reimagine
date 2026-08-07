@@ -21,8 +21,6 @@ export function CommandPalette() {
   const openCommandPalette = useUIStore((s) => s.openCommandPalette);
   const openNodePalette = useUIStore((s) => s.openNodePalette);
   const closePalette = useUIStore((s) => s.closePalette);
-  const setActivePanel = useUIStore((s) => s.setActivePanel);
-  const togglePanel = useUIStore((s) => s.togglePanel);
   const startRun = useRuntimeStore((s) => s.startRun);
   const defs = useNodeRegistryStore((s) => s.defList);
 
@@ -66,8 +64,8 @@ export function CommandPalette() {
       },
       {
         id: "toggle-panel",
-        label: "Toggle Panel",
-        hint: "Show or hide the explorer",
+        label: "Toggle Sidebar",
+        hint: "Show or hide the sidebar",
         keywords: ["explorer", "sidebar", "panel"],
         shortcut: "⌘B",
       },
@@ -107,8 +105,7 @@ export function CommandPalette() {
     [defs],
   );
 
-  const entries =
-    palette.kind === "node" ? nodeItems : commandItems;
+  const entries = palette.kind === "node" ? nodeItems : commandItems;
   const visible = filterEntries(query, entries);
   const itemCount = visible.length;
 
@@ -130,7 +127,7 @@ export function CommandPalette() {
         openNodePalette(flowViewportCenter());
         return;
       case "toggle-panel":
-        togglePanel("Graph");
+        useUIStore.getState().toggleSidebar();
         return;
       case "run-workflow":
         startRun();
@@ -139,13 +136,12 @@ export function CommandPalette() {
         void saveWorkflowNow();
         return;
       case "settings":
-        setActivePanel("Settings");
+        useUIStore.getState().setActiveSidebarSection("settings");
         return;
       default:
         if (id.startsWith("node-")) {
           const typeId = id.slice("node-".length);
-          const position =
-            palette.kind === "node" ? palette.position : flowViewportCenter();
+          const position = palette.kind === "node" ? palette.position : flowViewportCenter();
           if (!createNodeAt(typeId, position)) {
             toast.error("Unknown node type", {
               description: `"${typeId}" is not in the node catalog.`,
@@ -161,9 +157,7 @@ export function CommandPalette() {
       setActiveIndex((index) => (itemCount === 0 ? 0 : (index + 1) % itemCount));
     } else if (event.key === "ArrowUp") {
       event.preventDefault();
-      setActiveIndex((index) =>
-        itemCount === 0 ? 0 : (index - 1 + itemCount) % itemCount,
-      );
+      setActiveIndex((index) => (itemCount === 0 ? 0 : (index - 1 + itemCount) % itemCount));
     } else if (event.key === "Enter") {
       event.preventDefault();
       const item = visible[activeIndex];
@@ -201,9 +195,7 @@ export function CommandPalette() {
             value={query}
             onChange={(event) => setQuery(event.target.value)}
             onKeyDown={onKeyDown}
-            placeholder={
-              palette.kind === "node" ? "Search node types…" : "Search commands…"
-            }
+            placeholder={palette.kind === "node" ? "Search node types…" : "Search commands…"}
             className="min-w-0 flex-1 bg-transparent text-body-sm text-on-surface placeholder:text-on-surface-variant focus:outline-none"
           />
           {palette.kind === "node" && (
@@ -219,9 +211,7 @@ export function CommandPalette() {
 
         <ul ref={listRef} className="scrollbar-hide max-h-80 overflow-y-auto p-1.5">
           {visible.length === 0 && (
-            <li className="px-2.5 py-2 text-caption text-on-surface-variant">
-              No matches.
-            </li>
+            <li className="px-2.5 py-2 text-caption text-on-surface-variant">No matches.</li>
           )}
           {visible.map((entry, index) => {
             const Icon =

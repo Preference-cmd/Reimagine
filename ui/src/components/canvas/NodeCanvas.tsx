@@ -19,19 +19,12 @@ import { BaseNode, type ParamRow, type SocketSlot } from "./BaseNode";
 import { edgeTypes } from "./FlowEdge";
 import { GenericNode } from "./GenericNode";
 import { NodePreview } from "./NodePreview";
-import {
-  useWorkflowStore,
-  onNodeSelect,
-} from "@/store/workflow";
+import { useWorkflowStore, onNodeSelect } from "@/store/workflow";
 import { useNodeRegistryStore } from "@/store/nodeRegistry";
 import { useNodeArtifact } from "@/hooks/useNodeArtifact";
 import { checkConnection } from "@/lib/socketCompat";
 import { createNodeAt, NODE_DRAG_MIME } from "@/lib/nodeFactory";
-import {
-  flowPositionFor,
-  registerFlowInstance,
-  selectAllNodes,
-} from "@/lib/flowInstance";
+import { flowPositionFor, registerFlowInstance, selectAllNodes } from "@/lib/flowInstance";
 import { useUIStore } from "@/store/uiStore";
 
 /* ───── Demo node data ───── */
@@ -52,17 +45,10 @@ type DemoNodeData = {
 const PromptNode = ({ data, selected }: NodeProps) => {
   const d = data as unknown as DemoNodeData;
   return (
-    <BaseNode
-      title={d.title}
-      tone={d.tone}
-      selected={selected}
-      disabled={d.disabled === true}
-    >
+    <BaseNode title={d.title} tone={d.tone} selected={selected} disabled={d.disabled === true}>
       {d.prompt && (
         <>
-          <div className="mb-2.5 text-body-sm leading-relaxed text-on-surface">
-            {d.prompt}
-          </div>
+          <div className="mb-2.5 text-body-sm leading-relaxed text-on-surface">{d.prompt}</div>
           <input
             className="w-full rounded-md border border-control-border bg-surface-container-high px-2.5 py-1.5 text-body-sm text-on-surface placeholder-on-surface-variant focus:outline-none focus:ring-1 focus:ring-control-active"
             placeholder="Edit prompt"
@@ -88,9 +74,7 @@ const ModelNode = ({ data, selected }: NodeProps) => {
     >
       <div className="flex items-center justify-end">
         <span className="flex items-center gap-1.5 rounded-md bg-surface-container-high px-2.5 py-1.5 text-body-sm font-medium leading-none text-on-surface">
-          <span className="truncate">
-            {d.parameters?.[0]?.value ?? ""}
-          </span>
+          <span className="truncate">{d.parameters?.[0]?.value ?? ""}</span>
           <ChevronDown className="h-3 w-3 shrink-0 text-on-surface-variant" />
         </span>
       </div>
@@ -171,7 +155,7 @@ function ZoomControls({ zoom }: { zoom: number }) {
     "flex h-8 w-8 cursor-pointer items-center justify-center rounded-full text-on-surface-variant transition-colors hover:bg-control-hover hover:text-on-surface focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary/30";
 
   return (
-    <div className="overlay-slot-canvas-controls panel-flat flex h-11 items-center gap-0.5 rounded-2xl px-1">
+    <div className="panel-flat absolute bottom-5 left-5 z-10 flex h-10 items-center gap-0.5 rounded-xl px-1 shadow-[0_2px_8px_-2px_rgb(0_0_0/0.15)]">
       <button
         type="button"
         onClick={() => zoomOut({ duration: 200 })}
@@ -259,8 +243,7 @@ function CanvasFlow({ themeMode }: { themeMode: "light" | "dark" }) {
     (conn: Parameters<typeof onConnect>[0]) => {
       const result = checkConnection(conn, nodes, catalogDefs);
       if (!result.ok) {
-        const label = (kind: string | null) =>
-          kind ? `"${kind}"` : "unknown";
+        const label = (kind: string | null) => (kind ? `"${kind}"` : "unknown");
         toast.error("Connection type mismatch", {
           description: `Cannot connect ${label(result.sourceKind)} to ${label(result.targetKind)}.`,
         });
@@ -299,8 +282,7 @@ function CanvasFlow({ themeMode }: { themeMode: "light" | "dark" }) {
         catalogDefs,
       );
       if (result.ok) return;
-      const label = (kind: string | null) =>
-        kind ? `"${kind}"` : "unknown";
+      const label = (kind: string | null) => (kind ? `"${kind}"` : "unknown");
       toast.error("Connection type mismatch", {
         description: `Cannot connect ${label(result.sourceKind)} to ${label(result.targetKind)}.`,
       });
@@ -338,17 +320,11 @@ function CanvasFlow({ themeMode }: { themeMode: "light" | "dark" }) {
   const handleCanvasDoubleClick = useCallback(
     (event: React.MouseEvent) => {
       const target = event.target as HTMLElement | null;
-      if (
-        target?.closest(
-          ".react-flow__node, .react-flow__edge, .react-flow__minimap",
-        )
-      ) {
+      if (target?.closest(".react-flow__node, .react-flow__edge, .react-flow__minimap")) {
         return;
       }
       closeContextMenu();
-      openNodePalette(
-        screenToFlowPosition({ x: event.clientX, y: event.clientY }),
-      );
+      openNodePalette(screenToFlowPosition({ x: event.clientX, y: event.clientY }));
     },
     [closeContextMenu, openNodePalette, screenToFlowPosition],
   );
@@ -365,8 +341,7 @@ function CanvasFlow({ themeMode }: { themeMode: "light" | "dark" }) {
           id: "add-node",
           label: "Add Node…",
           shortcut: "Double-click",
-          onSelect: () =>
-            openNodePalette(flowPositionFor({ x: event.clientX, y: event.clientY })),
+          onSelect: () => openNodePalette(flowPositionFor({ x: event.clientX, y: event.clientY })),
         },
         {
           id: "paste",
@@ -396,8 +371,7 @@ function CanvasFlow({ themeMode }: { themeMode: "light" | "dark" }) {
       event.preventDefault();
       const data = node.data as { disabled?: unknown; title?: unknown } | undefined;
       const disabled = data?.disabled === true;
-      const title =
-        typeof data?.title === "string" && data.title ? data.title : node.id;
+      const title = typeof data?.title === "string" && data.title ? data.title : node.id;
       const x = Math.min(event.clientX, window.innerWidth - 176);
       const y = Math.min(event.clientY, window.innerHeight - 240);
       openContextMenu(x, y, [
@@ -519,7 +493,7 @@ function CanvasFlow({ themeMode }: { themeMode: "light" | "dark" }) {
           maskColor="transparent"
           nodeColor="var(--color-on-panel-muted)"
           nodeStrokeColor="var(--color-on-panel)"
-          className="overlay-slot-minimap panel-flat !m-0 !h-24 !w-40 !rounded-2xl p-2.5"
+          className="panel-flat absolute bottom-5 right-5 z-10 !m-0 !h-24 !w-40 !rounded-xl shadow-[0_2px_8px_-2px_rgb(0_0_0/0.15)] p-2.5"
         />
       </ReactFlow>
     </div>

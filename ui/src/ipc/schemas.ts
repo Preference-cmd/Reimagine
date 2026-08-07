@@ -2,12 +2,7 @@ import { z } from "zod";
 
 /* ───── Socket kinds (mirror of ui/src/design/tokens.ts) ───── */
 
-export const SocketKindSchema = z.enum([
-  "model",
-  "conditioning",
-  "latent",
-  "image",
-]);
+export const SocketKindSchema = z.enum(["model", "conditioning", "latent", "image"]);
 export type SocketKind = z.infer<typeof SocketKindSchema>;
 
 /* ───── Socket spec (port on a node) ───── */
@@ -129,14 +124,16 @@ export const RunSnapshotDtoSchema = z.object({
   workflowId: z.string(),
   state: z.string(),
   nodeStates: z.record(z.string(), z.string()),
-  diagnostics: z.array(z.object({
-    id: z.string(),
-    code: z.string(),
-    severity: z.string(),
-    source: z.string(),
-    message: z.string(),
-    target: z.string(),
-  })),
+  diagnostics: z.array(
+    z.object({
+      id: z.string(),
+      code: z.string(),
+      severity: z.string(),
+      source: z.string(),
+      message: z.string(),
+      target: z.string(),
+    }),
+  ),
   artifacts: z.array(z.any()),
   startedAt: z.string(),
   updatedAt: z.string(),
@@ -150,26 +147,30 @@ export const RunWorkflowResponseSchema = z.discriminatedUnion("outcome", [
     workflowId: z.string(),
     workflowVersion: z.string(),
     initialSnapshot: RunSnapshotDtoSchema,
-    diagnostics: z.array(z.object({
-      id: z.string(),
-      code: z.string(),
-      severity: z.string(),
-      source: z.string(),
-      message: z.string(),
-      target: z.string(),
-    })),
+    diagnostics: z.array(
+      z.object({
+        id: z.string(),
+        code: z.string(),
+        severity: z.string(),
+        source: z.string(),
+        message: z.string(),
+        target: z.string(),
+      }),
+    ),
   }),
   z.object({
     outcome: z.literal("blocked"),
     workflowId: z.string(),
-    diagnostics: z.array(z.object({
-      id: z.string(),
-      code: z.string(),
-      severity: z.string(),
-      source: z.string(),
-      message: z.string(),
-      target: z.string(),
-    })),
+    diagnostics: z.array(
+      z.object({
+        id: z.string(),
+        code: z.string(),
+        severity: z.string(),
+        source: z.string(),
+        message: z.string(),
+        target: z.string(),
+      }),
+    ),
   }),
 ]);
 export type RunWorkflowResponse = z.infer<typeof RunWorkflowResponseSchema>;
@@ -191,9 +192,7 @@ export const ModelFiltersSchema = z.object({
   pipelineTag: z.string().nullable().optional(),
   libraryName: z.string().nullable().optional(),
   tags: z.array(z.string()).default([]),
-  sort: z
-    .enum(["downloads", "likes", "trending", "lastModified"])
-    .default("downloads"),
+  sort: z.enum(["downloads", "likes", "trending", "lastModified"]).default("downloads"),
   limit: z.number().default(20),
 });
 export type ModelFilters = z.infer<typeof ModelFiltersSchema>;
@@ -243,9 +242,7 @@ export const DownloadHuggingfaceModelArgsSchema = z.object({
   autoDetect: z.boolean().optional(),
   fromCatalog: z.boolean().optional(),
 });
-export type DownloadHuggingfaceModelArgs = z.infer<
-  typeof DownloadHuggingfaceModelArgsSchema
->;
+export type DownloadHuggingfaceModelArgs = z.infer<typeof DownloadHuggingfaceModelArgsSchema>;
 
 export const FileEntrySchema = z.object({
   relativePath: z.string(),

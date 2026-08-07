@@ -9,9 +9,7 @@ export function AssetsView() {
     <div className="flex h-full flex-col bg-background p-6">
       {/* Header */}
       <div className="mb-6">
-        <h1 className="text-display-sm font-semibold text-on-surface">
-          Assets
-        </h1>
+        <h1 className="text-display-sm font-semibold text-on-surface">Assets</h1>
         <p className="mt-1 text-body-sm text-on-surface-variant">
           Project files & generated images
         </p>

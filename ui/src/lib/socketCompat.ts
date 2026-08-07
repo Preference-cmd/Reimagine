@@ -12,12 +12,7 @@ import type { NodeDef } from "@/ipc/schemas";
  * compatible (forward compatibility with new backend kinds).
  */
 
-export type SlotType =
-  | "Primitive"
-  | "Tensor"
-  | "ModelHandle"
-  | "Conditioning"
-  | "Artifact";
+export type SlotType = "Primitive" | "Tensor" | "ModelHandle" | "Conditioning" | "Artifact";
 
 const PRIMITIVE_KINDS = new Set([
   "string",
@@ -36,9 +31,7 @@ const CONDITIONING_KINDS = new Set(["conditioning"]);
 const ARTIFACT_KINDS = new Set(["image", "artifact"]);
 
 /** Classify a socket kind into its slot type (null when unknown). */
-export function socketSlotType(
-  kind: string | null | undefined,
-): SlotType | null {
+export function socketSlotType(kind: string | null | undefined): SlotType | null {
   if (!kind) return null;
   if (PRIMITIVE_KINDS.has(kind)) return "Primitive";
   if (TENSOR_KINDS.has(kind)) return "Tensor";

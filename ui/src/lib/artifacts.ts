@@ -14,8 +14,7 @@ export function tauriAvailable(): boolean {
   try {
     return (
       typeof window !== "undefined" &&
-      typeof (window as { __TAURI_INTERNALS__?: unknown }).__TAURI_INTERNALS__ !==
-        "undefined"
+      typeof (window as { __TAURI_INTERNALS__?: unknown }).__TAURI_INTERNALS__ !== "undefined"
     );
   } catch {
     return false;
@@ -23,9 +22,7 @@ export function tauriAvailable(): boolean {
 }
 
 /** Resolve an artifact metadata to an <img>-loadable URL. */
-export async function artifactDisplayUrl(
-  metadata: ArtifactMetadata,
-): Promise<string> {
+export async function artifactDisplayUrl(metadata: ArtifactMetadata): Promise<string> {
   const { path } = metadata;
   if (
     path.startsWith("data:") ||

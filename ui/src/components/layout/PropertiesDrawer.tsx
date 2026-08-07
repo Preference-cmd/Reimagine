@@ -1,5 +1,6 @@
 import { useWorkflowStore } from "@/store/workflow";
 import { useNodeRegistryStore, selectNodeDef } from "@/store/nodeRegistry";
+import { useUIStore } from "@/store/uiStore";
 import { cn } from "@/lib/utils";
 import { Slider } from "@/components/ui/slider";
 import type { ReactNode } from "react";
@@ -11,13 +12,7 @@ import {
   type ParamSpecLike,
   type ParamValue,
 } from "@/lib/nodes";
-import {
-  Cable,
-  Hash,
-  MapPin,
-  SlidersHorizontal,
-  X,
-} from "lucide-react";
+import { Cable, Hash, MapPin, SlidersHorizontal, X } from "lucide-react";
 
 type InspectorNodeData = {
   title?: unknown;
@@ -31,20 +26,16 @@ type InspectorNodeData = {
 const controlClass =
   "w-full rounded-md border border-control-border bg-surface-container-high px-2.5 py-1.5 text-body-sm text-on-surface placeholder:text-on-surface-variant focus:outline-none focus:ring-1 focus:ring-control-active";
 
-export function PropertiesPanel() {
+export function PropertiesDrawer() {
   const selectedNode = useWorkflowStore((s) => s.selectedNode);
   const nodes = useWorkflowStore((s) => s.nodes);
-  const open = useWorkflowStore((s) => s.propertiesPanelOpen);
-  const setOpen = useWorkflowStore((s) => s.setPropertiesPanelOpen);
+  const open = useUIStore((s) => s.propertiesDrawerOpen);
+  const setOpen = useUIStore((s) => s.setPropertiesDrawerOpen);
   const defs = useNodeRegistryStore((s) => s.defs);
 
-  if (!open || !selectedNode) {
-    return null;
-  }
-
-  const node = nodes.find((n) => n.id === selectedNode.id);
+  const node = open && selectedNode ? nodes.find((n) => n.id === selectedNode.id) : null;
   const data = (node?.data ?? {}) as InspectorNodeData;
-  const title = readString(data.title) ?? selectedNode.id;
+  const title = readString(data.title) ?? selectedNode?.id ?? "";
   const tone = readString(data.tone) ?? "#7928ca";
   const inputs = readArray(data.inputs);
   const outputs = readArray(data.outputs);
@@ -54,8 +45,8 @@ export function PropertiesPanel() {
   const specs = node ? paramSpecsFor(node, def) : [];
 
   const rows = [
-    { label: "ID", value: selectedNode.id },
-    { label: "Type", value: formatType(selectedNode.type) },
+    { label: "ID", value: selectedNode?.id ?? "" },
+    { label: "Type", value: formatType(selectedNode?.type ?? null) },
     ...(node
       ? [
           {
@@ -67,98 +58,98 @@ export function PropertiesPanel() {
   ];
 
   return (
-    <div
-      className={cn(
-        "overlay-slot-inspector panel-raised pointer-events-auto flex max-h-[min(580px,calc(100vh-96px))] w-64 flex-col rounded-lg",
-      )}
-    >
-      <div className="flex items-center justify-between border-b border-outline px-3.5 py-2.5"
-      >
-        <div className="flex items-center gap-2"
-        >
-          <SlidersHorizontal className="h-4 w-4 text-on-surface-variant" />
-          <span className="text-body-md font-semibold text-on-surface"
-          >
-            Inspector
-          </span>
-        </div>
-        <button
+    <>
+      {/* Backdrop */}
+      {open && (
+        <div
+          className="fixed inset-0 z-40 bg-black/20 transition-opacity"
           onClick={() => setOpen(false)}
-          aria-label="Close inspector"
-          className="rounded-md p-1 text-on-surface-variant hover:bg-control-hover hover:text-on-surface"
-          type="button"
-        >
-          <X className="h-4 w-4" />
-        </button>
-      </div>
-      <div className="space-y-4 overflow-y-auto p-3.5 scrollbar-hide"
-      >
-        <div className="flex items-center gap-2 rounded-md border border-outline bg-surface-container-high px-2.5 py-2"
-        >
-          <span
-            className="h-2 w-2 shrink-0 rounded-full"
-            style={{ backgroundColor: tone }}
-          />
-          <span className="min-w-0 truncate text-body-sm text-on-surface"
-          >
-            {title}
-          </span>
-        </div>
-        <div className="space-y-3"
-        >
-          <SectionTitle icon={Hash} label="Node metadata" />
-          <div className="grid grid-cols-2 gap-y-2 text-body-sm"
-          >
-            {rows.map((p) => (
-              <div key={p.label} className="contents"
-              >
-                <span className="text-on-surface-variant">{p.label}</span>
-                <span className="min-w-0 truncate text-right text-on-surface"
-                >
-                  {p.value}
-                </span>
-              </div>
-            ))}
-          </div>
-        </div>
+        />
+      )}
 
-        <div className="space-y-3"
-        >
-          <SectionTitle icon={Cable} label="Ports" />
-          <div className="grid grid-cols-2 gap-y-2 text-body-sm"
-          >
-            <div className="contents"
-            >
-              <span className="text-on-surface-variant">Inputs</span>
-              <span className="text-right text-on-surface">{inputs.length}</span>
-            </div>
-            <div className="contents"
-            >
-              <span className="text-on-surface-variant">Outputs</span>
-              <span className="text-right text-on-surface">{outputs.length}</span>
-            </div>
-          </div>
-        </div>
-
-        {(specs.length > 0 || prompt) && node && (
-          <div className="space-y-3"
-          >
-            <SectionTitle icon={MapPin} label="Values" />
-            <div className="space-y-3 text-body-sm"
-            >
-              {prompt && <PromptField nodeId={node.id} prompt={prompt} />}
-              {specs.map((spec) => (
-                <ParamField key={spec.id} nodeId={node.id} spec={spec} />
-              ))}
-            </div>
-          </div>
+      {/* Drawer panel */}
+      <div
+        data-open={open}
+        className={cn(
+          "fixed right-0 top-0 z-50 flex h-full w-80 flex-col border-l border-outline bg-surface shadow-modal transition-transform duration-200 ease-out",
+          open ? "translate-x-0" : "translate-x-full",
         )}
+      >
+        {/* Header */}
+        <div className="flex items-center justify-between border-b border-outline px-3.5 py-2.5">
+          <div className="flex items-center gap-2">
+            <SlidersHorizontal className="h-4 w-4 text-on-surface-variant" />
+            <span className="text-body-md font-semibold text-on-surface">Inspector</span>
+          </div>
+          <button
+            onClick={() => setOpen(false)}
+            aria-label="Close inspector"
+            className="rounded-md p-1 text-on-surface-variant hover:bg-control-hover hover:text-on-surface"
+            type="button"
+          >
+            <X className="h-4 w-4" />
+          </button>
+        </div>
+
+        {/* Content */}
+        <div className="space-y-4 overflow-y-auto p-3.5 scrollbar-hide">
+          {!open || !selectedNode ? (
+            <div className="rounded-xl bg-control-hover/60 px-2.5 py-2 text-caption text-on-surface-variant">
+              Select a node to inspect.
+            </div>
+          ) : (
+            <>
+              <div className="flex items-center gap-2 rounded-md border border-outline bg-surface-container-high px-2.5 py-2">
+                <span className="h-2 w-2 shrink-0 rounded-full" style={{ backgroundColor: tone }} />
+                <span className="min-w-0 truncate text-body-sm text-on-surface">{title}</span>
+              </div>
+
+              <div className="space-y-3">
+                <SectionTitle icon={Hash} label="Node metadata" />
+                <div className="grid grid-cols-2 gap-y-2 text-body-sm">
+                  {rows.map((p) => (
+                    <div key={p.label} className="contents">
+                      <span className="text-on-surface-variant">{p.label}</span>
+                      <span className="min-w-0 truncate text-right text-on-surface">{p.value}</span>
+                    </div>
+                  ))}
+                </div>
+              </div>
+
+              <div className="space-y-3">
+                <SectionTitle icon={Cable} label="Ports" />
+                <div className="grid grid-cols-2 gap-y-2 text-body-sm">
+                  <div className="contents">
+                    <span className="text-on-surface-variant">Inputs</span>
+                    <span className="text-right text-on-surface">{inputs.length}</span>
+                  </div>
+                  <div className="contents">
+                    <span className="text-on-surface-variant">Outputs</span>
+                    <span className="text-right text-on-surface">{outputs.length}</span>
+                  </div>
+                </div>
+              </div>
+
+              {(specs.length > 0 || prompt) && node && (
+                <div className="space-y-3">
+                  <SectionTitle icon={MapPin} label="Values" />
+                  <div className="space-y-3 text-body-sm">
+                    {prompt && <PromptField nodeId={node.id} prompt={prompt} />}
+                    {specs.map((spec) => (
+                      <ParamField key={spec.id} nodeId={node.id} spec={spec} />
+                    ))}
+                  </div>
+                </div>
+              )}
+            </>
+          )}
+        </div>
       </div>
-    </div>
+    </>
   );
 }
 
-/* ───── Prompt (legacy free-text field, F2-4) ───── */
+/* ───── Prompt (legacy free-text field) ───── */
 
 function PromptField({ nodeId, prompt }: { nodeId: string; prompt: string }) {
   const updateNodePrompt = useWorkflowStore((s) => s.updateNodePrompt);
@@ -175,13 +166,9 @@ function PromptField({ nodeId, prompt }: { nodeId: string; prompt: string }) {
   );
 }
 
-/* ───── Per-kind editable control (F2-4) ───── */
+/* ───── Per-kind editable control ───── */
 
-/** Read the live value for one param of one node (zustand selector). */
-function useNodeParamValue(
-  nodeId: string,
-  spec: ParamSpecLike,
-): ParamValue | undefined {
+function useNodeParamValue(nodeId: string, spec: ParamSpecLike): ParamValue | undefined {
   return useWorkflowStore((s) => {
     const node = s.nodes.find((n) => n.id === nodeId);
     return node ? paramValueFor(node, spec) : undefined;
@@ -218,10 +205,7 @@ function ParamField({ nodeId, spec }: { nodeId: string; spec: ParamSpecLike }) {
       return (
         <div className="flex items-center justify-between gap-2">
           <FieldLabel>{spec.label}</FieldLabel>
-          <SwitchControl
-            checked={value === true}
-            onCheckedChange={(checked) => commit(checked)}
-          />
+          <SwitchControl checked={value === true} onCheckedChange={(checked) => commit(checked)} />
         </div>
       );
     case "select":
@@ -244,7 +228,6 @@ function ParamField({ nodeId, spec }: { nodeId: string; spec: ParamSpecLike }) {
         </div>
       );
     default:
-      // image / unhandled kinds — read-only display.
       return (
         <div className="grid grid-cols-[minmax(0,1fr)_auto] gap-3">
           <FieldLabel>{spec.label}</FieldLabel>
@@ -265,12 +248,8 @@ function FloatField({
   value: ParamValue | undefined;
   onCommit: (raw: number) => void;
 }) {
-  const numeric =
-    typeof value === "number" ? value : parseFloat(String(value ?? ""));
+  const numeric = typeof value === "number" ? value : parseFloat(String(value ?? ""));
   const current = Number.isFinite(numeric) ? numeric : Number(spec.default ?? 0);
-  // Constraint data (min/max/step) comes from the backend DTO when the
-  // node declares it; fall back to a range that always contains the
-  // current value and a small default step.
   const min = spec.min ?? Math.min(0, current - 1);
   const max = spec.max ?? Math.max(1, current * 2);
   const step = spec.step ?? 0.01;
@@ -307,8 +286,6 @@ function SelectField({
   const options = spec.options ?? [];
   const current = String(value ?? spec.default ?? "");
 
-  // No option list available (node declares no options constraint) —
-  // degrade to a text field.
   if (options.length === 0) {
     return (
       <div className="space-y-1">
@@ -373,23 +350,12 @@ function SwitchControl({
 }
 
 function FieldLabel({ children }: { children: ReactNode }) {
-  return (
-    <span className="text-body-sm leading-none text-on-surface-variant">
-      {children}
-    </span>
-  );
+  return <span className="text-body-sm leading-none text-on-surface-variant">{children}</span>;
 }
 
-function SectionTitle({
-  icon: Icon,
-  label,
-}: {
-  icon: typeof Hash;
-  label: string;
-}) {
+function SectionTitle({ icon: Icon, label }: { icon: typeof Hash; label: string }) {
   return (
-    <h4 className="flex items-center gap-2 text-body-sm font-semibold text-on-surface-variant"
-    >
+    <h4 className="flex items-center gap-2 text-body-sm font-semibold text-on-surface-variant">
       <Icon className="h-3.5 w-3.5 text-on-surface-variant/60" />
       {label}
     </h4>
@@ -406,8 +372,5 @@ function readArray(value: unknown): unknown[] {
 
 function formatType(type: string | null): string {
   if (!type) return "Unknown";
-
-  return type
-    .replace(/([a-z])([A-Z])/g, "$1 $2")
-    .replace(/^./, (char) => char.toUpperCase());
+  return type.replace(/([a-z])([A-Z])/g, "$1 $2").replace(/^./, (char) => char.toUpperCase());
 }

@@ -54,10 +54,7 @@ export function scoreEntry(query: string, entry: PaletteEntry): number {
 }
 
 /** Filter + rank entries by fuzzy relevance; empty query keeps order. */
-export function filterEntries<T extends PaletteEntry>(
-  query: string,
-  entries: T[],
-): T[] {
+export function filterEntries<T extends PaletteEntry>(query: string, entries: T[]): T[] {
   if (!query.trim()) return entries;
   const scored = entries
     .map((entry) => ({ entry, score: scoreEntry(query, entry) }))

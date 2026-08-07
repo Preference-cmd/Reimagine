@@ -1,4 +1,4 @@
-import { expect, test } from "bun:test";
+import { expect, test } from "vitest";
 
 import {
   createNodeAt,
@@ -56,9 +56,7 @@ test("createNodeFromDef builds a flow node with title, tone and params", () => {
 
 test("uniqueNodeId sanitizes type names and avoids collisions", () => {
   expect(uniqueNodeId([], "builtin.ksampler")).toBe("builtin-ksampler");
-  expect(uniqueNodeId([{ id: "builtin-ksampler" }], "builtin.ksampler")).toBe(
-    "builtin-ksampler-1",
-  );
+  expect(uniqueNodeId([{ id: "builtin-ksampler" }], "builtin.ksampler")).toBe("builtin-ksampler-1");
   expect(
     uniqueNodeId([{ id: "builtin-ksampler" }, { id: "builtin-ksampler-1" }], "builtin.ksampler"),
   ).toBe("builtin-ksampler-2");

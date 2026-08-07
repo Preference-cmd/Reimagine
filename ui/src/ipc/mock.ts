@@ -56,11 +56,7 @@ export async function mockRunWorkflow(
   await delay(200);
   const runId = rand("run");
 
-  const emit = (
-    kind: string,
-    nodeId?: string | null,
-    artifactId?: string | null,
-  ) =>
+  const emit = (kind: string, nodeId?: string | null, artifactId?: string | null) =>
     onEvent?.({
       id: rand("evt"),
       runId,
@@ -72,9 +68,7 @@ export async function mockRunWorkflow(
 
   // Demo event stream so inline previews (F5-4) are visible in dev even
   // when the caller passed no workflow payload (TopBar runs without args).
-  const nodes = workflow?.nodes?.length
-    ? workflow.nodes
-    : useWorkflowStore.getState().nodes;
+  const nodes = workflow?.nodes?.length ? workflow.nodes : useWorkflowStore.getState().nodes;
 
   emit("RunStarted");
   for (const node of nodes) {
@@ -153,9 +147,7 @@ export async function mockSaveWorkflow(input: {
   return `mock:/workflows/${input.workflowId}.json`;
 }
 
-export async function mockLoadWorkflow(input: {
-  workflowId: string;
-}): Promise<unknown> {
+export async function mockLoadWorkflow(input: { workflowId: string }): Promise<unknown> {
   await delay(50);
   const raw = mockReadAll()[input.workflowId];
   if (!raw) {
@@ -270,7 +262,13 @@ const MOCK_NODE_DEFS: NodeDef[] = [
       { id: "steps", label: "Steps", kind: "int", default: 30, min: 1, max: 100 },
       { id: "cfg", label: "CFG scale", kind: "float", default: 8.0, min: 1, max: 20 },
       { id: "sampler", label: "Sampler", kind: "select", default: "dpm++ 2M", options: SAMPLERS },
-      { id: "scheduler", label: "Scheduler", kind: "select", default: "karras", options: SCHEDULERS },
+      {
+        id: "scheduler",
+        label: "Scheduler",
+        kind: "select",
+        default: "karras",
+        options: SCHEDULERS,
+      },
       { id: "denoise", label: "Denoise", kind: "float", default: 0.5, min: 0, max: 1 },
     ],
   },
@@ -316,9 +314,7 @@ const MOCK_NODE_DEFS: NodeDef[] = [
   },
 ];
 
-export async function mockResolveArtifact(
-  artifactId: string,
-): Promise<ArtifactMetadata> {
+export async function mockResolveArtifact(artifactId: string): Promise<ArtifactMetadata> {
   await delay(100);
   return {
     id: artifactId,
@@ -380,18 +376,17 @@ const MOCK_CARD: ModelCard = {
   components: ["unet", "text_encoder", "text_encoder_2", "vae"],
 };
 
-export async function mockSearchModels(
-  input: { query: string; filters?: unknown },
-): Promise<ModelCatalogEntry[]> {
+export async function mockSearchModels(input: {
+  query: string;
+  filters?: unknown;
+}): Promise<ModelCatalogEntry[]> {
   await delay(200);
   const needle = input.query.trim().toLowerCase();
   if (!needle) return [];
   return MOCK_CATALOG.filter((entry) => entry.id.toLowerCase().includes(needle));
 }
 
-export async function mockGetModelCard(_input: {
-  repoId: string;
-}): Promise<ModelCard> {
+export async function mockGetModelCard(_input: { repoId: string }): Promise<ModelCard> {
   await delay(150);
   return MOCK_CARD;
 }
@@ -482,9 +477,7 @@ export async function mockListWorkerSwitchTargets(): Promise<WorkerSwitchTarget[
   return [...MOCK_SWITCH_TARGETS];
 }
 
-export async function mockRebootBackend(
-  input: RebootBackendArgs,
-): Promise<ComputeProfile> {
+export async function mockRebootBackend(input: RebootBackendArgs): Promise<ComputeProfile> {
   await delay(400);
   const backend = input.selection;
   return {

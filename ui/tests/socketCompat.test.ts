@@ -1,4 +1,4 @@
-import { expect, test } from "bun:test";
+import { expect, test } from "vitest";
 
 import {
   socketSlotType,
@@ -54,9 +54,7 @@ test("unknown kinds stay connectable (forward compatibility)", () => {
 
 test("rejection reason is null when allowed, descriptive otherwise", () => {
   expect(connectionRejectionReason("latent", "latent")).toBeNull();
-  expect(connectionRejectionReason("model", "latent")).toContain(
-    "Cannot connect model → latent",
-  );
+  expect(connectionRejectionReason("model", "latent")).toContain("Cannot connect model → latent");
   expect(connectionRejectionReason(null, null)).toBeNull();
 });
 

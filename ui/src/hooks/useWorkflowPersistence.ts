@@ -46,16 +46,11 @@ export function useWorkflowPersistence() {
         const json = await loadWorkflow(mostRecent.id);
         if (cancelled) return;
         const { nodes, edges, name } = workflowFromJson(json);
-        useWorkflowStore
-          .getState()
-          .hydrate(nodes, edges, mostRecent.id, name);
+        useWorkflowStore.getState().hydrate(nodes, edges, mostRecent.id, name);
         // The pre-load demo graph must not be reachable via undo.
         useWorkflowStore.temporal.getState().clear();
       } catch (error) {
-        console.warn(
-          "[persistence] initial load failed; using demo workflow",
-          error,
-        );
+        console.warn("[persistence] initial load failed; using demo workflow", error);
       }
     })();
     return () => {

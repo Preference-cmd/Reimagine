@@ -3,10 +3,12 @@ import type { XYPosition } from "@xyflow/react";
 import type { NodeDef } from "@/ipc/schemas";
 
 /**
- * UI shell state (F3-1/F3-3): active panel, command palette mode and
- * position, the floating context menu, and the rename dialog target.
+ * UI shell state — sidebar navigation, properties drawer,
+ * command palette, context menu, and rename dialog.
  * View-only state — deliberately kept out of the workflow (undo) store.
  */
+
+export type SidebarSection = "workflows" | "models" | "runs" | "assets" | "settings" | null;
 
 export type PaletteMode =
   | { kind: "closed" }
@@ -32,35 +34,53 @@ export type ContextMenuState = {
 export type RenameTarget = { id: string; title: string } | null;
 
 type UIState = {
-  activePanel: string | null;
-  setActivePanel: (panel: string | null) => void;
-  togglePanel: (panel: string) => void;
+  // ── Sidebar ─────────────────────────────────────────────
+  sidebarCollapsed: boolean;
+  toggleSidebar: () => void;
+  activeSidebarSection: SidebarSection;
+  setActiveSidebarSection: (section: SidebarSection) => void;
 
+  // ── Properties drawer ───────────────────────────────────
+  propertiesDrawerOpen: boolean;
+  setPropertiesDrawerOpen: (open: boolean) => void;
+
+  // ── Settings nav ────────────────────────────────────────
+  settingsNavId: string | null;
+  setSettingsNavId: (id: string | null) => void;
+
+  // ── Command palette ─────────────────────────────────────
   palette: PaletteMode;
   openCommandPalette: () => void;
-  /** Open the node picker with nodes inserted at `position` (flow coords). */
   openNodePalette: (position: XYPosition) => void;
   closePalette: () => void;
 
+  // ── Context menu ────────────────────────────────────────
   contextMenu: ContextMenuState;
-  openContextMenu: (
-    x: number,
-    y: number,
-    items: ContextMenuItem[],
-  ) => void;
+  openContextMenu: (x: number, y: number, items: ContextMenuItem[]) => void;
   closeContextMenu: () => void;
 
+  // ── Rename dialog ───────────────────────────────────────
   renameTarget: RenameTarget;
   startRename: (target: { id: string; title: string }) => void;
   finishRename: () => void;
 };
 
 export const useUIStore = create<UIState>()((set) => ({
-  activePanel: null,
-  setActivePanel: (panel) => set({ activePanel: panel }),
-  togglePanel: (panel) =>
-    set((state) => ({ activePanel: state.activePanel === panel ? null : panel })),
+  // Sidebar
+  sidebarCollapsed: false,
+  toggleSidebar: () => set((state) => ({ sidebarCollapsed: !state.sidebarCollapsed })),
+  activeSidebarSection: "workflows",
+  setActiveSidebarSection: (section) => set({ activeSidebarSection: section }),
 
+  // Properties drawer
+  propertiesDrawerOpen: false,
+  setPropertiesDrawerOpen: (open: boolean) => set({ propertiesDrawerOpen: open }),
+
+  // Settings nav
+  settingsNavId: "general",
+  setSettingsNavId: (id: string | null) => set({ settingsNavId: id }),
+
+  // Command palette
   palette: { kind: "closed" },
   openCommandPalette: () =>
     set((state) => ({
@@ -69,10 +89,12 @@ export const useUIStore = create<UIState>()((set) => ({
   openNodePalette: (position) => set({ palette: { kind: "node", position } }),
   closePalette: () => set({ palette: { kind: "closed" } }),
 
+  // Context menu
   contextMenu: null,
   openContextMenu: (x, y, items) => set({ contextMenu: { x, y, items } }),
   closeContextMenu: () => set({ contextMenu: null }),
 
+  // Rename dialog
   renameTarget: null,
   startRename: (target) => set({ renameTarget: target }),
   finishRename: () => set({ renameTarget: null }),

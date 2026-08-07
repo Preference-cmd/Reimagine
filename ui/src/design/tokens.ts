@@ -11,10 +11,10 @@
 
 /** Socket type → color hex. Mirrored as --color-socket-* in theme.css. */
 export const SOCKET_COLORS = {
-  model:        '#f5a623',  // model and checkpoint route
-  conditioning: '#f5a623',  // positive/negative conditioning route
-  latent:       '#7928ca',  // latent tensor route
-  image:        '#50e3c2',  // image artifact route
+  model: "#f5a623", // model and checkpoint route
+  conditioning: "#f5a623", // positive/negative conditioning route
+  latent: "#7928ca", // latent tensor route
+  image: "#50e3c2", // image artifact route
 } as const;
 
 export type SocketKind = keyof typeof SOCKET_COLORS;
@@ -27,23 +27,23 @@ export const FONT_STACKS = {
 
 /** Layout dimensions in px. Mirrored as --spacing-* in theme.css. */
 export const LAYOUT = {
-  canvasGrid:    20,
-  nodePadding:   12,
-  sidebarWidth:  280,
-  gutterMd:      16,
-  stackTight:     4,
-  stackBase:      8,
+  canvasGrid: 20,
+  nodePadding: 12,
+  sidebarWidth: 280,
+  gutterMd: 16,
+  stackTight: 4,
+  stackBase: 8,
   controlHeight: 32,
 } as const;
 
 /** Border radius. Mirrored as --radius-* in theme.css. */
 export const RADIUS = {
-  sm:      '0.125rem',
-  DEFAULT: '0.25rem',
-  md:      '0.375rem',
-  lg:      '0.5rem',
-  xl:      '0.75rem',
-  full:    '9999px',
+  sm: "0.125rem",
+  DEFAULT: "0.25rem",
+  md: "0.375rem",
+  lg: "0.5rem",
+  xl: "0.75rem",
+  full: "9999px",
 } as const;
 
 /** Standardized icon sizes (lucide-react uses pixel size attribute). */

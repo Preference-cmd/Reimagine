@@ -17,7 +17,9 @@
     /* Path aliases — keep in sync with components.json */
     "baseUrl": ".",
     "paths": {
-      "@/*": ["./src/*"]
+      "@/*": ["./src/*"],
+      "$paraglide/messages": ["./src/paraglide/messages.d.ts"],
+      "$paraglide/runtime": ["./src/paraglide/runtime.d.ts"]
     },
 
     /* Linting */

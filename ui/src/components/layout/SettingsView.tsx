@@ -2,6 +2,10 @@ import { useUIStore } from "@/store/uiStore";
 import { useSettingsStore } from "@/store/settingsStore";
 import { cn } from "@/lib/utils";
 import * as m from "$paraglide/messages";
+import { useForm, type UseFormReturn } from "react-hook-form";
+import { zodResolver } from "@hookform/resolvers/zod";
+import { settingsSchema, type SettingsFormData } from "@/lib/settings-schema";
+import { useEffect } from "react";
 
 export type ThemeMode = "light" | "dark";
 
@@ -23,9 +27,24 @@ const SETTINGS_CONTENT: Record<string, SettingsGroup[]> = {
     {
       labelKey: "settings.general",
       items: [
-        { id: "auto-save", labelKey: "settings.auto-save", descriptionKey: "settings.auto-save-desc", type: "toggle" },
-        { id: "restore-session", labelKey: "settings.restore-session", descriptionKey: "settings.restore-session-desc", type: "toggle" },
-        { id: "check-updates", labelKey: "settings.check-updates", descriptionKey: "settings.check-updates-desc", type: "toggle" },
+        {
+          id: "auto-save",
+          labelKey: "settings.auto-save",
+          descriptionKey: "settings.auto-save-desc",
+          type: "toggle",
+        },
+        {
+          id: "restore-session",
+          labelKey: "settings.restore-session",
+          descriptionKey: "settings.restore-session-desc",
+          type: "toggle",
+        },
+        {
+          id: "check-updates",
+          labelKey: "settings.check-updates",
+          descriptionKey: "settings.check-updates-desc",
+          type: "toggle",
+        },
       ],
     },
   ],
@@ -33,14 +52,31 @@ const SETTINGS_CONTENT: Record<string, SettingsGroup[]> = {
     {
       labelKey: "settings.appearance",
       items: [
-        { id: "color-mode", labelKey: "settings.color-mode", descriptionKey: "settings.color-mode-desc", type: "segment", options: ["settings.light", "settings.dark"] },
+        {
+          id: "color-mode",
+          labelKey: "settings.color-mode",
+          descriptionKey: "settings.color-mode-desc",
+          type: "segment",
+          options: ["settings.light", "settings.dark"],
+        },
       ],
     },
     {
       labelKey: "settings.appearance",
       items: [
-        { id: "grid-style", labelKey: "settings.grid-style", descriptionKey: "settings.grid-style-desc", type: "segment", options: ["settings.dots", "settings.lines", "settings.none"] },
-        { id: "minimap", labelKey: "settings.minimap", descriptionKey: "settings.minimap-desc", type: "toggle" },
+        {
+          id: "grid-style",
+          labelKey: "settings.grid-style",
+          descriptionKey: "settings.grid-style-desc",
+          type: "segment",
+          options: ["settings.dots", "settings.lines", "settings.none"],
+        },
+        {
+          id: "minimap",
+          labelKey: "settings.minimap",
+          descriptionKey: "settings.minimap-desc",
+          type: "toggle",
+        },
       ],
     },
   ],
@@ -48,7 +84,12 @@ const SETTINGS_CONTENT: Record<string, SettingsGroup[]> = {
     {
       labelKey: "settings.shortcuts",
       items: [
-        { id: "cmd-palette", labelKey: "settings.cmd-palette", type: "segment", options: ["⌘P", "⌘K"] },
+        {
+          id: "cmd-palette",
+          labelKey: "settings.cmd-palette",
+          type: "segment",
+          options: ["⌘P", "⌘K"],
+        },
         { id: "save", labelKey: "common.save", type: "segment", options: ["⌘S"] },
         { id: "undo", labelKey: "settings.undo", type: "segment", options: ["⌘Z"] },
         { id: "redo", labelKey: "settings.redo", type: "segment", options: ["⌘⇧Z"] },
@@ -59,9 +100,27 @@ const SETTINGS_CONTENT: Record<string, SettingsGroup[]> = {
     {
       labelKey: "settings.runtime",
       items: [
-        { id: "backend", labelKey: "settings.default-backend", descriptionKey: "settings.default-backend-desc", type: "select", options: ["settings.burn", "settings.candle"] },
-        { id: "device", labelKey: "settings.device-selection", descriptionKey: "settings.device-selection-desc", type: "select", options: ["settings.auto-detect", "settings.cpu", "settings.gpu-0", "settings.gpu-1"] },
-        { id: "memory-budget", labelKey: "settings.vram-budget", descriptionKey: "settings.vram-budget-desc", type: "select", options: ["settings.2gb", "settings.4gb", "settings.8gb", "settings.16gb"] },
+        {
+          id: "backend",
+          labelKey: "settings.default-backend",
+          descriptionKey: "settings.default-backend-desc",
+          type: "select",
+          options: ["settings.burn", "settings.candle"],
+        },
+        {
+          id: "device",
+          labelKey: "settings.device-selection",
+          descriptionKey: "settings.device-selection-desc",
+          type: "select",
+          options: ["settings.auto-detect", "settings.cpu", "settings.gpu-0", "settings.gpu-1"],
+        },
+        {
+          id: "memory-budget",
+          labelKey: "settings.vram-budget",
+          descriptionKey: "settings.vram-budget-desc",
+          type: "select",
+          options: ["settings.2gb", "settings.4gb", "settings.8gb", "settings.16gb"],
+        },
       ],
     },
   ],
@@ -69,8 +128,24 @@ const SETTINGS_CONTENT: Record<string, SettingsGroup[]> = {
     {
       labelKey: "settings.workspace",
       items: [
-        { id: "project-dir", labelKey: "settings.project-directory", descriptionKey: "settings.project-directory-desc", type: "select", options: ["~/Reimagine", "~/Documents/Reimagine"] },
-        { id: "autosave-interval", labelKey: "settings.autosave-interval", type: "select", options: ["settings.5-seconds", "settings.10-seconds", "settings.30-seconds", "settings.1-minute"] },
+        {
+          id: "project-dir",
+          labelKey: "settings.project-directory",
+          descriptionKey: "settings.project-directory-desc",
+          type: "select",
+          options: ["~/Reimagine", "~/Documents/Reimagine"],
+        },
+        {
+          id: "autosave-interval",
+          labelKey: "settings.autosave-interval",
+          type: "select",
+          options: [
+            "settings.5-seconds",
+            "settings.10-seconds",
+            "settings.30-seconds",
+            "settings.1-minute",
+          ],
+        },
       ],
     },
   ],
@@ -78,8 +153,19 @@ const SETTINGS_CONTENT: Record<string, SettingsGroup[]> = {
     {
       labelKey: "settings.modelManagement",
       items: [
-        { id: "download-dir", labelKey: "settings.download-directory", descriptionKey: "settings.download-directory-desc", type: "select", options: ["~/.cache/reimagine/models", "~/Reimagine/models"] },
-        { id: "auto-convert", labelKey: "settings.auto-convert", descriptionKey: "settings.auto-convert-desc", type: "toggle" },
+        {
+          id: "download-dir",
+          labelKey: "settings.download-directory",
+          descriptionKey: "settings.download-directory-desc",
+          type: "select",
+          options: ["~/.cache/reimagine/models", "~/Reimagine/models"],
+        },
+        {
+          id: "auto-convert",
+          labelKey: "settings.auto-convert",
+          descriptionKey: "settings.auto-convert-desc",
+          type: "toggle",
+        },
       ],
     },
   ],
@@ -109,6 +195,56 @@ export function SettingsView({ themeMode, onThemeModeChange }: SettingsViewProps
   const groups = SETTINGS_CONTENT[activeSection] ?? [];
   const sectionLabelKey = SECTION_LABEL_KEYS[activeSection] ?? "settings.general";
 
+  // Get current settings from store for form initialization
+  const settings = useSettingsStore();
+
+  // Initialize react-hook-form with zod validation
+  const form = useForm<SettingsFormData>({
+    resolver: zodResolver(settingsSchema),
+    defaultValues: {
+      autoSave: settings.autoSave,
+      restoreSession: settings.restoreSession,
+      checkUpdates: settings.checkUpdates,
+      gridStyle: settings.gridStyle,
+      minimap: settings.minimap,
+      cmdPaletteKey: settings.cmdPaletteKey,
+      backend: settings.backend,
+      device: settings.device,
+      memoryBudget: settings.memoryBudget,
+      projectDir: settings.projectDir,
+      autosaveInterval: settings.autosaveInterval,
+      downloadDir: settings.downloadDir,
+      autoConvert: settings.autoConvert,
+    },
+  });
+
+  // Sync form changes back to the settings store
+  useEffect(() => {
+    const subscription = form.watch((value) => {
+      if (!value) return;
+
+      // Update each setting when form values change
+      if (value.autoSave !== undefined) settings.setAutoSave(value.autoSave);
+      if (value.restoreSession !== undefined) settings.setRestoreSession(value.restoreSession);
+      if (value.checkUpdates !== undefined) settings.setCheckUpdates(value.checkUpdates);
+      if (value.gridStyle !== undefined) settings.setGridStyle(value.gridStyle);
+      if (value.minimap !== undefined) settings.setMinimap(value.minimap);
+      if (value.cmdPaletteKey !== undefined) settings.setCmdPaletteKey(value.cmdPaletteKey);
+      if (value.backend !== undefined) settings.setBackend(value.backend);
+      if (value.device !== undefined) settings.setDevice(value.device);
+      if (value.memoryBudget !== undefined) settings.setMemoryBudget(value.memoryBudget);
+      if (value.projectDir !== undefined) settings.setProjectDir(value.projectDir);
+      if (value.autosaveInterval !== undefined)
+        settings.setAutosaveInterval(value.autosaveInterval);
+      if (value.downloadDir !== undefined) settings.setDownloadDir(value.downloadDir);
+      if (value.autoConvert !== undefined) settings.setAutoConvert(value.autoConvert);
+    });
+
+    return () => {
+      subscription.unsubscribe();
+    };
+  }, [form, settings]);
+
   // Resolve message keys to actual translated strings
   const resolveLabel = (key: string): string => {
     const msg = (m as unknown as Record<string, () => string>)[key];
@@ -128,7 +264,14 @@ export function SettingsView({ themeMode, onThemeModeChange }: SettingsViewProps
           </h2>
           <div className="divide-y divide-outline rounded-xl border border-outline bg-surface">
             {group.items.map((item) => (
-              <SettingRow key={item.id} item={item} themeMode={themeMode} onThemeModeChange={onThemeModeChange} resolveLabel={resolveLabel} />
+              <SettingRow
+                key={item.id}
+                item={item}
+                form={form}
+                themeMode={themeMode}
+                onThemeModeChange={onThemeModeChange}
+                resolveLabel={resolveLabel}
+              />
             ))}
           </div>
         </section>
@@ -139,84 +282,162 @@ export function SettingsView({ themeMode, onThemeModeChange }: SettingsViewProps
 
 function SettingRow({
   item,
+  form,
   themeMode,
   onThemeModeChange,
   resolveLabel,
 }: {
   item: SettingItem;
+  form: UseFormReturn<SettingsFormData>;
   themeMode: ThemeMode;
   onThemeModeChange: (mode: ThemeMode) => void;
   resolveLabel: (key: string) => string;
 }) {
-  const settings = useSettingsStore();
-  const segmentIndex = useSettingsStore((s) => {
+  const watchedValues = form.watch();
+
+  const segmentIndex = (() => {
     if (item.id === "grid-style") {
-      return s.gridStyle === "dots" ? 0 : s.gridStyle === "lines" ? 1 : 2;
+      const val = watchedValues.gridStyle;
+      return val === "dots" ? 0 : val === "lines" ? 1 : 2;
     }
-    if (item.id === "cmd-palette") return s.cmdPaletteKey === "⌘P" ? 0 : 1;
+    if (item.id === "cmd-palette") {
+      const val = watchedValues.cmdPaletteKey;
+      return val === "⌘P" ? 0 : 1;
+    }
     return 0;
-  });
+  })();
 
   const isColorMode = item.id === "color-mode";
   const isGridStyle = item.id === "grid-style";
   const isCmdPalette = item.id === "cmd-palette";
-  const currentSegment = isColorMode
-    ? themeMode === "dark" ? 1 : 0
-    : segmentIndex;
+  const currentSegment = isColorMode ? (themeMode === "dark" ? 1 : 0) : segmentIndex;
 
   const toggleValue = (() => {
     switch (item.id) {
-      case "auto-save": return settings.autoSave;
-      case "restore-session": return settings.restoreSession;
-      case "check-updates": return settings.checkUpdates;
-      case "minimap": return settings.minimap;
-      case "auto-convert": return settings.autoConvert;
-      default: return false;
+      case "auto-save":
+        return watchedValues.autoSave;
+      case "restore-session":
+        return watchedValues.restoreSession;
+      case "check-updates":
+        return watchedValues.checkUpdates;
+      case "minimap":
+        return watchedValues.minimap;
+      case "auto-convert":
+        return watchedValues.autoConvert;
+      default:
+        return false;
     }
   })();
 
   const selectValue = (() => {
     switch (item.id) {
-      case "backend": return settings.backend === "Burn" ? resolveLabel("settings.burn") : resolveLabel("settings.candle");
-      case "device": return settings.device === "auto" ? resolveLabel("settings.auto-detect") : settings.device === "cpu" ? resolveLabel("settings.cpu") : settings.device === "gpu0" ? resolveLabel("settings.gpu-0") : resolveLabel("settings.gpu-1");
-      case "memory-budget": return settings.memoryBudget === "2GB" ? resolveLabel("settings.2gb") : settings.memoryBudget === "4GB" ? resolveLabel("settings.4gb") : settings.memoryBudget === "8GB" ? resolveLabel("settings.8gb") : resolveLabel("settings.16gb");
-      case "project-dir": return settings.projectDir;
-      case "autosave-interval": return settings.autosaveInterval === "5s" ? resolveLabel("settings.5-seconds") : settings.autosaveInterval === "10s" ? resolveLabel("settings.10-seconds") : settings.autosaveInterval === "30s" ? resolveLabel("settings.30-seconds") : resolveLabel("settings.1-minute");
-      case "download-dir": return settings.downloadDir;
-      default: return "";
+      case "backend": {
+        const val = watchedValues.backend;
+        return val === "Burn" ? resolveLabel("settings.burn") : resolveLabel("settings.candle");
+      }
+      case "device": {
+        const val = watchedValues.device;
+        return val === "auto"
+          ? resolveLabel("settings.auto-detect")
+          : val === "cpu"
+            ? resolveLabel("settings.cpu")
+            : val === "gpu0"
+              ? resolveLabel("settings.gpu-0")
+              : resolveLabel("settings.gpu-1");
+      }
+      case "memory-budget": {
+        const val = watchedValues.memoryBudget;
+        return val === "2GB"
+          ? resolveLabel("settings.2gb")
+          : val === "4GB"
+            ? resolveLabel("settings.4gb")
+            : val === "8GB"
+              ? resolveLabel("settings.8gb")
+              : resolveLabel("settings.16gb");
+      }
+      case "project-dir":
+        return watchedValues.projectDir;
+      case "autosave-interval": {
+        const val = watchedValues.autosaveInterval;
+        return val === "5s"
+          ? resolveLabel("settings.5-seconds")
+          : val === "10s"
+            ? resolveLabel("settings.10-seconds")
+            : val === "30s"
+              ? resolveLabel("settings.30-seconds")
+              : resolveLabel("settings.1-minute");
+      }
+      case "download-dir":
+        return watchedValues.downloadDir;
+      default:
+        return "";
     }
   })();
 
   const handleToggle = () => {
     switch (item.id) {
-      case "auto-save": settings.setAutoSave(!toggleValue); break;
-      case "restore-session": settings.setRestoreSession(!toggleValue); break;
-      case "check-updates": settings.setCheckUpdates(!toggleValue); break;
-      case "minimap": settings.setMinimap(!toggleValue); break;
-      case "auto-convert": settings.setAutoConvert(!toggleValue); break;
+      case "auto-save":
+        form.setValue("autoSave", !toggleValue);
+        break;
+      case "restore-session":
+        form.setValue("restoreSession", !toggleValue);
+        break;
+      case "check-updates":
+        form.setValue("checkUpdates", !toggleValue);
+        break;
+      case "minimap":
+        form.setValue("minimap", !toggleValue);
+        break;
+      case "auto-convert":
+        form.setValue("autoConvert", !toggleValue);
+        break;
     }
   };
 
   const handleSelect = (value: string) => {
     switch (item.id) {
-      case "backend": settings.setBackend(value.includes("Candle") ? "Candle (deprecated)" : "Burn"); break;
+      case "backend":
+        form.setValue("backend", value.includes("Candle") ? "Candle (deprecated)" : "Burn");
+        break;
       case "device": {
-        const v = value.includes("Auto") ? "auto" : value.includes("CPU") ? "cpu" : value.includes("0") ? "gpu0" : "gpu1";
-        settings.setDevice(v as "auto" | "cpu" | "gpu0" | "gpu1");
+        const v = value.includes("Auto")
+          ? "auto"
+          : value.includes("CPU")
+            ? "cpu"
+            : value.includes("0")
+              ? "gpu0"
+              : "gpu1";
+        form.setValue("device", v as "auto" | "cpu" | "gpu0" | "gpu1");
         break;
       }
       case "memory-budget": {
-        const v = value.includes("2") ? "2GB" : value.includes("4") ? "4GB" : value.includes("8") ? "8GB" : "16GB";
-        settings.setMemoryBudget(v as "2GB" | "4GB" | "8GB" | "16GB");
+        const v = value.includes("2")
+          ? "2GB"
+          : value.includes("4")
+            ? "4GB"
+            : value.includes("8")
+              ? "8GB"
+              : "16GB";
+        form.setValue("memoryBudget", v as "2GB" | "4GB" | "8GB" | "16GB");
         break;
       }
-      case "project-dir": settings.setProjectDir(value); break;
+      case "project-dir":
+        form.setValue("projectDir", value);
+        break;
       case "autosave-interval": {
-        const v = value.includes("5") ? "5s" : value.includes("10") ? "10s" : value.includes("30") ? "30s" : "60s";
-        settings.setAutosaveInterval(v as "5s" | "10s" | "30s" | "60s");
+        const v = value.includes("5")
+          ? "5s"
+          : value.includes("10")
+            ? "10s"
+            : value.includes("30")
+              ? "30s"
+              : "60s";
+        form.setValue("autosaveInterval", v as "5s" | "10s" | "30s" | "60s");
         break;
       }
-      case "download-dir": settings.setDownloadDir(value); break;
+      case "download-dir":
+        form.setValue("downloadDir", value);
+        break;
     }
   };
 
@@ -224,9 +445,9 @@ function SettingRow({
     if (isColorMode) {
       onThemeModeChange(i === 0 ? "light" : "dark");
     } else if (isGridStyle) {
-      settings.setGridStyle(i === 0 ? "dots" : i === 1 ? "lines" : "none");
+      form.setValue("gridStyle", i === 0 ? "dots" : i === 1 ? "lines" : "none");
     } else if (isCmdPalette) {
-      settings.setCmdPaletteKey(i === 0 ? "⌘P" : "⌘K");
+      form.setValue("cmdPaletteKey", i === 0 ? "⌘P" : "⌘K");
     }
   };
 

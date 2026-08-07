@@ -46,13 +46,8 @@ export function GenericNode({ id, type, data, selected }: NodeProps) {
   const d = (data ?? {}) as GenericNodeData;
 
   const def = selectNodeDef(defs, type);
-  const title =
-    (typeof d.title === "string" && d.title) ||
-    def?.displayName ||
-    type ||
-    id;
-  const tone =
-    (typeof d.tone === "string" && d.tone) || categoryTone(def?.category);
+  const title = (typeof d.title === "string" && d.title) || def?.displayName || type || id;
+  const tone = (typeof d.tone === "string" && d.tone) || categoryTone(def?.category);
 
   const inputs = inputSlotsFor(data, def);
   const outputs = outputSlotsFor(data, def);
@@ -65,9 +60,7 @@ export function GenericNode({ id, type, data, selected }: NodeProps) {
   }));
 
   const preview = useNodeArtifact(id);
-  const showPreview = Boolean(
-    preview || (type != null && PREVIEW_TYPES.has(type)),
-  );
+  const showPreview = Boolean(preview || (type != null && PREVIEW_TYPES.has(type)));
 
   return (
     <BaseNode

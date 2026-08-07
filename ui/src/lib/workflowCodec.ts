@@ -73,9 +73,7 @@ export function workflowToJson(
     nodes: nodes.map((node) => ({
       id: node.id,
       type_id: node.type ?? "builtin.unknown",
-      ...(typeof node.data?.title === "string"
-        ? { label: node.data.title }
-        : {}),
+      ...(typeof node.data?.title === "string" ? { label: node.data.title } : {}),
       params: {
         ...paramsFromData(node.data),
         [UI_DATA_SLOT]: { type: "string", value: JSON.stringify(node.data ?? {}) },
@@ -88,10 +86,7 @@ export function workflowToJson(
     })),
     layout: {
       nodes: Object.fromEntries(
-        nodes.map((node) => [
-          node.id,
-          { x: node.position.x, y: node.position.y },
-        ]),
+        nodes.map((node) => [node.id, { x: node.position.x, y: node.position.y }]),
       ),
     },
   };
@@ -125,10 +120,7 @@ export function workflowFromJson(json: unknown): WorkflowGraph {
   });
 
   const edges: FlowEdge[] = (workflow.edges ?? [])
-    .filter(
-      (edge) =>
-        edge?.from?.node && edge?.from?.slot && edge?.to?.node && edge?.to?.slot,
-    )
+    .filter((edge) => edge?.from?.node && edge?.from?.slot && edge?.to?.node && edge?.to?.slot)
     .map((edge) => ({
       id: edge.id,
       source: edge.from.node,
@@ -157,17 +149,14 @@ function isPersistableEdge(edge: FlowEdge): edge is EdgeWithHandles {
   return Boolean(edge.source && edge.sourceHandle && edge.target && edge.targetHandle);
 }
 
-function paramsFromData(
-  data: Record<string, unknown> | undefined,
-): Record<string, ParamValue> {
+function paramsFromData(data: Record<string, unknown> | undefined): Record<string, ParamValue> {
   const rows = Array.isArray(data?.parameters)
     ? (data.parameters as Array<{ id?: unknown; value?: unknown }>)
     : [];
   const params: Record<string, ParamValue> = {};
   for (const row of rows) {
     if (typeof row.id !== "string" || row.id.length === 0) continue;
-    const value =
-      typeof row.value === "string" ? row.value : String(row.value ?? "");
+    const value = typeof row.value === "string" ? row.value : String(row.value ?? "");
     params[row.id] = inferParamValue(value);
   }
   return params;
@@ -186,11 +175,7 @@ function inferParamValue(value: string): ParamValue {
 }
 
 /** Resolve a socket `kind` from a node id + handle id, for restored edges. */
-function socketKind(
-  nodes: Node[],
-  nodeId: string,
-  handleId: string,
-): string {
+function socketKind(nodes: Node[], nodeId: string, handleId: string): string {
   const node = nodes.find((n) => n.id === nodeId);
   const data = node?.data as
     | { inputs?: { id: string; kind: string }[]; outputs?: { id: string; kind: string }[] }

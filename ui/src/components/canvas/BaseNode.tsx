@@ -75,10 +75,7 @@ export function BaseNode({
     >
       {/* Header — own sub-container */}
       <div className="node-base__header">
-        <span
-          className="h-2 w-2 shrink-0 rounded-full"
-          style={{ backgroundColor: tone }}
-        />
+        <span className="h-2 w-2 shrink-0 rounded-full" style={{ backgroundColor: tone }} />
         <span className="truncate text-body-sm font-medium leading-none text-on-surface">
           {title}
         </span>
@@ -91,22 +88,13 @@ export function BaseNode({
             <div className="flex justify-between gap-2">
               <div className="flex flex-1 flex-col gap-1.5">
                 {inputs.map((slot) => (
-                  <div
-                    key={slot.id}
-                    className="relative flex h-5 w-full items-center gap-2"
-                  >
-                    <Socket
-                      id={slot.id}
-                      kind={slot.kind}
-                      side="left"
-                      dotColor={slot.dotColor}
-                    />
+                  <div key={slot.id} className="relative flex h-5 w-full items-center gap-2">
+                    <Socket id={slot.id} kind={slot.kind} side="left" dotColor={slot.dotColor} />
                     {slot.badge && (
                       <span
                         className="flex h-5 w-5 shrink-0 items-center justify-center rounded text-caption font-bold text-white"
                         style={{
-                          backgroundColor:
-                            slot.dotColor || SOCKET_COLORS[slot.kind],
+                          backgroundColor: slot.dotColor || SOCKET_COLORS[slot.kind],
                         }}
                       >
                         {slot.badge}
@@ -131,19 +119,13 @@ export function BaseNode({
                       <span
                         className="flex h-5 w-5 shrink-0 items-center justify-center rounded text-caption font-bold text-white"
                         style={{
-                          backgroundColor:
-                            slot.dotColor || SOCKET_COLORS[slot.kind],
+                          backgroundColor: slot.dotColor || SOCKET_COLORS[slot.kind],
                         }}
                       >
                         {slot.badge}
                       </span>
                     )}
-                    <Socket
-                      id={slot.id}
-                      kind={slot.kind}
-                      side="right"
-                      dotColor={slot.dotColor}
-                    />
+                    <Socket id={slot.id} kind={slot.kind} side="right" dotColor={slot.dotColor} />
                   </div>
                 ))}
               </div>
@@ -156,10 +138,7 @@ export function BaseNode({
               {parameters.length > 0 && (
                 <div className="space-y-1.5">
                   {parameters.map((p) => (
-                    <div
-                      key={p.id}
-                      className="flex items-center justify-between gap-2"
-                    >
+                    <div key={p.id} className="flex items-center justify-between gap-2">
                       {p.label && (
                         <span className="text-body-sm leading-none text-on-surface-variant">
                           {p.label}

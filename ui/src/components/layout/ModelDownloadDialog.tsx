@@ -1,13 +1,5 @@
 import { useEffect, useRef, useState } from "react";
-import {
-  ArrowLeft,
-  Boxes,
-  CheckCircle2,
-  Download,
-  Loader2,
-  Search,
-  X,
-} from "lucide-react";
+import { ArrowLeft, Boxes, CheckCircle2, Download, Loader2, Search, X } from "lucide-react";
 import { Dialog } from "radix-ui";
 import { Button } from "@/components/ui/button";
 import { downloadHuggingfaceModel, getModelCard, searchModels } from "@/ipc";
@@ -199,9 +191,7 @@ export function ModelDownloadDialog({
     }
   }
 
-  const fraction = progress.totalBytes
-    ? Math.min(1, progress.bytes / progress.totalBytes)
-    : 0;
+  const fraction = progress.totalBytes ? Math.min(1, progress.bytes / progress.totalBytes) : 0;
 
   return (
     <Dialog.Root open={open} onOpenChange={(nextOpen) => !nextOpen && onClose()}>
@@ -282,8 +272,8 @@ export function ModelDownloadDialog({
                               {entry.id}
                             </span>
                             <span className="mt-0.5 block truncate text-caption text-on-surface-variant">
-                              {entry.pipelineTag ?? "model"} /{" "}
-                              {entry.downloads.toLocaleString()} downloads
+                              {entry.pipelineTag ?? "model"} / {entry.downloads.toLocaleString()}{" "}
+                              downloads
                             </span>
                           </span>
                         </button>
@@ -317,25 +307,15 @@ export function ModelDownloadDialog({
                     </div>
 
                     <div className="mt-3 grid grid-cols-2 gap-1">
-                      <DialogSummaryCell
-                        label="Format"
-                        value={card.detectedFormat}
-                      />
+                      <DialogSummaryCell label="Format" value={card.detectedFormat} />
                       <DialogSummaryCell
                         label="Estimated size"
                         value={formatBytes(card.estimatedDownloadSize)}
                       />
-                      <DialogSummaryCell
-                        label="Files"
-                        value={String(card.fileCount)}
-                      />
+                      <DialogSummaryCell label="Files" value={String(card.fileCount)} />
                       <DialogSummaryCell
                         label="Components"
-                        value={
-                          card.components.length
-                            ? card.components.join(", ")
-                            : "Unknown"
-                        }
+                        value={card.components.length ? card.components.join(", ") : "Unknown"}
                       />
                     </div>
 
@@ -354,11 +334,7 @@ export function ModelDownloadDialog({
                 )}
               </div>
               <footer className="flex shrink-0 items-center justify-end gap-2 border-t border-outline px-4 py-3">
-                <Button
-                  size="sm"
-                  onClick={() => void startDownload()}
-                  disabled={!card}
-                >
+                <Button size="sm" onClick={() => void startDownload()} disabled={!card}>
                   <Download className="h-3.5 w-3.5" />
                   Download
                 </Button>
@@ -381,13 +357,9 @@ export function ModelDownloadDialog({
                 />
               </div>
               <div className="mt-2 flex items-center justify-between gap-3 text-caption text-on-surface-variant">
-                <span className="truncate">
-                  {formatBytes(progress.bytes)} transferred
-                </span>
+                <span className="truncate">{formatBytes(progress.bytes)} transferred</span>
                 {progress.totalBytes ? (
-                  <span className="shrink-0">
-                    {formatBytes(progress.totalBytes)} total
-                  </span>
+                  <span className="shrink-0">{formatBytes(progress.totalBytes)} total</span>
                 ) : (
                   <span className="shrink-0">Estimating…</span>
                 )}
@@ -398,9 +370,7 @@ export function ModelDownloadDialog({
           {phase === "done" && (
             <div className="flex flex-1 flex-col items-center justify-center gap-2 p-6 text-center">
               <CheckCircle2 className="h-8 w-8 text-status-ready" />
-              <div className="text-body-sm font-semibold text-on-surface">
-                Model installed
-              </div>
+              <div className="text-body-sm font-semibold text-on-surface">Model installed</div>
               <div className="max-w-full truncate text-caption text-on-surface-variant">
                 {output
                   ? `${output.repoId} · ${formatBytes(output.totalBytes)} · ${
@@ -419,19 +389,11 @@ export function ModelDownloadDialog({
   );
 }
 
-function DialogSummaryCell({
-  label,
-  value,
-}: {
-  label: string;
-  value: string;
-}) {
+function DialogSummaryCell({ label, value }: { label: string; value: string }) {
   return (
     <div className="min-w-0 rounded-lg bg-control-hover/60 px-2 py-1.5">
       <div className="truncate text-caption text-on-surface-variant">{label}</div>
-      <div className="truncate text-caption font-semibold text-on-surface">
-        {value}
-      </div>
+      <div className="truncate text-caption font-semibold text-on-surface">{value}</div>
     </div>
   );
 }

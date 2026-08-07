@@ -3,13 +3,7 @@ import type { RunEventPayload } from "@/ipc/schemas";
 import { runWorkflow as ipcRunWorkflow, cancelRun as ipcCancelRun } from "@/ipc";
 import { useArtifactStore } from "./artifacts";
 
-export type RuntimePhase =
-  | "idle"
-  | "starting"
-  | "running"
-  | "completed"
-  | "failed"
-  | "cancelled";
+export type RuntimePhase = "idle" | "starting" | "running" | "completed" | "failed" | "cancelled";
 
 export type RuntimeDiagnostic = {
   id: string;
@@ -75,10 +69,7 @@ export const useRuntimeStore = create<RuntimeState>()((set, get) => ({
     };
 
     try {
-      const response = await ipcRunWorkflow(
-        workflowJson as any,
-        handleEvent,
-      );
+      const response = await ipcRunWorkflow(workflowJson as any, handleEvent);
 
       if (response.outcome === "started") {
         set({
@@ -106,12 +97,14 @@ export const useRuntimeStore = create<RuntimeState>()((set, get) => ({
     } catch (err) {
       set({
         phase: "failed",
-        diagnostics: [{
-          id: "run-error",
-          severity: "error",
-          message: String(err),
-          source: "Runtime",
-        }],
+        diagnostics: [
+          {
+            id: "run-error",
+            severity: "error",
+            message: String(err),
+            source: "Runtime",
+          },
+        ],
       });
       stopProgressTimer();
     }
@@ -126,7 +119,14 @@ export const useRuntimeStore = create<RuntimeState>()((set, get) => ({
       set({ phase: "cancelled" });
     } catch {
       // If cancel fails, just reset
-      set({ phase: "idle", runId: null, currentNode: null, progress: 0, elapsedMs: 0, diagnostics: [] });
+      set({
+        phase: "idle",
+        runId: null,
+        currentNode: null,
+        progress: 0,
+        elapsedMs: 0,
+        diagnostics: [],
+      });
     }
   },
 
@@ -145,12 +145,18 @@ export const useRuntimeStore = create<RuntimeState>()((set, get) => ({
 
 function eventKindToPhase(kind: string): RuntimePhase {
   switch (kind) {
-    case "RunQueued": return "starting";
-    case "RunStarted": return "running";
-    case "RunCompleted": return "completed";
-    case "RunFailed": return "failed";
-    case "RunCancelled": return "cancelled";
-    default: return "running";
+    case "RunQueued":
+      return "starting";
+    case "RunStarted":
+      return "running";
+    case "RunCompleted":
+      return "completed";
+    case "RunFailed":
+      return "failed";
+    case "RunCancelled":
+      return "cancelled";
+    default:
+      return "running";
   }
 }
 

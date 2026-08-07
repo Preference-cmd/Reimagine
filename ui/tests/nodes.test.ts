@@ -1,4 +1,4 @@
-import { expect, test } from "bun:test";
+import { expect, test } from "vitest";
 
 import {
   categoryTone,
@@ -120,16 +120,16 @@ test("typed data.params values win over spec defaults", () => {
 test("passes data/http/asset URLs through unchanged", async () => {
   const dataUrl = "data:image/svg+xml;utf8,hello";
   expect(await artifactDisplayUrl({ path: dataUrl } as never)).toBe(dataUrl);
-  expect(
-    await artifactDisplayUrl({ path: "https://example.com/img.png" } as never),
-  ).toBe("https://example.com/img.png");
-  expect(
-    await artifactDisplayUrl({ path: "asset://localhost/x.png" } as never),
-  ).toBe("asset://localhost/x.png");
+  expect(await artifactDisplayUrl({ path: "https://example.com/img.png" } as never)).toBe(
+    "https://example.com/img.png",
+  );
+  expect(await artifactDisplayUrl({ path: "asset://localhost/x.png" } as never)).toBe(
+    "asset://localhost/x.png",
+  );
 });
 
 test("filesystem paths pass through when no Tauri bridge is present", async () => {
-  expect(
-    await artifactDisplayUrl({ path: "/tmp/out/run-1.png" } as never),
-  ).toBe("/tmp/out/run-1.png");
+  expect(await artifactDisplayUrl({ path: "/tmp/out/run-1.png" } as never)).toBe(
+    "/tmp/out/run-1.png",
+  );
 });

@@ -61,9 +61,7 @@ export function ContextMenuPanel() {
         >
           <span className="flex-1 truncate">{item.label}</span>
           {item.shortcut && (
-            <span className="text-caption text-on-surface-variant/70">
-              {item.shortcut}
-            </span>
+            <span className="text-caption text-on-surface-variant/70">{item.shortcut}</span>
           )}
         </button>
       ))}

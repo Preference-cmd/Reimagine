@@ -1,11 +1,4 @@
-import {
-  CheckCircle2,
-  CircleDot,
-  Clock3,
-  Cpu,
-  Loader2,
-  XCircle,
-} from "lucide-react";
+import { CheckCircle2, CircleDot, Clock3, Cpu, Loader2, XCircle } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { useRuntimeStore, type RuntimePhase } from "@/store/runtime";
 
@@ -67,12 +60,8 @@ export function RunsView() {
     <div className="flex h-full flex-col bg-background p-6">
       {/* Header */}
       <div className="mb-6">
-        <h1 className="text-display-sm font-semibold text-on-surface">
-          Runs
-        </h1>
-        <p className="mt-1 text-body-sm text-on-surface-variant">
-          Runtime history & status
-        </p>
+        <h1 className="text-display-sm font-semibold text-on-surface">Runs</h1>
+        <p className="mt-1 text-body-sm text-on-surface-variant">Runtime history & status</p>
       </div>
 
       {/* Current run status */}
@@ -84,9 +73,7 @@ export function RunsView() {
               phaseTone(phase),
             )}
           >
-            <Icon
-              className={cn("h-5 w-5", active && "motion-safe:animate-spin")}
-            />
+            <Icon className={cn("h-5 w-5", active && "motion-safe:animate-spin")} />
           </span>
           <div className="min-w-0 flex-1">
             <div className="flex items-center gap-2">
@@ -128,9 +115,7 @@ export function RunsView() {
 
       {/* Diagnostics */}
       <div className="min-h-0 flex-1">
-        <h3 className="mb-3 text-body-sm font-semibold text-on-surface">
-          Diagnostics
-        </h3>
+        <h3 className="mb-3 text-body-sm font-semibold text-on-surface">Diagnostics</h3>
         {diagnostics.length === 0 ? (
           <div className="flex items-center gap-2 rounded-xl bg-control-hover/60 px-3 py-2 text-caption text-on-surface-variant">
             <CircleDot className="h-3.5 w-3.5 opacity-30" />
@@ -154,12 +139,8 @@ export function RunsView() {
                   )}
                 />
                 <div className="min-w-0">
-                  <div className="text-caption font-medium text-on-surface">
-                    {d.source}
-                  </div>
-                  <div className="text-caption text-on-surface-variant">
-                    {d.message}
-                  </div>
+                  <div className="text-caption font-medium text-on-surface">{d.source}</div>
+                  <div className="text-caption text-on-surface-variant">{d.message}</div>
                 </div>
               </div>
             ))}
@@ -185,9 +166,7 @@ function StatCard({
         <Icon className="h-3.5 w-3.5" />
         <span className="text-caption">{label}</span>
       </div>
-      <div className="mt-1 truncate text-body-sm font-medium text-on-surface">
-        {value}
-      </div>
+      <div className="mt-1 truncate text-body-sm font-medium text-on-surface">{value}</div>
     </div>
   );
 }

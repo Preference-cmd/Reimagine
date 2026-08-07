@@ -1,9 +1,5 @@
 import { type FC } from "react";
-import {
-  getBezierPath,
-  type EdgeProps,
-  type Edge,
-} from "@xyflow/react";
+import { getBezierPath, type EdgeProps, type Edge } from "@xyflow/react";
 
 export type FlowEdgeData = {
   /** Socket kind on the source side (drives the gradient start color). */
@@ -79,13 +75,7 @@ export const FlowEdgeComponent: FC<EdgeProps<FlowEdge>> = ({
 
       {/* Invisible wider hit area — receives pointer events so edges can be
           selected/deleted, while the visual paths below stay non-interactive. */}
-      <path
-        d={path}
-        fill="none"
-        stroke="transparent"
-        strokeWidth={12}
-        pointerEvents="stroke"
-      />
+      <path d={path} fill="none" stroke="transparent" strokeWidth={12} pointerEvents="stroke" />
 
       {/* Main line — thicker, with a soft glow */}
       <path
@@ -111,10 +101,7 @@ export const FlowEdgeComponent: FC<EdgeProps<FlowEdge>> = ({
 
       {/* Midpoint label pill — frosted-glass style, matching the node aesthetic */}
       {data?.label && (
-        <g
-          transform={`translate(${labelX}, ${labelY})`}
-          className="pointer-events-none"
-        >
+        <g transform={`translate(${labelX}, ${labelY})`} className="pointer-events-none">
           <rect
             x={-30}
             y={-10}

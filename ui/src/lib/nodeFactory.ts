@@ -49,10 +49,7 @@ export function createNodeFromDef(
 }
 
 /** Collision-free id for a new node of a given catalog type. */
-export function uniqueNodeId(
-  existing: Array<{ id: string }>,
-  type: string,
-): string {
+export function uniqueNodeId(existing: Array<{ id: string }>, type: string): string {
   const base = type.replace(/[^a-zA-Z0-9_-]/g, "-").replace(/^-+|-+$/g, "");
   const prefix = base || "node";
   let candidate = prefix;
@@ -80,9 +77,6 @@ export function createNodeAt(typeId: string, position: XYPosition): boolean {
 }
 
 /** Short display name for a catalog type (used in menus and toasts). */
-export function displayNameFor(
-  defs: Map<string, NodeDef>,
-  typeId: string,
-): string {
+export function displayNameFor(defs: Map<string, NodeDef>, typeId: string): string {
   return defs.get(typeId)?.displayName ?? typeId;
 }

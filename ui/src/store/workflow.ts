@@ -2,11 +2,7 @@ import { create } from "zustand";
 import { temporal, type TemporalState } from "zundo";
 import { useStore } from "zustand";
 import type { Node, NodeChange, EdgeChange, Connection } from "@xyflow/react";
-import {
-  applyNodeChanges,
-  applyEdgeChanges,
-  addEdge as rfAddEdge,
-} from "@xyflow/react";
+import { applyNodeChanges, applyEdgeChanges, addEdge as rfAddEdge } from "@xyflow/react";
 
 import type { FlowEdge, FlowEdgeData } from "@/components/canvas/FlowEdge";
 import type { ParamValue } from "@/lib/nodes";
@@ -28,16 +24,11 @@ type WorkflowState = {
   edges: FlowEdge[];
   // ── view state (excluded from undo history) ──────────────────────
   selectedNode: SelectionInfo;
-  propertiesPanelOpen: boolean;
   // mutations (all flow through zundo's temporal middleware)
   onNodesChange: (changes: NodeChange[]) => void;
   onEdgesChange: (changes: EdgeChange[]) => void;
-  onConnect: (
-    conn: Connection,
-    kinds?: { sourceKind: string; targetKind: string },
-  ) => void;
+  onConnect: (conn: Connection, kinds?: { sourceKind: string; targetKind: string }) => void;
   onNodeSelect: (s: SelectionInfo) => void;
-  setPropertiesPanelOpen: (open: boolean) => void;
   /** Merge typed parameter values into a node's `data.params` (F2-4). */
   updateNodeParams: (nodeId: string, patch: ParamPatch) => void;
   /** Edit the legacy free-text `data.prompt` field (F2-4). */
@@ -98,8 +89,7 @@ const initialNodes: Node[] = [
     data: {
       title: "Positive",
       tone: "#50e3c2",
-      prompt:
-        "A black bear with a pink snout, minimalist style, soft gradients, clear blue sky",
+      prompt: "A black bear with a pink snout, minimalist style, soft gradients, clear blue sky",
     },
   },
   {
@@ -109,8 +99,7 @@ const initialNodes: Node[] = [
     data: {
       title: "Negative",
       tone: "#ff0080",
-      prompt:
-        "No text, unnecessary details, background objects, other animals or people",
+      prompt: "No text, unnecessary details, background objects, other animals or people",
     },
   },
   {
@@ -126,9 +115,7 @@ const initialNodes: Node[] = [
         { id: "negative", kind: "conditioning", label: "negative", dotColor: "#ff0080" },
         { id: "latent", kind: "latent", label: "latent", dotColor: "#7928ca" },
       ],
-      outputs: [
-        { id: "image", kind: "image", label: "image", dotColor: "#50e3c2" },
-      ],
+      outputs: [{ id: "image", kind: "image", label: "image", dotColor: "#50e3c2" }],
       parameters: [
         { id: "seed", label: "Seed", value: "12345", tag: "Fixed", kind: "int" },
         { id: "steps", label: "Steps", value: "30", kind: "int" },
@@ -157,9 +144,7 @@ const initialNodes: Node[] = [
     data: {
       title: "Image",
       tone: "#50e3c2",
-      inputs: [
-        { id: "image", kind: "image", label: "image", dotColor: "#50e3c2" },
-      ],
+      inputs: [{ id: "image", kind: "image", label: "image", dotColor: "#50e3c2" }],
     },
   },
 ];
@@ -208,7 +193,6 @@ export const useWorkflowStore = create<WorkflowState>()(
         nodes: initialNodes,
         edges: initialEdges,
         selectedNode: null,
-        propertiesPanelOpen: false,
         onNodesChange: (changes: NodeChange[]) => {
           const s = get();
           set({ nodes: applyNodeChanges(changes, s.nodes) });
@@ -217,18 +201,11 @@ export const useWorkflowStore = create<WorkflowState>()(
           const s = get();
           set({ edges: applyEdgeChanges(changes, s.edges) as FlowEdge[] });
         },
-        onConnect: (
-          conn: Connection,
-          kinds?: { sourceKind: string; targetKind: string },
-        ) => {
+        onConnect: (conn: Connection, kinds?: { sourceKind: string; targetKind: string }) => {
           const s = get();
           const data: FlowEdgeData = {
-            sourceKind:
-              kinds?.sourceKind ??
-              deriveKind(s.nodes, conn.source, conn.sourceHandle),
-            targetKind:
-              kinds?.targetKind ??
-              deriveKind(s.nodes, conn.target, conn.targetHandle),
+            sourceKind: kinds?.sourceKind ?? deriveKind(s.nodes, conn.source, conn.sourceHandle),
+            targetKind: kinds?.targetKind ?? deriveKind(s.nodes, conn.target, conn.targetHandle),
           };
           const newEdges = rfAddEdge(
             { ...conn, type: "flow", data },
@@ -236,21 +213,12 @@ export const useWorkflowStore = create<WorkflowState>()(
           ) as unknown as FlowEdge[];
           set({ edges: newEdges });
         },
-        onNodeSelect: (sel: SelectionInfo) =>
-          set(
-            sel
-              ? { selectedNode: sel, propertiesPanelOpen: true }
-              : { selectedNode: sel, propertiesPanelOpen: false },
-          ),
-        setPropertiesPanelOpen: (open: boolean) =>
-          set({ propertiesPanelOpen: open }),
+        onNodeSelect: (sel: SelectionInfo) => set({ selectedNode: sel }),
         updateNodeParams: (nodeId: string, patch: ParamPatch) =>
           set((s) => ({
             nodes: s.nodes.map((node) => {
               if (node.id !== nodeId) return node;
-              const existing =
-                (node.data as { params?: ParamPatch } | undefined)?.params ??
-                {};
+              const existing = (node.data as { params?: ParamPatch } | undefined)?.params ?? {};
               return {
                 ...node,
                 data: {
@@ -263,28 +231,22 @@ export const useWorkflowStore = create<WorkflowState>()(
         updateNodePrompt: (nodeId: string, prompt: string) =>
           set((s) => ({
             nodes: s.nodes.map((node) =>
-              node.id === nodeId
-                ? { ...node, data: { ...node.data, prompt } }
-                : node,
+              node.id === nodeId ? { ...node, data: { ...node.data, prompt } } : node,
             ),
           })),
         hydrate: (nodes: Node[], edges: FlowEdge[], workflowId: string, name: string) =>
           set({ nodes, edges, id: workflowId, name }),
-        addNode: (node: Node) =>
-          set((s) => ({ nodes: [...s.nodes, node] })),
+        addNode: (node: Node) => set((s) => ({ nodes: [...s.nodes, node] })),
         removeNodes: (ids: string[]) =>
           set((s) => {
             const removed = new Set(ids);
             return {
               nodes: s.nodes.filter((node) => !removed.has(node.id)),
               edges: s.edges.filter(
-                (edge) =>
-                  !removed.has(edge.source) && !removed.has(edge.target),
+                (edge) => !removed.has(edge.source) && !removed.has(edge.target),
               ),
               selectedNode:
-                s.selectedNode && removed.has(s.selectedNode.id)
-                  ? null
-                  : s.selectedNode,
+                s.selectedNode && removed.has(s.selectedNode.id) ? null : s.selectedNode,
             };
           }),
         duplicateNode: (id: string) =>
@@ -304,9 +266,7 @@ export const useWorkflowStore = create<WorkflowState>()(
           set((s) => ({
             nodes: s.nodes.map((node) => {
               if (node.id !== id) return node;
-              const disabled = !Boolean(
-                (node.data as { disabled?: unknown } | undefined)?.disabled,
-              );
+              const disabled = !(node.data as { disabled?: unknown } | undefined)?.disabled;
               return {
                 ...node,
                 draggable: !disabled,
@@ -317,9 +277,7 @@ export const useWorkflowStore = create<WorkflowState>()(
         renameNode: (id: string, title: string) =>
           set((s) => ({
             nodes: s.nodes.map((node) =>
-              node.id === id
-                ? { ...node, data: { ...node.data, title } }
-                : node,
+              node.id === id ? { ...node, data: { ...node.data, title } } : node,
             ),
           })),
         removeEdges: (ids: string[]) =>
@@ -328,9 +286,7 @@ export const useWorkflowStore = create<WorkflowState>()(
           })),
         disconnectNodeEdges: (id: string) =>
           set((s) => ({
-            edges: s.edges.filter(
-              (edge) => edge.source !== id && edge.target !== id,
-            ),
+            edges: s.edges.filter((edge) => edge.source !== id && edge.target !== id),
           })),
       };
       return initial;
@@ -349,27 +305,24 @@ export const useWorkflowStore = create<WorkflowState>()(
 /* ───── Hooks ───── */
 
 /** Typed accessor for the temporal (undo/redo) slice. */
-export const useWorkflowTemporal = <T,>(
+export const useWorkflowTemporal = <T>(
   selector: (state: TemporalState<Pick<WorkflowState, "nodes" | "edges">>) => T,
 ): T => useStore(useWorkflowStore.temporal, selector);
 
 /* ───── Imperative helpers (for non-React callers) ───── */
 
-export const onNodeSelect = (s: SelectionInfo) =>
-  useWorkflowStore.getState().onNodeSelect(s);
+export const onNodeSelect = (s: SelectionInfo) => useWorkflowStore.getState().onNodeSelect(s);
 
 /* ───── Local ───── */
 
 /** Resolve a socket's `kind` from a node id + handle id, for new connections. */
-function deriveKind(
-  nodes: Node[],
-  nodeId: string | null,
-  handleId: string | null,
-): string {
+function deriveKind(nodes: Node[], nodeId: string | null, handleId: string | null): string {
   if (!nodeId) return "latent";
   const node = nodes.find((n) => n.id === nodeId);
   if (!node) return "latent";
-  const data = node.data as { inputs?: { id: string; kind: string }[]; outputs?: { id: string; kind: string }[] } | undefined;
+  const data = node.data as
+    | { inputs?: { id: string; kind: string }[]; outputs?: { id: string; kind: string }[] }
+    | undefined;
   if (!data) return "latent";
   const pool = [...(data.inputs ?? []), ...(data.outputs ?? [])];
   const sock = pool.find((s) => s.id === handleId);

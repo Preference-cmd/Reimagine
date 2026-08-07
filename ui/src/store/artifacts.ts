@@ -61,10 +61,7 @@ export const useArtifactStore = create<ArtifactState>()((set, get) => ({
       const byNode = get().byNode;
       const next: Record<string, ArtifactPreview> = {};
       for (const [nodeId, preview] of Object.entries(byNode)) {
-        next[nodeId] =
-          preview.status === "pending"
-            ? { ...preview, status: "stale" }
-            : preview;
+        next[nodeId] = preview.status === "pending" ? { ...preview, status: "stale" } : preview;
       }
       set({ byNode: next });
       return;

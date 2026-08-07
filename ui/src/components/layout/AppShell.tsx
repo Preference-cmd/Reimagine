@@ -1,26 +1,25 @@
 import { useEffect, useState } from "react";
+import { ErrorBoundary } from "react-error-boundary";
 import { Toaster } from "sonner";
-import { TopBar } from "./TopBar";
-import { SideRail } from "./SideRail";
-import { ExplorerPanel } from "./ExplorerPanel";
-import { PropertiesPanel } from "./PropertiesPanel";
-import { SettingsPanel, type ThemeMode } from "./SettingsPanel";
-import {
-  getOverlayPolicy,
-} from "./overlayLayout";
-import { NodeCanvas } from "@/components/canvas/NodeCanvas";
+import { Sidebar } from "./Sidebar";
+import { WindowControls } from "./WindowControls";
+import { PropertiesDrawer } from "./PropertiesDrawer";
+import { RunFab } from "./RunFab";
+import { MainContent } from "./MainContent";
+import { ErrorFallback } from "./ErrorFallback";
 import { ContextMenuPanel } from "@/components/canvas/ContextMenuPanel";
 import { RenameNodeDialog } from "@/components/canvas/RenameNodeDialog";
 import { CommandPalette } from "@/components/palette/CommandPalette";
 import { useNodeRegistryStore } from "@/store/nodeRegistry";
 import { useUIStore } from "@/store/uiStore";
+import type { ThemeMode } from "./SettingsView";
+
 const THEME_STORAGE_KEY = "reimagine.theme";
 
 function readStoredTheme(): ThemeMode {
   if (typeof window === "undefined") {
     return "light";
   }
-
   const stored = window.localStorage.getItem(THEME_STORAGE_KEY);
   return stored === "dark" ? "dark" : "light";
 }
@@ -28,19 +27,15 @@ function readStoredTheme(): ThemeMode {
 /**
  * AppShell — root layout for the editor workspace.
  *
- * Structure:
- *   - NodeCanvas lives inside an overflow-hidden layer so the canvas grid
- *     cannot scroll the viewport.
- *   - TopBar, SideRail, ExplorerPanel, and PropertiesPanel are siblings
- *     outside that clipping layer so tooltips/menus/popovers can escape.
- *   - CommandPalette / ContextMenuPanel / RenameNodeDialog render last so
- *     they sit above every overlay (F3-1/F3-3).
+ * Codex-style sidebar-first layout:
+ *   - Sidebar (280px fixed) on the left
+ *   - Main content area switches between views based on sidebar nav
+ *   - PropertiesDrawer slides from the right edge
+ *   - Global overlays (CommandPalette, ContextMenu, RenameDialog, Toaster)
  */
 export function AppShell() {
-  const activePanel = useUIStore((s) => s.activePanel);
-  const setActivePanel = useUIStore((s) => s.setActivePanel);
+  const activeSection = useUIStore((s) => s.activeSidebarSection);
   const [themeMode, setThemeMode] = useState<ThemeMode>(readStoredTheme);
-  const overlayPolicy = getOverlayPolicy(activePanel);
 
   useEffect(() => {
     document.documentElement.dataset.theme = themeMode;
@@ -48,40 +43,39 @@ export function AppShell() {
     window.localStorage.setItem(THEME_STORAGE_KEY, themeMode);
   }, [themeMode]);
 
-  // F2-1: fetch the backend node catalog once at startup. Failure is
-  // handled inside the registry store (canvas falls back to GenericNode).
+  // Fetch the backend node catalog once at startup.
   useEffect(() => {
     void useNodeRegistryStore.getState().load();
   }, []);
 
+  const handleThemeModeChange = (mode: ThemeMode) => {
+    setThemeMode(mode);
+    window.localStorage.setItem(THEME_STORAGE_KEY, mode);
+  };
+
+  const showRunFab = activeSection === "workflows";
+
   return (
-    <div className="overlay-root relative h-full w-full bg-background text-foreground">
-      <div className="absolute inset-0">
-        <NodeCanvas themeMode={themeMode} />
-      </div>
+    <div className="app-shell flex h-full w-full bg-background text-foreground">
+      {/* Sidebar — fixed left column */}
+      <Sidebar />
 
-      <TopBar forceRuntimeCollapsed={overlayPolicy.forceRuntimeCollapsed} />
+      {/* Main content — fills remaining space */}
+      <main className="main-content relative flex min-w-0 flex-1 flex-col overflow-hidden">
+        <WindowControls />
 
-      <div className="overlay-slot-rail pointer-events-none">
-        <SideRail activePanel={activePanel} onPanelChange={setActivePanel} />
-      </div>
+        <div className="relative min-h-0 flex-1">
+          <ErrorBoundary FallbackComponent={ErrorFallback}>
+            <MainContent themeMode={themeMode} onThemeModeChange={handleThemeModeChange} />
+          </ErrorBoundary>
+          {showRunFab && <RunFab />}
+        </div>
+      </main>
 
-      <ExplorerPanel
-        className="overlay-slot-explorer pointer-events-auto"
-        open={overlayPolicy.explorerOpen}
-        view={overlayPolicy.explorerView}
-        onClose={() => setActivePanel(null)}
-      />
+      {/* Properties drawer — slides from right */}
+      <PropertiesDrawer />
 
-      <SettingsPanel
-        open={overlayPolicy.settingsOpen}
-        themeMode={themeMode}
-        onThemeModeChange={setThemeMode}
-        onClose={() => setActivePanel(null)}
-      />
-
-      {!overlayPolicy.suppressContextPanels && <PropertiesPanel />}
-
+      {/* Global overlays */}
       <CommandPalette />
       <ContextMenuPanel />
       <RenameNodeDialog />

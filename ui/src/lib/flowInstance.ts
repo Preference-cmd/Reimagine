@@ -16,9 +16,7 @@ type ReactFlowInstanceLike = {
 
 let instance: ReactFlowInstanceLike | null = null;
 
-export function registerFlowInstance(
-  next: ReactFlowInstanceLike | null,
-): void {
+export function registerFlowInstance(next: ReactFlowInstanceLike | null): void {
   instance = next;
 }
 
@@ -46,7 +44,5 @@ export function selectAllNodes(): void {
   const nodes = useWorkflowStore.getState().nodes;
   useWorkflowStore
     .getState()
-    .onNodesChange(
-      nodes.map((node) => ({ id: node.id, type: "select", selected: true })),
-    );
+    .onNodesChange(nodes.map((node) => ({ id: node.id, type: "select", selected: true })));
 }

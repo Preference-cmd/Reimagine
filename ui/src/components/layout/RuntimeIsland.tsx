@@ -11,11 +11,7 @@ import {
 } from "lucide-react";
 import { useEffect, useMemo, useState } from "react";
 import { cn } from "@/lib/utils";
-import {
-  useRuntimeStore,
-  type RuntimeDiagnostic,
-  type RuntimePhase,
-} from "@/store/runtime";
+import { useRuntimeStore, type RuntimeDiagnostic, type RuntimePhase } from "@/store/runtime";
 
 const PHASE_LABEL: Record<RuntimePhase, string> = {
   idle: "Ready",
@@ -75,25 +71,13 @@ function diagnosticTone(diagnostic: RuntimeDiagnostic) {
 
 function DiagnosticIcon({ diagnostic }: { diagnostic: RuntimeDiagnostic }) {
   if (diagnostic.severity === "info") {
-    return (
-      <CircleDot
-        className={cn("mt-0.5 h-3.5 w-3.5", diagnosticTone(diagnostic))}
-      />
-    );
+    return <CircleDot className={cn("mt-0.5 h-3.5 w-3.5", diagnosticTone(diagnostic))} />;
   }
 
-  return (
-    <AlertTriangle
-      className={cn("mt-0.5 h-3.5 w-3.5", diagnosticTone(diagnostic))}
-    />
-  );
+  return <AlertTriangle className={cn("mt-0.5 h-3.5 w-3.5", diagnosticTone(diagnostic))} />;
 }
 
-export function RuntimeIsland({
-  forceCollapsed = false,
-}: {
-  forceCollapsed?: boolean;
-}) {
+export function RuntimeIsland({ forceCollapsed = false }: { forceCollapsed?: boolean }) {
   const [open, setOpen] = useState(false);
   const phase = useRuntimeStore((s) => s.phase);
   const runId = useRuntimeStore((s) => s.runId);
@@ -109,7 +93,8 @@ export function RuntimeIsland({
   const Icon = phaseIcon(phase);
   const active = phase === "starting" || phase === "running";
   const expanded = open && !forceCollapsed;
-  const topDiagnostic = diagnostics.find((d) => d.severity === "error") ??
+  const topDiagnostic =
+    diagnostics.find((d) => d.severity === "error") ??
     diagnostics.find((d) => d.severity === "warning") ??
     diagnostics[0];
 
@@ -153,9 +138,7 @@ export function RuntimeIsland({
               phaseTone(phase),
             )}
           >
-            <Icon
-              className={cn("h-3.5 w-3.5", active && "motion-safe:animate-spin")}
-            />
+            <Icon className={cn("h-3.5 w-3.5", active && "motion-safe:animate-spin")} />
           </span>
           <span className="min-w-0" aria-live="polite">
             <span className="flex min-w-0 items-center gap-2">
@@ -163,14 +146,10 @@ export function RuntimeIsland({
                 {PHASE_LABEL[phase]}
               </span>
               {runId && (
-                <span className="truncate text-caption text-on-surface-variant">
-                  {runId}
-                </span>
+                <span className="truncate text-caption text-on-surface-variant">{runId}</span>
               )}
             </span>
-            <span className="block truncate text-caption text-on-surface-variant">
-              {summary}
-            </span>
+            <span className="block truncate text-caption text-on-surface-variant">{summary}</span>
           </span>
           <ChevronDown
             className={cn(
@@ -181,11 +160,7 @@ export function RuntimeIsland({
         </button>
 
         {expanded && (
-          <div
-            aria-label="Runtime diagnostics"
-            role="region"
-            className="px-4 pb-3 pt-1"
-          >
+          <div aria-label="Runtime diagnostics" role="region" className="px-4 pb-3 pt-1">
             {active && (
               <div className="pb-3">
                 <div className="mb-2 flex items-center justify-between gap-3 text-caption">
@@ -211,31 +186,15 @@ export function RuntimeIsland({
             )}
 
             <div className="grid grid-cols-3 border-t border-outline/70 py-3 text-caption">
-              <RuntimeStat
-                icon={Cpu}
-                label="Runtime"
-                value={`${backend} / ${device}`}
-              />
-              <RuntimeStat
-                icon={Clock3}
-                label="Elapsed"
-                value={formatElapsed(elapsedMs)}
-              />
-              <RuntimeStat
-                icon={CircleDot}
-                label="Node"
-                value={currentNode ?? "Idle"}
-              />
+              <RuntimeStat icon={Cpu} label="Runtime" value={`${backend} / ${device}`} />
+              <RuntimeStat icon={Clock3} label="Elapsed" value={formatElapsed(elapsedMs)} />
+              <RuntimeStat icon={CircleDot} label="Node" value={currentNode ?? "Idle"} />
             </div>
 
             <div className="border-t border-outline/70 pt-3">
               <div className="mb-2 flex items-center justify-between gap-3 text-caption">
-                <span className="font-medium text-on-surface-variant">
-                  Diagnostics
-                </span>
-                <span className="truncate text-on-surface-variant">
-                  {runId ?? workflowName}
-                </span>
+                <span className="font-medium text-on-surface-variant">Diagnostics</span>
+                <span className="truncate text-on-surface-variant">{runId ?? workflowName}</span>
               </div>
               {diagnostics.length > 0 ? (
                 <div className="space-y-2">
