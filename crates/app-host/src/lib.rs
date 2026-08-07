@@ -74,3 +74,4 @@ pub use worker_management::{
 };
 pub use workflow_service::WorkflowService;
 pub use workspace::WorkspaceHost;
+pub use workspace::WorkspaceHostBuilder;

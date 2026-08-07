@@ -1,5 +1,9 @@
+pub mod builder;
+
 use std::path::Path;
 use std::sync::Arc;
+
+pub use builder::WorkspaceHostBuilder;
 
 use reimagine_agent::{AgentEventSink, AgentToolRegistry, WorkspaceScope};
 use reimagine_backend_worker_host::WorkerStorePaths;
@@ -28,25 +32,25 @@ use crate::{InstalledWorkerInventoryProvider, WorkerInventoryProvider};
 const REBOOTSTRAP_DRAIN_DEADLINE: std::time::Duration = std::time::Duration::from_secs(30);
 
 pub struct WorkspaceHost {
-    workspace_scope: WorkspaceScope,
-    config: Arc<AppConfig>,
-    backend_config: InferenceBackendConfig,
-    workflow_service: Arc<WorkflowService>,
-    model_service: Arc<ModelService>,
-    runtime_service: Arc<RuntimeService>,
-    agent_service: Arc<AgentService>,
-    node_catalog: Arc<NodeCatalogService>,
-    builtin_catalog: Arc<BuiltinNodeCatalog>,
-    services: Arc<WorkspaceServices>,
-    compute_profile: Arc<WorkspaceComputeProfile>,
-    resolved_backend_instance: reimagine_inference::BackendInstance,
-    worker_switch: Option<Arc<crate::WorkerSwitchService>>,
-    worker_inventory: Arc<dyn WorkerInventoryProvider>,
-    topology:
+    pub(crate) workspace_scope: WorkspaceScope,
+    pub(crate) config: Arc<AppConfig>,
+    pub(crate) backend_config: InferenceBackendConfig,
+    pub(crate) workflow_service: Arc<WorkflowService>,
+    pub(crate) model_service: Arc<ModelService>,
+    pub(crate) runtime_service: Arc<RuntimeService>,
+    pub(crate) agent_service: Arc<AgentService>,
+    pub(crate) node_catalog: Arc<NodeCatalogService>,
+    pub(crate) builtin_catalog: Arc<BuiltinNodeCatalog>,
+    pub(crate) services: Arc<WorkspaceServices>,
+    pub(crate) compute_profile: Arc<WorkspaceComputeProfile>,
+    pub(crate) resolved_backend_instance: reimagine_inference::BackendInstance,
+    pub(crate) worker_switch: Option<Arc<crate::WorkerSwitchService>>,
+    pub(crate) worker_inventory: Arc<dyn WorkerInventoryProvider>,
+    pub(crate) topology:
         Option<Arc<tokio::sync::Mutex<crate::inference::topology::ConnectionTopologyManager>>>,
-    discovery: Option<Arc<crate::inference::discovery::DiscoveryOrchestrator>>,
-    event_sink: BoxedRunEventSink,
-    agent_event_sink: Arc<dyn AgentEventSink>,
+    pub(crate) discovery: Option<Arc<crate::inference::discovery::DiscoveryOrchestrator>>,
+    pub(crate) event_sink: BoxedRunEventSink,
+    pub(crate) agent_event_sink: Arc<dyn AgentEventSink>,
 }
 
 impl std::fmt::Debug for WorkspaceHost {
