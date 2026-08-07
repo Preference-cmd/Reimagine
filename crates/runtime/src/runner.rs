@@ -3,6 +3,7 @@
 mod diagnostics;
 mod orchestrator;
 mod publisher;
+mod reduction;
 mod service;
 mod stage_reducer;
 

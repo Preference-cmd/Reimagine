@@ -2,15 +2,13 @@ use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
-use reimagine_core::diagnostic::Diagnostic;
 use reimagine_core::event::{RunEventKind, Timestamp};
 use reimagine_core::model::NodeId;
 use reimagine_core::readiness::{ExecutionInputSource, ExecutionNode};
-use reimagine_inference::{ExecutionValueRetention, NodeInputs, NodeParams, StageId};
+use reimagine_inference::{NodeInputs, NodeParams, StageId};
 use tokio::sync::Mutex;
 use tokio::task::JoinSet;
 
-use super::diagnostics::make_diagnostic;
 use super::orchestrator::Runner;
 use crate::artifacts::ArtifactStore;
 use crate::cancellation::CancellationToken;
@@ -68,12 +66,12 @@ fn node_out_of_memory_message(node_id: &NodeId, estimated: usize, budget: &Memor
 /// All `session`-mutating helpers below take a `&mut RunSession`; callers
 /// that run stages concurrently hold the shared
 /// `tokio::sync::Mutex<RunSession>` guard while calling them.
-struct StageReductionContext<'a> {
-    session: &'a mut RunSession,
-    started_at: &'a Timestamp,
-    artifact_store: &'a Arc<Mutex<ArtifactStore>>,
-    consumer_index: &'a PlanConsumerIndex,
-    policy: &'a mut StageExecutionPolicy,
+pub(super) struct StageReductionContext<'a> {
+    pub(super) session: &'a mut RunSession,
+    pub(super) started_at: &'a Timestamp,
+    pub(super) artifact_store: &'a Arc<Mutex<ArtifactStore>>,
+    pub(super) consumer_index: &'a PlanConsumerIndex,
+    pub(super) policy: &'a mut StageExecutionPolicy,
 }
 
 impl Runner {
@@ -668,279 +666,5 @@ impl Runner {
         self.emit_node_event(node, RunEventKind::NodeStarted, &[]);
         self.publish_snapshot(session, started_at, artifact_store)
             .await;
-    }
-
-    async fn reduce_stage_node_result(
-        &self,
-        result: StageNodeResult,
-        discard_success: bool,
-        reduction: &mut StageReductionContext<'_>,
-    ) -> bool {
-        match result {
-            StageNodeResult::Completed { node, outputs } => {
-                let node_id = node.node_id().clone();
-                if discard_success {
-                    reduction
-                        .session
-                        .record_outcome(node_id, NodeOutcome::Cancelled);
-                    self.drop_consumed_single_use_values(
-                        &node,
-                        reduction.consumer_index,
-                        reduction.session,
-                    );
-                    self.emit_node_event(&node, RunEventKind::NodeCancelled, &[]);
-                    self.publish_snapshot(
-                        reduction.session,
-                        reduction.started_at,
-                        reduction.artifact_store,
-                    )
-                    .await;
-                    return false;
-                }
-
-                reduction
-                    .session
-                    .record_outcome(node_id.clone(), NodeOutcome::Completed);
-                for output in outputs {
-                    let key = OutputKey::new(node_id.clone(), output.slot_id().clone());
-                    let retention = output.retention();
-                    if let Some(diag) =
-                        self.check_single_use_fan_out(reduction.consumer_index, &key, retention)
-                    {
-                        let message = diag.message().to_string();
-                        self.emit_node_event(
-                            &node,
-                            RunEventKind::NodeFailed,
-                            std::slice::from_ref(&diag),
-                        );
-                        reduction.session.record_outcome(
-                            node_id.clone(),
-                            NodeOutcome::Failed {
-                                message: message.clone(),
-                            },
-                        );
-                        reduction.policy.record_failure(node_id, message);
-                        self.publish_snapshot(
-                            reduction.session,
-                            reduction.started_at,
-                            reduction.artifact_store,
-                        )
-                        .await;
-                        return false;
-                    }
-                    reduction.session.values_mut().insert_with_retention(
-                        key,
-                        output.into_value(),
-                        retention,
-                    );
-                }
-                self.emit_node_event(&node, RunEventKind::NodeCompleted, &[]);
-                self.drop_consumed_single_use_values(
-                    &node,
-                    reduction.consumer_index,
-                    reduction.session,
-                );
-                self.publish_snapshot(
-                    reduction.session,
-                    reduction.started_at,
-                    reduction.artifact_store,
-                )
-                .await;
-                false
-            }
-            StageNodeResult::Failed { node, message } => {
-                self.reduce_node_failed(&node, message, reduction).await;
-                false
-            }
-            StageNodeResult::Cancelled { node } => {
-                let already_failing = reduction.policy.failed_message().is_some();
-                reduction
-                    .session
-                    .record_outcome(node.node_id().clone(), NodeOutcome::Cancelled);
-                self.drop_consumed_single_use_values(
-                    &node,
-                    reduction.consumer_index,
-                    reduction.session,
-                );
-                self.emit_node_event(&node, RunEventKind::NodeCancelled, &[]);
-                self.publish_snapshot(
-                    reduction.session,
-                    reduction.started_at,
-                    reduction.artifact_store,
-                )
-                .await;
-                // Classify the cancellation: a run token cancellation, or an
-                // unprompted executor Cancelled (no node token armed), stops
-                // the whole run. A node-scoped cancellation — the host asked
-                // only this node to stop — lets the run continue.
-                let run_cancelled = self.cancellation.is_cancelled();
-                let node_cancelled = self.cancellation.is_node_cancelled(node.node_id());
-                !already_failing && (run_cancelled || !node_cancelled)
-            }
-        }
-    }
-
-    /// Record a node as failed. The failure is recorded in the stage
-    /// policy, failing the run fail-fast.
-    async fn reduce_node_failed(
-        &self,
-        node: &ExecutionNode,
-        message: String,
-        reduction: &mut StageReductionContext<'_>,
-    ) {
-        let diagnostic = make_diagnostic(&self.run_id, node.node_id(), &message);
-        reduction.session.record_outcome(
-            node.node_id().clone(),
-            NodeOutcome::Failed {
-                message: message.clone(),
-            },
-        );
-        self.emit_node_event(
-            node,
-            RunEventKind::NodeFailed,
-            std::slice::from_ref(&diagnostic),
-        );
-        reduction
-            .policy
-            .record_failure(node.node_id().clone(), message);
-        self.drop_consumed_single_use_values(node, reduction.consumer_index, reduction.session);
-        self.publish_snapshot(
-            reduction.session,
-            reduction.started_at,
-            reduction.artifact_store,
-        )
-        .await;
-    }
-
-    /// Record a node as cancelled without affecting the run (node-level
-    /// cancellation semantics). Used when a node is cancelled before it is
-    /// admitted into the stage.
-    async fn reduce_node_cancelled(
-        &self,
-        node: &ExecutionNode,
-        session: &Mutex<RunSession>,
-        started_at: &Timestamp,
-        artifact_store: &Arc<Mutex<ArtifactStore>>,
-    ) {
-        let mut session_guard = session.lock().await;
-        session_guard.record_outcome(node.node_id().clone(), NodeOutcome::Cancelled);
-        self.emit_node_event(node, RunEventKind::NodeCancelled, &[]);
-        self.publish_snapshot(&session_guard, started_at, artifact_store)
-            .await;
-    }
-
-    /// Record a node as failed with a timeout diagnostic.
-    ///
-    /// Unlike [`Runner::reduce_node_failed`], the failure is **not**
-    /// recorded in the stage policy: a node that exceeded its deadline is a
-    /// node-level failure, and the run continues with the remaining nodes
-    /// (see
-    /// [`RuntimeOptions::default_node_timeout`](crate::runner::RuntimeOptions)).
-    /// Downstream nodes that depend on the timed-out node's outputs fail on
-    /// missing values at prepare time, which does fail the run.
-    async fn reduce_node_timed_out(
-        &self,
-        node: &ExecutionNode,
-        message: String,
-        session: &Mutex<RunSession>,
-        started_at: &Timestamp,
-        artifact_store: &Arc<Mutex<ArtifactStore>>,
-        consumer_index: &PlanConsumerIndex,
-    ) {
-        let diagnostic = make_diagnostic(&self.run_id, node.node_id(), &message);
-        let mut session_guard = session.lock().await;
-        session_guard.record_outcome(
-            node.node_id().clone(),
-            NodeOutcome::Failed {
-                message: message.clone(),
-            },
-        );
-        self.emit_node_event(
-            node,
-            RunEventKind::NodeFailed,
-            std::slice::from_ref(&diagnostic),
-        );
-        self.drop_consumed_single_use_values(node, consumer_index, &mut session_guard);
-        self.publish_snapshot(&session_guard, started_at, artifact_store)
-            .await;
-    }
-
-    async fn reduce_node_skipped(
-        &self,
-        node: &ExecutionNode,
-        reason: String,
-        session: &Mutex<RunSession>,
-        started_at: &Timestamp,
-        artifact_store: &Arc<Mutex<ArtifactStore>>,
-    ) {
-        self.emit_node_skipped(node.node_id(), &node.type_id().clone(), &reason);
-        let mut session_guard = session.lock().await;
-        session_guard.record_outcome(
-            node.node_id().clone(),
-            NodeOutcome::Skipped {
-                reason: reason.clone(),
-            },
-        );
-        self.publish_snapshot(&session_guard, started_at, artifact_store)
-            .await;
-    }
-
-    fn check_single_use_fan_out(
-        &self,
-        consumer_index: &PlanConsumerIndex,
-        key: &OutputKey,
-        retention: ExecutionValueRetention,
-    ) -> Option<Diagnostic> {
-        if retention != ExecutionValueRetention::SingleUse {
-            return None;
-        }
-        let fan_out = consumer_index.fan_out(key);
-        if fan_out > 1 {
-            let node_id = key.node_id().clone();
-            let slot_id = key.slot_id().clone();
-            let message = format!(
-                "SingleUse output {node_id}:{slot_id} has {fan_out} edge-sourced consumers in the active execution plan; SingleUse fan-out must be exactly one"
-            );
-            Some(make_diagnostic(&self.run_id, &node_id, &message))
-        } else {
-            None
-        }
-    }
-
-    fn drop_consumed_single_use_values(
-        &self,
-        node: &ExecutionNode,
-        consumer_index: &PlanConsumerIndex,
-        session: &mut RunSession,
-    ) {
-        let upstream_keys: Vec<OutputKey> = node
-            .input_bindings()
-            .iter()
-            .filter_map(|binding| match binding.source() {
-                ExecutionInputSource::Edge {
-                    from_node_id,
-                    from_slot_id,
-                    ..
-                } => Some(OutputKey::new(from_node_id.clone(), from_slot_id.clone())),
-                _ => None,
-            })
-            .collect();
-        let mut to_drop = Vec::new();
-        for upstream in upstream_keys {
-            let retention = match session.values().retention(&upstream) {
-                Some(retention) => retention,
-                None => continue,
-            };
-            if retention != ExecutionValueRetention::SingleUse {
-                continue;
-            }
-            match consumer_index.unique_consumer(&upstream) {
-                Some(unique) if unique.to_node_id == *node.node_id() => to_drop.push(upstream),
-                _ => {}
-            }
-        }
-        for key in to_drop {
-            session.values_mut().remove(&key);
-        }
     }
 }
