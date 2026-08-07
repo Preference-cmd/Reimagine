@@ -51,14 +51,14 @@ impl OpenAiCompatibleProvider {
         }
     }
 
-    /// Construct with the production `RealRigBackend`. Unit tests
+    /// Construct with the production `ReqwestBackend`. Unit tests
     /// inject a fake backend or a local wiremock-backed HTTP client so
     /// the default suite does not require live provider credentials.
     pub fn new(name: ProviderName, config: OpenAiCompatibleConfig) -> Self {
         Self {
             name: name.clone(),
             config: config.clone(),
-            backend: crate::rig::arc_real_backend(name, config),
+            backend: crate::reqwest_backend::arc_real_backend(name, config),
         }
     }
 

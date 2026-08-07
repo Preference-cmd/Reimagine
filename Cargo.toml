@@ -57,7 +57,6 @@ tower-http = { version = "0.6", features = ["trace"] }
 clap = { version = "4", features = ["derive"] }
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
-rig-core = { version = "0.31", default-features = false, features = ["reqwest-middleware-rustls"] }
 candle-core = { version = "0.10", default-features = false }
 candle-nn = { version = "0.10", default-features = false }
 candle-transformers = { version = "0.10", default-features = false }

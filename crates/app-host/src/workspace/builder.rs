@@ -7,15 +7,15 @@ use reimagine_config::{AppConfig, AppPaths, InferenceBackendConfig};
 use reimagine_runtime::BoxedRunEventSink;
 use reimagine_runtime::VecRunEventSink;
 
+use crate::InstalledWorkerInventoryProvider;
 use crate::inference::compose::bootstrap_inference_with_worker_inventory;
 use crate::model_acquisition_service::ModelAcquisitionService;
 use crate::services::WorkspaceServices;
 use crate::tools::register_app_tools;
 use crate::{
-    AgentService, AppHostError, BackendSelection, ModelService, WorkflowService,
-    WorkerInventoryProvider,
+    AgentService, AppHostError, BackendSelection, ModelService, WorkerInventoryProvider,
+    WorkflowService,
 };
-use crate::InstalledWorkerInventoryProvider;
 
 use super::{WorkspaceHost, load_backend_config_result};
 
@@ -181,11 +181,7 @@ impl WorkspaceHostBuilder {
                 Arc::clone(&event_sink),
                 Arc::new(reimagine_runtime::SystemClock),
             )
-            .with_resource_hint_sink(
-                worker_switch
-                    .as_ref()
-                    .and_then(|ws| ws.active_hint_sink()),
-            ),
+            .with_resource_hint_sink(worker_switch.as_ref().and_then(|ws| ws.active_hint_sink())),
         );
 
         // Wire run cancellation to worker switch
