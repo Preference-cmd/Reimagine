@@ -10,6 +10,7 @@ bun-debug.log*
 
 # ----- Node / frontend dependencies -----
 node_modules/
+ui/package-lock.json
 
 # ----- Build outputs -----
 # Cargo workspace (root, src-tauri/, crates/*/ — all caught by unanchored)
