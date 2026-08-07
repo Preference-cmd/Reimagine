@@ -1,34 +1,32 @@
 import { SidebarHeader } from "./SidebarHeader";
 import { SidebarNav } from "./SidebarNav";
 import { SidebarSettingsNav } from "./SidebarSettingsNav";
-import { RecentWorkflows } from "./RecentWorkflows";
 import { SidebarFooter } from "./SidebarFooter";
 import { useUIStore } from "@/store/uiStore";
 
 /**
- * Sidebar — fixed-width left column (280 px).
+ * Sidebar — Codex-style (200 px) with icon + text navigation.
  *
- * Normal mode: Logo + Nav + Recent + User Card
- * Settings mode: Back button + Search + Settings nav groups
+ * Normal mode: Logo + Nav + Footer
+ * Settings mode: Full-width settings panel
  */
 export function Sidebar() {
   const activeSection = useUIStore((s) => s.activeSidebarSection);
   const isSettings = activeSection === "settings";
 
-  return (
-    <aside className="sidebar-root flex h-full w-[280px] shrink-0 flex-col border-r border-outline/60 bg-surface-dim">
-      {isSettings ? (
+  if (isSettings) {
+    return (
+      <aside className="sidebar-root flex h-full w-[260px] shrink-0 flex-col border-r border-white/[0.06] bg-[#171717]">
         <SidebarSettingsNav />
-      ) : (
-        <>
-          <SidebarHeader />
-          <SidebarNav />
-          <div className="min-h-0 flex-1 overflow-y-auto scrollbar-hide">
-            <RecentWorkflows />
-          </div>
-          <SidebarFooter />
-        </>
-      )}
+      </aside>
+    );
+  }
+
+  return (
+    <aside className="sidebar-root flex h-full w-[200px] shrink-0 flex-col border-r border-white/[0.06] bg-[#171717]">
+      <SidebarHeader />
+      <SidebarNav />
+      <SidebarFooter />
     </aside>
   );
 }

@@ -29,7 +29,8 @@ export const FONT_STACKS = {
 export const LAYOUT = {
   canvasGrid: 20,
   nodePadding: 12,
-  sidebarWidth: 280,
+  sidebarWidth: 200,
+  sidebarExpanded: 260,
   gutterMd: 16,
   stackTight: 4,
   stackBase: 8,

@@ -45,42 +45,41 @@ export function useSettingsNav() {
 
 /**
  * SidebarSettingsNav — shown when activeSidebarSection === "settings".
- * Replaces the regular sidebar content with settings navigation.
+ * Codex-style dark theme settings panel.
  */
 export function SidebarSettingsNav() {
   const setActiveSidebarSection = useUIStore((s) => s.setActiveSidebarSection);
   const { active, setActive, search, setSearch, filtered } = useSettingsNav();
 
-  // Sync the local active section to the global store
   useEffect(() => {
     useUIStore.setState({ settingsNavId: active });
   }, [active]);
 
   return (
-    <nav className="flex flex-col" aria-label="Settings navigation">
+    <nav className="flex h-full flex-col bg-[#0d0d0d]" aria-label="Settings navigation">
       {/* Back to app */}
       <button
         type="button"
         onClick={() => setActiveSidebarSection("workflows")}
-        className="flex h-11 w-full cursor-pointer items-center gap-2 px-4 text-body-sm font-medium text-on-surface-variant transition-colors hover:bg-control-hover hover:text-on-surface focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary/30"
+        className="flex h-10 w-full cursor-pointer items-center gap-2 px-3 text-sm font-medium text-white/50 transition-colors hover:bg-white/[0.06] hover:text-white/80 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-white/20"
       >
         <ArrowLeft className="h-4 w-4" />
         {m["common.backToApp"]()}
       </button>
 
       {/* Language switcher */}
-      <div className="px-3 pb-2">
-        <div className="flex gap-1 rounded-lg bg-surface-container-low p-0.5">
+      <div className="px-3 pb-3">
+        <div className="flex gap-1 rounded-lg bg-white/[0.04] p-0.5">
           {(["en", "zh"] as const).map((code) => (
             <button
               key={code}
               type="button"
               onClick={() => setLocale(code)}
               className={cn(
-                "rounded-md px-3 py-1 text-caption font-medium transition-colors",
+                "flex-1 rounded-md px-3 py-1 text-xs font-medium transition-colors",
                 getLocale() === code
-                  ? "bg-surface text-on-surface shadow-sm"
-                  : "text-on-surface-variant hover:text-on-surface",
+                  ? "bg-white/[0.08] text-white"
+                  : "text-white/40 hover:text-white/70",
               )}
             >
               {code === "en" ? "English" : "中文"}
@@ -90,11 +89,11 @@ export function SidebarSettingsNav() {
       </div>
 
       {/* Search */}
-      <div className="px-3 pb-2">
+      <div className="px-3 pb-3">
         <div className="relative">
-          <Search className="pointer-events-none absolute left-2.5 top-1/2 h-3.5 w-3.5 -translate-y-1/2 text-on-surface-variant" />
+          <Search className="pointer-events-none absolute left-2.5 top-1/2 h-3.5 w-3.5 -translate-y-1/2 text-white/30" />
           <input
-            className="h-7 w-full rounded-lg border border-outline/50 bg-surface-container-low px-3 pl-8 text-caption text-on-surface outline-none transition-[border-color,box-shadow] placeholder:text-on-surface-variant focus-visible:border-primary/30 focus-visible:ring-2 focus-visible:ring-primary/10"
+            className="h-7 w-full rounded-lg border border-white/[0.06] bg-white/[0.04] px-3 pl-8 text-xs text-white/80 outline-none transition-[border-color,box-shadow] placeholder:text-white/25 focus-visible:border-white/[0.12] focus-visible:ring-1 focus-visible:ring-white/[0.08]"
             placeholder={m["settings.searchPlaceholder"]()}
             value={search}
             onChange={(e) => setSearch(e.target.value)}
@@ -106,7 +105,7 @@ export function SidebarSettingsNav() {
       <div className="flex-1 overflow-y-auto scrollbar-hide px-2 pb-4">
         {filtered.map((group) => (
           <div key={group.section} className="mb-3">
-            <div className="px-2 pb-1 text-xs font-medium uppercase tracking-wider text-on-surface-variant/50">
+            <div className="px-2 pb-1 text-[10px] font-semibold uppercase tracking-wider text-white/20">
               {group.section}
             </div>
             {group.items.map((item) => {
@@ -118,14 +117,14 @@ export function SidebarSettingsNav() {
                   aria-current={isActive ? "page" : undefined}
                   onClick={() => setActive(item.id)}
                   className={cn(
-                    "flex h-7 w-full cursor-pointer items-center gap-2 rounded-md px-2 text-left text-body-sm font-medium transition-colors",
-                    "focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary/30",
+                    "flex h-7 w-full cursor-pointer items-center gap-2 rounded-md px-2 text-left text-sm transition-colors",
+                    "focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-white/20",
                     isActive
-                      ? "bg-surface-container-high text-on-surface"
-                      : "text-on-surface-variant hover:bg-control-hover hover:text-on-surface",
+                      ? "bg-white/[0.08] text-white"
+                      : "text-white/40 hover:bg-white/[0.06] hover:text-white/70",
                   )}
                 >
-                  <span className="text-sm">{item.icon}</span>
+                  <span className="text-xs">{item.icon}</span>
                   <span className="truncate">{item.label}</span>
                 </button>
               );
