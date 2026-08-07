@@ -116,9 +116,9 @@
   --color-socket-latent:       #7928ca;
   --color-socket-image:        #50e3c2;
 
-  /* Typography. Geist is preferred when available; Inter / JetBrains Mono
-     are bundled fallbacks for the editor surface. */
-  --font-sans: "Geist", "Inter", system-ui, sans-serif;
+  /* Typography. Geist is the primary font; JetBrains Mono is a bundled
+     monospace fallback for code surfaces. */
+  --font-sans: "Geist", system-ui, sans-serif;
   --font-mono: "Geist Mono", "JetBrains Mono", ui-monospace, monospace;
 
   --text-display-xl: 48px;

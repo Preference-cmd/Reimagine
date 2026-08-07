@@ -21,8 +21,8 @@ export type SocketKind = keyof typeof SOCKET_COLORS;
 
 /** Font stacks — must match --font-sans / --font-mono in theme.css. */
 export const FONT_STACKS = {
-  sans: '"Inter", system-ui, sans-serif',
-  mono: '"JetBrains Mono", ui-monospace, monospace',
+  sans: '"Geist", system-ui, sans-serif',
+  mono: '"Geist Mono", "JetBrains Mono", ui-monospace, monospace',
 } as const;
 
 /** Layout dimensions in px. Mirrored as --spacing-* in theme.css. */
