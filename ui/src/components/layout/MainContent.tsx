@@ -1,15 +1,9 @@
-import React, { Suspense } from "react";
+import { Suspense } from "react";
 import { ErrorBoundary } from "react-error-boundary";
+import { getRoute } from "@/lib/routes";
 import { useUIStore } from "@/store/uiStore";
-import { NodeCanvas } from "@/components/canvas/NodeCanvas";
-import { AssetsView } from "./AssetsView";
-import { SettingsView, type ThemeMode } from "./SettingsView";
 import { ErrorFallback } from "./ErrorFallback";
-
-const ModelsView = React.lazy(() =>
-  import("./ModelsView").then((m) => ({ default: m.ModelsView })),
-);
-const RunsView = React.lazy(() => import("./RunsView").then((m) => ({ default: m.RunsView })));
+import type { ThemeMode } from "./SettingsView";
 
 function LazyFallback() {
   return (
@@ -21,7 +15,7 @@ function LazyFallback() {
 
 /**
  * MainContent — switches between views based on active sidebar section.
- * ModelsView and RunsView are lazy-loaded to reduce the initial bundle size.
+ * Uses route configuration for automatic view rendering and lazy loading.
  * Each view is wrapped in its own ErrorBoundary so a crash in one view
  * does not bring down the rest of the application.
  */
@@ -33,42 +27,22 @@ export function MainContent({
   onThemeModeChange: (mode: ThemeMode) => void;
 }) {
   const activeSection = useUIStore((s) => s.activeSidebarSection);
+  const route = getRoute(activeSection);
+  const ViewComponent = route.component;
 
-  switch (activeSection) {
-    case "models":
-      return (
-        <ErrorBoundary FallbackComponent={ErrorFallback}>
-          <Suspense fallback={<LazyFallback />}>
-            <ModelsView />
-          </Suspense>
-        </ErrorBoundary>
-      );
-    case "runs":
-      return (
-        <ErrorBoundary FallbackComponent={ErrorFallback}>
-          <Suspense fallback={<LazyFallback />}>
-            <RunsView />
-          </Suspense>
-        </ErrorBoundary>
-      );
-    case "assets":
-      return (
-        <ErrorBoundary FallbackComponent={ErrorFallback}>
-          <AssetsView />
-        </ErrorBoundary>
-      );
-    case "settings":
-      return (
-        <ErrorBoundary FallbackComponent={ErrorFallback}>
-          <SettingsView themeMode={themeMode} onThemeModeChange={onThemeModeChange} />
-        </ErrorBoundary>
-      );
-    case "workflows":
-    default:
-      return (
-        <ErrorBoundary FallbackComponent={ErrorFallback}>
-          <NodeCanvas themeMode={themeMode} />
-        </ErrorBoundary>
-      );
-  }
+  // Build props based on route ID — avoids type gymnastics
+  const props =
+    route.id === "workflows"
+      ? { themeMode }
+      : route.id === "settings"
+        ? { themeMode, onThemeModeChange }
+        : {};
+
+  return (
+    <ErrorBoundary FallbackComponent={ErrorFallback}>
+      <Suspense fallback={<LazyFallback />}>
+        <ViewComponent {...props} />
+      </Suspense>
+    </ErrorBoundary>
+  );
 }

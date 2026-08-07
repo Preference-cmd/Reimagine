@@ -11,6 +11,7 @@ import { ContextMenuPanel } from "@/components/canvas/ContextMenuPanel";
 import { RenameNodeDialog } from "@/components/canvas/RenameNodeDialog";
 import { CommandPalette } from "@/components/palette/CommandPalette";
 import { useNodeRegistryStore } from "@/store/nodeRegistry";
+import { getRoute } from "@/lib/routes";
 import { useUIStore } from "@/store/uiStore";
 import type { ThemeMode } from "./SettingsView";
 
@@ -28,7 +29,7 @@ function readStoredTheme(): ThemeMode {
  * AppShell — root layout for the editor workspace.
  *
  * Codex-style sidebar-first layout:
- *   - Sidebar (280px fixed) on the left
+ *   - Sidebar (56px icon bar) on the left, expands to 260px for settings
  *   - Main content area switches between views based on sidebar nav
  *   - PropertiesDrawer slides from the right edge
  *   - Global overlays (CommandPalette, ContextMenu, RenameDialog, Toaster)
@@ -53,7 +54,8 @@ export function AppShell() {
     window.localStorage.setItem(THEME_STORAGE_KEY, mode);
   };
 
-  const showRunFab = activeSection === "workflows";
+  // Use route config for conditional UI elements
+  const route = getRoute(activeSection);
 
   return (
     <div className="app-shell flex h-full w-full bg-background text-foreground">
@@ -68,12 +70,12 @@ export function AppShell() {
           <ErrorBoundary FallbackComponent={ErrorFallback}>
             <MainContent themeMode={themeMode} onThemeModeChange={handleThemeModeChange} />
           </ErrorBoundary>
-          {showRunFab && <RunFab />}
+          {route.showRunFab && <RunFab />}
         </div>
       </main>
 
       {/* Properties drawer — slides from right */}
-      <PropertiesDrawer />
+      {route.showPropertiesDrawer && <PropertiesDrawer />}
 
       {/* Global overlays */}
       <CommandPalette />
