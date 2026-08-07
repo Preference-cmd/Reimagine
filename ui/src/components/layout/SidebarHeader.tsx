@@ -23,17 +23,17 @@ export function SidebarHeader() {
   const openCommandPalette = useUIStore((s) => s.openCommandPalette);
 
   return (
-    <div className="flex items-center gap-2.5 px-3 py-3">
+    <div className="flex items-center gap-3 px-4 py-3.5">
       <Logo className="h-6 w-6 shrink-0 text-on-surface" />
-      <span className="text-body-sm font-semibold text-on-surface">Reimagine</span>
+      <span className="text-body-sm font-semibold tracking-tight text-on-surface">Reimagine</span>
 
       <button
         type="button"
         aria-label="Search"
         onClick={openCommandPalette}
-        className="ml-auto flex h-7 w-7 shrink-0 cursor-pointer items-center justify-center rounded-md text-on-surface-variant transition-colors hover:bg-control-hover hover:text-on-surface focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary/30"
+        className="ml-auto flex h-8 w-8 shrink-0 cursor-pointer items-center justify-center rounded-lg text-on-surface-variant transition-colors hover:bg-control-hover hover:text-on-surface focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary/30"
       >
-        <Search className="h-3.5 w-3.5" />
+        <Search className="h-4 w-4" />
       </button>
     </div>
   );

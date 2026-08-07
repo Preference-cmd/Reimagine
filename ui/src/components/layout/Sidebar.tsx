@@ -8,16 +8,15 @@ import { useUIStore } from "@/store/uiStore";
 /**
  * Sidebar — fixed-width left column (280 px).
  *
- * Codex-style:
- *   - Normal mode: Logo + Nav + Recent + User Card
- *   - Settings mode: Back button + Search + Settings nav groups
+ * Normal mode: Logo + Nav + Recent + User Card
+ * Settings mode: Back button + Search + Settings nav groups
  */
 export function Sidebar() {
   const activeSection = useUIStore((s) => s.activeSidebarSection);
   const isSettings = activeSection === "settings";
 
   return (
-    <aside className="sidebar-root flex h-full w-[280px] shrink-0 flex-col border-r border-outline bg-surface-dim">
+    <aside className="sidebar-root flex h-full w-[280px] shrink-0 flex-col border-r border-outline/60 bg-surface-dim">
       {isSettings ? (
         <SidebarSettingsNav />
       ) : (

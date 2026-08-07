@@ -1,12 +1,11 @@
 import { useEffect, useState } from "react";
-import { Clock, FileText } from "lucide-react";
+import { FileText } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { useWorkflowStore } from "@/store/workflow";
 
 type RecentWorkflow = {
   id: string;
   name: string;
-  lastModified: number;
 };
 
 /**
@@ -23,7 +22,6 @@ export function RecentWorkflows() {
     const current: RecentWorkflow = {
       id: currentId,
       name: useWorkflowStore.getState().name,
-      lastModified: Date.now(),
     };
     setRecent([current]);
   }, [currentId]);
@@ -31,10 +29,9 @@ export function RecentWorkflows() {
   if (recent.length === 0) return null;
 
   return (
-    <div className="px-2 py-2">
-      <div className="mb-1.5 flex items-center gap-1.5 px-2">
-        <Clock className="h-3 w-3 text-on-surface-variant/60" />
-        <span className="text-caption font-medium text-on-surface-variant/70">Recent</span>
+    <div className="px-3 py-2">
+      <div className="mb-1 px-1">
+        <span className="text-label-caps text-on-surface-variant/50">Recent</span>
       </div>
 
       <ul className="space-y-0.5">
@@ -43,28 +40,19 @@ export function RecentWorkflows() {
             <button
               type="button"
               className={cn(
-                "flex w-full cursor-pointer items-center gap-2.5 rounded-lg px-2 py-1.5 text-left transition-colors",
+                "flex h-7 w-full cursor-pointer items-center gap-2 rounded-md px-2 text-left transition-colors",
                 "hover:bg-control-hover focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary/20",
                 workflow.id === currentId && "bg-control-hover",
               )}
             >
-              <span
+              <FileText
                 className={cn(
-                  "flex h-5 w-5 shrink-0 items-center justify-center rounded-md",
-                  workflow.id === currentId
-                    ? "bg-primary text-on-primary"
-                    : "bg-control-hover text-on-surface-variant",
+                  "h-3.5 w-3.5 shrink-0",
+                  workflow.id === currentId ? "text-primary" : "text-on-surface-variant/50",
                 )}
-              >
-                <FileText className="h-3 w-3" />
-              </span>
-              <span className="min-w-0 flex-1">
-                <span className="block truncate text-caption font-medium text-on-surface">
-                  {workflow.name}
-                </span>
-                <span className="block truncate text-caption text-on-surface-variant/70">
-                  {workflow.id}
-                </span>
+              />
+              <span className="min-w-0 flex-1 truncate text-body-sm text-on-surface">
+                {workflow.name}
               </span>
             </button>
           </li>
