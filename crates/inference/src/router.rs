@@ -267,112 +267,18 @@ impl InferenceRouter {
 
     // ─── Typed capability dispatch methods ─────────────────────
 
-    pub async fn load_bundle_with_invocation(
-        &self,
-        invocation: &InferenceInvocation,
-        request: LoadBundleRequest,
-    ) -> Result<LoadBundleResponse, InferenceError> {
-        let backend = self.resolve_for_request(&request)?;
-        backend
-            .backend
-            .load_bundle_with_invocation(invocation, request)
-            .await
-    }
-
-    pub async fn text_encode_with_invocation(
-        &self,
-        invocation: &InferenceInvocation,
-        request: TextEncodeRequest,
-    ) -> Result<TextEncodeResponse, InferenceError> {
-        let backend = self.resolve_for_request(&request)?;
-        backend
-            .backend
-            .text_encode_with_invocation(invocation, request)
-            .await
-    }
-
-    pub async fn create_empty_latent_with_invocation(
-        &self,
-        invocation: &InferenceInvocation,
-        request: CreateEmptyLatentRequest,
-    ) -> Result<CreateEmptyLatentResponse, InferenceError> {
-        let backend = self.resolve_for_request(&request)?;
-        backend
-            .backend
-            .create_empty_latent_with_invocation(invocation, request)
-            .await
-    }
-
-    pub async fn diffusion_sample_with_invocation(
-        &self,
-        invocation: &InferenceInvocation,
-        request: DiffusionSampleRequest,
-    ) -> Result<DiffusionSampleResponse, InferenceError> {
-        let backend = self.resolve_for_request(&request)?;
-        backend
-            .backend
-            .diffusion_sample_with_invocation(invocation, request)
-            .await
-    }
-
-    pub async fn latent_decode_with_invocation(
-        &self,
-        invocation: &InferenceInvocation,
-        request: LatentDecodeRequest,
-    ) -> Result<LatentDecodeResponse, InferenceError> {
-        let backend = self.resolve_for_request(&request)?;
-        backend
-            .backend
-            .latent_decode_with_invocation(invocation, request)
-            .await
-    }
-
-    pub async fn latent_encode_with_invocation(
-        &self,
-        invocation: &InferenceInvocation,
-        request: LatentEncodeRequest,
-    ) -> Result<LatentEncodeResponse, InferenceError> {
-        let backend = self.resolve_for_request(&request)?;
-        backend
-            .backend
-            .latent_encode_with_invocation(invocation, request)
-            .await
-    }
-
-    pub async fn image_import_with_invocation(
-        &self,
-        invocation: &InferenceInvocation,
-        request: ImageImportRequest,
-    ) -> Result<ImageImportResponse, InferenceError> {
-        let backend = self.resolve_for_request(&request)?;
-        backend
-            .backend
-            .image_import_with_invocation(invocation, request)
-            .await
-    }
-
-    pub async fn image_save_with_invocation(
-        &self,
-        invocation: &InferenceInvocation,
-        request: ImageSaveRequest,
-    ) -> Result<ImageSaveResponse, InferenceError> {
-        let backend = self.resolve_for_request(&request)?;
-        backend
-            .backend
-            .image_save_with_invocation(invocation, request)
-            .await
-    }
-
-    pub async fn image_preview_with_invocation(
-        &self,
-        invocation: &InferenceInvocation,
-        request: ImagePreviewRequest,
-    ) -> Result<ImagePreviewResponse, InferenceError> {
-        let backend = self.resolve_for_request(&request)?;
-        backend
-            .backend
-            .image_preview_with_invocation(invocation, request)
-            .await
+    // Generate all dispatch methods using the macro.
+    // These all follow the same pattern: resolve backend, then call the same method.
+    impl_dispatch_methods! {
+        load_bundle_with_invocation: load_bundle_with_invocation(LoadBundleRequest) -> LoadBundleResponse,
+        text_encode_with_invocation: text_encode_with_invocation(TextEncodeRequest) -> TextEncodeResponse,
+        create_empty_latent_with_invocation: create_empty_latent_with_invocation(CreateEmptyLatentRequest) -> CreateEmptyLatentResponse,
+        diffusion_sample_with_invocation: diffusion_sample_with_invocation(DiffusionSampleRequest) -> DiffusionSampleResponse,
+        latent_decode_with_invocation: latent_decode_with_invocation(LatentDecodeRequest) -> LatentDecodeResponse,
+        latent_encode_with_invocation: latent_encode_with_invocation(LatentEncodeRequest) -> LatentEncodeResponse,
+        image_import_with_invocation: image_import_with_invocation(ImageImportRequest) -> ImageImportResponse,
+        image_save_with_invocation: image_save_with_invocation(ImageSaveRequest) -> ImageSaveResponse,
+        image_preview_with_invocation: image_preview_with_invocation(ImagePreviewRequest) -> ImagePreviewResponse,
     }
 }
 

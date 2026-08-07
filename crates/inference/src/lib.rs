@@ -29,6 +29,8 @@
 // exempt because the lint fires on `#[cfg(test)]` code too.
 #![cfg_attr(not(test), deny(clippy::unwrap_used))]
 
+#[macro_use]
+mod router_macros;
 mod artifact_publisher;
 mod backend;
 mod backend_registry;
