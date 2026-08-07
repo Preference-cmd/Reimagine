@@ -27,8 +27,7 @@ fn openai_cfg_for(server: &MockServer) -> OpenAiCompatibleConfig {
 }
 
 fn anthropic_cfg_for(server: &MockServer) -> AnthropicConfig {
-    AnthropicConfig::new(ANTHROPIC_KEY, "claude-3-5-sonnet-latest")
-        .with_base_url(server.uri())
+    AnthropicConfig::new(ANTHROPIC_KEY, "claude-3-5-sonnet-latest").with_base_url(server.uri())
 }
 
 fn build_request(model: &str) -> AgentRequest {

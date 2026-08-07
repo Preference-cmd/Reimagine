@@ -117,10 +117,7 @@ impl ReqwestBackend {
         request: &AgentRequest,
     ) -> Result<AgentResponse, ProviderAdapterError> {
         let cfg = self.openai_config()?;
-        let url = format!(
-            "{}/chat/completions",
-            cfg.base_url().trim_end_matches('/')
-        );
+        let url = format!("{}/chat/completions", cfg.base_url().trim_end_matches('/'));
 
         let messages = translation::request::to_openai_messages(request.messages());
         let tools = translation::tools::to_openai_tools(request.tools());
@@ -249,10 +246,7 @@ async fn response_json_or_error(resp: reqwest::Response) -> Result<Value, Provid
         serde_json::from_str(&text)
             .map_err(|e| ProviderAdapterError::serialization(format!("response json: {e}")))
     } else {
-        Err(ProviderAdapterError::api(
-            status.as_u16().to_string(),
-            text,
-        ))
+        Err(ProviderAdapterError::api(status.as_u16().to_string(), text))
     }
 }
 
