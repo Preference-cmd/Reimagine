@@ -12,6 +12,7 @@
 #![deny(unsafe_code)]
 
 mod context;
+mod context_manager;
 mod error;
 mod event;
 mod ids;
