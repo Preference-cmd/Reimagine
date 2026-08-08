@@ -2,6 +2,7 @@
 //! execution.
 
 use std::collections::HashMap;
+use std::ffi::OsStr;
 use std::io::{self, BufRead, Write};
 use std::path::Path;
 use std::sync::{Arc, Mutex, PoisonError};
@@ -9,7 +10,7 @@ use std::sync::{Arc, Mutex, PoisonError};
 use reimagine_agent::{
     AgentEvent, AgentEventSink, AgentLoop, AgentMode, AgentSessionId, AgentTurnId,
     AgentTurnRequest, AgentTurnResult, ContextConfig, ContextManager, Message, ModelName,
-    PermissionSet, ProviderName, ToolCallId, ToolPermission, VecAgentEventSink,
+    PermissionSet, ProviderName, ToolCallId, ToolName, ToolPermission, VecAgentEventSink,
 };
 use serde::Serialize;
 use serde::de::DeserializeOwned;
@@ -78,6 +79,34 @@ struct SessionState {
     turn_lock: Arc<Semaphore>,
 }
 
+/// Outcome of a resumed session's tool registry compatibility check.
+///
+/// A session is always allowed to resume; `compatible` reports whether
+/// tool drift was detected so hosts can surface it.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ToolRegistryValidation {
+    /// `true` when the persisted tool snapshot matches the current
+    /// registry. V1 persists no snapshot, so this is always `true`
+    /// unless the caller supplies one.
+    pub compatible: bool,
+    /// Tool names recorded at persist time that are no longer
+    /// registered in the workspace.
+    pub missing: Vec<String>,
+    /// Tool names that are still registered but whose schema changed.
+    /// V1 does not persist schemas, so this is always empty; the field
+    /// exists for a future persistence format.
+    pub schema_changed: Vec<String>,
+}
+
+/// Minimal metadata read from a persisted session file at resume time.
+/// V1 files written by `ContextManager::persist` carry `created_at`;
+/// the history itself is loaded separately via `ContextManager::load`.
+#[derive(serde::Deserialize)]
+struct PersistedSessionMetadata {
+    #[serde(default)]
+    created_at: String,
+}
+
 /// JSON-RPC server core: owns the daemon workspace, live sessions, and
 /// the map of in-flight turn cancellation tokens.
 pub struct AgentDaemon {
@@ -91,16 +120,21 @@ impl AgentDaemon {
     /// Initialize the daemon workspace rooted at `workspace_dir`.
     ///
     /// Providers must be registered on the workspace's agent service
-    /// before `session.create` / `turn.run` succeed.
+    /// before `session.create` / `turn.run` succeed. After workspace
+    /// init, sessions persisted by a previous daemon run are resumed
+    /// from `{workspace_dir}/agent-sessions` (see
+    /// [`Self::resume_persisted_sessions`]).
     pub async fn new(workspace_dir: &Path) -> Result<Self, DaemonInitError> {
         let sink: Arc<dyn AgentEventSink> = Arc::new(VecAgentEventSink::new());
         let workspace = DaemonWorkspace::initialize(workspace_dir, sink).await?;
-        Ok(Self {
+        let mut daemon = Self {
             workspace,
             sessions: HashMap::new(),
             active_turns: Arc::new(Mutex::new(HashMap::new())),
             client: None,
-        })
+        };
+        daemon.resume_persisted_sessions();
+        Ok(daemon)
     }
 
     pub fn workspace(&self) -> &DaemonWorkspace {
@@ -110,6 +144,170 @@ impl AgentDaemon {
     /// Client identity reported by the last `initialize` handshake.
     pub fn client_info(&self) -> Option<&ClientInfo> {
         self.client.as_ref()
+    }
+
+    /// Scan the session directory for persisted sessions and load each
+    /// into the live session map.
+    ///
+    /// Called by [`AgentDaemon::new`] after workspace init so a daemon
+    /// restart makes prior sessions available through `session.list`
+    /// and `turn.run` with their full history. Corrupt or partial
+    /// session files are logged and skipped — startup never fails
+    /// because of a bad session file. Re-scanning is idempotent:
+    /// sessions already in the map are skipped.
+    ///
+    /// V1 persisted sessions store conversation history only. Mode and
+    /// provider are not persisted, so resumed sessions default to
+    /// `AgentMode::Agent` and the first provider registered in the
+    /// catalog (an empty provider name when the catalog is empty;
+    /// `turn.run` then falls back to the current default provider or
+    /// fails with an unknown-provider error). Tool registry snapshots
+    /// are not persisted either, so the compatibility check runs with
+    /// an empty snapshot.
+    ///
+    /// Returns the number of sessions resumed.
+    pub fn resume_persisted_sessions(&mut self) -> usize {
+        let config = self.session_config();
+        let session_dir = config.session_dir.clone();
+        let entries = match std::fs::read_dir(&session_dir) {
+            Ok(entries) => entries,
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => return 0,
+            Err(error) => {
+                tracing::warn!(
+                    path = %session_dir.display(),
+                    %error,
+                    "failed to scan session directory"
+                );
+                return 0;
+            }
+        };
+        let mut resumed = 0;
+        for entry in entries.flatten() {
+            let path = entry.path();
+            if path.extension().and_then(OsStr::to_str) != Some("json") {
+                continue;
+            }
+            let Some(session_id) = path.file_stem().and_then(OsStr::to_str) else {
+                continue;
+            };
+            let id = AgentSessionId::new(session_id);
+            if self.sessions.contains_key(&id) {
+                continue;
+            }
+            let context = match ContextManager::load(
+                session_id,
+                ContextConfig {
+                    max_tokens: config.max_tokens,
+                    recent_turns: config.recent_turns,
+                    session_dir: session_dir.clone(),
+                },
+            ) {
+                Ok(context) => context,
+                Err(error) => {
+                    tracing::warn!(
+                        session_id,
+                        %error,
+                        "failed to load persisted session; skipping"
+                    );
+                    continue;
+                }
+            };
+            let created_at = persisted_created_at(&path).unwrap_or_default();
+            let provider = self.default_resume_provider();
+            self.workspace
+                .agent_service()
+                .create_session_with_permissions(
+                    id.clone(),
+                    AgentMode::Agent,
+                    provider.clone(),
+                    created_at.clone(),
+                    v1_permissions(),
+                );
+            self.validate_tool_registry(&id, &[]);
+            let info = SessionInfo {
+                session_id: id.to_string(),
+                mode: AgentMode::Agent.to_string(),
+                provider: provider.to_string(),
+                created_at,
+            };
+            let state = SessionState {
+                info,
+                context: Arc::new(AsyncMutex::new(context)),
+                turn_lock: Arc::new(Semaphore::new(1)),
+            };
+            self.sessions.insert(id, state);
+            resumed += 1;
+        }
+        resumed
+    }
+
+    /// Context configuration shared by new and resumed sessions: the
+    /// persistence directory under the workspace base path.
+    fn session_config(&self) -> ContextConfig {
+        ContextConfig {
+            max_tokens: 64_000,
+            recent_turns: 20,
+            session_dir: self.workspace.host().base_path().join("agent-sessions"),
+        }
+    }
+
+    /// Provider bound to resumed sessions. V1 does not persist the
+    /// provider, so resumed sessions default to the first registered
+    /// provider, or an empty provider name when none is registered —
+    /// `turn.run` then falls back to the current default provider or
+    /// fails with an unknown-provider error.
+    fn default_resume_provider(&self) -> ProviderName {
+        self.workspace
+            .providers()
+            .provider_names()
+            .into_iter()
+            .next()
+            .unwrap_or_else(|| ProviderName::new(""))
+    }
+
+    /// Validate the tool registry against the tool names recorded when
+    /// a session was persisted.
+    ///
+    /// V1 does not persist tool information, so the daemon always calls
+    /// this with an empty snapshot and it logs a debug note. The seam
+    /// exists so a future persistence format can detect tool drift
+    /// between daemon restarts. Missing or changed tools are reported
+    /// in the result and logged as a warning, but never block
+    /// resumption: turns surface unknown-tool failures at runtime.
+    pub fn validate_tool_registry(
+        &self,
+        session_id: &AgentSessionId,
+        persisted_tools: &[String],
+    ) -> ToolRegistryValidation {
+        if persisted_tools.is_empty() {
+            tracing::debug!(
+                session_id = %session_id,
+                "no tool registry snapshot in persisted session; skipping compatibility check"
+            );
+            return ToolRegistryValidation {
+                compatible: true,
+                missing: Vec::new(),
+                schema_changed: Vec::new(),
+            };
+        }
+        let current = self.workspace.registry().tool_names();
+        let missing: Vec<String> = persisted_tools
+            .iter()
+            .filter(|tool| !current.contains(&ToolName::new(tool.as_str())))
+            .cloned()
+            .collect();
+        if !missing.is_empty() {
+            tracing::warn!(
+                session_id = %session_id,
+                missing = ?missing,
+                "persisted session tool registry drift detected; resuming anyway"
+            );
+        }
+        ToolRegistryValidation {
+            compatible: missing.is_empty(),
+            missing,
+            schema_changed: Vec::new(),
+        }
     }
 
     /// Serve requests from `transport` until the reader is exhausted.
@@ -214,11 +412,7 @@ impl AgentDaemon {
             provider: provider.to_string(),
             created_at: started_at,
         };
-        let config = ContextConfig {
-            max_tokens: 64_000,
-            recent_turns: 20,
-            session_dir: self.workspace.host().base_path().join("agent-sessions"),
-        };
+        let config = self.session_config();
         let state = SessionState {
             info: info.clone(),
             context: Arc::new(AsyncMutex::new(ContextManager::new(config))),
@@ -269,15 +463,25 @@ impl AgentDaemon {
             .agent_service()
             .get_session(&session_id)
             .map_err(|_| unknown_session(&session_id))?;
-        let provider = self
-            .workspace
-            .providers()
-            .get(agent_session.provider())
-            .ok_or_else(|| {
-                JsonRpcError::invalid_params().with_data(json!({
-                    "provider": agent_session.provider().to_string(),
-                }))
-            })?;
+        let provider = if agent_session.provider().as_str().is_empty() {
+            // Resumed V1 sessions do not persist their provider; when
+            // none was registered at resume time the session carries an
+            // empty provider name, so bind the turn to the current
+            // default provider.
+            self.workspace
+                .providers()
+                .provider_names()
+                .into_iter()
+                .next()
+                .and_then(|name| self.workspace.providers().get(&name))
+        } else {
+            self.workspace.providers().get(agent_session.provider())
+        };
+        let provider = provider.ok_or_else(|| {
+            JsonRpcError::invalid_params().with_data(json!({
+                "provider": agent_session.provider().to_string(),
+            }))
+        })?;
         let Some(state) = self.sessions.get(&session_id) else {
             return Err(unknown_session(&session_id));
         };
@@ -463,6 +667,16 @@ fn v1_permissions() -> PermissionSet {
         ToolPermission::new("model.read"),
         ToolPermission::new("model.write"),
     ])
+}
+
+/// Read the `created_at` field out of a persisted session file. The
+/// field is opaque (V1 writes unix seconds); an unreadable or partial
+/// file yields `None` and the caller falls back to an empty timestamp.
+fn persisted_created_at(path: &Path) -> Option<String> {
+    let json = std::fs::read(path).ok()?;
+    serde_json::from_slice::<PersistedSessionMetadata>(&json)
+        .ok()
+        .map(|meta| meta.created_at)
 }
 
 fn turn_input_text(input: &Value) -> Option<String> {
