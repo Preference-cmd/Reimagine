@@ -18,6 +18,7 @@ use std::sync::{Arc, Mutex};
 use serde_json::{Value, json};
 
 use crate::context::ToolContext;
+use crate::context_manager::ContextManager;
 use crate::error::{ToolError, ToolErrorCode};
 use crate::event::AgentEvent;
 use crate::ids::ToolName;
@@ -142,7 +143,19 @@ impl AgentLoop {
     /// 6. Otherwise executes the requested tool calls sequentially
     ///    through the session's registry, appends `Message::tool_result`
     ///    observations, and loops back to step 3.
-    pub async fn run_turn(&self, request: AgentTurnRequest) -> AgentTurnResult {
+    ///
+    /// `context` optionally supplies a [`ContextManager`] that owns the
+    /// conversation history for this turn. When present, the provider
+    /// message list is built by `prepare_messages` (system message +
+    /// rolling-windowed history + input) and this turn's new messages
+    /// are committed through `commit_turn`; the session history is not
+    /// mutated. When `None`, V1 behavior applies: the session history
+    /// seeds the provider list and receives the turn's messages.
+    pub async fn run_turn(
+        &self,
+        request: AgentTurnRequest,
+        mut context: Option<&mut ContextManager>,
+    ) -> AgentTurnResult {
         let mut result = AgentTurnResult::new()
             .with_turn_id(request.turn_id().clone())
             .with_session_id(request.session().id().clone())
@@ -152,21 +165,29 @@ impl AgentLoop {
             .with_status(AgentTurnStatus::Running);
 
         let registry = request.session().registry().clone();
-        // Seed the provider message list with the session's running
-        // conversation history, then append this turn's input on top.
-        // `pre_run_len` points just past the prior history (NOT past
-        // the input), so `commit_session_history` will append *this
-        // turn's input + new assistant + tool observations* to the
-        // session history at the end — matching the issue's note
-        // about "appending turn input, assistant messages, and tool
-        // observation messages to session history."
-        let prior_history = request.session().history();
-        let pre_run_len = prior_history.len();
-        let mut messages: Vec<Message> = prior_history
-            .iter()
-            .cloned()
-            .chain(request.input().iter().cloned())
-            .collect();
+        // Seed the provider message list from the active history
+        // source. With a context manager, `prepare_messages` attaches
+        // a system message and applies the rolling window. V1 has no
+        // system prompt, so the system slot is empty. `pre_run_len`
+        // points just past the prior context (NOT past the input), so
+        // `commit_turn_history` will commit *this turn's input + new
+        // assistant + tool observations* at the end — matching the
+        // issue's note about "appending turn input, assistant
+        // messages, and tool observation messages."
+        let mut messages: Vec<Message>;
+        let pre_run_len: usize;
+        if let Some(manager) = context.as_deref_mut() {
+            messages = manager.prepare_messages("", request.input());
+            pre_run_len = messages.len() - request.input().len();
+        } else {
+            let prior_history = request.session().history();
+            pre_run_len = prior_history.len();
+            messages = prior_history
+                .iter()
+                .cloned()
+                .chain(request.input().iter().cloned())
+                .collect();
+        }
         let tool_defs = build_tool_definitions(&registry, request.session().mode());
 
         let max_tool_steps = request.max_tool_steps();
@@ -180,7 +201,7 @@ impl AgentLoop {
                     .with_stop_reason(AgentTurnStopReason::Cancelled)
                     .with_status(AgentTurnStatus::Stopped)
                     .with_messages(messages.clone());
-                commit_session_history(request.session(), &messages, pre_run_len);
+                commit_turn_history(&mut context, request.session(), &messages, pre_run_len);
                 return result;
             }
 
@@ -192,7 +213,7 @@ impl AgentLoop {
                     .with_stop_reason(AgentTurnStopReason::ProviderError)
                     .with_status(AgentTurnStatus::Stopped)
                     .with_messages(messages.clone());
-                commit_session_history(request.session(), &messages, pre_run_len);
+                commit_turn_history(&mut context, request.session(), &messages, pre_run_len);
                 return result;
             }
 
@@ -214,7 +235,7 @@ impl AgentLoop {
                         .with_stop_reason(AgentTurnStopReason::ProviderError)
                         .with_status(AgentTurnStatus::Stopped)
                         .with_messages(messages.clone());
-                    commit_session_history(request.session(), &messages, pre_run_len);
+                    commit_turn_history(&mut context, request.session(), &messages, pre_run_len);
                     return result;
                 }
             };
@@ -239,7 +260,7 @@ impl AgentLoop {
                     .with_stop_reason(AgentTurnStopReason::FinalResponse)
                     .with_status(AgentTurnStatus::Completed)
                     .with_messages(messages.clone());
-                commit_session_history(request.session(), &messages, pre_run_len);
+                commit_turn_history(&mut context, request.session(), &messages, pre_run_len);
                 return result;
             }
 
@@ -254,7 +275,7 @@ impl AgentLoop {
                     .with_stop_reason(AgentTurnStopReason::MaxToolStepsExceeded)
                     .with_status(AgentTurnStatus::Stopped)
                     .with_messages(messages.clone());
-                commit_session_history(request.session(), &messages, pre_run_len);
+                commit_turn_history(&mut context, request.session(), &messages, pre_run_len);
                 return result;
             }
 
@@ -274,7 +295,7 @@ impl AgentLoop {
                         .with_stop_reason(AgentTurnStopReason::MaxToolStepsExceeded)
                         .with_status(AgentTurnStatus::Stopped)
                         .with_messages(messages.clone());
-                    commit_session_history(request.session(), &messages, pre_run_len);
+                    commit_turn_history(&mut context, request.session(), &messages, pre_run_len);
                     return result;
                 }
                 // Check cancellation before each tool execution.
@@ -283,7 +304,7 @@ impl AgentLoop {
                         .with_stop_reason(AgentTurnStopReason::Cancelled)
                         .with_status(AgentTurnStatus::Stopped)
                         .with_messages(messages.clone());
-                    commit_session_history(request.session(), &messages, pre_run_len);
+                    commit_turn_history(&mut context, request.session(), &messages, pre_run_len);
                     return result;
                 }
                 tool_steps_taken += 1;
@@ -325,7 +346,13 @@ impl AgentLoop {
     /// completes (the model must finish generating all tool calls before
     /// the stream ends). The loop then re-enters the stream for the next
     /// round if tool calls were present.
-    pub async fn run_turn_streaming(&self, request: AgentTurnRequest) -> AgentTurnResult {
+    ///
+    /// `context` behaves exactly as in [`run_turn`](Self::run_turn).
+    pub async fn run_turn_streaming(
+        &self,
+        request: AgentTurnRequest,
+        mut context: Option<&mut ContextManager>,
+    ) -> AgentTurnResult {
         let mut result = AgentTurnResult::new()
             .with_turn_id(request.turn_id().clone())
             .with_session_id(request.session().id().clone())
@@ -335,13 +362,20 @@ impl AgentLoop {
             .with_status(AgentTurnStatus::Running);
 
         let registry = request.session().registry().clone();
-        let prior_history = request.session().history();
-        let pre_run_len = prior_history.len();
-        let mut messages: Vec<Message> = prior_history
-            .iter()
-            .cloned()
-            .chain(request.input().iter().cloned())
-            .collect();
+        let mut messages: Vec<Message>;
+        let pre_run_len: usize;
+        if let Some(manager) = context.as_deref_mut() {
+            messages = manager.prepare_messages("", request.input());
+            pre_run_len = messages.len() - request.input().len();
+        } else {
+            let prior_history = request.session().history();
+            pre_run_len = prior_history.len();
+            messages = prior_history
+                .iter()
+                .cloned()
+                .chain(request.input().iter().cloned())
+                .collect();
+        }
         let tool_defs = build_tool_definitions(&registry, request.session().mode());
 
         let max_tool_steps = request.max_tool_steps();
@@ -355,7 +389,7 @@ impl AgentLoop {
                     .with_stop_reason(AgentTurnStopReason::Cancelled)
                     .with_status(AgentTurnStatus::Stopped)
                     .with_messages(messages.clone());
-                commit_session_history(request.session(), &messages, pre_run_len);
+                commit_turn_history(&mut context, request.session(), &messages, pre_run_len);
                 return result;
             }
 
@@ -367,7 +401,7 @@ impl AgentLoop {
                     .with_stop_reason(AgentTurnStopReason::ProviderError)
                     .with_status(AgentTurnStatus::Stopped)
                     .with_messages(messages.clone());
-                commit_session_history(request.session(), &messages, pre_run_len);
+                commit_turn_history(&mut context, request.session(), &messages, pre_run_len);
                 return result;
             }
 
@@ -390,7 +424,7 @@ impl AgentLoop {
                         .with_stop_reason(AgentTurnStopReason::ProviderError)
                         .with_status(AgentTurnStatus::Stopped)
                         .with_messages(messages.clone());
-                    commit_session_history(request.session(), &messages, pre_run_len);
+                    commit_turn_history(&mut context, request.session(), &messages, pre_run_len);
                     return result;
                 }
             };
@@ -443,7 +477,7 @@ impl AgentLoop {
                     .with_stop_reason(AgentTurnStopReason::FinalResponse)
                     .with_status(AgentTurnStatus::Completed)
                     .with_messages(messages.clone());
-                commit_session_history(request.session(), &messages, pre_run_len);
+                commit_turn_history(&mut context, request.session(), &messages, pre_run_len);
                 return result;
             }
 
@@ -453,7 +487,7 @@ impl AgentLoop {
                     .with_stop_reason(AgentTurnStopReason::MaxToolStepsExceeded)
                     .with_status(AgentTurnStatus::Stopped)
                     .with_messages(messages.clone());
-                commit_session_history(request.session(), &messages, pre_run_len);
+                commit_turn_history(&mut context, request.session(), &messages, pre_run_len);
                 return result;
             }
 
@@ -466,7 +500,7 @@ impl AgentLoop {
                         .with_stop_reason(AgentTurnStopReason::MaxToolStepsExceeded)
                         .with_status(AgentTurnStatus::Stopped)
                         .with_messages(messages.clone());
-                    commit_session_history(request.session(), &messages, pre_run_len);
+                    commit_turn_history(&mut context, request.session(), &messages, pre_run_len);
                     return result;
                 }
                 // Check cancellation before each tool execution.
@@ -475,7 +509,7 @@ impl AgentLoop {
                         .with_stop_reason(AgentTurnStopReason::Cancelled)
                         .with_status(AgentTurnStatus::Stopped)
                         .with_messages(messages.clone());
-                    commit_session_history(request.session(), &messages, pre_run_len);
+                    commit_turn_history(&mut context, request.session(), &messages, pre_run_len);
                     return result;
                 }
                 tool_steps_taken += 1;
@@ -611,6 +645,27 @@ fn commit_session_history(
     }
 }
 
+/// Commit the messages produced during this turn to the active
+/// history store.
+///
+/// When a `ContextManager` is present it replaces the session history
+/// as the source of truth: the turn slice is appended through
+/// `commit_turn` and the session history is intentionally left
+/// untouched, so the two stores never diverge. When it is absent, the
+/// V1 path appends the turn slice to the session history via
+/// [`commit_session_history`].
+fn commit_turn_history(
+    context: &mut Option<&mut ContextManager>,
+    session: &crate::session::AgentSession,
+    messages: &[Message],
+    pre_run_len: usize,
+) {
+    match context {
+        Some(manager) => manager.commit_turn(&messages[pre_run_len..]),
+        None => commit_session_history(session, messages, pre_run_len),
+    }
+}
+
 /// Build `AgentToolDefinition` values from registry specs that allow
 /// `mode`. Specs without an `input_schema` are sent with a JSON Schema
 /// `{"type": "object"}` placeholder so adapters always see a valid
@@ -667,6 +722,7 @@ fn tool_observation_text(result: &ToolCallResult) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::context_manager::{ContextConfig, ContextManager};
     use crate::error::ProviderError;
     use crate::ids::{AgentSessionId, ModelName, ProviderName, WorkspaceScope};
     use crate::mode::AgentMode;
@@ -680,6 +736,7 @@ mod tests {
     use async_trait::async_trait;
     use serde_json::{Value, json};
     use std::collections::VecDeque;
+    use std::path::PathBuf;
     use std::sync::Mutex;
 
     // ----- mock provider -----
@@ -891,7 +948,7 @@ mod tests {
             vec![Message::user("hi")],
         );
 
-        let result = loop_harness.run_turn(req).await;
+        let result = loop_harness.run_turn(req, None).await;
         assert_eq!(result.status(), AgentTurnStatus::Completed);
         assert_eq!(result.stop_reason(), AgentTurnStopReason::FinalResponse);
         assert_eq!(result.final_response().unwrap().content(), "hello");
@@ -928,7 +985,7 @@ mod tests {
             vec![Message::user("hi")],
         );
 
-        let result = loop_harness.run_turn(req).await;
+        let result = loop_harness.run_turn(req, None).await;
         assert_eq!(result.status(), AgentTurnStatus::Completed);
         assert_eq!(result.stop_reason(), AgentTurnStopReason::FinalResponse);
         assert_eq!(result.tool_calls().len(), 1);
@@ -989,7 +1046,7 @@ mod tests {
             vec![Message::user("hi")],
         );
 
-        let result = loop_harness.run_turn(req).await;
+        let result = loop_harness.run_turn(req, None).await;
         assert_eq!(result.status(), AgentTurnStatus::Completed);
         assert_eq!(result.tool_calls().len(), 3);
         // Provider order preserved.
@@ -1064,7 +1121,7 @@ mod tests {
         )
         .with_max_tool_steps(5);
 
-        let result = loop_harness.run_turn(req).await;
+        let result = loop_harness.run_turn(req, None).await;
         assert_eq!(result.status(), AgentTurnStatus::Completed);
         assert_eq!(result.tool_calls().len(), 1);
         assert_eq!(result.tool_calls()[0].status(), ToolCallStatus::Rejected);
@@ -1105,7 +1162,7 @@ mod tests {
             vec![Message::user("hi")],
         );
 
-        let result = loop_harness.run_turn(req).await;
+        let result = loop_harness.run_turn(req, None).await;
         assert_eq!(result.status(), AgentTurnStatus::Completed);
         assert_eq!(result.tool_calls().len(), 1);
         assert_eq!(result.tool_calls()[0].status(), ToolCallStatus::Rejected);
@@ -1140,7 +1197,7 @@ mod tests {
             vec![Message::user("hi")],
         );
 
-        let result = loop_harness.run_turn(req).await;
+        let result = loop_harness.run_turn(req, None).await;
         assert_eq!(result.status(), AgentTurnStatus::Stopped);
         assert_eq!(result.stop_reason(), AgentTurnStopReason::ProviderError);
         assert!(result.final_response().is_none());
@@ -1186,7 +1243,7 @@ mod tests {
         )
         .with_max_tool_steps(2);
 
-        let result = loop_harness.run_turn(req).await;
+        let result = loop_harness.run_turn(req, None).await;
         assert_eq!(result.status(), AgentTurnStatus::Stopped);
         assert_eq!(
             result.stop_reason(),
@@ -1244,7 +1301,7 @@ mod tests {
         )
         .with_max_tool_steps(2);
 
-        let result = loop_harness.run_turn(req).await;
+        let result = loop_harness.run_turn(req, None).await;
         assert_eq!(result.status(), AgentTurnStatus::Stopped);
         assert_eq!(
             result.stop_reason(),
@@ -1303,7 +1360,7 @@ mod tests {
             vec![Message::user("hi")],
         );
 
-        let result = loop_harness.run_turn(req).await;
+        let result = loop_harness.run_turn(req, None).await;
         assert_eq!(result.status(), AgentTurnStatus::Completed);
         assert_eq!(result.tool_calls().len(), 1);
         let tcr = &result.tool_calls()[0];
@@ -1337,7 +1394,7 @@ mod tests {
             vec![Message::user("hi")],
         );
 
-        let result = loop_harness.run_turn(req).await;
+        let result = loop_harness.run_turn(req, None).await;
         let usage = result.usage().expect("usage recorded");
         assert_eq!(usage.input_tokens(), Some(11));
         assert_eq!(usage.output_tokens(), Some(22));
@@ -1366,7 +1423,7 @@ mod tests {
             vec![Message::user("hi")],
         );
 
-        let result = loop_harness.run_turn(req).await;
+        let result = loop_harness.run_turn(req, None).await;
         assert_eq!(result.status(), AgentTurnStatus::Completed);
         assert_eq!(result.tool_calls().len(), 1);
         assert_eq!(result.tool_calls()[0].status(), ToolCallStatus::Failed);
@@ -1443,7 +1500,7 @@ mod tests {
             vec![Message::user("hi")],
         );
 
-        let _ = loop_harness.run_turn(req).await;
+        let _ = loop_harness.run_turn(req, None).await;
         let mut names = provider.seen_tool_names.lock().unwrap().clone();
         names.sort();
         assert_eq!(names, vec!["alpha", "beta"]);
@@ -1487,7 +1544,7 @@ mod tests {
             vec![Message::user("hi")],
         );
 
-        let _ = loop_harness.run_turn(req).await;
+        let _ = loop_harness.run_turn(req, None).await;
 
         // The harness must have invoked the registry with both inputs,
         // in order. This was previously a no-op assertion; now it
@@ -1649,7 +1706,7 @@ mod tests {
             ModelName::new("test-model"),
             vec![Message::user("hello")],
         );
-        let _ = loop_harness.run_turn(req).await;
+        let _ = loop_harness.run_turn(req, None).await;
 
         // Session history should now contain [user, assistant].
         let history = session.history();
@@ -1672,7 +1729,7 @@ mod tests {
             ModelName::new("test-model"),
             vec![Message::user("and now this")],
         );
-        let _ = loop_harness.run_turn(req).await;
+        let _ = loop_harness.run_turn(req, None).await;
 
         let provider_roles = provider.seen_message_roles.lock().unwrap().clone();
         // Round 1 sent [user]; round 2 sent [user, assistant, user].
@@ -1713,7 +1770,7 @@ mod tests {
             ModelName::new("test-model"),
             vec![Message::user("hi")],
         );
-        let _ = loop_harness.run_turn(req).await;
+        let _ = loop_harness.run_turn(req, None).await;
 
         // History includes the input even though the provider never
         // produced an assistant message.
@@ -1808,7 +1865,7 @@ mod tests {
             vec![Message::user("hi")],
         );
 
-        let result = loop_harness.run_turn_streaming(req).await;
+        let result = loop_harness.run_turn_streaming(req, None).await;
         assert_eq!(result.status(), AgentTurnStatus::Completed);
         assert_eq!(result.stop_reason(), AgentTurnStopReason::FinalResponse);
         let final_text = result.final_response().unwrap().content();
@@ -1865,7 +1922,7 @@ mod tests {
             vec![Message::user("hi")],
         );
 
-        let result = loop_harness.run_turn_streaming(req).await;
+        let result = loop_harness.run_turn_streaming(req, None).await;
         assert_eq!(result.status(), AgentTurnStatus::Completed);
         assert_eq!(result.tool_calls().len(), 1);
         assert_eq!(result.tool_calls()[0].tool_name().as_str(), "echo");
@@ -1897,7 +1954,7 @@ mod tests {
             vec![Message::user("hi")],
         );
 
-        let result = loop_harness.run_turn_streaming(req).await;
+        let result = loop_harness.run_turn_streaming(req, None).await;
         // Empty stream → no content, no tool calls → completed with empty final response.
         assert_eq!(result.status(), AgentTurnStatus::Completed);
         assert_eq!(result.stop_reason(), AgentTurnStopReason::FinalResponse);
@@ -1929,7 +1986,7 @@ mod tests {
         )
         .with_cancel_token(cancel_token);
 
-        let result = loop_harness.run_turn(req).await;
+        let result = loop_harness.run_turn(req, None).await;
         assert_eq!(result.status(), AgentTurnStatus::Stopped);
         assert_eq!(result.stop_reason(), AgentTurnStopReason::Cancelled);
         // Provider should NOT have been called.
@@ -1958,8 +2015,115 @@ mod tests {
         )
         .with_cancel_token(cancel_token);
 
-        let result = loop_harness.run_turn_streaming(req).await;
+        let result = loop_harness.run_turn_streaming(req, None).await;
         assert_eq!(result.status(), AgentTurnStatus::Stopped);
         assert_eq!(result.stop_reason(), AgentTurnStopReason::Cancelled);
+    }
+
+    // ------------------------------------------------------------------
+    // Context manager integration
+    // ------------------------------------------------------------------
+
+    fn temp_session_dir(prefix: &str) -> PathBuf {
+        let nonce = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .expect("system clock before unix epoch")
+            .as_nanos();
+        std::env::temp_dir().join(format!("reimagine-agent-context-{prefix}-{nonce}"))
+    }
+
+    #[tokio::test]
+    async fn run_turn_with_context_manager_prepares_and_commits_history() {
+        struct CapturingProvider {
+            name: ProviderName,
+            seen_message_contents: Mutex<Vec<Vec<String>>>,
+        }
+        #[async_trait]
+        impl AgentProvider for CapturingProvider {
+            fn name(&self) -> ProviderName {
+                self.name.clone()
+            }
+            async fn complete(
+                &self,
+                request: AgentRequest,
+            ) -> Result<AgentResponse, ProviderError> {
+                self.seen_message_contents.lock().unwrap().push(
+                    request
+                        .messages()
+                        .iter()
+                        .map(|m| m.content().to_string())
+                        .collect(),
+                );
+                Ok(response_with_text("done"))
+            }
+            async fn stream(
+                &self,
+                _request: AgentRequest,
+            ) -> Result<Box<dyn AgentStream>, ProviderError> {
+                Ok(Box::new(UnusedStream))
+            }
+            async fn list_models(&self) -> Result<Vec<ModelInfo>, ProviderError> {
+                Ok(Vec::new())
+            }
+        }
+
+        let dir = temp_session_dir("ctx-loop");
+        let config = ContextConfig {
+            max_tokens: 10_000,
+            recent_turns: 2,
+            session_dir: dir.clone(),
+        };
+        let mut context = ContextManager::new(config);
+        let session = make_session(AgentToolRegistry::new());
+        let provider = Arc::new(CapturingProvider {
+            name: ProviderName::new("capture"),
+            seen_message_contents: Mutex::new(Vec::new()),
+        });
+        let loop_harness = AgentLoop::new(provider.clone(), Arc::new(VecAgentEventSink::new()));
+
+        // Five turns push the stored history past the window of
+        // `recent_turns * 2 = 4` messages; each turn commits its own
+        // [user, assistant] pair.
+        for i in 1..=5 {
+            let req = AgentTurnRequest::new(
+                session.clone(),
+                AgentTurnId::new(format!("ctx-{i}")),
+                ModelName::new("test-model"),
+                vec![Message::user(format!("u{i}"))],
+            );
+            let result = loop_harness.run_turn(req, Some(&mut context)).await;
+            assert_eq!(result.status(), AgentTurnStatus::Completed);
+        }
+
+        // The provider received prepare_messages output: an (empty,
+        // V1 has no system prompt) system message, the windowed
+        // history, then this turn's input.
+        let seen = provider.seen_message_contents.lock().unwrap().clone();
+        assert_eq!(seen[0], vec!["", "u1"]);
+        assert_eq!(seen[1], vec!["", "u1", "done", "u2"]);
+        assert_eq!(seen[2], vec!["", "u1", "done", "u2", "done", "u3"]);
+        assert_eq!(seen[3], vec!["", "u2", "done", "u3", "done", "u4"]);
+        assert_eq!(seen[4], vec!["", "u3", "done", "u4", "done", "u5"]);
+
+        // The context manager owns the history; the session transcript
+        // must stay untouched.
+        assert_eq!(session.history_len(), 0);
+
+        // persist/load round trip after a turn: the loaded manager
+        // serves the same windowed history as the live one.
+        context.persist("sess-ctx").expect("persist failed");
+        let mut loaded = ContextManager::load(
+            "sess-ctx",
+            ContextConfig {
+                max_tokens: 10_000,
+                recent_turns: 2,
+                session_dir: dir,
+            },
+        )
+        .expect("load failed");
+        assert_eq!(loaded.token_count(), context.token_count());
+        let prepared = loaded.prepare_messages("", &[Message::user("u6")]);
+        let contents: Vec<String> = prepared.iter().map(|m| m.content().to_string()).collect();
+        assert_eq!(contents, vec!["", "u4", "done", "u5", "done", "u6"]);
     }
 }
