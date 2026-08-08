@@ -208,7 +208,7 @@ impl DomainEventAdapter<AgentEvent> for AgentDomainEventAdapter {
                 session_id, text, ..
             } => {
                 let _ = text; // Delta text is not stored in the domain event;
-                              // the UI reads it from the stream directly.
+                // the UI reads it from the stream directly.
                 let ev = Self::build_event(
                     "agent.content_delta",
                     source_name,

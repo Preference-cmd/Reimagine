@@ -32,5 +32,3 @@ macro_rules! impl_dispatch_methods {
         )*
     };
 }
-
-pub(crate) use impl_dispatch_methods;

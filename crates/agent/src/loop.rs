@@ -185,15 +185,15 @@ impl AgentLoop {
             }
 
             // Check turn timeout.
-            if let Some(timeout_dur) = request.turn_timeout() {
-                if turn_start.elapsed() >= timeout_dur {
-                    result = result
-                        .with_stop_reason(AgentTurnStopReason::ProviderError)
-                        .with_status(AgentTurnStatus::Stopped)
-                        .with_messages(messages.clone());
-                    commit_session_history(request.session(), &messages, pre_run_len);
-                    return result;
-                }
+            if let Some(timeout_dur) = request.turn_timeout()
+                && turn_start.elapsed() >= timeout_dur
+            {
+                result = result
+                    .with_stop_reason(AgentTurnStopReason::ProviderError)
+                    .with_status(AgentTurnStatus::Stopped)
+                    .with_messages(messages.clone());
+                commit_session_history(request.session(), &messages, pre_run_len);
+                return result;
             }
 
             let provider_request = AgentRequest::new(request.model().clone(), messages.clone())
@@ -360,15 +360,15 @@ impl AgentLoop {
             }
 
             // Check turn timeout.
-            if let Some(timeout_dur) = request.turn_timeout() {
-                if turn_start.elapsed() >= timeout_dur {
-                    result = result
-                        .with_stop_reason(AgentTurnStopReason::ProviderError)
-                        .with_status(AgentTurnStatus::Stopped)
-                        .with_messages(messages.clone());
-                    commit_session_history(request.session(), &messages, pre_run_len);
-                    return result;
-                }
+            if let Some(timeout_dur) = request.turn_timeout()
+                && turn_start.elapsed() >= timeout_dur
+            {
+                result = result
+                    .with_stop_reason(AgentTurnStopReason::ProviderError)
+                    .with_status(AgentTurnStatus::Stopped)
+                    .with_messages(messages.clone());
+                commit_session_history(request.session(), &messages, pre_run_len);
+                return result;
             }
 
             let provider_request = AgentRequest::new(request.model().clone(), messages.clone())
@@ -416,9 +416,8 @@ impl AgentLoop {
                     }
                     crate::provider::AgentStreamEvent::Done { stop_reason } => {
                         if let Some(reason) = stop_reason {
-                            result = result.with_stop_reason(
-                                crate::turn::AgentTurnStopReason::ProviderError,
-                            );
+                            result = result
+                                .with_stop_reason(crate::turn::AgentTurnStopReason::ProviderError);
                             let _ = reason;
                         }
                         break;
@@ -1765,27 +1764,18 @@ mod tests {
             self.name.clone()
         }
 
-        async fn complete(
-            &self,
-            _request: AgentRequest,
-        ) -> Result<AgentResponse, ProviderError> {
-            Err(ProviderError::new(
-                "streaming_only",
-                "this provider only supports streaming",
+        async fn complete(&self, _request: AgentRequest) -> Result<AgentResponse, ProviderError> {
+            Err(
+                ProviderError::new("streaming_only", "this provider only supports streaming")
+                    .with_provider(self.name.clone()),
             )
-            .with_provider(self.name.clone()))
         }
 
         async fn stream(
             &self,
             _request: AgentRequest,
         ) -> Result<Box<dyn crate::provider::AgentStream>, ProviderError> {
-            let events = self
-                .streams
-                .lock()
-                .unwrap()
-                .pop_front()
-                .unwrap_or_default();
+            let events = self.streams.lock().unwrap().pop_front().unwrap_or_default();
             Ok(Box::new(MockStream { events }))
         }
 
@@ -1867,11 +1857,8 @@ mod tests {
 
         let req = AgentTurnRequest::new(
             session_with(|reg| {
-                reg.register(ScriptedTool::success(
-                    "echo",
-                    vec![json!({"ok": true})],
-                ))
-                .unwrap();
+                reg.register(ScriptedTool::success("echo", vec![json!({"ok": true})]))
+                    .unwrap();
             }),
             AgentTurnId::new("stream-2"),
             ModelName::new("test-model"),
