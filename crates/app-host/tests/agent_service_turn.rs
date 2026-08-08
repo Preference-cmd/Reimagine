@@ -62,8 +62,12 @@ impl AgentProvider for ScriptedProvider {
             })
     }
 
-    async fn stream(&self, _request: AgentRequest) -> Result<Box<dyn AgentStream>, ProviderError> {
-        Ok(Box::new(EmptyStream))
+    async fn stream(&self, request: AgentRequest) -> Result<Box<dyn AgentStream>, ProviderError> {
+        self.requests.lock().unwrap().push(request);
+        let response = self.responses.lock().unwrap().pop_front().ok_or_else(|| {
+            ProviderError::new("SCRIPT_EXHAUSTED", "scripted provider exhausted")
+        })??;
+        Ok(Box::new(ScriptedStream::from_response(response)))
     }
 
     async fn list_models(&self) -> Result<Vec<ModelInfo>, ProviderError> {
@@ -71,12 +75,30 @@ impl AgentProvider for ScriptedProvider {
     }
 }
 
-struct EmptyStream;
+struct ScriptedStream {
+    events: VecDeque<AgentStreamEvent>,
+}
+
+impl ScriptedStream {
+    fn from_response(response: AgentResponse) -> Self {
+        let mut events = VecDeque::new();
+        let message = response.message();
+        let content = message.content();
+        if !content.is_empty() {
+            events.push_back(AgentStreamEvent::ContentDelta(content.to_string()));
+        }
+        for tool_call in message.tool_calls() {
+            events.push_back(AgentStreamEvent::ToolCall(tool_call.clone()));
+        }
+        events.push_back(AgentStreamEvent::Done { stop_reason: None });
+        Self { events }
+    }
+}
 
 #[async_trait]
-impl AgentStream for EmptyStream {
+impl AgentStream for ScriptedStream {
     async fn next_event(&mut self) -> Option<AgentStreamEvent> {
-        None
+        self.events.pop_front()
     }
 }
 
