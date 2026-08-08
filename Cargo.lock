@@ -6835,9 +6835,11 @@ version = "0.1.0"
 dependencies = [
  "reimagine-agent",
  "reimagine-app-host",
+ "reimagine-runtime",
  "serde",
  "serde_json",
  "tokio",
+ "tracing",
 ]
 
 [[package]]
