@@ -10,7 +10,17 @@ import { lazy, type ComponentType } from "react";
  * - `showPropertiesDrawer`: Whether the properties drawer is available
  */
 
-export type RouteId = "workflows" | "models" | "runs" | "assets" | "settings";
+export type RouteId =
+  | "chat"
+  | "new-task"
+  | "pull-requests"
+  | "scheduled"
+  | "plugins"
+  | "workflows"
+  | "models"
+  | "runs"
+  | "assets"
+  | "settings";
 
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 export type AnyComponent = ComponentType<any>;
@@ -23,6 +33,10 @@ export interface RouteConfig {
 }
 
 // Lazy-loaded view components
+const ChatView = lazy(() =>
+  import("@/components/layout/ChatView").then((m) => ({ default: m.ChatView })),
+);
+
 const NodeCanvas = lazy(() =>
   import("@/components/canvas/NodeCanvas").then((m) => ({ default: m.NodeCanvas })),
 );
@@ -49,6 +63,26 @@ const SettingsView = lazy(() =>
  */
 export const ROUTES: RouteConfig[] = [
   {
+    id: "chat",
+    component: ChatView,
+  },
+  {
+    id: "new-task",
+    component: ChatView,
+  },
+  {
+    id: "pull-requests",
+    component: ChatView,
+  },
+  {
+    id: "scheduled",
+    component: ChatView,
+  },
+  {
+    id: "plugins",
+    component: ChatView,
+  },
+  {
     id: "workflows",
     component: NodeCanvas,
     showRunFab: true,
@@ -74,7 +108,7 @@ export const ROUTES: RouteConfig[] = [
 
 /**
  * Get route config by ID.
- * Returns the workflows route as fallback for unknown IDs.
+ * Returns the chat route as fallback for unknown IDs.
  */
 export function getRoute(id: string | null): RouteConfig {
   return ROUTES.find((r) => r.id === id) ?? ROUTES[0];

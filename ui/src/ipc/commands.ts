@@ -218,6 +218,85 @@ export function listWorkflows(): Promise<WorkflowFileSummary[]> {
   return dispatch("list_workflows", null, undefined, mockListWorkflows);
 }
 
+/* ───── Agent (BE-19 streaming) ───── */
+
+/** Create a new agent session in the given mode with the specified provider. */
+export function createAgentSession(
+  mode: string,
+  provider: string,
+): Promise<{ sessionId: string; mode: string; provider: string; startedAt: string }> {
+  return invokeWithFallback(
+    async () => {
+      const { invoke } = await import("@tauri-apps/api/core");
+      return invoke("create_agent_session", { mode, provider });
+    },
+    async () => ({
+      sessionId: crypto.randomUUID(),
+      mode,
+      provider,
+      startedAt: new Date().toISOString(),
+    }),
+  );
+}
+
+export interface AgentEventPayload {
+  sessionId: string;
+  kind: string;
+  toolName?: string;
+  toolCallId?: string;
+  code?: string;
+  message?: string;
+}
+
+/**
+ * Execute an agent turn with live streaming events.
+ * `onEvent` is called for each `AgentEvent` (including `content_delta`)
+ * as the model generates tokens.
+ */
+export async function agentTurn(
+  sessionId: string,
+  turnId: string,
+  model: string,
+  input: unknown[],
+  onEvent?: (event: AgentEventPayload) => void,
+): Promise<unknown> {
+  return invokeWithFallback(
+    async () => {
+      const { Channel, invoke } = await import("@tauri-apps/api/core");
+      const channel = new Channel<AgentEventPayload>();
+      if (onEvent) {
+        channel.onmessage = onEvent;
+      }
+      return invoke("agent_turn", {
+        sessionId,
+        turnId,
+        model,
+        input,
+        channel,
+      });
+    },
+    async () => {
+      // Mock: simulate a short streaming response
+      if (onEvent) {
+        onEvent({ sessionId, kind: "content_delta", message: "Hello! " });
+        onEvent({ sessionId, kind: "content_delta", message: "This is a mock response." });
+      }
+      return { status: "completed", stopReason: "final_response" };
+    },
+  );
+}
+
+/** List available agent providers for the UI selector. */
+export function listAgentProviders(): Promise<string[]> {
+  return invokeWithFallback(
+    async () => {
+      const { invoke } = await import("@tauri-apps/api/core");
+      return invoke<string[]>("list_agent_providers");
+    },
+    async () => ["openai", "anthropic"],
+  );
+}
+
 /* ───── Worker switching (BE-32) ───── */
 
 /** Drain in-flight runs (waiting up to `deadlineSecs`) then switch the active
