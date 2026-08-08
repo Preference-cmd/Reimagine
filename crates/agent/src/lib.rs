@@ -30,6 +30,7 @@ mod event_adapter;
 mod r#loop;
 
 pub use context::{Actor, ToolContext};
+pub use context_manager::{ContextConfig, ContextManager};
 pub use error::{AgentError, ProviderError, ToolError, ToolErrorCode};
 pub use event::AgentEvent;
 pub use event_adapter::AgentDomainEventAdapter;
