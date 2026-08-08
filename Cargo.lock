@@ -6830,6 +6830,17 @@ dependencies = [
 ]
 
 [[package]]
+name = "reimagine-agent-daemon"
+version = "0.1.0"
+dependencies = [
+ "reimagine-agent",
+ "reimagine-app-host",
+ "serde",
+ "serde_json",
+ "tokio",
+]
+
+[[package]]
 name = "reimagine-agent-macros"
 version = "0.1.0"
 dependencies = [
