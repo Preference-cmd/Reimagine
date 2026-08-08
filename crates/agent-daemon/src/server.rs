@@ -14,7 +14,7 @@ use reimagine_agent::{
 use serde::Serialize;
 use serde::de::DeserializeOwned;
 use serde_json::{Value, json};
-use tokio::sync::Semaphore;
+use tokio::sync::{Mutex as AsyncMutex, Semaphore};
 use tokio_util::sync::CancellationToken;
 
 use crate::init::{DaemonInitError, DaemonWorkspace};
@@ -74,7 +74,7 @@ impl<W: Write> Write for SharedWriter<W> {
 /// The daemon's per-session state.
 struct SessionState {
     info: SessionInfo,
-    context: Arc<Mutex<ContextManager>>,
+    context: Arc<AsyncMutex<ContextManager>>,
     turn_lock: Arc<Semaphore>,
 }
 
@@ -221,7 +221,7 @@ impl AgentDaemon {
         };
         let state = SessionState {
             info: info.clone(),
-            context: Arc::new(Mutex::new(ContextManager::new(config))),
+            context: Arc::new(AsyncMutex::new(ContextManager::new(config))),
             turn_lock: Arc::new(Semaphore::new(1)),
         };
         self.sessions.insert(session_id.clone(), state);
@@ -308,12 +308,12 @@ impl AgentDaemon {
                 vec![Message::user(text)],
             )
             .with_cancel_token(cancel_token);
-            let result = loop_harness.run_turn_streaming(turn_request).await;
-            {
-                let mut context = lock(&context);
-                context.commit_turn(result.messages());
-                let _ = context.persist(task_session_id.as_str());
-            }
+            let mut context_guard = context.lock().await;
+            let result = loop_harness
+                .run_turn_streaming(turn_request, Some(&mut context_guard))
+                .await;
+            let _ = context_guard.persist(task_session_id.as_str());
+            drop(context_guard);
             let notification = JsonRpcNotification::new(
                 METHOD_AGENT_TURN_COMPLETED,
                 TurnCompletedParams {
