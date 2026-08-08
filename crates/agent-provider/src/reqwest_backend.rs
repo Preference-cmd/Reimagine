@@ -313,10 +313,7 @@ impl ReqwestBackend {
             .map_err(|e| ProviderAdapterError::transport(e.to_string()))?;
 
         let resp = check_stream_status(resp).await?;
-        Ok(Box::new(ReqwestSseStream::new(
-            resp,
-            StreamKind::Anthropic,
-        )))
+        Ok(Box::new(ReqwestSseStream::new(resp, StreamKind::Anthropic)))
     }
 }
 
@@ -469,7 +466,8 @@ impl ReqwestSseStream {
                     .map(|i| i as usize)
                     .unwrap_or(i);
                 while self.openai_tool_calls.len() <= index {
-                    self.openai_tool_calls.push(OpenAiPartialToolCall::default());
+                    self.openai_tool_calls
+                        .push(OpenAiPartialToolCall::default());
                 }
                 let entry = &mut self.openai_tool_calls[index];
                 if let Some(id) = call.get("id").and_then(|v| v.as_str()) {
@@ -499,10 +497,9 @@ impl ReqwestSseStream {
             .and_then(|a| a.first())
             .and_then(|c| c.get("finish_reason"))
             .and_then(|v| v.as_str())
+            && finish_reason == "tool_calls"
         {
-            if finish_reason == "tool_calls" {
-                self.flush_openai_tool_calls();
-            }
+            self.flush_openai_tool_calls();
         }
 
         // Extract usage.
@@ -548,14 +545,14 @@ impl ReqwestSseStream {
                         self.anthropic_tool_calls
                             .push(AnthropicPartialToolCall::default());
                     }
-                    if let Some(block) = data.get("content_block") {
-                        if block.get("type").and_then(|v| v.as_str()) == Some("tool_use") {
-                            if let Some(id) = block.get("id").and_then(|v| v.as_str()) {
-                                self.anthropic_tool_calls[index].id = Some(id.to_string());
-                            }
-                            if let Some(name) = block.get("name").and_then(|v| v.as_str()) {
-                                self.anthropic_tool_calls[index].name = Some(name.to_string());
-                            }
+                    if let Some(block) = data.get("content_block")
+                        && block.get("type").and_then(|v| v.as_str()) == Some("tool_use")
+                    {
+                        if let Some(id) = block.get("id").and_then(|v| v.as_str()) {
+                            self.anthropic_tool_calls[index].id = Some(id.to_string());
+                        }
+                        if let Some(name) = block.get("name").and_then(|v| v.as_str()) {
+                            self.anthropic_tool_calls[index].name = Some(name.to_string());
                         }
                     }
                 }
@@ -568,8 +565,9 @@ impl ReqwestSseStream {
                             Some("text_delta") => {
                                 if let Some(text) = delta.get("text").and_then(|v| v.as_str()) {
                                     self.anthropic_text.push_str(text);
-                                    self.pending
-                                        .push_back(AgentStreamEvent::ContentDelta(text.to_string()));
+                                    self.pending.push_back(AgentStreamEvent::ContentDelta(
+                                        text.to_string(),
+                                    ));
                                 }
                             }
                             Some("input_json_delta") => {
@@ -580,9 +578,7 @@ impl ReqwestSseStream {
                                         self.anthropic_tool_calls
                                             .push(AnthropicPartialToolCall::default());
                                     }
-                                    self.anthropic_tool_calls[index]
-                                        .arguments
-                                        .push_str(partial);
+                                    self.anthropic_tool_calls[index].arguments.push_str(partial);
                                 }
                             }
                             _ => {}
@@ -593,34 +589,31 @@ impl ReqwestSseStream {
             "content_block_stop" => {
                 if let Some(index) = data.get("index").and_then(|v| v.as_u64()) {
                     let index = index as usize;
-                    if let Some(partial) = self.anthropic_tool_calls.get_mut(index) {
-                        if let (Some(id), Some(name)) =
-                            (partial.id.clone(), partial.name.clone())
-                        {
-                            let arguments = if partial.arguments.is_empty() {
-                                Value::Null
-                            } else {
-                                serde_json::from_str(&partial.arguments).unwrap_or(Value::Null)
-                            };
-                            *partial = AnthropicPartialToolCall::default();
-                            self.pending
-                                .push_back(AgentStreamEvent::ToolCall(
-                                    reimagine_agent::ToolCall::new(
-                                        reimagine_agent::ToolCallId::new(id),
-                                        name,
-                                        arguments,
-                                    ),
-                                ));
-                        }
+                    if let Some(partial) = self.anthropic_tool_calls.get_mut(index)
+                        && let (Some(id), Some(name)) = (partial.id.clone(), partial.name.clone())
+                    {
+                        let arguments = if partial.arguments.is_empty() {
+                            Value::Null
+                        } else {
+                            serde_json::from_str(&partial.arguments).unwrap_or(Value::Null)
+                        };
+                        *partial = AnthropicPartialToolCall::default();
+                        self.pending.push_back(AgentStreamEvent::ToolCall(
+                            reimagine_agent::ToolCall::new(
+                                reimagine_agent::ToolCallId::new(id),
+                                name,
+                                arguments,
+                            ),
+                        ));
                     }
                 }
             }
             "message_delta" => {
-                if let Some(delta) = data.get("delta") {
-                    if let Some(reason) = delta.get("stop_reason").and_then(|v| v.as_str()) {
-                        // Store stop_reason; will be emitted on message_stop.
-                        let _ = reason;
-                    }
+                if let Some(delta) = data.get("delta")
+                    && let Some(reason) = delta.get("stop_reason").and_then(|v| v.as_str())
+                {
+                    // Store stop_reason; will be emitted on message_stop.
+                    let _ = reason;
                 }
                 if let Some(usage) = data.get("usage") {
                     let input = usage.get("input_tokens").and_then(|v| v.as_u64());
@@ -633,9 +626,8 @@ impl ReqwestSseStream {
             }
             "message_stop" => {
                 self.done = true;
-                self.pending.push_back(AgentStreamEvent::Done {
-                    stop_reason: None,
-                });
+                self.pending
+                    .push_back(AgentStreamEvent::Done { stop_reason: None });
             }
             _ => {}
         }
@@ -747,9 +739,8 @@ impl CompletionBackend for ReqwestBackend {
             }
         }
 
-        Err(last_err.unwrap_or_else(|| {
-            ProviderAdapterError::transport("retry exhausted".to_string())
-        }))
+        Err(last_err
+            .unwrap_or_else(|| ProviderAdapterError::transport("retry exhausted".to_string())))
     }
 
     async fn stream(
@@ -790,8 +781,7 @@ impl CompletionBackend for ReqwestBackend {
             }
         }
 
-        Err(last_err.unwrap_or_else(|| {
-            ProviderAdapterError::transport("retry exhausted".to_string())
-        }))
+        Err(last_err
+            .unwrap_or_else(|| ProviderAdapterError::transport("retry exhausted".to_string())))
     }
 }
