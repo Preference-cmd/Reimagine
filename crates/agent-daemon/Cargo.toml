@@ -10,9 +10,11 @@ license.workspace = true
 [dependencies]
 reimagine-agent = { path = "../agent" }
 reimagine-app-host = { path = "../app-host" }
+reimagine-runtime = { path = "../runtime" }
 serde = { workspace = true }
 serde_json = { workspace = true }
 tokio = { workspace = true }
+tracing = { workspace = true }
 
 [dev-dependencies]
 serde_json = { workspace = true }
