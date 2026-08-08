@@ -16,6 +16,17 @@
   "sidebar.user": "User",
   "sidebar.localWorkspace": "Local workspace",
   "sidebar.noRecent": "No recent workflows",
+  "sidebar.newTask": "New Task",
+  "sidebar.pullRequests": "Pull Requests",
+  "sidebar.scheduled": "Scheduled",
+  "sidebar.plugins": "Plugins",
+  "sidebar.projects": "Projects",
+  "sidebar.tasks": "Tasks",
+  "sidebar.noTasks": "No tasks",
+
+  "settings.groupPersonal": "Personal",
+  "settings.groupIntegration": "Integrations",
+  "settings.groupCoding": "Coding",
 
   "settings.searchPlaceholder": "Search settings…",
   "settings.personal": "Personal",

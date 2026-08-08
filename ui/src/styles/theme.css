@@ -39,6 +39,16 @@
   --color-status-error: #ee0000;
   --color-status-success: #29bc9b;
 
+  /* Sidebar — Codex-style dark chrome. */
+  --color-sidebar-bg: #111111;
+  --color-sidebar-border: rgb(255 255 255 / 0.06);
+  --color-sidebar-item-hover: rgb(255 255 255 / 0.05);
+  --color-sidebar-item-active: rgb(255 255 255 / 0.08);
+  --color-sidebar-text-primary: rgb(255 255 255 / 0.9);
+  --color-sidebar-text-secondary: rgb(255 255 255 / 0.4);
+  --color-sidebar-text-muted: rgb(255 255 255 / 0.3);
+  --color-sidebar-section-header: rgb(255 255 255 / 0.2);
+
   /* Elevation: stacked small offsets + an inset hairline so edges stay crisp
      without relying on a separate heavy drop-shadow. */
   --shadow-panel-raised:

@@ -186,8 +186,8 @@ type SettingsViewProps = {
 };
 
 /**
- * SettingsView -- content-only settings page.
- * The sidebar handles navigation; this component renders the form.
+ * SettingsView — Codex-style content-only settings page.
+ * Light gray background, large title, card sections with group headers.
  */
 export function SettingsView({ themeMode, onThemeModeChange }: SettingsViewProps) {
   const settingsNavId = useUIStore((s) => s.settingsNavId);
@@ -195,10 +195,8 @@ export function SettingsView({ themeMode, onThemeModeChange }: SettingsViewProps
   const groups = SETTINGS_CONTENT[activeSection] ?? [];
   const sectionLabelKey = SECTION_LABEL_KEYS[activeSection] ?? "settings.general";
 
-  // Get current settings from store for form initialization
   const settings = useSettingsStore();
 
-  // Initialize react-hook-form with zod validation
   const form = useForm<SettingsFormData>({
     resolver: zodResolver(settingsSchema),
     defaultValues: {
@@ -218,12 +216,9 @@ export function SettingsView({ themeMode, onThemeModeChange }: SettingsViewProps
     },
   });
 
-  // Sync form changes back to the settings store
   useEffect(() => {
     const subscription = form.watch((value) => {
       if (!value) return;
-
-      // Update each setting when form values change
       if (value.autoSave !== undefined) settings.setAutoSave(value.autoSave);
       if (value.restoreSession !== undefined) settings.setRestoreSession(value.restoreSession);
       if (value.checkUpdates !== undefined) settings.setCheckUpdates(value.checkUpdates);
@@ -239,43 +234,44 @@ export function SettingsView({ themeMode, onThemeModeChange }: SettingsViewProps
       if (value.downloadDir !== undefined) settings.setDownloadDir(value.downloadDir);
       if (value.autoConvert !== undefined) settings.setAutoConvert(value.autoConvert);
     });
-
-    return () => {
-      subscription.unsubscribe();
-    };
+    return () => subscription.unsubscribe();
   }, [form, settings]);
 
-  // Resolve message keys to actual translated strings
   const resolveLabel = (key: string): string => {
     const msg = (m as unknown as Record<string, () => string>)[key];
     return msg ? msg() : key;
   };
 
   return (
-    <div className="min-h-0 flex-1 overflow-y-auto p-8">
-      <h1 className="mb-8 text-display-sm font-semibold text-on-surface">
-        {resolveLabel(sectionLabelKey)}
-      </h1>
+    <div className="min-h-0 flex-1 overflow-y-auto bg-background">
+      <div className="mx-auto max-w-2xl px-8 py-10">
+        {/* Large title */}
+        <h1 className="mb-10 text-headline-lg font-bold tracking-tight text-on-surface">
+          {resolveLabel(sectionLabelKey)}
+        </h1>
 
-      {groups.map((group, gi) => (
-        <section key={`${group.labelKey}-${gi}`} className="mb-8">
-          <h2 className="mb-3 text-body-sm font-semibold text-on-surface">
-            {resolveLabel(group.labelKey)}
-          </h2>
-          <div className="divide-y divide-outline rounded-xl border border-outline bg-surface">
-            {group.items.map((item) => (
-              <SettingRow
-                key={item.id}
-                item={item}
-                form={form}
-                themeMode={themeMode}
-                onThemeModeChange={onThemeModeChange}
-                resolveLabel={resolveLabel}
-              />
-            ))}
-          </div>
-        </section>
-      ))}
+        {/* Settings groups as cards */}
+        {groups.map((group, gi) => (
+          <section key={`${group.labelKey}-${gi}`} className="mb-8">
+            <h2 className="mb-3 text-body-sm font-semibold text-on-surface">
+              {resolveLabel(group.labelKey)}
+            </h2>
+            <div className="overflow-hidden rounded-xl border border-outline bg-surface">
+              {group.items.map((item, idx) => (
+                <div key={item.id} className={cn(idx > 0 && "border-t border-outline")}>
+                  <SettingRow
+                    item={item}
+                    form={form}
+                    themeMode={themeMode}
+                    onThemeModeChange={onThemeModeChange}
+                    resolveLabel={resolveLabel}
+                  />
+                </div>
+              ))}
+            </div>
+          </section>
+        ))}
+      </div>
     </div>
   );
 }
@@ -452,13 +448,13 @@ function SettingRow({
   };
 
   return (
-    <div className="flex items-center justify-between gap-4 px-4 py-3">
+    <div className="flex items-center justify-between gap-6 px-5 py-4">
       <div className="min-w-0 flex-1">
         <div className="text-body-sm font-medium text-on-surface">
           {resolveLabel(item.labelKey)}
         </div>
         {item.descriptionKey && (
-          <div className="mt-0.5 text-caption text-on-surface-variant">
+          <div className="mt-0.5 text-caption leading-relaxed text-on-surface-variant">
             {resolveLabel(item.descriptionKey)}
           </div>
         )}

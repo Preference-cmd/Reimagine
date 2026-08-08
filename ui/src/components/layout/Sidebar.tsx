@@ -5,7 +5,7 @@ import { SidebarFooter } from "./SidebarFooter";
 import { useUIStore } from "@/store/uiStore";
 
 /**
- * Sidebar — Codex-style (200 px) with icon + text navigation.
+ * Sidebar — Codex-style (220 px) with icon + text navigation.
  *
  * Normal mode: Logo + Nav + Footer
  * Settings mode: Full-width settings panel
@@ -16,14 +16,14 @@ export function Sidebar() {
 
   if (isSettings) {
     return (
-      <aside className="sidebar-root flex h-full w-[260px] shrink-0 flex-col border-r border-white/[0.06] bg-[#171717]">
+      <aside className="sidebar-root flex h-full w-[260px] shrink-0 flex-col border-r border-sidebar-border bg-sidebar-bg">
         <SidebarSettingsNav />
       </aside>
     );
   }
 
   return (
-    <aside className="sidebar-root flex h-full w-[200px] shrink-0 flex-col border-r border-white/[0.06] bg-[#171717]">
+    <aside className="sidebar-root flex h-full w-[220px] shrink-0 flex-col border-r border-sidebar-border bg-sidebar-bg">
       <SidebarHeader />
       <SidebarNav />
       <SidebarFooter />

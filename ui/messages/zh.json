@@ -16,6 +16,17 @@
   "sidebar.user": "用户",
   "sidebar.localWorkspace": "本地工作区",
   "sidebar.noRecent": "暂无最近工作流",
+  "sidebar.newTask": "新建任务",
+  "sidebar.pullRequests": "拉取请求",
+  "sidebar.scheduled": "已安排",
+  "sidebar.plugins": "插件",
+  "sidebar.projects": "项目",
+  "sidebar.tasks": "任务",
+  "sidebar.noTasks": "无任务",
+
+  "settings.groupPersonal": "个人",
+  "settings.groupIntegration": "集成",
+  "settings.groupCoding": "编码",
 
   "settings.searchPlaceholder": "搜索设置…",
   "settings.personal": "个人",

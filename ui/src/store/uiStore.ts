@@ -8,7 +8,18 @@ import type { NodeDef } from "@/ipc/schemas";
  * View-only state — deliberately kept out of the workflow (undo) store.
  */
 
-export type SidebarSection = "workflows" | "models" | "runs" | "assets" | "settings" | null;
+export type SidebarSection =
+  | "chat"
+  | "new-task"
+  | "pull-requests"
+  | "scheduled"
+  | "plugins"
+  | "workflows"
+  | "models"
+  | "runs"
+  | "assets"
+  | "settings"
+  | null;
 
 export type PaletteMode =
   | { kind: "closed" }
@@ -40,6 +51,16 @@ type UIState = {
   activeSidebarSection: SidebarSection;
   setActiveSidebarSection: (section: SidebarSection) => void;
 
+  // ── Sidebar projects ────────────────────────────────────
+  projectsExpanded: boolean;
+  setProjectsExpanded: (expanded: boolean) => void;
+  activeProjectId: string | null;
+  setActiveProjectId: (id: string | null) => void;
+
+  // ── Sidebar progress ────────────────────────────────────
+  sidebarProgress: number;
+  setSidebarProgress: (progress: number) => void;
+
   // ── Properties drawer ───────────────────────────────────
   propertiesDrawerOpen: boolean;
   setPropertiesDrawerOpen: (open: boolean) => void;
@@ -69,8 +90,18 @@ export const useUIStore = create<UIState>()((set) => ({
   // Sidebar
   sidebarCollapsed: false,
   toggleSidebar: () => set((state) => ({ sidebarCollapsed: !state.sidebarCollapsed })),
-  activeSidebarSection: "workflows",
+  activeSidebarSection: "chat" as SidebarSection,
   setActiveSidebarSection: (section) => set({ activeSidebarSection: section }),
+
+  // Sidebar projects
+  projectsExpanded: true,
+  setProjectsExpanded: (expanded) => set({ projectsExpanded: expanded }),
+  activeProjectId: null,
+  setActiveProjectId: (id) => set({ activeProjectId: id }),
+
+  // Sidebar progress
+  sidebarProgress: 0,
+  setSidebarProgress: (progress) => set({ sidebarProgress: progress }),
 
   // Properties drawer
   propertiesDrawerOpen: false,
