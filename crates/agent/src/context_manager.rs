@@ -13,7 +13,52 @@
 
 use std::path::PathBuf;
 
+use serde::{Deserialize, Serialize};
+
 use crate::provider::Message;
+
+/// Serialized snapshot of a session's context written by
+/// [`ContextManager::persist`] and read back by
+/// [`ContextManager::load`].
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+struct PersistedSession {
+    session_id: String,
+    created_at: String,
+    history: Vec<Message>,
+    compaction_summary: Option<String>,
+    total_tokens: usize,
+}
+
+/// Persistence failure returned by [`ContextManager::persist`] and
+/// [`ContextManager::load`].
+#[derive(Debug)]
+pub enum ContextError {
+    Io(std::io::Error),
+    Json(serde_json::Error),
+    NotFound(String),
+}
+
+impl std::fmt::Display for ContextError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::Io(err) => write!(f, "context persistence io error: {err}"),
+            Self::Json(err) => write!(f, "context persistence json error: {err}"),
+            Self::NotFound(session_id) => {
+                write!(f, "no persisted context for session {session_id:?}")
+            }
+        }
+    }
+}
+
+impl std::error::Error for ContextError {
+    fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
+        match self {
+            Self::Io(err) => Some(err),
+            Self::Json(err) => Some(err),
+            Self::NotFound(_) => None,
+        }
+    }
+}
 
 /// Rolling-window context configuration.
 pub struct ContextConfig {
@@ -76,6 +121,51 @@ impl ContextManager {
     pub fn needs_compaction(&self) -> bool {
         self.token_count() > self.config.max_tokens
     }
+
+    /// Persist this session's context to
+    /// `{session_dir}/{session_id}.json`, creating the session
+    /// directory if it does not exist.
+    pub fn persist(&self, session_id: &str) -> Result<(), ContextError> {
+        let state = PersistedSession {
+            session_id: session_id.to_owned(),
+            created_at: created_at(),
+            history: self.history.clone(),
+            compaction_summary: None,
+            total_tokens: self.token_count(),
+        };
+        std::fs::create_dir_all(&self.config.session_dir).map_err(ContextError::Io)?;
+        let path = self.config.session_dir.join(format!("{session_id}.json"));
+        let json = serde_json::to_string_pretty(&state).map_err(ContextError::Json)?;
+        std::fs::write(path, json).map_err(ContextError::Io)
+    }
+
+    /// Load a session's context previously written by
+    /// [`ContextManager::persist`]. The returned manager uses `config`
+    /// for the window and token threshold; only the history is restored.
+    pub fn load(session_id: &str, config: ContextConfig) -> Result<Self, ContextError> {
+        let path = config.session_dir.join(format!("{session_id}.json"));
+        let json = std::fs::read(&path).map_err(|err| {
+            if err.kind() == std::io::ErrorKind::NotFound {
+                ContextError::NotFound(session_id.to_owned())
+            } else {
+                ContextError::Io(err)
+            }
+        })?;
+        let state: PersistedSession = serde_json::from_slice(&json).map_err(ContextError::Json)?;
+        Ok(Self {
+            config,
+            history: state.history,
+        })
+    }
+}
+
+/// Unix epoch seconds used as the `created_at` persisted field.
+fn created_at() -> String {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .expect("system clock before unix epoch")
+        .as_secs()
+        .to_string()
 }
 
 /// Estimate the token count of `text`.
@@ -93,6 +183,9 @@ pub(crate) fn estimate_tokens(text: &str) -> usize {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use serde_json::json;
+
+    use crate::provider::{ToolCall, ToolCallId};
 
     fn config(recent_turns: usize) -> ContextConfig {
         ContextConfig {
@@ -218,5 +311,94 @@ mod tests {
     #[test]
     fn arabic_counts_as_other() {
         assert_eq!(estimate_tokens("مرحبا بالعالم"), 7);
+    }
+
+    fn temp_session_dir(prefix: &str) -> PathBuf {
+        let nonce = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .expect("system clock before unix epoch")
+            .as_nanos();
+        std::env::temp_dir().join(format!("reimagine-agent-context-{prefix}-{nonce}"))
+    }
+
+    #[test]
+    fn persist_load_round_trips_history() {
+        let dir = temp_session_dir("round-trip");
+        let cfg = ContextConfig {
+            max_tokens: 10_000,
+            recent_turns: 2,
+            session_dir: dir.clone(),
+        };
+        let mut manager = ContextManager::new(cfg);
+        manager.commit_turn(&[
+            Message::user("u1"),
+            Message::assistant("a1"),
+            Message::user("u2"),
+            Message::assistant_with_tool_calls(
+                "",
+                vec![ToolCall::new(
+                    ToolCallId::new("c1"),
+                    "echo",
+                    json!({"x": 1}),
+                )],
+            ),
+        ]);
+        manager.persist("sess-1").expect("persist failed");
+
+        let loaded = ContextManager::load(
+            "sess-1",
+            ContextConfig {
+                max_tokens: 10_000,
+                recent_turns: 2,
+                session_dir: dir,
+            },
+        )
+        .expect("load failed");
+        assert_eq!(loaded.token_count(), manager.token_count());
+        assert_eq!(loaded.history, manager.history);
+    }
+
+    #[test]
+    fn persist_creates_session_dir() {
+        let dir = temp_session_dir("mkdir");
+        let manager = ContextManager::new(ContextConfig {
+            max_tokens: 10_000,
+            recent_turns: 2,
+            session_dir: dir.clone(),
+        });
+        manager.persist("sess-1").expect("persist failed");
+        assert!(dir.join("sess-1.json").is_file());
+    }
+
+    #[test]
+    fn load_missing_session_returns_err() {
+        let dir = temp_session_dir("missing");
+        let result = ContextManager::load(
+            "nope",
+            ContextConfig {
+                max_tokens: 10_000,
+                recent_turns: 2,
+                session_dir: dir,
+            },
+        );
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn persist_writes_compaction_summary_none() {
+        let dir = temp_session_dir("summary");
+        let manager = ContextManager::new(ContextConfig {
+            max_tokens: 10_000,
+            recent_turns: 2,
+            session_dir: dir.clone(),
+        });
+        manager.persist("sess-1").expect("persist failed");
+
+        let json = std::fs::read_to_string(dir.join("sess-1.json")).expect("read failed");
+        let state: serde_json::Value = serde_json::from_str(&json).expect("json parse failed");
+        assert_eq!(state["session_id"], "sess-1");
+        assert_eq!(state["history"], serde_json::Value::Array(vec![]));
+        assert!(state["compaction_summary"].is_null());
+        assert_eq!(state["total_tokens"], 0);
     }
 }
