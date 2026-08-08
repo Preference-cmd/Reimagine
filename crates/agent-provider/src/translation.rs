@@ -8,5 +8,6 @@
 pub mod listing;
 pub mod request;
 pub mod response;
+pub mod sse_parser;
 pub mod streaming;
 pub mod tools;

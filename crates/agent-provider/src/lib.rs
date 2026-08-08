@@ -28,6 +28,7 @@ pub use reqwest_backend::{
     ReqwestBackend, arc_real_anthropic_backend, arc_real_anthropic_backend_with_http_client,
     arc_real_backend, arc_real_backend_with_http_client,
 };
+pub use translation::sse_parser::{SseEvent, SseParser};
 
 use std::sync::Arc;
 

@@ -58,6 +58,20 @@ impl ProviderAdapterError {
         Self::StreamingUnsupported
     }
 
+    /// Returns `true` if this error is transient and may succeed on retry.
+    pub fn is_retryable(&self) -> bool {
+        match self {
+            Self::Transport(_) => true,
+            Self::Api { code, .. } => {
+                // 429 (rate limit) and 5xx (server error) are retryable.
+                code.parse::<u16>()
+                    .map(|c| c == 429 || (500..600).contains(&c))
+                    .unwrap_or(false)
+            }
+            _ => false,
+        }
+    }
+
     /// Convert into the Reimagine-owned `ProviderError`. `provider` is
     /// attached when known so diagnostics carry it.
     pub fn to_provider_error(&self, provider: Option<ProviderName>) -> ProviderError {
