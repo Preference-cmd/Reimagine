@@ -217,6 +217,6 @@ impl AgentService {
             turn_request = turn_request.with_max_tool_steps(max_tool_steps);
         }
         let loop_harness = AgentLoop::new(provider, Arc::clone(&self.event_sink));
-        Ok(loop_harness.run_turn(turn_request).await)
+        Ok(loop_harness.run_turn_streaming(turn_request).await)
     }
 }

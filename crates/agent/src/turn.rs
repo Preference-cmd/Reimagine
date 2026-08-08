@@ -10,8 +10,11 @@
 //! keeps the lifecycle model easy to unit-test and easy to reuse from
 //! `app-host`, future Axum adapters, and tests.
 
+use std::time::Duration;
+
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
+use tokio_util::sync::CancellationToken;
 
 use crate::error::ToolError;
 use crate::ids::{AgentSessionId, ModelName, ProviderName, ToolName};
@@ -287,6 +290,12 @@ pub struct AgentTurnRequest {
     model: ModelName,
     input: Vec<Message>,
     max_tool_steps: usize,
+    /// Cancellation token. When cancelled, the loop stops at the next
+    /// check point and returns `AgentTurnStopReason::Cancelled`.
+    cancel_token: CancellationToken,
+    /// Optional overall turn timeout. If the turn does not complete
+    /// within this duration, it stops with `ProviderError`.
+    turn_timeout: Option<Duration>,
 }
 
 impl AgentTurnRequest {
@@ -304,12 +313,27 @@ impl AgentTurnRequest {
             model,
             input,
             max_tool_steps: 0,
+            cancel_token: CancellationToken::new(),
+            turn_timeout: None,
         }
     }
 
     /// Override the max-tool-step guard. `0` falls back to the default.
     pub fn with_max_tool_steps(mut self, max_tool_steps: usize) -> Self {
         self.max_tool_steps = max_tool_steps;
+        self
+    }
+
+    /// Set the cancellation token for this turn.
+    pub fn with_cancel_token(mut self, cancel_token: CancellationToken) -> Self {
+        self.cancel_token = cancel_token;
+        self
+    }
+
+    /// Set an overall turn timeout. The turn will stop with
+    /// `ProviderError` if it does not complete within this duration.
+    pub fn with_turn_timeout(mut self, timeout: Duration) -> Self {
+        self.turn_timeout = Some(timeout);
         self
     }
 
@@ -327,6 +351,14 @@ impl AgentTurnRequest {
 
     pub fn input(&self) -> &[Message] {
         &self.input
+    }
+
+    pub fn cancel_token(&self) -> &CancellationToken {
+        &self.cancel_token
+    }
+
+    pub fn turn_timeout(&self) -> Option<Duration> {
+        self.turn_timeout
     }
 
     /// Effective max-tool-step guard. Falls back to

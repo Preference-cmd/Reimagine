@@ -204,6 +204,19 @@ impl DomainEventAdapter<AgentEvent> for AgentDomainEventAdapter {
                 );
                 EventReport::with_event(ev)
             }
+            AgentEvent::ContentDelta {
+                session_id, text, ..
+            } => {
+                let _ = text; // Delta text is not stored in the domain event;
+                              // the UI reads it from the stream directly.
+                let ev = Self::build_event(
+                    "agent.content_delta",
+                    source_name,
+                    Self::subject_session(session_id.as_str()),
+                    correlation_id.as_ref(),
+                );
+                EventReport::with_event(ev)
+            }
         }
     }
 }

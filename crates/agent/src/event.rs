@@ -56,6 +56,12 @@ pub enum AgentEvent {
         session_id: AgentSessionId,
         proposal_id: String,
     },
+    /// A streaming text delta from the provider. Emitted during
+    /// `run_turn_streaming` as the model generates tokens.
+    ContentDelta {
+        session_id: AgentSessionId,
+        text: String,
+    },
 }
 
 impl AgentEvent {
@@ -69,7 +75,8 @@ impl AgentEvent {
             | Self::ToolCompleted { session_id, .. }
             | Self::ToolFailed { session_id, .. }
             | Self::ProviderError { session_id, .. }
-            | Self::ProposalReady { session_id, .. } => session_id,
+            | Self::ProposalReady { session_id, .. }
+            | Self::ContentDelta { session_id, .. } => session_id,
         }
     }
 }

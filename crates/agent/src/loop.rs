@@ -171,8 +171,31 @@ impl AgentLoop {
 
         let max_tool_steps = request.max_tool_steps();
         let mut tool_steps_taken: usize = 0;
+        let turn_start = std::time::Instant::now();
 
         loop {
+            // Check cancellation before each provider round.
+            if request.cancel_token().is_cancelled() {
+                result = result
+                    .with_stop_reason(AgentTurnStopReason::Cancelled)
+                    .with_status(AgentTurnStatus::Stopped)
+                    .with_messages(messages.clone());
+                commit_session_history(request.session(), &messages, pre_run_len);
+                return result;
+            }
+
+            // Check turn timeout.
+            if let Some(timeout_dur) = request.turn_timeout() {
+                if turn_start.elapsed() >= timeout_dur {
+                    result = result
+                        .with_stop_reason(AgentTurnStopReason::ProviderError)
+                        .with_status(AgentTurnStatus::Stopped)
+                        .with_messages(messages.clone());
+                    commit_session_history(request.session(), &messages, pre_run_len);
+                    return result;
+                }
+            }
+
             let provider_request = AgentRequest::new(request.model().clone(), messages.clone())
                 .with_tools(tool_defs.clone());
 
@@ -249,6 +272,208 @@ impl AgentLoop {
                 if tool_steps_taken >= max_tool_steps {
                     result = result
                         .with_stop_reason(AgentTurnStopReason::MaxToolStepsExceeded)
+                        .with_status(AgentTurnStatus::Stopped)
+                        .with_messages(messages.clone());
+                    commit_session_history(request.session(), &messages, pre_run_len);
+                    return result;
+                }
+                // Check cancellation before each tool execution.
+                if request.cancel_token().is_cancelled() {
+                    result = result
+                        .with_stop_reason(AgentTurnStopReason::Cancelled)
+                        .with_status(AgentTurnStatus::Stopped)
+                        .with_messages(messages.clone());
+                    commit_session_history(request.session(), &messages, pre_run_len);
+                    return result;
+                }
+                tool_steps_taken += 1;
+                let tool_name = ToolName::new(tool_call.name());
+
+                self.sink.handle(&AgentEvent::ToolInvoked {
+                    session_id: request.session().id().clone(),
+                    tool: tool_name.clone(),
+                    id: Some(tool_call.id().clone()),
+                });
+
+                let tool_context = ToolContext::new(
+                    request.session().workspace_scope().clone(),
+                    request.session().id().clone(),
+                    request.session().mode(),
+                )
+                .with_permissions(request.session().permissions().clone());
+
+                let tool_result = self
+                    .execute_tool(&registry, &tool_name, tool_call, &tool_context)
+                    .await;
+
+                let observation_content = tool_observation_text(&tool_result);
+                result.push_tool_call(tool_result);
+                messages.push(Message::tool_result(
+                    tool_call.id().clone(),
+                    observation_content,
+                ));
+            }
+        }
+    }
+
+    /// Run a single turn using streaming. Like [`run_turn`](Self::run_turn)
+    /// but calls `provider.stream()` instead of `provider.complete()`,
+    /// forwarding `ContentDelta` events through the event sink as the
+    /// model generates tokens.
+    ///
+    /// Tool calls are still executed sequentially after the stream
+    /// completes (the model must finish generating all tool calls before
+    /// the stream ends). The loop then re-enters the stream for the next
+    /// round if tool calls were present.
+    pub async fn run_turn_streaming(&self, request: AgentTurnRequest) -> AgentTurnResult {
+        let mut result = AgentTurnResult::new()
+            .with_turn_id(request.turn_id().clone())
+            .with_session_id(request.session().id().clone())
+            .with_mode(request.session().mode())
+            .with_provider(request.session().provider().clone())
+            .with_model(request.model().clone())
+            .with_status(AgentTurnStatus::Running);
+
+        let registry = request.session().registry().clone();
+        let prior_history = request.session().history();
+        let pre_run_len = prior_history.len();
+        let mut messages: Vec<Message> = prior_history
+            .iter()
+            .cloned()
+            .chain(request.input().iter().cloned())
+            .collect();
+        let tool_defs = build_tool_definitions(&registry, request.session().mode());
+
+        let max_tool_steps = request.max_tool_steps();
+        let mut tool_steps_taken: usize = 0;
+        let turn_start = std::time::Instant::now();
+
+        loop {
+            // Check cancellation before each provider round.
+            if request.cancel_token().is_cancelled() {
+                result = result
+                    .with_stop_reason(AgentTurnStopReason::Cancelled)
+                    .with_status(AgentTurnStatus::Stopped)
+                    .with_messages(messages.clone());
+                commit_session_history(request.session(), &messages, pre_run_len);
+                return result;
+            }
+
+            // Check turn timeout.
+            if let Some(timeout_dur) = request.turn_timeout() {
+                if turn_start.elapsed() >= timeout_dur {
+                    result = result
+                        .with_stop_reason(AgentTurnStopReason::ProviderError)
+                        .with_status(AgentTurnStatus::Stopped)
+                        .with_messages(messages.clone());
+                    commit_session_history(request.session(), &messages, pre_run_len);
+                    return result;
+                }
+            }
+
+            let provider_request = AgentRequest::new(request.model().clone(), messages.clone())
+                .with_tools(tool_defs.clone());
+
+            // Open a stream from the provider.
+            let mut stream = match self.provider.stream(provider_request).await {
+                Ok(s) => s,
+                Err(err) => {
+                    let provider_name = request.session().provider().clone();
+                    result.push_diagnostic(err.to_diagnostic(None));
+                    self.sink.handle(&AgentEvent::ProviderError {
+                        session_id: request.session().id().clone(),
+                        provider: provider_name,
+                        code: err.code().to_string(),
+                        message: err.message().to_string(),
+                    });
+                    result = result
+                        .with_stop_reason(AgentTurnStopReason::ProviderError)
+                        .with_status(AgentTurnStatus::Stopped)
+                        .with_messages(messages.clone());
+                    commit_session_history(request.session(), &messages, pre_run_len);
+                    return result;
+                }
+            };
+
+            // Consume the stream, collecting text and tool calls.
+            let mut content_text = String::new();
+            let mut pending_tool_calls: Vec<crate::provider::ToolCall> = Vec::new();
+
+            while let Some(event) = stream.next_event().await {
+                match event {
+                    crate::provider::AgentStreamEvent::ContentDelta(text) => {
+                        content_text.push_str(&text);
+                        self.sink.handle(&AgentEvent::ContentDelta {
+                            session_id: request.session().id().clone(),
+                            text: text.clone(),
+                        });
+                    }
+                    crate::provider::AgentStreamEvent::ToolCall(tc) => {
+                        pending_tool_calls.push(tc);
+                    }
+                    crate::provider::AgentStreamEvent::Usage(u) => {
+                        result = result.with_usage(u);
+                    }
+                    crate::provider::AgentStreamEvent::Done { stop_reason } => {
+                        if let Some(reason) = stop_reason {
+                            result = result.with_stop_reason(
+                                crate::turn::AgentTurnStopReason::ProviderError,
+                            );
+                            let _ = reason;
+                        }
+                        break;
+                    }
+                    // ToolCallDelta is informational; we only act on ToolCall (complete).
+                    crate::provider::AgentStreamEvent::ToolCallDelta { .. } => {}
+                }
+            }
+
+            // Build the assistant message from accumulated content + tool calls.
+            let has_tool_calls = !pending_tool_calls.is_empty();
+            let assistant = if has_tool_calls {
+                Message::assistant_with_tool_calls(&content_text, pending_tool_calls)
+            } else {
+                Message::assistant(&content_text)
+            };
+
+            // No tool calls → final response.
+            if !has_tool_calls {
+                messages.push(assistant.clone());
+                result = result
+                    .with_final_response(assistant)
+                    .with_stop_reason(AgentTurnStopReason::FinalResponse)
+                    .with_status(AgentTurnStatus::Completed)
+                    .with_messages(messages.clone());
+                commit_session_history(request.session(), &messages, pre_run_len);
+                return result;
+            }
+
+            // Max-tool-step guard.
+            if tool_steps_taken >= max_tool_steps {
+                result = result
+                    .with_stop_reason(AgentTurnStopReason::MaxToolStepsExceeded)
+                    .with_status(AgentTurnStatus::Stopped)
+                    .with_messages(messages.clone());
+                commit_session_history(request.session(), &messages, pre_run_len);
+                return result;
+            }
+
+            messages.push(assistant.clone());
+
+            // Execute the requested tool calls sequentially.
+            for tool_call in assistant.tool_calls() {
+                if tool_steps_taken >= max_tool_steps {
+                    result = result
+                        .with_stop_reason(AgentTurnStopReason::MaxToolStepsExceeded)
+                        .with_status(AgentTurnStatus::Stopped)
+                        .with_messages(messages.clone());
+                    commit_session_history(request.session(), &messages, pre_run_len);
+                    return result;
+                }
+                // Check cancellation before each tool execution.
+                if request.cancel_token().is_cancelled() {
+                    result = result
+                        .with_stop_reason(AgentTurnStopReason::Cancelled)
                         .with_status(AgentTurnStatus::Stopped)
                         .with_messages(messages.clone());
                     commit_session_history(request.session(), &messages, pre_run_len);
@@ -1497,5 +1722,257 @@ mod tests {
         assert_eq!(history.len(), 1);
         assert_eq!(history[0].role(), "user");
         assert_eq!(history[0].content(), "hi");
+    }
+
+    // ------------------------------------------------------------------
+    // Streaming tests
+    // ------------------------------------------------------------------
+
+    /// An in-memory stream that yields pre-scripted events.
+    struct MockStream {
+        events: Vec<crate::provider::AgentStreamEvent>,
+    }
+
+    #[async_trait]
+    impl crate::provider::AgentStream for MockStream {
+        async fn next_event(&mut self) -> Option<crate::provider::AgentStreamEvent> {
+            if self.events.is_empty() {
+                None
+            } else {
+                Some(self.events.remove(0))
+            }
+        }
+    }
+
+    /// A provider that returns scripted streams from `stream()`.
+    struct StreamingProvider {
+        name: ProviderName,
+        streams: Mutex<VecDeque<Vec<crate::provider::AgentStreamEvent>>>,
+    }
+
+    impl StreamingProvider {
+        fn new(name: &str, streams: Vec<Vec<crate::provider::AgentStreamEvent>>) -> Self {
+            Self {
+                name: ProviderName::new(name),
+                streams: Mutex::new(streams.into()),
+            }
+        }
+    }
+
+    #[async_trait]
+    impl AgentProvider for StreamingProvider {
+        fn name(&self) -> ProviderName {
+            self.name.clone()
+        }
+
+        async fn complete(
+            &self,
+            _request: AgentRequest,
+        ) -> Result<AgentResponse, ProviderError> {
+            Err(ProviderError::new(
+                "streaming_only",
+                "this provider only supports streaming",
+            )
+            .with_provider(self.name.clone()))
+        }
+
+        async fn stream(
+            &self,
+            _request: AgentRequest,
+        ) -> Result<Box<dyn crate::provider::AgentStream>, ProviderError> {
+            let events = self
+                .streams
+                .lock()
+                .unwrap()
+                .pop_front()
+                .unwrap_or_default();
+            Ok(Box::new(MockStream { events }))
+        }
+
+        async fn list_models(&self) -> Result<Vec<ModelInfo>, ProviderError> {
+            Ok(Vec::new())
+        }
+    }
+
+    #[tokio::test]
+    async fn run_turn_streaming_final_response() {
+        use crate::provider::AgentStreamEvent;
+
+        let provider = Arc::new(StreamingProvider::new(
+            "mock",
+            vec![vec![
+                AgentStreamEvent::ContentDelta("hello".into()),
+                AgentStreamEvent::ContentDelta(" world".into()),
+                AgentStreamEvent::Done {
+                    stop_reason: Some("stop".into()),
+                },
+            ]],
+        ));
+        let sink = Arc::new(VecAgentEventSink::new());
+        let loop_harness = AgentLoop::new(provider, sink.clone());
+
+        let req = AgentTurnRequest::new(
+            make_session(AgentToolRegistry::new()),
+            AgentTurnId::new("stream-1"),
+            ModelName::new("test-model"),
+            vec![Message::user("hi")],
+        );
+
+        let result = loop_harness.run_turn_streaming(req).await;
+        assert_eq!(result.status(), AgentTurnStatus::Completed);
+        assert_eq!(result.stop_reason(), AgentTurnStopReason::FinalResponse);
+        let final_text = result.final_response().unwrap().content();
+        assert_eq!(final_text, "hello world");
+
+        // Verify ContentDelta events were emitted.
+        let events = sink.events();
+        let deltas: Vec<&str> = events
+            .iter()
+            .filter_map(|e| match e {
+                AgentEvent::ContentDelta { text, .. } => Some(text.as_str()),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(deltas, vec!["hello", " world"]);
+    }
+
+    #[tokio::test]
+    async fn run_turn_streaming_with_tool_call() {
+        use crate::provider::AgentStreamEvent;
+
+        let tool_call = ToolCall::new(ToolCallId::new("c1"), "echo", json!({"x": 1}));
+
+        let provider = Arc::new(StreamingProvider::new(
+            "mock",
+            vec![
+                // First stream: text + tool call
+                vec![
+                    AgentStreamEvent::ContentDelta("thinking...".into()),
+                    AgentStreamEvent::ToolCall(tool_call),
+                    AgentStreamEvent::Done {
+                        stop_reason: Some("tool_calls".into()),
+                    },
+                ],
+                // Second stream: final response after tool execution
+                vec![
+                    AgentStreamEvent::ContentDelta("done".into()),
+                    AgentStreamEvent::Done {
+                        stop_reason: Some("stop".into()),
+                    },
+                ],
+            ],
+        ));
+        let sink = Arc::new(VecAgentEventSink::new());
+        let loop_harness = AgentLoop::new(provider, sink.clone());
+
+        let req = AgentTurnRequest::new(
+            session_with(|reg| {
+                reg.register(ScriptedTool::success(
+                    "echo",
+                    vec![json!({"ok": true})],
+                ))
+                .unwrap();
+            }),
+            AgentTurnId::new("stream-2"),
+            ModelName::new("test-model"),
+            vec![Message::user("hi")],
+        );
+
+        let result = loop_harness.run_turn_streaming(req).await;
+        assert_eq!(result.status(), AgentTurnStatus::Completed);
+        assert_eq!(result.tool_calls().len(), 1);
+        assert_eq!(result.tool_calls()[0].tool_name().as_str(), "echo");
+        assert_eq!(result.tool_calls()[0].status(), ToolCallStatus::Succeeded);
+
+        // Final response should be "done".
+        let final_text = result.final_response().unwrap().content();
+        assert_eq!(final_text, "done");
+
+        // Should have ContentDelta events for both rounds.
+        let events = sink.events();
+        let delta_count = events
+            .iter()
+            .filter(|e| matches!(e, AgentEvent::ContentDelta { .. }))
+            .count();
+        assert_eq!(delta_count, 2); // "thinking..." + "done"
+    }
+
+    #[tokio::test]
+    async fn run_turn_streaming_empty_stream() {
+        let provider = Arc::new(StreamingProvider::new("mock", vec![]));
+        let sink = Arc::new(VecAgentEventSink::new());
+        let loop_harness = AgentLoop::new(provider, sink.clone());
+
+        let req = AgentTurnRequest::new(
+            make_session(AgentToolRegistry::new()),
+            AgentTurnId::new("stream-empty"),
+            ModelName::new("test-model"),
+            vec![Message::user("hi")],
+        );
+
+        let result = loop_harness.run_turn_streaming(req).await;
+        // Empty stream → no content, no tool calls → completed with empty final response.
+        assert_eq!(result.status(), AgentTurnStatus::Completed);
+        assert_eq!(result.stop_reason(), AgentTurnStopReason::FinalResponse);
+    }
+
+    // ------------------------------------------------------------------
+    // Cancellation tests
+    // ------------------------------------------------------------------
+
+    #[tokio::test]
+    async fn run_turn_cancelled_before_first_provider_call() {
+        use tokio_util::sync::CancellationToken;
+
+        let provider = Arc::new(ScriptedProvider::new(
+            "mock",
+            vec![ScriptedStep::Respond(response_with_text("too late"))],
+        ));
+        let sink = Arc::new(VecAgentEventSink::new());
+        let loop_harness = AgentLoop::new(provider.clone(), sink);
+
+        let cancel_token = CancellationToken::new();
+        cancel_token.cancel(); // Cancel immediately.
+
+        let req = AgentTurnRequest::new(
+            make_session(AgentToolRegistry::new()),
+            AgentTurnId::new("cancel-1"),
+            ModelName::new("test-model"),
+            vec![Message::user("hi")],
+        )
+        .with_cancel_token(cancel_token);
+
+        let result = loop_harness.run_turn(req).await;
+        assert_eq!(result.status(), AgentTurnStatus::Stopped);
+        assert_eq!(result.stop_reason(), AgentTurnStopReason::Cancelled);
+        // Provider should NOT have been called.
+        assert_eq!(provider.call_count(), 0);
+    }
+
+    #[tokio::test]
+    async fn run_turn_streaming_cancelled_before_first_provider_call() {
+        use tokio_util::sync::CancellationToken;
+
+        let provider = Arc::new(StreamingProvider::new(
+            "mock",
+            vec![vec![AgentStreamEvent::ContentDelta("too late".into())]],
+        ));
+        let sink = Arc::new(VecAgentEventSink::new());
+        let loop_harness = AgentLoop::new(provider, sink);
+
+        let cancel_token = CancellationToken::new();
+        cancel_token.cancel();
+
+        let req = AgentTurnRequest::new(
+            make_session(AgentToolRegistry::new()),
+            AgentTurnId::new("cancel-2"),
+            ModelName::new("test-model"),
+            vec![Message::user("hi")],
+        )
+        .with_cancel_token(cancel_token);
+
+        let result = loop_harness.run_turn_streaming(req).await;
+        assert_eq!(result.status(), AgentTurnStatus::Stopped);
+        assert_eq!(result.stop_reason(), AgentTurnStopReason::Cancelled);
     }
 }

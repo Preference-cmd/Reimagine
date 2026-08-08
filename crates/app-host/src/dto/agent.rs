@@ -201,6 +201,16 @@ impl From<&AgentEvent> for AgentEventPayload {
                 code: None,
                 message: Some(format!("proposal_id={proposal_id}")),
             },
+            AgentEvent::ContentDelta {
+                session_id, text, ..
+            } => Self {
+                session_id: session_id.to_string(),
+                kind: "content_delta".to_string(),
+                tool_name: None,
+                tool_call_id: None,
+                code: None,
+                message: Some(text.clone()),
+            },
         }
     }
 }
