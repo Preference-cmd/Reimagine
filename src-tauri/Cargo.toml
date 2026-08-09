@@ -21,6 +21,7 @@ tauri-build = { workspace = true }
 
 [dependencies]
 reimagine-agent = { path = "../crates/agent" }
+reimagine-agent-daemon = { path = "../crates/agent-daemon" }
 reimagine-app-host = { path = "../crates/app-host" }
 reimagine-config = { path = "../crates/config" }
 reimagine-core = { path = "../crates/core" }
@@ -32,5 +33,16 @@ tauri = { workspace = true }
 tauri-plugin-opener = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }
-tokio = { workspace = true, features = ["fs", "time"] }
+tokio = { workspace = true, features = ["fs", "io-util", "macros", "process", "rt", "rt-multi-thread", "sync", "time"] }
 opener = "0.7"
+
+[dev-dependencies]
+tempfile = { workspace = true }
+
+# Scripted mock daemon used by the agent bridge tests. Compiled as a
+# plain binary (no test harness) so the bridge test can spawn it as a
+# child process.
+[[test]]
+name = "mock_daemon"
+path = "tests/mock_daemon.rs"
+harness = false
