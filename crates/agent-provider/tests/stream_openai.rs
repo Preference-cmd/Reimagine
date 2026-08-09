@@ -3,8 +3,8 @@ use reimagine_agent::{
 };
 use reimagine_agent_provider::translation::streaming::OpenAiStreamAccumulator;
 use reimagine_agent_provider::{
-    CompletionBackend, FakeCompletionBackend, OpenAiCompatibleConfig, OpenAiCompatibleProvider,
-    ScriptedBackendStep,
+    CompletionBackend, FakeCompletionBackend, OpenAiChatCompletionsConfig,
+    OpenAiChatCompletionsProvider, ScriptedBackendStep,
 };
 use serde_json::json;
 use std::sync::Arc;
@@ -16,9 +16,9 @@ async fn openai_adapter_complete_returns_response_and_maps_error() {
             AgentResponse::new(Message::assistant("hi back")).with_stop_reason("stop")
         )),
     ]));
-    let provider = OpenAiCompatibleProvider::with_backend(
+    let provider = OpenAiChatCompletionsProvider::with_backend(
         ProviderName::new("openai"),
-        OpenAiCompatibleConfig::new("https://api.example.com/v1", "sk", "gpt-4o-mini"),
+        OpenAiChatCompletionsConfig::new("https://api.example.com/v1", "sk", "gpt-4o-mini"),
         backend,
     );
     let req = AgentRequest::new(ModelName::new("gpt-4o-mini"), vec![Message::user("hi")]);
@@ -34,9 +34,9 @@ async fn openai_adapter_complete_maps_backend_error_to_provider_error() {
             reimagine_agent_provider::ProviderAdapterError::transport("connection refused"),
         )),
     ]));
-    let provider = OpenAiCompatibleProvider::with_backend(
+    let provider = OpenAiChatCompletionsProvider::with_backend(
         ProviderName::new("openai"),
-        OpenAiCompatibleConfig::new("https://api.example.com/v1", "sk", "gpt-4o-mini"),
+        OpenAiChatCompletionsConfig::new("https://api.example.com/v1", "sk", "gpt-4o-mini"),
         backend,
     );
     let req = AgentRequest::new(ModelName::new("gpt-4o-mini"), vec![Message::user("hi")]);

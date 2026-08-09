@@ -29,7 +29,7 @@ fn serialization_error_carries_message() {
 #[test]
 fn configuration_error_carries_message() {
     let e = ProviderAdapterError::configuration("missing api_key");
-    let mapped: ProviderError = e.to_provider_error(Some(ProviderName::new("anthropic")));
+    let mapped: ProviderError = e.to_provider_error(Some(ProviderName::new("anthropic_messages")));
     assert_eq!(mapped.code(), "CONFIGURATION");
     assert_eq!(mapped.message(), "missing api_key");
 }
@@ -42,21 +42,21 @@ fn streaming_unsupported_carries_distinct_code() {
 }
 
 #[test]
-fn missing_config_carries_provider_name_and_kind() {
+fn missing_config_carries_provider_name_and_protocol() {
     let e = ProviderAdapterError::MissingConfig {
         provider: "broken".into(),
-        kind: reimagine_agent_provider::ProviderKind::Anthropic,
+        protocol: reimagine_agent_provider::Protocol::AnthropicMessages,
     };
     let s = format!("{e}");
     assert!(s.contains("broken"));
-    assert!(s.contains("anthropic"));
+    assert!(s.contains("anthropic_messages"));
 }
 
 #[test]
 fn missing_config_maps_to_configuration_error() {
     let e = ProviderAdapterError::MissingConfig {
         provider: "broken".into(),
-        kind: reimagine_agent_provider::ProviderKind::Anthropic,
+        protocol: reimagine_agent_provider::Protocol::AnthropicMessages,
     };
     let mapped: ProviderError = e.to_provider_error(None);
     assert_eq!(mapped.code(), "CONFIGURATION");

@@ -17,18 +17,18 @@ use reimagine_agent::{
 };
 
 use crate::backend::CompletionBackend;
-use crate::config::OpenAiCompatibleConfig;
+use crate::config::OpenAiChatCompletionsConfig;
 
 /// V1 adapter for OpenAI-compatible chat completion APIs.
-pub struct OpenAiCompatibleProvider {
+pub struct OpenAiChatCompletionsProvider {
     name: ProviderName,
-    config: OpenAiCompatibleConfig,
+    config: OpenAiChatCompletionsConfig,
     backend: Arc<dyn CompletionBackend>,
 }
 
-impl std::fmt::Debug for OpenAiCompatibleProvider {
+impl std::fmt::Debug for OpenAiChatCompletionsProvider {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.debug_struct("OpenAiCompatibleProvider")
+        f.debug_struct("OpenAiChatCompletionsProvider")
             .field("name", &self.name)
             .field("base_url", &self.config.base_url())
             .field("default_model", &self.config.default_model())
@@ -36,12 +36,12 @@ impl std::fmt::Debug for OpenAiCompatibleProvider {
     }
 }
 
-impl OpenAiCompatibleProvider {
+impl OpenAiChatCompletionsProvider {
     /// Construct with a custom backend (used by tests and by app-host
     /// to inject a real backend).
     pub fn with_backend(
         name: ProviderName,
-        config: OpenAiCompatibleConfig,
+        config: OpenAiChatCompletionsConfig,
         backend: Arc<dyn CompletionBackend>,
     ) -> Self {
         Self {
@@ -54,21 +54,21 @@ impl OpenAiCompatibleProvider {
     /// Construct with the production `ReqwestBackend`. Unit tests
     /// inject a fake backend or a local wiremock-backed HTTP client so
     /// the default suite does not require live provider credentials.
-    pub fn new(name: ProviderName, config: OpenAiCompatibleConfig) -> Self {
+    pub fn new(name: ProviderName, config: OpenAiChatCompletionsConfig) -> Self {
         Self {
             name: name.clone(),
             config: config.clone(),
-            backend: crate::reqwest_backend::arc_real_backend(name, config),
+            backend: crate::reqwest_backend::arc_real_openai_chat_completions_backend(name, config),
         }
     }
 
-    pub fn config(&self) -> &OpenAiCompatibleConfig {
+    pub fn config(&self) -> &OpenAiChatCompletionsConfig {
         &self.config
     }
 }
 
 #[async_trait]
-impl AgentProvider for OpenAiCompatibleProvider {
+impl AgentProvider for OpenAiChatCompletionsProvider {
     fn name(&self) -> ProviderName {
         self.name.clone()
     }

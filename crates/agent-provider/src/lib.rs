@@ -16,17 +16,18 @@ mod openai_compatible;
 pub mod reqwest_backend;
 pub mod translation;
 
-pub use anthropic::AnthropicProvider;
+pub use anthropic::AnthropicMessagesProvider;
 pub use backend::{CompletionBackend, FakeCompletionBackend, ScriptedBackendStep};
 pub use config::{
-    AgentProviderConfigDocument, AnthropicConfig, OpenAiCompatibleConfig, ProviderConfig,
-    ProviderKind,
+    AgentProviderConfigDocument, AnthropicMessagesConfig, OpenAiChatCompletionsConfig, Protocol,
+    ProviderConfig,
 };
 pub use error::ProviderAdapterError;
-pub use openai_compatible::OpenAiCompatibleProvider;
+pub use openai_compatible::OpenAiChatCompletionsProvider;
 pub use reqwest_backend::{
-    ReqwestBackend, arc_real_anthropic_backend, arc_real_anthropic_backend_with_http_client,
-    arc_real_backend, arc_real_backend_with_http_client,
+    ReqwestBackend, arc_real_anthropic_messages_backend,
+    arc_real_anthropic_messages_backend_with_http_client, arc_real_openai_chat_completions_backend,
+    arc_real_openai_chat_completions_backend_with_http_client,
 };
 pub use translation::sse_parser::{SseEvent, SseParser};
 
@@ -34,36 +35,38 @@ use std::sync::Arc;
 
 use reimagine_agent::{AgentProvider, ProviderName};
 
-/// Build an `Arc<dyn AgentProvider>` from a `ProviderConfig`. The kind
+/// Build an `Arc<dyn AgentProvider>` from a `ProviderConfig`. The protocol
 /// determines which concrete adapter is constructed. Missing inner
 /// config is rejected with `ProviderAdapterError::MissingConfig`.
 pub fn build_provider(
     config: ProviderConfig,
 ) -> Result<Arc<dyn AgentProvider>, ProviderAdapterError> {
-    match config.kind() {
-        ProviderKind::OpenAiCompatible => {
-            let cfg =
-                config
-                    .openai_compatible()
-                    .ok_or_else(|| ProviderAdapterError::MissingConfig {
-                        provider: config.name().to_string(),
-                        kind: ProviderKind::OpenAiCompatible,
-                    })?;
-            let provider = OpenAiCompatibleProvider::new(
+    match config.protocol() {
+        Protocol::OpenAiChatCompletions => {
+            let cfg = config.openai_chat_completions().ok_or_else(|| {
+                ProviderAdapterError::MissingConfig {
+                    provider: config.name().to_string(),
+                    protocol: Protocol::OpenAiChatCompletions,
+                }
+            })?;
+            let provider = OpenAiChatCompletionsProvider::new(
                 ProviderName::new(config.name().to_string()),
                 cfg.clone(),
             );
             Ok(Arc::new(provider))
         }
-        ProviderKind::Anthropic => {
-            let cfg = config
-                .anthropic()
-                .ok_or_else(|| ProviderAdapterError::MissingConfig {
-                    provider: config.name().to_string(),
-                    kind: ProviderKind::Anthropic,
-                })?;
-            let provider =
-                AnthropicProvider::new(ProviderName::new(config.name().to_string()), cfg.clone());
+        Protocol::AnthropicMessages => {
+            let cfg =
+                config
+                    .anthropic_messages()
+                    .ok_or_else(|| ProviderAdapterError::MissingConfig {
+                        provider: config.name().to_string(),
+                        protocol: Protocol::AnthropicMessages,
+                    })?;
+            let provider = AnthropicMessagesProvider::new(
+                ProviderName::new(config.name().to_string()),
+                cfg.clone(),
+            );
             Ok(Arc::new(provider))
         }
     }

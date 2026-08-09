@@ -1,33 +1,33 @@
 //! Typed provider config shapes for V1.
 //!
 //! V1 stores provider config in a JSON document loaded by app-host. The
-//! shapes here are the wire format: `enabled`, `kind` discriminator,
-//! `base_url` (OpenAI-compatible only), `api_key`, and `default_model`.
-//! `api_key` is held as a `String` in memory. The app-host is responsible
-//! for sourcing the value from the workspace's secrets file before
-//! constructing an adapter.
+//! shapes here are the wire format: `enabled`, `protocol`
+//! discriminator, `base_url` (chat-completions protocols only),
+//! `api_key`, and `default_model`. `api_key` is held as a `String` in
+//! memory. The app-host is responsible for sourcing the value from the
+//! workspace's secrets file before constructing an adapter.
 
 use serde::{Deserialize, Serialize};
 
-/// Discriminator for the V1 provider kinds.
+/// Discriminator for the message protocol a provider entry speaks.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
-pub enum ProviderKind {
-    #[serde(rename = "openai_compatible")]
-    OpenAiCompatible,
-    #[serde(rename = "anthropic")]
-    Anthropic,
+pub enum Protocol {
+    #[serde(rename = "openai_chat_completions")]
+    OpenAiChatCompletions,
+    #[serde(rename = "anthropic_messages")]
+    AnthropicMessages,
 }
 
-impl ProviderKind {
+impl Protocol {
     pub fn as_str(self) -> &'static str {
         match self {
-            Self::OpenAiCompatible => "openai_compatible",
-            Self::Anthropic => "anthropic",
+            Self::OpenAiChatCompletions => "openai_chat_completions",
+            Self::AnthropicMessages => "anthropic_messages",
         }
     }
 }
 
-impl std::fmt::Display for ProviderKind {
+impl std::fmt::Display for Protocol {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.write_str(self.as_str())
     }
@@ -37,13 +37,13 @@ impl std::fmt::Display for ProviderKind {
 /// V1 supports arbitrary OpenAI-compatible endpoints, not just
 /// `api.openai.com`.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-pub struct OpenAiCompatibleConfig {
+pub struct OpenAiChatCompletionsConfig {
     base_url: String,
     api_key: String,
     default_model: String,
 }
 
-impl OpenAiCompatibleConfig {
+impl OpenAiChatCompletionsConfig {
     pub fn new(
         base_url: impl Into<String>,
         api_key: impl Into<String>,
@@ -73,14 +73,14 @@ impl OpenAiCompatibleConfig {
 /// model. `base_url` is optional; when `None`, the adapter defaults to
 /// `https://api.anthropic.com`.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-pub struct AnthropicConfig {
+pub struct AnthropicMessagesConfig {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     base_url: Option<String>,
     api_key: String,
     default_model: String,
 }
 
-impl AnthropicConfig {
+impl AnthropicMessagesConfig {
     pub fn new(api_key: impl Into<String>, default_model: impl Into<String>) -> Self {
         Self {
             base_url: None,
@@ -107,7 +107,7 @@ impl AnthropicConfig {
     }
 }
 
-/// A single provider entry. `kind` discriminates which inner config is
+/// A single provider entry. `protocol` discriminates which inner config is
 /// present. `enabled` defaults to `true`; hosts may disable a provider
 /// without removing it from the config file.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -115,20 +115,20 @@ pub struct ProviderConfig {
     name: String,
     #[serde(default = "default_enabled")]
     enabled: bool,
-    kind: ProviderKind,
+    protocol: Protocol,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     base_url: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     api_key: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     default_model: Option<String>,
-    /// Strongly-typed inner configs. Only the one matching `kind` is
+    /// Strongly-typed inner configs. Only the one matching `protocol` is
     /// populated. The flat fields above exist so the on-disk JSON is
     /// readable; the typed fields are the source of truth at runtime.
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    openai_compatible: Option<OpenAiCompatibleConfig>,
+    openai_chat_completions: Option<OpenAiChatCompletionsConfig>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    anthropic: Option<AnthropicConfig>,
+    anthropic_messages: Option<AnthropicMessagesConfig>,
 }
 
 fn default_enabled() -> bool {
@@ -136,29 +136,35 @@ fn default_enabled() -> bool {
 }
 
 impl ProviderConfig {
-    pub fn with_openai_compatible(name: impl Into<String>, inner: OpenAiCompatibleConfig) -> Self {
+    pub fn with_openai_chat_completions(
+        name: impl Into<String>,
+        inner: OpenAiChatCompletionsConfig,
+    ) -> Self {
         Self {
             name: name.into(),
             enabled: true,
-            kind: ProviderKind::OpenAiCompatible,
+            protocol: Protocol::OpenAiChatCompletions,
             base_url: Some(inner.base_url().to_string()),
             api_key: Some(inner.api_key().to_string()),
             default_model: Some(inner.default_model().to_string()),
-            openai_compatible: Some(inner),
-            anthropic: None,
+            openai_chat_completions: Some(inner),
+            anthropic_messages: None,
         }
     }
 
-    pub fn with_anthropic(name: impl Into<String>, inner: AnthropicConfig) -> Self {
+    pub fn with_anthropic_messages(
+        name: impl Into<String>,
+        inner: AnthropicMessagesConfig,
+    ) -> Self {
         Self {
             name: name.into(),
             enabled: true,
-            kind: ProviderKind::Anthropic,
+            protocol: Protocol::AnthropicMessages,
             base_url: inner.base_url().map(|s| s.to_string()),
             api_key: Some(inner.api_key().to_string()),
             default_model: Some(inner.default_model().to_string()),
-            openai_compatible: None,
-            anthropic: Some(inner),
+            openai_chat_completions: None,
+            anthropic_messages: Some(inner),
         }
     }
 
@@ -166,8 +172,8 @@ impl ProviderConfig {
         &self.name
     }
 
-    pub fn kind(&self) -> ProviderKind {
-        self.kind
+    pub fn protocol(&self) -> Protocol {
+        self.protocol
     }
 
     pub fn is_enabled(&self) -> bool {
@@ -178,12 +184,12 @@ impl ProviderConfig {
         self.enabled = value;
     }
 
-    pub fn openai_compatible(&self) -> Option<&OpenAiCompatibleConfig> {
-        self.openai_compatible.as_ref()
+    pub fn openai_chat_completions(&self) -> Option<&OpenAiChatCompletionsConfig> {
+        self.openai_chat_completions.as_ref()
     }
 
-    pub fn anthropic(&self) -> Option<&AnthropicConfig> {
-        self.anthropic.as_ref()
+    pub fn anthropic_messages(&self) -> Option<&AnthropicMessagesConfig> {
+        self.anthropic_messages.as_ref()
     }
 }
 
@@ -219,8 +225,11 @@ mod tests {
     use super::*;
 
     #[test]
-    fn provider_kind_as_str() {
-        assert_eq!(ProviderKind::OpenAiCompatible.as_str(), "openai_compatible");
-        assert_eq!(ProviderKind::Anthropic.as_str(), "anthropic");
+    fn protocol_as_str() {
+        assert_eq!(
+            Protocol::OpenAiChatCompletions.as_str(),
+            "openai_chat_completions"
+        );
+        assert_eq!(Protocol::AnthropicMessages.as_str(), "anthropic_messages");
     }
 }
