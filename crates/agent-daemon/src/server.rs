@@ -142,6 +142,28 @@ impl AgentDaemon {
         self.serve(transport).await
     }
 
+    /// Persist every live session context to its session file.
+    ///
+    /// Part of the graceful shutdown path, called after the serve loop
+    /// returns at EOF. One session failing to persist does not block the
+    /// rest: failures are logged and the remaining sessions still write.
+    /// Returns the number of sessions persisted.
+    pub async fn persist_all(&self) -> usize {
+        let mut persisted = 0;
+        for (session_id, state) in &self.sessions {
+            let context = state.context.lock().await;
+            match context.persist(session_id.as_str()) {
+                Ok(()) => persisted += 1,
+                Err(error) => tracing::warn!(
+                    session = %session_id,
+                    %error,
+                    "failed to persist session context during shutdown"
+                ),
+            }
+        }
+        persisted
+    }
+
     fn dispatch<R, W>(
         &mut self,
         transport: &StdioTransport<R, SharedWriter<W>>,

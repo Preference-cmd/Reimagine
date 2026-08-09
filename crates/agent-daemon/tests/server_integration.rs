@@ -381,6 +381,35 @@ async fn turn_lock_rejects_concurrent_turn_on_same_session() {
 }
 
 #[tokio::test]
+async fn persist_all_writes_every_session_context() {
+    let dir = temp_dir("persist-all");
+    let mut daemon = AgentDaemon::new(&dir).await.expect("daemon initializes");
+    daemon
+        .workspace()
+        .agent_service()
+        .providers()
+        .register(Arc::new(ScriptedProvider::new("mock", vec![])));
+
+    let (session_a, _) = create_session(&mut daemon).await;
+    let (session_b, _) = create_session(&mut daemon).await;
+
+    let persisted = daemon.persist_all().await;
+    assert_eq!(persisted, 2, "both sessions persist");
+
+    let session_dir = dir.join("agent-sessions");
+    assert!(
+        session_dir.join(format!("{session_a}.json")).exists(),
+        "session a context file exists"
+    );
+    assert!(
+        session_dir.join(format!("{session_b}.json")).exists(),
+        "session b context file exists"
+    );
+
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+#[tokio::test]
 async fn turn_cancel_stops_accepted_turn() {
     let dir = temp_dir("turn-cancel");
     let mut daemon = AgentDaemon::new(&dir).await.expect("daemon initializes");

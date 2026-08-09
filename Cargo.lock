@@ -6834,6 +6834,7 @@ name = "reimagine-agent-daemon"
 version = "0.1.0"
 dependencies = [
  "async-trait",
+ "clap",
  "reimagine-agent",
  "reimagine-app-host",
  "reimagine-runtime",
@@ -6842,6 +6843,7 @@ dependencies = [
  "tokio",
  "tokio-util",
  "tracing",
+ "tracing-subscriber",
 ]
 
 [[package]]
