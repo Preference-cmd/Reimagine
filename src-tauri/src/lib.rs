@@ -1,7 +1,10 @@
+mod agent_bridge;
 mod agent_event_hub;
 mod desktop_host;
 mod download_event_hub;
 mod event_hub;
+
+pub use agent_bridge::{AgentBridge, AgentBridgeError};
 
 use desktop_host::{DesktopHostState, WorkerSwitchResultDto, default_workspace_path};
 use event_hub::RunEventPayload;

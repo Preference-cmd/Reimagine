@@ -6802,6 +6802,7 @@ version = "0.1.0"
 dependencies = [
  "opener",
  "reimagine-agent",
+ "reimagine-agent-daemon",
  "reimagine-app-host",
  "reimagine-backend-worker-host",
  "reimagine-backend-worker-protocol",
@@ -6814,6 +6815,7 @@ dependencies = [
  "tauri",
  "tauri-build",
  "tauri-plugin-opener",
+ "tempfile",
  "tokio",
 ]
 
