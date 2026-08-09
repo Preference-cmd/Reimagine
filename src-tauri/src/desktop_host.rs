@@ -2,14 +2,14 @@ use std::path::{Path, PathBuf};
 use std::sync::{Arc, RwLock};
 
 use reimagine_agent::{AgentEventSink, WorkspaceScope};
+use reimagine_agent_daemon::protocol::{TurnRunParams, TurnRunResult};
 use reimagine_app_host::dto::{
-    AgentEventPayload, AgentSessionInfo, AgentTurnResponse, ArtifactMetadataDto, ComputeProfileDto,
-    HealthResponse, ModelInfoDto, NodeCatalogResponse, RunWorkflowResponse,
+    AgentEventPayload, AgentSessionInfo, ArtifactMetadataDto, ComputeProfileDto, HealthResponse,
+    ModelInfoDto, NodeCatalogResponse, RunWorkflowResponse,
 };
 use reimagine_app_host::{
-    AgentServiceTurnRequest, AppHost, AppHostError, BackendSelection, WorkerBackendCandidate,
-    WorkerInstallationDto, WorkerManagementService, WorkerSelectionHandle, WorkerSwitchError,
-    WorkspaceHost,
+    AppHost, AppHostError, BackendSelection, WorkerBackendCandidate, WorkerInstallationDto,
+    WorkerManagementService, WorkerSelectionHandle, WorkerSwitchError, WorkspaceHost,
 };
 use reimagine_backend_worker_host::{WorkerLaunchSpec, WorkerLimits};
 use reimagine_backend_worker_protocol::ProtocolRange;
@@ -19,8 +19,9 @@ use reimagine_core::workflow::Workflow;
 use reimagine_runtime::BoxedRunEventSink;
 use serde::Serialize;
 use tauri::ipc::Channel;
+use tokio::sync::{Mutex as AsyncMutex, MutexGuard as AsyncMutexGuard};
 
-use crate::agent_event_hub::TauriAgentEventHub;
+use crate::agent_bridge::{AgentBridge, AgentBridgeError};
 use crate::download_event_hub::TauriDownloadEventHub;
 use crate::event_hub::{RunEventPayload, TauriRunEventHub};
 
@@ -31,9 +32,10 @@ const APP_HOST_LOCK: &str = "desktop app_host lock poisoned";
 pub struct DesktopHostState {
     app_host: RwLock<AppHost>,
     event_hub: Arc<TauriRunEventHub>,
-    agent_event_hub: Arc<TauriAgentEventHub>,
     download_event_hub: Arc<TauriDownloadEventHub>,
     worker_management: Arc<WorkerManagementService>,
+    /// Lazily spawned agent daemon bridge (one daemon per host).
+    agent_bridge: Arc<AsyncMutex<Option<AgentBridge>>>,
 }
 
 impl Clone for DesktopHostState {
@@ -41,9 +43,9 @@ impl Clone for DesktopHostState {
         Self {
             app_host: RwLock::new(self.app_host.read().expect(APP_HOST_LOCK).clone()),
             event_hub: self.event_hub.clone(),
-            agent_event_hub: self.agent_event_hub.clone(),
             download_event_hub: self.download_event_hub.clone(),
             worker_management: self.worker_management.clone(),
+            agent_bridge: Arc::clone(&self.agent_bridge),
         }
     }
 }
@@ -65,8 +67,11 @@ impl DesktopHostState {
         AppPaths::new(&workspace_base_path).ensure_all().await?;
         let event_hub = Arc::new(TauriRunEventHub::new());
         let event_sink: BoxedRunEventSink = event_hub.clone();
-        let agent_event_hub = Arc::new(TauriAgentEventHub::new());
-        let agent_event_sink: Arc<dyn AgentEventSink> = agent_event_hub.clone();
+        // Agent events now stream from the daemon through the bridge; the
+        // in-process agent service is retained for backward compatibility
+        // only, so its events go to a discard sink.
+        let agent_event_sink: Arc<dyn AgentEventSink> =
+            Arc::new(reimagine_agent::VecAgentEventSink::new());
         let workspace = WorkspaceHost::try_with_app_data_root_and_event_sinks(
             WorkspaceScope::new(WORKSPACE_SCOPE),
             &workspace_base_path,
@@ -82,9 +87,9 @@ impl DesktopHostState {
         Ok(Self {
             app_host: RwLock::new(AppHost::new(workspace)),
             event_hub,
-            agent_event_hub,
             download_event_hub,
             worker_management,
+            agent_bridge: Arc::new(AsyncMutex::new(None)),
         })
     }
 
@@ -263,70 +268,72 @@ impl DesktopHostState {
         })
     }
 
-    /// Create a new agent session.
+    /// Create a new agent session through the daemon bridge.
     ///
-    /// Returns `AppHostError::UnknownAgentProvider` if the named provider
-    /// is not registered in the catalog.
-    pub fn create_agent_session(
+    /// `mode` must be "Agent" or "Build"; `provider` must be registered in
+    /// the catalog. Sessions live on the daemon; `AgentService` is kept for
+    /// backward compatibility but is not used by the desktop host anymore.
+    pub async fn create_agent_session(
         &self,
         mode: String,
         provider: String,
-    ) -> Result<AgentSessionInfo, AppHostError> {
-        use reimagine_app_host::dto::AgentSessionInfo as Dto;
-
-        let agent_mode = match mode.as_str() {
-            "Agent" => reimagine_agent::AgentMode::Agent,
-            "Build" => reimagine_agent::AgentMode::Build,
+    ) -> Result<AgentSessionInfo, AgentBridgeError> {
+        // V1 wire mode names are lowercase; the UI contract uses the
+        // `AgentMode` debug names.
+        let wire_mode = match mode.as_str() {
+            "Agent" => "agent",
+            "Build" => "build",
             other => {
-                return Err(AppHostError::UnknownAgentMode {
-                    mode: other.to_string(),
+                return Err(AgentBridgeError::Protocol {
+                    code: 0,
+                    message: format!("unknown agent mode `{other}`; expected `Agent` or `Build`"),
                 });
             }
         };
 
-        // Validate provider exists in catalog before creating session
-        let (provider_known, agent_service, provider_name) = {
+        // Validate provider exists in the catalog before asking the daemon
+        // so the friendly "configure in Settings" error survives the rewire.
+        let provider_known = {
             let app_host = self.app_host.read().expect(APP_HOST_LOCK);
-            let agent_service = app_host.workspace().agent_service();
-            let catalog = agent_service.providers();
-            let provider_name = reimagine_agent::ProviderName::new(&provider);
-            (
-                catalog.contains(&provider_name),
-                Arc::clone(agent_service),
-                provider_name,
-            )
+            app_host
+                .workspace()
+                .agent_service()
+                .providers()
+                .contains(&reimagine_agent::ProviderName::new(&provider))
         };
         if !provider_known {
-            return Err(AppHostError::UnknownAgentProvider {
-                provider: provider_name,
+            return Err(AgentBridgeError::Protocol {
+                code: 0,
+                message: format!(
+                    "Provider '{provider}' is not configured. Add a provider in Settings."
+                ),
             });
         }
 
-        let session_id = reimagine_agent::AgentSessionId::new(format!(
-            "sess-{}",
-            std::time::SystemTime::now()
-                .duration_since(std::time::UNIX_EPOCH)
-                .unwrap_or_default()
-                .as_nanos()
-        ));
-
-        let started_at = std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .unwrap_or_default()
-            .as_millis()
-            .to_string();
-
-        let session =
-            agent_service.create_session(session_id.clone(), agent_mode, provider_name, started_at);
-
-        Ok(Dto::from(session))
+        let mut bridge = self.agent_bridge().await?;
+        let bridge = bridge.as_mut().expect("agent bridge initialized");
+        let session = bridge.create_session(wire_mode, &provider).await?;
+        Ok(AgentSessionInfo {
+            session_id: session.session_id,
+            mode: match session.mode.as_str() {
+                "agent" => "Agent".to_owned(),
+                "build" => "Build".to_owned(),
+                other => other.to_owned(),
+            },
+            provider: session.provider,
+            started_at: session.created_at,
+        })
     }
 
-    /// Execute a single agent turn.
+    /// Execute a single agent turn through the daemon bridge.
     ///
     /// The `model` field is the model name string as understood by the
-    /// registered provider. The `input` is a JSON array of user messages.
-    /// Subscribes the provided channel for live `AgentEvent` streaming.
+    /// registered provider. The `input` is the UI's JSON array of
+    /// `{ role, content }` messages; the daemon protocol takes a plain
+    /// prompt, so the last user message becomes the turn input. Daemon
+    /// streaming notifications are translated to `AgentEventPayload` and
+    /// forwarded to `channel`; the returned `TurnRunResult` is the
+    /// daemon's acceptance of the turn.
     pub async fn agent_turn(
         &self,
         session_id: String,
@@ -334,36 +341,35 @@ impl DesktopHostState {
         model: String,
         input: serde_json::Value,
         channel: Channel<AgentEventPayload>,
-    ) -> Result<AgentTurnResponse, AppHostError> {
-        // Parse messages from JSON array
-        let messages: Vec<reimagine_agent::Message> =
-            serde_json::from_value(input).map_err(|e| AppHostError::WorkflowJson {
-                path: std::path::PathBuf::new(),
-                message: format!("invalid input messages: {e}"),
-            })?;
+    ) -> Result<TurnRunResult, AgentBridgeError> {
+        let input_text = turn_input_text(&input)?;
 
-        let agent_service = {
-            let app_host = self.app_host.read().expect(APP_HOST_LOCK);
-            Arc::clone(app_host.workspace().agent_service())
-        };
+        // Forward daemon notifications to the UI channel, translating the
+        // raw JSON-RPC envelopes into the `AgentEventPayload` shape the
+        // frontend already consumes.
+        let forwarded = Channel::<serde_json::Value>::new(move |body| {
+            let Ok(envelope) = body.deserialize::<serde_json::Value>() else {
+                return Ok(());
+            };
+            if let Some(payload) = agent_event_payload_from_envelope(&envelope) {
+                channel.send(payload)?;
+            }
+            Ok(())
+        });
 
-        // Validate session exists (fail-fast before subscription)
-        let _session =
-            agent_service.get_session(&reimagine_agent::AgentSessionId::new(&session_id))?;
-
-        // Subscribe the channel before starting the turn (no replay needed)
-        self.agent_event_hub.subscribe(&session_id, channel);
-
-        let turn_request = AgentServiceTurnRequest::new(
-            reimagine_agent::AgentSessionId::new(session_id.clone()),
-            reimagine_agent::AgentTurnId::new(turn_id.clone()),
-            reimagine_agent::ModelName::new(model),
-            messages,
-        );
-
-        let result = agent_service.run_turn(turn_request).await?;
-
-        Ok(AgentTurnResponse::from(result))
+        let mut bridge = self.agent_bridge().await?;
+        let bridge = bridge.as_mut().expect("agent bridge initialized");
+        bridge
+            .run_turn(
+                TurnRunParams {
+                    session_id,
+                    turn_id,
+                    model,
+                    input: serde_json::Value::String(input_text),
+                },
+                forwarded,
+            )
+            .await
     }
 
     /// Preview a command batch (dry-run).
@@ -473,16 +479,32 @@ impl DesktopHostState {
     }
 
     /// List available provider names for the agent UI selector.
-    pub fn list_agent_providers(&self) -> Result<Vec<String>, AppHostError> {
-        let provider_names = {
-            let app_host = self.app_host.read().expect(APP_HOST_LOCK);
-            app_host
-                .workspace()
-                .agent_service()
-                .providers()
-                .provider_names()
-        };
-        Ok(provider_names.into_iter().map(|p| p.to_string()).collect())
+    pub async fn list_agent_providers(&self) -> Result<Vec<String>, AgentBridgeError> {
+        let mut bridge = self.agent_bridge().await?;
+        bridge
+            .as_mut()
+            .expect("agent bridge initialized")
+            .list_providers()
+            .await
+    }
+
+    /// Lazily spawn the agent daemon bridge on first agent command.
+    ///
+    /// The daemon binary is located by the bridge (`REIMAGINE_AGENT_DAEMON`
+    /// override, the workspace target dirs, then `PATH`); the workspace
+    /// directory is the host's own workspace path.
+    async fn agent_bridge(
+        &self,
+    ) -> Result<AsyncMutexGuard<'_, Option<AgentBridge>>, AgentBridgeError> {
+        let mut guard = self.agent_bridge.lock().await;
+        if guard.is_none() {
+            let workspace_dir = {
+                let app_host = self.app_host.read().expect(APP_HOST_LOCK);
+                app_host.workspace().base_path().to_path_buf()
+            };
+            *guard = Some(AgentBridge::new(&workspace_dir).await?);
+        }
+        Ok(guard)
     }
 
     // ─── Workflow persistence ─────────────────────────────────────
@@ -877,6 +899,193 @@ pub fn default_workspace_path(app_data_dir: impl AsRef<Path>) -> PathBuf {
     app_data_dir.as_ref().join("workspace")
 }
 
+/// Translate the `agent_turn` `input` argument into the daemon's prompt.
+///
+/// The UI sends a JSON array of `{ role, content }` messages (the shape
+/// the in-process `AgentService` accepted); the daemon V1 protocol takes
+/// a plain string or a `{ "text": ... }` object. The last user message's
+/// content is the prompt; other shapes are passed through unchanged.
+fn turn_input_text(input: &serde_json::Value) -> Result<String, AgentBridgeError> {
+    use serde_json::Value;
+    match input {
+        Value::String(text) => Ok(text.clone()),
+        Value::Object(map) => match map.get("text").and_then(Value::as_str) {
+            Some(text) => Ok(text.to_owned()),
+            None => Err(AgentBridgeError::Protocol {
+                code: 0,
+                message: "invalid input messages: expected a `text` field".to_owned(),
+            }),
+        },
+        Value::Array(messages) => {
+            // Lenient extraction: UI messages are `{ role, content }`
+            // objects; the last user message is the new prompt.
+            let text = messages
+                .iter()
+                .rev()
+                .find(|message| message.get("role").and_then(Value::as_str) == Some("user"))
+                .and_then(|message| message.get("content").and_then(Value::as_str))
+                .map(str::to_owned);
+            text.ok_or_else(|| AgentBridgeError::Protocol {
+                code: 0,
+                message: "invalid input messages: expected at least one user message with \
+                          string content"
+                    .to_owned(),
+            })
+        }
+        _ => Err(AgentBridgeError::Protocol {
+            code: 0,
+            message: "invalid input messages: expected an array of messages, a string, \
+                      or an object with a `text` field"
+                .to_owned(),
+        }),
+    }
+}
+
+/// Translate a daemon JSON-RPC notification envelope into the
+/// `AgentEventPayload` shape the UI already consumes.
+///
+/// Unknown or malformed envelopes yield `None` and are dropped so the
+/// stream stays resilient to protocol additions.
+fn agent_event_payload_from_envelope(envelope: &serde_json::Value) -> Option<AgentEventPayload> {
+    use serde_json::Value;
+    let method = envelope.get("method").and_then(Value::as_str)?;
+    let params = envelope.get("params")?;
+    let session_id = params.get("session_id").and_then(Value::as_str)?.to_owned();
+    let (kind, tool_name, tool_call_id, code, message) = match method {
+        "agent.session_started" => {
+            let provider = params
+                .get("provider")
+                .and_then(Value::as_str)
+                .unwrap_or_default();
+            let mode = params
+                .get("mode")
+                .and_then(Value::as_str)
+                .unwrap_or_default();
+            (
+                "session_started",
+                None,
+                None,
+                None,
+                Some(format!("provider={provider} mode={mode}")),
+            )
+        }
+        "agent.session_stopped" => (
+            "session_stopped",
+            None,
+            None,
+            None,
+            params
+                .get("reason")
+                .and_then(Value::as_str)
+                .map(str::to_owned),
+        ),
+        "agent.tool_invoked" => tool_event_payload("tool_invoked", params, None),
+        "agent.tool_completed" => tool_event_payload("tool_completed", params, None),
+        "agent.tool_failed" => tool_event_payload(
+            "tool_failed",
+            params,
+            params
+                .get("error")
+                .and_then(Value::as_str)
+                .map(str::to_owned),
+        ),
+        "agent.content_delta" => (
+            "content_delta",
+            None,
+            None,
+            None,
+            params
+                .get("text")
+                .and_then(Value::as_str)
+                .map(str::to_owned),
+        ),
+        "agent.proposal_ready" => (
+            "proposal_ready",
+            None,
+            None,
+            None,
+            params
+                .get("proposal_id")
+                .and_then(Value::as_str)
+                .map(|id| format!("proposal_id={id}")),
+        ),
+        "agent.error" => (
+            "provider_error",
+            None,
+            None,
+            params
+                .get("code")
+                .and_then(Value::as_str)
+                .map(str::to_owned),
+            params
+                .get("message")
+                .and_then(Value::as_str)
+                .map(str::to_owned),
+        ),
+        "agent.turn_completed" => (
+            "turn_completed",
+            None,
+            None,
+            None,
+            params.get("result").and_then(turn_completed_message),
+        ),
+        _ => return None,
+    };
+    Some(AgentEventPayload {
+        session_id,
+        kind: kind.to_owned(),
+        tool_name,
+        tool_call_id,
+        code,
+        message,
+    })
+}
+
+/// Build a tool-event payload row from `agent.tool_*` notification params.
+fn tool_event_payload(
+    kind: &'static str,
+    params: &serde_json::Value,
+    error: Option<String>,
+) -> (
+    &'static str,
+    Option<String>,
+    Option<String>,
+    Option<String>,
+    Option<String>,
+) {
+    (
+        kind,
+        params
+            .get("tool")
+            .and_then(serde_json::Value::as_str)
+            .map(str::to_owned),
+        params
+            .get("tool_call_id")
+            .and_then(serde_json::Value::as_str)
+            .map(str::to_owned),
+        None,
+        error,
+    )
+}
+
+/// Project a `turn_completed` result into the payload message: the final
+/// response text when present, otherwise the serialized result.
+fn turn_completed_message(result: &serde_json::Value) -> Option<String> {
+    match result {
+        serde_json::Value::String(text) => Some(text.clone()),
+        serde_json::Value::Object(map) => {
+            match map
+                .get("final_response")
+                .and_then(serde_json::Value::as_str)
+            {
+                Some(text) if !text.is_empty() => Some(text.to_owned()),
+                _ => Some(result.to_string()),
+            }
+        }
+        _ => Some(result.to_string()),
+    }
+}
+
 /// Validate a user-supplied workflow id before it reaches `WorkflowId::new`
 /// (which asserts — and would panic — on invalid input).
 fn workflow_id_from_str(id: &str) -> Result<reimagine_core::model::WorkflowId, AppHostError> {
@@ -892,4 +1101,152 @@ fn workflow_id_from_str(id: &str) -> Result<reimagine_core::model::WorkflowId, A
         });
     }
     Ok(reimagine_core::model::WorkflowId::new(id))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use serde_json::json;
+
+    // ─── agent bridge input translation ──────────────────────────
+
+    #[test]
+    fn turn_input_passes_through_text_shapes() {
+        assert_eq!(turn_input_text(&json!("hello")).expect("string"), "hello");
+        assert_eq!(
+            turn_input_text(&json!({ "text": "draw a cat" })).expect("text object"),
+            "draw a cat"
+        );
+    }
+
+    #[test]
+    fn turn_input_uses_last_user_message_from_ui_array() {
+        let input = json!([
+            { "role": "system", "content": "be concise" },
+            { "role": "user", "content": "first" },
+            { "role": "assistant", "content": "ok" },
+            { "role": "user", "content": "the prompt" },
+        ]);
+        assert_eq!(
+            turn_input_text(&input).expect("message array"),
+            "the prompt"
+        );
+    }
+
+    #[test]
+    fn turn_input_rejects_bad_shapes() {
+        assert!(turn_input_text(&json!(42)).is_err());
+        assert!(turn_input_text(&json!({ "role": "user" })).is_err());
+        assert!(turn_input_text(&json!([{ "role": "assistant", "content": "no user" }])).is_err());
+        assert!(turn_input_text(&json!([{ "role": "user" }])).is_err());
+    }
+
+    // ─── daemon notification → AgentEventPayload translation ─────
+
+    fn envelope(method: &str, params: serde_json::Value) -> serde_json::Value {
+        json!({ "jsonrpc": "2.0", "method": method, "params": params })
+    }
+
+    #[test]
+    fn envelope_translates_content_delta() {
+        let payload = agent_event_payload_from_envelope(&envelope(
+            "agent.content_delta",
+            json!({ "session_id": "s1", "turn_id": "t1", "text": "hello" }),
+        ))
+        .expect("translated");
+        assert_eq!(payload.session_id, "s1");
+        assert_eq!(payload.kind, "content_delta");
+        assert_eq!(payload.message.as_deref(), Some("hello"));
+        assert!(payload.tool_name.is_none());
+    }
+
+    #[test]
+    fn envelope_translates_tool_events() {
+        let invoked = agent_event_payload_from_envelope(&envelope(
+            "agent.tool_invoked",
+            json!({ "session_id": "s1", "turn_id": "t1", "tool": "workflow.read", "tool_call_id": "call-1" }),
+        ))
+        .expect("translated");
+        assert_eq!(invoked.kind, "tool_invoked");
+        assert_eq!(invoked.tool_name.as_deref(), Some("workflow.read"));
+        assert_eq!(invoked.tool_call_id.as_deref(), Some("call-1"));
+
+        let failed = agent_event_payload_from_envelope(&envelope(
+            "agent.tool_failed",
+            json!({ "session_id": "s1", "turn_id": "t1", "tool": "workflow.read", "tool_call_id": "call-1", "error": "timeout" }),
+        ))
+        .expect("translated");
+        assert_eq!(failed.kind, "tool_failed");
+        assert_eq!(failed.message.as_deref(), Some("timeout"));
+    }
+
+    #[test]
+    fn envelope_translates_lifecycle_notifications() {
+        let started = agent_event_payload_from_envelope(&envelope(
+            "agent.session_started",
+            json!({ "session_id": "s1", "mode": "agent", "provider": "openai" }),
+        ))
+        .expect("translated");
+        assert_eq!(started.kind, "session_started");
+        assert_eq!(
+            started.message.as_deref(),
+            Some("provider=openai mode=agent")
+        );
+
+        let stopped = agent_event_payload_from_envelope(&envelope(
+            "agent.session_stopped",
+            json!({ "session_id": "s1", "reason": "user_requested" }),
+        ))
+        .expect("translated");
+        assert_eq!(stopped.kind, "session_stopped");
+        assert_eq!(stopped.message.as_deref(), Some("user_requested"));
+
+        let proposal = agent_event_payload_from_envelope(&envelope(
+            "agent.proposal_ready",
+            json!({ "session_id": "s1", "proposal_id": "p1" }),
+        ))
+        .expect("translated");
+        assert_eq!(proposal.kind, "proposal_ready");
+        assert_eq!(proposal.message.as_deref(), Some("proposal_id=p1"));
+    }
+
+    #[test]
+    fn envelope_translates_error_and_turn_completed() {
+        let error = agent_event_payload_from_envelope(&envelope(
+            "agent.error",
+            json!({ "session_id": "s1", "code": "provider_error", "message": "upstream 429" }),
+        ))
+        .expect("translated");
+        assert_eq!(error.kind, "provider_error");
+        assert_eq!(error.code.as_deref(), Some("provider_error"));
+        assert_eq!(error.message.as_deref(), Some("upstream 429"));
+
+        let completed = agent_event_payload_from_envelope(&envelope(
+            "agent.turn_completed",
+            json!({ "session_id": "s1", "turn_id": "t1", "result": { "status": "completed", "final_response": "done" } }),
+        ))
+        .expect("translated");
+        assert_eq!(completed.kind, "turn_completed");
+        assert_eq!(completed.message.as_deref(), Some("done"));
+    }
+
+    #[test]
+    fn envelope_drops_unknown_or_malformed_messages() {
+        assert!(
+            agent_event_payload_from_envelope(
+                &json!({ "method": "agent.unknown", "params": { "session_id": "s1" } })
+            )
+            .is_none()
+        );
+        assert!(
+            agent_event_payload_from_envelope(&json!({ "method": "agent.content_delta" }))
+                .is_none()
+        );
+        assert!(
+            agent_event_payload_from_envelope(
+                &json!({ "method": "agent.content_delta", "params": {} })
+            )
+            .is_none()
+        );
+    }
 }
