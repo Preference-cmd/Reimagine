@@ -15,19 +15,20 @@ use reimagine_agent::{
     AgentRequest, AgentToolDefinition, Message, ModelCapability, ModelName, ProviderName,
 };
 use reimagine_agent_provider::{
-    AnthropicConfig, CompletionBackend, OpenAiCompatibleConfig, ProviderAdapterError,
-    ReqwestBackend, arc_real_backend_with_http_client,
+    AnthropicMessagesConfig, CompletionBackend, OpenAiChatCompletionsConfig, ProviderAdapterError,
+    ReqwestBackend, arc_real_openai_chat_completions_backend_with_http_client,
 };
 
 const OPENAI_KEY: &str = "sk-test-openai";
 const ANTHROPIC_KEY: &str = "sk-test-anthropic";
 
-fn openai_cfg_for(server: &MockServer) -> OpenAiCompatibleConfig {
-    OpenAiCompatibleConfig::new(format!("{}/v1", server.uri()), OPENAI_KEY, "gpt-4o-mini")
+fn openai_cfg_for(server: &MockServer) -> OpenAiChatCompletionsConfig {
+    OpenAiChatCompletionsConfig::new(format!("{}/v1", server.uri()), OPENAI_KEY, "gpt-4o-mini")
 }
 
-fn anthropic_cfg_for(server: &MockServer) -> AnthropicConfig {
-    AnthropicConfig::new(ANTHROPIC_KEY, "claude-3-5-sonnet-latest").with_base_url(server.uri())
+fn anthropic_cfg_for(server: &MockServer) -> AnthropicMessagesConfig {
+    AnthropicMessagesConfig::new(ANTHROPIC_KEY, "claude-3-5-sonnet-latest")
+        .with_base_url(server.uri())
 }
 
 fn build_request(model: &str) -> AgentRequest {
@@ -90,11 +91,12 @@ async fn openai_complete_returns_translated_response() {
 
     let http = reqwest::Client::new();
 
-    let backend: Arc<dyn CompletionBackend> = arc_real_backend_with_http_client(
-        ProviderName::new("openai-test"),
-        openai_cfg_for(&server),
-        http,
-    );
+    let backend: Arc<dyn CompletionBackend> =
+        arc_real_openai_chat_completions_backend_with_http_client(
+            ProviderName::new("openai-test"),
+            openai_cfg_for(&server),
+            http,
+        );
 
     let resp = backend
         .complete(build_request("gpt-4o-mini"))
@@ -123,11 +125,12 @@ async fn openai_complete_maps_non_2xx_to_api_error() {
         .await;
 
     let http = reqwest::Client::new();
-    let backend: Arc<dyn CompletionBackend> = arc_real_backend_with_http_client(
-        ProviderName::new("openai-test"),
-        openai_cfg_for(&server),
-        http,
-    );
+    let backend: Arc<dyn CompletionBackend> =
+        arc_real_openai_chat_completions_backend_with_http_client(
+            ProviderName::new("openai-test"),
+            openai_cfg_for(&server),
+            http,
+        );
     let err = backend
         .complete(build_request("gpt-4o-mini"))
         .await
@@ -159,11 +162,12 @@ async fn openai_list_models_returns_translated_listing() {
         .await;
 
     let http = reqwest::Client::new();
-    let backend: Arc<dyn CompletionBackend> = arc_real_backend_with_http_client(
-        ProviderName::new("openai-test"),
-        openai_cfg_for(&server),
-        http,
-    );
+    let backend: Arc<dyn CompletionBackend> =
+        arc_real_openai_chat_completions_backend_with_http_client(
+            ProviderName::new("openai-test"),
+            openai_cfg_for(&server),
+            http,
+        );
     let models = backend.list_models().await.expect("list ok");
     assert_eq!(models.len(), 2);
     assert_eq!(models[0].name().as_str(), "gpt-4o-mini");
@@ -196,7 +200,7 @@ async fn anthropic_complete_returns_translated_response() {
         .await;
 
     let http = reqwest::Client::new();
-    let backend = ReqwestBackend::anthropic_with_http_client(
+    let backend = ReqwestBackend::anthropic_messages_with_http_client(
         ProviderName::new("anthropic-test"),
         anthropic_cfg_for(&server),
         http,
@@ -227,7 +231,7 @@ async fn anthropic_complete_maps_non_2xx_to_api_error() {
         .await;
 
     let http = reqwest::Client::new();
-    let backend = ReqwestBackend::anthropic_with_http_client(
+    let backend = ReqwestBackend::anthropic_messages_with_http_client(
         ProviderName::new("anthropic-test"),
         anthropic_cfg_for(&server),
         http,
@@ -263,7 +267,7 @@ async fn anthropic_list_models_returns_translated_listing() {
         .await;
 
     let http = reqwest::Client::new();
-    let backend = ReqwestBackend::anthropic_with_http_client(
+    let backend = ReqwestBackend::anthropic_messages_with_http_client(
         ProviderName::new("anthropic-test"),
         anthropic_cfg_for(&server),
         http,

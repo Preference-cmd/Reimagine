@@ -7,7 +7,7 @@
 
 use reimagine_agent::{ProviderError, ProviderName};
 
-use crate::config::ProviderKind;
+use crate::config::Protocol;
 
 /// Internal error type for the `agent-provider` crate. The public
 /// provider boundary is `reimagine_agent::ProviderError`; this type is
@@ -30,7 +30,7 @@ pub enum ProviderAdapterError {
     /// the discriminator.
     MissingConfig {
         provider: String,
-        kind: ProviderKind,
+        protocol: Protocol,
     },
 }
 
@@ -84,9 +84,9 @@ impl ProviderAdapterError {
                 "STREAMING_UNSUPPORTED".to_string(),
                 "this provider adapter does not support streaming".to_string(),
             ),
-            Self::MissingConfig { provider, kind } => (
+            Self::MissingConfig { provider, protocol } => (
                 "CONFIGURATION".to_string(),
-                format!("provider `{provider}` is missing config for kind `{kind}`"),
+                format!("provider `{provider}` is missing config for protocol `{protocol}`"),
             ),
         };
         let mut err = ProviderError::new(code, message);
@@ -105,10 +105,10 @@ impl std::fmt::Display for ProviderAdapterError {
             Self::Serialization(m) => write!(f, "[SERIALIZATION] {m}"),
             Self::Configuration(m) => write!(f, "[CONFIGURATION] {m}"),
             Self::StreamingUnsupported => write!(f, "[STREAMING_UNSUPPORTED]"),
-            Self::MissingConfig { provider, kind } => {
+            Self::MissingConfig { provider, protocol } => {
                 write!(
                     f,
-                    "[CONFIGURATION] provider `{provider}` missing config for `{kind}`"
+                    "[CONFIGURATION] provider `{provider}` missing config for `{protocol}`"
                 )
             }
         }

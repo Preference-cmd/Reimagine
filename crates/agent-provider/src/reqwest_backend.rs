@@ -21,7 +21,7 @@ use reimagine_agent::{
 use serde_json::Value;
 
 use crate::backend::CompletionBackend;
-use crate::config::{AnthropicConfig, OpenAiCompatibleConfig};
+use crate::config::{AnthropicMessagesConfig, OpenAiChatCompletionsConfig, Protocol};
 use crate::error::ProviderAdapterError;
 use crate::translation;
 use crate::translation::sse_parser::SseParser;
@@ -32,88 +32,98 @@ const MAX_RETRIES: u32 = 3;
 const RETRY_BASE_DELAY: Duration = Duration::from_millis(500);
 
 /// Production backend. `complete` and `list_models` route through
-/// direct reqwest HTTP calls. `stream` remains `streaming_unsupported`
-/// — V2 work.
+/// direct reqwest HTTP calls.
 #[derive(Clone)]
 pub struct ReqwestBackend {
     name: ProviderName,
-    kind: BackendKind,
+    config: BackendConfig,
     http: reqwest::Client,
 }
 
 impl std::fmt::Debug for ReqwestBackend {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        let kind_repr = match &self.kind {
-            BackendKind::OpenAiCompatible(_) => "OpenAiCompatible(<redacted>)",
-            BackendKind::Anthropic(_) => "Anthropic(<redacted>)",
+        let protocol_repr = match &self.config {
+            BackendConfig::OpenAiChatCompletions(_) => "OpenAiChatCompletions(<redacted>)",
+            BackendConfig::AnthropicMessages(_) => "AnthropicMessages(<redacted>)",
         };
         f.debug_struct("ReqwestBackend")
             .field("name", &self.name)
-            .field("kind", &kind_repr)
+            .field("config", &protocol_repr)
             .finish_non_exhaustive()
     }
 }
 
+/// A protocol paired with its typed config. `protocol()` derives the
+/// [`Protocol`](crate::config::Protocol) discriminator from the variant.
 #[derive(Debug, Clone)]
-pub enum BackendKind {
-    OpenAiCompatible(OpenAiCompatibleConfig),
-    Anthropic(AnthropicConfig),
+pub enum BackendConfig {
+    OpenAiChatCompletions(OpenAiChatCompletionsConfig),
+    AnthropicMessages(AnthropicMessagesConfig),
+}
+
+impl BackendConfig {
+    pub fn protocol(&self) -> Protocol {
+        match self {
+            Self::OpenAiChatCompletions(_) => Protocol::OpenAiChatCompletions,
+            Self::AnthropicMessages(_) => Protocol::AnthropicMessages,
+        }
+    }
 }
 
 impl ReqwestBackend {
     /// Construct an OpenAI-compatible backend with a default
     /// `reqwest::Client`.
-    pub fn openai_compatible(name: ProviderName, cfg: OpenAiCompatibleConfig) -> Self {
-        Self::openai_compatible_with_http_client(name, cfg, reqwest::Client::new())
+    pub fn openai_chat_completions(name: ProviderName, cfg: OpenAiChatCompletionsConfig) -> Self {
+        Self::openai_chat_completions_with_http_client(name, cfg, reqwest::Client::new())
     }
 
     /// Construct an OpenAI-compatible backend with an explicit
     /// `reqwest::Client` (used by tests).
-    pub fn openai_compatible_with_http_client(
+    pub fn openai_chat_completions_with_http_client(
         name: ProviderName,
-        cfg: OpenAiCompatibleConfig,
+        cfg: OpenAiChatCompletionsConfig,
         http: reqwest::Client,
     ) -> Self {
         Self {
             name,
-            kind: BackendKind::OpenAiCompatible(cfg),
+            config: BackendConfig::OpenAiChatCompletions(cfg),
             http,
         }
     }
 
     /// Construct an Anthropic backend with a default `reqwest::Client`.
-    pub fn anthropic(name: ProviderName, cfg: AnthropicConfig) -> Self {
-        Self::anthropic_with_http_client(name, cfg, reqwest::Client::new())
+    pub fn anthropic_messages(name: ProviderName, cfg: AnthropicMessagesConfig) -> Self {
+        Self::anthropic_messages_with_http_client(name, cfg, reqwest::Client::new())
     }
 
     /// Construct an Anthropic backend with an explicit `reqwest::Client`
     /// (used by tests).
-    pub fn anthropic_with_http_client(
+    pub fn anthropic_messages_with_http_client(
         name: ProviderName,
-        cfg: AnthropicConfig,
+        cfg: AnthropicMessagesConfig,
         http: reqwest::Client,
     ) -> Self {
         Self {
             name,
-            kind: BackendKind::Anthropic(cfg),
+            config: BackendConfig::AnthropicMessages(cfg),
             http,
         }
     }
 
-    fn openai_config(&self) -> Result<&OpenAiCompatibleConfig, ProviderAdapterError> {
-        match &self.kind {
-            BackendKind::OpenAiCompatible(cfg) => Ok(cfg),
-            BackendKind::Anthropic(_) => Err(ProviderAdapterError::configuration(
-                "expected OpenAI-compatible backend, got Anthropic",
+    fn openai_config(&self) -> Result<&OpenAiChatCompletionsConfig, ProviderAdapterError> {
+        match &self.config {
+            BackendConfig::OpenAiChatCompletions(cfg) => Ok(cfg),
+            BackendConfig::AnthropicMessages(_) => Err(ProviderAdapterError::configuration(
+                "expected openai_chat_completions protocol, got anthropic_messages",
             )),
         }
     }
 
-    fn anthropic_config(&self) -> Result<&AnthropicConfig, ProviderAdapterError> {
-        match &self.kind {
-            BackendKind::Anthropic(cfg) => Ok(cfg),
-            BackendKind::OpenAiCompatible(_) => Err(ProviderAdapterError::configuration(
-                "expected Anthropic backend, got OpenAI-compatible",
+    fn anthropic_config(&self) -> Result<&AnthropicMessagesConfig, ProviderAdapterError> {
+        match &self.config {
+            BackendConfig::AnthropicMessages(cfg) => Ok(cfg),
+            BackendConfig::OpenAiChatCompletions(_) => Err(ProviderAdapterError::configuration(
+                "expected anthropic_messages protocol, got openai_chat_completions",
             )),
         }
     }
@@ -679,36 +689,38 @@ impl AgentStream for ReqwestSseStream {
     }
 }
 
-pub fn arc_real_backend(
+pub fn arc_real_openai_chat_completions_backend(
     name: ProviderName,
-    cfg: OpenAiCompatibleConfig,
+    cfg: OpenAiChatCompletionsConfig,
 ) -> Arc<dyn CompletionBackend> {
-    Arc::new(ReqwestBackend::openai_compatible(name, cfg))
+    Arc::new(ReqwestBackend::openai_chat_completions(name, cfg))
 }
 
-pub fn arc_real_backend_with_http_client(
+pub fn arc_real_openai_chat_completions_backend_with_http_client(
     name: ProviderName,
-    cfg: OpenAiCompatibleConfig,
+    cfg: OpenAiChatCompletionsConfig,
     http: reqwest::Client,
 ) -> Arc<dyn CompletionBackend> {
-    Arc::new(ReqwestBackend::openai_compatible_with_http_client(
+    Arc::new(ReqwestBackend::openai_chat_completions_with_http_client(
         name, cfg, http,
     ))
 }
 
-pub fn arc_real_anthropic_backend(
+pub fn arc_real_anthropic_messages_backend(
     name: ProviderName,
-    cfg: AnthropicConfig,
+    cfg: AnthropicMessagesConfig,
 ) -> Arc<dyn CompletionBackend> {
-    Arc::new(ReqwestBackend::anthropic(name, cfg))
+    Arc::new(ReqwestBackend::anthropic_messages(name, cfg))
 }
 
-pub fn arc_real_anthropic_backend_with_http_client(
+pub fn arc_real_anthropic_messages_backend_with_http_client(
     name: ProviderName,
-    cfg: AnthropicConfig,
+    cfg: AnthropicMessagesConfig,
     http: reqwest::Client,
 ) -> Arc<dyn CompletionBackend> {
-    Arc::new(ReqwestBackend::anthropic_with_http_client(name, cfg, http))
+    Arc::new(ReqwestBackend::anthropic_messages_with_http_client(
+        name, cfg, http,
+    ))
 }
 
 #[async_trait]
@@ -722,9 +734,9 @@ impl CompletionBackend for ReqwestBackend {
                 tokio::time::sleep(delay).await;
             }
 
-            let result = match &self.kind {
-                BackendKind::OpenAiCompatible(_) => self.run_openai_complete(&request).await,
-                BackendKind::Anthropic(_) => self.run_anthropic_complete(&request).await,
+            let result = match &self.config {
+                BackendConfig::OpenAiChatCompletions(_) => self.run_openai_complete(&request).await,
+                BackendConfig::AnthropicMessages(_) => self.run_anthropic_complete(&request).await,
             };
 
             match result {
@@ -749,9 +761,9 @@ impl CompletionBackend for ReqwestBackend {
     ) -> Result<Box<dyn AgentStream>, ProviderAdapterError> {
         // Streaming does not retry — the caller owns the stream lifecycle.
         // Retry is the caller's responsibility for streaming.
-        match &self.kind {
-            BackendKind::OpenAiCompatible(_) => self.run_openai_stream(&request).await,
-            BackendKind::Anthropic(_) => self.run_anthropic_stream(&request).await,
+        match &self.config {
+            BackendConfig::OpenAiChatCompletions(_) => self.run_openai_stream(&request).await,
+            BackendConfig::AnthropicMessages(_) => self.run_anthropic_stream(&request).await,
         }
     }
 
@@ -764,9 +776,9 @@ impl CompletionBackend for ReqwestBackend {
                 tokio::time::sleep(delay).await;
             }
 
-            let result = match &self.kind {
-                BackendKind::OpenAiCompatible(_) => self.run_openai_list_models().await,
-                BackendKind::Anthropic(_) => self.run_anthropic_list_models().await,
+            let result = match &self.config {
+                BackendConfig::OpenAiChatCompletions(_) => self.run_openai_list_models().await,
+                BackendConfig::AnthropicMessages(_) => self.run_anthropic_list_models().await,
             };
 
             match result {
