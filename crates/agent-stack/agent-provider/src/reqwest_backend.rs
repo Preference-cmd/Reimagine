@@ -214,8 +214,10 @@ impl ReqwestBackend {
         let base = cfg.base_url().unwrap_or("https://api.anthropic.com");
         let url = format!("{}/v1/messages", base.trim_end_matches('/'));
 
-        let (system, messages) = translation::request::to_anthropic_messages(request.messages());
-        let tools = translation::tools::to_anthropic_tools(request.tools());
+        let cache_control = translation::params::cache_control_enabled(request.options());
+        let (system, messages) =
+            translation::request::to_anthropic_messages(request.messages(), cache_control);
+        let tools = translation::tools::to_anthropic_tools(request.tools(), cache_control);
         let params = sampling_params(request);
         let mut body = serde_json::Map::new();
         body.insert("model".into(), json!(request.model().as_str()));
@@ -404,8 +406,10 @@ impl ReqwestBackend {
         let base = cfg.base_url().unwrap_or("https://api.anthropic.com");
         let url = format!("{}/v1/messages", base.trim_end_matches('/'));
 
-        let (system, messages) = translation::request::to_anthropic_messages(request.messages());
-        let tools = translation::tools::to_anthropic_tools(request.tools());
+        let cache_control = translation::params::cache_control_enabled(request.options());
+        let (system, messages) =
+            translation::request::to_anthropic_messages(request.messages(), cache_control);
+        let tools = translation::tools::to_anthropic_tools(request.tools(), cache_control);
         let params = sampling_params(request);
         let mut body = serde_json::Map::new();
         body.insert("model".into(), json!(request.model().as_str()));
@@ -581,6 +585,12 @@ struct ReqwestSseStream {
     /// `output_index`. Arguments deltas arrive base64-encoded and are
     /// decoded before accumulation.
     responses_tool_calls: Vec<ResponsesPartialToolCall>,
+    /// Input-side Anthropic usage captured from `message_start`
+    /// (input_tokens + cache fields); merged into the report emitted on
+    /// `message_delta` (output_tokens).
+    anthropic_input: Option<u64>,
+    anthropic_cache_creation: Option<u64>,
+    anthropic_cache_read: Option<u64>,
     /// Whether the stream is done.
     done: bool,
 }
@@ -620,6 +630,9 @@ impl ReqwestSseStream {
             anthropic_text: String::new(),
             anthropic_tool_calls: Vec::new(),
             responses_tool_calls: Vec::new(),
+            anthropic_input: None,
+            anthropic_cache_creation: None,
+            anthropic_cache_read: None,
             done: false,
         }
     }
@@ -733,14 +746,12 @@ impl ReqwestSseStream {
         if let Some(usage) = chunk.get("usage") {
             let input = usage.get("prompt_tokens").and_then(|v| v.as_u64());
             let output = usage.get("completion_tokens").and_then(|v| v.as_u64());
-            let reasoning = usage
-                .get("completion_tokens_details")
-                .and_then(|d| d.get("reasoning_tokens"))
-                .and_then(|v| v.as_u64())
-                .or_else(|| usage.get("reasoning_tokens").and_then(|v| v.as_u64()));
+            let reasoning = translation::usage::openai_reasoning_tokens(usage);
+            let cached = translation::usage::openai_cached_tokens(usage);
             self.pending.push_back(AgentStreamEvent::Usage(
                 reimagine_agent_harness::Usage::new(input, output)
-                    .with_reasoning_tokens(reasoning),
+                    .with_reasoning_tokens(reasoning)
+                    .with_cache_read(cached),
             ));
         }
     }
@@ -848,6 +859,17 @@ impl ReqwestSseStream {
                     }
                 }
             }
+            "message_start" => {
+                if let Some(usage) = data.get("message").and_then(|m| m.get("usage")) {
+                    self.anthropic_input = usage.get("input_tokens").and_then(|v| v.as_u64());
+                    self.anthropic_cache_creation = usage
+                        .get("cache_creation_input_tokens")
+                        .and_then(|v| v.as_u64());
+                    self.anthropic_cache_read = usage
+                        .get("cache_read_input_tokens")
+                        .and_then(|v| v.as_u64());
+                }
+            }
             "message_delta" => {
                 if let Some(delta) = data.get("delta")
                     && let Some(reason) = delta.get("stop_reason").and_then(|v| v.as_str())
@@ -856,12 +878,22 @@ impl ReqwestSseStream {
                     let _ = reason;
                 }
                 if let Some(usage) = data.get("usage") {
-                    let input = usage.get("input_tokens").and_then(|v| v.as_u64());
+                    let input = self.anthropic_input.or_else(|| {
+                        usage.get("input_tokens").and_then(|v| v.as_u64())
+                    });
                     let output = usage.get("output_tokens").and_then(|v| v.as_u64());
+                    let cache_creation = self.anthropic_cache_creation.or_else(|| {
+                        usage.get("cache_creation_input_tokens").and_then(|v| v.as_u64())
+                    });
+                    let cache_read = self.anthropic_cache_read.or_else(|| {
+                        usage.get("cache_read_input_tokens").and_then(|v| v.as_u64())
+                    });
                     self.pending
-                        .push_back(AgentStreamEvent::Usage(reimagine_agent_harness::Usage::new(
-                            input, output,
-                        )));
+                        .push_back(AgentStreamEvent::Usage(
+                            reimagine_agent_harness::Usage::new(input, output)
+                                .with_cache_creation(cache_creation)
+                                .with_cache_read(cache_read),
+                        ));
                 }
             }
             "message_stop" => {
@@ -999,9 +1031,11 @@ impl ReqwestSseStream {
                         .get("output_tokens_details")
                         .and_then(|d| d.get("reasoning_tokens"))
                         .and_then(|v| v.as_u64());
+                    let cached = translation::usage::openai_cached_tokens(usage);
                     self.pending.push_back(AgentStreamEvent::Usage(
                         reimagine_agent_harness::Usage::new(input, output)
-                            .with_reasoning_tokens(reasoning),
+                            .with_reasoning_tokens(reasoning)
+                            .with_cache_read(cached),
                     ));
                 }
                 self.done = true;

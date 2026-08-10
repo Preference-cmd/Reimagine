@@ -174,13 +174,27 @@ impl ToolCall {
 /// `reasoning_tokens` counts the tokens the model spent on internal
 /// reasoning before answering (OpenAI `output_tokens_details.reasoning_tokens`,
 /// DeepSeek-style top-level `reasoning_tokens`). It is a sub-portion of
-/// `output_tokens`; `total` remains input + output.
+/// `output_tokens`.
+///
+/// Cache accounting follows the Anthropic SDK budget convention that
+/// CM-V2's budget model consumes directly:
+/// `total = input + cache_creation + cache_read + output`. OpenAI reports
+/// only a combined `cached_tokens` (read from `input_tokens_details`),
+/// which is mapped into `cache_read_input_tokens`.
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Usage {
     input_tokens: Option<u64>,
     output_tokens: Option<u64>,
     #[serde(default)]
     reasoning_tokens: Option<u64>,
+    /// Tokens written to the provider cache (Anthropic
+    /// `cache_creation_input_tokens`). OpenAI has no equivalent.
+    #[serde(default)]
+    cache_creation_input_tokens: Option<u64>,
+    /// Tokens read from the provider cache (Anthropic
+    /// `cache_read_input_tokens`; OpenAI `input_tokens_details.cached_tokens`).
+    #[serde(default)]
+    cache_read_input_tokens: Option<u64>,
 }
 
 impl Usage {
@@ -189,11 +203,23 @@ impl Usage {
             input_tokens,
             output_tokens,
             reasoning_tokens: None,
+            cache_creation_input_tokens: None,
+            cache_read_input_tokens: None,
         }
     }
 
     pub fn with_reasoning_tokens(mut self, reasoning_tokens: Option<u64>) -> Self {
         self.reasoning_tokens = reasoning_tokens;
+        self
+    }
+
+    pub fn with_cache_creation(mut self, tokens: Option<u64>) -> Self {
+        self.cache_creation_input_tokens = tokens;
+        self
+    }
+
+    pub fn with_cache_read(mut self, tokens: Option<u64>) -> Self {
+        self.cache_read_input_tokens = tokens;
         self
     }
 
@@ -207,6 +233,43 @@ impl Usage {
 
     pub fn reasoning_tokens(&self) -> Option<u64> {
         self.reasoning_tokens
+    }
+
+    pub fn cache_creation_input_tokens(&self) -> Option<u64> {
+        self.cache_creation_input_tokens
+    }
+
+    pub fn cache_read_input_tokens(&self) -> Option<u64> {
+        self.cache_read_input_tokens
+    }
+
+    /// Total budgeted tokens: input + cache_creation + cache_read + output
+    /// (Anthropic SDK convention). `None` when no token count is reported
+    /// at all.
+    ///
+    /// NOTE: OpenAI reports `cached_tokens` as a sub-portion of
+    /// `prompt_tokens`, so for OpenAI sources this formula counts the
+    /// cached tokens twice (input already includes them). The convention
+    /// is exact for Anthropic; CM-V2 consumers must not mix providers
+    /// when comparing totals.
+    pub fn total(&self) -> Option<u64> {
+        let any_reported = [
+            self.input_tokens,
+            self.output_tokens,
+            self.cache_creation_input_tokens,
+            self.cache_read_input_tokens,
+        ]
+        .iter()
+        .any(Option::is_some);
+        if !any_reported {
+            return None;
+        }
+        Some(
+            self.input_tokens.unwrap_or(0)
+                + self.cache_creation_input_tokens.unwrap_or(0)
+                + self.cache_read_input_tokens.unwrap_or(0)
+                + self.output_tokens.unwrap_or(0),
+        )
     }
 }
 
