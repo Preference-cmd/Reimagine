@@ -33,3 +33,10 @@ pub fn to_anthropic_tools(defs: &[AgentToolDefinition]) -> Vec<Value> {
         })
         .collect()
 }
+
+/// Translate a slice of `AgentToolDefinition` into the OpenAI Responses
+/// API `tools` array format. Same function-tool shape as
+/// [`to_openai_tools`]; the Responses API accepts it verbatim.
+pub fn to_responses_tools(defs: &[AgentToolDefinition]) -> Vec<Value> {
+    to_openai_tools(defs)
+}

@@ -16,6 +16,8 @@ pub enum Protocol {
     OpenAiChatCompletions,
     #[serde(rename = "anthropic_messages")]
     AnthropicMessages,
+    #[serde(rename = "openai_responses")]
+    OpenAiResponses,
 }
 
 impl Protocol {
@@ -23,6 +25,7 @@ impl Protocol {
         match self {
             Self::OpenAiChatCompletions => "openai_chat_completions",
             Self::AnthropicMessages => "anthropic_messages",
+            Self::OpenAiResponses => "openai_responses",
         }
     }
 }
@@ -44,6 +47,42 @@ pub struct OpenAiChatCompletionsConfig {
 }
 
 impl OpenAiChatCompletionsConfig {
+    pub fn new(
+        base_url: impl Into<String>,
+        api_key: impl Into<String>,
+        default_model: impl Into<String>,
+    ) -> Self {
+        Self {
+            base_url: base_url.into(),
+            api_key: api_key.into(),
+            default_model: default_model.into(),
+        }
+    }
+
+    pub fn base_url(&self) -> &str {
+        &self.base_url
+    }
+
+    pub fn api_key(&self) -> &str {
+        &self.api_key
+    }
+
+    pub fn default_model(&self) -> &str {
+        &self.default_model
+    }
+}
+
+/// OpenAI Responses API provider config. `base_url` is required
+/// because V1 supports arbitrary OpenAI-compatible endpoints, not just
+/// `api.openai.com`.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct OpenAiResponsesConfig {
+    base_url: String,
+    api_key: String,
+    default_model: String,
+}
+
+impl OpenAiResponsesConfig {
     pub fn new(
         base_url: impl Into<String>,
         api_key: impl Into<String>,
@@ -129,6 +168,8 @@ pub struct ProviderConfig {
     openai_chat_completions: Option<OpenAiChatCompletionsConfig>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     anthropic_messages: Option<AnthropicMessagesConfig>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    openai_responses: Option<OpenAiResponsesConfig>,
 }
 
 fn default_enabled() -> bool {
@@ -149,6 +190,7 @@ impl ProviderConfig {
             default_model: Some(inner.default_model().to_string()),
             openai_chat_completions: Some(inner),
             anthropic_messages: None,
+            openai_responses: None,
         }
     }
 
@@ -165,6 +207,21 @@ impl ProviderConfig {
             default_model: Some(inner.default_model().to_string()),
             openai_chat_completions: None,
             anthropic_messages: Some(inner),
+            openai_responses: None,
+        }
+    }
+
+    pub fn with_openai_responses(name: impl Into<String>, inner: OpenAiResponsesConfig) -> Self {
+        Self {
+            name: name.into(),
+            enabled: true,
+            protocol: Protocol::OpenAiResponses,
+            base_url: Some(inner.base_url().to_string()),
+            api_key: Some(inner.api_key().to_string()),
+            default_model: Some(inner.default_model().to_string()),
+            openai_chat_completions: None,
+            anthropic_messages: None,
+            openai_responses: Some(inner),
         }
     }
 
@@ -190,6 +247,10 @@ impl ProviderConfig {
 
     pub fn anthropic_messages(&self) -> Option<&AnthropicMessagesConfig> {
         self.anthropic_messages.as_ref()
+    }
+
+    pub fn openai_responses(&self) -> Option<&OpenAiResponsesConfig> {
+        self.openai_responses.as_ref()
     }
 }
 
@@ -231,5 +292,14 @@ mod tests {
             "openai_chat_completions"
         );
         assert_eq!(Protocol::AnthropicMessages.as_str(), "anthropic_messages");
+        assert_eq!(Protocol::OpenAiResponses.as_str(), "openai_responses");
+    }
+
+    #[test]
+    fn openai_responses_config_carries_base_url_api_key_and_default_model() {
+        let cfg = OpenAiResponsesConfig::new("https://api.example.com/v1", "sk-test", "gpt-5-mini");
+        assert_eq!(cfg.base_url(), "https://api.example.com/v1");
+        assert_eq!(cfg.api_key(), "sk-test");
+        assert_eq!(cfg.default_model(), "gpt-5-mini");
     }
 }
