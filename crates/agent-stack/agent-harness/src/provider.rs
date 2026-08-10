@@ -246,9 +246,22 @@ impl Usage {
     /// Total budgeted tokens: input + cache_creation + cache_read + output
     /// (Anthropic SDK convention). `None` when no token count is reported
     /// at all.
+    ///
+    /// NOTE: OpenAI reports `cached_tokens` as a sub-portion of
+    /// `prompt_tokens`, so for OpenAI sources this formula counts the
+    /// cached tokens twice (input already includes them). The convention
+    /// is exact for Anthropic; CM-V2 consumers must not mix providers
+    /// when comparing totals.
     pub fn total(&self) -> Option<u64> {
-        let parts = [self.input_tokens, self.output_tokens];
-        if parts.iter().all(Option::is_none) {
+        let any_reported = [
+            self.input_tokens,
+            self.output_tokens,
+            self.cache_creation_input_tokens,
+            self.cache_read_input_tokens,
+        ]
+        .iter()
+        .any(Option::is_some);
+        if !any_reported {
             return None;
         }
         Some(
