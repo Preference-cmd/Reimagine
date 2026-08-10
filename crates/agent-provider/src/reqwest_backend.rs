@@ -21,7 +21,9 @@ use reimagine_agent::{
 use serde_json::Value;
 
 use crate::backend::CompletionBackend;
-use crate::config::{AnthropicMessagesConfig, OpenAiChatCompletionsConfig, Protocol};
+use crate::config::{
+    AnthropicMessagesConfig, OpenAiChatCompletionsConfig, OpenAiResponsesConfig, Protocol,
+};
 use crate::error::ProviderAdapterError;
 use crate::translation;
 use crate::translation::sse_parser::SseParser;
@@ -45,6 +47,7 @@ impl std::fmt::Debug for ReqwestBackend {
         let protocol_repr = match &self.config {
             BackendConfig::OpenAiChatCompletions(_) => "OpenAiChatCompletions(<redacted>)",
             BackendConfig::AnthropicMessages(_) => "AnthropicMessages(<redacted>)",
+            BackendConfig::OpenAiResponses(_) => "OpenAiResponses(<redacted>)",
         };
         f.debug_struct("ReqwestBackend")
             .field("name", &self.name)
@@ -59,6 +62,7 @@ impl std::fmt::Debug for ReqwestBackend {
 pub enum BackendConfig {
     OpenAiChatCompletions(OpenAiChatCompletionsConfig),
     AnthropicMessages(AnthropicMessagesConfig),
+    OpenAiResponses(OpenAiResponsesConfig),
 }
 
 impl BackendConfig {
@@ -66,6 +70,7 @@ impl BackendConfig {
         match self {
             Self::OpenAiChatCompletions(_) => Protocol::OpenAiChatCompletions,
             Self::AnthropicMessages(_) => Protocol::AnthropicMessages,
+            Self::OpenAiResponses(_) => Protocol::OpenAiResponses,
         }
     }
 }
@@ -110,11 +115,46 @@ impl ReqwestBackend {
         }
     }
 
+    /// Construct an OpenAI Responses backend with a default
+    /// `reqwest::Client`.
+    pub fn openai_responses(name: ProviderName, cfg: OpenAiResponsesConfig) -> Self {
+        Self::openai_responses_with_http_client(name, cfg, reqwest::Client::new())
+    }
+
+    /// Construct an OpenAI Responses backend with an explicit
+    /// `reqwest::Client` (used by tests).
+    pub fn openai_responses_with_http_client(
+        name: ProviderName,
+        cfg: OpenAiResponsesConfig,
+        http: reqwest::Client,
+    ) -> Self {
+        Self {
+            name,
+            config: BackendConfig::OpenAiResponses(cfg),
+            http,
+        }
+    }
+
     fn openai_config(&self) -> Result<&OpenAiChatCompletionsConfig, ProviderAdapterError> {
         match &self.config {
             BackendConfig::OpenAiChatCompletions(cfg) => Ok(cfg),
             BackendConfig::AnthropicMessages(_) => Err(ProviderAdapterError::configuration(
                 "expected openai_chat_completions protocol, got anthropic_messages",
+            )),
+            BackendConfig::OpenAiResponses(_) => Err(ProviderAdapterError::configuration(
+                "expected openai_chat_completions protocol, got openai_responses",
+            )),
+        }
+    }
+
+    fn responses_config(&self) -> Result<&OpenAiResponsesConfig, ProviderAdapterError> {
+        match &self.config {
+            BackendConfig::OpenAiResponses(cfg) => Ok(cfg),
+            BackendConfig::OpenAiChatCompletions(_) => Err(ProviderAdapterError::configuration(
+                "expected openai_responses protocol, got openai_chat_completions",
+            )),
+            BackendConfig::AnthropicMessages(_) => Err(ProviderAdapterError::configuration(
+                "expected openai_responses protocol, got anthropic_messages",
             )),
         }
     }
@@ -124,6 +164,9 @@ impl ReqwestBackend {
             BackendConfig::AnthropicMessages(cfg) => Ok(cfg),
             BackendConfig::OpenAiChatCompletions(_) => Err(ProviderAdapterError::configuration(
                 "expected anthropic_messages protocol, got openai_chat_completions",
+            )),
+            BackendConfig::OpenAiResponses(_) => Err(ProviderAdapterError::configuration(
+                "expected anthropic_messages protocol, got openai_responses",
             )),
         }
     }
@@ -204,17 +247,71 @@ impl ReqwestBackend {
         translation::response::from_anthropic_response(&value)
     }
 
+    /// OpenAI Responses completion. Builds the request body from the V1
+    /// translation functions: system text goes into `instructions`,
+    /// the rest into the `input` array. `prompt_cache_key` is forwarded
+    /// from `request.options()` when present. The full input array is
+    /// resent on every request — no `previous_response_id` chaining.
+    async fn run_openai_responses_complete(
+        &self,
+        request: &AgentRequest,
+    ) -> Result<AgentResponse, ProviderAdapterError> {
+        let cfg = self.responses_config()?;
+        let url = format!("{}/responses", cfg.base_url().trim_end_matches('/'));
+
+        let instructions = translation::request::to_responses_instructions(request.messages());
+        let input =
+            translation::request::to_responses_input(request.messages(), instructions.as_deref());
+        let tools = translation::tools::to_responses_tools(request.tools());
+        let prompt_cache_key = request
+            .options()
+            .get("prompt_cache_key")
+            .and_then(|v| v.as_str());
+        let mut body = serde_json::json!({
+            "model": request.model().as_str(),
+            "input": input,
+            "tools": tools,
+        });
+        if let Some(sys) = instructions {
+            body["instructions"] = serde_json::json!(sys);
+        }
+        if let Some(key) = prompt_cache_key {
+            body["prompt_cache_key"] = serde_json::json!(key);
+        }
+
+        let resp = self
+            .http
+            .post(&url)
+            .bearer_auth(cfg.api_key())
+            .json(&body)
+            .send()
+            .await
+            .map_err(|e| ProviderAdapterError::transport(e.to_string()))?;
+
+        let value = response_json_or_error(resp).await?;
+        translation::response::from_responses_response(&value)
+    }
+
     /// OpenAI-compatible model listing. Hits `/models` relative to the
     /// configured base URL and stamps the configured provider name on
-    /// every entry.
+    /// every entry. Shared by the chat-completions and Responses
+    /// protocols.
     async fn run_openai_list_models(&self) -> Result<Vec<ModelInfo>, ProviderAdapterError> {
-        let cfg = self.openai_config()?;
-        let url = format!("{}/models", cfg.base_url().trim_end_matches('/'));
+        let (base_url, api_key) = match &self.config {
+            BackendConfig::OpenAiChatCompletions(cfg) => (cfg.base_url(), cfg.api_key()),
+            BackendConfig::OpenAiResponses(cfg) => (cfg.base_url(), cfg.api_key()),
+            BackendConfig::AnthropicMessages(_) => {
+                return Err(ProviderAdapterError::configuration(
+                    "expected an openai protocol, got anthropic_messages",
+                ));
+            }
+        };
+        let url = format!("{}/models", base_url.trim_end_matches('/'));
 
         let resp = self
             .http
             .get(&url)
-            .bearer_auth(cfg.api_key())
+            .bearer_auth(api_key)
             .send()
             .await
             .map_err(|e| ProviderAdapterError::transport(e.to_string()))?;
@@ -324,6 +421,18 @@ impl ReqwestBackend {
 
         let resp = check_stream_status(resp).await?;
         Ok(Box::new(ReqwestSseStream::new(resp, StreamKind::Anthropic)))
+    }
+
+    /// OpenAI Responses streaming is not implemented yet (PV-01b). Until
+    /// then the backend rejects `stream` with a configuration error so
+    /// callers can fall back to `complete`.
+    async fn run_responses_stream(
+        &self,
+        _request: &AgentRequest,
+    ) -> Result<Box<dyn AgentStream>, ProviderAdapterError> {
+        Err(ProviderAdapterError::configuration(
+            "streaming is not yet implemented for the openai_responses protocol",
+        ))
     }
 }
 
@@ -723,6 +832,23 @@ pub fn arc_real_anthropic_messages_backend_with_http_client(
     ))
 }
 
+pub fn arc_real_openai_responses_backend(
+    name: ProviderName,
+    cfg: OpenAiResponsesConfig,
+) -> Arc<dyn CompletionBackend> {
+    Arc::new(ReqwestBackend::openai_responses(name, cfg))
+}
+
+pub fn arc_real_openai_responses_backend_with_http_client(
+    name: ProviderName,
+    cfg: OpenAiResponsesConfig,
+    http: reqwest::Client,
+) -> Arc<dyn CompletionBackend> {
+    Arc::new(ReqwestBackend::openai_responses_with_http_client(
+        name, cfg, http,
+    ))
+}
+
 #[async_trait]
 impl CompletionBackend for ReqwestBackend {
     async fn complete(&self, request: AgentRequest) -> Result<AgentResponse, ProviderAdapterError> {
@@ -737,6 +863,9 @@ impl CompletionBackend for ReqwestBackend {
             let result = match &self.config {
                 BackendConfig::OpenAiChatCompletions(_) => self.run_openai_complete(&request).await,
                 BackendConfig::AnthropicMessages(_) => self.run_anthropic_complete(&request).await,
+                BackendConfig::OpenAiResponses(_) => {
+                    self.run_openai_responses_complete(&request).await
+                }
             };
 
             match result {
@@ -764,6 +893,7 @@ impl CompletionBackend for ReqwestBackend {
         match &self.config {
             BackendConfig::OpenAiChatCompletions(_) => self.run_openai_stream(&request).await,
             BackendConfig::AnthropicMessages(_) => self.run_anthropic_stream(&request).await,
+            BackendConfig::OpenAiResponses(_) => self.run_responses_stream(&request).await,
         }
     }
 
@@ -779,6 +909,7 @@ impl CompletionBackend for ReqwestBackend {
             let result = match &self.config {
                 BackendConfig::OpenAiChatCompletions(_) => self.run_openai_list_models().await,
                 BackendConfig::AnthropicMessages(_) => self.run_anthropic_list_models().await,
+                BackendConfig::OpenAiResponses(_) => self.run_openai_list_models().await,
             };
 
             match result {
