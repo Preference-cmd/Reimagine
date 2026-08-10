@@ -10,6 +10,7 @@
 
 mod anthropic;
 mod backend;
+pub mod catalog;
 mod config;
 mod error;
 mod openai_compatible;
@@ -18,6 +19,7 @@ pub mod translation;
 
 pub use anthropic::AnthropicMessagesProvider;
 pub use backend::{CompletionBackend, FakeCompletionBackend, ScriptedBackendStep};
+pub use catalog::{CatalogError, ModelCatalog, ProviderCatalogEntry};
 pub use config::{
     AgentProviderConfigDocument, AnthropicMessagesConfig, OpenAiChatCompletionsConfig, Protocol,
     ProviderConfig,
