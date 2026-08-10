@@ -18,7 +18,7 @@ use async_trait::async_trait;
 use reimagine_agent::{
     AgentRequest, AgentResponse, AgentStream, AgentStreamEvent, ModelInfo, ProviderName,
 };
-use serde_json::Value;
+use serde_json::{Value, json};
 
 use crate::backend::CompletionBackend;
 use crate::config::{AnthropicMessagesConfig, OpenAiChatCompletionsConfig, Protocol};
@@ -140,17 +140,18 @@ impl ReqwestBackend {
 
         let messages = translation::request::to_openai_messages(request.messages());
         let tools = translation::tools::to_openai_tools(request.tools());
-        let body = serde_json::json!({
-            "model": request.model().as_str(),
-            "messages": messages,
-            "tools": tools,
-        });
+        let params = sampling_params(request);
+        let mut body = serde_json::Map::new();
+        body.insert("model".into(), json!(request.model().as_str()));
+        body.insert("messages".into(), json!(messages));
+        body.insert("tools".into(), json!(tools));
+        params.apply_openai(&mut body);
 
         let resp = self
             .http
             .post(&url)
             .bearer_auth(cfg.api_key())
-            .json(&body)
+            .json(&Value::Object(body))
             .send()
             .await
             .map_err(|e| ProviderAdapterError::transport(e.to_string()))?;
@@ -173,21 +174,18 @@ impl ReqwestBackend {
 
         let (system, messages) = translation::request::to_anthropic_messages(request.messages());
         let tools = translation::tools::to_anthropic_tools(request.tools());
-        let max_tokens = request
-            .options()
-            .get("max_tokens")
-            .and_then(|v| v.as_u64())
-            .filter(|n| *n > 0)
-            .map(|n| n as u32)
-            .unwrap_or(4096);
-        let mut body = serde_json::json!({
-            "model": request.model().as_str(),
-            "messages": messages,
-            "tools": tools,
-            "max_tokens": max_tokens,
-        });
+        let params = sampling_params(request);
+        let mut body = serde_json::Map::new();
+        body.insert("model".into(), json!(request.model().as_str()));
+        body.insert("messages".into(), json!(messages));
+        body.insert("tools".into(), json!(tools));
+        body.insert(
+            "max_tokens".into(),
+            json!(params.max_tokens.unwrap_or(4096)),
+        );
+        params.apply_anthropic(&mut body);
         if let Some(sys) = system {
-            body["system"] = serde_json::json!(sys);
+            body.insert("system".into(), json!(sys));
         }
 
         let resp = self
@@ -195,7 +193,7 @@ impl ReqwestBackend {
             .post(&url)
             .header("x-api-key", cfg.api_key())
             .header("anthropic-version", "2023-06-01")
-            .json(&body)
+            .json(&Value::Object(body))
             .send()
             .await
             .map_err(|e| ProviderAdapterError::transport(e.to_string()))?;
@@ -262,18 +260,19 @@ impl ReqwestBackend {
 
         let messages = translation::request::to_openai_messages(request.messages());
         let tools = translation::tools::to_openai_tools(request.tools());
-        let body = serde_json::json!({
-            "model": request.model().as_str(),
-            "messages": messages,
-            "tools": tools,
-            "stream": true,
-        });
+        let params = sampling_params(request);
+        let mut body = serde_json::Map::new();
+        body.insert("model".into(), json!(request.model().as_str()));
+        body.insert("messages".into(), json!(messages));
+        body.insert("tools".into(), json!(tools));
+        body.insert("stream".into(), json!(true));
+        params.apply_openai(&mut body);
 
         let resp = self
             .http
             .post(&url)
             .bearer_auth(cfg.api_key())
-            .json(&body)
+            .json(&Value::Object(body))
             .send()
             .await
             .map_err(|e| ProviderAdapterError::transport(e.to_string()))?;
@@ -294,22 +293,19 @@ impl ReqwestBackend {
 
         let (system, messages) = translation::request::to_anthropic_messages(request.messages());
         let tools = translation::tools::to_anthropic_tools(request.tools());
-        let max_tokens = request
-            .options()
-            .get("max_tokens")
-            .and_then(|v| v.as_u64())
-            .filter(|n| *n > 0)
-            .map(|n| n as u32)
-            .unwrap_or(4096);
-        let mut body = serde_json::json!({
-            "model": request.model().as_str(),
-            "messages": messages,
-            "tools": tools,
-            "max_tokens": max_tokens,
-            "stream": true,
-        });
+        let params = sampling_params(request);
+        let mut body = serde_json::Map::new();
+        body.insert("model".into(), json!(request.model().as_str()));
+        body.insert("messages".into(), json!(messages));
+        body.insert("tools".into(), json!(tools));
+        body.insert(
+            "max_tokens".into(),
+            json!(params.max_tokens.unwrap_or(4096)),
+        );
+        body.insert("stream".into(), json!(true));
+        params.apply_anthropic(&mut body);
         if let Some(sys) = system {
-            body["system"] = serde_json::json!(sys);
+            body.insert("system".into(), json!(sys));
         }
 
         let resp = self
@@ -317,7 +313,7 @@ impl ReqwestBackend {
             .post(&url)
             .header("x-api-key", cfg.api_key())
             .header("anthropic-version", "2023-06-01")
-            .json(&body)
+            .json(&Value::Object(body))
             .send()
             .await
             .map_err(|e| ProviderAdapterError::transport(e.to_string()))?;
@@ -325,6 +321,20 @@ impl ReqwestBackend {
         let resp = check_stream_status(resp).await?;
         Ok(Box::new(ReqwestSseStream::new(resp, StreamKind::Anthropic)))
     }
+}
+
+/// Read sampling params from a request, stripping keys that reasoning
+/// models reject when reasoning is enabled.
+fn sampling_params(request: &AgentRequest) -> translation::params::SamplingParams {
+    let (params, stripped) =
+        translation::params::from_options_with_applicability(request.options());
+    if !stripped.is_empty() {
+        tracing::warn!(
+            keys = ?stripped,
+            "stripped sampling parameters that reasoning models reject"
+        );
+    }
+    params
 }
 
 /// Parse a reqwest response into a `serde_json::Value`, mapping non-2xx
