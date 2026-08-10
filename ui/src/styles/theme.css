@@ -3,20 +3,20 @@
      The editor is canvas-first: semantic primitives describe product
      roles (canvas, panel, node, status, socket), while framework aliases
      below keep Tailwind and shadcn-compatible color names stable. */
-  --color-canvas: #fafafa;
-  --color-canvas-grid-dot: #dbdbdb;
-  --color-canvas-grid-line: #eeeeee;
+  --color-canvas: #ffffff;
+  --color-canvas-grid-dot: #e5e5e5;
+  --color-canvas-grid-line: #f0f0f0;
   --color-on-canvas: #171717;
 
   --color-panel: #ffffff;
-  --color-panel-float: rgb(255 255 255 / 0.92);
+  --color-panel-float: rgb(255 255 255 / 0.96);
   --color-panel-flat: #ffffff;
-  --color-panel-raised: #f5f5f5;
-  --color-panel-pressed: #ebebeb;
+  --color-panel-raised: #fafafa;
+  --color-panel-pressed: #f0f0f0;
   --color-panel-border: rgb(0 0 0 / 0.08);
   --color-panel-border-hover: rgb(0 0 0 / 0.12);
   --color-on-panel: #171717;
-  --color-on-panel-muted: #4d4d4d;
+  --color-on-panel-muted: #6b6b6b;
 
   --color-node: rgb(255 255 255 / 0.72);
   --color-node-body: rgb(0 0 0 / 0.04);
@@ -39,15 +39,15 @@
   --color-status-error: #ee0000;
   --color-status-success: #29bc9b;
 
-  /* Sidebar — Codex-style dark chrome. */
-  --color-sidebar-bg: #111111;
-  --color-sidebar-border: rgb(255 255 255 / 0.06);
-  --color-sidebar-item-hover: rgb(255 255 255 / 0.05);
-  --color-sidebar-item-active: rgb(255 255 255 / 0.08);
-  --color-sidebar-text-primary: rgb(255 255 255 / 0.9);
-  --color-sidebar-text-secondary: rgb(255 255 255 / 0.4);
-  --color-sidebar-text-muted: rgb(255 255 255 / 0.3);
-  --color-sidebar-section-header: rgb(255 255 255 / 0.2);
+  /* Sidebar — light gray chrome in light mode, dark in dark mode. */
+  --color-sidebar-bg: #f5f5f5;
+  --color-sidebar-border: rgb(0 0 0 / 0.06);
+  --color-sidebar-item-hover: rgb(0 0 0 / 0.05);
+  --color-sidebar-item-active: rgb(0 0 0 / 0.08);
+  --color-sidebar-text-primary: rgb(0 0 0 / 0.85);
+  --color-sidebar-text-secondary: rgb(0 0 0 / 0.5);
+  --color-sidebar-text-muted: rgb(0 0 0 / 0.3);
+  --color-sidebar-section-header: rgb(0 0 0 / 0.3);
 
   /* Elevation: stacked small offsets + an inset hairline so edges stay crisp
      without relying on a separate heavy drop-shadow. */
@@ -245,18 +245,18 @@
 [data-theme="dark"] {
   color-scheme: dark;
 
-  --color-canvas: #111111;
+  --color-canvas: #0a0a0a;
   --color-canvas-grid-dot: #2b2b2b;
-  --color-canvas-grid-line: #242424;
+  --color-canvas-grid-line: #1a1a1a;
   --color-on-canvas: #f5f5f5;
 
-  --color-panel: #171717;
-  --color-panel-float: rgb(23 23 23 / 0.9);
-  --color-panel-flat: #2a2a2a;
-  --color-panel-raised: #242424;
-  --color-panel-pressed: #333333;
-  --color-panel-border: rgb(255 255 255 / 0.1);
-  --color-panel-border-hover: rgb(255 255 255 / 0.16);
+  --color-panel: #111111;
+  --color-panel-float: rgb(17 17 17 / 0.95);
+  --color-panel-flat: #1a1a1a;
+  --color-panel-raised: #1e1e1e;
+  --color-panel-pressed: #2a2a2a;
+  --color-panel-border: rgb(255 255 255 / 0.08);
+  --color-panel-border-hover: rgb(255 255 255 / 0.14);
   --color-on-panel: #f5f5f5;
   --color-on-panel-muted: #a3a3a3;
 
@@ -293,4 +293,14 @@
   --color-on-tertiary-container: #ffd9e4;
   --color-error-container: #5f1717;
   --color-on-error-container: #ffd4d4;
+
+  /* Sidebar — lighter than content in dark mode for depth. */
+  --color-sidebar-bg: #1a1a1a;
+  --color-sidebar-border: rgb(255 255 255 / 0.06);
+  --color-sidebar-item-hover: rgb(255 255 255 / 0.06);
+  --color-sidebar-item-active: rgb(255 255 255 / 0.1);
+  --color-sidebar-text-primary: rgb(255 255 255 / 0.88);
+  --color-sidebar-text-secondary: rgb(255 255 255 / 0.45);
+  --color-sidebar-text-muted: rgb(255 255 255 / 0.28);
+  --color-sidebar-section-header: rgb(255 255 255 / 0.2);
 }

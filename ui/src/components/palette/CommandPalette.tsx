@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { Boxes, CircleDot, CornerDownLeft, Plus, Search } from "lucide-react";
+import { useNavigate } from "@tanstack/react-router";
 import { toast } from "sonner";
 import { cn } from "@/lib/utils";
 import { useUIStore } from "@/store/uiStore";
@@ -23,6 +24,7 @@ export function CommandPalette() {
   const closePalette = useUIStore((s) => s.closePalette);
   const startRun = useRuntimeStore((s) => s.startRun);
   const defs = useNodeRegistryStore((s) => s.defList);
+  const navigate = useNavigate();
 
   const [query, setQuery] = useState("");
   const [activeIndex, setActiveIndex] = useState(0);
@@ -127,7 +129,7 @@ export function CommandPalette() {
         openNodePalette(flowViewportCenter());
         return;
       case "toggle-panel":
-        useUIStore.getState().toggleSidebar();
+        useUIStore.getState().setSidebarWidth(220);
         return;
       case "run-workflow":
         startRun();
@@ -136,7 +138,7 @@ export function CommandPalette() {
         void saveWorkflowNow();
         return;
       case "settings":
-        useUIStore.getState().setActiveSidebarSection("settings");
+        navigate({ to: "/settings" });
         return;
       default:
         if (id.startsWith("node-")) {

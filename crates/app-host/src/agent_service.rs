@@ -1,7 +1,7 @@
 use std::collections::BTreeMap;
 use std::sync::{Arc, RwLock};
 
-use reimagine_agent::{
+use reimagine_agent_harness::{
     AgentEventSink, AgentLoop, AgentMode, AgentSession, AgentSessionId, AgentToolRegistry,
     AgentTurnId, AgentTurnRequest, AgentTurnResult, Message, ModelName, PermissionSet,
     ProviderName, VecAgentEventSink, WorkspaceScope,

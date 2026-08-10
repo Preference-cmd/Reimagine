@@ -3,7 +3,7 @@ use std::marker::PhantomData;
 use std::sync::Arc;
 
 use async_trait::async_trait;
-use reimagine_agent::{
+use reimagine_agent_harness::{
     AgentMode, AgentTool, AgentToolRegistry, ToolContext, ToolError, ToolErrorCode, ToolInput,
     ToolName, ToolPermission, ToolResult, ToolRiskLevel, ToolSpec,
 };

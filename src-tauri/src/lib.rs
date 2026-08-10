@@ -888,7 +888,7 @@ mod tests {
         use reimagine_app_host::AppHostErrorCode;
 
         let mapped = app_host_command_error(AppHostError::UnknownAgentProvider {
-            provider: reimagine_agent::ProviderName::new("openai"),
+            provider: reimagine_agent_harness::ProviderName::new("openai"),
         });
         assert_eq!(mapped.code, AppHostErrorCode::UnknownProvider);
         assert!(mapped.message.contains("Settings"));

@@ -1,7 +1,7 @@
 use std::path::PathBuf;
 use std::sync::Arc;
 
-use reimagine_agent::{AgentEventSink, WorkspaceScope};
+use reimagine_agent_harness::{AgentEventSink, WorkspaceScope};
 use reimagine_backend_worker_host::WorkerStorePaths;
 use reimagine_config::{AppConfig, AppPaths, InferenceBackendConfig};
 use reimagine_runtime::BoxedRunEventSink;
@@ -10,6 +10,7 @@ use reimagine_runtime::VecRunEventSink;
 use crate::InstalledWorkerInventoryProvider;
 use crate::inference::compose::bootstrap_inference_with_worker_inventory;
 use crate::model_acquisition_service::ModelAcquisitionService;
+use crate::provider_config::AgentProviderConfigDocument;
 use crate::services::WorkspaceServices;
 use crate::tools::register_app_tools;
 use crate::{
@@ -28,7 +29,7 @@ use super::{WorkspaceHost, load_backend_config_result};
 ///
 /// ```rust,no_run
 /// # use reimagine_app_host::WorkspaceHostBuilder;
-/// # use reimagine_agent::WorkspaceScope;
+/// # use reimagine_agent_harness::WorkspaceScope;
 /// # async fn example() -> Result<(), Box<dyn std::error::Error>> {
 /// let host = WorkspaceHostBuilder::new(WorkspaceScope::new("my-workspace"), "/tmp/workspace")
 ///     .build()
@@ -47,6 +48,7 @@ pub struct WorkspaceHostBuilder {
     event_sink: Option<BoxedRunEventSink>,
     agent_event_sink: Option<Arc<dyn AgentEventSink>>,
     worker_inventory: Option<Arc<dyn WorkerInventoryProvider>>,
+    provider_config: Option<AgentProviderConfigDocument>,
 }
 
 impl WorkspaceHostBuilder {
@@ -63,6 +65,7 @@ impl WorkspaceHostBuilder {
             event_sink: None,
             agent_event_sink: None,
             worker_inventory: None,
+            provider_config: None,
         }
     }
 
@@ -112,6 +115,17 @@ impl WorkspaceHostBuilder {
         self
     }
 
+    /// Set the provider config document used to construct and register
+    /// concrete `AgentProvider` adapters.
+    ///
+    /// When not set, the builder loads `{config_dir}/agent-providers.json`
+    /// through the config store (a missing file yields an empty document,
+    /// so no providers are registered).
+    pub fn provider_config(mut self, document: AgentProviderConfigDocument) -> Self {
+        self.provider_config = Some(document);
+        self
+    }
+
     /// Build the [`WorkspaceHost`].
     ///
     /// This async phase:
@@ -135,7 +149,7 @@ impl WorkspaceHostBuilder {
             .unwrap_or_else(|| Arc::new(VecRunEventSink::new()));
         let agent_event_sink = self
             .agent_event_sink
-            .unwrap_or_else(|| Arc::new(reimagine_agent::VecAgentEventSink::new()));
+            .unwrap_or_else(|| Arc::new(reimagine_agent_harness::VecAgentEventSink::new()));
 
         // Resolve worker inventory
         let worker_inventory = match self.worker_inventory {
@@ -210,7 +224,7 @@ impl WorkspaceHostBuilder {
 
         // Create agent service: first create a temporary one to get default registry/providers,
         // then recreate with the injected event sink
-        let mut registry = reimagine_agent::AgentToolRegistry::new();
+        let mut registry = reimagine_agent_harness::AgentToolRegistry::new();
         register_app_tools(&mut registry, Arc::clone(&services));
         let registry = Arc::new(registry);
         let temp_agent_service = Arc::new(AgentService::with_registry(
@@ -218,6 +232,29 @@ impl WorkspaceHostBuilder {
             Arc::clone(&registry),
         ));
         let providers = temp_agent_service.providers().clone();
+
+        // Register concrete providers from the config document. When no
+        // explicit document was injected, load it from the config store;
+        // a missing file yields an empty document (no providers).
+        let provider_document = match self.provider_config {
+            Some(document) => document,
+            None => {
+                let handle = config.config::<AgentProviderConfigDocument>()?;
+                let (document, _report) = handle.load().await?;
+                document
+            }
+        };
+        let (registered, errors) = crate::register_providers_from_document(&providers, &provider_document);
+        if !registered.is_empty() {
+            tracing::info!(
+                providers = ?registered.iter().map(|p| p.as_str()).collect::<Vec<_>>(),
+                "registered agent providers"
+            );
+        }
+        for error in &errors {
+            tracing::warn!("{error}");
+        }
+
         let agent_service = Arc::new(AgentService::with_registry_providers_and_sink(
             self.workspace_scope.clone(),
             registry,
@@ -322,7 +359,7 @@ mod tests {
         let base = temp_dir("sinks");
         let event_sink: BoxedRunEventSink = Arc::new(VecRunEventSink::new());
         let agent_sink: Arc<dyn AgentEventSink> =
-            Arc::new(reimagine_agent::VecAgentEventSink::new());
+            Arc::new(reimagine_agent_harness::VecAgentEventSink::new());
 
         let host = WorkspaceHostBuilder::new(WorkspaceScope::new("test"), &base)
             .event_sink(event_sink)

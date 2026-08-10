@@ -4,15 +4,16 @@ import path from "node:path";
 import react from "@vitejs/plugin-react";
 import tailwindcss from "@tailwindcss/vite";
 import { paraglideVitePlugin } from "@inlang/paraglide-js";
+import { tanstackRouter } from "@tanstack/router-plugin/vite";
 import { visualizer } from "rollup-plugin-visualizer";
 
-// @ts-expect-error process is a nodejs global
-const host = process.env.TAURI_DEV_HOST;
+const host = (process as { env?: { TAURI_DEV_HOST?: string } }).env?.TAURI_DEV_HOST;
 const analyze = process.env.ANALYZE === "true";
 
 // https://vite.dev/config/
 export default defineConfig(async () => ({
   plugins: [
+    tanstackRouter({ quoteStyle: "double" }),
     react(),
     tailwindcss(),
     paraglideVitePlugin({

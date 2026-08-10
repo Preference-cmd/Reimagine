@@ -1,8 +1,7 @@
-import { useEffect, useState } from "react";
+import { useState } from "react";
 import { Boxes, Download, HardDrive, Search } from "lucide-react";
 import { cn } from "@/lib/utils";
-import { listModels } from "@/ipc";
-import type { ModelInfo } from "@/ipc";
+import { useModels } from "@/hooks/queries";
 import { ModelDownloadDialog } from "./ModelDownloadDialog";
 
 function formatBytes(bytes: number | null): string {
@@ -22,29 +21,9 @@ function formatBytes(bytes: number | null): string {
  * Shows installed models with search, and an install button.
  */
 export function ModelsView() {
-  const [models, setModels] = useState<ModelInfo[]>([]);
-  const [loading, setLoading] = useState(true);
+  const { data: models = [], isLoading: loading } = useModels();
   const [query, setQuery] = useState("");
   const [downloadOpen, setDownloadOpen] = useState(false);
-  const [reloadKey, setReloadKey] = useState(0);
-
-  useEffect(() => {
-    let cancelled = false;
-    setLoading(true);
-    listModels()
-      .then((result) => {
-        if (!cancelled) setModels(result);
-      })
-      .catch(() => {
-        if (!cancelled) setModels([]);
-      })
-      .finally(() => {
-        if (!cancelled) setLoading(false);
-      });
-    return () => {
-      cancelled = true;
-    };
-  }, [reloadKey]);
 
   const filtered = models.filter(
     (m) =>
@@ -126,7 +105,7 @@ export function ModelsView() {
         open={downloadOpen}
         initialRepoId={null}
         onClose={() => setDownloadOpen(false)}
-        onInstalled={() => setReloadKey((k) => k + 1)}
+        onInstalled={() => {}}
       />
     </div>
   );

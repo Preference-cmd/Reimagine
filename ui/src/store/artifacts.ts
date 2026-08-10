@@ -1,7 +1,9 @@
 import { create } from "zustand";
+import type { QueryClient } from "@tanstack/react-query";
 import type { RunEventPayload } from "@/ipc/schemas";
 import { resolveArtifact } from "@/ipc";
 import { artifactDisplayUrl } from "@/lib/artifacts";
+import { queryKeys } from "@/hooks/queries";
 
 /**
  * Artifact preview cache (F5-4).
@@ -10,6 +12,10 @@ import { artifactDisplayUrl } from "@/lib/artifacts";
  * artifact ids to displayable URLs via `resolveArtifact()` IPC, keyed by
  * node id. A new run clears the map; pending entries are marked stale on
  * terminal run states so no spinner outlives the run.
+ *
+ * Uses TanStack Query's `fetchQuery` for resolution — benefits from
+ * caching and automatic retry without changing the store's event-driven
+ * architecture.
  *
  * Nodes render previews through the `useNodeArtifact` hook — this store
  * holds no React state itself.
@@ -40,6 +46,14 @@ type ArtifactState = {
 
 const TERMINAL_KINDS = new Set(["RunCompleted", "RunFailed", "RunCancelled"]);
 const ARTIFACT_KINDS = new Set(["ArtifactCreated", "PreviewUpdated"]);
+
+/** Module-level QueryClient reference — set once at app startup. */
+let _queryClient: QueryClient | null = null;
+
+/** Set the QueryClient for artifact resolution caching. Call once in main.tsx. */
+export function setArtifactQueryClient(client: QueryClient) {
+  _queryClient = client;
+}
 
 export const useArtifactStore = create<ArtifactState>()((set, get) => ({
   runId: null,
@@ -83,7 +97,16 @@ export const useArtifactStore = create<ArtifactState>()((set, get) => ({
     };
     set({ byNode: { ...current.byNode, [nodeId]: preview } });
 
-    void resolveArtifact(artifactId)
+    // Resolve via TanStack Query cache (or fetch if not cached)
+    const resolvePromise = _queryClient
+      ? _queryClient.fetchQuery({
+          queryKey: queryKeys.artifact(artifactId),
+          queryFn: () => resolveArtifact(artifactId),
+          staleTime: Infinity,
+        })
+      : resolveArtifact(artifactId);
+
+    void resolvePromise
       .then(async (metadata) => {
         // The run may have been superseded while resolving.
         if (get().runId !== null && get().runId !== runId) return;

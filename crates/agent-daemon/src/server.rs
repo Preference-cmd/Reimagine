@@ -7,7 +7,7 @@ use std::io::{self, BufRead, Write};
 use std::path::Path;
 use std::sync::{Arc, Mutex, PoisonError};
 
-use reimagine_agent::{
+use reimagine_agent_harness::{
     AgentEvent, AgentEventSink, AgentLoop, AgentMode, AgentSessionId, AgentTurnId,
     AgentTurnRequest, AgentTurnResult, ContextConfig, ContextManager, Message, ModelName,
     PermissionSet, ProviderName, ToolCallId, ToolName, ToolPermission, VecAgentEventSink,
@@ -22,14 +22,15 @@ use crate::init::{DaemonInitError, DaemonWorkspace};
 use crate::protocol::{
     AgentErrorParams, ClientInfo, ContentDeltaParams, InitializeRequest, InitializeResponse,
     JsonRpcError, JsonRpcNotification, JsonRpcRequest, JsonRpcResponse, METHOD_AGENT_CONTENT_DELTA,
-    METHOD_AGENT_ERROR, METHOD_AGENT_PROPOSAL_READY, METHOD_AGENT_SESSION_STARTED,
-    METHOD_AGENT_SESSION_STOPPED, METHOD_AGENT_TOOL_COMPLETED, METHOD_AGENT_TOOL_FAILED,
-    METHOD_AGENT_TOOL_INVOKED, METHOD_AGENT_TURN_COMPLETED, METHOD_INITIALIZE, METHOD_INITIALIZED,
-    METHOD_PROVIDERS_LIST, METHOD_SESSION_CREATE, METHOD_SESSION_GET, METHOD_SESSION_LIST,
-    METHOD_TURN_CANCEL, METHOD_TURN_RUN, METHOD_TURN_STEER, ProposalReadyParams, ProviderInfo,
-    ProvidersListResult, ServerCapabilities, ServerInfo, SessionCreateParams, SessionCreateResult,
-    SessionGetParams, SessionInfo, SessionListResult, SessionStartedParams, SessionStoppedParams,
-    ToolEventParams, TurnCancelParams, TurnCancelResult, TurnCancelStatus, TurnCompletedParams,
+    METHOD_AGENT_ERROR, METHOD_AGENT_PROPOSAL_READY, METHOD_AGENT_REASONING_DELTA,
+    METHOD_AGENT_SESSION_STARTED, METHOD_AGENT_SESSION_STOPPED, METHOD_AGENT_TOOL_COMPLETED,
+    METHOD_AGENT_TOOL_FAILED, METHOD_AGENT_TOOL_INVOKED, METHOD_AGENT_TURN_COMPLETED,
+    METHOD_INITIALIZE, METHOD_INITIALIZED, METHOD_PROVIDERS_LIST, METHOD_SESSION_CREATE,
+    METHOD_SESSION_GET, METHOD_SESSION_LIST, METHOD_TURN_CANCEL, METHOD_TURN_RUN, METHOD_TURN_STEER,
+    ProposalReadyParams, ProviderInfo, ProvidersListResult, ReasoningDeltaParams,
+    ServerCapabilities, ServerInfo, SessionCreateParams, SessionCreateResult, SessionGetParams,
+    SessionInfo, SessionListResult, SessionStartedParams, SessionStoppedParams, ToolEventParams,
+    TurnCancelParams, TurnCancelResult, TurnCancelStatus, TurnCompletedParams,
     TurnRunParams, TurnRunResult, TurnRunStatus,
 };
 use crate::transport::StdioTransport;
@@ -616,6 +617,14 @@ impl<W: Write + Send> TurnEventSink<W> {
                     text: text.clone(),
                 }),
             )),
+            AgentEvent::ReasoningDelta { text, .. } => Some((
+                METHOD_AGENT_REASONING_DELTA,
+                to_value(ReasoningDeltaParams {
+                    session_id: self.session_id.to_string(),
+                    turn_id: self.turn_id.to_string(),
+                    text: text.clone(),
+                }),
+            )),
             AgentEvent::ToolInvoked { tool, id, .. } => {
                 Some((METHOD_AGENT_TOOL_INVOKED, self.tool_params(tool, id, None)))
             }
@@ -664,7 +673,7 @@ impl<W: Write + Send> TurnEventSink<W> {
 
     fn tool_params(
         &self,
-        tool: &reimagine_agent::ToolName,
+        tool: &reimagine_agent_harness::ToolName,
         tool_call_id: &Option<ToolCallId>,
         error: Option<String>,
     ) -> Value {

@@ -6801,8 +6801,8 @@ name = "reimagine"
 version = "0.1.0"
 dependencies = [
  "opener",
- "reimagine-agent",
  "reimagine-agent-daemon",
+ "reimagine-agent-harness",
  "reimagine-app-host",
  "reimagine-backend-worker-host",
  "reimagine-backend-worker-protocol",
@@ -6820,24 +6820,12 @@ dependencies = [
 ]
 
 [[package]]
-name = "reimagine-agent"
-version = "0.1.0"
-dependencies = [
- "async-trait",
- "reimagine-core",
- "serde",
- "serde_json",
- "tokio",
- "tokio-util",
-]
-
-[[package]]
 name = "reimagine-agent-daemon"
 version = "0.1.0"
 dependencies = [
  "async-trait",
  "clap",
- "reimagine-agent",
+ "reimagine-agent-harness",
  "reimagine-app-host",
  "reimagine-runtime",
  "serde",
@@ -6849,13 +6837,29 @@ dependencies = [
 ]
 
 [[package]]
+name = "reimagine-agent-harness"
+version = "0.1.0"
+dependencies = [
+ "async-trait",
+ "reimagine-config",
+ "reimagine-core",
+ "reqwest 0.12.28",
+ "serde",
+ "serde_json",
+ "tempfile",
+ "tokio",
+ "tokio-util",
+ "wiremock",
+]
+
+[[package]]
 name = "reimagine-agent-macros"
 version = "0.1.0"
 dependencies = [
  "async-trait",
  "proc-macro2",
  "quote",
- "reimagine-agent",
+ "reimagine-agent-harness",
  "schemars 0.8.22",
  "serde",
  "serde_json",
@@ -6869,16 +6873,27 @@ name = "reimagine-agent-provider"
 version = "0.1.0"
 dependencies = [
  "async-trait",
- "bytes",
- "reimagine-agent",
- "reimagine-config",
+ "base64 0.22.1",
+ "reimagine-agent-harness",
+ "reimagine-ai-protocol",
  "reqwest 0.12.28",
- "serde",
  "serde_json",
  "tempfile",
  "tokio",
  "tracing",
  "wiremock",
+]
+
+[[package]]
+name = "reimagine-ai-protocol"
+version = "0.1.0"
+dependencies = [
+ "async-trait",
+ "reimagine-agent-harness",
+ "serde",
+ "serde_json",
+ "tokio",
+ "tracing",
 ]
 
 [[package]]
@@ -6889,7 +6904,8 @@ dependencies = [
  "async-trait",
  "chrono",
  "hf-hub",
- "reimagine-agent",
+ "reimagine-agent-harness",
+ "reimagine-agent-provider",
  "reimagine-backend-worker-host",
  "reimagine-backend-worker-protocol",
  "reimagine-backend-worker-transfer",
@@ -6923,7 +6939,7 @@ dependencies = [
  "clap",
  "http-body-util",
  "image",
- "reimagine-agent",
+ "reimagine-agent-harness",
  "reimagine-app-host",
  "reimagine-backend-worker-host",
  "reimagine-backend-worker-protocol",
@@ -7106,7 +7122,7 @@ dependencies = [
  "http-body-util",
  "image",
  "quinn",
- "reimagine-agent",
+ "reimagine-agent-harness",
  "reimagine-app-host",
  "reimagine-axum-host",
  "reimagine-backend-worker-host",

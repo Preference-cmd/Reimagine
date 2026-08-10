@@ -8,10 +8,11 @@ members = [
     "crates/model-acquisition",
     "crates/nodes",
     "crates/runtime",
-    "crates/agent",
-    "crates/agent-macros",
+    "crates/agent-stack/ai-protocol",
+    "crates/agent-stack/agent-harness",
+    "crates/agent-stack/agent-macros",
+    "crates/agent-stack/agent-provider",
     "crates/app-host",
-    "crates/agent-provider",
     "crates/agent-daemon",
     "crates/axum-host",
     "crates/inference",
@@ -80,4 +81,5 @@ fs2 = "0.4"
 chrono = { version = "0.4", features = ["serde"] }
 hex = "0.4"
 reqwest = { version = "0.12", default-features = false, features = ["rustls-tls", "stream"] }
+base64 = "0.22"
 arc-swap = "1"

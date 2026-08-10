@@ -12,10 +12,10 @@ import {
   type LucideIcon,
 } from "lucide-react";
 import { useEffect, useState } from "react";
+import { useNavigate } from "@tanstack/react-router";
 import { cn } from "@/lib/utils";
 import { useUIStore } from "@/store/uiStore";
 import * as m from "$paraglide/messages";
-import { setLocale, getLocale } from "$paraglide/runtime";
 
 type NavItem = { id: string; label: string; icon: LucideIcon };
 type NavGroup = { section: string; sectionKey: string; items: NavItem[] };
@@ -30,7 +30,7 @@ const SETTINGS_NAV: NavGroup[] = [
       { id: "shortcuts", label: "", icon: Keyboard },
       { id: "runtime", label: "", icon: Monitor },
       { id: "workspace", label: "", icon: Layers },
-      { id: "models", label: "", icon: Boxes },
+      { id: "modelManagement", label: "", icon: Boxes },
     ],
   },
   {
@@ -73,11 +73,11 @@ export function useSettingsNav() {
 }
 
 /**
- * SidebarSettingsNav — Codex-style light settings panel.
- * White background, grouped nav with icons, search, language switcher.
+ * SidebarSettingsNav — settings panel with sidebar-consistent theming.
+ * Uses sidebar background and text colors for visual coherence.
  */
 export function SidebarSettingsNav() {
-  const setActiveSidebarSection = useUIStore((s) => s.setActiveSidebarSection);
+  const navigate = useNavigate();
   const { active, setActive, search, setSearch, filtered, resolveLabel } = useSettingsNav();
 
   useEffect(() => {
@@ -85,16 +85,13 @@ export function SidebarSettingsNav() {
   }, [active]);
 
   return (
-    <nav
-      className="flex h-full flex-col border-r border-outline bg-surface"
-      aria-label="Settings navigation"
-    >
+    <nav className="flex h-full flex-col bg-sidebar-bg" aria-label="Settings navigation">
       {/* Back to app */}
       <div className="flex items-center gap-2 px-4 py-3">
         <button
           type="button"
-          onClick={() => setActiveSidebarSection("chat")}
-          className="flex items-center gap-1.5 text-sm text-on-surface-variant transition-colors hover:text-on-surface focus-visible:outline-none"
+          onClick={() => navigate({ to: "/new" })}
+          className="flex items-center gap-1.5 text-sm text-sidebar-text-secondary transition-colors hover:text-sidebar-text-primary focus-visible:outline-none"
         >
           <ArrowLeft className="h-4 w-4" />
           {m["common.backToApp"]()}
@@ -104,9 +101,9 @@ export function SidebarSettingsNav() {
       {/* Search */}
       <div className="px-3 pb-3">
         <div className="relative">
-          <Search className="pointer-events-none absolute left-2.5 top-1/2 h-3.5 w-3.5 -translate-y-1/2 text-on-surface-variant/50" />
+          <Search className="pointer-events-none absolute left-2.5 top-1/2 h-3.5 w-3.5 -translate-y-1/2 text-sidebar-text-muted" />
           <input
-            className="h-8 w-full rounded-lg border border-outline bg-surface-container-low px-3 pl-8 text-body-sm text-on-surface outline-none transition-[border-color,box-shadow] placeholder:text-on-surface-variant/50 focus-visible:border-secondary/30 focus-visible:ring-2 focus-visible:ring-secondary/10"
+            className="h-8 w-full rounded-lg border border-sidebar-border bg-sidebar-item-hover px-3 pl-8 text-body-sm text-sidebar-text-primary outline-none transition-[border-color,box-shadow] placeholder:text-sidebar-text-muted focus-visible:border-sidebar-text-secondary/30 focus-visible:ring-2 focus-visible:ring-sidebar-text-secondary/10"
             placeholder={m["settings.searchPlaceholder"]()}
             value={search}
             onChange={(e) => setSearch(e.target.value)}
@@ -114,32 +111,11 @@ export function SidebarSettingsNav() {
         </div>
       </div>
 
-      {/* Language switcher */}
-      <div className="px-3 pb-3">
-        <div className="flex gap-1 rounded-lg bg-surface-container-low p-0.5">
-          {(["en", "zh"] as const).map((code) => (
-            <button
-              key={code}
-              type="button"
-              onClick={() => setLocale(code)}
-              className={cn(
-                "flex-1 rounded-md px-3 py-1 text-xs font-medium transition-colors",
-                getLocale() === code
-                  ? "bg-surface text-on-surface shadow-sm"
-                  : "text-on-surface-variant hover:text-on-surface hover:bg-control-hover",
-              )}
-            >
-              {code === "en" ? "English" : "中文"}
-            </button>
-          ))}
-        </div>
-      </div>
-
       {/* Nav groups */}
       <div className="flex-1 overflow-y-auto scrollbar-hide px-2 pb-4">
         {filtered.map((group) => (
-          <div key={group.section} className="mb-4">
-            <div className="px-2 pb-1.5 text-[11px] font-semibold uppercase tracking-wider text-on-surface-variant/50">
+          <div key={group.section} className="mb-5">
+            <div className="px-3 pb-1.5 pt-2 text-[11px] font-semibold uppercase tracking-wider text-sidebar-section-header">
               {resolveLabel(group.sectionKey)}
             </div>
             {group.items.map((item) => {
@@ -152,17 +128,17 @@ export function SidebarSettingsNav() {
                   aria-current={isActive ? "page" : undefined}
                   onClick={() => setActive(item.id)}
                   className={cn(
-                    "flex h-8 w-full cursor-pointer items-center gap-2.5 rounded-md px-2.5 text-left text-sm transition-colors",
-                    "focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-secondary/20",
+                    "flex h-9 w-full cursor-pointer items-center gap-2.5 rounded-md px-3 text-left text-sm transition-colors",
+                    "focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-sidebar-text-secondary/20",
                     isActive
-                      ? "bg-secondary/10 text-secondary font-medium"
-                      : "text-on-surface-variant hover:bg-control-hover hover:text-on-surface",
+                      ? "bg-sidebar-item-active text-sidebar-text-primary font-medium"
+                      : "text-sidebar-text-secondary hover:bg-sidebar-item-hover hover:text-sidebar-text-primary",
                   )}
                 >
                   <Icon
                     className={cn(
                       "h-4 w-4 shrink-0",
-                      isActive ? "text-secondary" : "text-on-surface-variant/60",
+                      isActive ? "text-sidebar-text-primary" : "text-sidebar-text-muted",
                     )}
                   />
                   <span className="truncate">{item.label}</span>

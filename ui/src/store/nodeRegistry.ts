@@ -1,17 +1,14 @@
 import { create } from "zustand";
-import { getNodeDefs } from "@/ipc";
 import { NodeDefSchema, type NodeDef } from "@/ipc/schemas";
 
 /**
  * Node catalog registry (F2-1).
  *
- * Fetches the backend node catalog once at startup via `getNodeDefs()` and
- * exposes it as a `Map<type_id, NodeDef>`. The canvas builds its React Flow
- * `nodeTypes` registry from this map; anything not covered by a hand-crafted
- * component falls back to GenericNode.
- *
- * Failure is non-fatal: the store lands in `error` with an empty map and the
- * canvas renders every node through GenericNode with whatever data it has.
+ * Populated at startup from the `useNodeDefs()` query (see hooks/queries.ts).
+ * The `hydrate()` action transforms the raw IPC array into the Map structure
+ * that canvas components consume. Failure is non-fatal: the store lands in
+ * `error` with an empty map and the canvas renders every node through
+ * GenericNode with whatever data it has.
  */
 
 export type NodeRegistryStatus = "idle" | "loading" | "ready" | "error";
@@ -23,44 +20,41 @@ type NodeRegistryState = {
   /** Same defs as a list (handy for iteration/indexing). */
   defList: NodeDef[];
   error: string | null;
-  load: () => Promise<void>;
+  /** Populate the store from pre-fetched data (called by __root.tsx). */
+  hydrate: (defs: NodeDef[], error?: string) => void;
 };
 
-export const useNodeRegistryStore = create<NodeRegistryState>()((set, get) => ({
+export const useNodeRegistryStore = create<NodeRegistryState>()((set) => ({
   status: "idle",
   defs: new Map(),
   defList: [],
   error: null,
 
-  load: async () => {
-    if (get().status === "loading") return;
-    set({ status: "loading", error: null });
-    try {
-      const raw = await getNodeDefs();
-      // Per-def safe parsing: a malformed entry is dropped, never fatal.
-      const defs: NodeDef[] = [];
-      for (const entry of raw) {
-        const parsed = NodeDefSchema.safeParse(entry);
-        if (parsed.success) {
-          defs.push(parsed.data);
-        } else {
-          console.warn(
-            "[nodeRegistry] skipping malformed node def",
-            entry?.type ?? "<unknown>",
-            parsed.error,
-          );
-        }
-      }
-      set({
-        status: "ready",
-        defList: defs,
-        defs: new Map(defs.map((def) => [def.type, def])),
-      });
-    } catch (err) {
-      // Empty catalog → every node renders via GenericNode fallback.
-      console.warn("[nodeRegistry] catalog fetch failed; falling back to GenericNode", err);
-      set({ status: "error", error: String(err) });
+  hydrate: (rawDefs: NodeDef[], error?: string) => {
+    if (error) {
+      console.warn("[nodeRegistry] catalog fetch failed; falling back to GenericNode", error);
+      set({ status: "error", error });
+      return;
     }
+    // Per-def safe parsing: a malformed entry is dropped, never fatal.
+    const defs: NodeDef[] = [];
+    for (const entry of rawDefs) {
+      const parsed = NodeDefSchema.safeParse(entry);
+      if (parsed.success) {
+        defs.push(parsed.data);
+      } else {
+        console.warn(
+          "[nodeRegistry] skipping malformed node def",
+          entry?.type ?? "<unknown>",
+          parsed.error,
+        );
+      }
+    }
+    set({
+      status: "ready",
+      defList: defs,
+      defs: new Map(defs.map((def) => [def.type, def])),
+    });
   },
 }));
 

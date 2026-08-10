@@ -1,0 +1,20 @@
+import { createFileRoute } from "@tanstack/react-router";
+import { NodeCanvas } from "@/components/canvas/NodeCanvas";
+import { WelcomeScreen } from "@/components/layout/WelcomeScreen";
+import { useTheme } from "@/lib/theme";
+import { useWorkflowStore } from "@/store/workflow";
+
+function WorkflowView() {
+  const { themeMode } = useTheme();
+  const nodeCount = useWorkflowStore((s) => s.nodes.length);
+
+  if (nodeCount === 0) {
+    return <WelcomeScreen />;
+  }
+
+  return <NodeCanvas themeMode={themeMode} />;
+}
+
+export const Route = createFileRoute("/new")({
+  component: WorkflowView,
+});

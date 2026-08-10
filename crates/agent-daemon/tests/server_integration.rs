@@ -7,7 +7,7 @@ use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 use async_trait::async_trait;
-use reimagine_agent::{
+use reimagine_agent_harness::{
     AgentProvider, AgentRequest, AgentResponse, AgentSessionId, AgentStream, AgentStreamEvent,
     Message, ModelInfo, ProviderError, ProviderName, ToolCall, ToolCallId,
 };

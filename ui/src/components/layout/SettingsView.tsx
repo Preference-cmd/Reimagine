@@ -2,10 +2,11 @@ import { useUIStore } from "@/store/uiStore";
 import { useSettingsStore } from "@/store/settingsStore";
 import { cn } from "@/lib/utils";
 import * as m from "$paraglide/messages";
+import { setLocale, getLocale } from "$paraglide/runtime";
 import { useForm, type UseFormReturn } from "react-hook-form";
 import { zodResolver } from "@hookform/resolvers/zod";
 import { settingsSchema, type SettingsFormData } from "@/lib/settings-schema";
-import { useEffect } from "react";
+import { useEffect, useRef, useState } from "react";
 
 export type ThemeMode = "light" | "dark";
 
@@ -27,6 +28,12 @@ const SETTINGS_CONTENT: Record<string, SettingsGroup[]> = {
     {
       labelKey: "settings.general",
       items: [
+        {
+          id: "language",
+          labelKey: "settings.language",
+          type: "segment",
+          options: ["English", "中文"],
+        },
         {
           id: "auto-save",
           labelKey: "settings.auto-save",
@@ -244,16 +251,16 @@ export function SettingsView({ themeMode, onThemeModeChange }: SettingsViewProps
 
   return (
     <div className="min-h-0 flex-1 overflow-y-auto bg-background">
-      <div className="mx-auto max-w-2xl px-8 py-10">
+      <div className="max-w-[750px] mx-auto px-10 py-8">
         {/* Large title */}
-        <h1 className="mb-10 text-headline-lg font-bold tracking-tight text-on-surface">
+        <h1 className="mb-8 text-headline-lg font-bold tracking-tight text-on-surface">
           {resolveLabel(sectionLabelKey)}
         </h1>
 
         {/* Settings groups as cards */}
         {groups.map((group, gi) => (
-          <section key={`${group.labelKey}-${gi}`} className="mb-8">
-            <h2 className="mb-3 text-body-sm font-semibold text-on-surface">
+          <section key={`${group.labelKey}-${gi}`} className="mb-6">
+            <h2 className="mb-2 text-body-sm font-semibold text-on-surface">
               {resolveLabel(group.labelKey)}
             </h2>
             <div className="overflow-hidden rounded-xl border border-outline bg-surface">
@@ -290,6 +297,19 @@ function SettingRow({
   resolveLabel: (key: string) => string;
 }) {
   const watchedValues = form.watch();
+  const [langOpen, setLangOpen] = useState(false);
+  const langRef = useRef<HTMLDivElement>(null);
+
+  useEffect(() => {
+    if (!langOpen) return;
+    const handleClickOutside = (e: MouseEvent) => {
+      if (langRef.current && !langRef.current.contains(e.target as Node)) {
+        setLangOpen(false);
+      }
+    };
+    document.addEventListener("mousedown", handleClickOutside);
+    return () => document.removeEventListener("mousedown", handleClickOutside);
+  }, [langOpen]);
 
   const segmentIndex = (() => {
     if (item.id === "grid-style") {
@@ -306,7 +326,16 @@ function SettingRow({
   const isColorMode = item.id === "color-mode";
   const isGridStyle = item.id === "grid-style";
   const isCmdPalette = item.id === "cmd-palette";
-  const currentSegment = isColorMode ? (themeMode === "dark" ? 1 : 0) : segmentIndex;
+  const isLanguage = item.id === "language";
+  const currentSegment = isLanguage
+    ? getLocale() === "zh"
+      ? 1
+      : 0
+    : isColorMode
+      ? themeMode === "dark"
+        ? 1
+        : 0
+      : segmentIndex;
 
   const toggleValue = (() => {
     switch (item.id) {
@@ -438,7 +467,9 @@ function SettingRow({
   };
 
   const handleSegment = (i: number) => {
-    if (isColorMode) {
+    if (isLanguage) {
+      setLocale(i === 0 ? "en" : "zh");
+    } else if (isColorMode) {
       onThemeModeChange(i === 0 ? "light" : "dark");
     } else if (isGridStyle) {
       form.setValue("gridStyle", i === 0 ? "dots" : i === 1 ? "lines" : "none");
@@ -448,7 +479,7 @@ function SettingRow({
   };
 
   return (
-    <div className="flex items-center justify-between gap-6 px-5 py-4">
+    <div className="flex items-center justify-between gap-4 px-5 py-3.5">
       <div className="min-w-0 flex-1">
         <div className="text-body-sm font-medium text-on-surface">
           {resolveLabel(item.labelKey)}
@@ -468,22 +499,26 @@ function SettingRow({
             aria-checked={toggleValue ? "true" : "false"}
             onClick={handleToggle}
             className={cn(
-              "relative h-6 w-11 shrink-0 rounded-full transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-secondary/30",
-              toggleValue ? "bg-secondary" : "bg-control-border",
+              "relative shrink-0 rounded-full transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-secondary/30",
+              toggleValue ? "bg-status-ready" : "bg-control-border",
             )}
+            style={{ width: "40px", height: "22px" }}
           >
             <span
-              className={cn(
-                "absolute left-0.5 top-0.5 h-5 w-5 rounded-full bg-white shadow-sm transition-transform",
-                toggleValue && "translate-x-5",
-              )}
+              className="absolute top-[2px] rounded-full bg-white shadow-sm transition-all"
+              style={{
+                width: "18px",
+                height: "18px",
+                left: toggleValue ? "20px" : "2px",
+              }}
             />
           </button>
         )}
 
         {item.type === "select" && (
           <select
-            className="h-8 rounded-lg border border-outline bg-surface px-3 text-body-sm text-on-surface outline-none focus-visible:border-secondary/30 focus-visible:ring-2 focus-visible:ring-secondary/10"
+            style={{ height: "32px", fontSize: "13px", padding: "0 10px" }}
+            className="rounded-md border border-outline bg-surface text-on-surface outline-none focus-visible:border-secondary/30 focus-visible:ring-2 focus-visible:ring-secondary/10"
             value={selectValue}
             onChange={(e) => handleSelect(e.target.value)}
           >
@@ -495,15 +530,55 @@ function SettingRow({
           </select>
         )}
 
-        {item.type === "segment" && item.options && (
-          <div className="flex rounded-lg border border-outline/50 bg-surface-container-low p-1">
+        {item.type === "segment" && item.options && isLanguage && (
+          <div ref={langRef} className="relative">
+            <button
+              type="button"
+              onClick={() => setLangOpen(!langOpen)}
+              style={{ height: "32px", padding: "0 10px", fontSize: "13px" }}
+              className="flex items-center gap-1.5 rounded-md border border-outline bg-surface font-medium text-on-surface hover:bg-control-hover transition-colors"
+            >
+              {resolveLabel(item.options[currentSegment])}
+              <span className="text-on-surface-variant text-[10px]">▾</span>
+            </button>
+            {langOpen && (
+              <div className="absolute right-0 top-full mt-1 z-50 min-w-[120px] rounded-md border border-outline bg-surface py-1 shadow-md">
+                {item.options.map((opt, i) => (
+                  <button
+                    key={opt}
+                    type="button"
+                    onClick={() => {
+                      handleSegment(i);
+                      setLangOpen(false);
+                    }}
+                    className={cn(
+                      "w-full text-left px-3 py-1.5 text-[13px] transition-colors",
+                      currentSegment === i
+                        ? "bg-surface-container-low text-on-surface font-medium"
+                        : "text-on-surface hover:bg-control-hover",
+                    )}
+                  >
+                    {resolveLabel(opt)}
+                  </button>
+                ))}
+              </div>
+            )}
+          </div>
+        )}
+
+        {item.type === "segment" && item.options && !isLanguage && (
+          <div
+            className="flex rounded-md border border-outline/50 bg-surface-container-low"
+            style={{ padding: "2px" }}
+          >
             {item.options.map((opt, i) => (
               <button
                 key={opt}
                 type="button"
                 onClick={() => handleSegment(i)}
+                style={{ padding: "4px 12px", fontSize: "13px", lineHeight: "18px" }}
                 className={cn(
-                  "flex-1 rounded-md px-3 py-1.5 text-caption font-medium transition-all",
+                  "flex-1 rounded font-medium transition-all",
                   currentSegment === i
                     ? "bg-surface text-on-surface shadow-sm"
                     : "text-on-surface-variant hover:text-on-surface hover:bg-control-hover",

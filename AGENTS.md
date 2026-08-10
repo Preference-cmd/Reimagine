@@ -1,7 +1,10 @@
 # Reimagine
 
-A Tauri + Burn + React desktop app for node-based image generation workflows
-with an integrated AI agent daemon.
+**Agent for AIGC** — a Tauri + Burn + React desktop app with a native AI agent
+that deeply understands node-based creative workflows. The agent is a peer
+operator, not an external tool; it shares the same domain model and operation
+paths as the user, starting with image generation and extending to video,
+animation, and audio.
 
 - `AGENTS.local.md` Additional local specs. Must loaded after this file if exists.
 
@@ -15,8 +18,12 @@ with an integrated AI agent daemon.
 - `crates/runtime/` - `reimagine-runtime`: RuntimeService, scheduler, run/value store.
 - `crates/inference/` - `reimagine-inference`: backend contract, router, execution values, built-in executors.
 - `crates/inference-backends/` - Concrete backend adapters (Burn primary, Candle deprecated).
-- `crates/app-host/` - `reimagine-app-host`: WorkspaceHost, service facade, Agent tools.
-- `crates/agent/` - `reimagine-agent`: tool registry, policy, provider boundary, Agent loop, ContextManager.
+- `crates/app-host/` - `reimagine-app-host`: WorkspaceHost, service facade, Agent tools, provider config documents + adapter wiring.
+- `crates/agent-stack/` - Agent libraries, organized like `inference-backends/`:
+  - `ai-protocol/` - `reimagine-ai-protocol`: wire-protocol layer (`Protocol` discriminator, DTO translation, `CompletionBackend` seam). Transport-free.
+  - `agent-harness/` - `reimagine-agent-harness`: agent harness domain (tool registry, policy, provider boundary, Agent loop, ContextManager, `LlmModelCatalog`).
+  - `agent-provider/` - `reimagine-agent-provider`: concrete provider adapters (reqwest OpenAI-compatible / Anthropic / Responses).
+  - `agent-macros/` - `reimagine-agent-macros`: `#[agent_tool]` attribute macro.
 - `crates/agent-daemon/` - `reimagine-agent-daemon`: standalone daemon binary. JSON-RPC over stdio, self-contained execution engine with full WorkspaceHost.
 - `crates/axum-host/` - `reimagine-axum-host`: HTTP E2E test harness.
 - `ui/` - React 19 + Vite 7 frontend, managed with Bun.
@@ -28,6 +35,13 @@ The agent runs as an independent daemon process (`agent-daemon`) that owns a
 complete `WorkspaceHost` — including tool registry, provider catalog, and all
 workspace tools. Communication with the Tauri app uses JSON-RPC 2.0 over
 stdio (newline-delimited JSON).
+
+The agent operates as a **peer operator** — it shares the same domain model
+and operation paths as the user. All modifications (human and agent) go through
+the same `WorkflowCommand` path, supporting undo/redo and audit. In the AIGC
+Codex vision, the agent evolves into a **pipeline orchestrator** that can
+decompose high-level intent into cross-domain sub-pipelines and schedule
+workers across local and remote compute.
 
 ```
 ┌──────────────────┐  JSON-RPC  ┌──────────────────────────────────────┐
@@ -59,6 +73,7 @@ stdio (newline-delimited JSON).
 
 - Domain crates must not depend on `tauri`.
 - `agent-daemon` depends on `app-host` (not `tauri`) — it is host-neutral.
+- Agent layering mirrors the Pi agent toolkit: `agent-harness` (loop, tools, policy, model catalog) ← `ai-protocol` (Protocol discriminator, DTO translation, `CompletionBackend` seam — transport-free) ← `agent-provider` (concrete reqwest adapters, must not depend on `app-host`) ← `app-host` (provider config documents, adapter wiring, `AgentProviderCatalog`).
 - Dependency versions are centralized in root `Cargo.toml` under `[workspace.dependencies]`.
 - AI/ML inference backend code belongs in `crates/inference-backends/`.
 - Do not commit generated build outputs, local runtime data, model weights, secrets, or machine-local planning files.

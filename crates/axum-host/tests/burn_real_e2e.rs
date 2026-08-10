@@ -16,7 +16,7 @@ use std::path::PathBuf;
 
 use axum::body::Body;
 use axum::http::{Request, header};
-use reimagine_agent::WorkspaceScope;
+use reimagine_agent_harness::WorkspaceScope;
 use reimagine_app_host::{
     StaticWorkerInventoryProvider, WorkerBackendCandidate, WorkerInventorySnapshot, WorkspaceHost,
 };

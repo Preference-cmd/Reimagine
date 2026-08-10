@@ -5,7 +5,7 @@ use std::sync::Arc;
 
 pub use builder::WorkspaceHostBuilder;
 
-use reimagine_agent::{AgentEventSink, AgentToolRegistry, WorkspaceScope};
+use reimagine_agent_harness::{AgentEventSink, AgentToolRegistry, WorkspaceScope};
 use reimagine_backend_worker_host::WorkerStorePaths;
 use reimagine_config::{AppConfig, AppPaths, ConfigDocument, InferenceBackendConfig};
 use reimagine_core::model::NodeDef;
@@ -127,7 +127,7 @@ impl WorkspaceHost {
             topology: None,
             discovery: None,
             event_sink: Arc::new(VecRunEventSink::new()),
-            agent_event_sink: Arc::new(reimagine_agent::VecAgentEventSink::new())
+            agent_event_sink: Arc::new(reimagine_agent_harness::VecAgentEventSink::new())
                 as Arc<dyn AgentEventSink>,
         }
     }
@@ -243,7 +243,7 @@ impl WorkspaceHost {
             config,
             backend_config,
             event_sink,
-            Arc::new(reimagine_agent::VecAgentEventSink::new()),
+            Arc::new(reimagine_agent_harness::VecAgentEventSink::new()),
             worker_inventory,
         )
         .await
@@ -260,7 +260,7 @@ impl WorkspaceHost {
             workspace_scope,
             base_path,
             event_sink,
-            Arc::new(reimagine_agent::VecAgentEventSink::new()),
+            Arc::new(reimagine_agent_harness::VecAgentEventSink::new()),
         )
         .await
     }
@@ -291,7 +291,7 @@ impl WorkspaceHost {
             config,
             backend_config,
             event_sink,
-            Arc::new(reimagine_agent::VecAgentEventSink::new()) as Arc<dyn AgentEventSink>,
+            Arc::new(reimagine_agent_harness::VecAgentEventSink::new()) as Arc<dyn AgentEventSink>,
         )
     }
 
@@ -307,7 +307,7 @@ impl WorkspaceHost {
             config,
             backend_config,
             event_sink,
-            Arc::new(reimagine_agent::VecAgentEventSink::new()) as Arc<dyn AgentEventSink>,
+            Arc::new(reimagine_agent_harness::VecAgentEventSink::new()) as Arc<dyn AgentEventSink>,
         )
     }
 
@@ -1278,7 +1278,7 @@ mod tests {
             &app_data_root,
             backend_config,
             Arc::new(VecRunEventSink::new()),
-            Arc::new(reimagine_agent::VecAgentEventSink::new()),
+            Arc::new(reimagine_agent_harness::VecAgentEventSink::new()),
         )
         .await
         .expect("bootstrap with explicit app-data root");

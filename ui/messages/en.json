@@ -8,6 +8,7 @@
   "common.empty": "Nothing here yet",
 
   "sidebar.workflows": "Workflows",
+  "sidebar.new": "New",
   "sidebar.models": "Models",
   "sidebar.runs": "Runs",
   "sidebar.assets": "Assets",
@@ -37,6 +38,10 @@
   "settings.runtime": "Runtime",
   "settings.workspace": "Workspace",
   "settings.modelManagement": "Models",
+  "settings.plugins": "Plugins",
+  "settings.browser": "Browser",
+  "settings.hooks": "Hooks",
+  "settings.language": "Language",
 
   "settings.auto-save": "Auto-save",
   "settings.auto-save-desc": "Automatically save workflow changes to local storage",
@@ -134,5 +139,18 @@
   "commandPalette.placeholder": "Type a command or search…",
   "commandPalette.commands": "Commands",
   "commandPalette.nodes": "Nodes",
-  "commandPalette.noResults": "No results found"
+  "commandPalette.noResults": "No results found",
+
+  "welcome.title": "What are we working on?",
+  "welcome.subtitle": "Ask a question, create an output, or build a workflow.",
+  "welcome.inputPlaceholder": "Start a new conversation…",
+  "welcome.getStarted": "GET STARTED",
+  "welcome.textToImage": "Text to Image",
+  "welcome.textToImageDesc": "Generate images from text prompts",
+  "welcome.imageToImage": "Image to Image",
+  "welcome.imageToImageDesc": "Transform existing images with AI",
+  "welcome.inpaint": "Inpaint",
+  "welcome.inpaintDesc": "Edit specific areas of an image",
+  "welcome.upscale": "Upscale",
+  "welcome.upscaleDesc": "Enhance image resolution and quality"
 }

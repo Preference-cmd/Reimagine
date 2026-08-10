@@ -15,7 +15,7 @@ use async_trait::async_trait;
 use axum::body::Body;
 use axum::http::header;
 use axum::http::{Request, StatusCode};
-use reimagine_agent::WorkspaceScope;
+use reimagine_agent_harness::WorkspaceScope;
 use reimagine_app_host::{BackendInstance, BackendSelection, ModelService, WorkspaceHost};
 use reimagine_config::{AppConfig, AppPaths};
 use reimagine_core::model::{ArtifactRef, SlotId};

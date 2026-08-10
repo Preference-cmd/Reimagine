@@ -39,7 +39,7 @@ rocm = ["reimagine-inference-burn/rocm"]
 axum = { workspace = true }
 http-body-util = "0.1"
 image = { workspace = true }
-reimagine-agent = { path = "../../agent" }
+reimagine-agent-harness = { path = "../../agent-stack/agent-harness" }
 reimagine-app-host = { path = "../../app-host" }
 reimagine-axum-host = { path = "../../axum-host" }
 reimagine-backend-worker-host = { path = "../../backend-worker-host" }

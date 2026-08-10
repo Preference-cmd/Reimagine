@@ -1,58 +1,40 @@
 import { describe, test, expect, vi } from "vitest";
-import { render, screen, fireEvent } from "./test-utils";
+import { render, screen } from "./test-utils";
 import { SidebarNav } from "../src/components/layout/SidebarNav";
 
-const mockSetActive = vi.fn();
-const mockSetProjectsExpanded = vi.fn();
-const mockSetActiveProjectId = vi.fn();
-
-vi.mock("../src/store/uiStore", () => ({
-  useUIStore: Object.assign(
-    vi.fn((selector?: (state: any) => any) => {
-      const state = {
-        activeSidebarSection: "chat",
-        setActiveSidebarSection: mockSetActive,
-        projectsExpanded: true,
-        setProjectsExpanded: mockSetProjectsExpanded,
-        activeProjectId: null,
-        setActiveProjectId: mockSetActiveProjectId,
-      };
-      return selector ? selector(state) : state;
-    }),
-    {
-      getState: () => ({
-        activeSidebarSection: "chat",
-        setActiveSidebarSection: mockSetActive,
-        projectsExpanded: true,
-        setProjectsExpanded: mockSetProjectsExpanded,
-        activeProjectId: null,
-        setActiveProjectId: mockSetActiveProjectId,
-      }),
-    },
+vi.mock("@tanstack/react-router", () => ({
+  useLocation: () => ({ pathname: "/workflows" }),
+  Link: ({
+    to,
+    children,
+    className,
+    ...props
+  }: {
+    to: string;
+    children: React.ReactNode;
+    className?: string;
+    [key: string]: unknown;
+  }) => (
+    <a href={to} className={className} {...props}>
+      {children}
+    </a>
   ),
 }));
 
-vi.mock("../src/store/workflow", () => ({
-  useWorkflowStore: vi.fn(() => "Untitled"),
-}));
-
 vi.mock("$paraglide/messages", () => ({
-  "sidebar.newTask": () => "New Task",
-  "sidebar.pullRequests": () => "Pull Requests",
-  "sidebar.scheduled": () => "Scheduled",
-  "sidebar.plugins": () => "Plugins",
-  "sidebar.projects": () => "Projects",
-  "sidebar.tasks": () => "Tasks",
-  "sidebar.noTasks": () => "No tasks",
+  "sidebar.workflows": () => "Workflows",
+  "sidebar.models": () => "Models",
+  "sidebar.runs": () => "Runs",
+  "sidebar.assets": () => "Assets",
 }));
 
 describe("SidebarNav", () => {
   test("renders all primary navigation items", () => {
     render(<SidebarNav />);
-    expect(screen.getByText("New Task")).toBeInTheDocument();
-    expect(screen.getByText("Pull Requests")).toBeInTheDocument();
-    expect(screen.getByText("Scheduled")).toBeInTheDocument();
-    expect(screen.getByText("Plugins")).toBeInTheDocument();
+    expect(screen.getByText("Workflows")).toBeInTheDocument();
+    expect(screen.getByText("Models")).toBeInTheDocument();
+    expect(screen.getByText("Runs")).toBeInTheDocument();
+    expect(screen.getByText("Assets")).toBeInTheDocument();
   });
 
   test("renders navigation with correct aria label", () => {
@@ -60,13 +42,13 @@ describe("SidebarNav", () => {
     expect(screen.getByLabelText("Sidebar navigation")).toBeInTheDocument();
   });
 
-  test("calls setActiveSidebarSection on click and clears project selection", () => {
+  test("renders links with correct hrefs", () => {
     render(<SidebarNav />);
-    mockSetActive.mockClear();
-    mockSetActiveProjectId.mockClear();
-
-    fireEvent.click(screen.getByText("Scheduled"));
-    expect(mockSetActive).toHaveBeenCalledWith("scheduled");
-    expect(mockSetActiveProjectId).toHaveBeenCalledWith(null);
+    const links = screen.getAllByRole("link");
+    const hrefs = links.map((link) => link.getAttribute("href"));
+    expect(hrefs).toContain("/workflows");
+    expect(hrefs).toContain("/models");
+    expect(hrefs).toContain("/runs");
+    expect(hrefs).toContain("/assets");
   });
 });

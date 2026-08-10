@@ -18,8 +18,8 @@ import {
 } from "lucide-react";
 import type { Node } from "@xyflow/react";
 import { cn } from "@/lib/utils";
-import { listModels } from "@/ipc";
-import type { ModelInfo } from "@/ipc";
+import { useModels } from "@/hooks/queries";
+import type { ModelInfo } from "@/ipc/schemas";
 import { ModelDownloadDialog } from "@/components/layout/ModelDownloadDialog";
 import { useRuntimeStore } from "@/store/runtime";
 import { useWorkflowStore } from "@/store/workflow";
@@ -119,35 +119,14 @@ export function ExplorerPanel({ open, view, onClose, className }: ExplorerPanelP
   const runtimeDiagnostics = useRuntimeStore((s) => s.diagnostics);
 
   const [query, setQuery] = useState("");
-  const [models, setModels] = useState<ModelInfo[]>([]);
-  const [modelsLoading, setModelsLoading] = useState(false);
-  const [modelsReloadKey, setModelsReloadKey] = useState(0);
   const [downloadOpen, setDownloadOpen] = useState(false);
+
+  // Shared models query — same cache as ModelsView (dedup!)
+  const { data: models = [], isLoading: modelsLoading } = useModels();
 
   useEffect(() => {
     setQuery("");
   }, [currentView]);
-
-  useEffect(() => {
-    if (!open || currentView !== "Models") return;
-
-    let cancelled = false;
-    setModelsLoading(true);
-    listModels()
-      .then((result) => {
-        if (!cancelled) setModels(result);
-      })
-      .catch(() => {
-        if (!cancelled) setModels([]);
-      })
-      .finally(() => {
-        if (!cancelled) setModelsLoading(false);
-      });
-
-    return () => {
-      cancelled = true;
-    };
-  }, [currentView, modelsReloadKey, open]);
 
   const rows = useMemo(() => {
     if (currentView === "Graph") {
@@ -273,7 +252,7 @@ export function ExplorerPanel({ open, view, onClose, className }: ExplorerPanelP
         open={downloadOpen}
         initialRepoId={null}
         onClose={() => setDownloadOpen(false)}
-        onInstalled={() => setModelsReloadKey((key) => key + 1)}
+        onInstalled={() => {}}
       />
     </div>
   );

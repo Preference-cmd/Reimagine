@@ -12,7 +12,7 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use async_trait::async_trait;
-use reimagine_agent::WorkspaceScope;
+use reimagine_agent_harness::WorkspaceScope;
 use reimagine_app_host::{
     AppHostError, BackendInstance, ModelService, RunWorkflowRequest, RunWorkflowResult,
     SnapshotExternalReadinessProvider, WorkspaceComputeProfile, WorkspaceHost,

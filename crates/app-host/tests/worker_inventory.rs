@@ -1,6 +1,6 @@
 use std::sync::Arc;
 
-use reimagine_agent::WorkspaceScope;
+use reimagine_agent_harness::WorkspaceScope;
 use reimagine_app_host::{EmptyWorkerInventoryProvider, WorkspaceHost};
 use reimagine_app_host::{
     StaticWorkerInventoryProvider, WorkerBackendCandidate, WorkerInventorySnapshot,

@@ -1,6 +1,6 @@
 use std::sync::Arc;
 
-use reimagine_agent::WorkspaceScope;
+use reimagine_agent_harness::WorkspaceScope;
 use reimagine_config::AppConfig;
 use reimagine_runtime::RuntimeService;
 

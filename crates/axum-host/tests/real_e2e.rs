@@ -19,7 +19,7 @@ use std::time::Duration;
 
 use axum::body::Body;
 use axum::http::{Request, StatusCode, header};
-use reimagine_agent::WorkspaceScope;
+use reimagine_agent_harness::WorkspaceScope;
 use reimagine_app_host::{BackendSelection, WorkspaceHost};
 use reimagine_axum_host::{AxumHostState, build_router};
 use reimagine_config::{AppPaths, InferenceBackendConfig, InferenceBackendKind};

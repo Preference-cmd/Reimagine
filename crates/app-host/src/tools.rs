@@ -2,8 +2,8 @@ use std::sync::Arc;
 
 mod workspace_tool;
 
-use reimagine_agent::ToolRiskLevel;
-use reimagine_agent::{
+use reimagine_agent_harness::ToolRiskLevel;
+use reimagine_agent_harness::{
     AgentMode, AgentToolRegistry, ToolContext, ToolError, ToolErrorCode, ToolName, ToolResult,
 };
 use reimagine_core::command::{

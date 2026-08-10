@@ -21,10 +21,10 @@ pub enum AppHostError {
         current_version: WorkflowVersion,
     },
     UnknownAgentSession {
-        session_id: reimagine_agent::AgentSessionId,
+        session_id: reimagine_agent_harness::AgentSessionId,
     },
     UnknownAgentProvider {
-        provider: reimagine_agent::ProviderName,
+        provider: reimagine_agent_harness::ProviderName,
     },
     UnknownAgentMode {
         mode: String,

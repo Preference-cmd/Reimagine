@@ -1,11 +1,11 @@
 //! Agent DTOs for Tauri/Axum IPC.
 //!
-//! These shapes project host-neutral `reimagine_agent` types into stable
+//! These shapes project host-neutral `reimagine_agent_harness` types into stable
 //! JSON forms that frontends can consume directly. The projections strip
 //! backend-internal types and private fields so frontends never see
 //! agent-crate internals.
 
-use reimagine_agent::{AgentEvent, AgentSession, AgentTurnResult, Message, ToolCallResult, Usage};
+use reimagine_agent_harness::{AgentEvent, AgentSession, AgentTurnResult, Message, ToolCallResult, Usage};
 use serde::{Deserialize, Serialize};
 
 use super::runs::DiagnosticDto;
@@ -57,7 +57,7 @@ impl From<AgentTurnResult> for AgentTurnResponse {
     }
 }
 
-/// Agent message DTO (projection of `reimagine_agent::Message`).
+/// Agent message DTO (projection of `reimagine_agent_harness::Message`).
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct AgentMessageDto {
@@ -78,7 +78,7 @@ impl From<Message> for AgentMessageDto {
     }
 }
 
-/// Agent tool call DTO (projection of `reimagine_agent::ToolCallResult`).
+/// Agent tool call DTO (projection of `reimagine_agent_harness::ToolCallResult`).
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct AgentToolCallDto {
@@ -211,6 +211,16 @@ impl From<&AgentEvent> for AgentEventPayload {
                 code: None,
                 message: Some(text.clone()),
             },
+            AgentEvent::ReasoningDelta {
+                session_id, text, ..
+            } => Self {
+                session_id: session_id.to_string(),
+                kind: "reasoning_delta".to_string(),
+                tool_name: None,
+                tool_call_id: None,
+                code: None,
+                message: Some(text.clone()),
+            },
         }
     }
 }
@@ -263,16 +273,16 @@ pub use reimagine_core::command::CommandResult;
 #[cfg(test)]
 mod tests {
     use super::*;
-    use reimagine_agent::{AgentMode, AgentSessionId, AgentTurnResult, ProviderName};
+    use reimagine_agent_harness::{AgentMode, AgentSessionId, AgentTurnResult, ProviderName};
 
     #[test]
     fn agent_turn_projects_from_result() {
         let result = AgentTurnResult::new()
-            .with_turn_id(reimagine_agent::AgentTurnId::new("turn-1"))
+            .with_turn_id(reimagine_agent_harness::AgentTurnId::new("turn-1"))
             .with_session_id(AgentSessionId::new("sess-1"))
             .with_mode(AgentMode::Agent)
             .with_provider(ProviderName::new("openai"))
-            .with_model(reimagine_agent::ModelName::new("gpt-4"));
+            .with_model(reimagine_agent_harness::ModelName::new("gpt-4"));
 
         let dto: AgentTurnResponse = result.into();
         assert_eq!(dto.turn_id, "turn-1");

@@ -1,4 +1,4 @@
-use reimagine_agent::AgentSessionId;
+use reimagine_agent_harness::AgentSessionId;
 use reimagine_core::command::{CommandBatch, CommandResult};
 use reimagine_core::model::{ProposalId, WorkflowId, WorkflowVersion};
 

@@ -14,7 +14,7 @@ use std::path::PathBuf;
 use std::sync::Arc;
 use std::time::Duration;
 
-use reimagine_agent::WorkspaceScope;
+use reimagine_agent_harness::WorkspaceScope;
 use reimagine_app_host::{
     BackendSelection, ModelService, RunWorkflowRequest, RunWorkflowResult, WorkspaceHost,
 };

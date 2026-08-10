@@ -8,7 +8,7 @@ rust-version.workspace = true
 license.workspace = true
 
 [dependencies]
-reimagine-agent = { path = "../agent" }
+reimagine-agent-harness = { path = "../agent-stack/agent-harness" }
 reimagine-app-host = { path = "../app-host" }
 reimagine-runtime = { path = "../runtime" }
 clap = { workspace = true }

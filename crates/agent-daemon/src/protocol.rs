@@ -53,6 +53,7 @@ pub const METHOD_TURN_STEER: &str = "turn.steer";
 pub const METHOD_PROVIDERS_LIST: &str = "providers.list";
 /// Daemon streams incremental assistant text for a turn.
 pub const METHOD_AGENT_CONTENT_DELTA: &str = "agent.content_delta";
+pub const METHOD_AGENT_REASONING_DELTA: &str = "agent.reasoning_delta";
 /// Daemon reports a tool call is being executed.
 pub const METHOD_AGENT_TOOL_INVOKED: &str = "agent.tool_invoked";
 /// Daemon reports a tool call completed successfully.
@@ -382,6 +383,16 @@ pub struct ProvidersListResult {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub struct ContentDeltaParams {
+    pub session_id: String,
+    pub turn_id: String,
+    pub text: String,
+}
+
+/// `agent.reasoning_delta` notification params. Reasoning is display-only;
+/// the daemon never persists it into session history.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub struct ReasoningDeltaParams {
     pub session_id: String,
     pub turn_id: String,
     pub text: String,

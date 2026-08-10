@@ -1,15 +1,10 @@
 import { useEffect, useRef, useState } from "react";
 import { ArrowLeft, Boxes, CheckCircle2, Download, Loader2, Search, X } from "lucide-react";
 import { Dialog } from "radix-ui";
+import { useQueryClient } from "@tanstack/react-query";
 import { Button } from "@/components/ui/button";
-import { downloadHuggingfaceModel, getModelCard, searchModels } from "@/ipc";
-import type {
-  DownloadEventPayload,
-  DownloadHuggingfaceModelArgs,
-  ModelCard,
-  ModelCatalogEntry,
-  ModelDownloadOutput,
-} from "@/ipc";
+import { useModelSearch, useModelCard, useDownloadModel, queryKeys } from "@/hooks/queries";
+import type { DownloadHuggingfaceModelArgs, DownloadEventPayload } from "@/ipc/schemas";
 
 const SEARCH_DELAY_MS = 300;
 
@@ -52,28 +47,49 @@ const PHASE_TITLES: Record<Phase, string> = {
   done: "Installed",
 };
 
+/** Debounce a string value by `delayMs`. */
+function useDebouncedValue(value: string, delayMs: number): string {
+  const [debounced, setDebounced] = useState(value);
+  useEffect(() => {
+    const timer = setTimeout(() => setDebounced(value), delayMs);
+    return () => clearTimeout(timer);
+  }, [value, delayMs]);
+  return debounced;
+}
+
 export function ModelDownloadDialog({
   open,
   initialRepoId,
   onClose,
   onInstalled,
 }: ModelDownloadDialogProps) {
+  const queryClient = useQueryClient();
   const [phase, setPhase] = useState<Phase>("browse");
   const [query, setQuery] = useState("");
-  const [results, setResults] = useState<ModelCatalogEntry[]>([]);
-  const [searching, setSearching] = useState(false);
   const [selectedRepoId, setSelectedRepoId] = useState<string | null>(null);
-  const [card, setCard] = useState<ModelCard | null>(null);
-  const [cardError, setCardError] = useState<string | null>(null);
   const [downloadError, setDownloadError] = useState<string | null>(null);
   const [progress, setProgress] = useState<DownloadProgress>({
     bytes: 0,
     totalBytes: null,
     message: null,
   });
-  const [output, setOutput] = useState<ModelDownloadOutput | null>(null);
+  const [output, setOutput] = useState<{
+    repoId: string;
+    totalBytes: number;
+    detectedFormat?: string;
+    provider: string;
+  } | null>(null);
   const alive = useRef(true);
 
+  // Debounce search input
+  const debouncedQuery = useDebouncedValue(query, SEARCH_DELAY_MS);
+
+  // TanStack Query hooks
+  const searchQuery = useModelSearch(debouncedQuery);
+  const cardQuery = useModelCard(selectedRepoId);
+  const downloadMutation = useDownloadModel();
+
+  // Reset state when dialog opens
   useEffect(() => {
     alive.current = true;
     return () => {
@@ -84,8 +100,6 @@ export function ModelDownloadDialog({
   useEffect(() => {
     if (!open) return;
     setQuery("");
-    setResults([]);
-    setSearching(false);
     setDownloadError(null);
     setOutput(null);
     setProgress({ bytes: 0, totalBytes: null, message: null });
@@ -93,53 +107,15 @@ export function ModelDownloadDialog({
       void openRepo(initialRepoId);
     } else {
       setSelectedRepoId(null);
-      setCard(null);
-      setCardError(null);
       setPhase("browse");
     }
   }, [open, initialRepoId]);
 
-  useEffect(() => {
-    if (!open || phase !== "browse") return;
-    const needle = query.trim();
-    if (!needle) {
-      setResults([]);
-      setSearching(false);
-      return;
-    }
-    setSearching(true);
-    let cancelled = false;
-    const timer = setTimeout(() => {
-      searchModels(needle)
-        .then((entries) => {
-          if (!cancelled) setResults(entries);
-        })
-        .catch(() => {
-          if (!cancelled) setResults([]);
-        })
-        .finally(() => {
-          if (!cancelled) setSearching(false);
-        });
-    }, SEARCH_DELAY_MS);
-    return () => {
-      cancelled = true;
-      clearTimeout(timer);
-    };
-  }, [open, phase, query]);
-
   async function openRepo(repoId: string) {
     setSelectedRepoId(repoId);
-    setCard(null);
-    setCardError(null);
     setDownloadError(null);
     setOutput(null);
     setPhase("card");
-    try {
-      const fetched = await getModelCard(repoId);
-      if (alive.current) setCard(fetched);
-    } catch (error) {
-      if (alive.current) setCardError(errorMessage(error));
-    }
   }
 
   function applyDownloadEvent(event: DownloadEventPayload) {
@@ -177,12 +153,15 @@ export function ModelDownloadDialog({
       fromCatalog: true,
     };
     try {
-      const result = await downloadHuggingfaceModel(args, (event) => {
-        applyDownloadEvent(event);
+      const result = await downloadMutation.mutateAsync({
+        args,
+        onEvent: (event) => applyDownloadEvent(event),
       });
       if (!alive.current) return;
       setOutput(result);
       setPhase("done");
+      // Invalidate models list so both ModelsView and ExplorerPanel update
+      await queryClient.invalidateQueries({ queryKey: queryKeys.models });
       onInstalled();
     } catch (error) {
       if (!alive.current) return;
@@ -192,6 +171,10 @@ export function ModelDownloadDialog({
   }
 
   const fraction = progress.totalBytes ? Math.min(1, progress.bytes / progress.totalBytes) : 0;
+  const results = searchQuery.data ?? [];
+  const searching = searchQuery.isFetching;
+  const card = cardQuery.data ?? null;
+  const cardError = cardQuery.error ? errorMessage(cardQuery.error) : null;
 
   return (
     <Dialog.Root open={open} onOpenChange={(nextOpen) => !nextOpen && onClose()}>

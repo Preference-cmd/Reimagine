@@ -19,20 +19,22 @@ function Logo({ className }: { className?: string }) {
   );
 }
 
-export function SidebarHeader() {
+export function SidebarHeader({ collapsed }: { collapsed?: boolean }) {
   const openCommandPalette = useUIStore((s) => s.openCommandPalette);
 
   return (
     <div className="flex items-center gap-2 px-3 py-3">
       <Logo className="h-5 w-5 shrink-0 text-sidebar-text-secondary" />
 
-      <button
-        type="button"
-        className="flex items-center gap-1 text-sm font-medium text-sidebar-text-primary hover:text-white focus-visible:outline-none"
-      >
-        Reimagine
-        <ChevronDown className="h-3 w-3 text-sidebar-text-muted" />
-      </button>
+      {!collapsed && (
+        <button
+          type="button"
+          className="flex items-center gap-1 text-sm font-medium text-sidebar-text-primary hover:text-white focus-visible:outline-none"
+        >
+          Reimagine
+          <ChevronDown className="h-3 w-3 text-sidebar-text-muted" />
+        </button>
+      )}
 
       <button
         type="button"

@@ -11,7 +11,7 @@
 
 use std::sync::Arc;
 
-use reimagine_agent::{
+use reimagine_agent_harness::{
     AgentMode, AgentSessionId, PermissionSet, ToolContext, ToolPermission, WorkspaceScope,
 };
 use reimagine_app_host::{ProposalReceipt, ProposalStatus, WorkflowCommandPolicy, WorkspaceHost};
@@ -128,7 +128,7 @@ async fn tool_rejects_workspace_mismatch() {
 
     let result = registry
         .invoke(
-            &reimagine_agent::ToolName::new("workflow.get"),
+            &reimagine_agent_harness::ToolName::new("workflow.get"),
             &wrong_ctx,
             input,
         )
@@ -159,7 +159,7 @@ async fn preview_commands_does_not_mutate_workflow() {
     let registry = Arc::clone(host.agent_service().registry());
     let output = registry
         .invoke(
-            &reimagine_agent::ToolName::new("workflow.preview_commands"),
+            &reimagine_agent_harness::ToolName::new("workflow.preview_commands"),
             &ctx,
             input,
         )
@@ -195,7 +195,7 @@ async fn propose_commands_stores_pending_proposal_without_mutation() {
     let registry = Arc::clone(host.agent_service().registry());
     let output = registry
         .invoke(
-            &reimagine_agent::ToolName::new("workflow.propose_commands"),
+            &reimagine_agent_harness::ToolName::new("workflow.propose_commands"),
             &ctx,
             input,
         )
@@ -244,7 +244,7 @@ async fn propose_commands_replaces_previous_pending_proposal() {
         });
         let _ = registry
             .invoke(
-                &reimagine_agent::ToolName::new("workflow.propose_commands"),
+                &reimagine_agent_harness::ToolName::new("workflow.propose_commands"),
                 &ctx,
                 input,
             )
@@ -275,7 +275,7 @@ async fn apply_commands_in_build_mode_is_not_effective() {
     let registry = Arc::clone(host.agent_service().registry());
     let output = registry
         .invoke(
-            &reimagine_agent::ToolName::new("workflow.apply_commands"),
+            &reimagine_agent_harness::ToolName::new("workflow.apply_commands"),
             &ctx,
             input,
         )
@@ -307,7 +307,7 @@ async fn apply_commands_in_agent_mode_applies_editor_only_batch() {
     let registry = Arc::clone(host.agent_service().registry());
     let output = registry
         .invoke(
-            &reimagine_agent::ToolName::new("workflow.apply_commands"),
+            &reimagine_agent_harness::ToolName::new("workflow.apply_commands"),
             &ctx,
             input,
         )
@@ -340,7 +340,7 @@ async fn apply_commands_in_agent_mode_rejects_graph_semantic_batch() {
     let registry = Arc::clone(host.agent_service().registry());
     let output = registry
         .invoke(
-            &reimagine_agent::ToolName::new("workflow.apply_commands"),
+            &reimagine_agent_harness::ToolName::new("workflow.apply_commands"),
             &ctx,
             input,
         )
@@ -374,7 +374,7 @@ async fn apply_commands_returns_effective_false_when_preview_rejects() {
     let registry = Arc::clone(host.agent_service().registry());
     let output = registry
         .invoke(
-            &reimagine_agent::ToolName::new("workflow.apply_commands"),
+            &reimagine_agent_harness::ToolName::new("workflow.apply_commands"),
             &ctx,
             input,
         )
@@ -434,7 +434,7 @@ async fn workflow_get_returns_snapshot() {
     let ctx = agent_ctx(host.workspace_scope().clone(), AgentMode::Agent);
     let registry = Arc::clone(host.agent_service().registry());
     let output = registry
-        .invoke(&reimagine_agent::ToolName::new("workflow.get"), &ctx, input)
+        .invoke(&reimagine_agent_harness::ToolName::new("workflow.get"), &ctx, input)
         .await
         .expect("get should succeed");
 
@@ -462,7 +462,7 @@ async fn approved_proposal_apply_through_host_api() {
     let registry = Arc::clone(host.agent_service().registry());
     let _receipt = registry
         .invoke(
-            &reimagine_agent::ToolName::new("workflow.propose_commands"),
+            &reimagine_agent_harness::ToolName::new("workflow.propose_commands"),
             &ctx,
             input,
         )
@@ -507,7 +507,7 @@ async fn rejected_proposal_apply_keeps_pending_proposal() {
     let registry = Arc::clone(host.agent_service().registry());
     let _receipt = registry
         .invoke(
-            &reimagine_agent::ToolName::new("workflow.propose_commands"),
+            &reimagine_agent_harness::ToolName::new("workflow.propose_commands"),
             &ctx,
             input,
         )
@@ -551,7 +551,7 @@ async fn preview_commands_rejects_workspace_mismatch() {
     let registry = Arc::clone(host.agent_service().registry());
     let result = registry
         .invoke(
-            &reimagine_agent::ToolName::new("workflow.preview_commands"),
+            &reimagine_agent_harness::ToolName::new("workflow.preview_commands"),
             &wrong_ctx,
             input,
         )
@@ -584,7 +584,7 @@ async fn propose_commands_rejects_workspace_mismatch() {
     let registry = Arc::clone(host.agent_service().registry());
     let result = registry
         .invoke(
-            &reimagine_agent::ToolName::new("workflow.propose_commands"),
+            &reimagine_agent_harness::ToolName::new("workflow.propose_commands"),
             &wrong_ctx,
             input,
         )
@@ -615,7 +615,7 @@ async fn apply_commands_rejects_workspace_mismatch() {
     let registry = Arc::clone(host.agent_service().registry());
     let result = registry
         .invoke(
-            &reimagine_agent::ToolName::new("workflow.apply_commands"),
+            &reimagine_agent_harness::ToolName::new("workflow.apply_commands"),
             &wrong_ctx,
             input,
         )
@@ -649,7 +649,7 @@ async fn propose_commands_returns_rejected_when_preview_fails() {
     let registry = Arc::clone(host.agent_service().registry());
     let output = registry
         .invoke(
-            &reimagine_agent::ToolName::new("workflow.propose_commands"),
+            &reimagine_agent_harness::ToolName::new("workflow.propose_commands"),
             &ctx,
             input,
         )
@@ -696,7 +696,7 @@ async fn apply_commands_ignores_input_actor_kind() {
     let registry = Arc::clone(host.agent_service().registry());
     let output = registry
         .invoke(
-            &reimagine_agent::ToolName::new("workflow.apply_commands"),
+            &reimagine_agent_harness::ToolName::new("workflow.apply_commands"),
             &ctx,
             input,
         )

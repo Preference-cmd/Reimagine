@@ -1,4 +1,4 @@
-use reimagine_agent::{AgentMode, AgentSessionId, ProviderName, WorkspaceScope};
+use reimagine_agent_harness::{AgentMode, AgentSessionId, ProviderName, WorkspaceScope};
 use reimagine_app_host::{AppHost, ModelService, WorkflowService, WorkspaceHost};
 use reimagine_config::AppPaths;
 use reimagine_core::command::{

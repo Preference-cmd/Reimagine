@@ -21,6 +21,7 @@ mod model_service;
 mod node_catalog;
 mod policy;
 mod proposal;
+mod provider_config;
 mod readiness;
 mod run_observation;
 mod run_workflow;
@@ -30,7 +31,9 @@ mod worker_management;
 mod workflow_service;
 mod workspace;
 
-pub use agent_provider::AgentProviderCatalog;
+pub use agent_provider::{
+    AgentProviderCatalog, build_provider, register_providers_from_document,
+};
 pub use agent_service::{AgentService, AgentServiceTurnRequest};
 pub use app_host::AppHost;
 pub use artifact_access::{
@@ -63,6 +66,10 @@ pub use model_service::{AcquireAndConvertReport, AcquireAndConvertRequest, Model
 pub use node_catalog::{NodeCatalogAlignment, NodeCatalogService};
 pub use policy::WorkflowCommandPolicy;
 pub use proposal::{ProposalReceipt, ProposalStatus, WorkflowProposal};
+pub use provider_config::{
+    AgentProviderConfigDocument, AnthropicMessagesConfig, OpenAiChatCompletionsConfig,
+    OpenAiResponsesConfig, Protocol, ProviderConfig,
+};
 pub use readiness::SnapshotExternalReadinessProvider;
 pub use reimagine_backend_worker_transport_grpc::{GrpcAuth, GrpcTls};
 pub use reimagine_inference::{BackendInstance, WorkspaceComputeProfile};

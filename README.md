@@ -2,8 +2,8 @@
 
 # Reimagine
 
-**An agentic workflow studio for AIGC — node-based workflow editing**
-**with a first-class agent loop, in a single Rust + React workspace.**
+**The AI agent that understands your AIGC workflows**
+**Node-based editing + native agent, in a single Rust + React workspace.**
 
 [![License: GPL-3.0-or-later](https://img.shields.io/badge/License-GPL--3.0--or--later-blue?style=flat-square)](LICENSE)
 [![Rust](https://img.shields.io/badge/Rust-1.96%2B-orange?style=flat-square&logo=rust)](https://www.rust-lang.org)
@@ -14,16 +14,32 @@
 
 AIGC workflows are usually hand-wired: compose nodes, wire slots, run,
 inspect, tweak — then repeat. The bottleneck is the editing loop itself.
+External agents (Comfy MCP) can help, but they don't understand node graph
+semantics and can't operate as true collaborators.
 
-Reimagine closes that loop. A first-class agent reads, authors, and executes
-workflows on the same runtime behind the desktop and HTTP hosts, exposing a
-typed tool surface over the graph, validation pipeline, and scheduler.
-Describe what you want — the agent composes, validates, runs, observes, and
-iterates.
+Reimagine puts an AI agent at the center. The agent reads, authors, and
+executes workflows on the same runtime behind the desktop and HTTP hosts,
+exposing a typed tool surface over the graph, validation pipeline, and
+scheduler. It is not a chatbot bolted onto a node editor — it is a peer
+operator that shares the same domain model and operation paths as the user.
+Describe what you want; the agent composes, validates, runs, observes, and
+iterates alongside you.
 
 
 
 ## Architecture
+
+### Agent-first design
+
+Reimagine is built around a native AI agent that deeply understands AIGC
+workflows. The agent is not an external tool talking through MCP — it is a
+peer operator that shares the same domain model and operation paths as the
+user. Every modification, whether from a human click or an agent tool call,
+flows through the same `WorkflowCommand` path with full undo/redo support.
+
+Starting from image generation, the agent's domain understanding extends
+across video, animation, and audio — composing cross-domain pipelines from
+a single natural-language intent.
 
 ### Desktop app + headless server
 

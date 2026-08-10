@@ -1,7 +1,7 @@
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, RwLock};
 
-use reimagine_agent::{AgentEventSink, WorkspaceScope};
+use reimagine_agent_harness::{AgentEventSink, WorkspaceScope};
 use reimagine_agent_daemon::protocol::{TurnRunParams, TurnRunResult};
 use reimagine_app_host::dto::{
     AgentEventPayload, AgentSessionInfo, ArtifactMetadataDto, ComputeProfileDto, HealthResponse,
@@ -71,7 +71,7 @@ impl DesktopHostState {
         // in-process agent service is retained for backward compatibility
         // only, so its events go to a discard sink.
         let agent_event_sink: Arc<dyn AgentEventSink> =
-            Arc::new(reimagine_agent::VecAgentEventSink::new());
+            Arc::new(reimagine_agent_harness::VecAgentEventSink::new());
         let workspace = WorkspaceHost::try_with_app_data_root_and_event_sinks(
             WorkspaceScope::new(WORKSPACE_SCOPE),
             &workspace_base_path,
@@ -299,7 +299,7 @@ impl DesktopHostState {
                 .workspace()
                 .agent_service()
                 .providers()
-                .contains(&reimagine_agent::ProviderName::new(&provider))
+                .contains(&reimagine_agent_harness::ProviderName::new(&provider))
         };
         if !provider_known {
             return Err(AgentBridgeError::Protocol {

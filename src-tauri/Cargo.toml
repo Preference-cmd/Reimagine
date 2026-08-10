@@ -20,7 +20,7 @@ crate-type = ["staticlib", "cdylib", "rlib"]
 tauri-build = { workspace = true }
 
 [dependencies]
-reimagine-agent = { path = "../crates/agent" }
+reimagine-agent-harness = { path = "../crates/agent-stack/agent-harness" }
 reimagine-agent-daemon = { path = "../crates/agent-daemon" }
 reimagine-app-host = { path = "../crates/app-host" }
 reimagine-config = { path = "../crates/config" }

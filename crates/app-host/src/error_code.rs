@@ -154,7 +154,7 @@ mod tests {
     fn agent_provider_classifies_as_unknown_provider() {
         assert_eq!(
             AppHostError::UnknownAgentProvider {
-                provider: reimagine_agent::ProviderName::new("openai")
+                provider: reimagine_agent_harness::ProviderName::new("openai")
             }
             .code(),
             AppHostErrorCode::UnknownProvider

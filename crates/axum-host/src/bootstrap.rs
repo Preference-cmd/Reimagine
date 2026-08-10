@@ -7,7 +7,7 @@
 use std::path::PathBuf;
 use std::sync::Arc;
 
-use reimagine_agent::WorkspaceScope;
+use reimagine_agent_harness::WorkspaceScope;
 use reimagine_app_host::{AppHostError, WorkspaceHost};
 use reimagine_config::AppPaths;
 use reimagine_runtime::RunEventSink;

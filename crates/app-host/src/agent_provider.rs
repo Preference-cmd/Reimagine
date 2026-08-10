@@ -1,7 +1,11 @@
 use std::collections::BTreeMap;
 use std::sync::{Arc, RwLock};
 
-use reimagine_agent::{AgentProvider, ProviderName};
+use reimagine_agent_harness::{AgentProvider, ProviderName};
+
+use crate::provider_config::{
+    AgentProviderConfigDocument, Protocol, ProviderConfig,
+};
 
 #[derive(Clone, Default)]
 pub struct AgentProviderCatalog {
@@ -71,4 +75,72 @@ impl AgentProviderCatalog {
     pub fn is_empty(&self) -> bool {
         self.len() == 0
     }
+}
+
+/// Build an `Arc<dyn AgentProvider>` from a `ProviderConfig`.
+///
+/// The protocol discriminator selects which concrete adapter in
+/// `reimagine-agent-provider` is constructed. Missing inner config is
+/// rejected with
+/// [`reimagine_agent_provider::ProviderAdapterError::MissingConfig`].
+pub fn build_provider(
+    config: &ProviderConfig,
+) -> Result<Arc<dyn AgentProvider>, reimagine_agent_provider::ProviderAdapterError> {
+    use reimagine_agent_provider::{
+        AnthropicMessagesProvider, OpenAiChatCompletionsProvider, OpenAiResponsesProvider,
+    };
+    let name = ProviderName::new(config.name().to_string());
+    match config.protocol() {
+        Protocol::OpenAiChatCompletions => {
+            let inner = config.openai_chat_completions().ok_or_else(|| {
+                reimagine_agent_provider::ProviderAdapterError::MissingConfig {
+                    provider: config.name().to_string(),
+                    protocol: Protocol::OpenAiChatCompletions,
+                }
+            })?;
+            Ok(Arc::new(OpenAiChatCompletionsProvider::new(name, inner.clone())))
+        }
+        Protocol::AnthropicMessages => {
+            let inner = config.anthropic_messages().ok_or_else(|| {
+                reimagine_agent_provider::ProviderAdapterError::MissingConfig {
+                    provider: config.name().to_string(),
+                    protocol: Protocol::AnthropicMessages,
+                }
+            })?;
+            Ok(Arc::new(AnthropicMessagesProvider::new(name, inner.clone())))
+        }
+        Protocol::OpenAiResponses => {
+            let inner = config.openai_responses().ok_or_else(|| {
+                reimagine_agent_provider::ProviderAdapterError::MissingConfig {
+                    provider: config.name().to_string(),
+                    protocol: Protocol::OpenAiResponses,
+                }
+            })?;
+            Ok(Arc::new(OpenAiResponsesProvider::new(name, inner.clone())))
+        }
+    }
+}
+
+/// Register every enabled provider from a config document into a catalog.
+///
+/// Returns the provider names that were registered. Providers whose
+/// config is missing its inner typed section are skipped and reported in
+/// the returned error list; the remaining providers are still registered
+/// so a partial document never bricks the whole catalog.
+pub fn register_providers_from_document(
+    catalog: &AgentProviderCatalog,
+    document: &AgentProviderConfigDocument,
+) -> (Vec<ProviderName>, Vec<String>) {
+    let mut registered = Vec::new();
+    let mut errors = Vec::new();
+    for config in document.enabled() {
+        match build_provider(config) {
+            Ok(provider) => {
+                let name = catalog.register(provider);
+                registered.push(name);
+            }
+            Err(error) => errors.push(format!("provider `{}`: {error}", config.name())),
+        }
+    }
+    (registered, errors)
 }

@@ -3,7 +3,7 @@
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
-use reimagine_agent::{AgentEventSink, AgentToolRegistry, WorkspaceScope};
+use reimagine_agent_harness::{AgentEventSink, AgentToolRegistry, WorkspaceScope};
 use reimagine_app_host::{AgentProviderCatalog, AgentService, AppHostError, WorkspaceHost};
 use reimagine_runtime::{BoxedRunEventSink, VecRunEventSink};
 
@@ -121,7 +121,7 @@ fn workspace_scope_for(workspace_dir: &Path) -> WorkspaceScope {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use reimagine_agent::VecAgentEventSink;
+    use reimagine_agent_harness::VecAgentEventSink;
     use std::path::PathBuf;
 
     fn temp_dir(prefix: &str) -> PathBuf {

@@ -18,7 +18,7 @@ burn-rocm = ["dep:reimagine-inference-burn", "reimagine-inference-burn/rocm"]
 async-trait = { workspace = true }
 axum = { workspace = true }
 clap = { workspace = true }
-reimagine-agent = { path = "../agent" }
+reimagine-agent-harness = { path = "../agent-stack/agent-harness" }
 reimagine-app-host = { path = "../app-host" }
 reimagine-config = { path = "../config" }
 reimagine-inference-burn = { path = "../inference-backends/burn", default-features = false, optional = true }
@@ -38,7 +38,7 @@ tracing-subscriber = { workspace = true }
 async-trait = { workspace = true }
 http-body-util = "0.1"
 image = { workspace = true }
-reimagine-agent = { path = "../agent" }
+reimagine-agent-harness = { path = "../agent-stack/agent-harness" }
 reimagine-backend-worker-host = { path = "../backend-worker-host" }
 reimagine-backend-worker-protocol = { path = "../backend-worker-protocol" }
 reimagine-config = { path = "../config" }

@@ -3,23 +3,11 @@ import type { XYPosition } from "@xyflow/react";
 import type { NodeDef } from "@/ipc/schemas";
 
 /**
- * UI shell state — sidebar navigation, properties drawer,
- * command palette, context menu, and rename dialog.
+ * UI shell state — properties drawer, command palette,
+ * context menu, and rename dialog.
  * View-only state — deliberately kept out of the workflow (undo) store.
+ * Route navigation is handled by TanStack Router (URL-based).
  */
-
-export type SidebarSection =
-  | "chat"
-  | "new-task"
-  | "pull-requests"
-  | "scheduled"
-  | "plugins"
-  | "workflows"
-  | "models"
-  | "runs"
-  | "assets"
-  | "settings"
-  | null;
 
 export type PaletteMode =
   | { kind: "closed" }
@@ -46,16 +34,8 @@ export type RenameTarget = { id: string; title: string } | null;
 
 type UIState = {
   // ── Sidebar ─────────────────────────────────────────────
-  sidebarCollapsed: boolean;
-  toggleSidebar: () => void;
-  activeSidebarSection: SidebarSection;
-  setActiveSidebarSection: (section: SidebarSection) => void;
-
-  // ── Sidebar projects ────────────────────────────────────
-  projectsExpanded: boolean;
-  setProjectsExpanded: (expanded: boolean) => void;
-  activeProjectId: string | null;
-  setActiveProjectId: (id: string | null) => void;
+  sidebarWidth: number;
+  setSidebarWidth: (width: number) => void;
 
   // ── Sidebar progress ────────────────────────────────────
   sidebarProgress: number;
@@ -86,18 +66,34 @@ type UIState = {
   finishRename: () => void;
 };
 
+const STORAGE_KEY = "reimagine:sidebar-width";
+const DEFAULT_WIDTH = 220;
+
+function loadSidebarWidth(): number {
+  try {
+    const raw = localStorage.getItem(STORAGE_KEY);
+    if (raw !== null) {
+      const n = Number(raw);
+      if (Number.isFinite(n) && n >= 120 && n <= 400) return Math.round(n);
+    }
+  } catch {
+    /* ignore */
+  }
+  return DEFAULT_WIDTH;
+}
+
 export const useUIStore = create<UIState>()((set) => ({
   // Sidebar
-  sidebarCollapsed: false,
-  toggleSidebar: () => set((state) => ({ sidebarCollapsed: !state.sidebarCollapsed })),
-  activeSidebarSection: "chat" as SidebarSection,
-  setActiveSidebarSection: (section) => set({ activeSidebarSection: section }),
-
-  // Sidebar projects
-  projectsExpanded: true,
-  setProjectsExpanded: (expanded) => set({ projectsExpanded: expanded }),
-  activeProjectId: null,
-  setActiveProjectId: (id) => set({ activeProjectId: id }),
+  sidebarWidth: loadSidebarWidth(),
+  setSidebarWidth: (width) => {
+    const rounded = Math.round(width);
+    try {
+      localStorage.setItem(STORAGE_KEY, String(rounded));
+    } catch {
+      /* ignore */
+    }
+    set({ sidebarWidth: rounded });
+  },
 
   // Sidebar progress
   sidebarProgress: 0,

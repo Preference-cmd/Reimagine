@@ -377,7 +377,7 @@ mod tests {
     use std::sync::Arc;
     use tower::ServiceExt;
 
-    use reimagine_agent::WorkspaceScope;
+    use reimagine_agent_harness::WorkspaceScope;
     use reimagine_app_host::WorkspaceHost;
     use serde_json::json;
 

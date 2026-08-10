@@ -248,7 +248,7 @@ fn process_launch_spec(
 
 #[tokio::test]
 async fn app_host_activates_selected_worker_from_injected_inventory() {
-    use reimagine_agent::WorkspaceScope;
+    use reimagine_agent_harness::WorkspaceScope;
     use reimagine_app_host::{
         StaticWorkerInventoryProvider, WorkerBackendCandidate, WorkerInventorySnapshot,
         WorkspaceHost,
@@ -314,7 +314,7 @@ async fn app_host_activates_selected_worker_from_injected_inventory() {
 
 #[tokio::test]
 async fn app_host_rejects_manifest_and_live_hello_profile_mismatch() {
-    use reimagine_agent::WorkspaceScope;
+    use reimagine_agent_harness::WorkspaceScope;
     use reimagine_app_host::{
         StaticWorkerInventoryProvider, WorkerBackendCandidate, WorkerInventorySnapshot,
         WorkspaceHost,
@@ -371,7 +371,7 @@ async fn axum_workflow_reaches_png_through_process_backed_worker() {
     use axum::body::Body;
     use axum::http::{Request, header};
     use http_body_util::BodyExt;
-    use reimagine_agent::WorkspaceScope;
+    use reimagine_agent_harness::WorkspaceScope;
     use reimagine_app_host::{
         StaticWorkerInventoryProvider, WorkerBackendCandidate, WorkerInventorySnapshot,
         WorkspaceHost,

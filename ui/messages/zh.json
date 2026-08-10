@@ -8,6 +8,7 @@
   "common.empty": "暂无内容",
 
   "sidebar.workflows": "工作流",
+  "sidebar.new": "新建",
   "sidebar.models": "模型",
   "sidebar.runs": "运行",
   "sidebar.assets": "资源",
@@ -37,6 +38,10 @@
   "settings.runtime": "运行时",
   "settings.workspace": "工作区",
   "settings.modelManagement": "模型管理",
+  "settings.plugins": "插件",
+  "settings.browser": "浏览器",
+  "settings.hooks": "钩子",
+  "settings.language": "语言",
 
   "settings.auto-save": "自动保存",
   "settings.auto-save-desc": "工作流变更后自动保存到本地存储",
@@ -134,5 +139,18 @@
   "commandPalette.placeholder": "输入命令或搜索…",
   "commandPalette.commands": "命令",
   "commandPalette.nodes": "节点",
-  "commandPalette.noResults": "未找到结果"
+  "commandPalette.noResults": "未找到结果",
+
+  "welcome.title": "我们来做什么？",
+  "welcome.subtitle": "提个问题、创建内容，或构建一个工作流。",
+  "welcome.inputPlaceholder": "开始新的对话…",
+  "welcome.getStarted": "快速开始",
+  "welcome.textToImage": "文生图",
+  "welcome.textToImageDesc": "通过文本提示生成图像",
+  "welcome.imageToImage": "图生图",
+  "welcome.imageToImageDesc": "用 AI 变换现有图像",
+  "welcome.inpaint": "局部重绘",
+  "welcome.inpaintDesc": "编辑图像的特定区域",
+  "welcome.upscale": "超分辨率",
+  "welcome.upscaleDesc": "提升图像分辨率和质量"
 }
