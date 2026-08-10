@@ -16,7 +16,7 @@ use reimagine_agent_provider::{
     arc_real_openai_chat_completions_backend_with_http_client,
     arc_real_openai_responses_backend_with_http_client,
 };
-use serde_json::json;
+use serde_json::{Value, json};
 use wiremock::matchers::BodyExactMatcher;
 use wiremock::matchers::{body_partial_json, header, method, path};
 use wiremock::{Mock, MockServer, ResponseTemplate};
@@ -50,6 +50,37 @@ fn build_request(model: &str) -> AgentRequest {
             json!({"type": "object", "properties": {"x": {"type": "number"}}}),
         ),
     ])
+}
+
+fn build_request_with_options(model: &str, options: Value) -> AgentRequest {
+    build_request(model).with_options(options)
+}
+
+fn openai_completion_response() -> ResponseTemplate {
+    ResponseTemplate::new(200).set_body_json(json!({
+        "id": "cmpl-2",
+        "object": "chat.completion",
+        "created": 0,
+        "model": "gpt-4o-mini",
+        "choices": [{
+            "index": 0,
+            "message": {"role": "assistant", "content": "ok"},
+            "finish_reason": "stop"
+        }],
+        "usage": {"prompt_tokens": 1, "completion_tokens": 1, "total_tokens": 2}
+    }))
+}
+
+fn anthropic_completion_response() -> ResponseTemplate {
+    ResponseTemplate::new(200).set_body_json(json!({
+        "id": "msg_2",
+        "type": "message",
+        "role": "assistant",
+        "content": [{"type": "text", "text": "ok"}],
+        "model": "claude-3-5-sonnet-latest",
+        "stop_reason": "end_turn",
+        "usage": {"input_tokens": 1, "output_tokens": 1}
+    }))
 }
 
 #[tokio::test]
@@ -521,4 +552,226 @@ async fn responses_stream_returns_configuration_error_until_pv_01b() {
         Ok(_) => panic!("expected streaming to be rejected"),
     };
     assert!(matches!(err, ProviderAdapterError::Configuration(_)));
+}
+
+#[tokio::test]
+async fn openai_complete_forwards_sampling_params_and_unknown_keys() {
+    let server = MockServer::start().await;
+
+    Mock::given(method("POST"))
+        .and(path("/v1/chat/completions"))
+        .and(body_partial_json(json!({
+            "model": "gpt-4o-mini",
+            "max_tokens": 512,
+            "temperature": 0.7,
+            "top_p": 0.9,
+            "stop": ["end"],
+            "seed": 42,
+            "user": "u1",
+            "frequency_penalty": 0.2,
+        })))
+        .respond_with(openai_completion_response())
+        .mount(&server)
+        .await;
+
+    let http = reqwest::Client::new();
+    let backend: Arc<dyn CompletionBackend> =
+        arc_real_openai_chat_completions_backend_with_http_client(
+            ProviderName::new("openai-test"),
+            openai_cfg_for(&server),
+            http,
+        );
+    let req = build_request_with_options(
+        "gpt-4o-mini",
+        json!({
+            "max_tokens": 512,
+            "temperature": 0.7,
+            "top_p": 0.9,
+            "stop": "end",
+            "seed": 42,
+            "user": "u1",
+            "frequency_penalty": 0.2,
+        }),
+    );
+    let resp = backend.complete(req).await.expect("complete ok");
+    assert_eq!(resp.message().content(), "ok");
+}
+
+#[tokio::test]
+async fn openai_complete_with_reasoning_strips_temperature_and_top_p() {
+    let server = MockServer::start().await;
+
+    Mock::given(method("POST"))
+        .and(path("/v1/chat/completions"))
+        .respond_with(openai_completion_response())
+        .mount(&server)
+        .await;
+
+    let http = reqwest::Client::new();
+    let backend: Arc<dyn CompletionBackend> =
+        arc_real_openai_chat_completions_backend_with_http_client(
+            ProviderName::new("openai-test"),
+            openai_cfg_for(&server),
+            http,
+        );
+    let req = build_request_with_options(
+        "gpt-4o-mini",
+        json!({
+            "reasoning_effort": "high",
+            "temperature": 0.7,
+            "top_p": 0.9,
+            "stop": "end",
+            "seed": 42,
+        }),
+    );
+    backend.complete(req).await.expect("complete ok");
+
+    let requests = server.received_requests().await.expect("requests captured");
+    let body: Value = serde_json::from_slice(&requests[0].body).expect("body json");
+    assert_eq!(body["reasoning_effort"], "high");
+    assert_eq!(body["stop"], json!(["end"]));
+    assert_eq!(body["seed"], 42);
+    assert!(body.get("temperature").is_none());
+    assert!(body.get("top_p").is_none());
+}
+
+#[tokio::test]
+async fn openai_stream_forwards_sampling_params() {
+    let server = MockServer::start().await;
+
+    Mock::given(method("POST"))
+        .and(path("/v1/chat/completions"))
+        .and(body_partial_json(json!({
+            "model": "gpt-4o-mini",
+            "stream": true,
+            "max_tokens": 256,
+            "temperature": 0.2,
+            "seed": 7,
+        })))
+        .respond_with(ResponseTemplate::new(200).set_body_string("data: [DONE]\n\n"))
+        .mount(&server)
+        .await;
+
+    let http = reqwest::Client::new();
+    let backend: Arc<dyn CompletionBackend> =
+        arc_real_openai_chat_completions_backend_with_http_client(
+            ProviderName::new("openai-test"),
+            openai_cfg_for(&server),
+            http,
+        );
+    let req = build_request_with_options(
+        "gpt-4o-mini",
+        json!({"max_tokens": 256, "temperature": 0.2, "seed": 7}),
+    );
+    backend.stream(req).await.expect("stream starts");
+}
+
+#[tokio::test]
+async fn anthropic_complete_forwards_sampling_params() {
+    let server = MockServer::start().await;
+
+    Mock::given(method("POST"))
+        .and(path("/v1/messages"))
+        .and(body_partial_json(json!({
+            "model": "claude-3-5-sonnet-latest",
+            "max_tokens": 1024,
+            "temperature": 0.4,
+            "top_p": 0.8,
+            "top_k": 32,
+            "stop_sequences": ["a", "b"],
+        })))
+        .respond_with(anthropic_completion_response())
+        .mount(&server)
+        .await;
+
+    let http = reqwest::Client::new();
+    let backend = ReqwestBackend::anthropic_messages_with_http_client(
+        ProviderName::new("anthropic-test"),
+        anthropic_cfg_for(&server),
+        http,
+    );
+    let req = build_request_with_options(
+        "claude-3-5-sonnet-latest",
+        json!({
+            "max_tokens": 1024,
+            "temperature": 0.4,
+            "top_p": 0.8,
+            "top_k": 32,
+            "stop": ["a", "b"],
+        }),
+    );
+    let resp = backend.complete(req).await.expect("complete ok");
+    assert_eq!(resp.message().content(), "ok");
+}
+
+#[tokio::test]
+async fn anthropic_complete_with_reasoning_strips_inapplicable_params() {
+    let server = MockServer::start().await;
+
+    Mock::given(method("POST"))
+        .and(path("/v1/messages"))
+        .respond_with(anthropic_completion_response())
+        .mount(&server)
+        .await;
+
+    let http = reqwest::Client::new();
+    let backend = ReqwestBackend::anthropic_messages_with_http_client(
+        ProviderName::new("anthropic-test"),
+        anthropic_cfg_for(&server),
+        http,
+    );
+    let req = build_request_with_options(
+        "claude-3-5-sonnet-latest",
+        json!({
+            "reasoning_effort": "high",
+            "temperature": 0.4,
+            "top_p": 0.8,
+            "top_k": 32,
+            "stop": ["a"],
+            "seed": 9,
+            "user": "u1",
+        }),
+    );
+    backend.complete(req).await.expect("complete ok");
+
+    let requests = server.received_requests().await.expect("requests captured");
+    let body: Value = serde_json::from_slice(&requests[0].body).expect("body json");
+    assert_eq!(body["max_tokens"], 4096);
+    assert_eq!(body["top_k"], 32);
+    assert_eq!(body["stop_sequences"], json!(["a"]));
+    assert!(body.get("temperature").is_none());
+    assert!(body.get("top_p").is_none());
+    assert!(body.get("reasoning_effort").is_none());
+    assert!(body.get("seed").is_none());
+    assert!(body.get("user").is_none());
+}
+
+#[tokio::test]
+async fn anthropic_stream_forwards_sampling_params() {
+    let server = MockServer::start().await;
+
+    Mock::given(method("POST"))
+        .and(path("/v1/messages"))
+        .and(body_partial_json(json!({
+            "model": "claude-3-5-sonnet-latest",
+            "stream": true,
+            "max_tokens": 2048,
+            "temperature": 0.4,
+            "top_k": 32,
+        })))
+        .respond_with(ResponseTemplate::new(200).set_body_string(""))
+        .mount(&server)
+        .await;
+
+    let http = reqwest::Client::new();
+    let backend = ReqwestBackend::anthropic_messages_with_http_client(
+        ProviderName::new("anthropic-test"),
+        anthropic_cfg_for(&server),
+        http,
+    );
+    let req = build_request_with_options(
+        "claude-3-5-sonnet-latest",
+        json!({"max_tokens": 2048, "temperature": 0.4, "top_k": 32}),
+    );
+    backend.stream(req).await.expect("stream starts");
 }

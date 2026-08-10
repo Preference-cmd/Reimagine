@@ -6,6 +6,7 @@
 //! `crates/agent`.
 
 pub mod listing;
+pub mod params;
 pub mod request;
 pub mod response;
 pub mod sse_parser;
