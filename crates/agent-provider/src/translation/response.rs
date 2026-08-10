@@ -141,3 +141,71 @@ pub fn from_anthropic_response(value: &Value) -> Result<AgentResponse, ProviderA
     }
     Ok(resp)
 }
+
+/// Translate an OpenAI Responses API response JSON into an
+/// [`AgentResponse`]. `output` items of type `message` contribute
+/// `output_text` content blocks; items of type `function_call` become
+/// tool calls (their `arguments` is a JSON string).
+pub fn from_responses_response(value: &Value) -> Result<AgentResponse, ProviderAdapterError> {
+    let output = value
+        .get("output")
+        .and_then(|o| o.as_array())
+        .ok_or_else(|| ProviderAdapterError::serialization("missing output array"))?;
+    let mut text = String::new();
+    let mut tool_calls = Vec::new();
+    for (i, item) in output.iter().enumerate() {
+        match item.get("type").and_then(|v| v.as_str()) {
+            Some("message") => {
+                if let Some(blocks) = item.get("content").and_then(|c| c.as_array()) {
+                    for block in blocks {
+                        if block.get("type").and_then(|v| v.as_str()) == Some("output_text")
+                            && let Some(t) = block.get("text").and_then(|v| v.as_str())
+                        {
+                            if !text.is_empty() {
+                                text.push('\n');
+                            }
+                            text.push_str(t);
+                        }
+                    }
+                }
+            }
+            Some("function_call") => {
+                let id = item
+                    .get("call_id")
+                    .and_then(|v| v.as_str())
+                    .ok_or_else(|| {
+                        ProviderAdapterError::serialization(format!("output[{i}].call_id missing"))
+                    })?
+                    .to_string();
+                let name = item
+                    .get("name")
+                    .and_then(|v| v.as_str())
+                    .ok_or_else(|| {
+                        ProviderAdapterError::serialization(format!("output[{i}].name missing"))
+                    })?
+                    .to_string();
+                let args_str = item
+                    .get("arguments")
+                    .and_then(|v| v.as_str())
+                    .unwrap_or("{}");
+                let arguments = serde_json::from_str(args_str).map_err(|e| {
+                    ProviderAdapterError::serialization(format!("output[{i}].arguments: {e}"))
+                })?;
+                tool_calls.push(ToolCall::new(ToolCallId::new(id), name, arguments));
+            }
+            _ => {}
+        }
+    }
+    let message = if tool_calls.is_empty() {
+        Message::assistant(text)
+    } else {
+        Message::assistant_with_tool_calls(text, tool_calls)
+    };
+    let mut resp = AgentResponse::new(message);
+    if let Some(usage) = value.get("usage") {
+        let input = usage.get("input_tokens").and_then(|v| v.as_u64());
+        let output = usage.get("output_tokens").and_then(|v| v.as_u64());
+        resp = resp.with_usage(Usage::new(input, output));
+    }
+    Ok(resp)
+}

@@ -10,24 +10,29 @@
 
 mod anthropic;
 mod backend;
+pub mod catalog;
 mod config;
 mod error;
 mod openai_compatible;
+mod openai_responses;
 pub mod reqwest_backend;
 pub mod translation;
 
 pub use anthropic::AnthropicMessagesProvider;
 pub use backend::{CompletionBackend, FakeCompletionBackend, ScriptedBackendStep};
+pub use catalog::{CatalogError, ModelCatalog, ProviderCatalogEntry};
 pub use config::{
-    AgentProviderConfigDocument, AnthropicMessagesConfig, OpenAiChatCompletionsConfig, Protocol,
-    ProviderConfig,
+    AgentProviderConfigDocument, AnthropicMessagesConfig, OpenAiChatCompletionsConfig,
+    OpenAiResponsesConfig, Protocol, ProviderConfig,
 };
 pub use error::ProviderAdapterError;
 pub use openai_compatible::OpenAiChatCompletionsProvider;
+pub use openai_responses::OpenAiResponsesProvider;
 pub use reqwest_backend::{
     ReqwestBackend, arc_real_anthropic_messages_backend,
     arc_real_anthropic_messages_backend_with_http_client, arc_real_openai_chat_completions_backend,
-    arc_real_openai_chat_completions_backend_with_http_client,
+    arc_real_openai_chat_completions_backend_with_http_client, arc_real_openai_responses_backend,
+    arc_real_openai_responses_backend_with_http_client,
 };
 pub use translation::sse_parser::{SseEvent, SseParser};
 
@@ -64,6 +69,20 @@ pub fn build_provider(
                         protocol: Protocol::AnthropicMessages,
                     })?;
             let provider = AnthropicMessagesProvider::new(
+                ProviderName::new(config.name().to_string()),
+                cfg.clone(),
+            );
+            Ok(Arc::new(provider))
+        }
+        Protocol::OpenAiResponses => {
+            let cfg =
+                config
+                    .openai_responses()
+                    .ok_or_else(|| ProviderAdapterError::MissingConfig {
+                        provider: config.name().to_string(),
+                        protocol: Protocol::OpenAiResponses,
+                    })?;
+            let provider = OpenAiResponsesProvider::new(
                 ProviderName::new(config.name().to_string()),
                 cfg.clone(),
             );

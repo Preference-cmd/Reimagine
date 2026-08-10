@@ -7,20 +7,27 @@
 
 use std::sync::Arc;
 
-use serde_json::{Value, json};
-use wiremock::matchers::{body_partial_json, header, method, path};
-use wiremock::{Mock, MockServer, ResponseTemplate};
-
 use reimagine_agent::{
     AgentRequest, AgentToolDefinition, Message, ModelCapability, ModelName, ProviderName,
 };
 use reimagine_agent_provider::{
-    AnthropicMessagesConfig, CompletionBackend, OpenAiChatCompletionsConfig, ProviderAdapterError,
-    ReqwestBackend, arc_real_openai_chat_completions_backend_with_http_client,
+    AnthropicMessagesConfig, CompletionBackend, OpenAiChatCompletionsConfig, OpenAiResponsesConfig,
+    ProviderAdapterError, ReqwestBackend,
+    arc_real_openai_chat_completions_backend_with_http_client,
+    arc_real_openai_responses_backend_with_http_client,
 };
+use serde_json::{Value, json};
+use wiremock::matchers::BodyExactMatcher;
+use wiremock::matchers::{body_partial_json, header, method, path};
+use wiremock::{Mock, MockServer, ResponseTemplate};
+
+fn body_exact_json(body: serde_json::Value) -> BodyExactMatcher {
+    BodyExactMatcher::json(body)
+}
 
 const OPENAI_KEY: &str = "sk-test-openai";
 const ANTHROPIC_KEY: &str = "sk-test-anthropic";
+const RESPONSES_KEY: &str = "sk-test-responses";
 
 fn openai_cfg_for(server: &MockServer) -> OpenAiChatCompletionsConfig {
     OpenAiChatCompletionsConfig::new(format!("{}/v1", server.uri()), OPENAI_KEY, "gpt-4o-mini")
@@ -29,6 +36,10 @@ fn openai_cfg_for(server: &MockServer) -> OpenAiChatCompletionsConfig {
 fn anthropic_cfg_for(server: &MockServer) -> AnthropicMessagesConfig {
     AnthropicMessagesConfig::new(ANTHROPIC_KEY, "claude-3-5-sonnet-latest")
         .with_base_url(server.uri())
+}
+
+fn responses_cfg_for(server: &MockServer) -> OpenAiResponsesConfig {
+    OpenAiResponsesConfig::new(format!("{}/v1", server.uri()), RESPONSES_KEY, "gpt-5-mini")
 }
 
 fn build_request(model: &str) -> AgentRequest {
@@ -313,6 +324,234 @@ async fn anthropic_list_models_returns_translated_listing() {
         assert!(m.capabilities().contains(&ModelCapability::ToolUse));
         assert_eq!(m.provider().map(|p| p.as_str()), Some("anthropic-test"));
     }
+}
+
+fn responses_request() -> AgentRequest {
+    AgentRequest::new(
+        ModelName::new("gpt-5-mini"),
+        vec![
+            Message::system("sys"),
+            Message::user("hi"),
+            Message::assistant_with_tool_calls(
+                "",
+                vec![reimagine_agent::ToolCall::new(
+                    reimagine_agent::ToolCallId::new("c1"),
+                    "echo",
+                    json!({"x": 1}),
+                )],
+            ),
+            Message::tool_result(reimagine_agent::ToolCallId::new("c1"), "ok"),
+        ],
+    )
+    .with_tools(vec![AgentToolDefinition::new(
+        "echo",
+        "echo a string",
+        json!({"type": "object", "properties": {"x": {"type": "number"}}}),
+    )])
+}
+
+#[tokio::test]
+async fn responses_complete_assembles_full_input_array_and_prompt_cache_key() {
+    let server = MockServer::start().await;
+
+    Mock::given(method("POST"))
+        .and(path("/v1/responses"))
+        .and(header("authorization", format!("Bearer {RESPONSES_KEY}")))
+        .and(body_partial_json(json!({
+            "model": "gpt-5-mini",
+            "instructions": "sys",
+            "input": [
+                { "role": "user", "content": [{ "type": "input_text", "text": "hi" }] },
+                {
+                    "type": "function_call",
+                    "call_id": "c1",
+                    "name": "echo",
+                    "arguments": "{\"x\":1}"
+                },
+                { "type": "function_call_output", "call_id": "c1", "output": "ok" }
+            ],
+            "tools": [{
+                "type": "function",
+                "function": {
+                    "name": "echo",
+                    "description": "echo a string",
+                    "parameters": {
+                        "type": "object",
+                        "properties": {"x": {"type": "number"}}
+                    }
+                }
+            }],
+            "prompt_cache_key": "session-42",
+        })))
+        .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+            "id": "resp_1",
+            "output": [{
+                "type": "message",
+                "role": "assistant",
+                "content": [{ "type": "output_text", "text": "hello back" }]
+            }],
+            "usage": { "input_tokens": 9, "output_tokens": 3, "total_tokens": 12 }
+        })))
+        .mount(&server)
+        .await;
+
+    let http = reqwest::Client::new();
+    let backend: Arc<dyn CompletionBackend> = arc_real_openai_responses_backend_with_http_client(
+        ProviderName::new("responses-test"),
+        responses_cfg_for(&server),
+        http,
+    );
+
+    let request = responses_request().with_options(json!({ "prompt_cache_key": "session-42" }));
+    let resp = backend
+        .complete(request)
+        .await
+        .expect("upstream returned 2xx");
+    assert_eq!(resp.message().content(), "hello back");
+    assert_eq!(resp.message().tool_calls().len(), 0);
+    let usage = resp.usage().expect("usage present");
+    assert_eq!(usage.input_tokens(), Some(9));
+    assert_eq!(usage.output_tokens(), Some(3));
+}
+
+#[tokio::test]
+async fn responses_complete_omits_prompt_cache_key_when_absent() {
+    let server = MockServer::start().await;
+
+    Mock::given(method("POST"))
+        .and(path("/v1/responses"))
+        .and(header("authorization", format!("Bearer {RESPONSES_KEY}")))
+        .and(body_exact_json(json!({
+            "model": "gpt-5-mini",
+            "instructions": "sys",
+            "input": [
+                { "role": "user", "content": [{ "type": "input_text", "text": "hi" }] },
+                {
+                    "type": "function_call",
+                    "call_id": "c1",
+                    "name": "echo",
+                    "arguments": "{\"x\":1}"
+                },
+                { "type": "function_call_output", "call_id": "c1", "output": "ok" }
+            ],
+            "tools": [{
+                "type": "function",
+                "function": {
+                    "name": "echo",
+                    "description": "echo a string",
+                    "parameters": {
+                        "type": "object",
+                        "properties": {"x": {"type": "number"}}
+                    }
+                }
+            }]
+        })))
+        .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+            "id": "resp_2",
+            "output": [],
+            "usage": { "input_tokens": 1, "output_tokens": 1, "total_tokens": 2 }
+        })))
+        .mount(&server)
+        .await;
+
+    let http = reqwest::Client::new();
+    let backend: Arc<dyn CompletionBackend> = arc_real_openai_responses_backend_with_http_client(
+        ProviderName::new("responses-test"),
+        responses_cfg_for(&server),
+        http,
+    );
+
+    let resp = backend
+        .complete(responses_request())
+        .await
+        .expect("upstream returned 2xx");
+    assert!(resp.usage().is_some());
+}
+
+#[tokio::test]
+async fn responses_complete_parses_function_call_items() {
+    let server = MockServer::start().await;
+
+    Mock::given(method("POST"))
+        .and(path("/v1/responses"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+            "id": "resp_3",
+            "output": [{
+                "type": "function_call",
+                "call_id": "call_1",
+                "name": "echo",
+                "arguments": "{\"x\": 42}"
+            }],
+            "usage": { "input_tokens": 5, "output_tokens": 8, "total_tokens": 13 }
+        })))
+        .mount(&server)
+        .await;
+
+    let http = reqwest::Client::new();
+    let backend: Arc<dyn CompletionBackend> = arc_real_openai_responses_backend_with_http_client(
+        ProviderName::new("responses-test"),
+        responses_cfg_for(&server),
+        http,
+    );
+
+    let resp = backend
+        .complete(responses_request())
+        .await
+        .expect("upstream returned 2xx");
+    let calls = resp.message().tool_calls();
+    assert_eq!(calls.len(), 1);
+    assert_eq!(calls[0].id().as_str(), "call_1");
+    assert_eq!(calls[0].name(), "echo");
+    assert_eq!(calls[0].arguments(), &json!({"x": 42}));
+}
+
+#[tokio::test]
+async fn responses_list_models_reuses_models_path() {
+    let server = MockServer::start().await;
+
+    Mock::given(method("GET"))
+        .and(path("/v1/models"))
+        .and(header("authorization", format!("Bearer {RESPONSES_KEY}")))
+        .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+            "object": "list",
+            "data": [
+                { "id": "gpt-5-mini", "object": "model" },
+                { "id": "gpt-5",       "object": "model" }
+            ]
+        })))
+        .mount(&server)
+        .await;
+
+    let http = reqwest::Client::new();
+    let backend: Arc<dyn CompletionBackend> = arc_real_openai_responses_backend_with_http_client(
+        ProviderName::new("responses-test"),
+        responses_cfg_for(&server),
+        http,
+    );
+    let models = backend.list_models().await.expect("list ok");
+    assert_eq!(models.len(), 2);
+    assert_eq!(models[0].name().as_str(), "gpt-5-mini");
+    assert_eq!(models[1].name().as_str(), "gpt-5");
+    for m in &models {
+        assert_eq!(m.provider().map(|p| p.as_str()), Some("responses-test"));
+    }
+}
+
+#[tokio::test]
+async fn responses_stream_returns_configuration_error_until_pv_01b() {
+    let server = MockServer::start().await;
+
+    let http = reqwest::Client::new();
+    let backend: Arc<dyn CompletionBackend> = arc_real_openai_responses_backend_with_http_client(
+        ProviderName::new("responses-test"),
+        responses_cfg_for(&server),
+        http,
+    );
+    let err = match backend.stream(responses_request()).await {
+        Err(err) => err,
+        Ok(_) => panic!("expected streaming to be rejected"),
+    };
+    assert!(matches!(err, ProviderAdapterError::Configuration(_)));
 }
 
 #[tokio::test]

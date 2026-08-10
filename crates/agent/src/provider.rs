@@ -193,14 +193,72 @@ impl Usage {
     }
 }
 
+/// Token pricing for a model in USD per 1M tokens. Fields are
+/// optional-by-default so catalog entries with partial pricing remain
+/// usable.
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize, Default)]
+pub struct ModelCost {
+    input: f64,
+    output: f64,
+    cache_read: f64,
+    cache_write: f64,
+}
+
+impl ModelCost {
+    pub fn new(input: f64, output: f64, cache_read: f64, cache_write: f64) -> Self {
+        Self {
+            input,
+            output,
+            cache_read,
+            cache_write,
+        }
+    }
+
+    pub fn input(&self) -> f64 {
+        self.input
+    }
+
+    pub fn output(&self) -> f64 {
+        self.output
+    }
+
+    pub fn cache_read(&self) -> f64 {
+        self.cache_read
+    }
+
+    pub fn cache_write(&self) -> f64 {
+        self.cache_write
+    }
+}
+
 /// Information about a single model advertised by a provider.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+///
+/// Capability fields beyond `capabilities` (reasoning, input
+/// modalities, context window, max tokens, cost) default to their
+/// "unknown" value so older serialized payloads deserialize without
+/// breaking.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct ModelInfo {
     name: ModelName,
     /// Provider that owns this model. Optional because some catalogs
     /// are queried per provider.
     provider: Option<ProviderName>,
     capabilities: Vec<ModelCapability>,
+    /// Whether the model performs reasoning before answering.
+    #[serde(default)]
+    reasoning: bool,
+    /// Input modality names the model accepts (e.g. "text", "image").
+    #[serde(default)]
+    input_modalities: Vec<String>,
+    /// Model context window in tokens.
+    #[serde(default)]
+    context_window: Option<usize>,
+    /// Maximum output tokens the model can produce.
+    #[serde(default)]
+    max_tokens: Option<usize>,
+    /// Token pricing in USD per 1M tokens.
+    #[serde(default)]
+    cost: Option<ModelCost>,
 }
 
 impl ModelInfo {
@@ -209,6 +267,11 @@ impl ModelInfo {
             name,
             provider: None,
             capabilities: Vec::new(),
+            reasoning: false,
+            input_modalities: Vec::new(),
+            context_window: None,
+            max_tokens: None,
+            cost: None,
         }
     }
 
@@ -227,6 +290,31 @@ impl ModelInfo {
         self
     }
 
+    pub fn with_reasoning(mut self, reasoning: bool) -> Self {
+        self.reasoning = reasoning;
+        self
+    }
+
+    pub fn with_input_modalities(mut self, modalities: impl IntoIterator<Item = String>) -> Self {
+        self.input_modalities.extend(modalities);
+        self
+    }
+
+    pub fn with_context_window(mut self, tokens: Option<usize>) -> Self {
+        self.context_window = tokens;
+        self
+    }
+
+    pub fn with_max_tokens(mut self, tokens: Option<usize>) -> Self {
+        self.max_tokens = tokens;
+        self
+    }
+
+    pub fn with_cost(mut self, cost: Option<ModelCost>) -> Self {
+        self.cost = cost;
+        self
+    }
+
     pub fn name(&self) -> &ModelName {
         &self.name
     }
@@ -237,6 +325,26 @@ impl ModelInfo {
 
     pub fn capabilities(&self) -> &[ModelCapability] {
         &self.capabilities
+    }
+
+    pub fn reasoning(&self) -> bool {
+        self.reasoning
+    }
+
+    pub fn input_modalities(&self) -> &[String] {
+        &self.input_modalities
+    }
+
+    pub fn context_window(&self) -> Option<usize> {
+        self.context_window
+    }
+
+    pub fn max_tokens(&self) -> Option<usize> {
+        self.max_tokens
+    }
+
+    pub fn cost(&self) -> Option<&ModelCost> {
+        self.cost.as_ref()
     }
 }
 

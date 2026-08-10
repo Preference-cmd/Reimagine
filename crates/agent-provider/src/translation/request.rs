@@ -129,6 +129,82 @@ pub fn to_anthropic_messages(messages: &[Message]) -> (Option<String>, Vec<Value
     (system, out)
 }
 
+/// Collect system messages into a single `instructions` string for the
+/// OpenAI Responses API. System content is concatenated with newlines,
+/// mirroring `to_anthropic_messages`; returns `None` when no system
+/// message is present.
+pub fn to_responses_instructions(messages: &[Message]) -> Option<String> {
+    let mut system: Option<String> = None;
+    for m in messages {
+        if m.role() == "system" {
+            system = Some(match system {
+                Some(existing) => format!("{existing}\n{}", m.content()),
+                None => m.content().to_string(),
+            });
+        }
+    }
+    system
+}
+
+/// Build the `input` array for an OpenAI Responses API request. System
+/// messages are skipped here (the caller puts them in the `instructions`
+/// field). User and assistant messages become `{role, content:[...]}`
+/// items; assistant tool calls become `function_call` items; tool
+/// results become `function_call_output` items.
+pub fn to_responses_input(messages: &[Message], system: Option<&str>) -> Vec<Value> {
+    let mut out = Vec::with_capacity(messages.len());
+    for m in messages {
+        match m.role() {
+            "system" => {
+                debug_assert!(
+                    system.is_some(),
+                    "system messages must be extracted into the `system` argument"
+                );
+            }
+            "user" => {
+                out.push(json!({
+                    "role": "user",
+                    "content": [{ "type": "input_text", "text": m.content() }],
+                }));
+            }
+            "assistant" => {
+                if !m.content().is_empty() {
+                    out.push(json!({
+                        "role": "assistant",
+                        "content": [{ "type": "output_text", "text": m.content() }],
+                    }));
+                }
+                for c in m.tool_calls() {
+                    out.push(json!({
+                        "type": "function_call",
+                        "call_id": c.id().as_str(),
+                        "name": c.name(),
+                        "arguments": c.arguments().to_string(),
+                    }));
+                }
+            }
+            "tool" => {
+                let id = m
+                    .tool_call_id()
+                    .map(|i| i.as_str().to_string())
+                    .unwrap_or_default();
+                out.push(json!({
+                    "type": "function_call_output",
+                    "call_id": id,
+                    "output": m.content(),
+                }));
+            }
+            other => {
+                out.push(json!({
+                    "role": "user",
+                    "content": [{ "type": "input_text", "text": format!("[{other}] {}", m.content()) }],
+                }));
+            }
+        }
+    }
+    out
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -192,5 +268,59 @@ mod tests {
         assert_eq!(v[0]["content"][0]["type"], "tool_result");
         assert_eq!(v[0]["content"][0]["tool_use_id"], "c1");
         assert_eq!(v[0]["content"][0]["content"], "ok");
+    }
+
+    #[test]
+    fn responses_instructions_collects_system_messages() {
+        let msgs = vec![Message::system("sys"), Message::user("hi")];
+        assert_eq!(to_responses_instructions(&msgs).as_deref(), Some("sys"));
+        assert_eq!(to_responses_instructions(&[]), None);
+    }
+
+    #[test]
+    fn responses_input_user_and_assistant_items() {
+        let msgs = vec![
+            Message::system("sys"),
+            Message::user("hi"),
+            Message::assistant("yo"),
+        ];
+        let v = to_responses_input(&msgs, Some("sys"));
+        assert_eq!(v.len(), 2);
+        assert_eq!(v[0]["role"], "user");
+        assert_eq!(v[0]["content"][0]["type"], "input_text");
+        assert_eq!(v[0]["content"][0]["text"], "hi");
+        assert_eq!(v[1]["role"], "assistant");
+        assert_eq!(v[1]["content"][0]["type"], "output_text");
+        assert_eq!(v[1]["content"][0]["text"], "yo");
+    }
+
+    #[test]
+    fn responses_input_skips_system_messages() {
+        let msgs = vec![Message::system("sys"), Message::user("hi")];
+        let v = to_responses_input(&msgs, Some("sys"));
+        assert_eq!(v.len(), 1);
+        assert_eq!(v[0]["role"], "user");
+    }
+
+    #[test]
+    fn responses_input_assistant_tool_call_becomes_function_call_item() {
+        let call = ToolCall::new(ToolCallId::new("c1"), "echo", json!({"x": 1}));
+        let msgs = vec![Message::assistant_with_tool_calls("", vec![call])];
+        let v = to_responses_input(&msgs, None);
+        assert_eq!(v.len(), 1);
+        assert_eq!(v[0]["type"], "function_call");
+        assert_eq!(v[0]["call_id"], "c1");
+        assert_eq!(v[0]["name"], "echo");
+        assert_eq!(v[0]["arguments"], "{\"x\":1}");
+    }
+
+    #[test]
+    fn responses_input_tool_result_becomes_function_call_output_item() {
+        let msgs = vec![Message::tool_result(ToolCallId::new("c1"), "ok")];
+        let v = to_responses_input(&msgs, None);
+        assert_eq!(v.len(), 1);
+        assert_eq!(v[0]["type"], "function_call_output");
+        assert_eq!(v[0]["call_id"], "c1");
+        assert_eq!(v[0]["output"], "ok");
     }
 }
