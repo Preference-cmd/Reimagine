@@ -37,16 +37,23 @@ const DEFAULT_RESERVED_TOKENS: usize = 16_000;
 /// Token estimation seam (CM-V2a, decision table M1). Callers may
 /// install an exact counter later without changing `ContextManager`
 /// internals.
+///
+/// Contract: `estimate_message` returns the full message cost including
+/// any fixed per-message overhead (the default heuristic adds 4 per
+/// text block); `estimate_text` returns the raw text cost and is used
+/// for plain text outside a message envelope. Custom estimators should
+/// mirror these semantics.
 pub trait TokenEstimator: Send + Sync {
     /// Estimate the tokens of a full message (content blocks plus
-    /// per-message overhead).
+    /// fixed overhead).
     fn estimate_message(&self, message: &Message) -> usize;
-    /// Estimate the tokens of plain text (no per-message overhead).
+    /// Estimate the tokens of plain text (no message envelope
+    /// overhead).
     fn estimate_text(&self, text: &str) -> usize;
 }
 
 /// Default heuristic estimator: CJK 2 chars/token, other 4 chars/token,
-/// +4 per-message overhead, fixed budgets for file blocks.
+/// +4 per text block, fixed budgets for file blocks.
 pub struct HeuristicEstimator;
 
 impl TokenEstimator for HeuristicEstimator {
@@ -271,7 +278,9 @@ impl ContextManager {
 
     /// Load a session's context previously written by
     /// [`ContextManager::persist`]. The returned manager uses `config`
-    /// for the window and token threshold; only the history is restored.
+    /// for the window and token threshold; only the history is restored
+    /// (a custom estimator installed via [`ContextManager::with_estimator`]
+    /// must be re-applied by the caller after loading).
     pub fn load(session_id: &str, config: ContextConfig) -> Result<Self, ContextError> {
         let path = config.session_dir.join(format!("{session_id}.json"));
         let json = std::fs::read(&path).map_err(|err| {
