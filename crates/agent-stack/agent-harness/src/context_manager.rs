@@ -125,7 +125,10 @@ struct PersistedSession {
     #[serde(default)]
     sticky_count: usize,
     total_tokens: usize,
-    #[serde(default = "current_schema_version")]
+    /// On-disk schema version. `default` only serves the fallback path
+    /// in [`parse_persisted_session`] (CM-V2c files lack the key); the
+    /// value is not consumed after parsing.
+    #[serde(default)]
     schema_version: u32,
 }
 
@@ -141,10 +144,6 @@ struct PersistedSessionV1 {
     history: Vec<Message>,
     compaction_summary: Option<String>,
     total_tokens: usize,
-}
-
-fn current_schema_version() -> u32 {
-    CURRENT_SCHEMA_VERSION
 }
 
 /// Persistence failure returned by [`ContextManager::persist`] and
@@ -998,23 +997,30 @@ fn truncate_tool_result(message: &Message, record_truncate_tokens: usize) -> Mes
 
 /// Parse a persisted session file with schema migration (CM-V2d):
 /// files declaring `schema_version` parse as the current shape; files
-/// without it are treated as V1 (string-or-null summary dropped,
-/// no sticky prefix). Returns `(history, compaction_summary,
-/// sticky_count)`.
+/// without it are treated as V1 (string-or-null summary dropped, no
+/// sticky prefix) — unless that fails, in which case they are parsed
+/// as the current shape (files written by CM-V2c had no
+/// `schema_version` yet carried a `CompactionRecord` summary).
+/// Returns `(history, compaction_summary, sticky_count)`.
 fn parse_persisted_session(
     json: &[u8],
 ) -> Result<(Vec<Message>, Option<CompactionRecord>, usize), ContextError> {
     let envelope: serde_json::Value = serde_json::from_slice(json).map_err(ContextError::Json)?;
-    let version = envelope
-        .get("schema_version")
-        .and_then(|v| v.as_u64())
-        .unwrap_or(1) as u32;
-    if version > CURRENT_SCHEMA_VERSION {
-        return Err(ContextError::UnsupportedVersion(version));
+    let version = envelope.get("schema_version").and_then(|v| v.as_u64());
+    match version {
+        Some(v) if v > CURRENT_SCHEMA_VERSION as u64 => {
+            return Err(ContextError::UnsupportedVersion(v as u32));
+        }
+        Some(_) => {
+            let state: PersistedSession =
+                serde_json::from_value(envelope).map_err(ContextError::Json)?;
+            return Ok((state.history, state.compaction_summary, state.sticky_count));
+        }
+        None => {}
     }
-    if version == 1 {
-        let v1: PersistedSessionV1 =
-            serde_json::from_value(envelope).map_err(ContextError::Json)?;
+    // No schema_version: try V1 first; fall back to the current shape
+    // for CM-V2c files (record summary, sticky_count present).
+    if let Ok(v1) = serde_json::from_value::<PersistedSessionV1>(envelope.clone()) {
         return Ok((v1.history, None, 0));
     }
     let state: PersistedSession = serde_json::from_value(envelope).map_err(ContextError::Json)?;
@@ -1802,6 +1808,94 @@ mod tests {
         let json = std::fs::read_to_string(dir.join("sess-1.json")).expect("read failed");
         let state: serde_json::Value = serde_json::from_str(&json).expect("json parse failed");
         assert_eq!(state["schema_version"], 2);
+    }
+
+    #[test]
+    fn v1_load_then_persist_upgrades_to_v2() {
+        // A migrated V1 session re-persists with the current schema
+        // version.
+        let dir = temp_session_dir("v1-upgrade");
+        std::fs::create_dir_all(&dir).expect("mkdir failed");
+        std::fs::write(
+            dir.join("sess-1.json"),
+            r#"{"session_id":"sess-1","created_at":"0","history":[{"role":"user","content":[{"type":"text","text":"hi"}],"tool_call_id":null,"tool_calls":[]}],"compaction_summary":null,"total_tokens":4}"#,
+        )
+        .expect("write failed");
+        let mut loaded = ContextManager::load(
+            "sess-1",
+            ContextConfig::new(10_000, 2, dir.clone()),
+        )
+        .expect("v1 load failed");
+        loaded.persist("sess-1").expect("persist failed");
+
+        let json = std::fs::read_to_string(dir.join("sess-1.json")).expect("read failed");
+        let state: serde_json::Value = serde_json::from_str(&json).expect("json parse failed");
+        assert_eq!(state["schema_version"], 2);
+        assert_eq!(state["history"][0]["content"][0]["text"], "hi");
+    }
+
+    #[test]
+    fn load_cmv2c_format_without_schema_version_falls_back() {
+        // Files written by CM-V2c carry a CompactionRecord summary and
+        // sticky_count but no schema_version: they must load via the
+        // current-shape fallback, not the V1 path.
+        let dir = temp_session_dir("v2c-fallback");
+        std::fs::create_dir_all(&dir).expect("mkdir failed");
+        std::fs::write(
+            dir.join("sess-1.json"),
+            r#"{"session_id":"sess-1","created_at":"0","history":[{"role":"user","content":[{"type":"text","text":"hi"}],"tool_call_id":null,"tool_calls":[]}],"compaction_summary":{"text":"gen-1","tokens_before":100,"tokens_after":7,"created_at":"0","attempt":1,"image_refs":["assets/a.png"]},"sticky_count":1,"total_tokens":7}"#,
+        )
+        .expect("write failed");
+        let loaded = ContextManager::load(
+            "sess-1",
+            ContextConfig::new(10_000, 2, dir),
+        )
+        .expect("v2c fallback load failed");
+        let record = loaded.compaction_summary().expect("summary lost");
+        assert_eq!(record.text, "gen-1");
+        assert_eq!(record.image_refs, vec!["assets/a.png"]);
+        assert_eq!(loaded.sticky_count(), 1);
+    }
+
+    #[test]
+    fn future_schema_version_error_message_is_helpful() {
+        let dir = temp_session_dir("future-msg");
+        std::fs::create_dir_all(&dir).expect("mkdir failed");
+        std::fs::write(
+            dir.join("sess-1.json"),
+            r#"{"session_id":"sess-1","created_at":"0","history":[],"compaction_summary":null,"sticky_count":0,"total_tokens":0,"schema_version":999}"#,
+        )
+        .expect("write failed");
+        let err = match ContextManager::load(
+            "sess-1",
+            ContextConfig::new(10_000, 2, dir),
+        ) {
+            Ok(_) => panic!("future version must fail"),
+            Err(err) => err,
+        };
+        let message = err.to_string();
+        assert!(message.contains("999"), "{message}");
+        assert!(message.contains("newer"), "{message}");
+    }
+
+    #[test]
+    fn huge_future_schema_version_is_rejected_without_truncation() {
+        // 2^32 + 2 must not be truncated into a valid version.
+        let dir = temp_session_dir("future-huge");
+        std::fs::create_dir_all(&dir).expect("mkdir failed");
+        std::fs::write(
+            dir.join("sess-1.json"),
+            r#"{"session_id":"sess-1","created_at":"0","history":[],"compaction_summary":null,"sticky_count":0,"total_tokens":0,"schema_version":4294967298}"#,
+        )
+        .expect("write failed");
+        let err = match ContextManager::load(
+            "sess-1",
+            ContextConfig::new(10_000, 2, dir),
+        ) {
+            Ok(_) => panic!("huge version must fail"),
+            Err(err) => err,
+        };
+        assert!(matches!(err, ContextError::UnsupportedVersion(_)), "{err}");
     }
 
     #[test]
