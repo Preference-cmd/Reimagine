@@ -32,7 +32,8 @@ mod r#loop;
 
 pub use context::{Actor, ToolContext};
 pub use context_manager::{
-    BudgetSnapshot, ContextConfig, ContextManager, HeuristicEstimator, TokenEstimator,
+    BudgetSnapshot, CompactionRecord, ContextConfig, ContextManager, HeuristicEstimator,
+    TokenEstimator,
 };
 pub use error::{AgentError, ProviderError, ToolError, ToolErrorCode};
 pub use event::AgentEvent;
