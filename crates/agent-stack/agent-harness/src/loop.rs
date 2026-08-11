@@ -720,6 +720,11 @@ fn image_media_types(messages: &[Message]) -> Vec<String> {
 /// design: when the model cannot be found in the listing (custom model
 /// names, listing failures), the request is allowed through so custom /
 /// unlisted models never get blocked.
+///
+/// An empty `input_modalities` list also counts as "unknown" and is
+/// allowed through: the listing translation layer only fills modality
+/// data when the upstream API exposes it (Anthropic `/v1/models` does
+/// not), so an absent list must never be read as "known unsupported".
 async fn enforce_image_modality_gate(
     provider: &dyn AgentProvider,
     model: &ModelName,
@@ -744,6 +749,13 @@ async fn enforce_image_modality_gate(
         .iter()
         .any(|m| m == "image" || m.starts_with("image/"));
     if supports_image {
+        return Ok(());
+    }
+    if info.input_modalities().is_empty() {
+        // Unknown capability: the listing did not advertise modalities
+        // (or the adapter fills only capabilities). Allowing through is
+        // the best-effort default; a missing list is not evidence of
+        // non-support.
         return Ok(());
     }
     Err(ProviderError::new(
@@ -2377,6 +2389,23 @@ mod tests {
         assert_eq!(err.code(), "MODALITY_UNSUPPORTED");
         assert!(err.message().contains("text-1"), "{}", err.message());
         assert!(err.message().contains("image/png"), "{}", err.message());
+    }
+
+    #[tokio::test]
+    async fn image_modality_gate_allows_listed_model_with_unknown_modalities() {
+        // The listing translation layer only fills `input_modalities`
+        // when the upstream exposes them (Anthropic /v1/models does
+        // not); an empty list means "unknown", never "known
+        // unsupported". Regression for the production path: a listed
+        // model with empty modalities must be allowed through.
+        let provider = ModelsProvider::with_models(vec![ModelInfo::new(ModelName::new("m"))]);
+        let result = enforce_image_modality_gate(
+            &provider,
+            &ModelName::new("m"),
+            &["image/png".to_string()],
+        )
+        .await;
+        assert!(result.is_ok());
     }
 
     #[tokio::test]
