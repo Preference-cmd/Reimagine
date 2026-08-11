@@ -709,7 +709,10 @@ fn persisted_created_at(path: &Path) -> Option<String> {
 }
 
 /// Maximum decoded size of an inline (base64) file block, in base64
-/// characters: 10MB decoded ≈ 13.3M base64 chars.
+/// characters. This is a **character-count** limit, not a decoded-byte
+/// check: `10 * 1024 * 1024 * 4 / 3` ≈ 13.3M chars, which by integer
+/// truncation admits files up to 10MiB − 1 byte (conservative, safe
+/// direction). Base64 validity is the provider's concern downstream.
 const MAX_INLINE_FILE_BASE64_CHARS: usize = 10 * 1024 * 1024 * 4 / 3;
 
 /// Maximum number of file blocks accepted in a single turn input.
