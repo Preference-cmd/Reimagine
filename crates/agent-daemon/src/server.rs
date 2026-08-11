@@ -197,11 +197,7 @@ impl AgentDaemon {
             }
             let context = match ContextManager::load(
                 session_id,
-                ContextConfig {
-                    max_tokens: config.max_tokens,
-                    recent_turns: config.recent_turns,
-                    session_dir: session_dir.clone(),
-                },
+                ContextConfig::new(config.max_tokens, config.recent_turns, session_dir.clone()),
             ) {
                 Ok(context) => context,
                 Err(error) => {
@@ -245,11 +241,7 @@ impl AgentDaemon {
     /// Context configuration shared by new and resumed sessions: the
     /// persistence directory under the workspace base path.
     fn session_config(&self) -> ContextConfig {
-        ContextConfig {
-            max_tokens: 64_000,
-            recent_turns: 20,
-            session_dir: self.workspace.host().base_path().join("agent-sessions"),
-        }
+        ContextConfig::new(64_000, 20, self.workspace.host().base_path().join("agent-sessions"))
     }
 
     /// Provider bound to resumed sessions. V1 does not persist the

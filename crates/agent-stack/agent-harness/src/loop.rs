@@ -2208,11 +2208,7 @@ mod tests {
         }
 
         let dir = temp_session_dir("ctx-loop");
-        let config = ContextConfig {
-            max_tokens: 10_000,
-            recent_turns: 2,
-            session_dir: dir.clone(),
-        };
+        let config = ContextConfig::new(10_000, 2, dir.clone());
         let mut context = ContextManager::new(config);
         let session = make_session(AgentToolRegistry::new());
         let provider = Arc::new(CapturingProvider {
@@ -2254,11 +2250,7 @@ mod tests {
         context.persist("sess-ctx").expect("persist failed");
         let mut loaded = ContextManager::load(
             "sess-ctx",
-            ContextConfig {
-                max_tokens: 10_000,
-                recent_turns: 2,
-                session_dir: dir,
-            },
+            ContextConfig::new(10_000, 2, dir),
         )
         .expect("load failed");
         assert_eq!(loaded.token_count(), context.token_count());

@@ -10,6 +10,10 @@
 //! characters (code point above `0x2E80`) average one token per two
 //! characters; all other characters average one token per four
 //! characters. A fixed per-message overhead of 4 tokens is added.
+//!
+//! Estimation is behind the [`TokenEstimator`] seam: the heuristic is
+//! the default implementation, and an exact counter (e.g. tiktoken-rs,
+//! deferred to V3) can be swapped in without touching callers.
 
 use std::path::PathBuf;
 
@@ -24,6 +28,36 @@ const IMAGE_TOKENS_PER_BLOCK: usize = 1024;
 
 /// Pre-budget fallback for non-image file blocks (audio, video, ...).
 const OTHER_FILE_TOKENS_PER_BLOCK: usize = 256;
+
+/// Default soft-trigger cushion (CM-V2a, decision table M1): compaction
+/// is triggered once the stored history exceeds
+/// `max_tokens - reserved_tokens`; the hard limit remains `max_tokens`.
+const DEFAULT_RESERVED_TOKENS: usize = 16_000;
+
+/// Token estimation seam (CM-V2a, decision table M1). Callers may
+/// install an exact counter later without changing `ContextManager`
+/// internals.
+pub trait TokenEstimator: Send + Sync {
+    /// Estimate the tokens of a full message (content blocks plus
+    /// per-message overhead).
+    fn estimate_message(&self, message: &Message) -> usize;
+    /// Estimate the tokens of plain text (no per-message overhead).
+    fn estimate_text(&self, text: &str) -> usize;
+}
+
+/// Default heuristic estimator: CJK 2 chars/token, other 4 chars/token,
+/// +4 per-message overhead, fixed budgets for file blocks.
+pub struct HeuristicEstimator;
+
+impl TokenEstimator for HeuristicEstimator {
+    fn estimate_message(&self, message: &Message) -> usize {
+        estimate_message_tokens(message)
+    }
+
+    fn estimate_text(&self, text: &str) -> usize {
+        estimate_tokens(text)
+    }
+}
 
 /// Serialized snapshot of a session's context written by
 /// [`ContextManager::persist`] and read back by
@@ -70,19 +104,69 @@ impl std::error::Error for ContextError {
 
 /// Rolling-window context configuration.
 pub struct ContextConfig {
-    /// Token threshold that triggers [`ContextManager::needs_compaction`].
+    /// Token hard limit for the stored history.
     pub max_tokens: usize,
     /// Rolling window: keep the most recent `recent_turns * 2` messages.
     pub recent_turns: usize,
     /// Session persistence directory. Stored now for AS-03 session
     /// persistence; not used by the V1 context manager.
     pub session_dir: PathBuf,
+    /// Soft-trigger cushion (CM-V2a, decision table M1):
+    /// `needs_compaction()` fires once the history exceeds
+    /// `max_tokens - reserved_tokens`; `is_over_hard_limit()` fires at
+    /// `max_tokens`.
+    pub reserved_tokens: usize,
+}
+
+impl ContextConfig {
+    /// V1-compatible constructor: keeps old struct-literal call sites
+    /// readable while defaulting the soft-trigger cushion.
+    pub fn new(max_tokens: usize, recent_turns: usize, session_dir: PathBuf) -> Self {
+        Self {
+            max_tokens,
+            recent_turns,
+            session_dir,
+            reserved_tokens: DEFAULT_RESERVED_TOKENS,
+        }
+    }
+}
+
+/// Decomposition of the per-call token budget
+/// `max_tokens = system + summary + windowed_history + input`
+/// (CM-V2a, decision table M1).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct BudgetSnapshot {
+    pub system_tokens: usize,
+    pub summary_tokens: usize,
+    pub history_tokens: usize,
+    pub input_tokens: usize,
+    pub reserved_tokens: usize,
+    pub max_tokens: usize,
+}
+
+impl BudgetSnapshot {
+    /// Sum of every component except the reserved cushion.
+    pub fn windowed_total(&self) -> usize {
+        self.system_tokens + self.summary_tokens + self.history_tokens + self.input_tokens
+    }
+
+    /// `true` when the windowed total exceeds the soft trigger line
+    /// (`max_tokens - reserved_tokens`).
+    pub fn is_over_budget(&self) -> bool {
+        self.windowed_total() > self.max_tokens.saturating_sub(self.reserved_tokens)
+    }
+
+    /// `true` when the windowed total exceeds the hard limit.
+    pub fn is_over_hard_limit(&self) -> bool {
+        self.windowed_total() > self.max_tokens
+    }
 }
 
 /// Manages conversation history for a single agent session.
 pub struct ContextManager {
     config: ContextConfig,
     history: Vec<Message>,
+    estimator: Box<dyn TokenEstimator>,
 }
 
 impl ContextManager {
@@ -90,7 +174,15 @@ impl ContextManager {
         Self {
             config,
             history: Vec::new(),
+            estimator: Box::new(HeuristicEstimator),
         }
+    }
+
+    /// Install a custom estimator (exact tokenizer, calibrated model).
+    /// The default [`HeuristicEstimator`] remains when unset.
+    pub fn with_estimator(mut self, estimator: Box<dyn TokenEstimator>) -> Self {
+        self.estimator = estimator;
+        self
     }
 
     /// Build the message vector for a provider call:
@@ -121,12 +213,42 @@ impl ContextManager {
     pub fn token_count(&self) -> usize {
         self.history
             .iter()
-            .map(estimate_message_tokens)
+            .map(|m| self.estimator.estimate_message(m))
             .sum()
     }
 
-    /// `true` when the stored history exceeds `max_tokens`.
+    /// Estimated tokens of the history message at `index`. Returns
+    /// `None` when `index` is outside the stored history.
+    pub fn message_tokens(&self, index: usize) -> Option<usize> {
+        self.history.get(index).map(|m| self.estimator.estimate_message(m))
+    }
+
+    /// Budget decomposition of the next provider call: `system`,
+    /// `input` and the reserved cushion are supplied by the caller's
+    /// perspective (`system_tokens` / `input_tokens`), while
+    /// `history_tokens` and `summary_tokens` come from the stored
+    /// state (summary is always 0 until CM-V2c fills it).
+    pub fn budget_snapshot(&self, system_tokens: usize, input_tokens: usize) -> BudgetSnapshot {
+        BudgetSnapshot {
+            system_tokens,
+            summary_tokens: 0,
+            history_tokens: self.token_count(),
+            input_tokens,
+            reserved_tokens: self.config.reserved_tokens,
+            max_tokens: self.config.max_tokens,
+        }
+    }
+
+    /// `true` when the stored history exceeds the soft trigger line
+    /// (`max_tokens - reserved_tokens`); the turn should compact
+    /// before sending.
     pub fn needs_compaction(&self) -> bool {
+        self.token_count() > self.config.max_tokens.saturating_sub(self.config.reserved_tokens)
+    }
+
+    /// `true` when the stored history exceeds `max_tokens`; the turn
+    /// must compact (or drop) before sending.
+    pub fn is_over_hard_limit(&self) -> bool {
         self.token_count() > self.config.max_tokens
     }
 
@@ -163,6 +285,7 @@ impl ContextManager {
         Ok(Self {
             config,
             history: state.history,
+            estimator: Box::new(HeuristicEstimator),
         })
     }
 }
@@ -214,11 +337,7 @@ mod tests {
     use crate::provider::{ContentBlock, FileContentBlock, ToolCall, ToolCallId};
 
     fn config(recent_turns: usize) -> ContextConfig {
-        ContextConfig {
-            max_tokens: 10_000,
-            recent_turns,
-            session_dir: PathBuf::from("/tmp/reimagine-test"),
-        }
+        ContextConfig::new(10_000, recent_turns, PathBuf::from("/tmp/reimagine-test"))
     }
 
     #[test]
@@ -287,16 +406,175 @@ mod tests {
     }
 
     #[test]
-    fn needs_compaction_flips_when_tokens_exceed_threshold() {
+    fn needs_compaction_flips_when_tokens_exceed_soft_trigger() {
+        // max_tokens 100, reserved 90 -> soft line at 10.
         let mut manager = ContextManager::new(ContextConfig {
-            max_tokens: 8,
+            max_tokens: 100,
             recent_turns: 2,
             session_dir: PathBuf::from("/tmp/reimagine-test"),
+            reserved_tokens: 90,
         });
+        assert!(!manager.needs_compaction());
         manager.commit_turn(&[Message::user("a"), Message::assistant("b")]);
+        // 4 + 4 = 8 <= 10: under the soft line.
         assert!(!manager.needs_compaction());
         manager.commit_turn(&[Message::user("c"), Message::assistant("d")]);
+        // 16 > 10: soft trigger fires.
         assert!(manager.needs_compaction());
+    }
+
+    #[test]
+    fn is_over_hard_limit_flips_at_max_tokens() {
+        let mut manager = ContextManager::new(ContextConfig::new(
+            20,
+            2,
+            PathBuf::from("/tmp/reimagine-test"),
+        ));
+        manager.commit_turn(&[Message::user("a"), Message::assistant("b")]);
+        // 8 <= 20; soft line (20 - 16k -> 0) already fired, hard has not.
+        assert!(manager.needs_compaction());
+        assert!(!manager.is_over_hard_limit());
+        manager.commit_turn(&[Message::user("c"), Message::assistant("d")]);
+        // 16 <= 20: still under the hard limit.
+        assert!(!manager.is_over_hard_limit());
+        manager.commit_turn(&[Message::user("e"), Message::assistant("f")]);
+        // 24 > 20: hard limit fires.
+        assert!(manager.is_over_hard_limit());
+    }
+
+    #[test]
+    fn soft_trigger_precedes_hard_limit() {
+        let mut manager = ContextManager::new(ContextConfig {
+            max_tokens: 100,
+            recent_turns: 2,
+            session_dir: PathBuf::from("/tmp/reimagine-test"),
+            reserved_tokens: 40,
+        });
+        manager.commit_turn(&[Message::user("a"), Message::assistant("b")]);
+        // 8 < 60: neither fires.
+        assert!(!manager.needs_compaction());
+        assert!(!manager.is_over_hard_limit());
+        for i in 0..6 {
+            manager.commit_turn(&[
+                Message::user(format!("u{i}")),
+                Message::assistant(format!("a{i}")),
+            ]);
+        }
+        // 7 turns = 56 tokens: soft (60) not yet fired, hard (100) not.
+        assert!(!manager.needs_compaction());
+        manager.commit_turn(&[Message::user("u7"), Message::assistant("a7")]);
+        // 64 > 60: soft fires; 64 < 100: hard still quiet.
+        assert!(manager.needs_compaction());
+        assert!(!manager.is_over_hard_limit());
+    }
+
+    #[test]
+    fn new_config_defaults_reserved_cushion() {
+        let config = ContextConfig::new(64_000, 20, PathBuf::from("/tmp/reimagine-test"));
+        assert_eq!(config.reserved_tokens, 16_000);
+    }
+
+    #[test]
+    fn budget_snapshot_decomposes_call_budget() {
+        let mut manager = ContextManager::new(ContextConfig {
+            max_tokens: 100,
+            recent_turns: 2,
+            session_dir: PathBuf::from("/tmp/reimagine-test"),
+            reserved_tokens: 40,
+        });
+        manager.commit_turn(&[Message::user("a"), Message::assistant("b")]);
+        let snapshot = manager.budget_snapshot(/* system */ 20, /* input */ 12);
+        assert_eq!(snapshot.system_tokens, 20);
+        assert_eq!(snapshot.summary_tokens, 0);
+        assert_eq!(snapshot.history_tokens, 8);
+        assert_eq!(snapshot.input_tokens, 12);
+        assert_eq!(snapshot.reserved_tokens, 40);
+        assert_eq!(snapshot.max_tokens, 100);
+        assert_eq!(snapshot.windowed_total(), 40);
+        // Soft line = 100 - 40 = 60; hard line = 100.
+        assert!(!snapshot.is_over_budget());
+        assert!(!snapshot.is_over_hard_limit());
+
+        manager.commit_turn(&[Message::user("u1"), Message::assistant("a1")]);
+        let snapshot = manager.budget_snapshot(20, 12);
+        assert_eq!(snapshot.windowed_total(), 48);
+        assert!(!snapshot.is_over_budget());
+
+        manager.commit_turn(&[Message::user("u2"), Message::assistant("a2")]);
+        let snapshot = manager.budget_snapshot(20, 12);
+        // system 20 + history 24 (3 turns) + input 12 = 56 <= 60: quiet.
+        assert_eq!(snapshot.windowed_total(), 56);
+        assert!(!snapshot.is_over_budget());
+    }
+
+    #[test]
+    fn budget_snapshot_flips_over_budget_with_large_history() {
+        let mut manager = ContextManager::new(ContextConfig {
+            max_tokens: 100,
+            recent_turns: 2,
+            session_dir: PathBuf::from("/tmp/reimagine-test"),
+            reserved_tokens: 40,
+        });
+        for i in 0..10 {
+            manager.commit_turn(&[
+                Message::user(format!("u{i}")),
+                Message::assistant(format!("a{i}")),
+            ]);
+        }
+        // 20 messages * 4 tokens = 80. With system 20 + input 0: 100 > 60 soft.
+        let snapshot = manager.budget_snapshot(20, 0);
+        assert_eq!(snapshot.history_tokens, 80);
+        assert_eq!(snapshot.windowed_total(), 100);
+        assert!(snapshot.is_over_budget());
+        // 100 > 100 is false: exactly at the hard line.
+        assert!(!snapshot.is_over_hard_limit());
+
+        // 20 system + 80 history + 1 input message = 104 > 100 hard.
+        let snapshot = manager.budget_snapshot(20, 4);
+        assert!(snapshot.is_over_hard_limit());
+    }
+
+    #[test]
+    fn message_tokens_attributes_per_message() {
+        let mut manager = ContextManager::new(ContextConfig::new(
+            10_000,
+            2,
+            PathBuf::from("/tmp/reimagine-test"),
+        ));
+        manager.commit_turn(&[Message::user("abc"), Message::assistant("defg")]);
+        // "abc" = 0 (3 chars / 4) + 4 overhead; "defg" = 1 + 4.
+        assert_eq!(manager.message_tokens(0), Some(4));
+        assert_eq!(manager.message_tokens(1), Some(5));
+        assert_eq!(manager.message_tokens(2), None);
+    }
+
+    struct FlatEstimator(usize);
+
+    impl TokenEstimator for FlatEstimator {
+        fn estimate_message(&self, _message: &Message) -> usize {
+            self.0
+        }
+
+        fn estimate_text(&self, _text: &str) -> usize {
+            self.0
+        }
+    }
+
+    #[test]
+    fn custom_estimator_replaces_heuristic() {
+        let mut manager = ContextManager::new(ContextConfig::new(
+            10_000,
+            2,
+            PathBuf::from("/tmp/reimagine-test"),
+        ))
+        .with_estimator(Box::new(FlatEstimator(7)));
+        manager.commit_turn(&[Message::user("a"), Message::assistant("b")]);
+        assert_eq!(manager.token_count(), 14);
+        assert_eq!(manager.message_tokens(0), Some(7));
+        assert_eq!(
+            manager.budget_snapshot(7, 7).history_tokens,
+            14
+        );
     }
 
     #[test]
@@ -378,11 +656,7 @@ mod tests {
     #[test]
     fn persist_load_round_trips_history() {
         let dir = temp_session_dir("round-trip");
-        let cfg = ContextConfig {
-            max_tokens: 10_000,
-            recent_turns: 2,
-            session_dir: dir.clone(),
-        };
+        let cfg = ContextConfig::new(10_000, 2, dir.clone());
         let mut manager = ContextManager::new(cfg);
         manager.commit_turn(&[
             Message::user("u1"),
@@ -401,11 +675,7 @@ mod tests {
 
         let loaded = ContextManager::load(
             "sess-1",
-            ContextConfig {
-                max_tokens: 10_000,
-                recent_turns: 2,
-                session_dir: dir,
-            },
+            ContextConfig::new(10_000, 2, dir),
         )
         .expect("load failed");
         assert_eq!(loaded.token_count(), manager.token_count());
@@ -415,11 +685,7 @@ mod tests {
     #[test]
     fn persist_round_trips_file_blocks() {
         let dir = temp_session_dir("file-blocks");
-        let cfg = ContextConfig {
-            max_tokens: 10_000,
-            recent_turns: 2,
-            session_dir: dir.clone(),
-        };
+        let cfg = ContextConfig::new(10_000, 2, dir.clone());
         let mut manager = ContextManager::new(cfg);
         manager.commit_turn(&[Message::user_with_blocks(vec![
             ContentBlock::Text("describe".into()),
@@ -429,11 +695,7 @@ mod tests {
 
         let loaded = ContextManager::load(
             "sess-1",
-            ContextConfig {
-                max_tokens: 10_000,
-                recent_turns: 2,
-                session_dir: dir,
-            },
+            ContextConfig::new(10_000, 2, dir),
         )
         .expect("load failed");
         assert_eq!(loaded.history, manager.history);
@@ -454,11 +716,7 @@ mod tests {
         .expect("write failed");
         let result = ContextManager::load(
             "sess-1",
-            ContextConfig {
-                max_tokens: 10_000,
-                recent_turns: 2,
-                session_dir: dir,
-            },
+            ContextConfig::new(10_000, 2, dir),
         );
         assert!(result.is_err());
     }
@@ -466,11 +724,7 @@ mod tests {
     #[test]
     fn persist_creates_session_dir() {
         let dir = temp_session_dir("mkdir");
-        let manager = ContextManager::new(ContextConfig {
-            max_tokens: 10_000,
-            recent_turns: 2,
-            session_dir: dir.clone(),
-        });
+        let manager = ContextManager::new(ContextConfig::new(10_000, 2, dir.clone()));
         manager.persist("sess-1").expect("persist failed");
         assert!(dir.join("sess-1.json").is_file());
     }
@@ -480,11 +734,7 @@ mod tests {
         let dir = temp_session_dir("missing");
         let result = ContextManager::load(
             "nope",
-            ContextConfig {
-                max_tokens: 10_000,
-                recent_turns: 2,
-                session_dir: dir,
-            },
+            ContextConfig::new(10_000, 2, dir),
         );
         assert!(result.is_err());
     }
@@ -492,11 +742,7 @@ mod tests {
     #[test]
     fn persist_writes_compaction_summary_none() {
         let dir = temp_session_dir("summary");
-        let manager = ContextManager::new(ContextConfig {
-            max_tokens: 10_000,
-            recent_turns: 2,
-            session_dir: dir.clone(),
-        });
+        let manager = ContextManager::new(ContextConfig::new(10_000, 2, dir.clone()));
         manager.persist("sess-1").expect("persist failed");
 
         let json = std::fs::read_to_string(dir.join("sess-1.json")).expect("read failed");
