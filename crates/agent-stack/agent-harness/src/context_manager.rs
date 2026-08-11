@@ -159,7 +159,7 @@ pub enum ContextError {
     CompactionStale,
     /// The persisted file was written by a newer build than the
     /// running one.
-    UnsupportedVersion(u32),
+    UnsupportedVersion(u64),
 }
 
 impl std::fmt::Display for ContextError {
@@ -709,9 +709,10 @@ impl ContextManager {
     /// via [`ContextManager::with_estimator`] must be re-applied by the
     /// caller after loading).
     ///
-    /// Schema migration (CM-V2d): files without `schema_version`
-    /// (pre-CM-V2c) load as V1 — their string-or-null summary is
-    /// dropped and no sticky prefix is restored. Files written by a
+    /// Schema migration (CM-V2d): files without `schema_version` load
+    /// as V1 (their string-or-null summary is dropped and no sticky
+    /// prefix is restored), falling back to the current shape for
+    /// CM-V2c files that carry a record summary. Files written by a
     /// newer build than the running one fail with
     /// [`ContextError::UnsupportedVersion`].
     pub fn load(session_id: &str, config: ContextConfig) -> Result<Self, ContextError> {
@@ -1009,7 +1010,7 @@ fn parse_persisted_session(
     let version = envelope.get("schema_version").and_then(|v| v.as_u64());
     match version {
         Some(v) if v > CURRENT_SCHEMA_VERSION as u64 => {
-            return Err(ContextError::UnsupportedVersion(v as u32));
+            return Err(ContextError::UnsupportedVersion(v));
         }
         Some(_) => {
             let state: PersistedSession =
