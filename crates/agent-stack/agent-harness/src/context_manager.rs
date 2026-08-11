@@ -112,7 +112,10 @@ struct PersistedSession {
     session_id: String,
     created_at: String,
     history: Vec<Message>,
-    compaction_summary: Option<String>,
+    compaction_summary: Option<CompactionRecord>,
+    /// Number of sticky front messages (the summary message). Restored
+    /// so a resumed session's summary is never window-evicted.
+    sticky_count: usize,
     total_tokens: usize,
 }
 
@@ -231,6 +234,115 @@ impl BudgetSnapshot {
     }
 }
 
+/// Record of one successful summarization compaction (CM-V2c). Persisted
+/// with the session so a resumed session restores its summary.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct CompactionRecord {
+    pub text: String,
+    pub tokens_before: usize,
+    pub tokens_after: usize,
+    pub created_at: String,
+    /// Which compaction attempt of the current failure streak this
+    /// record represents (1 = first).
+    pub attempt: u32,
+    /// Workspace paths of image files referenced by the evicted
+    /// messages (PV-03 decision: references survive compaction).
+    pub image_refs: Vec<String>,
+}
+
+/// Window plan computed without mutating state (CM-V2b): the eviction
+/// range `[sticky_end, keep_start)` is what a compaction pass replaces
+/// with a summary; `cuts` are assistant-halves of oversized turns that
+/// are dropped outright (never summarized).
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct WindowPlan {
+    sticky_end: usize,
+    keep_start: usize,
+    cuts: Vec<(usize, usize)>,
+}
+
+impl WindowPlan {
+    /// Absolute ranges of messages that will disappear after the plan
+    /// is applied: the eviction range plus any cuts.
+    fn disappearing_ranges(&self) -> Vec<(usize, usize)> {
+        let mut ranges = Vec::with_capacity(1 + self.cuts.len());
+        if self.keep_start > self.sticky_end {
+            ranges.push((self.sticky_end, self.keep_start));
+        }
+        ranges.extend(
+            self.cuts
+                .iter()
+                .copied()
+                .filter(|(start, end)| end > start),
+        );
+        ranges.sort_unstable();
+        ranges
+    }
+}
+
+/// Consecutive summarization failures that stop compaction attempts
+/// (CM-V2c, decision table M3: 防 thrash).
+const MAX_CONSECUTIVE_COMPACTION_FAILURES: u32 = 3;
+
+/// Summarization prompt head: the domain-structured six-section schema
+/// (CM-V2c, decision table M3). The summarizer is instructed to write
+/// in the conversation's language and to treat the anchor (previous
+/// summary) as an incremental update target.
+const SUMMARY_SCHEMA_PROMPT: &str = "\
+Summarize the conversation below so that a fresh context can continue \
+the work without the original messages. Write the summary in the same \
+language as the conversation. Structure it exactly as:
+
+Goal: ...
+Constraints: ...
+Progress (Done | Active | Blocked): ...
+Key Decisions (decision: rationale): ...
+Next Steps: ...
+Relevant State (workflow/node/model): ...";
+
+/// Anchor prompt: the previous summary is included as the update
+/// target; it is excluded from the evicted conversation (迭代锚定摘要,
+/// decision table M3).
+const ANCHORED_SUMMARY_PROMPT: &str = "\
+Anchored summary (update this incrementally; do not repeat its content \
+verbatim in the new summary):
+
+";
+
+/// Image reference prompt: workspace paths that must survive
+/// compaction even though the image blocks themselves are dropped
+/// (PV-03 decision).
+const IMAGE_REFS_PROMPT: &str = "\
+Image files referenced by the evicted messages (keep these workspace \
+paths in Relevant State; do not inline the images):
+
+";
+
+/// Evicted conversation prompt.
+const EVICTED_CONVERSATION_PROMPT: &str = "\
+Conversation to summarize:
+
+";
+
+/// Render a message as a compact `role: content` line for the
+/// summarizer input. Tool results carry their call id; assistant tool
+/// calls list name + arguments.
+fn render_message_for_summary(message: &Message) -> String {
+    let mut line = format!("{}: {}\n", message.role(), message.content());
+    if let Some(id) = message.tool_call_id() {
+        line.push_str(&format!("  (result of call {id})\n"));
+    }
+    for call in message.tool_calls() {
+        line.push_str(&format!(
+            "  (tool call {}: {}({}) → result below)\n",
+            call.id(),
+            call.name(),
+            call.arguments()
+        ));
+    }
+    line
+}
+
 /// Manages conversation history for a single agent session.
 pub struct ContextManager {
     config: ContextConfig,
@@ -241,6 +353,12 @@ pub struct ContextManager {
     /// CM-V2b decision table M2). Managed by the summarization module
     /// (CM-V2c); public accessors keep the window honest.
     sticky_count: usize,
+    /// Record of the last successful summarization compaction.
+    compaction_summary: Option<CompactionRecord>,
+    /// Consecutive summarization failures since the last success.
+    /// At [`MAX_CONSECUTIVE_COMPACTION_FAILURES`] attempts stop (防
+    /// thrash, CM-V2c decision table M3).
+    consecutive_compaction_failures: u32,
 }
 
 impl ContextManager {
@@ -250,6 +368,8 @@ impl ContextManager {
             history: Vec::new(),
             estimator: Box::new(HeuristicEstimator),
             sticky_count: 0,
+            compaction_summary: None,
+            consecutive_compaction_failures: 0,
         }
     }
 
@@ -263,6 +383,142 @@ impl ContextManager {
     /// Number of sticky front messages the window never evicts.
     pub fn sticky_count(&self) -> usize {
         self.sticky_count
+    }
+
+    /// Record of the last successful summarization compaction, if any.
+    pub fn compaction_summary(&self) -> Option<&CompactionRecord> {
+        self.compaction_summary.as_ref()
+    }
+
+    /// Consecutive summarization failures since the last success.
+    pub fn consecutive_compaction_failures(&self) -> u32 {
+        self.consecutive_compaction_failures
+    }
+
+    /// `true` while compaction attempts are allowed. Flipped `false`
+    /// after [`MAX_CONSECUTIVE_COMPACTION_FAILURES`] consecutive
+    /// failures (防 thrash) until a success resets the streak.
+    pub fn should_attempt_compaction(&self) -> bool {
+        self.consecutive_compaction_failures < MAX_CONSECUTIVE_COMPACTION_FAILURES
+    }
+
+    /// Register a failed summarization attempt. The caller falls back
+    /// to plain eviction (drop-oldest) and the turn still completes.
+    pub fn record_compaction_failure(&mut self) {
+        self.consecutive_compaction_failures = self
+            .consecutive_compaction_failures
+            .saturating_add(1);
+    }
+
+    /// Build the summarizer input for the messages the window is about
+    /// to evict (CM-V2c): a single `user` message containing the
+    /// domain-structured six-section schema prompt, the anchored
+    /// previous summary (when present), the workspace image references
+    /// of the evicted messages, and the evicted conversation itself.
+    ///
+    /// The manager never calls a model itself — the caller (loop,
+    /// CM-V2e) runs the returned messages through the provider and
+    /// feeds the reply text to [`ContextManager::apply_summary`].
+    pub fn summarize_request(&self) -> Vec<Message> {
+        let plan = self.window_plan();
+        let ranges = plan.disappearing_ranges();
+
+        let mut sections: Vec<String> = Vec::new();
+        sections.push(SUMMARY_SCHEMA_PROMPT.to_owned());
+
+        if let Some(anchor) = &self.compaction_summary {
+            sections.push(format!(
+                "{ANCHORED_SUMMARY_PROMPT}\n{anchor_text}",
+                anchor_text = anchor.text
+            ));
+        }
+
+        let refs = self.collect_image_refs(&ranges);
+        if !refs.is_empty() {
+            sections.push(format!(
+                "{IMAGE_REFS_PROMPT}\n{}",
+                refs.join("\n")
+            ));
+        }
+
+        let mut evicted = String::new();
+        for (start, end) in &ranges {
+            for message in &self.history[*start..*end] {
+                evicted.push_str(&render_message_for_summary(message));
+            }
+        }
+        if !evicted.is_empty() {
+            sections.push(format!("{EVICTED_CONVERSATION_PROMPT}\n{evicted}"));
+        }
+
+        vec![Message::user(sections.join("\n\n"))]
+    }
+
+    /// Apply a successful summarization reply: the eviction range is
+    /// replaced by a sticky summary message (never evicted by the
+    /// window), the `CompactionRecord` is stored, and the failure
+    /// streak resets. Returns the recorded summary.
+    pub fn apply_summary(&mut self, text: impl Into<String>) -> CompactionRecord {
+        let plan = self.window_plan();
+        let ranges = plan.disappearing_ranges();
+        let tokens_before: usize = ranges
+            .iter()
+            .map(|(start, end)| {
+                self.history[*start..*end]
+                    .iter()
+                    .map(|m| self.estimator.estimate_message(m))
+                    .sum::<usize>()
+            })
+            .sum();
+
+        let text = text.into();
+        let summary_message = Message::user(text.clone());
+        let tokens_after = self.estimator.estimate_message(&summary_message);
+        let image_refs = self.collect_image_refs(&ranges);
+
+        // Remove the evicted messages from the back, then insert the
+        // sticky summary at the front of the keep region.
+        for (start, end) in ranges.iter().rev() {
+            self.history.drain(*start..*end);
+        }
+        self.history.insert(plan.sticky_end, summary_message);
+        self.sticky_count += 1;
+
+        let record = CompactionRecord {
+            text,
+            tokens_before,
+            tokens_after,
+            created_at: created_at(),
+            attempt: self.consecutive_compaction_failures + 1,
+            image_refs,
+        };
+        self.compaction_summary = Some(record.clone());
+        self.consecutive_compaction_failures = 0;
+        record
+    }
+
+    /// Workspace references of image file blocks inside `ranges`:
+    /// `Url` sources keep their path/URL, `Data` sources fall back to
+    /// their display filename. Used by the summary so image references
+    /// survive compaction (PV-03 decision).
+    fn collect_image_refs(&self, ranges: &[(usize, usize)]) -> Vec<String> {
+        let mut refs: Vec<String> = Vec::new();
+        for (start, end) in ranges {
+            for message in &self.history[*start..*end] {
+                for block in message.blocks() {
+                    if let ContentBlock::File(file) = block
+                        && file.media_type().starts_with("image/")
+                    {
+                        if let Some(url) = file.source().url() {
+                            refs.push(url.to_owned());
+                        } else if let Some(filename) = file.filename() {
+                            refs.push(filename.to_owned());
+                        }
+                    }
+                }
+            }
+        }
+        refs
     }
 
     /// Build the message vector for a provider call:
@@ -349,7 +605,8 @@ impl ContextManager {
             session_id: session_id.to_owned(),
             created_at: created_at(),
             history: self.history.clone(),
-            compaction_summary: None,
+            compaction_summary: self.compaction_summary.clone(),
+            sticky_count: self.sticky_count,
             total_tokens: self.token_count(),
         };
         std::fs::create_dir_all(&self.config.session_dir).map_err(ContextError::Io)?;
@@ -360,9 +617,10 @@ impl ContextManager {
 
     /// Load a session's context previously written by
     /// [`ContextManager::persist`]. The returned manager uses `config`
-    /// for the window and token threshold; only the history is restored
-    /// (a custom estimator installed via [`ContextManager::with_estimator`]
-    /// must be re-applied by the caller after loading).
+    /// for the window and token threshold; the history and the
+    /// compaction summary are restored (a custom estimator installed
+    /// via [`ContextManager::with_estimator`] must be re-applied by the
+    /// caller after loading).
     pub fn load(session_id: &str, config: ContextConfig) -> Result<Self, ContextError> {
         let path = config.session_dir.join(format!("{session_id}.json"));
         let json = std::fs::read(&path).map_err(|err| {
@@ -377,28 +635,47 @@ impl ContextManager {
             config,
             history: state.history,
             estimator: Box::new(HeuristicEstimator),
-            sticky_count: 0,
+            sticky_count: state.sticky_count,
+            compaction_summary: state.compaction_summary,
+            consecutive_compaction_failures: 0,
         })
     }
 
     /// Window the stored history in place (CM-V2b, decision table M2):
+    /// prune first, then apply the [`WindowPlan`] computed from the
+    /// current state.
+    fn apply_window(&mut self) {
+        self.prune_old_tool_outputs();
+        let plan = self.window_plan();
+        // Cuts lie inside the keep region: drain from the back so
+        // earlier absolute indexes stay valid, then evict the front
+        // range.
+        for (start, end) in plan.cuts.iter().rev() {
+            self.history.drain(*start..*end);
+        }
+        if plan.keep_start > plan.sticky_end {
+            self.history.drain(plan.sticky_end..plan.keep_start);
+        }
+    }
+
+    /// Compute the window plan without mutating state (CM-V2b):
     ///
-    /// 1. **Prune stage**: tool outputs older than the verbatim tail
-    ///    are replaced with placeholders once their accumulated tokens
-    ///    exceed `prune_threshold_tokens`, stopping at
-    ///    `prune_target_tokens`.
-    /// 2. **Verbatim tail**: the most recent `tail_turns` complete turns
+    /// 1. **Verbatim tail**: the most recent `tail_turns` complete turns
     ///    are kept word-for-word, bounded by the tail budget
     ///    (`25%` of the available window, 2k-8k clamp).
-    /// 3. **Middle window**: turns between the sticky prefix and the
+    /// 2. **Middle window**: turns between the sticky prefix and the
     ///    tail are kept from newest to oldest until the soft budget
     ///    line (`max_tokens - reserved_tokens`) is filled; the rest is
     ///    evicted in whole turn units (a user↔assistant turn and its
     ///    tool-call↔tool-result pairs are never split). A single turn
     ///    larger than the window budget is cut at its first assistant
     ///    message, keeping the user message.
-    fn apply_window(&mut self) {
-        self.prune_old_tool_outputs();
+    ///
+    /// The plan reports `[sticky_end, keep_start)` as the eviction
+    /// range (what summarization replaces) and `cuts` as the
+    /// assistant-halves of oversized turns removed inside the keep
+    /// region (not summarized, they are dropped).
+    fn window_plan(&self) -> WindowPlan {
         let sticky_end = self.sticky_count.min(self.history.len());
         let turns = turn_spans(&self.history[sticky_end..]);
 
@@ -427,8 +704,7 @@ impl ContextManager {
         // The newest turn always survives the tail loop. Verbatim-tail
         // protection wins over the soft window, but a turn that alone
         // exceeds the hard limit (`max_tokens`) is cut at its first
-        // assistant message so the hard limit still holds (review M1
-        // fix).
+        // assistant message so the hard limit still holds.
         let mut tail_cut: Option<(usize, usize)> = None;
         if let Some(&newest_span) = turns.get(tail_start)
             && self.span_tokens(sticky_end, &newest_span) > self.config.max_tokens
@@ -472,22 +748,20 @@ impl ContextManager {
             }
         }
 
-        // Apply the cuts before eviction: both lie inside the keep
-        // region, so the eviction range in front of them is unaffected
-        // by the length change.
-        if let Some((cut_start, cut_end)) = tail_cut {
-            self.history.drain(cut_start..cut_end);
-        }
-        if let Some((cut_start, cut_end)) = oversized_cut {
-            self.history.drain(cut_start..cut_end);
-        }
         let keep_abs_start = if keep_from >= turns.len() {
             self.history.len().min(sticky_end + turns.last().map(|s| s.0 + s.1).unwrap_or(0))
         } else {
             sticky_end + turns[keep_from].0
         };
-        if keep_abs_start > sticky_end {
-            self.history.drain(sticky_end..keep_abs_start);
+
+        let mut cuts: Vec<(usize, usize)> = Vec::new();
+        cuts.extend(tail_cut);
+        cuts.extend(oversized_cut);
+
+        WindowPlan {
+            sticky_end,
+            keep_start: keep_abs_start,
+            cuts,
         }
     }
 
@@ -1370,5 +1644,160 @@ mod tests {
         assert_eq!(state["history"], serde_json::Value::Array(vec![]));
         assert!(state["compaction_summary"].is_null());
         assert_eq!(state["total_tokens"], 0);
+        assert_eq!(state["sticky_count"], 0);
+    }
+
+    #[test]
+    fn summarize_request_builds_schema_prompt_from_eviction_range() {
+        let mut manager = ContextManager::new(window_config(10_000, 2_000, 2));
+        for i in 0..60 {
+            manager.commit_turn(&turn(i, 400));
+        }
+
+        let request = manager.summarize_request();
+        assert_eq!(request.len(), 1);
+        let prompt = request[0].content().to_owned();
+        // Six-section schema with language instruction.
+        for section in [
+            "Goal:",
+            "Constraints:",
+            "Progress (Done | Active | Blocked):",
+            "Key Decisions",
+            "Next Steps:",
+            "Relevant State",
+            "same language as the conversation",
+        ] {
+            assert!(prompt.contains(section), "missing {section:?}");
+        }
+        // Evicted oldest turn is inside the prompt.
+        assert!(prompt.contains("u0:"));
+        // The verbatim tail is not part of the prompt.
+        assert!(!prompt.contains("u59:"));
+    }
+
+    #[test]
+    fn summarize_request_anchors_previous_summary() {
+        let mut manager = ContextManager::new(window_config(10_000, 2_000, 2));
+        for i in 0..60 {
+            manager.commit_turn(&turn(i, 400));
+        }
+        manager.apply_summary("summary-one: goal preserved");
+
+        let request = manager.summarize_request();
+        let prompt = request[0].content().to_owned();
+        assert!(prompt.contains("Anchored summary"));
+        assert!(prompt.contains("summary-one: goal preserved"));
+        // The anchored summary text itself is not repeated as evicted
+        // conversation (旧摘要从输入排除).
+        assert_eq!(prompt.matches("summary-one: goal preserved").count(), 1);
+    }
+
+    #[test]
+    fn apply_summary_replaces_evicted_range_with_sticky_message() {
+        let mut manager = ContextManager::new(window_config(10_000, 2_000, 2));
+        for i in 0..60 {
+            manager.commit_turn(&turn(i, 400));
+        }
+        let before = manager.token_count();
+
+        let record = manager.apply_summary("goal: continue artwork refinement");
+        assert_eq!(record.attempt, 1);
+        // tokens_before counts the evicted range only, not all history.
+        assert!(record.tokens_before > 0);
+        assert!(record.tokens_before < manager.token_count() + record.tokens_after);
+        assert!(record.tokens_after > 0);
+        assert!(manager.compaction_summary().is_some());
+        assert_eq!(manager.sticky_count(), 1);
+        assert_eq!(manager.history[0].content(), "goal: continue artwork refinement");
+
+        // The sticky summary survives the window: repeated prepares do
+        // not evict it.
+        manager.prepare_messages("sys", &[]);
+        assert_eq!(manager.history[0].content(), "goal: continue artwork refinement");
+        assert!(manager.token_count() <= 10_000);
+    }
+
+    #[test]
+    fn apply_summary_then_window_keeps_anchor_and_tail() {
+        let mut manager = ContextManager::new(window_config(10_000, 2_000, 2));
+        for i in 0..60 {
+            manager.commit_turn(&turn(i, 400));
+        }
+        manager.apply_summary("anchor-summary");
+
+        manager.prepare_messages("sys", &[]);
+        let history: Vec<Message> = manager.history.clone();
+        assert_eq!(history[0].content(), "anchor-summary");
+        assert!(history.iter().any(|m| m.content().starts_with("u59")));
+        // The oldest evicted turn is gone for good.
+        assert!(!history.iter().any(|m| m.content().starts_with("u0")));
+    }
+
+    #[test]
+    fn summary_collects_image_refs_from_evicted_messages() {
+        let mut manager = ContextManager::new(window_config(10_000, 9_500, 2));
+        for i in 0..10 {
+            manager.commit_turn(&turn(i, 100));
+        }
+        // An old evicted turn carries an image reference.
+        manager.history[1] = Message::user_with_blocks(vec![
+            ContentBlock::Text("img".into()),
+            ContentBlock::File(FileContentBlock::url(
+                "image/png",
+                "assets/reference.png",
+            )),
+        ]);
+
+        let request = manager.summarize_request();
+        assert!(request[0].content().contains("assets/reference.png"));
+
+        let record = manager.apply_summary("summary with image ref");
+        assert_eq!(record.image_refs, vec!["assets/reference.png"]);
+    }
+
+    #[test]
+    fn compaction_thrash_stops_after_max_failures() {
+        let mut manager = ContextManager::new(window_config(10_000, 2_000, 2));
+        for i in 0..60 {
+            manager.commit_turn(&turn(i, 400));
+        }
+        assert!(manager.should_attempt_compaction());
+        manager.record_compaction_failure();
+        manager.record_compaction_failure();
+        assert!(manager.should_attempt_compaction());
+        manager.record_compaction_failure();
+        assert!(!manager.should_attempt_compaction());
+        assert_eq!(manager.consecutive_compaction_failures(), 3);
+
+        // A success resets the streak.
+        let record = manager.apply_summary("recovered");
+        assert_eq!(record.attempt, 4);
+        assert_eq!(manager.consecutive_compaction_failures(), 0);
+        assert!(manager.should_attempt_compaction());
+    }
+
+    #[test]
+    fn compaction_record_round_trips_persistence() {
+        let dir = temp_session_dir("record");
+        let cfg = ContextConfig {
+            ..ContextConfig::new(10_000, 2, dir.clone())
+        };
+        let mut manager = ContextManager::new(cfg);
+        for i in 0..60 {
+            manager.commit_turn(&turn(i, 400));
+        }
+        manager.apply_summary("persisted summary");
+        manager.persist("sess-1").expect("persist failed");
+
+        let loaded = ContextManager::load(
+            "sess-1",
+            ContextConfig::new(10_000, 2, dir),
+        )
+        .expect("load failed");
+        let record = loaded.compaction_summary().expect("summary lost");
+        assert_eq!(record.text, "persisted summary");
+        assert_eq!(loaded.sticky_count(), 1);
+        assert_eq!(loaded.history[0].content(), "persisted summary");
+        assert_eq!(loaded.consecutive_compaction_failures(), 0);
     }
 }
