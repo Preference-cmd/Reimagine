@@ -9,8 +9,8 @@ use std::sync::{Arc, Mutex, PoisonError};
 
 use reimagine_agent_harness::{
     AgentEvent, AgentEventSink, AgentLoop, AgentMode, AgentSessionId, AgentTurnId,
-    AgentTurnRequest, AgentTurnResult, ContextConfig, ContextManager, Message, ModelName,
-    PermissionSet, ProviderName, ToolCallId, ToolName, ToolPermission, VecAgentEventSink,
+    AgentTurnRequest, AgentTurnResult, ContentBlock, ContextConfig, ContextManager, Message,
+    ModelName, PermissionSet, ProviderName, ToolCallId, ToolName, ToolPermission, VecAgentEventSink,
 };
 use serde::Serialize;
 use serde::de::DeserializeOwned;
@@ -478,9 +478,7 @@ impl AgentDaemon {
         let session_id = AgentSessionId::new(request.session_id);
         let turn_id = AgentTurnId::new(request.turn_id);
         let model = ModelName::new(request.model);
-        let Some(text) = turn_input_text(&request.input) else {
-            return Err(JsonRpcError::invalid_params());
-        };
+        let input_blocks = turn_input_blocks(&request.input)?;
         let agent_session = self
             .workspace
             .agent_service()
@@ -532,7 +530,7 @@ impl AgentDaemon {
                 agent_session,
                 task_turn_id.clone(),
                 model,
-                vec![Message::user(text)],
+                vec![Message::user_with_blocks(input_blocks)],
             )
             .with_cancel_token(cancel_token);
             let mut context_guard = context.lock().await;
@@ -710,12 +708,85 @@ fn persisted_created_at(path: &Path) -> Option<String> {
         .map(|meta| meta.created_at)
 }
 
-fn turn_input_text(input: &Value) -> Option<String> {
-    match input {
-        Value::String(text) => Some(text.clone()),
-        Value::Object(map) => map.get("text").and_then(Value::as_str).map(str::to_owned),
-        _ => None,
+/// Maximum decoded size of an inline (base64) file block, in base64
+/// characters: 10MB decoded ≈ 13.3M base64 chars.
+const MAX_INLINE_FILE_BASE64_CHARS: usize = 10 * 1024 * 1024 * 4 / 3;
+
+/// Maximum number of file blocks accepted in a single turn input.
+const MAX_FILE_BLOCKS_PER_TURN: usize = 4;
+
+/// Parse the `turn.run` input into content blocks.
+///
+/// Three shapes are accepted:
+/// - a plain string (`"hi"`),
+/// - a compatibility object (`{"text":"hi"}`),
+/// - a content-block array (`[{type:"text",text:"hi"},{type:"file",...}]`).
+///
+/// File blocks are validated: `media_type` must be non-empty, inline
+/// base64 must stay within the 10MB (decoded) limit, and at most
+/// [`MAX_FILE_BLOCKS_PER_TURN`] file blocks are allowed per turn.
+/// Invalid inputs yield an `invalid_params` error.
+fn turn_input_blocks(input: &Value) -> Result<Vec<ContentBlock>, JsonRpcError> {
+    let blocks = match input {
+        Value::String(text) => vec![ContentBlock::Text(text.clone())],
+        Value::Object(map) => {
+            let text = map
+                .get("text")
+                .and_then(Value::as_str)
+                .ok_or_else(|| invalid_input("turn input object must carry a `text` string"))?;
+            vec![ContentBlock::Text(text.to_owned())]
+        }
+        Value::Array(items) => {
+            let mut blocks = Vec::with_capacity(items.len());
+            for item in items {
+                let block = serde_json::from_value::<ContentBlock>(item.clone()).map_err(|_| {
+                    invalid_input(
+                        "invalid content block: expected `{type:\"text\",text}` or `{type:\"file\",...}`",
+                    )
+                })?;
+                blocks.push(block);
+            }
+            blocks
+        }
+        _ => {
+            return Err(invalid_input(
+                "turn input must be a string, a `{text}` object, or a content-block array",
+            ))
+        }
+    };
+    validate_turn_blocks(&blocks)?;
+    Ok(blocks)
+}
+
+fn validate_turn_blocks(blocks: &[ContentBlock]) -> Result<(), JsonRpcError> {
+    let file_count = blocks
+        .iter()
+        .filter(|block| matches!(block, ContentBlock::File(_)))
+        .count();
+    if file_count > MAX_FILE_BLOCKS_PER_TURN {
+        return Err(invalid_input(format!(
+            "at most {MAX_FILE_BLOCKS_PER_TURN} file blocks allowed per turn"
+        )));
     }
+    for block in blocks {
+        if let ContentBlock::File(file) = block {
+            if file.media_type().is_empty() {
+                return Err(invalid_input("file block `media_type` must not be empty"));
+            }
+            if let Some(base64) = file.source().base64()
+                && base64.len() > MAX_INLINE_FILE_BASE64_CHARS
+            {
+                return Err(invalid_input(
+                    "inline file base64 exceeds the 10MB limit",
+                ));
+            }
+        }
+    }
+    Ok(())
+}
+
+fn invalid_input(reason: impl Into<String>) -> JsonRpcError {
+    JsonRpcError::invalid_params().with_data(json!({ "reason": reason.into() }))
 }
 
 fn turn_result_value(result: &AgentTurnResult) -> Value {
@@ -779,4 +850,141 @@ fn timestamp_millis() -> String {
         .unwrap_or_default()
         .as_millis()
         .to_string()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use reimagine_agent_harness::FileContentBlock;
+
+    fn parse(value: Value) -> Result<Vec<ContentBlock>, JsonRpcError> {
+        turn_input_blocks(&value)
+    }
+
+    fn file_block(media_type: &str, base64: &str) -> Value {
+        json!({
+            "type": "file",
+            "media_type": media_type,
+            "source": { "type": "data", "base64": base64 },
+        })
+    }
+
+    #[test]
+    fn string_input_becomes_text_block() {
+        assert_eq!(parse(json!("hi")).unwrap(), vec![ContentBlock::Text("hi".into())]);
+    }
+
+    #[test]
+    fn text_object_is_compat_shape() {
+        assert_eq!(
+            parse(json!({"text": "hi"})).unwrap(),
+            vec![ContentBlock::Text("hi".into())]
+        );
+    }
+
+    #[test]
+    fn text_object_without_text_is_rejected() {
+        let err = parse(json!({"other": 1})).unwrap_err();
+        assert_eq!(err.code, -32602);
+    }
+
+    #[test]
+    fn blocks_array_mixes_text_and_file() {
+        let blocks = parse(json!([
+            {"type": "text", "text": "describe"},
+            {"type": "file", "media_type": "image/png", "source": {"type": "data", "base64": "AAAA"}},
+            {"type": "file", "media_type": "image/jpeg", "source": {"type": "url", "url": "refs/pic.jpg"}, "filename": "pic.jpg"},
+        ]))
+        .unwrap();
+        assert_eq!(blocks.len(), 3);
+        assert_eq!(blocks[0], ContentBlock::Text("describe".into()));
+        let ContentBlock::File(file) = &blocks[1] else {
+            panic!("expected file block");
+        };
+        assert_eq!(file.media_type(), "image/png");
+        assert_eq!(file.source().base64(), Some("AAAA"));
+        let ContentBlock::File(file) = &blocks[2] else {
+            panic!("expected file block");
+        };
+        assert_eq!(file.media_type(), "image/jpeg");
+        assert_eq!(file.source().url(), Some("refs/pic.jpg"));
+        assert_eq!(file.filename(), Some("pic.jpg"));
+    }
+
+    #[test]
+    fn unknown_block_type_is_rejected() {
+        let err = parse(json!([{"type": "video", "url": "clip.mp4"}])).unwrap_err();
+        assert_eq!(err.code, -32602);
+    }
+
+    #[test]
+    fn empty_media_type_is_rejected() {
+        let err = parse(json!([file_block("", "AAAA")])).unwrap_err();
+        assert_eq!(err.code, -32602);
+        assert!(err
+            .data
+            .as_ref()
+            .and_then(|data| data.get("reason"))
+            .and_then(Value::as_str)
+            .unwrap_or_default()
+            .contains("media_type"));
+    }
+
+    #[test]
+    fn oversized_inline_file_is_rejected() {
+        let big = "A".repeat(MAX_INLINE_FILE_BASE64_CHARS + 1);
+        let err = parse(json!([file_block("image/png", &big)])).unwrap_err();
+        assert_eq!(err.code, -32602);
+        assert!(err
+            .data
+            .as_ref()
+            .and_then(|data| data.get("reason"))
+            .and_then(Value::as_str)
+            .unwrap_or_default()
+            .contains("10MB"));
+    }
+
+    #[test]
+    fn at_limit_inline_file_is_accepted() {
+        let big = "A".repeat(MAX_INLINE_FILE_BASE64_CHARS);
+        let blocks = parse(json!([file_block("image/png", &big)])).unwrap();
+        assert_eq!(blocks.len(), 1);
+    }
+
+    #[test]
+    fn too_many_file_blocks_are_rejected() {
+        let blocks: Vec<Value> = (0..=MAX_FILE_BLOCKS_PER_TURN)
+            .map(|_| file_block("image/png", "AAAA"))
+            .collect();
+        let err = parse(Value::Array(blocks)).unwrap_err();
+        assert_eq!(err.code, -32602);
+        assert!(err
+            .data
+            .as_ref()
+            .and_then(|data| data.get("reason"))
+            .and_then(Value::as_str)
+            .unwrap_or_default()
+            .contains("4 file blocks"));
+    }
+
+    #[test]
+    fn url_source_blocks_count_toward_the_limit() {
+        let blocks: Vec<Value> = (0..=MAX_FILE_BLOCKS_PER_TURN)
+            .map(|i| {
+                json!({
+                    "type": "file",
+                    "media_type": "image/png",
+                    "source": { "type": "url", "url": format!("refs/{i}.png") },
+                })
+            })
+            .collect();
+        assert!(parse(Value::Array(blocks)).is_err());
+    }
+
+    #[test]
+    fn non_text_non_object_input_is_rejected() {
+        assert!(parse(json!(42)).is_err());
+        assert!(parse(Value::Null).is_err());
+        assert!(parse(json!(true)).is_err());
+    }
 }

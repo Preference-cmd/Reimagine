@@ -46,16 +46,210 @@ impl From<&str> for ToolCallId {
     }
 }
 
+/// A single content block in a [`Message`]. V1 supports text and file
+/// blocks; file blocks lay the groundwork for image inputs (and other
+/// media) with an inline base64 or URL source.
+///
+/// Serde shape (tagged by `type`):
+/// - `{"type":"text","text":"hi"}`
+/// - `{"type":"file","media_type":"image/png","source":{...},"filename":"pic.png"}`
+///
+/// The plain-text `Message.content` of earlier versions is now
+/// represented as `Text` blocks; `Message::content()` aggregates them.
+#[derive(Debug, Clone, PartialEq)]
+pub enum ContentBlock {
+    /// Plain-text content.
+    Text(String),
+    /// A file (image, audio, ...) referenced by its source.
+    File(FileContentBlock),
+}
+
+/// A file content block.
+#[derive(Debug, Clone, PartialEq)]
+pub struct FileContentBlock {
+    /// IANA media type, e.g. `"image/png"`. Required.
+    media_type: String,
+    /// Where the file data lives.
+    source: FileSource,
+    /// Optional display filename.
+    filename: Option<String>,
+}
+
+impl FileContentBlock {
+    /// Build a file block backed by an inline base64 payload.
+    pub fn data(media_type: impl Into<String>, base64: impl Into<String>) -> Self {
+        Self {
+            media_type: media_type.into(),
+            source: FileSource::Data {
+                base64: base64.into(),
+            },
+            filename: None,
+        }
+    }
+
+    pub fn media_type(&self) -> &str {
+        &self.media_type
+    }
+
+    pub fn source(&self) -> &FileSource {
+        &self.source
+    }
+
+    pub fn filename(&self) -> Option<&str> {
+        self.filename.as_deref()
+    }
+}
+
+/// Where a [`FileContentBlock`]'s data lives.
+///
+/// Serde shape:
+/// - `{"type":"data","base64":"..."}` — pure base64, no `data:` prefix
+/// - `{"type":"url","url":"..."}` — workspace-relative path or URL
+#[derive(Debug, Clone, PartialEq)]
+pub enum FileSource {
+    /// Inline payload, base64-encoded without a `data:` prefix.
+    Data { base64: String },
+    /// Workspace-relative path or URL.
+    Url(String),
+}
+
+impl FileSource {
+    /// `Some` for [`FileSource::Data`] — the raw base64 payload.
+    pub fn base64(&self) -> Option<&str> {
+        match self {
+            Self::Data { base64 } => Some(base64),
+            Self::Url(_) => None,
+        }
+    }
+
+    /// `Some` for [`FileSource::Url`] — the path or URL.
+    pub fn url(&self) -> Option<&str> {
+        match self {
+            Self::Url(url) => Some(url),
+            Self::Data { .. } => None,
+        }
+    }
+}
+
+impl serde::Serialize for ContentBlock {
+    fn serialize<S: serde::Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+        use serde::ser::SerializeStruct;
+        match self {
+            Self::Text(text) => {
+                let mut state = serializer.serialize_struct("ContentBlock", 2)?;
+                state.serialize_field("type", "text")?;
+                state.serialize_field("text", text)?;
+                state.end()
+            }
+            Self::File(file) => file.serialize(serializer),
+        }
+    }
+}
+
+impl<'de> serde::Deserialize<'de> for ContentBlock {
+    fn deserialize<D: serde::Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+        #[derive(serde::Deserialize)]
+        #[serde(tag = "type", rename_all = "snake_case")]
+        enum Raw {
+            Text { text: String },
+            File(FileContentBlock),
+        }
+        Ok(match Raw::deserialize(deserializer)? {
+            Raw::Text { text } => Self::Text(text),
+            Raw::File(file) => Self::File(file),
+        })
+    }
+}
+
+impl serde::Serialize for FileContentBlock {
+    fn serialize<S: serde::Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+        use serde::ser::SerializeStruct;
+        let mut state = serializer.serialize_struct("FileContentBlock", 4)?;
+        state.serialize_field("type", "file")?;
+        state.serialize_field("media_type", &self.media_type)?;
+        state.serialize_field("source", &self.source)?;
+        if let Some(filename) = &self.filename {
+            state.serialize_field("filename", filename)?;
+        }
+        state.end()
+    }
+}
+
+impl<'de> serde::Deserialize<'de> for FileContentBlock {
+    fn deserialize<D: serde::Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+        #[derive(serde::Deserialize)]
+        #[serde(rename_all = "snake_case")]
+        struct Raw {
+            media_type: String,
+            source: FileSource,
+            filename: Option<String>,
+        }
+        let raw = Raw::deserialize(deserializer)?;
+        Ok(Self {
+            media_type: raw.media_type,
+            source: raw.source,
+            filename: raw.filename,
+        })
+    }
+}
+
+impl serde::Serialize for FileSource {
+    fn serialize<S: serde::Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+        use serde::ser::SerializeStruct;
+        let mut state = serializer.serialize_struct("FileSource", 2)?;
+        match self {
+            Self::Data { base64 } => {
+                state.serialize_field("type", "data")?;
+                state.serialize_field("base64", base64)?;
+            }
+            Self::Url(url) => {
+                state.serialize_field("type", "url")?;
+                state.serialize_field("url", url)?;
+            }
+        }
+        state.end()
+    }
+}
+
+impl<'de> serde::Deserialize<'de> for FileSource {
+    fn deserialize<D: serde::Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+        #[derive(serde::Deserialize)]
+        #[serde(tag = "type", rename_all = "snake_case")]
+        enum Raw {
+            Data { base64: String },
+            Url { url: String },
+        }
+        Ok(match Raw::deserialize(deserializer)? {
+            Raw::Data { base64 } => Self::Data { base64 },
+            Raw::Url { url } => Self::Url(url),
+        })
+    }
+}
+
 /// Provider-agnostic chat message.
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+///
+/// Content is a list of [`ContentBlock`]s (text and file blocks), giving
+/// the model a structured view of multimodal input. `content()` is the
+/// convenience text projection of the blocks; wire translations consume
+/// it for text-only flows and should walk `blocks()` once a given
+/// adapter carries file blocks to the provider.
+///
+/// Serde format changed from the V1 plain-string shape: content now
+/// serializes as a block array. Files persisted before this change fail
+/// to deserialize — development-period format change, no migration.
+#[derive(Debug, Clone, PartialEq, Serialize)]
 pub struct Message {
     /// Role discriminator. V1 uses the conventional string names
     /// `"system"`, `"user"`, `"assistant"`, and `"tool"`. Provider
     /// adapters translate to OpenAI / Anthropic roles.
     role: String,
-    /// Message content. Provider adapters split this into text or
-    /// multi-part content as needed.
-    content: String,
+    /// Message content blocks.
+    content: Vec<ContentBlock>,
+    /// Cached aggregation of the `Text` blocks (joined with `\n`) so
+    /// `content()` can return a `&str` without allocation. A pure
+    /// function of `content`; skipped by serde.
+    #[serde(skip)]
+    content_text: String,
     /// Optional tool call id this message is responding to (for role =
     /// "tool").
     tool_call_id: Option<ToolCallId>,
@@ -65,42 +259,55 @@ pub struct Message {
 }
 
 impl Message {
-    pub fn system(content: impl Into<String>) -> Self {
+    fn from_parts(
+        role: impl Into<String>,
+        content: Vec<ContentBlock>,
+        tool_call_id: Option<ToolCallId>,
+        tool_calls: Vec<ToolCall>,
+    ) -> Self {
+        let content_text = content
+            .iter()
+            .filter_map(|block| match block {
+                ContentBlock::Text(text) => Some(text.as_str()),
+                ContentBlock::File(_) => None,
+            })
+            .collect::<Vec<&str>>()
+            .join("\n");
         Self {
-            role: "system".into(),
-            content: content.into(),
-            tool_call_id: None,
-            tool_calls: Vec::new(),
+            role: role.into(),
+            content,
+            content_text,
+            tool_call_id,
+            tool_calls,
         }
+    }
+
+    pub fn system(content: impl Into<String>) -> Self {
+        Self::from_parts("system", vec![ContentBlock::Text(content.into())], None, Vec::new())
     }
 
     pub fn user(content: impl Into<String>) -> Self {
-        Self {
-            role: "user".into(),
-            content: content.into(),
-            tool_call_id: None,
-            tool_calls: Vec::new(),
-        }
+        Self::from_parts("user", vec![ContentBlock::Text(content.into())], None, Vec::new())
     }
 
     pub fn assistant(content: impl Into<String>) -> Self {
-        Self {
-            role: "assistant".into(),
-            content: content.into(),
-            tool_call_id: None,
-            tool_calls: Vec::new(),
-        }
+        Self::from_parts(
+            "assistant",
+            vec![ContentBlock::Text(content.into())],
+            None,
+            Vec::new(),
+        )
     }
 
     /// Build a `tool` message that delivers `content` as the result of
     /// the tool call with id `tool_call_id`.
     pub fn tool_result(tool_call_id: ToolCallId, content: impl Into<String>) -> Self {
-        Self {
-            role: "tool".into(),
-            content: content.into(),
-            tool_call_id: Some(tool_call_id),
-            tool_calls: Vec::new(),
-        }
+        Self::from_parts(
+            "tool",
+            vec![ContentBlock::Text(content.into())],
+            Some(tool_call_id),
+            Vec::new(),
+        )
     }
 
     /// Construct an assistant message that calls one or more tools.
@@ -108,19 +315,32 @@ impl Message {
         content: impl Into<String>,
         tool_calls: Vec<ToolCall>,
     ) -> Self {
-        Self {
-            role: "assistant".into(),
-            content: content.into(),
-            tool_call_id: None,
+        Self::from_parts(
+            "assistant",
+            vec![ContentBlock::Text(content.into())],
+            None,
             tool_calls,
-        }
+        )
+    }
+
+    /// Build a `user` message from explicit content blocks (e.g. text
+    /// plus file blocks for image inputs).
+    pub fn user_with_blocks(blocks: Vec<ContentBlock>) -> Self {
+        Self::from_parts("user", blocks, None, Vec::new())
     }
 
     pub fn role(&self) -> &str {
         &self.role
     }
 
+    /// Aggregated text of the message: all `Text` blocks joined with
+    /// `\n`, or the empty string when there are no text blocks.
     pub fn content(&self) -> &str {
+        &self.content_text
+    }
+
+    /// The message's content blocks, in order.
+    pub fn blocks(&self) -> &[ContentBlock] {
         &self.content
     }
 
@@ -130,6 +350,25 @@ impl Message {
 
     pub fn tool_calls(&self) -> &[ToolCall] {
         &self.tool_calls
+    }
+}
+
+impl<'de> serde::Deserialize<'de> for Message {
+    fn deserialize<D: serde::Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+        #[derive(serde::Deserialize)]
+        struct Raw {
+            role: String,
+            content: Vec<ContentBlock>,
+            tool_call_id: Option<ToolCallId>,
+            tool_calls: Vec<ToolCall>,
+        }
+        let raw = Raw::deserialize(deserializer)?;
+        Ok(Self::from_parts(
+            raw.role,
+            raw.content,
+            raw.tool_call_id,
+            raw.tool_calls,
+        ))
     }
 }
 
@@ -722,5 +961,107 @@ mod tests {
     fn stream_event_done_predicate() {
         assert!(AgentStreamEvent::Done { stop_reason: None }.is_done());
         assert!(!AgentStreamEvent::ContentDelta("hi".into()).is_done());
+    }
+
+    #[test]
+    fn content_block_text_roundtrips() {
+        let value = json!({ "type": "text", "text": "hi" });
+        let block: ContentBlock = serde_json::from_value(value.clone()).unwrap();
+        assert_eq!(block, ContentBlock::Text("hi".into()));
+        assert_eq!(serde_json::to_value(&block).unwrap(), value);
+    }
+
+    #[test]
+    fn content_block_file_data_roundtrips() {
+        let value = json!({
+            "type": "file",
+            "media_type": "image/png",
+            "source": { "type": "data", "base64": "iVBORw0KGgo=" },
+            "filename": "pic.png",
+        });
+        let block: ContentBlock = serde_json::from_value(value.clone()).unwrap();
+        let ContentBlock::File(file) = &block else {
+            panic!("expected file block");
+        };
+        assert_eq!(file.media_type(), "image/png");
+        assert_eq!(file.source().base64(), Some("iVBORw0KGgo="));
+        assert_eq!(file.source().url(), None);
+        assert_eq!(file.filename(), Some("pic.png"));
+        assert_eq!(serde_json::to_value(&block).unwrap(), value);
+    }
+
+    #[test]
+    fn content_block_file_url_roundtrips() {
+        let value = json!({
+            "type": "file",
+            "media_type": "image/jpeg",
+            "source": { "type": "url", "url": "refs/photo.jpg" },
+        });
+        let block: ContentBlock = serde_json::from_value(value.clone()).unwrap();
+        let ContentBlock::File(file) = &block else {
+            panic!("expected file block");
+        };
+        assert_eq!(file.source().url(), Some("refs/photo.jpg"));
+        assert_eq!(file.source().base64(), None);
+        assert_eq!(file.filename(), None);
+        assert_eq!(serde_json::to_value(&block).unwrap(), value);
+    }
+
+    #[test]
+    fn file_data_constructor_builds_data_source() {
+        let file = FileContentBlock::data("image/png", "AAAA");
+        assert_eq!(file.media_type(), "image/png");
+        assert_eq!(file.source().base64(), Some("AAAA"));
+        assert_eq!(file.filename(), None);
+    }
+
+    #[test]
+    fn content_aggregates_text_blocks() {
+        let message = Message::user_with_blocks(vec![
+            ContentBlock::Text("first".into()),
+            ContentBlock::File(FileContentBlock::data("image/png", "AAAA")),
+            ContentBlock::Text("second".into()),
+        ]);
+        assert_eq!(message.content(), "first\nsecond");
+        assert_eq!(message.blocks().len(), 3);
+    }
+
+    #[test]
+    fn content_without_text_blocks_is_empty() {
+        let message = Message::user_with_blocks(vec![ContentBlock::File(
+            FileContentBlock::data("image/png", "AAAA"),
+        )]);
+        assert_eq!(message.content(), "");
+        assert_eq!(message.blocks().len(), 1);
+    }
+
+    #[test]
+    fn user_with_blocks_builds_user_message() {
+        let message = Message::user_with_blocks(vec![ContentBlock::Text("hi".into())]);
+        assert_eq!(message.role(), "user");
+        assert_eq!(message.blocks(), &[ContentBlock::Text("hi".into())]);
+    }
+
+    #[test]
+    fn message_roundtrips_content_blocks() {
+        let message = Message::user_with_blocks(vec![
+            ContentBlock::Text("describe".into()),
+            ContentBlock::File(FileContentBlock::data("image/png", "AAAA")),
+        ]);
+        let value = serde_json::to_value(&message).unwrap();
+        let restored: Message = serde_json::from_value(value).unwrap();
+        assert_eq!(restored, message);
+        assert_eq!(restored.content(), "describe");
+        assert_eq!(restored.blocks().len(), 2);
+    }
+
+    #[test]
+    fn old_string_content_format_fails_to_deserialize() {
+        // Development-period format change: the V1 `{"content":"hi"}`
+        // string shape is intentionally not supported anymore.
+        let result = serde_json::from_str::<Message>(
+            r#"{"role":"user","content":"hi","tool_call_id":null,"tool_calls":[]}"#,
+        );
+        assert!(result.is_err());
     }
 }

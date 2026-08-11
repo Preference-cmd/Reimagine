@@ -43,7 +43,8 @@ pub use permissions::{PermissionSet, ToolPermission, ToolRiskLevel};
 pub use policy::{PolicyDecision, PolicyDenialReason, ToolPolicy};
 pub use provider::{
     AgentProvider, AgentRequest, AgentResponse, AgentStream, AgentStreamEvent, AgentToolDefinition,
-    Message, ModelCapability, ModelCost, ModelInfo, ToolCall, ToolCallId, Usage,
+    ContentBlock, FileContentBlock, FileSource, Message, ModelCapability, ModelCost, ModelInfo,
+    ToolCall, ToolCallId, Usage,
 };
 pub use registry::{AgentToolRegistry, ToolRegistryError};
 pub use report::{AgentReport, ToolInvocationReport};

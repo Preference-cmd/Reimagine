@@ -15,7 +15,15 @@ use std::path::PathBuf;
 
 use serde::{Deserialize, Serialize};
 
-use crate::provider::Message;
+use crate::provider::{ContentBlock, Message};
+
+/// Pre-budget token estimate for a single image file block. This is a
+/// planning-time figure only — the provider's reported `Usage` is the
+/// source of truth for actual consumption.
+const IMAGE_TOKENS_PER_BLOCK: usize = 1024;
+
+/// Pre-budget fallback for non-image file blocks (audio, video, ...).
+const OTHER_FILE_TOKENS_PER_BLOCK: usize = 256;
 
 /// Serialized snapshot of a session's context written by
 /// [`ContextManager::persist`] and read back by
@@ -113,7 +121,7 @@ impl ContextManager {
     pub fn token_count(&self) -> usize {
         self.history
             .iter()
-            .map(|message| estimate_tokens(message.content()))
+            .map(estimate_message_tokens)
             .sum()
     }
 
@@ -168,6 +176,24 @@ fn created_at() -> String {
         .to_string()
 }
 
+/// Estimate the token count of a message from its content blocks: text
+/// blocks use the character heuristic below, file blocks use fixed
+/// per-block budgets ([`IMAGE_TOKENS_PER_BLOCK`] for images,
+/// [`OTHER_FILE_TOKENS_PER_BLOCK`] otherwise).
+fn estimate_message_tokens(message: &Message) -> usize {
+    message
+        .blocks()
+        .iter()
+        .map(|block| match block {
+            ContentBlock::Text(text) => estimate_tokens(text),
+            ContentBlock::File(file) if file.media_type().starts_with("image/") => {
+                IMAGE_TOKENS_PER_BLOCK
+            }
+            ContentBlock::File(_) => OTHER_FILE_TOKENS_PER_BLOCK,
+        })
+        .sum()
+}
+
 /// Estimate the token count of `text`.
 ///
 /// Counting is character-based (`chars().count()`), so multi-byte
@@ -185,7 +211,7 @@ mod tests {
     use super::*;
     use serde_json::json;
 
-    use crate::provider::{ToolCall, ToolCallId};
+    use crate::provider::{ContentBlock, FileContentBlock, ToolCall, ToolCallId};
 
     fn config(recent_turns: usize) -> ContextConfig {
         ContextConfig {
@@ -309,6 +335,34 @@ mod tests {
     }
 
     #[test]
+    fn image_block_counts_fixed_budget() {
+        let mut manager = ContextManager::new(config(2));
+        manager.commit_turn(&[Message::user_with_blocks(vec![
+            ContentBlock::Text("look".into()),
+            ContentBlock::File(FileContentBlock::data("image/png", "AAAA")),
+        ])]);
+        // "look": 4 chars -> 1 + 4 overhead; plus the image budget.
+        assert_eq!(manager.token_count(), 5 + IMAGE_TOKENS_PER_BLOCK);
+    }
+
+    #[test]
+    fn non_image_file_block_counts_fallback_budget() {
+        let mut manager = ContextManager::new(config(2));
+        manager.commit_turn(&[Message::user_with_blocks(vec![ContentBlock::File(
+            FileContentBlock::data("audio/mpeg", "AAAA"),
+        )])]);
+        // No text block -> no character estimate; only the fallback.
+        assert_eq!(manager.token_count(), OTHER_FILE_TOKENS_PER_BLOCK);
+    }
+
+    #[test]
+    fn text_only_history_is_unchanged_by_blocks_path() {
+        let mut manager = ContextManager::new(config(2));
+        manager.commit_turn(&[Message::user("a"), Message::assistant("b")]);
+        assert_eq!(manager.token_count(), 8);
+    }
+
+    #[test]
     fn arabic_counts_as_other() {
         assert_eq!(estimate_tokens("مرحبا بالعالم"), 7);
     }
@@ -356,6 +410,57 @@ mod tests {
         .expect("load failed");
         assert_eq!(loaded.token_count(), manager.token_count());
         assert_eq!(loaded.history, manager.history);
+    }
+
+    #[test]
+    fn persist_round_trips_file_blocks() {
+        let dir = temp_session_dir("file-blocks");
+        let cfg = ContextConfig {
+            max_tokens: 10_000,
+            recent_turns: 2,
+            session_dir: dir.clone(),
+        };
+        let mut manager = ContextManager::new(cfg);
+        manager.commit_turn(&[Message::user_with_blocks(vec![
+            ContentBlock::Text("describe".into()),
+            ContentBlock::File(FileContentBlock::data("image/png", "AAAA")),
+        ])]);
+        manager.persist("sess-1").expect("persist failed");
+
+        let loaded = ContextManager::load(
+            "sess-1",
+            ContextConfig {
+                max_tokens: 10_000,
+                recent_turns: 2,
+                session_dir: dir,
+            },
+        )
+        .expect("load failed");
+        assert_eq!(loaded.history, manager.history);
+        assert_eq!(loaded.token_count(), manager.token_count());
+    }
+
+    #[test]
+    fn load_old_string_content_format_fails() {
+        // Development-period format change: files written with the V1
+        // `content` string fail to load and must be skipped by callers
+        // (the daemon's resume path already logs and skips).
+        let dir = temp_session_dir("old-format");
+        std::fs::create_dir_all(&dir).expect("mkdir failed");
+        std::fs::write(
+            dir.join("sess-1.json"),
+            r#"{"session_id":"sess-1","created_at":"0","history":[{"role":"user","content":"hi"}],"compaction_summary":null,"total_tokens":4}"#,
+        )
+        .expect("write failed");
+        let result = ContextManager::load(
+            "sess-1",
+            ContextConfig {
+                max_tokens: 10_000,
+                recent_turns: 2,
+                session_dir: dir,
+            },
+        );
+        assert!(result.is_err());
     }
 
     #[test]
