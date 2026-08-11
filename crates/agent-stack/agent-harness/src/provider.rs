@@ -87,6 +87,17 @@ impl FileContentBlock {
         }
     }
 
+    /// Build a file block referencing a workspace-relative path or URL.
+    /// Concrete adapters resolve the reference into an inline base64
+    /// payload before wire translation.
+    pub fn url(media_type: impl Into<String>, url: impl Into<String>) -> Self {
+        Self {
+            media_type: media_type.into(),
+            source: FileSource::Url(url.into()),
+            filename: None,
+        }
+    }
+
     pub fn media_type(&self) -> &str {
         &self.media_type
     }
@@ -97,6 +108,14 @@ impl FileContentBlock {
 
     pub fn filename(&self) -> Option<&str> {
         self.filename.as_deref()
+    }
+
+    /// Replace the source, keeping `media_type` and `filename`. Used by
+    /// adapters to resolve workspace-relative `Url` sources into inline
+    /// base64 payloads before wire translation.
+    pub fn with_source(mut self, source: FileSource) -> Self {
+        self.source = source;
+        self
     }
 }
 
@@ -259,20 +278,26 @@ pub struct Message {
 }
 
 impl Message {
-    fn from_parts(
-        role: impl Into<String>,
-        content: Vec<ContentBlock>,
-        tool_call_id: Option<ToolCallId>,
-        tool_calls: Vec<ToolCall>,
-    ) -> Self {
-        let content_text = content
+    /// Aggregated text of the given blocks: all `Text` blocks joined
+    /// with `\n`, or the empty string when there are no text blocks.
+    fn aggregate_text(blocks: &[ContentBlock]) -> String {
+        blocks
             .iter()
             .filter_map(|block| match block {
                 ContentBlock::Text(text) => Some(text.as_str()),
                 ContentBlock::File(_) => None,
             })
             .collect::<Vec<&str>>()
-            .join("\n");
+            .join("\n")
+    }
+
+    fn from_parts(
+        role: impl Into<String>,
+        content: Vec<ContentBlock>,
+        tool_call_id: Option<ToolCallId>,
+        tool_calls: Vec<ToolCall>,
+    ) -> Self {
+        let content_text = Self::aggregate_text(&content);
         Self {
             role: role.into(),
             content,
@@ -342,6 +367,16 @@ impl Message {
     /// The message's content blocks, in order.
     pub fn blocks(&self) -> &[ContentBlock] {
         &self.content
+    }
+
+    /// Replace the content blocks, preserving role, `tool_call_id`, and
+    /// tool calls. Recomputes the cached text aggregation. Used by
+    /// adapters that rewrite file block sources before wire
+    /// translation.
+    pub fn with_blocks(mut self, blocks: Vec<ContentBlock>) -> Self {
+        self.content_text = Self::aggregate_text(&blocks);
+        self.content = blocks;
+        self
     }
 
     pub fn tool_call_id(&self) -> Option<&ToolCallId> {
@@ -1013,6 +1048,47 @@ mod tests {
         assert_eq!(file.media_type(), "image/png");
         assert_eq!(file.source().base64(), Some("AAAA"));
         assert_eq!(file.filename(), None);
+    }
+
+    #[test]
+    fn file_url_constructor_builds_url_source() {
+        let file = FileContentBlock::url("image/png", "refs/pic.png");
+        assert_eq!(file.media_type(), "image/png");
+        assert_eq!(file.source().url(), Some("refs/pic.png"));
+        assert_eq!(file.source().base64(), None);
+    }
+
+    #[test]
+    fn file_with_source_replaces_source_keeping_metadata() {
+        let file = FileContentBlock::data("image/png", "AAAA").with_source(FileSource::Url(
+            "refs/pic.png".to_string(),
+        ));
+        assert_eq!(file.source().url(), Some("refs/pic.png"));
+        let file = file.with_source(FileSource::Data {
+            base64: "BBBB".to_string(),
+        });
+        assert_eq!(file.media_type(), "image/png");
+        assert_eq!(file.source().base64(), Some("BBBB"));
+    }
+
+    #[test]
+    fn message_with_blocks_replaces_blocks_and_recomputes_text() {
+        let message = Message::user_with_blocks(vec![
+            ContentBlock::Text("first".into()),
+            ContentBlock::File(FileContentBlock::data("image/png", "AAAA")),
+        ]);
+        assert_eq!(message.content(), "first");
+        let replaced = message.with_blocks(vec![
+            ContentBlock::Text("third".into()),
+            ContentBlock::File(FileContentBlock::data("image/png", "BBBB")),
+        ]);
+        assert_eq!(replaced.role(), "user");
+        assert_eq!(replaced.content(), "third");
+        assert_eq!(replaced.blocks().len(), 2);
+        let ContentBlock::File(file) = &replaced.blocks()[1] else {
+            panic!("expected file block");
+        };
+        assert_eq!(file.source().base64(), Some("BBBB"));
     }
 
     #[test]

@@ -244,7 +244,11 @@ impl WorkspaceHostBuilder {
                 document
             }
         };
-        let (registered, errors) = crate::register_providers_from_document(&providers, &provider_document);
+        let (registered, errors) = crate::register_providers_from_document(
+            &providers,
+            &provider_document,
+            Some(&self.base_path),
+        );
         if !registered.is_empty() {
             tracing::info!(
                 providers = ?registered.iter().map(|p| p.as_str()).collect::<Vec<_>>(),

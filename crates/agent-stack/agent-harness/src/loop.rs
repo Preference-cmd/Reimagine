@@ -19,10 +19,10 @@ use serde_json::{Value, json};
 
 use crate::context::ToolContext;
 use crate::context_manager::ContextManager;
-use crate::error::{ToolError, ToolErrorCode};
+use crate::error::{ProviderError, ToolError, ToolErrorCode};
 use crate::event::AgentEvent;
-use crate::ids::ToolName;
-use crate::provider::{AgentProvider, AgentRequest, AgentToolDefinition, Message};
+use crate::ids::{ModelName, ToolName};
+use crate::provider::{AgentProvider, AgentRequest, AgentToolDefinition, ContentBlock, Message};
 use crate::registry::{AgentToolRegistry, ToolRegistryError};
 use crate::turn::{
     AgentTurnRequest, AgentTurnResult, AgentTurnStatus, AgentTurnStopReason, ToolCallResult,
@@ -190,6 +190,26 @@ impl AgentLoop {
         }
         let tool_defs = build_tool_definitions(&registry, request.session().mode());
 
+        // Modality gate (PV-03b): image file blocks require a model that
+        // advertises image input support. Best-effort — models missing
+        // from the provider listing are allowed through.
+        if let Err(err) = enforce_image_modality_gate(
+            self.provider.as_ref(),
+            request.model(),
+            &image_media_types(&messages),
+        )
+        .await
+        {
+            return self.stop_with_provider_error(
+                &request,
+                result,
+                &mut context,
+                &messages,
+                pre_run_len,
+                err,
+            );
+        }
+
         let max_tool_steps = request.max_tool_steps();
         let mut tool_steps_taken: usize = 0;
         let turn_start = std::time::Instant::now();
@@ -223,20 +243,14 @@ impl AgentLoop {
             let response = match self.provider.complete(provider_request).await {
                 Ok(r) => r,
                 Err(err) => {
-                    let provider_name = request.session().provider().clone();
-                    result.push_diagnostic(err.to_diagnostic(None));
-                    self.sink.handle(&AgentEvent::ProviderError {
-                        session_id: request.session().id().clone(),
-                        provider: provider_name,
-                        code: err.code().to_string(),
-                        message: err.message().to_string(),
-                    });
-                    result = result
-                        .with_stop_reason(AgentTurnStopReason::ProviderError)
-                        .with_status(AgentTurnStatus::Stopped)
-                        .with_messages(messages.clone());
-                    commit_turn_history(&mut context, request.session(), &messages, pre_run_len);
-                    return result;
+                    return self.stop_with_provider_error(
+                        &request,
+                        result,
+                        &mut context,
+                        &messages,
+                        pre_run_len,
+                        err,
+                    );
                 }
             };
 
@@ -378,6 +392,26 @@ impl AgentLoop {
         }
         let tool_defs = build_tool_definitions(&registry, request.session().mode());
 
+        // Modality gate (PV-03b): image file blocks require a model that
+        // advertises image input support. Best-effort — models missing
+        // from the provider listing are allowed through.
+        if let Err(err) = enforce_image_modality_gate(
+            self.provider.as_ref(),
+            request.model(),
+            &image_media_types(&messages),
+        )
+        .await
+        {
+            return self.stop_with_provider_error(
+                &request,
+                result,
+                &mut context,
+                &messages,
+                pre_run_len,
+                err,
+            );
+        }
+
         let max_tool_steps = request.max_tool_steps();
         let mut tool_steps_taken: usize = 0;
         let turn_start = std::time::Instant::now();
@@ -412,20 +446,14 @@ impl AgentLoop {
             let mut stream = match self.provider.stream(provider_request).await {
                 Ok(s) => s,
                 Err(err) => {
-                    let provider_name = request.session().provider().clone();
-                    result.push_diagnostic(err.to_diagnostic(None));
-                    self.sink.handle(&AgentEvent::ProviderError {
-                        session_id: request.session().id().clone(),
-                        provider: provider_name,
-                        code: err.code().to_string(),
-                        message: err.message().to_string(),
-                    });
-                    result = result
-                        .with_stop_reason(AgentTurnStopReason::ProviderError)
-                        .with_status(AgentTurnStatus::Stopped)
-                        .with_messages(messages.clone());
-                    commit_turn_history(&mut context, request.session(), &messages, pre_run_len);
-                    return result;
+                    return self.stop_with_provider_error(
+                        &request,
+                        result,
+                        &mut context,
+                        &messages,
+                        pre_run_len,
+                        err,
+                    );
                 }
             };
 
@@ -550,6 +578,35 @@ impl AgentLoop {
         }
     }
 
+    /// Stop the turn with a provider-level failure: record the
+    /// diagnostic, emit the `ProviderError` event, mark the turn
+    /// stopped, and commit the messages seen so far. Shared by the
+    /// modality gate and provider call failures in both turn paths.
+    fn stop_with_provider_error(
+        &self,
+        request: &AgentTurnRequest,
+        mut result: AgentTurnResult,
+        context: &mut Option<&mut ContextManager>,
+        messages: &[Message],
+        pre_run_len: usize,
+        err: ProviderError,
+    ) -> AgentTurnResult {
+        let provider_name = request.session().provider().clone();
+        result.push_diagnostic(err.to_diagnostic(None));
+        self.sink.handle(&AgentEvent::ProviderError {
+            session_id: request.session().id().clone(),
+            provider: provider_name,
+            code: err.code().to_string(),
+            message: err.message().to_string(),
+        });
+        let result = result
+            .with_stop_reason(AgentTurnStopReason::ProviderError)
+            .with_status(AgentTurnStatus::Stopped)
+            .with_messages(messages.to_vec());
+        commit_turn_history(context, request.session(), messages, pre_run_len);
+        result
+    }
+
     /// Execute a single tool call through the registry, translating
     /// every registry error into the appropriate `ToolCallResult`
     /// shape and emitting the matching `AgentEvent`.
@@ -635,6 +692,68 @@ impl AgentLoop {
             message: err.message().to_string(),
         });
     }
+}
+
+/// Media types of the `image/*` file blocks present in `messages`,
+/// deduplicated and sorted. Empty when the turn carries no image
+/// blocks.
+fn image_media_types(messages: &[Message]) -> Vec<String> {
+    let mut out: Vec<String> = Vec::new();
+    for m in messages {
+        for block in m.blocks() {
+            if let ContentBlock::File(file) = block
+                && file.media_type().starts_with("image/")
+            {
+                out.push(file.media_type().to_string());
+            }
+        }
+    }
+    out.sort();
+    out.dedup();
+    out
+}
+
+/// Modality gate (PV-03b): when a turn's messages carry `image/*` file
+/// blocks, the selected model must advertise image input support.
+///
+/// The provider's model list is the capability source. Best-effort by
+/// design: when the model cannot be found in the listing (custom model
+/// names, listing failures), the request is allowed through so custom /
+/// unlisted models never get blocked.
+async fn enforce_image_modality_gate(
+    provider: &dyn AgentProvider,
+    model: &ModelName,
+    media_types: &[String],
+) -> Result<(), ProviderError> {
+    if media_types.is_empty() {
+        return Ok(());
+    }
+    let models = match provider.list_models().await {
+        Ok(models) => models,
+        // Best-effort: a listing failure must never block an image
+        // request from reaching a provider that may support it.
+        Err(_) => return Ok(()),
+    };
+    let Some(info) = models.iter().find(|m| m.name() == model) else {
+        // Best-effort: custom / unlisted model names are allowed
+        // through when the capability cannot be verified.
+        return Ok(());
+    };
+    let supports_image = info
+        .input_modalities()
+        .iter()
+        .any(|m| m == "image" || m.starts_with("image/"));
+    if supports_image {
+        return Ok(());
+    }
+    Err(ProviderError::new(
+        "MODALITY_UNSUPPORTED",
+        format!(
+            "model `{model}` does not support image input (modalities: {:?}); \
+             image file blocks with media types {media_types:?} cannot be sent",
+            info.input_modalities()
+        ),
+    ))
 }
 
 /// Append the messages produced during this turn to the session's
@@ -736,7 +855,8 @@ mod tests {
     use crate::mode::AgentMode;
     use crate::permissions::{PermissionSet, ToolPermission, ToolRiskLevel};
     use crate::provider::{
-        AgentResponse, AgentStream, AgentStreamEvent, ModelInfo, ToolCall, ToolCallId, Usage,
+        AgentResponse, AgentStream, AgentStreamEvent, FileContentBlock, ModelInfo, ToolCall,
+        ToolCallId, Usage,
     };
     use crate::session::AgentSession;
     use crate::tool::{AgentTool, ToolResult, ToolSpec};
@@ -2133,5 +2253,186 @@ mod tests {
         let prepared = loaded.prepare_messages("", &[Message::user("u6")]);
         let contents: Vec<String> = prepared.iter().map(|m| m.content().to_string()).collect();
         assert_eq!(contents, vec!["", "u4", "done", "u5", "done", "u6"]);
+    }
+
+    // ----- image modality gate (PV-03b) -----
+
+    struct ModelsProvider {
+        name: ProviderName,
+        models: Mutex<Vec<ModelInfo>>,
+        list_calls: Mutex<usize>,
+        fail_listing: Mutex<bool>,
+    }
+
+    impl ModelsProvider {
+        fn with_models(models: Vec<ModelInfo>) -> Self {
+            Self {
+                name: ProviderName::new("models"),
+                models: Mutex::new(models),
+                list_calls: Mutex::new(0),
+                fail_listing: Mutex::new(false),
+            }
+        }
+    }
+
+    #[async_trait]
+    impl AgentProvider for ModelsProvider {
+        fn name(&self) -> ProviderName {
+            self.name.clone()
+        }
+
+        async fn complete(&self, _request: AgentRequest) -> Result<AgentResponse, ProviderError> {
+            unreachable!("gate tests never complete")
+        }
+
+        async fn stream(
+            &self,
+            _request: AgentRequest,
+        ) -> Result<Box<dyn AgentStream>, ProviderError> {
+            unreachable!("gate tests never stream")
+        }
+
+        async fn list_models(&self) -> Result<Vec<ModelInfo>, ProviderError> {
+            *self.list_calls.lock().unwrap() += 1;
+            if *self.fail_listing.lock().unwrap() {
+                return Err(ProviderError::new(
+                    "list_failed",
+                    "models endpoint unreachable",
+                ));
+            }
+            Ok(self.models.lock().unwrap().clone())
+        }
+    }
+
+    fn image_input_messages() -> Vec<Message> {
+        vec![Message::user_with_blocks(vec![
+            ContentBlock::Text("describe".into()),
+            ContentBlock::File(FileContentBlock::data("image/png", "AAAA")),
+        ])]
+    }
+
+    #[test]
+    fn image_media_types_collects_deduped_media_types() {
+        let messages = vec![
+            Message::user_with_blocks(vec![
+                ContentBlock::Text("a".into()),
+                ContentBlock::File(FileContentBlock::data("image/png", "AAAA")),
+            ]),
+            Message::user_with_blocks(vec![
+                ContentBlock::File(FileContentBlock::data("image/png", "BBBB")),
+                ContentBlock::File(FileContentBlock::data("image/jpeg", "CCCC")),
+                ContentBlock::File(FileContentBlock::data("audio/mpeg", "DDDD")),
+            ]),
+        ];
+        assert_eq!(
+            image_media_types(&messages),
+            vec!["image/jpeg".to_string(), "image/png".to_string()]
+        );
+        assert!(image_media_types(&[Message::user("plain")]).is_empty());
+    }
+
+    #[tokio::test]
+    async fn image_modality_gate_allows_models_with_image_input() {
+        let provider = ModelsProvider::with_models(vec![
+            ModelInfo::new(ModelName::new("vision-1"))
+                .with_input_modalities(["text".to_string(), "image".to_string()]),
+        ]);
+        let result = enforce_image_modality_gate(
+            &provider,
+            &ModelName::new("vision-1"),
+            &["image/png".to_string()],
+        )
+        .await;
+        assert!(result.is_ok());
+        assert_eq!(*provider.list_calls.lock().unwrap(), 1);
+    }
+
+    #[tokio::test]
+    async fn image_modality_gate_allows_image_prefix_modalities() {
+        let provider = ModelsProvider::with_models(vec![
+            ModelInfo::new(ModelName::new("m"))
+                .with_input_modalities(["text".to_string(), "image/*".to_string()]),
+        ]);
+        let result = enforce_image_modality_gate(
+            &provider,
+            &ModelName::new("m"),
+            &["image/png".to_string()],
+        )
+        .await;
+        assert!(result.is_ok());
+    }
+
+    #[tokio::test]
+    async fn image_modality_gate_rejects_models_without_image_input() {
+        let provider = ModelsProvider::with_models(vec![
+            ModelInfo::new(ModelName::new("text-1")).with_input_modalities(["text".to_string()]),
+        ]);
+        let err = enforce_image_modality_gate(
+            &provider,
+            &ModelName::new("text-1"),
+            &["image/png".to_string()],
+        )
+        .await
+        .expect_err("must reject");
+        assert_eq!(err.code(), "MODALITY_UNSUPPORTED");
+        assert!(err.message().contains("text-1"), "{}", err.message());
+        assert!(err.message().contains("image/png"), "{}", err.message());
+    }
+
+    #[tokio::test]
+    async fn image_modality_gate_allows_unlisted_models() {
+        let provider = ModelsProvider::with_models(vec![ModelInfo::new(ModelName::new("other"))]);
+        let result = enforce_image_modality_gate(
+            &provider,
+            &ModelName::new("custom-model"),
+            &["image/png".to_string()],
+        )
+        .await;
+        assert!(result.is_ok());
+    }
+
+    #[tokio::test]
+    async fn image_modality_gate_allows_when_listing_fails() {
+        let provider = ModelsProvider::with_models(Vec::new());
+        *provider.fail_listing.lock().unwrap() = true;
+        let result = enforce_image_modality_gate(
+            &provider,
+            &ModelName::new("x"),
+            &["image/png".to_string()],
+        )
+        .await;
+        assert!(result.is_ok());
+    }
+
+    #[tokio::test]
+    async fn image_modality_gate_skips_listing_without_image_blocks() {
+        let provider = ModelsProvider::with_models(Vec::new());
+        let result = enforce_image_modality_gate(&provider, &ModelName::new("x"), &[]).await;
+        assert!(result.is_ok());
+        assert_eq!(*provider.list_calls.lock().unwrap(), 0);
+    }
+
+    #[tokio::test]
+    async fn run_turn_stops_with_provider_error_when_model_lacks_image_support() {
+        let provider = Arc::new(ModelsProvider::with_models(vec![
+            ModelInfo::new(ModelName::new("text-model"))
+                .with_input_modalities(["text".to_string()]),
+        ]));
+        let sink = Arc::new(VecAgentEventSink::new());
+        let loop_harness = AgentLoop::new(provider, sink.clone());
+
+        let req = AgentTurnRequest::new(
+            make_session(AgentToolRegistry::new()),
+            AgentTurnId::new("turn-img"),
+            ModelName::new("text-model"),
+            image_input_messages(),
+        );
+
+        let result = loop_harness.run_turn(req, None).await;
+        assert_eq!(result.status(), AgentTurnStatus::Stopped);
+        assert_eq!(result.stop_reason(), AgentTurnStopReason::ProviderError);
+        assert_eq!(result.diagnostics().len(), 1);
+        assert_eq!(sink.events().len(), 1);
+        assert!(matches!(sink.events()[0], AgentEvent::ProviderError { .. }));
     }
 }

@@ -1,4 +1,5 @@
 use std::collections::BTreeMap;
+use std::path::Path;
 use std::sync::{Arc, RwLock};
 
 use reimagine_agent_harness::{AgentProvider, ProviderName};
@@ -83,8 +84,13 @@ impl AgentProviderCatalog {
 /// `reimagine-agent-provider` is constructed. Missing inner config is
 /// rejected with
 /// [`reimagine_agent_provider::ProviderAdapterError::MissingConfig`].
+///
+/// `workspace_dir`, when present, roots `FileSource::Url` resolution:
+/// file blocks referencing workspace-relative paths are read from the
+/// workspace and inlined as base64 before wire translation.
 pub fn build_provider(
     config: &ProviderConfig,
+    workspace_dir: Option<&Path>,
 ) -> Result<Arc<dyn AgentProvider>, reimagine_agent_provider::ProviderAdapterError> {
     use reimagine_agent_provider::{
         AnthropicMessagesProvider, OpenAiChatCompletionsProvider, OpenAiResponsesProvider,
@@ -98,7 +104,11 @@ pub fn build_provider(
                     protocol: Protocol::OpenAiChatCompletions,
                 }
             })?;
-            Ok(Arc::new(OpenAiChatCompletionsProvider::new(name, inner.clone())))
+            let provider = OpenAiChatCompletionsProvider::new(name, inner.clone());
+            Ok(Arc::new(match workspace_dir {
+                Some(dir) => provider.with_workspace_dir(dir),
+                None => provider,
+            }))
         }
         Protocol::AnthropicMessages => {
             let inner = config.anthropic_messages().ok_or_else(|| {
@@ -107,7 +117,11 @@ pub fn build_provider(
                     protocol: Protocol::AnthropicMessages,
                 }
             })?;
-            Ok(Arc::new(AnthropicMessagesProvider::new(name, inner.clone())))
+            let provider = AnthropicMessagesProvider::new(name, inner.clone());
+            Ok(Arc::new(match workspace_dir {
+                Some(dir) => provider.with_workspace_dir(dir),
+                None => provider,
+            }))
         }
         Protocol::OpenAiResponses => {
             let inner = config.openai_responses().ok_or_else(|| {
@@ -116,7 +130,11 @@ pub fn build_provider(
                     protocol: Protocol::OpenAiResponses,
                 }
             })?;
-            Ok(Arc::new(OpenAiResponsesProvider::new(name, inner.clone())))
+            let provider = OpenAiResponsesProvider::new(name, inner.clone());
+            Ok(Arc::new(match workspace_dir {
+                Some(dir) => provider.with_workspace_dir(dir),
+                None => provider,
+            }))
         }
     }
 }
@@ -127,14 +145,18 @@ pub fn build_provider(
 /// config is missing its inner typed section are skipped and reported in
 /// the returned error list; the remaining providers are still registered
 /// so a partial document never bricks the whole catalog.
+///
+/// `workspace_dir`, when present, roots `FileSource::Url` resolution
+/// for every registered provider.
 pub fn register_providers_from_document(
     catalog: &AgentProviderCatalog,
     document: &AgentProviderConfigDocument,
+    workspace_dir: Option<&Path>,
 ) -> (Vec<ProviderName>, Vec<String>) {
     let mut registered = Vec::new();
     let mut errors = Vec::new();
     for config in document.enabled() {
-        match build_provider(config) {
+        match build_provider(config, workspace_dir) {
             Ok(provider) => {
                 let name = catalog.register(provider);
                 registered.push(name);

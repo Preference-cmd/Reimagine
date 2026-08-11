@@ -858,7 +858,6 @@ fn timestamp_millis() -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use reimagine_agent_harness::FileContentBlock;
 
     fn parse(value: Value) -> Result<Vec<ContentBlock>, JsonRpcError> {
         turn_input_blocks(&value)
