@@ -151,7 +151,9 @@ impl std::error::Error for ContextError {
 pub struct ContextConfig {
     /// Token hard limit for the stored history.
     pub max_tokens: usize,
-    /// Rolling window: keep the most recent `recent_turns * 2` messages.
+    /// Rolling window: kept for V1 call-site compatibility. The
+    /// window is now driven by token budgets and `tail_turns`
+    /// (CM-V2b); this field has no effect.
     pub recent_turns: usize,
     /// Session persistence directory. Stored now for AS-03 session
     /// persistence; not used by the V1 context manager.
@@ -422,6 +424,22 @@ impl ContextManager {
             tail_start += 1;
         }
 
+        // The newest turn always survives the tail loop. Verbatim-tail
+        // protection wins over the soft window, but a turn that alone
+        // exceeds the hard limit (`max_tokens`) is cut at its first
+        // assistant message so the hard limit still holds (review M1
+        // fix).
+        let mut tail_cut: Option<(usize, usize)> = None;
+        if let Some(&newest_span) = turns.get(tail_start)
+            && self.span_tokens(sticky_end, &newest_span) > self.config.max_tokens
+            && let Some(off) = first_assistant_offset(&self.history[sticky_end..], newest_span)
+        {
+            let abs_start = sticky_end + newest_span.0;
+            tail_cut = Some((abs_start + off, abs_start + newest_span.1));
+            let removed = self.span_tokens(sticky_end, &(newest_span.0 + off, newest_span.1 - off));
+            tail_tokens = tail_tokens.saturating_sub(removed);
+        }
+
         // Middle window: newest-to-oldest turns between the sticky
         // prefix and the tail, filling the remaining budget.
         let mut middle_budget = window_budget.saturating_sub(sticky_tokens + tail_tokens);
@@ -454,8 +472,12 @@ impl ContextManager {
             }
         }
 
-        // Apply the oversized cut first (it lies inside the keep
-        // region), then evict everything before the keep region.
+        // Apply the cuts before eviction: both lie inside the keep
+        // region, so the eviction range in front of them is unaffected
+        // by the length change.
+        if let Some((cut_start, cut_end)) = tail_cut {
+            self.history.drain(cut_start..cut_end);
+        }
         if let Some((cut_start, cut_end)) = oversized_cut {
             self.history.drain(cut_start..cut_end);
         }
@@ -484,12 +506,21 @@ impl ContextManager {
     /// is reached. Replaced outputs keep their `tool_call_id` so
     /// tool-call↔result pairing is preserved.
     fn prune_old_tool_outputs(&mut self) {
-        let tool_tokens: usize = self
-            .history
+        let sticky_end = self.sticky_count.min(self.history.len());
+        let turns = turn_spans(&self.history[sticky_end..]);
+        let tail_start = turns
+            .len()
+            .saturating_sub(self.config.tail_turns.max(1));
+
+        // Only the tool outputs outside the verbatim tail count toward
+        // the threshold: the tail is never pruned.
+        let tool_tokens: usize = turns[..tail_start]
             .iter()
-            .map(|m| {
-                if m.role() == "tool" {
-                    self.estimator.estimate_message(m)
+            .flat_map(|span| span.0..span.0 + span.1)
+            .map(|idx| {
+                let message = &self.history[sticky_end + idx];
+                if message.role() == "tool" {
+                    self.estimator.estimate_message(message)
                 } else {
                     0
                 }
@@ -498,12 +529,6 @@ impl ContextManager {
         if tool_tokens <= self.config.prune_threshold_tokens {
             return;
         }
-
-        let sticky_end = self.sticky_count.min(self.history.len());
-        let turns = turn_spans(&self.history[sticky_end..]);
-        let tail_start = turns
-            .len()
-            .saturating_sub(self.config.tail_turns.max(1));
 
         let placeholder = Message::tool_result(
             crate::provider::ToolCallId::new("pruned"),
@@ -1015,9 +1040,9 @@ mod tests {
 
     #[test]
     fn prune_replaces_old_tool_outputs_keeping_ids() {
-        // threshold 300 < 5 tool outputs (~395 tokens) -> prune to ~100.
+        // threshold 200 < 3 old tool outputs (~237 tokens) -> prune.
         let mut manager = ContextManager::new(ContextConfig {
-            prune_threshold_tokens: 300,
+            prune_threshold_tokens: 200,
             prune_target_tokens: 100,
             ..window_config(10_000, 2_000, 2)
         });
@@ -1072,6 +1097,67 @@ mod tests {
         let history: Vec<Message> = messages[1..].to_vec();
         assert!(history.iter().any(|m| m.content().starts_with("huge:")));
         assert!(!history.iter().any(|m| m.content() == "b".repeat(16_000)));
+    }
+
+    #[test]
+    fn newest_turn_alone_over_budget_is_cut_at_assistant() {
+        // Review M1 fix: the newest turn survives the tail loop even
+        // when it alone exceeds the window budget; a turn beyond the
+        // hard limit is cut at its first assistant message instead of
+        // blowing the hard limit.
+        let mut manager = ContextManager::new(window_config(8_000, 2_000, 2));
+        manager.commit_turn(&turn(0, 100));
+        manager.commit_turn(&[Message::user("newest:".to_owned() + &"a".repeat(16_000)), Message::assistant("b".repeat(16_000))]);
+
+        let messages = manager.prepare_messages("sys", &[]);
+        let history: Vec<Message> = messages[1..].to_vec();
+        assert!(history.iter().any(|m| m.content().starts_with("newest:")));
+        assert!(!history.iter().any(|m| m.content() == "b".repeat(16_000)));
+        assert!(manager.token_count() <= 8_000);
+    }
+
+    #[test]
+    fn newest_turn_within_hard_limit_survives_verbatim() {
+        // A newest turn between the window budget and the hard limit is
+        // kept verbatim: tail protection wins over the soft window.
+        let mut manager = ContextManager::new(window_config(10_000, 9_900, 2));
+        manager.commit_turn(&turn(0, 100));
+        manager.commit_turn(&[Message::user("big:".to_owned() + &"a".repeat(900)), Message::assistant("b".repeat(900))]);
+
+        let messages = manager.prepare_messages("sys", &[]);
+        let history: Vec<Message> = messages[1..].to_vec();
+        assert!(history.iter().any(|m| m.content().starts_with("big:")));
+        assert!(history.iter().any(|m| m.content().starts_with("b".repeat(900).as_str())));
+    }
+
+    #[test]
+    fn prune_ignores_tail_tool_outputs_for_threshold() {
+        // The threshold counts only tool outputs outside the tail: a
+        // huge tool output in the newest turn does not trigger a prune
+        // of the older turns.
+        let mut manager = ContextManager::new(ContextConfig {
+            prune_threshold_tokens: 100,
+            prune_target_tokens: 10,
+            ..window_config(10_000, 2_000, 2)
+        });
+        manager.commit_turn(&[Message::user("u0"), Message::assistant("a0")]);
+        // Latest turn carries a giant tool output (inside the tail).
+        manager.commit_turn(&[
+            Message::user("u1"),
+            Message::assistant_with_tool_calls(
+                "",
+                vec![ToolCall::new(ToolCallId::new("c1"), "echo", json!({}))],
+            ),
+            Message::tool_result(ToolCallId::new("c1"), "x".repeat(2_000)),
+            Message::assistant("a1"),
+        ]);
+
+        manager.prepare_messages("sys", &[]);
+        let history = manager.history.clone();
+        // The tail tool output keeps its raw content (not pruned).
+        assert!(history
+            .iter()
+            .any(|m| m.role() == "tool" && m.content().chars().count() > 1_000));
     }
 
     #[test]
