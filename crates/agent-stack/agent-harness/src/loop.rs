@@ -2217,9 +2217,9 @@ mod tests {
         });
         let loop_harness = AgentLoop::new(provider.clone(), Arc::new(VecAgentEventSink::new()));
 
-        // Five turns push the stored history past the window of
-        // `recent_turns * 2 = 4` messages; each turn commits its own
-        // [user, assistant] pair.
+        // Five turns push the stored history past the window (the
+        // verbatim tail of `tail_turns = 2` complete turns); each turn
+        // commits its own [user, assistant] pair.
         for i in 1..=5 {
             let req = AgentTurnRequest::new(
                 session.clone(),
