@@ -104,6 +104,12 @@ impl TokenEstimator for HeuristicEstimator {
     }
 }
 
+/// Current on-disk session schema version (CM-V2d, decision table M4).
+/// Version 2 adds `schema_version`, the `CompactionRecord` summary
+/// shape, and `sticky_count`. Version 1 files (no `schema_version`,
+/// string-or-null summary) load through a migration path.
+const CURRENT_SCHEMA_VERSION: u32 = 2;
+
 /// Serialized snapshot of a session's context written by
 /// [`ContextManager::persist`] and read back by
 /// [`ContextManager::load`].
@@ -119,6 +125,26 @@ struct PersistedSession {
     #[serde(default)]
     sticky_count: usize,
     total_tokens: usize,
+    #[serde(default = "current_schema_version")]
+    schema_version: u32,
+}
+
+/// V1 on-disk shape (pre CM-V2c): string-or-null summary, no
+/// `sticky_count`, no `schema_version`. Migrated into
+/// [`PersistedSession`] on load. Only `history` is consumed; the other
+/// fields exist to keep the serde shape honest.
+#[derive(Debug, Deserialize)]
+#[allow(dead_code)]
+struct PersistedSessionV1 {
+    session_id: String,
+    created_at: String,
+    history: Vec<Message>,
+    compaction_summary: Option<String>,
+    total_tokens: usize,
+}
+
+fn current_schema_version() -> u32 {
+    CURRENT_SCHEMA_VERSION
 }
 
 /// Persistence failure returned by [`ContextManager::persist`] and
@@ -132,6 +158,9 @@ pub enum ContextError {
     /// and [`ContextManager::apply_summary`]; the summary cannot be
     /// applied to a different conversation (CM-V2c review fix).
     CompactionStale,
+    /// The persisted file was written by a newer build than the
+    /// running one.
+    UnsupportedVersion(u32),
 }
 
 impl std::fmt::Display for ContextError {
@@ -147,6 +176,11 @@ impl std::fmt::Display for ContextError {
                 "compaction window changed between summarize_request and apply_summary; \
                  fall back to plain eviction"
             ),
+            Self::UnsupportedVersion(version) => write!(
+                f,
+                "persisted session schema version {version} is newer than the supported \
+                 {CURRENT_SCHEMA_VERSION}"
+            ),
         }
     }
 }
@@ -156,7 +190,7 @@ impl std::error::Error for ContextError {
         match self {
             Self::Io(err) => Some(err),
             Self::Json(err) => Some(err),
-            Self::NotFound(_) | Self::CompactionStale => None,
+            Self::NotFound(_) | Self::CompactionStale | Self::UnsupportedVersion(_) => None,
         }
     }
 }
@@ -661,6 +695,7 @@ impl ContextManager {
             compaction_summary: self.compaction_summary.clone(),
             sticky_count: self.sticky_count,
             total_tokens: self.token_count(),
+            schema_version: CURRENT_SCHEMA_VERSION,
         };
         std::fs::create_dir_all(&self.config.session_dir).map_err(ContextError::Io)?;
         let path = self.config.session_dir.join(format!("{session_id}.json"));
@@ -674,6 +709,12 @@ impl ContextManager {
     /// compaction summary are restored (a custom estimator installed
     /// via [`ContextManager::with_estimator`] must be re-applied by the
     /// caller after loading).
+    ///
+    /// Schema migration (CM-V2d): files without `schema_version`
+    /// (pre-CM-V2c) load as V1 — their string-or-null summary is
+    /// dropped and no sticky prefix is restored. Files written by a
+    /// newer build than the running one fail with
+    /// [`ContextError::UnsupportedVersion`].
     pub fn load(session_id: &str, config: ContextConfig) -> Result<Self, ContextError> {
         let path = config.session_dir.join(format!("{session_id}.json"));
         let json = std::fs::read(&path).map_err(|err| {
@@ -683,13 +724,13 @@ impl ContextManager {
                 ContextError::Io(err)
             }
         })?;
-        let state: PersistedSession = serde_json::from_slice(&json).map_err(ContextError::Json)?;
+        let (history, compaction_summary, sticky_count) = parse_persisted_session(&json)?;
         Ok(Self {
             config,
-            history: state.history,
+            history,
             estimator: Box::new(HeuristicEstimator),
-            sticky_count: state.sticky_count,
-            compaction_summary: state.compaction_summary,
+            sticky_count,
+            compaction_summary,
             consecutive_compaction_failures: 0,
             request_plan: None,
         })
@@ -953,6 +994,31 @@ fn truncate_tool_result(message: &Message, record_truncate_tokens: usize) -> Mes
         message.tool_call_id().cloned().unwrap_or_else(|| crate::provider::ToolCallId::new("truncated")),
         format!("{truncated}{TOOL_OUTPUT_TRUNCATED_SUFFIX}"),
     )
+}
+
+/// Parse a persisted session file with schema migration (CM-V2d):
+/// files declaring `schema_version` parse as the current shape; files
+/// without it are treated as V1 (string-or-null summary dropped,
+/// no sticky prefix). Returns `(history, compaction_summary,
+/// sticky_count)`.
+fn parse_persisted_session(
+    json: &[u8],
+) -> Result<(Vec<Message>, Option<CompactionRecord>, usize), ContextError> {
+    let envelope: serde_json::Value = serde_json::from_slice(json).map_err(ContextError::Json)?;
+    let version = envelope
+        .get("schema_version")
+        .and_then(|v| v.as_u64())
+        .unwrap_or(1) as u32;
+    if version > CURRENT_SCHEMA_VERSION {
+        return Err(ContextError::UnsupportedVersion(version));
+    }
+    if version == 1 {
+        let v1: PersistedSessionV1 =
+            serde_json::from_value(envelope).map_err(ContextError::Json)?;
+        return Ok((v1.history, None, 0));
+    }
+    let state: PersistedSession = serde_json::from_value(envelope).map_err(ContextError::Json)?;
+    Ok((state.history, state.compaction_summary, state.sticky_count))
 }
 
 /// Unix epoch seconds used as the `created_at` persisted field.
@@ -1669,6 +1735,76 @@ mod tests {
     }
 
     #[test]
+    fn load_v1_schema_migrates_without_summary() {
+        // CM-V2d: a V1 file (no schema_version, null summary) loads
+        // with the history restored and no compaction state.
+        let dir = temp_session_dir("v1-null");
+        std::fs::create_dir_all(&dir).expect("mkdir failed");
+        std::fs::write(
+            dir.join("sess-1.json"),
+            r#"{"session_id":"sess-1","created_at":"0","history":[{"role":"user","content":[{"type":"text","text":"hi"}],"tool_call_id":null,"tool_calls":[]},{"role":"assistant","content":[{"type":"text","text":"yo"}],"tool_call_id":null,"tool_calls":[]}],"compaction_summary":null,"total_tokens":8}"#,        )
+        .expect("write failed");
+        let loaded = ContextManager::load(
+            "sess-1",
+            ContextConfig::new(10_000, 2, dir),
+        )
+        .expect("v1 load failed");
+        assert_eq!(loaded.token_count(), 8);
+        assert!(loaded.compaction_summary().is_none());
+        assert_eq!(loaded.sticky_count(), 0);
+    }
+
+    #[test]
+    fn load_v1_schema_with_string_summary_drops_it() {
+        // A V1 file with a string summary loads; the summary has no
+        // structured shape yet and is dropped.
+        let dir = temp_session_dir("v1-string");
+        std::fs::create_dir_all(&dir).expect("mkdir failed");
+        std::fs::write(
+            dir.join("sess-1.json"),
+            r#"{"session_id":"sess-1","created_at":"0","history":[{"role":"user","content":[{"type":"text","text":"hi"}],"tool_call_id":null,"tool_calls":[]}],"compaction_summary":"old summary","total_tokens":4}"#,
+        )
+        .expect("write failed");
+        let loaded = ContextManager::load(
+            "sess-1",
+            ContextConfig::new(10_000, 2, dir),
+        )
+        .expect("v1 load failed");
+        assert!(loaded.compaction_summary().is_none());
+        assert_eq!(loaded.history.len(), 1);
+    }
+
+    #[test]
+    fn load_future_schema_version_errors() {
+        let dir = temp_session_dir("future");
+        std::fs::create_dir_all(&dir).expect("mkdir failed");
+        std::fs::write(
+            dir.join("sess-1.json"),
+            r#"{"session_id":"sess-1","created_at":"0","history":[],"compaction_summary":null,"sticky_count":0,"total_tokens":0,"schema_version":999}"#,
+        )
+        .expect("write failed");
+        let err = match ContextManager::load(
+            "sess-1",
+            ContextConfig::new(10_000, 2, dir),
+        ) {
+            Ok(_) => panic!("future version must fail"),
+            Err(err) => err,
+        };
+        assert!(matches!(err, ContextError::UnsupportedVersion(999)));
+    }
+
+    #[test]
+    fn persist_writes_current_schema_version() {
+        let dir = temp_session_dir("schema-version");
+        let manager = ContextManager::new(ContextConfig::new(10_000, 2, dir.clone()));
+        manager.persist("sess-1").expect("persist failed");
+
+        let json = std::fs::read_to_string(dir.join("sess-1.json")).expect("read failed");
+        let state: serde_json::Value = serde_json::from_str(&json).expect("json parse failed");
+        assert_eq!(state["schema_version"], 2);
+    }
+
+    #[test]
     fn persist_creates_session_dir() {
         let dir = temp_session_dir("mkdir");
         let manager = ContextManager::new(ContextConfig::new(10_000, 2, dir.clone()));
@@ -1752,7 +1888,6 @@ mod tests {
         for i in 0..60 {
             manager.commit_turn(&turn(i, 400));
         }
-        let before = manager.token_count();
 
         let record = manager.apply_summary("goal: continue artwork refinement").expect("apply failed");
         assert_eq!(record.attempt, 1);
