@@ -15,6 +15,11 @@
 //! provider call and drops the in-flight future (which cancels the
 //! underlying HTTP request) when it fires, then emits
 //! `AgentTurnStopReason::Cancelled` (AC-07).
+//!
+//! Both turn paths run through a single shared skeleton
+//! (`run_turn_inner`); only the per-round provider interaction differs
+//! (`complete` vs `stream`), so the two paths cannot drift again
+//! (AC-08).
 
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
@@ -26,7 +31,10 @@ use crate::context_manager::ContextManager;
 use crate::error::{ProviderError, ToolError, ToolErrorCode};
 use crate::event::AgentEvent;
 use crate::ids::{AgentSessionId, ModelName, ToolName};
-use crate::provider::{AgentProvider, AgentRequest, AgentToolDefinition, ContentBlock, Message};
+use crate::provider::{
+    AgentProvider, AgentRequest, AgentStreamEvent, AgentToolDefinition, ContentBlock, Message,
+    ToolCall,
+};
 use crate::registry::{AgentToolRegistry, ToolRegistryError};
 use crate::turn::{
     AgentTurnRequest, AgentTurnResult, AgentTurnStatus, AgentTurnStopReason, ToolCallResult,
@@ -113,6 +121,30 @@ impl std::fmt::Debug for AgentLoop {
     }
 }
 
+/// Which provider interaction a turn uses (AC-08). Selects the
+/// per-round implementation inside the shared turn skeleton
+/// ([`AgentLoop::run_turn_inner`]).
+#[derive(Clone, Copy)]
+enum TurnRound {
+    /// Non-streaming: `provider.complete()`.
+    Complete,
+    /// Streaming: `provider.stream()` + `next_event()`.
+    Streaming,
+}
+
+/// Outcome of one provider round inside the shared turn skeleton
+/// (AC-08).
+enum RoundOutcome {
+    /// The turn ended while producing this round (provider error,
+    /// empty stream, cancellation, or deadline); carries the final
+    /// result.
+    Ended(Box<AgentTurnResult>),
+    /// The round produced an assistant message. `truncated` marks a
+    /// stream the provider cut short (`length`/`max_tokens`), which
+    /// downgrades a final response to `Truncated`/`Stopped` (AC-01).
+    Assistant { assistant: Message, truncated: bool },
+}
+
 impl AgentLoop {
     /// Build a new harness with the given provider and event sink.
     /// Both are wrapped in `Arc` so the harness is cheap to share.
@@ -158,51 +190,202 @@ impl AgentLoop {
     pub async fn run_turn(
         &self,
         request: AgentTurnRequest,
-        mut context: Option<&mut ContextManager>,
+        context: Option<&mut ContextManager>,
     ) -> AgentTurnResult {
-        let mut result = AgentTurnResult::new()
-            .with_turn_id(request.turn_id().clone())
-            .with_session_id(request.session().id().clone())
-            .with_mode(request.session().mode())
-            .with_provider(request.session().provider().clone())
-            .with_model(request.model().clone())
-            .with_status(AgentTurnStatus::Running);
+        self.run_turn_inner(request, context, TurnRound::Complete)
+            .await
+    }
 
+    /// Shared turn skeleton (AC-08): both turn paths run through this
+    /// loop. The per-round provider interaction is path-specific
+    /// (`complete` vs `stream`; see [`Self::complete_round`] and
+    /// [`Self::streaming_round`]) — everything else (message seeding,
+    /// the modality gate, cancellation/deadline racing, the
+    /// max-tool-step guard, sequential tool execution, and history
+    /// commits) is common, so the paths cannot drift again.
+    async fn run_turn_inner(
+        &self,
+        request: AgentTurnRequest,
+        mut context: Option<&mut ContextManager>,
+        round: TurnRound,
+    ) -> AgentTurnResult {
+        let mut result = base_result(&request);
+        let (mut messages, pre_run_len) = match self.prepare_turn(&request, &mut context).await {
+            Ok(seeded) => seeded,
+            Err(ended) => return ended,
+        };
         let registry = request.session().registry().clone();
-        // Seed the provider message list from the active history
-        // source. With a context manager, `prepare_messages` attaches
-        // a system message and applies the rolling window. V1 has no
-        // system prompt, so the system slot is empty. `pre_run_len`
-        // points just past the prior context (NOT past the input), so
-        // `commit_turn_history` will commit *this turn's input + new
-        // assistant + tool observations* at the end — matching the
-        // issue's note about "appending turn input, assistant
-        // messages, and tool observation messages."
-        let mut messages: Vec<Message>;
-        let pre_run_len: usize;
-        if let Some(manager) = context.as_deref_mut() {
+        let tool_defs = build_tool_definitions(&registry, request.session().mode());
+        let max_tool_steps = request.max_tool_steps();
+        let mut tool_steps_taken: usize = 0;
+        let turn_start = std::time::Instant::now();
+
+        loop {
+            // Check cancellation before each provider round.
+            if request.cancel_token().is_cancelled() {
+                return self.stop_cancelled(
+                    &request,
+                    &mut result,
+                    &mut context,
+                    &messages,
+                    pre_run_len,
+                );
+            }
+
+            // Produce this round's assistant message. Every round races
+            // cancellation and the turn deadline, then either yields an
+            // assistant message or ends the turn.
+            let outcome = match round {
+                TurnRound::Complete => {
+                    self.complete_round(
+                        &request,
+                        &mut result,
+                        &mut context,
+                        &messages,
+                        pre_run_len,
+                        turn_start,
+                        &tool_defs,
+                    )
+                    .await
+                }
+                TurnRound::Streaming => {
+                    self.streaming_round(
+                        &request,
+                        &mut result,
+                        &mut context,
+                        &messages,
+                        pre_run_len,
+                        turn_start,
+                        &tool_defs,
+                    )
+                    .await
+                }
+            };
+            let (assistant, truncated) = match outcome {
+                RoundOutcome::Ended(ended) => return *ended,
+                RoundOutcome::Assistant {
+                    assistant,
+                    truncated,
+                } => (assistant, truncated),
+            };
+
+            let has_tool_calls = !assistant.tool_calls().is_empty();
+
+            // No tool calls → final response. Append the assistant
+            // message first so the transcript ends on it. A stream the
+            // provider cut short (`length`/`max_tokens`) keeps the
+            // partial response but is reported as incomplete (AC-01).
+            if !has_tool_calls {
+                messages.push(assistant.clone());
+                let (stop_reason, status) = if truncated {
+                    (AgentTurnStopReason::Truncated, AgentTurnStatus::Stopped)
+                } else {
+                    (
+                        AgentTurnStopReason::FinalResponse,
+                        AgentTurnStatus::Completed,
+                    )
+                };
+                return self.finish(
+                    &request,
+                    &mut result,
+                    &mut context,
+                    &messages,
+                    pre_run_len,
+                    Some(assistant),
+                    stop_reason,
+                    status,
+                );
+            }
+
+            // Max-tool-step guard. Counts *individual* tool calls. The
+            // check sits before the round's tool loop so the round is
+            // *admitted* (and its assistant message appended) only when
+            // at least one tool call slot remains; a finer-grained
+            // check inside `execute_tool_calls` then stops the turn
+            // exactly at the limit, even mid-round.
+            if tool_steps_taken >= max_tool_steps {
+                return self.stop_max_steps(
+                    &request,
+                    &mut result,
+                    &mut context,
+                    &messages,
+                    pre_run_len,
+                );
+            }
+
+            // Append the assistant message only after the guard passes
+            // — this way the assistant that requested tools always has
+            // corresponding `tool_result` observations.
+            messages.push(assistant.clone());
+
+            // Execute the requested tool calls sequentially in the
+            // order the provider returned them. All observations are
+            // appended before the next provider call so the model sees
+            // the full batch.
+            if let Some(ended) = self
+                .execute_tool_calls(
+                    &request,
+                    &mut result,
+                    &mut context,
+                    &mut messages,
+                    pre_run_len,
+                    &registry,
+                    assistant.tool_calls(),
+                    max_tool_steps,
+                    &mut tool_steps_taken,
+                )
+                .await
+            {
+                return ended;
+            }
+        }
+    }
+
+    /// Seed the provider message list from the active history source
+    /// and run the image-modality gate (PV-03b). Returns the seeded
+    /// messages plus `pre_run_len` — the length of the prior context,
+    /// past which this turn's slice begins — or the final stopped
+    /// result when the gate rejects the turn.
+    ///
+    /// With a context manager, `prepare_messages` attaches a system
+    /// message and applies the rolling window (V1 has no system
+    /// prompt, so the system slot is empty). Without one, the session
+    /// history seeds the provider list and receives the turn's
+    /// messages.
+    async fn prepare_turn(
+        &self,
+        request: &AgentTurnRequest,
+        context: &mut Option<&mut ContextManager>,
+    ) -> Result<(Vec<Message>, usize), AgentTurnResult> {
+        let (messages, pre_run_len) = if let Some(manager) = context.as_deref_mut() {
             // Compaction driver (CM-V2e): when the stored history
             // crosses the soft budget line and the thrash guard allows,
             // summarize the eviction range before the window is
             // applied. Failures fall back to plain eviction inside
             // `prepare_messages`; the turn still completes.
-            if let Some(event) = maybe_compact(manager, self.provider.as_ref(), request.model(), request.session().id())
-                .await
+            if let Some(event) = maybe_compact(
+                manager,
+                self.provider.as_ref(),
+                request.model(),
+                request.session().id(),
+            )
+            .await
             {
                 self.sink.handle(&event);
             }
-            messages = manager.prepare_messages("", request.input());
-            pre_run_len = messages.len() - request.input().len();
+            let messages = manager.prepare_messages("", request.input());
+            let pre_run_len = messages.len() - request.input().len();
+            (messages, pre_run_len)
         } else {
             let prior_history = request.session().history();
-            pre_run_len = prior_history.len();
-            messages = prior_history
+            let pre_run_len = prior_history.len();
+            let messages = prior_history
                 .iter()
                 .cloned()
                 .chain(request.input().iter().cloned())
                 .collect();
-        }
-        let tool_defs = build_tool_definitions(&registry, request.session().mode());
+            (messages, pre_run_len)
+        };
 
         // Modality gate (PV-03b): image file blocks require a model that
         // advertises image input support. Best-effort — models missing
@@ -214,48 +397,197 @@ impl AgentLoop {
         )
         .await
         {
-            return self.stop_with_provider_error(
-                &request,
-                result,
-                &mut context,
+            let mut stopped = base_result(request);
+            return Err(self.stop_with_provider_error(
+                request,
+                &mut stopped,
+                context,
                 &messages,
                 pre_run_len,
                 err,
-            );
+            ));
+        }
+        Ok((messages, pre_run_len))
+    }
+
+    /// Race an in-flight provider future against cancellation and the
+    /// turn deadline (AC-02, AC-07). When cancellation or the deadline
+    /// wins, the provider future is dropped — which aborts the
+    /// underlying HTTP call — and the turn's final result is returned
+    /// as the `Err` payload. On `Ok`, the provider output is returned
+    /// (the result is left untouched, to be consumed by the round).
+    ///
+    /// The parameters are the shared turn state threaded through the
+    /// skeleton's stop paths; grouping them would hide the flow (AC-08).
+    #[allow(clippy::too_many_arguments)]
+    async fn race_provider_call<T, F>(
+        &self,
+        request: &AgentTurnRequest,
+        result: &mut AgentTurnResult,
+        context: &mut Option<&mut ContextManager>,
+        messages: &[Message],
+        pre_run_len: usize,
+        turn_start: Instant,
+        provider_fut: F,
+    ) -> Result<T, AgentTurnResult>
+    where
+        F: std::future::Future<Output = Result<T, ProviderError>>,
+    {
+        tokio::pin!(provider_fut);
+        let deadline = turn_deadline(request.turn_timeout(), turn_start);
+        tokio::pin!(deadline);
+        tokio::select! {
+            _ = request.cancel_token().cancelled() => {
+                Err(self.stop_cancelled(request, result, context, messages, pre_run_len))
+            }
+            _ = &mut deadline => {
+                Err(self.stop_with_error(
+                    request,
+                    result,
+                    context,
+                    messages,
+                    pre_run_len,
+                    ProviderError::new(
+                        "TIMEOUT",
+                        format!(
+                            "turn exceeded the {:?} deadline",
+                            request.turn_timeout().unwrap_or_default()
+                        ),
+                    ),
+                    AgentTurnStopReason::Timeout,
+                ))
+            }
+            res = &mut provider_fut => match res {
+                Ok(output) => Ok(output),
+                Err(err) => Err(self.stop_with_provider_error(
+                    request,
+                    result,
+                    context,
+                    messages,
+                    pre_run_len,
+                    err,
+                )),
+            },
+        }
+    }
+
+    /// Non-streaming provider round (AC-08): complete the request under
+    /// the cancellation/deadline race and surface the assistant
+    /// message. Usage reported this round is captured here — V1 keeps
+    /// the latest reported usage rather than summing across rounds
+    /// (providers are expected to report a running total themselves).
+    ///
+    /// The parameters are the shared turn state threaded through the
+    /// skeleton's stop paths; grouping them would hide the flow (AC-08).
+    #[allow(clippy::too_many_arguments)]
+    async fn complete_round(
+        &self,
+        request: &AgentTurnRequest,
+        result: &mut AgentTurnResult,
+        context: &mut Option<&mut ContextManager>,
+        messages: &[Message],
+        pre_run_len: usize,
+        turn_start: Instant,
+        tool_defs: &[AgentToolDefinition],
+    ) -> RoundOutcome {
+        let provider_request = AgentRequest::new(request.model().clone(), messages.to_vec())
+            .with_tools(tool_defs.to_vec());
+        let response = match self
+            .race_provider_call(
+                request,
+                result,
+                context,
+                messages,
+                pre_run_len,
+                turn_start,
+                self.provider.complete(provider_request),
+            )
+            .await
+        {
+            Ok(response) => response,
+            Err(ended) => return RoundOutcome::Ended(Box::new(ended)),
+        };
+
+        if let Some(usage) = response.usage().cloned() {
+            *result = take_result(result).with_usage(usage);
         }
 
-        let max_tool_steps = request.max_tool_steps();
-        let mut tool_steps_taken: usize = 0;
-        let turn_start = std::time::Instant::now();
+        RoundOutcome::Assistant {
+            assistant: response.message().clone(),
+            truncated: false,
+        }
+    }
 
+    /// Streaming provider round (AC-08): open the provider stream under
+    /// the cancellation/deadline race, then consume it, forwarding
+    /// `ContentDelta`/`ReasoningDelta` to the sink and collecting
+    /// content + tool calls. Terminal failure semantics live here: a
+    /// zero-event stream is an `EMPTY_STREAM` provider error (AC-06),
+    /// an in-stream `Error` is a `STREAM` provider error (AC-05), and a
+    /// `Done` carrying a truncation reason (`length`/`max_tokens`)
+    /// marks the round truncated (AC-01).
+    ///
+    /// The parameters are the shared turn state threaded through the
+    /// skeleton's stop paths; grouping them would hide the flow (AC-08).
+    #[allow(clippy::too_many_arguments)]
+    async fn streaming_round(
+        &self,
+        request: &AgentTurnRequest,
+        result: &mut AgentTurnResult,
+        context: &mut Option<&mut ContextManager>,
+        messages: &[Message],
+        pre_run_len: usize,
+        turn_start: Instant,
+        tool_defs: &[AgentToolDefinition],
+    ) -> RoundOutcome {
+        let provider_request = AgentRequest::new(request.model().clone(), messages.to_vec())
+            .with_tools(tool_defs.to_vec());
+        let mut stream = match self
+            .race_provider_call(
+                request,
+                result,
+                context,
+                messages,
+                pre_run_len,
+                turn_start,
+                self.provider.stream(provider_request),
+            )
+            .await
+        {
+            Ok(stream) => stream,
+            Err(ended) => return RoundOutcome::Ended(Box::new(ended)),
+        };
+
+        // Consume the stream, collecting text and tool calls. Every
+        // read races cancellation — when the token fires the stream is
+        // dropped (closing the underlying HTTP connection) and the turn
+        // stops (AC-07) — and the turn deadline.
+        let mut content_text = String::new();
+        let mut pending_tool_calls: Vec<ToolCall> = Vec::new();
+        let mut saw_any_event = false;
+        let mut stream_truncated = false;
+
+        let deadline = turn_deadline(request.turn_timeout(), turn_start);
+        tokio::pin!(deadline);
         loop {
-            // Check cancellation before each provider round.
-            if request.cancel_token().is_cancelled() {
-                return self.stop_cancelled(&request, result, &mut context, &messages, pre_run_len);
-            }
-
-            let provider_request = AgentRequest::new(request.model().clone(), messages.clone())
-                .with_tools(tool_defs.clone());
-
-            // Await the provider call, but abort it the moment
-            // cancellation is requested: the select branch drops the
-            // in-flight future, which cancels the underlying HTTP
-            // request (AC-07). The turn deadline races the same call so
-            // a hung provider cannot outlive it (AC-02).
-            let complete = self.provider.complete(provider_request);
-            tokio::pin!(complete);
-            let deadline = turn_deadline(request.turn_timeout(), turn_start);
-            tokio::pin!(deadline);
-            let response = match tokio::select! {
+            let event = tokio::select! {
                 _ = request.cancel_token().cancelled() => {
-                    return self.stop_cancelled(&request, result, &mut context, &messages, pre_run_len);
+                    drop(stream);
+                    return RoundOutcome::Ended(Box::new(self.stop_cancelled(
+                        request,
+                        result,
+                        context,
+                        messages,
+                        pre_run_len,
+                    )));
                 }
                 _ = &mut deadline => {
-                    return self.stop_with_error(
-                        &request,
+                    drop(stream);
+                    return RoundOutcome::Ended(Box::new(self.stop_with_error(
+                        request,
                         result,
-                        &mut context,
-                        &messages,
+                        context,
+                        messages,
                         pre_run_len,
                         ProviderError::new(
                             "TIMEOUT",
@@ -265,112 +597,95 @@ impl AgentLoop {
                             ),
                         ),
                         AgentTurnStopReason::Timeout,
-                    );
+                    )));
                 }
-                res = &mut complete => res,
-            } {
-                Ok(r) => r,
-                Err(err) => {
-                    return self.stop_with_provider_error(
-                        &request,
-                        result,
-                        &mut context,
-                        &messages,
-                        pre_run_len,
-                        err,
-                    );
-                }
+                event = stream.next_event() => event,
             };
-
-            // Capture usage from this round if the provider reported
-            // it. V1 keeps the latest reported usage rather than
-            // summing across rounds — providers are expected to
-            // report a running total themselves.
-            if let Some(usage) = response.usage().cloned() {
-                result = result.with_usage(usage);
-            }
-
-            let assistant = response.message().clone();
-            let has_tool_calls = !assistant.tool_calls().is_empty();
-
-            // No tool calls → final response. Append the assistant
-            // message first so the transcript ends on it.
-            if !has_tool_calls {
-                messages.push(assistant.clone());
-                result = result
-                    .with_final_response(assistant)
-                    .with_stop_reason(AgentTurnStopReason::FinalResponse)
-                    .with_status(AgentTurnStatus::Completed)
-                    .with_messages(messages.clone());
-                commit_turn_history(&mut context, request.session(), &messages, pre_run_len);
-                return result;
-            }
-
-            // Max-tool-step guard. Counts *individual* tool calls.
-            // The check is placed before the round's `for` loop so
-            // that the round is *admitted* (and its assistant message
-            // appended) only when at least one tool call slot remains.
-            // A finer-grained check inside the `for` then stops the
-            // turn exactly at the limit, even mid-round.
-            if tool_steps_taken >= max_tool_steps {
-                result = result
-                    .with_stop_reason(AgentTurnStopReason::MaxToolStepsExceeded)
-                    .with_status(AgentTurnStatus::Stopped)
-                    .with_messages(messages.clone());
-                commit_turn_history(&mut context, request.session(), &messages, pre_run_len);
-                return result;
-            }
-
-            // Append the assistant message only after the guard
-            // passes — this way the assistant that requested tools
-            // always has corresponding `tool_result` observations.
-            messages.push(assistant.clone());
-
-            // Execute the requested tool calls sequentially in the
-            // order the provider returned them. All observations are
-            // appended before the next provider call so the model sees
-            // the full batch. The guard fires *before* each tool call
-            // so the limit is exact, not just per-round.
-            for tool_call in assistant.tool_calls() {
-                if tool_steps_taken >= max_tool_steps {
-                    result = result
-                        .with_stop_reason(AgentTurnStopReason::MaxToolStepsExceeded)
-                        .with_status(AgentTurnStatus::Stopped)
-                        .with_messages(messages.clone());
-                    commit_turn_history(&mut context, request.session(), &messages, pre_run_len);
-                    return result;
+            let Some(event) = event else { break };
+            saw_any_event = true;
+            match event {
+                AgentStreamEvent::ContentDelta(text) => {
+                    content_text.push_str(&text);
+                    self.sink.handle(&AgentEvent::ContentDelta {
+                        session_id: request.session().id().clone(),
+                        text: text.clone(),
+                    });
                 }
-                // Check cancellation before each tool execution.
-                if request.cancel_token().is_cancelled() {
-                    return self.stop_cancelled(&request, result, &mut context, &messages, pre_run_len);
+                // Reasoning is display-only: forward to the sink for
+                // hosts (UI progress) but never into message history.
+                AgentStreamEvent::ReasoningDelta(text) => {
+                    self.sink.handle(&AgentEvent::ReasoningDelta {
+                        session_id: request.session().id().clone(),
+                        text: text.clone(),
+                    });
                 }
-                tool_steps_taken += 1;
-                let tool_name = ToolName::new(tool_call.name());
-
-                self.sink.handle(&AgentEvent::ToolInvoked {
-                    session_id: request.session().id().clone(),
-                    tool: tool_name.clone(),
-                    id: Some(tool_call.id().clone()),
-                });
-
-                let tool_context = ToolContext::new(
-                    request.session().workspace_scope().clone(),
-                    request.session().id().clone(),
-                    request.session().mode(),
-                )
-                .with_permissions(request.session().permissions().clone());
-
-                let tool_result = self
-                    .execute_tool(&registry, &tool_name, tool_call, &tool_context)
-                    .await;
-
-                let observation_content = tool_observation_text(&tool_result);
-                result.push_tool_call(tool_result);
-                messages.push(Message::tool_result(
-                    tool_call.id().clone(),
-                    observation_content,
-                ));
+                AgentStreamEvent::ToolCall(tc) => {
+                    pending_tool_calls.push(tc);
+                }
+                AgentStreamEvent::Usage(u) => {
+                    *result = take_result(result).with_usage(u);
+                }
+                // Server-side compaction (Responses API, PV-01b
+                // reserved channel): informational. The opaque
+                // compacted content is never replayed into the
+                // message history.
+                AgentStreamEvent::Compacted { item_id } => {
+                    tracing::info!(item_id, "provider compacted conversation server-side");
+                }
+                // A terminal transport failure: surface it as a
+                // provider error instead of silently treating the
+                // stream as finished (AC-05).
+                AgentStreamEvent::Error(message) => {
+                    return RoundOutcome::Ended(Box::new(self.stop_with_provider_error(
+                        request,
+                        result,
+                        context,
+                        messages,
+                        pre_run_len,
+                        ProviderError::new("STREAM", message),
+                    )));
+                }
+                AgentStreamEvent::Done { stop_reason } => {
+                    if let Some(reason) = stop_reason {
+                        // "length"/"max_tokens" means the provider
+                        // cut the response short: the final answer
+                        // is incomplete (AC-01).
+                        stream_truncated = is_truncation_reason(&reason);
+                    }
+                    break;
+                }
+                // ToolCallDelta is informational; we only act on ToolCall (complete).
+                AgentStreamEvent::ToolCallDelta { .. } => {}
             }
+        }
+
+        // A stream that ended before yielding any event is a
+        // transport-level failure, not a final response (AC-06).
+        if !saw_any_event {
+            return RoundOutcome::Ended(Box::new(self.stop_with_provider_error(
+                request,
+                result,
+                context,
+                messages,
+                pre_run_len,
+                ProviderError::new(
+                    "EMPTY_STREAM",
+                    "provider stream ended before yielding any event",
+                ),
+            )));
+        }
+
+        // Build the assistant message from accumulated content + tool calls.
+        let has_tool_calls = !pending_tool_calls.is_empty();
+        let assistant = if has_tool_calls {
+            Message::assistant_with_tool_calls(&content_text, pending_tool_calls)
+        } else {
+            Message::assistant(&content_text)
+        };
+
+        RoundOutcome::Assistant {
+            assistant,
+            truncated: stream_truncated,
         }
     }
 
@@ -388,308 +703,10 @@ impl AgentLoop {
     pub async fn run_turn_streaming(
         &self,
         request: AgentTurnRequest,
-        mut context: Option<&mut ContextManager>,
+        context: Option<&mut ContextManager>,
     ) -> AgentTurnResult {
-        let mut result = AgentTurnResult::new()
-            .with_turn_id(request.turn_id().clone())
-            .with_session_id(request.session().id().clone())
-            .with_mode(request.session().mode())
-            .with_provider(request.session().provider().clone())
-            .with_model(request.model().clone())
-            .with_status(AgentTurnStatus::Running);
-
-        let registry = request.session().registry().clone();
-        let mut messages: Vec<Message>;
-        let pre_run_len: usize;
-        if let Some(manager) = context.as_deref_mut() {
-            // Compaction driver (CM-V2e): see `run_turn`.
-            if let Some(event) = maybe_compact(manager, self.provider.as_ref(), request.model(), request.session().id())
-                .await
-            {
-                self.sink.handle(&event);
-            }
-            messages = manager.prepare_messages("", request.input());
-            pre_run_len = messages.len() - request.input().len();
-        } else {
-            let prior_history = request.session().history();
-            pre_run_len = prior_history.len();
-            messages = prior_history
-                .iter()
-                .cloned()
-                .chain(request.input().iter().cloned())
-                .collect();
-        }
-        let tool_defs = build_tool_definitions(&registry, request.session().mode());
-
-        // Modality gate (PV-03b): image file blocks require a model that
-        // advertises image input support. Best-effort — models missing
-        // from the provider listing are allowed through.
-        if let Err(err) = enforce_image_modality_gate(
-            self.provider.as_ref(),
-            request.model(),
-            &image_media_types(&messages),
-        )
-        .await
-        {
-            return self.stop_with_provider_error(
-                &request,
-                result,
-                &mut context,
-                &messages,
-                pre_run_len,
-                err,
-            );
-        }
-
-        let max_tool_steps = request.max_tool_steps();
-        let mut tool_steps_taken: usize = 0;
-        let turn_start = std::time::Instant::now();
-
-        loop {
-            // Check cancellation before each provider round.
-            if request.cancel_token().is_cancelled() {
-                return self.stop_cancelled(&request, result, &mut context, &messages, pre_run_len);
-            }
-
-            let provider_request = AgentRequest::new(request.model().clone(), messages.clone())
-                .with_tools(tool_defs.clone());
-
-            // Open a stream from the provider, aborting the open the
-            // moment cancellation is requested (AC-07). The turn
-            // deadline races the open as well (AC-02).
-            let open_stream = self.provider.stream(provider_request);
-            tokio::pin!(open_stream);
-            let deadline = turn_deadline(request.turn_timeout(), turn_start);
-            tokio::pin!(deadline);
-            let mut stream = match tokio::select! {
-                _ = request.cancel_token().cancelled() => {
-                    return self.stop_cancelled(&request, result, &mut context, &messages, pre_run_len);
-                }
-                _ = &mut deadline => {
-                    return self.stop_with_error(
-                        &request,
-                        result,
-                        &mut context,
-                        &messages,
-                        pre_run_len,
-                        ProviderError::new(
-                            "TIMEOUT",
-                            format!(
-                                "turn exceeded the {:?} deadline",
-                                request.turn_timeout().unwrap_or_default()
-                            ),
-                        ),
-                        AgentTurnStopReason::Timeout,
-                    );
-                }
-                res = &mut open_stream => res,
-            } {
-                Ok(s) => s,
-                Err(err) => {
-                    return self.stop_with_provider_error(
-                        &request,
-                        result,
-                        &mut context,
-                        &messages,
-                        pre_run_len,
-                        err,
-                    );
-                }
-            };
-
-            // Consume the stream, collecting text and tool calls. The
-            // read races cancellation: when the token fires, the stream
-            // is dropped (closing the underlying HTTP connection) and
-            // the turn stops (AC-07).
-            let mut content_text = String::new();
-            let mut pending_tool_calls: Vec<crate::provider::ToolCall> = Vec::new();
-            let mut saw_any_event = false;
-            let mut stream_truncated = false;
-
-            loop {
-                let event = tokio::select! {
-                    _ = request.cancel_token().cancelled() => {
-                        drop(stream);
-                        return self.stop_cancelled(&request, result, &mut context, &messages, pre_run_len);
-                    }
-                    _ = &mut deadline => {
-                        drop(stream);
-                        return self.stop_with_error(
-                            &request,
-                            result,
-                            &mut context,
-                            &messages,
-                            pre_run_len,
-                            ProviderError::new(
-                                "TIMEOUT",
-                                format!(
-                                    "turn exceeded the {:?} deadline",
-                                    request.turn_timeout().unwrap_or_default()
-                                ),
-                            ),
-                            AgentTurnStopReason::Timeout,
-                        );
-                    }
-                    event = stream.next_event() => event,
-                };
-                let Some(event) = event else { break };
-                saw_any_event = true;
-                match event {
-                    crate::provider::AgentStreamEvent::ContentDelta(text) => {
-                        content_text.push_str(&text);
-                        self.sink.handle(&AgentEvent::ContentDelta {
-                            session_id: request.session().id().clone(),
-                            text: text.clone(),
-                        });
-                    }
-                    // Reasoning is display-only: forward to the sink for
-                    // hosts (UI progress) but never into message history.
-                    crate::provider::AgentStreamEvent::ReasoningDelta(text) => {
-                        self.sink.handle(&AgentEvent::ReasoningDelta {
-                            session_id: request.session().id().clone(),
-                            text: text.clone(),
-                        });
-                    }
-                    crate::provider::AgentStreamEvent::ToolCall(tc) => {
-                        pending_tool_calls.push(tc);
-                    }
-                    crate::provider::AgentStreamEvent::Usage(u) => {
-                        result = result.with_usage(u);
-                    }
-                    // Server-side compaction (Responses API, PV-01b
-                    // reserved channel): informational. The opaque
-                    // compacted content is never replayed into the
-                    // message history.
-                    crate::provider::AgentStreamEvent::Compacted { item_id } => {
-                        tracing::info!(
-                            item_id,
-                            "provider compacted conversation server-side"
-                        );
-                    }
-                    // A terminal transport failure: surface it as a
-                    // provider error instead of silently treating the
-                    // stream as finished (AC-05).
-                    crate::provider::AgentStreamEvent::Error(message) => {
-                        return self.stop_with_provider_error(
-                            &request,
-                            result,
-                            &mut context,
-                            &messages,
-                            pre_run_len,
-                            ProviderError::new("STREAM", message),
-                        );
-                    }
-                    crate::provider::AgentStreamEvent::Done { stop_reason } => {
-                        if let Some(reason) = stop_reason {
-                            // "length"/"max_tokens" means the provider
-                            // cut the response short: the final answer
-                            // is incomplete (AC-01).
-                            stream_truncated = is_truncation_reason(&reason);
-                        }
-                        break;
-                    }
-                    // ToolCallDelta is informational; we only act on ToolCall (complete).
-                    crate::provider::AgentStreamEvent::ToolCallDelta { .. } => {}
-                }
-            }
-
-            // A stream that ended before yielding any event is a
-            // transport-level failure, not a final response (AC-06).
-            if !saw_any_event {
-                return self.stop_with_provider_error(
-                    &request,
-                    result,
-                    &mut context,
-                    &messages,
-                    pre_run_len,
-                    ProviderError::new(
-                        "EMPTY_STREAM",
-                        "provider stream ended before yielding any event",
-                    ),
-                );
-            }
-
-            // Build the assistant message from accumulated content + tool calls.
-            let has_tool_calls = !pending_tool_calls.is_empty();
-            let assistant = if has_tool_calls {
-                Message::assistant_with_tool_calls(&content_text, pending_tool_calls)
-            } else {
-                Message::assistant(&content_text)
-            };
-
-            // No tool calls → final response. A truncated stream keeps
-            // the partial response but is reported as incomplete
-            // (AC-01).
-            if !has_tool_calls {
-                messages.push(assistant.clone());
-                let (stop_reason, status) = if stream_truncated {
-                    (AgentTurnStopReason::Truncated, AgentTurnStatus::Stopped)
-                } else {
-                    (AgentTurnStopReason::FinalResponse, AgentTurnStatus::Completed)
-                };
-                result = result
-                    .with_final_response(assistant)
-                    .with_stop_reason(stop_reason)
-                    .with_status(status)
-                    .with_messages(messages.clone());
-                commit_turn_history(&mut context, request.session(), &messages, pre_run_len);
-                return result;
-            }
-
-            // Max-tool-step guard.
-            if tool_steps_taken >= max_tool_steps {
-                result = result
-                    .with_stop_reason(AgentTurnStopReason::MaxToolStepsExceeded)
-                    .with_status(AgentTurnStatus::Stopped)
-                    .with_messages(messages.clone());
-                commit_turn_history(&mut context, request.session(), &messages, pre_run_len);
-                return result;
-            }
-
-            messages.push(assistant.clone());
-
-            // Execute the requested tool calls sequentially.
-            for tool_call in assistant.tool_calls() {
-                if tool_steps_taken >= max_tool_steps {
-                    result = result
-                        .with_stop_reason(AgentTurnStopReason::MaxToolStepsExceeded)
-                        .with_status(AgentTurnStatus::Stopped)
-                        .with_messages(messages.clone());
-                    commit_turn_history(&mut context, request.session(), &messages, pre_run_len);
-                    return result;
-                }
-                // Check cancellation before each tool execution.
-                if request.cancel_token().is_cancelled() {
-                    return self.stop_cancelled(&request, result, &mut context, &messages, pre_run_len);
-                }
-                tool_steps_taken += 1;
-                let tool_name = ToolName::new(tool_call.name());
-
-                self.sink.handle(&AgentEvent::ToolInvoked {
-                    session_id: request.session().id().clone(),
-                    tool: tool_name.clone(),
-                    id: Some(tool_call.id().clone()),
-                });
-
-                let tool_context = ToolContext::new(
-                    request.session().workspace_scope().clone(),
-                    request.session().id().clone(),
-                    request.session().mode(),
-                )
-                .with_permissions(request.session().permissions().clone());
-
-                let tool_result = self
-                    .execute_tool(&registry, &tool_name, tool_call, &tool_context)
-                    .await;
-
-                let observation_content = tool_observation_text(&tool_result);
-                result.push_tool_call(tool_result);
-                messages.push(Message::tool_result(
-                    tool_call.id().clone(),
-                    observation_content,
-                ));
-            }
-        }
+        self.run_turn_inner(request, context, TurnRound::Streaming)
+            .await
     }
 
     /// Stop the turn with a provider-level failure: record the
@@ -699,7 +716,7 @@ impl AgentLoop {
     fn stop_with_provider_error(
         &self,
         request: &AgentTurnRequest,
-        result: AgentTurnResult,
+        result: &mut AgentTurnResult,
         context: &mut Option<&mut ContextManager>,
         messages: &[Message],
         pre_run_len: usize,
@@ -720,10 +737,14 @@ impl AgentLoop {
     /// stop reason (used for turn timeout, which is not a provider
     /// failure but needs the same diagnostic + event + history-commit
     /// treatment — AC-02).
+    ///
+    /// The parameters are the shared turn state threaded through the
+    /// skeleton's stop paths; grouping them would hide the flow (AC-08).
+    #[allow(clippy::too_many_arguments)]
     fn stop_with_error(
         &self,
         request: &AgentTurnRequest,
-        mut result: AgentTurnResult,
+        result: &mut AgentTurnResult,
         context: &mut Option<&mut ContextManager>,
         messages: &[Message],
         pre_run_len: usize,
@@ -738,12 +759,16 @@ impl AgentLoop {
             code: err.code().to_string(),
             message: err.message().to_string(),
         });
-        let result = result
-            .with_stop_reason(reason)
-            .with_status(AgentTurnStatus::Stopped)
-            .with_messages(messages.to_vec());
-        commit_turn_history(context, request.session(), messages, pre_run_len);
-        result
+        self.finish(
+            request,
+            result,
+            context,
+            messages,
+            pre_run_len,
+            None,
+            reason,
+            AgentTurnStatus::Stopped,
+        )
     }
 
     /// Stop the turn on cancellation: mark it stopped with the
@@ -752,17 +777,137 @@ impl AgentLoop {
     fn stop_cancelled(
         &self,
         request: &AgentTurnRequest,
-        result: AgentTurnResult,
+        result: &mut AgentTurnResult,
         context: &mut Option<&mut ContextManager>,
         messages: &[Message],
         pre_run_len: usize,
     ) -> AgentTurnResult {
-        let result = result
-            .with_stop_reason(AgentTurnStopReason::Cancelled)
-            .with_status(AgentTurnStatus::Stopped)
+        self.finish(
+            request,
+            result,
+            context,
+            messages,
+            pre_run_len,
+            None,
+            AgentTurnStopReason::Cancelled,
+            AgentTurnStatus::Stopped,
+        )
+    }
+
+    /// Stop the turn when the max-tool-step guard trips (used by both
+    /// the pre-round and the mid-round check).
+    fn stop_max_steps(
+        &self,
+        request: &AgentTurnRequest,
+        result: &mut AgentTurnResult,
+        context: &mut Option<&mut ContextManager>,
+        messages: &[Message],
+        pre_run_len: usize,
+    ) -> AgentTurnResult {
+        self.finish(
+            request,
+            result,
+            context,
+            messages,
+            pre_run_len,
+            None,
+            AgentTurnStopReason::MaxToolStepsExceeded,
+            AgentTurnStatus::Stopped,
+        )
+    }
+
+    /// Finish the turn: stamp the result with the stop reason, status,
+    /// and transcript (plus the final assistant message when the turn
+    /// ended on a model response), commit the turn slice to the active
+    /// history store, and hand back the final result (AC-08). Every
+    /// stop path funnels through here so result stamping and history
+    /// commits cannot drift.
+    ///
+    /// The parameters are the shared turn state threaded through the
+    /// skeleton's stop paths; grouping them would hide the flow (AC-08).
+    #[allow(clippy::too_many_arguments)]
+    fn finish(
+        &self,
+        request: &AgentTurnRequest,
+        result: &mut AgentTurnResult,
+        context: &mut Option<&mut ContextManager>,
+        messages: &[Message],
+        pre_run_len: usize,
+        final_response: Option<Message>,
+        stop_reason: AgentTurnStopReason,
+        status: AgentTurnStatus,
+    ) -> AgentTurnResult {
+        let mut result = take_result(result)
+            .with_stop_reason(stop_reason)
+            .with_status(status)
             .with_messages(messages.to_vec());
+        if let Some(response) = final_response {
+            result = result.with_final_response(response);
+        }
         commit_turn_history(context, request.session(), messages, pre_run_len);
         result
+    }
+
+    /// Execute the round's tool calls sequentially through the
+    /// registry, appending observations and emitting `ToolInvoked`
+    /// events (AC-08). Shared by both turn paths. Returns `Some` with
+    /// the final result when a stop condition (max-tool-step guard or
+    /// cancellation) tripped mid-round; `None` when all calls executed
+    /// and the loop should continue.
+    ///
+    /// The parameters are the shared turn state threaded through the
+    /// skeleton's stop paths; grouping them would hide the flow (AC-08).
+    #[allow(clippy::too_many_arguments)]
+    async fn execute_tool_calls(
+        &self,
+        request: &AgentTurnRequest,
+        result: &mut AgentTurnResult,
+        context: &mut Option<&mut ContextManager>,
+        messages: &mut Vec<Message>,
+        pre_run_len: usize,
+        registry: &Arc<AgentToolRegistry>,
+        tool_calls: &[ToolCall],
+        max_tool_steps: usize,
+        tool_steps_taken: &mut usize,
+    ) -> Option<AgentTurnResult> {
+        for tool_call in tool_calls {
+            // The guard fires *before* each tool call so the limit is
+            // exact, not just per-round.
+            if *tool_steps_taken >= max_tool_steps {
+                return Some(self.stop_max_steps(request, result, context, messages, pre_run_len));
+            }
+            // Check cancellation before each tool execution.
+            if request.cancel_token().is_cancelled() {
+                return Some(self.stop_cancelled(request, result, context, messages, pre_run_len));
+            }
+            *tool_steps_taken += 1;
+            let tool_name = ToolName::new(tool_call.name());
+
+            self.sink.handle(&AgentEvent::ToolInvoked {
+                session_id: request.session().id().clone(),
+                tool: tool_name.clone(),
+                id: Some(tool_call.id().clone()),
+            });
+
+            let tool_context = ToolContext::new(
+                request.session().workspace_scope().clone(),
+                request.session().id().clone(),
+                request.session().mode(),
+            )
+            .with_permissions(request.session().permissions().clone());
+
+            let tool_result = self
+                .execute_tool(registry, &tool_name, tool_call, &tool_context)
+                .await;
+
+            let observation_content = tool_observation_text(&tool_result);
+            result.push_tool_call(tool_result);
+            messages.push(Message::tool_result(
+                tool_call.id().clone(),
+                observation_content,
+            ));
+        }
+        None
     }
 
     /// Execute a single tool call through the registry, translating
@@ -850,6 +995,26 @@ impl AgentLoop {
             message: err.message().to_string(),
         });
     }
+}
+
+/// Build the turn result skeleton stamped at turn start: turn/session
+/// ids, mode, provider, model, and `Running` status (AC-08).
+fn base_result(request: &AgentTurnRequest) -> AgentTurnResult {
+    AgentTurnResult::new()
+        .with_turn_id(request.turn_id().clone())
+        .with_session_id(request.session().id().clone())
+        .with_mode(request.session().mode())
+        .with_provider(request.session().provider().clone())
+        .with_model(request.model().clone())
+        .with_status(AgentTurnStatus::Running)
+}
+
+/// Consume-and-replace: hand out the current result value (the
+/// stamp-with-* builders take `self` by value) and leave a fresh empty
+/// result in `slot`, which callers immediately overwrite with the
+/// builder-chain output (AC-08).
+fn take_result(slot: &mut AgentTurnResult) -> AgentTurnResult {
+    std::mem::replace(slot, AgentTurnResult::new())
 }
 
 /// Media types of the `image/*` file blocks present in `messages`,
@@ -2382,10 +2547,7 @@ mod tests {
         assert_eq!(result.status(), AgentTurnStatus::Stopped);
         assert_eq!(result.stop_reason(), AgentTurnStopReason::Truncated);
         // The partial response is still available to hosts.
-        assert_eq!(
-            result.final_response().unwrap().content(),
-            "partial answer"
-        );
+        assert_eq!(result.final_response().unwrap().content(), "partial answer");
     }
 
     #[tokio::test]
@@ -2736,10 +2898,15 @@ mod tests {
         assert_eq!(seen[0], vec!["", "u1"]);
         assert_eq!(seen[1], vec!["", "u1", "done", "u2"]);
         assert_eq!(seen[2], vec!["", "u1", "done", "u2", "done", "u3"]);
-        assert_eq!(seen[3], vec!["", "u1", "done", "u2", "done", "u3", "done", "u4"]);
+        assert_eq!(
+            seen[3],
+            vec!["", "u1", "done", "u2", "done", "u3", "done", "u4"]
+        );
         assert_eq!(
             seen[4],
-            vec!["", "u1", "done", "u2", "done", "u3", "done", "u4", "done", "u5"]
+            vec![
+                "", "u1", "done", "u2", "done", "u3", "done", "u4", "done", "u5"
+            ]
         );
 
         // The context manager owns the history; the session transcript
@@ -2749,11 +2916,8 @@ mod tests {
         // persist/load round trip after a turn: the loaded manager
         // serves the same windowed history as the live one.
         context.persist("sess-ctx").expect("persist failed");
-        let mut loaded = ContextManager::load(
-            "sess-ctx",
-            ContextConfig::new(10_000, 2, dir),
-        )
-        .expect("load failed");
+        let mut loaded = ContextManager::load("sess-ctx", ContextConfig::new(10_000, 2, dir))
+            .expect("load failed");
         assert_eq!(loaded.token_count(), context.token_count());
         let prepared = loaded.prepare_messages("", &[Message::user("u6")]);
         let contents: Vec<String> = prepared.iter().map(|m| m.content().to_string()).collect();
@@ -2936,10 +3100,12 @@ mod tests {
         // The summarizer failure is registered; no event is emitted;
         // the turn completed via plain eviction.
         assert!(context.consecutive_compaction_failures() >= 1);
-        assert!(!sink
-            .events()
-            .iter()
-            .any(|e| matches!(e, AgentEvent::ContextCompacted { .. })));
+        assert!(
+            !sink
+                .events()
+                .iter()
+                .any(|e| matches!(e, AgentEvent::ContextCompacted { .. }))
+        );
         // The window still bounds the history.
         assert!(context.token_count() <= 10_000);
     }
