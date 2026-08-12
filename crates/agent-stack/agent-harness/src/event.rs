@@ -69,6 +69,16 @@ pub enum AgentEvent {
         session_id: AgentSessionId,
         text: String,
     },
+    /// A summarization compaction replaced evicted history with a
+    /// sticky summary (CM-V2e). `summary` is the new summary text;
+    /// `tokens_before` / `tokens_after` are the estimated token counts
+    /// of the replaced range and the summary.
+    ContextCompacted {
+        session_id: AgentSessionId,
+        summary: String,
+        tokens_before: usize,
+        tokens_after: usize,
+    },
 }
 
 impl AgentEvent {
@@ -84,7 +94,8 @@ impl AgentEvent {
             | Self::ProviderError { session_id, .. }
             | Self::ProposalReady { session_id, .. }
             | Self::ContentDelta { session_id, .. }
-            | Self::ReasoningDelta { session_id, .. } => session_id,
+            | Self::ReasoningDelta { session_id, .. }
+            | Self::ContextCompacted { session_id, .. } => session_id,
         }
     }
 }

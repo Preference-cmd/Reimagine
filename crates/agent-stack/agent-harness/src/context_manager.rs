@@ -448,6 +448,14 @@ impl ContextManager {
         self.consecutive_compaction_failures
     }
 
+    /// `true` while the window has messages pending eviction (the
+    /// range a compaction pass would summarize). Compaction is only
+    /// meaningful when this holds — with a single turn the window
+    /// keeps everything and there is nothing to compress.
+    pub fn has_eviction_pending(&self) -> bool {
+        !self.window_plan().disappearing_ranges().is_empty()
+    }
+
     /// `true` while compaction attempts are allowed. Flipped `false`
     /// after [`MAX_CONSECUTIVE_COMPACTION_FAILURES`] consecutive
     /// failures (防 thrash) and stays `false` for the rest of the

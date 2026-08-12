@@ -888,6 +888,13 @@ pub enum AgentStreamEvent {
     /// Final usage report. Optional because not every provider surfaces
     /// usage in the stream.
     Usage(Usage),
+    /// Server-side compaction notification (OpenAI Responses API):
+    /// the provider replaced earlier conversation items with an
+    /// opaque compaction item. `item_id` identifies it. Informational
+    /// for the runtime — the compacted content is not human-readable
+    /// and is never replayed into history (CM-V2e, PV-01b reserved
+    /// channel).
+    Compacted { item_id: String },
     /// Stream completed; the runtime stops reading.
     Done { stop_reason: Option<String> },
 }

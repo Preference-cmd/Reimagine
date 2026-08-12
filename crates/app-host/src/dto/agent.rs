@@ -221,6 +221,21 @@ impl From<&AgentEvent> for AgentEventPayload {
                 code: None,
                 message: Some(text.clone()),
             },
+            AgentEvent::ContextCompacted {
+                session_id,
+                summary,
+                tokens_before,
+                tokens_after,
+            } => Self {
+                session_id: session_id.to_string(),
+                kind: "context_compacted".to_string(),
+                tool_name: None,
+                tool_call_id: None,
+                code: None,
+                message: Some(format!(
+                    "tokens_before={tokens_before} tokens_after={tokens_after} summary={summary}"
+                )),
+            },
         }
     }
 }

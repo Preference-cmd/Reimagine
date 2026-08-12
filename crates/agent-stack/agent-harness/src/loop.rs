@@ -21,7 +21,7 @@ use crate::context::ToolContext;
 use crate::context_manager::ContextManager;
 use crate::error::{ProviderError, ToolError, ToolErrorCode};
 use crate::event::AgentEvent;
-use crate::ids::{ModelName, ToolName};
+use crate::ids::{AgentSessionId, ModelName, ToolName};
 use crate::provider::{AgentProvider, AgentRequest, AgentToolDefinition, ContentBlock, Message};
 use crate::registry::{AgentToolRegistry, ToolRegistryError};
 use crate::turn::{
@@ -177,6 +177,16 @@ impl AgentLoop {
         let mut messages: Vec<Message>;
         let pre_run_len: usize;
         if let Some(manager) = context.as_deref_mut() {
+            // Compaction driver (CM-V2e): when the stored history
+            // crosses the soft budget line and the thrash guard allows,
+            // summarize the eviction range before the window is
+            // applied. Failures fall back to plain eviction inside
+            // `prepare_messages`; the turn still completes.
+            if let Some(event) = maybe_compact(manager, self.provider.as_ref(), request.model(), request.session().id())
+                .await
+            {
+                self.sink.handle(&event);
+            }
             messages = manager.prepare_messages("", request.input());
             pre_run_len = messages.len() - request.input().len();
         } else {
@@ -379,6 +389,12 @@ impl AgentLoop {
         let mut messages: Vec<Message>;
         let pre_run_len: usize;
         if let Some(manager) = context.as_deref_mut() {
+            // Compaction driver (CM-V2e): see `run_turn`.
+            if let Some(event) = maybe_compact(manager, self.provider.as_ref(), request.model(), request.session().id())
+                .await
+            {
+                self.sink.handle(&event);
+            }
             messages = manager.prepare_messages("", request.input());
             pre_run_len = messages.len() - request.input().len();
         } else {
@@ -483,6 +499,16 @@ impl AgentLoop {
                     }
                     crate::provider::AgentStreamEvent::Usage(u) => {
                         result = result.with_usage(u);
+                    }
+                    // Server-side compaction (Responses API, PV-01b
+                    // reserved channel): informational. The opaque
+                    // compacted content is never replayed into the
+                    // message history.
+                    crate::provider::AgentStreamEvent::Compacted { item_id } => {
+                        tracing::info!(
+                            item_id,
+                            "provider compacted conversation server-side"
+                        );
                     }
                     crate::provider::AgentStreamEvent::Done { stop_reason } => {
                         if let Some(reason) = stop_reason {
@@ -766,6 +792,67 @@ async fn enforce_image_modality_gate(
             info.input_modalities()
         ),
     ))
+}
+
+/// Upper bound for the summarization reply (CM-V2c decision: 3k,
+/// clamp 2k-4k). The summary is produced by the same provider as the
+/// turn, in a dedicated request that never enters the session history.
+const SUMMARY_MAX_TOKENS: usize = 3_000;
+
+/// Compaction driver (CM-V2e, decision table M3 loop-driven seam):
+/// when the stored history crossed the soft budget line and the
+/// thrash guard allows, build the summarizer request from the
+/// eviction range, run it through the same provider/model as the
+/// turn, and apply the reply as a sticky summary.
+///
+/// Failure handling:
+/// - summarizer request fails -> `record_compaction_failure` and the
+///   caller's `prepare_messages` falls back to plain eviction
+///   (drop-oldest); the turn still completes.
+/// - the window changed between request and apply
+///   (`CompactionStale`) -> the summary is dropped and plain
+///   eviction applies.
+/// - consecutive failures reach [`MAX_CONSECUTIVE_COMPACTION_FAILURES`]
+///   -> [`ContextManager::should_attempt_compaction`] stops attempts
+///   for the rest of the session (防 thrash).
+///
+/// Returns the `ContextCompacted` event to emit, if any. The
+/// summarizer call is not part of the session history.
+async fn maybe_compact(
+    manager: &mut ContextManager,
+    provider: &dyn AgentProvider,
+    model: &ModelName,
+    session_id: &AgentSessionId,
+) -> Option<AgentEvent> {
+    if !manager.needs_compaction() || !manager.should_attempt_compaction() {
+        return None;
+    }
+    if !manager.has_eviction_pending() {
+        // Nothing would be summarized (e.g. a single-turn history the
+        // window keeps whole); skip the summarizer call.
+        return None;
+    }
+    let summarize_messages = manager.summarize_request();
+    let provider_request = AgentRequest::new(model.clone(), summarize_messages)
+        .with_options(serde_json::json!({ "max_tokens": SUMMARY_MAX_TOKENS }));
+    let summary_text = match provider.complete(provider_request).await {
+        Ok(response) => response.message().content().to_owned(),
+        Err(_) => {
+            manager.record_compaction_failure();
+            return None;
+        }
+    };
+    match manager.apply_summary(summary_text) {
+        Ok(record) => Some(AgentEvent::ContextCompacted {
+            session_id: session_id.clone(),
+            summary: record.text,
+            tokens_before: record.tokens_before,
+            tokens_after: record.tokens_after,
+        }),
+        // CompactionStale: the window moved while summarizing — drop
+        // the summary and let plain eviction handle the window.
+        Err(_) => None,
+    }
 }
 
 /// Append the messages produced during this turn to the session's
@@ -2208,7 +2295,13 @@ mod tests {
         }
 
         let dir = temp_session_dir("ctx-loop");
-        let config = ContextConfig::new(10_000, 2, dir.clone());
+        // reserved 0 puts the soft trigger at the hard limit (10k):
+        // the tiny test history never compacts, so this test exercises
+        // prepare/commit wiring only (compaction has dedicated tests).
+        let config = ContextConfig {
+            reserved_tokens: 0,
+            ..ContextConfig::new(10_000, 2, dir.clone())
+        };
         let mut context = ContextManager::new(config);
         let session = make_session(AgentToolRegistry::new());
         let provider = Arc::new(CapturingProvider {
@@ -2233,13 +2326,17 @@ mod tests {
 
         // The provider received prepare_messages output: an (empty,
         // V1 has no system prompt) system message, the windowed
-        // history, then this turn's input.
+        // history, then this turn's input. Within the (10k) budget the
+        // window keeps everything.
         let seen = provider.seen_message_contents.lock().unwrap().clone();
         assert_eq!(seen[0], vec!["", "u1"]);
         assert_eq!(seen[1], vec!["", "u1", "done", "u2"]);
         assert_eq!(seen[2], vec!["", "u1", "done", "u2", "done", "u3"]);
-        assert_eq!(seen[3], vec!["", "u2", "done", "u3", "done", "u4"]);
-        assert_eq!(seen[4], vec!["", "u3", "done", "u4", "done", "u5"]);
+        assert_eq!(seen[3], vec!["", "u1", "done", "u2", "done", "u3", "done", "u4"]);
+        assert_eq!(
+            seen[4],
+            vec!["", "u1", "done", "u2", "done", "u3", "done", "u4", "done", "u5"]
+        );
 
         // The context manager owns the history; the session transcript
         // must stay untouched.
@@ -2257,6 +2354,274 @@ mod tests {
         let prepared = loaded.prepare_messages("", &[Message::user("u6")]);
         let contents: Vec<String> = prepared.iter().map(|m| m.content().to_string()).collect();
         assert_eq!(contents, vec!["", "u4", "done", "u5", "done", "u6"]);
+    }
+
+    // ----- compaction driver (CM-V2e) -----
+
+    /// Provider that answers summarizer prompts (a lone user message
+    /// starting with the schema prompt) with a fixed summary and every
+    /// other request with "done".
+    struct SummarizingProvider {
+        name: ProviderName,
+        seen: Mutex<Vec<Vec<String>>>,
+        summarize_calls: Mutex<usize>,
+        fail_summarize: Mutex<bool>,
+    }
+
+    impl SummarizingProvider {
+        fn new(name: &str) -> Self {
+            Self {
+                name: ProviderName::new(name),
+                seen: Mutex::new(Vec::new()),
+                summarize_calls: Mutex::new(0),
+                fail_summarize: Mutex::new(false),
+            }
+        }
+
+        fn is_summarize_request(request: &AgentRequest) -> bool {
+            request.messages().len() == 1
+                && request.messages()[0]
+                    .content()
+                    .starts_with("Summarize the conversation")
+        }
+    }
+
+    #[async_trait]
+    impl AgentProvider for SummarizingProvider {
+        fn name(&self) -> ProviderName {
+            self.name.clone()
+        }
+
+        async fn complete(&self, request: AgentRequest) -> Result<AgentResponse, ProviderError> {
+            if Self::is_summarize_request(&request) {
+                *self.summarize_calls.lock().unwrap() += 1;
+                if *self.fail_summarize.lock().unwrap() {
+                    return Err(ProviderError::new("SUMMARIZE_FAIL", "summarizer down"));
+                }
+                return Ok(response_with_text("summary-text"));
+            }
+            self.seen.lock().unwrap().push(
+                request
+                    .messages()
+                    .iter()
+                    .map(|m| m.content().to_string())
+                    .collect(),
+            );
+            Ok(response_with_text("done"))
+        }
+
+        async fn stream(
+            &self,
+            _request: AgentRequest,
+        ) -> Result<Box<dyn AgentStream>, ProviderError> {
+            Ok(Box::new(UnusedStream))
+        }
+
+        async fn list_models(&self) -> Result<Vec<ModelInfo>, ProviderError> {
+            Ok(Vec::new())
+        }
+    }
+
+    fn big_turn_input(i: usize) -> Vec<Message> {
+        // One turn (~1.3k tokens) already crosses the 1k soft line.
+        vec![Message::user(format!("u{i}:{}", "a".repeat(5_000)))]
+    }
+
+    #[tokio::test]
+    async fn run_turn_compacts_before_window_when_soft_triggered() {
+        let dir = temp_session_dir("ctx-compact");
+        let config = ContextConfig {
+            reserved_tokens: 9_000, // soft line at 1k
+            tail_turns: 1,
+            ..ContextConfig::new(10_000, 2, dir)
+        };
+        let mut context = ContextManager::new(config);
+        let session = make_session(AgentToolRegistry::new());
+        let provider = Arc::new(SummarizingProvider::new("summarize"));
+        let sink = Arc::new(VecAgentEventSink::new());
+        let loop_harness = AgentLoop::new(provider.clone(), sink.clone());
+
+        // Two turns cross the soft line; with tail_turns = 1 the first
+        // turn is pending eviction.
+        for i in 1..=2 {
+            let req = AgentTurnRequest::new(
+                session.clone(),
+                AgentTurnId::new(format!("fill-{i}")),
+                ModelName::new("test-model"),
+                big_turn_input(i),
+            );
+            let result = loop_harness.run_turn(req, Some(&mut context)).await;
+            assert_eq!(result.status(), AgentTurnStatus::Completed);
+        }
+        assert!(context.needs_compaction());
+        assert!(context.has_eviction_pending());
+        let seen_before = provider.seen.lock().unwrap().len();
+
+        // The next turn trips the soft trigger: the summarizer runs
+        // first, then the windowed request starts with the sticky
+        // summary.
+        let req = AgentTurnRequest::new(
+            session.clone(),
+            AgentTurnId::new("compact-1"),
+            ModelName::new("test-model"),
+            big_turn_input(3),
+        );
+        let result = loop_harness.run_turn(req, Some(&mut context)).await;
+        assert_eq!(result.status(), AgentTurnStatus::Completed);
+        assert_eq!(*provider.summarize_calls.lock().unwrap(), 1);
+        assert_eq!(context.sticky_count(), 1);
+
+        let seen = provider.seen.lock().unwrap().clone();
+        assert_eq!(seen.len(), seen_before + 1);
+        assert_eq!(seen[seen_before][1], "summary-text");
+
+        // The event carries the record details.
+        let events = sink.events();
+        let compacted: Vec<&AgentEvent> = events
+            .iter()
+            .filter(|e| matches!(e, AgentEvent::ContextCompacted { .. }))
+            .collect();
+        assert_eq!(compacted.len(), 1);
+        if let AgentEvent::ContextCompacted {
+            summary,
+            tokens_before,
+            tokens_after,
+            ..
+        } = compacted[0]
+        {
+            assert_eq!(summary, "summary-text");
+            assert!(*tokens_before > 0);
+            assert!(*tokens_after > 0);
+        }
+    }
+
+    #[tokio::test]
+    async fn run_turn_compaction_failure_falls_back_to_eviction() {
+        let dir = temp_session_dir("ctx-compact-fail");
+        let config = ContextConfig {
+            reserved_tokens: 9_000,
+            tail_turns: 1,
+            ..ContextConfig::new(10_000, 2, dir)
+        };
+        let mut context = ContextManager::new(config);
+        let session = make_session(AgentToolRegistry::new());
+        let provider = Arc::new(SummarizingProvider::new("summarize-fail"));
+        *provider.fail_summarize.lock().unwrap() = true;
+        let sink = Arc::new(VecAgentEventSink::new());
+        let loop_harness = AgentLoop::new(provider.clone(), sink.clone());
+
+        for i in 1..=2 {
+            let req = AgentTurnRequest::new(
+                session.clone(),
+                AgentTurnId::new(format!("fill-{i}")),
+                ModelName::new("test-model"),
+                big_turn_input(i),
+            );
+            let result = loop_harness.run_turn(req, Some(&mut context)).await;
+            assert_eq!(result.status(), AgentTurnStatus::Completed);
+        }
+
+        let req = AgentTurnRequest::new(
+            session.clone(),
+            AgentTurnId::new("compact-fail"),
+            ModelName::new("test-model"),
+            big_turn_input(3),
+        );
+        let result = loop_harness.run_turn(req, Some(&mut context)).await;
+        assert_eq!(result.status(), AgentTurnStatus::Completed);
+        // The summarizer failure is registered; no event is emitted;
+        // the turn completed via plain eviction.
+        assert!(context.consecutive_compaction_failures() >= 1);
+        assert!(!sink
+            .events()
+            .iter()
+            .any(|e| matches!(e, AgentEvent::ContextCompacted { .. })));
+        // The window still bounds the history.
+        assert!(context.token_count() <= 10_000);
+    }
+
+    #[tokio::test]
+    async fn run_turn_compaction_thrash_stops_attempts() {
+        let dir = temp_session_dir("ctx-thrash");
+        let config = ContextConfig {
+            reserved_tokens: 9_000,
+            tail_turns: 1,
+            ..ContextConfig::new(10_000, 2, dir)
+        };
+        let mut context = ContextManager::new(config);
+        let session = make_session(AgentToolRegistry::new());
+        let provider = Arc::new(SummarizingProvider::new("summarize-thrash"));
+        *provider.fail_summarize.lock().unwrap() = true;
+        let loop_harness = AgentLoop::new(provider.clone(), Arc::new(VecAgentEventSink::new()));
+
+        for i in 1..=2 {
+            let req = AgentTurnRequest::new(
+                session.clone(),
+                AgentTurnId::new(format!("fill-{i}")),
+                ModelName::new("test-model"),
+                big_turn_input(i),
+            );
+            let result = loop_harness.run_turn(req, Some(&mut context)).await;
+            assert_eq!(result.status(), AgentTurnStatus::Completed);
+        }
+
+        // Three failing compaction attempts...
+        for i in 0..3 {
+            let req = AgentTurnRequest::new(
+                session.clone(),
+                AgentTurnId::new(format!("thrash-{i}")),
+                ModelName::new("test-model"),
+                big_turn_input(100 + i),
+            );
+            let result = loop_harness.run_turn(req, Some(&mut context)).await;
+            assert_eq!(result.status(), AgentTurnStatus::Completed);
+        }
+        assert_eq!(*provider.summarize_calls.lock().unwrap(), 3);
+        assert_eq!(context.consecutive_compaction_failures(), 3);
+
+        // ...and the guard holds: no further attempts, turns still
+        // complete.
+        for i in 0..3 {
+            let req = AgentTurnRequest::new(
+                session.clone(),
+                AgentTurnId::new(format!("after-{i}")),
+                ModelName::new("test-model"),
+                big_turn_input(200 + i),
+            );
+            let result = loop_harness.run_turn(req, Some(&mut context)).await;
+            assert_eq!(result.status(), AgentTurnStatus::Completed);
+        }
+        assert_eq!(*provider.summarize_calls.lock().unwrap(), 3);
+        assert!(!context.should_attempt_compaction());
+    }
+
+    #[tokio::test]
+    async fn run_turn_streaming_consumes_server_compaction() {
+        // A server-side compaction notification is informational: the
+        // turn completes with only the real content.
+        let provider = Arc::new(StreamingProvider::new(
+            "server-compact",
+            vec![vec![
+                crate::provider::AgentStreamEvent::Compacted {
+                    item_id: "fc_compacted_1".to_string(),
+                },
+                crate::provider::AgentStreamEvent::ContentDelta("final".to_string()),
+                crate::provider::AgentStreamEvent::Done { stop_reason: None },
+            ]],
+        ));
+        let loop_harness = AgentLoop::new(provider.clone(), Arc::new(VecAgentEventSink::new()));
+        let session = make_session(AgentToolRegistry::new());
+        let req = AgentTurnRequest::new(
+            session.clone(),
+            AgentTurnId::new("stream-compacted"),
+            ModelName::new("test-model"),
+            vec![Message::user("hi")],
+        );
+        let result = loop_harness.run_turn_streaming(req, None).await;
+        assert_eq!(result.status(), AgentTurnStatus::Completed);
+        let messages = result.messages();
+        assert_eq!(messages.len(), 2);
+        assert_eq!(messages[1].content(), "final");
     }
 
     // ----- image modality gate (PV-03b) -----

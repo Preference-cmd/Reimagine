@@ -22,12 +22,14 @@ use crate::init::{DaemonInitError, DaemonWorkspace};
 use crate::protocol::{
     AgentErrorParams, ClientInfo, ContentDeltaParams, InitializeRequest, InitializeResponse,
     JsonRpcError, JsonRpcNotification, JsonRpcRequest, JsonRpcResponse, METHOD_AGENT_CONTENT_DELTA,
-    METHOD_AGENT_ERROR, METHOD_AGENT_PROPOSAL_READY, METHOD_AGENT_REASONING_DELTA,
+    METHOD_AGENT_CONTEXT_COMPACTED, METHOD_AGENT_ERROR, METHOD_AGENT_PROPOSAL_READY,
+    METHOD_AGENT_REASONING_DELTA,
     METHOD_AGENT_SESSION_STARTED, METHOD_AGENT_SESSION_STOPPED, METHOD_AGENT_TOOL_COMPLETED,
     METHOD_AGENT_TOOL_FAILED, METHOD_AGENT_TOOL_INVOKED, METHOD_AGENT_TURN_COMPLETED,
     METHOD_INITIALIZE, METHOD_INITIALIZED, METHOD_PROVIDERS_LIST, METHOD_SESSION_CREATE,
     METHOD_SESSION_GET, METHOD_SESSION_LIST, METHOD_TURN_CANCEL, METHOD_TURN_RUN, METHOD_TURN_STEER,
-    ProposalReadyParams, ProviderInfo, ProvidersListResult, ReasoningDeltaParams,
+    ContextCompactedParams, ProposalReadyParams, ProviderInfo, ProvidersListResult,
+    ReasoningDeltaParams,
     ServerCapabilities, ServerInfo, SessionCreateParams, SessionCreateResult, SessionGetParams,
     SessionInfo, SessionListResult, SessionStartedParams, SessionStoppedParams, ToolEventParams,
     TurnCancelParams, TurnCancelResult, TurnCancelStatus, TurnCompletedParams,
@@ -613,6 +615,21 @@ impl<W: Write + Send> TurnEventSink<W> {
                     session_id: self.session_id.to_string(),
                     turn_id: self.turn_id.to_string(),
                     text: text.clone(),
+                }),
+            )),
+            AgentEvent::ContextCompacted {
+                summary,
+                tokens_before,
+                tokens_after,
+                ..
+            } => Some((
+                METHOD_AGENT_CONTEXT_COMPACTED,
+                to_value(ContextCompactedParams {
+                    session_id: self.session_id.to_string(),
+                    turn_id: self.turn_id.to_string(),
+                    summary: summary.clone(),
+                    tokens_before: *tokens_before as u64,
+                    tokens_after: *tokens_after as u64,
                 }),
             )),
             AgentEvent::ToolInvoked { tool, id, .. } => {

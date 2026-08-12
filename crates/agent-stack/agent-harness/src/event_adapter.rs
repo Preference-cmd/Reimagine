@@ -230,6 +230,23 @@ impl DomainEventAdapter<AgentEvent> for AgentDomainEventAdapter {
                 );
                 EventReport::with_event(ev)
             }
+            AgentEvent::ContextCompacted {
+                session_id,
+                summary,
+                tokens_before,
+                tokens_after,
+            } => {
+                let _ = (summary, tokens_before, tokens_after); // Full
+                // detail travels via the daemon JSON-RPC notification;
+                // the domain event carries kind + subject only.
+                let ev = Self::build_event(
+                    "agent.context_compacted",
+                    source_name,
+                    Self::subject_session(session_id.as_str()),
+                    correlation_id.as_ref(),
+                );
+                EventReport::with_event(ev)
+            }
         }
     }
 }
