@@ -842,6 +842,13 @@ async fn maybe_compact(
             return None;
         }
     };
+    if summary_text.trim().is_empty() {
+        // An empty reply (refusal / truncation) must not become a
+        // sticky summary: count it as a failure and fall back to
+        // plain eviction.
+        manager.record_compaction_failure();
+        return None;
+    }
     match manager.apply_summary(summary_text) {
         Ok(record) => Some(AgentEvent::ContextCompacted {
             session_id: session_id.clone(),

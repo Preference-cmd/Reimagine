@@ -777,7 +777,10 @@ impl ContextManager {
     /// The plan reports `[sticky_end, keep_start)` as the eviction
     /// range (what summarization replaces) and `cuts` as the
     /// assistant-halves of oversized turns removed inside the keep
-    /// region (not summarized, they are dropped).
+    /// region — both feed the summarization prompt and the
+    /// replacement range (everything that disappears is summarized
+    /// when compaction runs, and dropped when it falls back to plain
+    /// eviction).
     fn window_plan(&self) -> WindowPlan {
         let sticky_end = self.sticky_count.min(self.history.len());
         let turns = turn_spans(&self.history[sticky_end..]);

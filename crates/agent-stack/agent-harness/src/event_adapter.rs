@@ -393,4 +393,23 @@ mod tests {
             "corr-1"
         );
     }
+
+    #[test]
+    fn context_compacted_projects_kind_and_subject() {
+        // CM-V2e: the domain event carries kind + subject only; the
+        // full summary/token detail travels via the daemon JSON-RPC
+        // notification.
+        let report = <AgentDomainEventAdapter as DomainEventAdapter<AgentEvent>>::adapt(
+            AgentEvent::ContextCompacted {
+                session_id: crate::ids::AgentSessionId::new("sess-1"),
+                summary: "goal: preserve".to_string(),
+                tokens_before: 12_580,
+                tokens_after: 7,
+            },
+            ctx(),
+        );
+        let ev = &report.events()[0];
+        assert_eq!(ev.kind().as_str(), "agent.context_compacted");
+        assert_eq!(ev.subject().unwrap().id(), Some("sess-1"));
+    }
 }
