@@ -1437,6 +1437,51 @@ mod tests {
         }
     }
 
+    /// A tool whose `invoke` cancels the turn's token and returns
+    /// normally. Cancellation is only observed at the loop's
+    /// checkpoints (the top of the round loop and between tool calls) —
+    /// tool execution itself is atomic, so a mid-invoke cancel lands on
+    /// the *next* checkpoint, never inside the tool (AC-15).
+    #[derive(Clone)]
+    struct CancellingTool {
+        spec: ToolSpec,
+        token: CancellationToken,
+        recorded_inputs: Arc<Mutex<Vec<Value>>>,
+    }
+
+    impl CancellingTool {
+        fn new(token: CancellationToken) -> Self {
+            Self {
+                spec: ToolSpec::new(
+                    ToolName::new("cancel"),
+                    "cancels the turn token during invoke",
+                    [AgentMode::Agent, AgentMode::Build],
+                    ToolPermission::new("workflow.read"),
+                    ToolRiskLevel::Read,
+                ),
+                token,
+                recorded_inputs: Arc::new(Mutex::new(Vec::new())),
+            }
+        }
+
+        fn recorded_inputs(&self) -> Vec<Value> {
+            self.recorded_inputs.lock().unwrap().clone()
+        }
+    }
+
+    #[async_trait]
+    impl AgentTool for CancellingTool {
+        fn spec(&self) -> ToolSpec {
+            self.spec.clone()
+        }
+
+        async fn invoke(&self, _ctx: &ToolContext, input: Value) -> ToolResult {
+            self.recorded_inputs.lock().unwrap().push(input.clone());
+            self.token.cancel();
+            Ok(json!({"cancelled": true}))
+        }
+    }
+
     // ----- harness builders -----
 
     fn tool_context_with_read_perm() -> ToolContext {
@@ -2813,6 +2858,114 @@ mod tests {
         assert_eq!(result.stop_reason(), AgentTurnStopReason::Cancelled);
     }
 
+    // ----- mid-turn cancellation checkpoints (AC-15) -----
+
+    #[tokio::test]
+    async fn run_turn_cancel_between_rounds_stops_at_next_checkpoint() {
+        // The first round requests a tool call whose `invoke` cancels
+        // the token mid-execution. The tool still runs to completion
+        // (tool execution is atomic) and its observation is recorded;
+        // the loop's next checkpoint — the top of the round loop —
+        // sees the cancelled token and stops the turn. The second
+        // scripted provider response is never consumed.
+        let cancel_token = CancellationToken::new();
+        let canceller = Arc::new(CancellingTool::new(cancel_token.clone()));
+
+        let provider = Arc::new(ScriptedProvider::new(
+            "mock",
+            vec![
+                ScriptedStep::Respond(response_with_tool_calls(vec![ToolCall::new(
+                    ToolCallId::new("c1"),
+                    "cancel",
+                    json!({"round": 1}),
+                )])),
+                ScriptedStep::Respond(response_with_text("never reached")),
+            ],
+        ));
+        let loop_harness = AgentLoop::new(provider.clone(), Arc::new(VecAgentEventSink::new()));
+        let session = session_with(|reg| {
+            reg.register((*canceller).clone()).unwrap();
+        });
+
+        let req = AgentTurnRequest::new(
+            session.clone(),
+            AgentTurnId::new("cancel-rounds"),
+            ModelName::new("test-model"),
+            vec![Message::user("hi")],
+        )
+        .with_cancel_token(cancel_token.clone());
+
+        let result = loop_harness.run_turn(req, None).await;
+        assert_eq!(result.status(), AgentTurnStatus::Stopped);
+        assert_eq!(result.stop_reason(), AgentTurnStopReason::Cancelled);
+        // Only the first round ran: the second scripted response is
+        // still queued and was never requested.
+        assert_eq!(provider.call_count(), 1);
+        // The tool executed and its observation was recorded into the
+        // transcript before the checkpoint stopped the turn.
+        assert_eq!(canceller.recorded_inputs().len(), 1);
+        assert_eq!(result.tool_calls().len(), 1);
+        assert_eq!(result.tool_calls()[0].status(), ToolCallStatus::Succeeded);
+        let messages = result.messages();
+        assert_eq!(messages.len(), 3); // user + assistant tool call + tool observation
+        assert_eq!(messages[2].role(), "tool");
+        assert_eq!(messages[2].tool_call_id().unwrap().as_str(), "c1");
+        // The cancelled turn still committed the messages seen so far.
+        assert_eq!(session.history_len(), 3);
+    }
+
+    #[tokio::test]
+    async fn run_turn_cancel_between_tool_calls_skips_remaining_calls() {
+        // One round requests TWO tool calls; the first tool cancels the
+        // token during its invoke. Cancellation is only checked
+        // *between* tool calls in `execute_tool_calls` — tool execution
+        // is atomic — so the second tool call is never executed and the
+        // turn stops at the mid-round checkpoint with `Cancelled`.
+        let cancel_token = CancellationToken::new();
+        let canceller = Arc::new(CancellingTool::new(cancel_token.clone()));
+        let second = Arc::new(ScriptedTool::success("second", vec![json!({"ran": true})]));
+
+        let provider = Arc::new(ScriptedProvider::new(
+            "mock",
+            vec![ScriptedStep::Respond(response_with_tool_calls(vec![
+                ToolCall::new(ToolCallId::new("c1"), "cancel", json!({"step": 1})),
+                ToolCall::new(ToolCallId::new("c2"), "second", json!({"step": 2})),
+            ]))],
+        ));
+        let loop_harness = AgentLoop::new(provider.clone(), Arc::new(VecAgentEventSink::new()));
+        let session = session_with(|reg| {
+            reg.register((*canceller).clone()).unwrap();
+            reg.register((*second).clone()).unwrap();
+        });
+
+        let req = AgentTurnRequest::new(
+            session.clone(),
+            AgentTurnId::new("cancel-mid-round"),
+            ModelName::new("test-model"),
+            vec![Message::user("hi")],
+        )
+        .with_cancel_token(cancel_token.clone());
+
+        let result = loop_harness.run_turn(req, None).await;
+        assert_eq!(result.status(), AgentTurnStatus::Stopped);
+        assert_eq!(result.stop_reason(), AgentTurnStopReason::Cancelled);
+        // The first tool ran; the second never executed.
+        assert_eq!(canceller.recorded_inputs().len(), 1);
+        assert_eq!(
+            second.recorded_inputs().len(),
+            0,
+            "the second tool call must not execute after mid-round cancel"
+        );
+        assert_eq!(provider.call_count(), 1);
+        assert_eq!(result.tool_calls().len(), 1);
+        // The transcript ends on the first tool observation (the
+        // unexecuted second call has no observation).
+        let messages = result.messages();
+        assert_eq!(messages.len(), 3);
+        assert_eq!(messages[2].role(), "tool");
+        assert_eq!(messages[2].tool_call_id().unwrap().as_str(), "c1");
+    }
+
     // ------------------------------------------------------------------
     // Context manager integration
     // ------------------------------------------------------------------
@@ -2934,6 +3087,9 @@ mod tests {
         seen: Mutex<Vec<Vec<String>>>,
         summarize_calls: Mutex<usize>,
         fail_summarize: Mutex<bool>,
+        /// When set, the summarizer replies with an empty message
+        /// (refusal / truncation) instead of the fixed summary.
+        empty_summary: Mutex<bool>,
     }
 
     impl SummarizingProvider {
@@ -2943,6 +3099,7 @@ mod tests {
                 seen: Mutex::new(Vec::new()),
                 summarize_calls: Mutex::new(0),
                 fail_summarize: Mutex::new(false),
+                empty_summary: Mutex::new(false),
             }
         }
 
@@ -2966,6 +3123,9 @@ mod tests {
                 if *self.fail_summarize.lock().unwrap() {
                     return Err(ProviderError::new("SUMMARIZE_FAIL", "summarizer down"));
                 }
+                if *self.empty_summary.lock().unwrap() {
+                    return Ok(response_with_text(""));
+                }
                 return Ok(response_with_text("summary-text"));
             }
             self.seen.lock().unwrap().push(
@@ -2983,6 +3143,55 @@ mod tests {
             _request: AgentRequest,
         ) -> Result<Box<dyn AgentStream>, ProviderError> {
             Ok(Box::new(UnusedStream))
+        }
+
+        async fn list_models(&self) -> Result<Vec<ModelInfo>, ProviderError> {
+            Ok(Vec::new())
+        }
+    }
+
+    /// Provider for the streaming compaction path: `stream()` returns
+    /// scripted streams for turn rounds while `complete()` answers
+    /// summarizer prompts — the compaction driver calls `complete` for
+    /// the summarize request even when the turn itself streams.
+    struct StreamingSummarizeProvider {
+        name: ProviderName,
+        streams: Mutex<VecDeque<Vec<AgentStreamEvent>>>,
+        summarize_calls: Mutex<usize>,
+        summary_text: Mutex<String>,
+    }
+
+    impl StreamingSummarizeProvider {
+        fn new(name: &str, streams: Vec<Vec<AgentStreamEvent>>) -> Self {
+            Self {
+                name: ProviderName::new(name),
+                streams: Mutex::new(streams.into()),
+                summarize_calls: Mutex::new(0),
+                summary_text: Mutex::new("summary-text".to_string()),
+            }
+        }
+    }
+
+    #[async_trait]
+    impl AgentProvider for StreamingSummarizeProvider {
+        fn name(&self) -> ProviderName {
+            self.name.clone()
+        }
+
+        async fn complete(&self, request: AgentRequest) -> Result<AgentResponse, ProviderError> {
+            if SummarizingProvider::is_summarize_request(&request) {
+                *self.summarize_calls.lock().unwrap() += 1;
+                return Ok(response_with_text(&self.summary_text.lock().unwrap().clone()));
+            }
+            Ok(response_with_text("done"))
+        }
+
+        async fn stream(
+            &self,
+            _request: AgentRequest,
+        ) -> Result<Box<dyn AgentStream>, ProviderError> {
+            let events = self.streams.lock().unwrap().pop_front().unwrap_or_default();
+            Ok(Box::new(MockStream { events }))
         }
 
         async fn list_models(&self) -> Result<Vec<ModelInfo>, ProviderError> {
@@ -3163,6 +3372,164 @@ mod tests {
         }
         assert_eq!(*provider.summarize_calls.lock().unwrap(), 3);
         assert!(!context.should_attempt_compaction());
+    }
+
+    #[tokio::test]
+    async fn run_turn_empty_summary_reply_falls_back_to_plain_eviction() {
+        // The summarizer answers the compaction request with an empty
+        // message (refusal / truncation). The loop driver must reject
+        // it: no sticky summary, no ContextCompacted event, and the
+        // turn still completes via plain eviction. The empty-reply
+        // guard lives in the loop driver (`maybe_compact`), not in
+        // `ContextManager::apply_summary`.
+        let dir = temp_session_dir("ctx-empty-summary");
+        let config = ContextConfig {
+            reserved_tokens: 9_000,
+            tail_turns: 1,
+            ..ContextConfig::new(10_000, 2, dir)
+        };
+        let mut context = ContextManager::new(config);
+        let session = make_session(AgentToolRegistry::new());
+        let provider = Arc::new(SummarizingProvider::new("summarize-empty"));
+        *provider.empty_summary.lock().unwrap() = true;
+        let sink = Arc::new(VecAgentEventSink::new());
+        let loop_harness = AgentLoop::new(provider.clone(), sink.clone());
+
+        // Two turns cross the soft line (same shape as the happy-path
+        // compaction test), so the third turn trips the driver.
+        for i in 1..=2 {
+            let req = AgentTurnRequest::new(
+                session.clone(),
+                AgentTurnId::new(format!("fill-{i}")),
+                ModelName::new("test-model"),
+                big_turn_input(i),
+            );
+            let result = loop_harness.run_turn(req, Some(&mut context)).await;
+            assert_eq!(result.status(), AgentTurnStatus::Completed);
+        }
+        assert!(context.needs_compaction());
+        assert!(context.has_eviction_pending());
+
+        let req = AgentTurnRequest::new(
+            session.clone(),
+            AgentTurnId::new("empty-summary"),
+            ModelName::new("test-model"),
+            big_turn_input(3),
+        );
+        let result = loop_harness.run_turn(req, Some(&mut context)).await;
+        assert_eq!(result.status(), AgentTurnStatus::Completed);
+        // The summarizer ran and its empty reply counted as a failure.
+        assert_eq!(*provider.summarize_calls.lock().unwrap(), 1);
+        assert!(context.consecutive_compaction_failures() >= 1);
+        // No summary was applied and no compaction event was emitted.
+        assert!(context.compaction_summary().is_none());
+        assert_eq!(context.sticky_count(), 0);
+        assert!(
+            !sink
+                .events()
+                .iter()
+                .any(|e| matches!(e, AgentEvent::ContextCompacted { .. }))
+        );
+        // Plain eviction still bounds the window.
+        assert!(context.token_count() <= 10_000);
+    }
+
+    #[tokio::test]
+    async fn run_turn_streaming_triggers_compaction_driver() {
+        // The compaction driver runs inside `prepare_turn`, which both
+        // turn paths share: on the streaming path the summarizer call
+        // still goes through `provider.complete` (never `stream`), and
+        // a successful summary emits `ContextCompacted` with
+        // tokens_before > tokens_after.
+        let dir = temp_session_dir("ctx-stream-compact");
+        let config = ContextConfig {
+            reserved_tokens: 9_000,
+            tail_turns: 1,
+            ..ContextConfig::new(10_000, 2, dir)
+        };
+        let mut context = ContextManager::new(config);
+        let session = make_session(AgentToolRegistry::new());
+        let provider = Arc::new(StreamingSummarizeProvider::new(
+            "stream-compact",
+            vec![
+                // Two fill turns cross the soft line...
+                vec![
+                    AgentStreamEvent::ContentDelta("fill one".into()),
+                    AgentStreamEvent::Done {
+                        stop_reason: Some("stop".into()),
+                    },
+                ],
+                vec![
+                    AgentStreamEvent::ContentDelta("fill two".into()),
+                    AgentStreamEvent::Done {
+                        stop_reason: Some("stop".into()),
+                    },
+                ],
+                // ...and the third turn trips the compaction driver
+                // before its round streams.
+                vec![
+                    AgentStreamEvent::ContentDelta("final".into()),
+                    AgentStreamEvent::Done {
+                        stop_reason: Some("stop".into()),
+                    },
+                ],
+            ],
+        ));
+        let sink = Arc::new(VecAgentEventSink::new());
+        let loop_harness = AgentLoop::new(provider.clone(), sink.clone());
+
+        for i in 1..=2 {
+            let req = AgentTurnRequest::new(
+                session.clone(),
+                AgentTurnId::new(format!("fill-{i}")),
+                ModelName::new("test-model"),
+                big_turn_input(i),
+            );
+            let result = loop_harness.run_turn_streaming(req, Some(&mut context)).await;
+            assert_eq!(result.status(), AgentTurnStatus::Completed);
+        }
+        assert!(context.needs_compaction());
+        assert!(context.has_eviction_pending());
+
+        let req = AgentTurnRequest::new(
+            session.clone(),
+            AgentTurnId::new("stream-compact"),
+            ModelName::new("test-model"),
+            big_turn_input(3),
+        );
+        let result = loop_harness.run_turn_streaming(req, Some(&mut context)).await;
+        assert_eq!(result.status(), AgentTurnStatus::Completed);
+        assert_eq!(result.stop_reason(), AgentTurnStopReason::FinalResponse);
+        assert_eq!(result.final_response().unwrap().content(), "final");
+
+        // The summarizer was called once via `complete` and the sticky
+        // summary was applied.
+        assert_eq!(*provider.summarize_calls.lock().unwrap(), 1);
+        assert_eq!(context.sticky_count(), 1);
+        assert_eq!(
+            context.compaction_summary().map(|record| record.text.as_str()),
+            Some("summary-text")
+        );
+
+        let events = sink.events();
+        let compacted: Vec<&AgentEvent> = events
+            .iter()
+            .filter(|e| matches!(e, AgentEvent::ContextCompacted { .. }))
+            .collect();
+        assert_eq!(compacted.len(), 1);
+        if let AgentEvent::ContextCompacted {
+            summary,
+            tokens_before,
+            tokens_after,
+            ..
+        } = compacted[0]
+        {
+            assert_eq!(summary, "summary-text");
+            assert!(
+                *tokens_before > *tokens_after,
+                "compaction must shrink the stored history (before={tokens_before}, after={tokens_after})"
+            );
+        }
     }
 
     #[tokio::test]

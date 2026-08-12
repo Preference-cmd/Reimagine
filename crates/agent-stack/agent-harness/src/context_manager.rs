@@ -2222,4 +2222,184 @@ mod tests {
         assert_eq!(manager.sticky_count(), 0);
         assert!(manager.history.iter().any(|m| m.content() == "interrupt"));
     }
+
+    // ----- apply_summary invariants (AC-16) -----
+    //
+    // These tests pin the CURRENT behavior of `apply_summary` as the
+    // API-level contract. Several behaviors are known gaps guarded in
+    // the loop driver (`maybe_compact`) rather than here; each test
+    // documents which behavior it pins.
+
+    #[test]
+    fn apply_summary_accepts_empty_text() {
+        // Documented gap: the empty-reply guard lives in the loop
+        // caller (`maybe_compact` rejects empty summary text before it
+        // reaches this API), so `apply_summary("")` itself succeeds
+        // today and creates an empty sticky summary.
+        let mut manager = ContextManager::new(window_config(10_000, 2_000, 2));
+        for i in 0..60 {
+            manager.commit_turn(&turn(i, 400));
+        }
+        assert!(manager.has_eviction_pending());
+
+        let record = manager
+            .apply_summary("")
+            .expect("empty text applies (guard lives in the loop driver)");
+        assert_eq!(record.text, "");
+        // A real eviction range was replaced by the (empty) summary.
+        assert!(record.tokens_before > 0);
+        assert_eq!(manager.sticky_count(), 1);
+        // The empty summary is inserted as a sticky prefix message.
+        assert_eq!(manager.history[0].content(), "");
+        assert!(manager.compaction_summary().is_some());
+    }
+
+    #[test]
+    fn apply_summary_without_eviction_range_still_inserts_sticky() {
+        // A manager whose window has nothing to evict still applies: a
+        // redundant insert. The loop driver skips the summarizer call
+        // entirely when `has_eviction_pending()` is false, so this path
+        // only fires on direct API use (or a stale-plan bypass).
+        let mut manager = ContextManager::new(config(2));
+        manager.commit_turn(&[Message::user("u1"), Message::assistant("a1")]);
+        assert!(!manager.has_eviction_pending());
+
+        let record = manager
+            .apply_summary("redundant")
+            .expect("apply succeeds with no eviction range");
+        assert_eq!(record.tokens_before, 0);
+        // The summary was prepended; nothing was evicted.
+        assert_eq!(manager.history.len(), 3);
+        assert_eq!(manager.history[0].content(), "redundant");
+        assert_eq!(manager.sticky_count(), 1);
+    }
+
+    #[test]
+    fn apply_summary_twice_without_request_applies_both() {
+        // No pairing enforcement: two `apply_summary` calls in a row
+        // (no `summarize_request` between them) both succeed — the
+        // stale check is skipped because `request_plan` is None.
+        let mut manager = ContextManager::new(window_config(10_000, 2_000, 2));
+        for i in 0..60 {
+            manager.commit_turn(&turn(i, 400));
+        }
+
+        let first = manager
+            .apply_summary("first")
+            .expect("first apply succeeds");
+        assert_eq!(first.text, "first");
+        assert_eq!(manager.sticky_count(), 1);
+        assert_eq!(manager.history[0].content(), "first");
+
+        let second = manager
+            .apply_summary("second")
+            .expect("second apply succeeds without a new summarize_request");
+        assert_eq!(second.text, "second");
+        // Single-generation: the second summary replaced the first in
+        // place.
+        assert_eq!(manager.sticky_count(), 1);
+        assert_eq!(manager.history[0].content(), "second");
+        assert!(!manager.history.iter().any(|m| m.content() == "first"));
+        assert_eq!(
+            manager.compaction_summary().map(|r| r.text.as_str()),
+            Some("second")
+        );
+    }
+
+    #[test]
+    fn has_eviction_pending_false_for_tiny_history() {
+        let mut manager = ContextManager::new(config(2));
+        manager.commit_turn(&[Message::user("u1"), Message::assistant("a1")]);
+        assert!(!manager.has_eviction_pending());
+        manager.commit_turn(&[Message::user("u2"), Message::assistant("a2")]);
+        // Still within the window: nothing would be summarized.
+        assert!(!manager.has_eviction_pending());
+    }
+
+    #[test]
+    fn has_eviction_pending_true_when_window_has_eviction_range() {
+        let mut manager = ContextManager::new(window_config(10_000, 2_000, 2));
+        for i in 0..60 {
+            manager.commit_turn(&turn(i, 400));
+        }
+        assert!(manager.has_eviction_pending());
+        // The accessor reflects the same eviction range the
+        // summarization prompt would cover: at least the oldest turn.
+        let ranges = manager.window_plan().disappearing_ranges();
+        assert!(!ranges.is_empty());
+        assert!(ranges.iter().any(|(start, end)| end > start));
+    }
+
+    #[test]
+    fn load_compaction_summary_without_sticky_count_is_not_pinned() {
+        // A schema_version-2 file with a CompactionRecord summary
+        // present but `sticky_count: 0`, plus enough history that the
+        // summary message would be evicted: load succeeds with the
+        // record restored, but the summary is NOT pinned — the window
+        // evicts it on the next prepare. Documented gap: load does not
+        // detect the summary<->sticky inconsistency.
+        let dir = temp_session_dir("summary-not-pinned");
+        std::fs::create_dir_all(&dir).expect("mkdir failed");
+
+        let mut history = vec![json!({
+            "role": "user",
+            "content": [{"type": "text", "text": "stale summary text"}],
+            "tool_call_id": null,
+            "tool_calls": [],
+        })];
+        for i in 0..60 {
+            history.push(json!({
+                "role": "user",
+                "content": [{"type": "text", "text": format!("u{i}:{}", "a".repeat(400))}],
+                "tool_call_id": null,
+                "tool_calls": [],
+            }));
+            history.push(json!({
+                "role": "assistant",
+                "content": [{"type": "text", "text": format!("a{i}:{}", "b".repeat(400))}],
+                "tool_call_id": null,
+                "tool_calls": [],
+            }));
+        }
+        let state = json!({
+            "session_id": "sess-1",
+            "created_at": "0",
+            "history": history,
+            "compaction_summary": {
+                "text": "stale summary text",
+                "tokens_before": 12_000,
+                "tokens_after": 7,
+                "created_at": "0",
+                "attempt": 1,
+                "image_refs": [],
+            },
+            "sticky_count": 0,
+            "total_tokens": 12_000,
+            "schema_version": 2,
+        });
+        std::fs::write(dir.join("sess-1.json"), state.to_string()).expect("write failed");
+
+        // Same window shape as `window_config(10_000, 2_000, 2)`, but
+        // pointed at the temp session dir the file was written to.
+        let cfg = ContextConfig {
+            reserved_tokens: 2_000,
+            tail_turns: 2,
+            ..ContextConfig::new(10_000, 20, dir)
+        };
+        let mut loaded = ContextManager::load("sess-1", cfg).expect("load failed");
+        // Load succeeds and restores the record, but the sticky count
+        // stays 0 — the file claims no pinned prefix.
+        assert_eq!(loaded.sticky_count(), 0);
+        let record = loaded.compaction_summary().expect("record restored");
+        assert_eq!(record.text, "stale summary text");
+
+        // The summary message is not pinned: the window evicts it on
+        // the next prepare, even though `compaction_summary()` still
+        // reports it.
+        loaded.prepare_messages("sys", &[]);
+        assert!(
+            !loaded.history.iter().any(|m| m.content() == "stale summary text"),
+            "unpinned summary must be evicted by the window"
+        );
+    }
 }
