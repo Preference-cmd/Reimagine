@@ -6,7 +6,7 @@ use reimagine_core::diagnostic::{
 };
 use reimagine_core::model::DiagnosticId;
 
-use crate::ids::ToolName;
+use crate::ids::{AgentSessionId, ToolName};
 
 /// Stable, namespaced tool error codes. These are surfaced through the
 /// diagnostic bridge so hosts and agents can switch on the code.
@@ -139,22 +139,34 @@ impl DiagnosticError for ToolError {
 }
 
 impl ToolError {
-    /// Project this tool error into a core `Diagnostic`. Uses the
-    /// blanket `IntoDiagnostic` impl from `reimagine-core`.
+    /// Project this tool error into a core `Diagnostic` with a
+    /// session-scoped identity (AC-26). The diagnostic id and target
+    /// match the `AgentDomainEventAdapter`'s `ToolFailed` projection
+    /// exactly, so both projection paths produce the same identity for
+    /// the same failure:
+    ///
+    /// - id: `agent:{session}:tool:{tool}:{code}` (tool unknown →
+    ///   `agent:{session}:tool:{code}`)
+    /// - target: `agent.tool` with id `{session}:{tool}`
     pub fn to_diagnostic(
         &self,
+        session_id: &AgentSessionId,
         correlation_id: Option<reimagine_core::diagnostic::CorrelationId>,
     ) -> Diagnostic {
+        let id = match &self.tool {
+            Some(name) => format!(
+                "agent:{session_id}:tool:{}:{}",
+                name.as_str(),
+                self.code.as_str()
+            ),
+            None => format!("agent:{session_id}:tool:{}", self.code.as_str()),
+        };
         let target = match &self.tool {
             Some(name) => DiagnosticTarget::new(DiagnosticTargetDomain::new("agent.tool"))
-                .with_id(name.as_str()),
+                .with_id(format!("{session_id}:{}", name.as_str())),
             None => DiagnosticTarget::new(DiagnosticTargetDomain::new("agent.tool")),
         };
-        self.to_diagnostic_with(
-            DiagnosticId::new(self.diagnostic_id()),
-            target,
-            correlation_id,
-        )
+        self.to_diagnostic_with(DiagnosticId::new(id), target, correlation_id)
     }
 }
 
@@ -192,17 +204,42 @@ impl ProviderError {
         self.provider.as_ref()
     }
 
+    /// Whether the failure is transient and may succeed on retry
+    /// (AC-24). `true` for the transport and timeout codes and for
+    /// parseable numeric codes in the retryable HTTP ranges (429 rate
+    /// limit, 5xx server errors) — mirroring `ai-protocol`'s
+    /// `ProviderAdapterError::is_retryable`, now classified at the
+    /// harness level. `code` stays a free string; the classification
+    /// is a pure function of it (documented decision).
+    pub fn is_transient(&self) -> bool {
+        self.code == "TRANSPORT"
+            || self.code == "TIMEOUT"
+            || self
+                .code
+                .parse::<u16>()
+                .map(|c| c == 429 || (500..600).contains(&c))
+                .unwrap_or(false)
+    }
+
+    /// Project this provider error into a core `Diagnostic` with a
+    /// session-scoped identity (AC-26). The diagnostic id matches the
+    /// `AgentDomainEventAdapter`'s `ProviderError` projection exactly:
+    ///
+    /// - id: `agent:{session}:provider:{provider}:{code}` (provider
+    ///   unknown → `agent:{session}:provider:{code}`)
+    /// - target: `agent.provider` with id `{session}:{provider}`
     pub fn to_diagnostic(
         &self,
+        session_id: &AgentSessionId,
         correlation_id: Option<reimagine_core::diagnostic::CorrelationId>,
     ) -> Diagnostic {
         let id = match &self.provider {
-            Some(p) => format!("agent:provider:{}:{}", p.as_str(), self.code),
-            None => format!("agent:provider:{}", self.code),
+            Some(p) => format!("agent:{session_id}:provider:{}:{}", p.as_str(), self.code),
+            None => format!("agent:{session_id}:provider:{}", self.code),
         };
         let target = match &self.provider {
             Some(p) => DiagnosticTarget::new(DiagnosticTargetDomain::new("agent.provider"))
-                .with_id(p.as_str()),
+                .with_id(format!("{session_id}:{}", p.as_str())),
             None => DiagnosticTarget::new(DiagnosticTargetDomain::new("agent.provider")),
         };
         let mut diag = Diagnostic::new(
@@ -248,21 +285,66 @@ mod tests {
     fn tool_error_projects_to_diagnostic() {
         let err = ToolError::new(ToolErrorCode::PermissionDenied, "missing workflow.write")
             .with_tool(ToolName::new("workflow.apply_commands"));
-        let diag = err.to_diagnostic(None);
+        let session_id = AgentSessionId::new("sess-1");
+        let diag = err.to_diagnostic(&session_id, None);
         assert_eq!(diag.code().as_str(), "AGENT/TOOL_PERMISSION_DENIED");
         assert_eq!(diag.severity(), DiagnosticSeverity::Error);
         assert_eq!(diag.source().as_str(), "agent");
-        assert_eq!(diag.primary().id(), Some("workflow.apply_commands"));
+        // Session-scoped identity (AC-26): id and target match the
+        // `AgentDomainEventAdapter`'s ToolFailed projection exactly.
+        assert_eq!(
+            diag.id().as_str(),
+            "agent:sess-1:tool:workflow.apply_commands:AGENT/TOOL_PERMISSION_DENIED"
+        );
+        assert_eq!(diag.primary().domain().as_str(), "agent.tool");
+        assert_eq!(diag.primary().id(), Some("sess-1:workflow.apply_commands"));
+    }
+
+    #[test]
+    fn tool_error_without_tool_projects_session_scoped_diagnostic() {
+        let err = ToolError::new(ToolErrorCode::UnknownTool, "not registered");
+        let session_id = AgentSessionId::new("sess-2");
+        let diag = err.to_diagnostic(&session_id, None);
+        assert_eq!(diag.id().as_str(), "agent:sess-2:tool:AGENT/TOOL_UNKNOWN");
+        assert_eq!(diag.primary().domain().as_str(), "agent.tool");
+        assert_eq!(diag.primary().id(), None);
     }
 
     #[test]
     fn provider_error_projects_to_diagnostic() {
         let err = ProviderError::new("RATE_LIMIT", "slow down")
             .with_provider(crate::ids::ProviderName::new("openai"));
-        let diag = err.to_diagnostic(None);
+        let session_id = AgentSessionId::new("sess-1");
+        let diag = err.to_diagnostic(&session_id, None);
         assert_eq!(diag.code().as_str(), "AGENT/PROVIDER_RATE_LIMIT");
         assert_eq!(diag.source().as_str(), "agent");
-        assert_eq!(diag.primary().id(), Some("openai"));
+        // Session-scoped identity (AC-26): the id matches the
+        // `AgentDomainEventAdapter`'s ProviderError projection exactly.
+        assert_eq!(
+            diag.id().as_str(),
+            "agent:sess-1:provider:openai:RATE_LIMIT"
+        );
+        assert_eq!(diag.primary().domain().as_str(), "agent.provider");
+        assert_eq!(diag.primary().id(), Some("sess-1:openai"));
+    }
+
+    #[test]
+    fn provider_error_transient_classification() {
+        // Transport and timeout codes are transient (AC-24).
+        assert!(ProviderError::new("TRANSPORT", "connection reset").is_transient());
+        assert!(ProviderError::new("TIMEOUT", "slow").is_transient());
+        // Parseable numeric codes in the retryable HTTP ranges.
+        assert!(ProviderError::new("429", "rate limited").is_transient());
+        assert!(ProviderError::new("500", "server error").is_transient());
+        assert!(ProviderError::new("503", "unavailable").is_transient());
+        assert!(ProviderError::new("599", "proxy error").is_transient());
+        // Everything else is permanent.
+        assert!(!ProviderError::new("RATE_LIMIT", "slow down").is_transient());
+        assert!(!ProviderError::new("404", "not found").is_transient());
+        assert!(!ProviderError::new("400", "bad request").is_transient());
+        assert!(!ProviderError::new("CONFIGURATION", "bad config").is_transient());
+        assert!(!ProviderError::new("SERIALIZATION", "bad payload").is_transient());
+        assert!(!ProviderError::new("not_a_number", "nonsense").is_transient());
     }
 
     #[test]

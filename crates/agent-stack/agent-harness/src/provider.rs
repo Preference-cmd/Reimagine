@@ -31,7 +31,7 @@ agent_id_type!(ToolCallId);
 ///
 /// The plain-text `Message.content` of earlier versions is now
 /// represented as `Text` blocks; `Message::content()` aggregates them.
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub enum ContentBlock {
     /// Plain-text content.
     Text(String),
@@ -40,7 +40,7 @@ pub enum ContentBlock {
 }
 
 /// A file content block.
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct FileContentBlock {
     /// IANA media type, e.g. `"image/png"`. Required.
     media_type: String,
@@ -99,7 +99,7 @@ impl FileContentBlock {
 /// Serde shape:
 /// - `{"type":"data","base64":"..."}` — pure base64, no `data:` prefix
 /// - `{"type":"url","url":"..."}` — workspace-relative path or URL
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub enum FileSource {
     /// Inline payload, base64-encoded without a `data:` prefix.
     Data { base64: String },
@@ -384,7 +384,7 @@ impl<'de> serde::Deserialize<'de> for Message {
 
 /// Tool call requested by the model. The `arguments` payload is raw JSON
 /// so providers and tools can negotiate the exact shape.
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Hash, Serialize, Deserialize)]
 pub struct ToolCall {
     id: ToolCallId,
     /// Name of the tool the model wants to invoke. The agent runtime
@@ -876,6 +876,11 @@ pub enum AgentStreamEvent {
     /// the turn with a provider error (AC-05); the message is
     /// host-visible diagnostics.
     Error(String),
+    /// A host-visible informational warning from the provider (e.g. a
+    /// stream ended with incomplete tool-call fragments, D-5). Unlike
+    /// [`AgentStreamEvent::Error`], this is NOT terminal: the harness
+    /// logs it and continues the turn.
+    Warning(String),
     /// Stream completed; the runtime stops reading.
     Done { stop_reason: Option<String> },
 }
@@ -948,6 +953,24 @@ mod tests {
         let m = Message::assistant_with_tool_calls("", vec![call.clone()]);
         assert_eq!(m.tool_calls().len(), 1);
         assert_eq!(m.tool_calls()[0], call);
+    }
+
+    #[test]
+    fn tool_call_hashes_equal_for_equal_values() {
+        use std::collections::hash_map::DefaultHasher;
+        use std::hash::{Hash, Hasher};
+
+        fn hash_of(call: &ToolCall) -> u64 {
+            let mut hasher = DefaultHasher::new();
+            call.hash(&mut hasher);
+            hasher.finish()
+        }
+
+        let a = ToolCall::new(ToolCallId::new("c1"), "echo", json!({"x": 1}));
+        let b = ToolCall::new(ToolCallId::new("c1"), "echo", json!({"x": 1}));
+        let different_id = ToolCall::new(ToolCallId::new("c2"), "echo", json!({"x": 1}));
+        assert_eq!(hash_of(&a), hash_of(&b));
+        assert_ne!(hash_of(&a), hash_of(&different_id));
     }
 
     #[test]

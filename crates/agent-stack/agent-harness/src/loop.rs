@@ -645,6 +645,12 @@ impl AgentLoop {
                         ProviderError::new("STREAM", message),
                     )));
                 }
+                // A host-visible informational warning (e.g. EOF with
+                // incomplete tool-call fragments, D-5). Unlike `Error`
+                // this is NOT terminal: log and continue the turn.
+                AgentStreamEvent::Warning(message) => {
+                    tracing::warn!(message, "provider stream warning");
+                }
                 AgentStreamEvent::Done { stop_reason } => {
                     if let Some(reason) = stop_reason {
                         // "length"/"max_tokens" means the provider
@@ -752,7 +758,7 @@ impl AgentLoop {
         reason: AgentTurnStopReason,
     ) -> AgentTurnResult {
         let provider_name = request.session().provider().clone();
-        result.push_diagnostic(err.to_diagnostic(None));
+        result.push_diagnostic(err.to_diagnostic(request.session().id(), None));
         self.sink.handle(&AgentEvent::ProviderError {
             session_id: request.session().id().clone(),
             provider: provider_name,
@@ -1103,12 +1109,19 @@ const SUMMARY_MAX_TOKENS: usize = 3_000;
 /// turn, and apply the reply as a sticky summary.
 ///
 /// Failure handling:
-/// - summarizer request fails -> `record_compaction_failure` and the
-///   caller's `prepare_messages` falls back to plain eviction
-///   (drop-oldest); the turn still completes.
+/// - summarizer request fails -> classified by
+///   [`ProviderError::is_transient`] (AC-24): a transient failure
+///   (transport/timing/retryable HTTP status) is recorded via
+///   `record_transient_compaction_failure` and compaction retries
+///   next turn; a permanent failure advances the consecutive-failure
+///   streak via `record_compaction_failure`. Either way the caller's
+///   `prepare_messages` falls back to plain eviction (drop-oldest);
+///   the turn still completes.
 /// - the window changed between request and apply
 ///   (`CompactionStale`) -> the summary is dropped and plain
 ///   eviction applies.
+/// - an empty summary reply (model refusal) counts as a PERMANENT
+///   failure (`record_compaction_failure`).
 /// - consecutive failures reach [`MAX_CONSECUTIVE_COMPACTION_FAILURES`]
 ///   -> [`ContextManager::should_attempt_compaction`] stops attempts
 ///   for the rest of the session (防 thrash).
@@ -1134,8 +1147,16 @@ async fn maybe_compact(
         .with_options(serde_json::json!({ "max_tokens": SUMMARY_MAX_TOKENS }));
     let summary_text = match provider.complete(provider_request).await {
         Ok(response) => response.message().content().to_owned(),
-        Err(_) => {
-            manager.record_compaction_failure();
+        Err(err) => {
+            // AC-24: transient provider hiccups (transport, timeout,
+            // retryable HTTP status) must not advance the permanent
+            // streak — compaction retries next turn. Permanent
+            // failures do (3 disables the attempt for the session).
+            if err.is_transient() {
+                manager.record_transient_compaction_failure();
+            } else {
+                manager.record_compaction_failure();
+            }
             return None;
         }
     };
@@ -2674,6 +2695,63 @@ mod tests {
         )));
     }
 
+    #[tokio::test]
+    async fn run_turn_streaming_warning_mid_stream_continues_turn() {
+        // A host-visible Warning (e.g. EOF with incomplete tool-call
+        // fragments, D-5) is informational: unlike `Error`, it must
+        // NOT stop the turn — the stream continues to a normal final
+        // response.
+        let provider = Arc::new(StreamingProvider::new(
+            "mock",
+            vec![vec![
+                AgentStreamEvent::Warning(
+                    "stream ended with incomplete tool call(s)".into(),
+                ),
+                AgentStreamEvent::ContentDelta("final".into()),
+                AgentStreamEvent::Done {
+                    stop_reason: Some("stop".into()),
+                },
+            ]],
+        ));
+        let sink = Arc::new(VecAgentEventSink::new());
+        let loop_harness = AgentLoop::new(provider, sink.clone());
+
+        let req = AgentTurnRequest::new(
+            make_session(AgentToolRegistry::new()),
+            AgentTurnId::new("stream-warning"),
+            ModelName::new("test-model"),
+            vec![Message::user("hi")],
+        );
+
+        let result = loop_harness.run_turn_streaming(req, None).await;
+        assert_eq!(result.status(), AgentTurnStatus::Completed);
+        assert_eq!(result.stop_reason(), AgentTurnStopReason::FinalResponse);
+        assert_eq!(result.final_response().unwrap().content(), "final");
+        // No provider-error diagnostic or event: the warning was not
+        // treated as a terminal failure.
+        assert!(
+            result
+                .diagnostics()
+                .iter()
+                .all(|d| !d.code().as_str().ends_with("STREAM")),
+            "the Warning must not surface a provider error diagnostic"
+        );
+        assert!(!sink.events().iter().any(|e| matches!(
+            e,
+            AgentEvent::ProviderError { .. }
+        )));
+        // The deltas after the warning still reach the sink.
+        let events = sink.events();
+        let deltas: Vec<&str> = events
+            .iter()
+            .filter_map(|e| match e {
+                AgentEvent::ContentDelta { text, .. } => Some(text.as_str()),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(deltas, vec!["final"]);
+    }
+
     // ------------------------------------------------------------------
     // Cancellation tests
     // ------------------------------------------------------------------
@@ -3099,6 +3177,9 @@ mod tests {
         seen: Mutex<Vec<Vec<String>>>,
         summarize_calls: Mutex<usize>,
         fail_summarize: Mutex<bool>,
+        /// When set, the summarizer returns this exact error (used to
+        /// script transient vs permanent failures, AC-24).
+        fail_with: Mutex<Option<ProviderError>>,
         /// When set, the summarizer replies with an empty message
         /// (refusal / truncation) instead of the fixed summary.
         empty_summary: Mutex<bool>,
@@ -3111,6 +3192,7 @@ mod tests {
                 seen: Mutex::new(Vec::new()),
                 summarize_calls: Mutex::new(0),
                 fail_summarize: Mutex::new(false),
+                fail_with: Mutex::new(None),
                 empty_summary: Mutex::new(false),
             }
         }
@@ -3132,6 +3214,9 @@ mod tests {
         async fn complete(&self, request: AgentRequest) -> Result<AgentResponse, ProviderError> {
             if Self::is_summarize_request(&request) {
                 *self.summarize_calls.lock().unwrap() += 1;
+                if let Some(err) = self.fail_with.lock().unwrap().clone() {
+                    return Err(err);
+                }
                 if *self.fail_summarize.lock().unwrap() {
                     return Err(ProviderError::new("SUMMARIZE_FAIL", "summarizer down"));
                 }
@@ -3384,6 +3469,85 @@ mod tests {
         }
         assert_eq!(*provider.summarize_calls.lock().unwrap(), 3);
         assert!(!context.should_attempt_compaction());
+    }
+
+    #[tokio::test]
+    async fn run_turn_transient_compaction_failure_retries_next_turn() {
+        // AC-24: a transient summarizer failure (transport code) must
+        // NOT advance the permanent failure streak: compaction is
+        // retried on the next turn and is not disabled, unlike the
+        // permanent-failure thrash path above.
+        let dir = temp_session_dir("ctx-transient");
+        let config = ContextConfig {
+            reserved_tokens: 9_000,
+            tail_turns: 1,
+            ..ContextConfig::new(10_000, dir)
+        };
+        let mut context = ContextManager::new(config);
+        let session = make_session(AgentToolRegistry::new());
+        let provider = Arc::new(SummarizingProvider::new("summarize-transient"));
+        *provider.fail_with.lock().unwrap() = Some(ProviderError::new(
+            "TRANSPORT",
+            "connection reset mid-summarize",
+        ));
+        let sink = Arc::new(VecAgentEventSink::new());
+        let loop_harness = AgentLoop::new(provider.clone(), sink.clone());
+
+        for i in 1..=2 {
+            let req = AgentTurnRequest::new(
+                session.clone(),
+                AgentTurnId::new(format!("fill-{i}")),
+                ModelName::new("test-model"),
+                big_turn_input(i),
+            );
+            let result = loop_harness.run_turn(req, Some(&mut context)).await;
+            assert_eq!(result.status(), AgentTurnStatus::Completed);
+        }
+
+        // Three turns trip the driver while the summarizer fails
+        // transiently. Each turn retries the attempt; the permanent
+        // streak stays at 0, so the thrash guard never trips.
+        for i in 0..3 {
+            let req = AgentTurnRequest::new(
+                session.clone(),
+                AgentTurnId::new(format!("transient-{i}")),
+                ModelName::new("test-model"),
+                big_turn_input(100 + i),
+            );
+            let result = loop_harness.run_turn(req, Some(&mut context)).await;
+            assert_eq!(result.status(), AgentTurnStatus::Completed);
+        }
+        assert_eq!(*provider.summarize_calls.lock().unwrap(), 3);
+        assert_eq!(
+            context.consecutive_compaction_failures(),
+            0,
+            "transient failures must not advance the permanent streak"
+        );
+        assert!(
+            context.should_attempt_compaction(),
+            "compaction stays enabled after transient failures"
+        );
+        assert!(
+            !sink
+                .events()
+                .iter()
+                .any(|e| matches!(e, AgentEvent::ContextCompacted { .. }))
+        );
+
+        // Once the summarizer recovers, the very next turn compacts —
+        // no session-wide disable happened.
+        *provider.fail_with.lock().unwrap() = None;
+        let req = AgentTurnRequest::new(
+            session.clone(),
+            AgentTurnId::new("transient-recovered"),
+            ModelName::new("test-model"),
+            big_turn_input(200),
+        );
+        let result = loop_harness.run_turn(req, Some(&mut context)).await;
+        assert_eq!(result.status(), AgentTurnStatus::Completed);
+        assert_eq!(*provider.summarize_calls.lock().unwrap(), 4);
+        assert_eq!(context.sticky_count(), 1);
+        assert!(context.compaction_summary().is_some());
     }
 
     #[tokio::test]

@@ -159,6 +159,10 @@ pub enum ContextError {
     /// and [`ContextManager::apply_summary`]; the summary cannot be
     /// applied to a different conversation (CM-V2c review fix).
     CompactionStale,
+    /// [`ContextManager::apply_summary`] received empty (whitespace-
+    /// trimmed) text; an empty sticky summary must not be installed
+    /// (AC-25/D-6).
+    EmptySummary,
     /// The persisted file was written by a newer build than the
     /// running one.
     UnsupportedVersion(u64),
@@ -177,6 +181,10 @@ impl std::fmt::Display for ContextError {
                 "compaction window changed between summarize_request and apply_summary; \
                  fall back to plain eviction"
             ),
+            Self::EmptySummary => write!(
+                f,
+                "summary text is empty; refusing to install an empty sticky summary"
+            ),
             Self::UnsupportedVersion(version) => write!(
                 f,
                 "persisted session schema version {version} is newer than the supported \
@@ -191,7 +199,10 @@ impl std::error::Error for ContextError {
         match self {
             Self::Io(err) => Some(err),
             Self::Json(err) => Some(err),
-            Self::NotFound(_) | Self::CompactionStale | Self::UnsupportedVersion(_) => None,
+            Self::NotFound(_)
+            | Self::CompactionStale
+            | Self::EmptySummary
+            | Self::UnsupportedVersion(_) => None,
         }
     }
 }
@@ -304,6 +315,12 @@ struct WindowPlan {
     sticky_end: usize,
     keep_start: usize,
     cuts: Vec<(usize, usize)>,
+    /// AC-25: absolute history index and character cap of the newest
+    /// turn's user text when that turn is user-only and exceeds the
+    /// hard limit — there is no assistant message to cut at, so the
+    /// window truncates the user text to its head instead. Applied by
+    /// [`ContextManager::apply_window`]; a `None` means no truncation.
+    tail_user_truncation: Option<(usize, usize)>,
 }
 
 impl WindowPlan {
@@ -471,6 +488,19 @@ impl ContextManager {
             .saturating_add(1);
     }
 
+    /// Mark a summarization failure as transient and recoverable
+    /// (AC-24). Unlike [`ContextManager::record_compaction_failure`],
+    /// this does NOT advance the consecutive-failure streak:
+    /// [`ContextManager::should_attempt_compaction`] stays `true` and
+    /// compaction is not disabled at
+    /// [`MAX_CONSECUTIVE_COMPACTION_FAILURES`]. The loop driver calls
+    /// this for recoverable provider hiccups (e.g. a transient network
+    /// error mid-summarize) and reserves
+    /// [`ContextManager::record_compaction_failure`] for permanent
+    /// failures. Deliberately a no-op on state: the permanent streak
+    /// only advances through `record_compaction_failure`.
+    pub fn record_transient_compaction_failure(&mut self) {}
+
     /// Build the summarizer input for the messages the window is about
     /// to evict (CM-V2c): a single `user` message containing the
     /// domain-structured six-section schema prompt, the anchored
@@ -530,10 +560,19 @@ impl ContextManager {
     /// since [`ContextManager::summarize_request`] — the caller must
     /// fall back to plain eviction (drop-oldest) and the turn still
     /// completes.
+    ///
+    /// `Err(ContextError::EmptySummary)` when the text is empty after
+    /// trimming whitespace (AC-25/D-6) — an empty sticky summary is
+    /// never installed. The loop driver's own empty-reply guard is a
+    /// harmless redundancy.
     pub fn apply_summary(
         &mut self,
         text: impl Into<String>,
     ) -> Result<CompactionRecord, ContextError> {
+        let text = text.into();
+        if text.trim().is_empty() {
+            return Err(ContextError::EmptySummary);
+        }
         let plan = self.window_plan();
         if let Some(requested) = &self.request_plan
             && *requested != plan
@@ -552,7 +591,6 @@ impl ContextManager {
             })
             .sum();
 
-        let text = text.into();
         let summary_message = Message::user(text.clone());
         let tokens_after = self.estimator.estimate_message(&summary_message);
         let image_refs = self.collect_image_refs(&ranges);
@@ -641,9 +679,17 @@ impl ContextManager {
     /// conversation history. Tool results are truncated to
     /// `record_truncate_tokens` at commit time (CM-V2b).
     pub fn commit_turn(&mut self, messages: &[Message]) {
+        // Per-call sequence for fabricated ids (AC-25): id-less tool
+        // results truncated in the same commit get distinct
+        // `truncated-{n}` ids.
+        let mut fabricated_id_seq = 0usize;
         for message in messages {
             if message.role() == "tool" {
-                self.history.push(truncate_tool_result(message, self.config.record_truncate_tokens));
+                self.history.push(truncate_tool_result(
+                    message,
+                    self.config.record_truncate_tokens,
+                    &mut fabricated_id_seq,
+                ));
             } else {
                 self.history.push(message.clone());
             }
@@ -714,7 +760,18 @@ impl ContextManager {
         std::fs::create_dir_all(&self.config.session_dir).map_err(ContextError::Io)?;
         let path = self.config.session_dir.join(format!("{session_id}.json"));
         let json = serde_json::to_string_pretty(&state).map_err(ContextError::Json)?;
-        std::fs::write(path, json).map_err(ContextError::Io)
+        // Atomic write (AC-23): write to a same-directory temp file,
+        // then rename over the target. A reader (or a crash) never
+        // observes a partially written session file, and the rename is
+        // atomic on the same filesystem.
+        let tmp_path = self.config.session_dir.join(format!("{session_id}.json.tmp"));
+        std::fs::write(&tmp_path, json).map_err(ContextError::Io)?;
+        std::fs::rename(&tmp_path, &path).map_err(|err| {
+            // Best-effort cleanup so a failed rename does not leave the
+            // temp file behind for the next persist to trip over.
+            let _ = std::fs::remove_file(&tmp_path);
+            ContextError::Io(err)
+        })
     }
 
     /// Load a session's context previously written by
@@ -740,6 +797,21 @@ impl ContextManager {
             }
         })?;
         let (history, compaction_summary, sticky_count) = parse_persisted_session(&json)?;
+        // Auto-repair summary<->sticky inconsistency (AC-25/D-8): a
+        // file whose summary message is present in the history but was
+        // not pinned (`sticky_count: 0`) re-pins it when the first
+        // message's content matches the record's summary text exactly —
+        // the summary exists, it just lost its pin. A non-matching
+        // first message is left untouched (no guessing).
+        let sticky_count = if sticky_count == 0
+            && let Some(record) = &compaction_summary
+            && let Some(first) = history.first()
+            && first.content() == record.text
+        {
+            1
+        } else {
+            sticky_count
+        };
         // Defensive clamp (AC-04): a hand-edited or partially written
         // file may declare more sticky messages than the history holds;
         // `apply_summary` indexes `history[0]` on this count, so it must
@@ -762,6 +834,14 @@ impl ContextManager {
     fn apply_window(&mut self) {
         self.prune_old_tool_outputs();
         let plan = self.window_plan();
+        // AC-25: truncate an oversized user-only newest turn's text to
+        // its head before the range drains, so the plan's absolute
+        // indexes stay valid (truncation changes no message count).
+        if let Some((idx, max_chars)) = plan.tail_user_truncation
+            && let Some(message) = self.history.get_mut(idx)
+        {
+            *message = truncate_user_message(message, max_chars);
+        }
         // Cuts lie inside the keep region: drain from the back so
         // earlier absolute indexes stay valid, then evict the front
         // range.
@@ -801,7 +881,19 @@ impl ContextManager {
             .config
             .max_tokens
             .saturating_sub(self.config.reserved_tokens);
-        let tail_budget = tail_budget(window_budget);
+        // AC-25: the tail budget never exceeds the (positive) soft
+        // window — the 2k floor would otherwise refuse to shrink the
+        // tail for tiny windows and starve the middle budget to 0. A
+        // saturated soft window (`reserved_tokens >= max_tokens`,
+        // `window_budget == 0`) has no positive budget to clamp to:
+        // the 2k floor stays so the verbatim tail survives, and the
+        // hard-limit branch below still caps the newest turn at
+        // `max_tokens`.
+        let tail_budget = if window_budget > 0 {
+            tail_budget(window_budget).min(window_budget)
+        } else {
+            tail_budget(window_budget)
+        };
         let sticky_tokens: usize = (0..sticky_end)
             .map(|i| self.message_tokens(i).unwrap_or(0))
             .sum();
@@ -822,21 +914,66 @@ impl ContextManager {
         // The newest turn always survives the tail loop. Verbatim-tail
         // protection wins over the soft window, but a turn that alone
         // exceeds the hard limit (`max_tokens`) is cut at its first
-        // assistant message so the hard limit still holds.
+        // assistant message so the hard limit still holds; a user-only
+        // turn has no assistant message to cut at, so its user text is
+        // truncated to the head that fits (AC-25).
         let mut tail_cut: Option<(usize, usize)> = None;
+        let mut tail_user_truncation: Option<(usize, usize)> = None;
         if let Some(&newest_span) = turns.get(tail_start)
             && self.span_tokens(sticky_end, &newest_span) > self.config.max_tokens
-            && let Some(off) = first_assistant_offset(&self.history[sticky_end..], newest_span)
         {
             let abs_start = sticky_end + newest_span.0;
-            tail_cut = Some((abs_start + off, abs_start + newest_span.1));
-            let removed = self.span_tokens(sticky_end, &(newest_span.0 + off, newest_span.1 - off));
-            tail_tokens = tail_tokens.saturating_sub(removed);
+            if let Some(off) = first_assistant_offset(&self.history[sticky_end..], newest_span) {
+                tail_cut = Some((abs_start + off, abs_start + newest_span.1));
+                let removed = self.span_tokens(sticky_end, &(newest_span.0 + off, newest_span.1 - off));
+                tail_tokens = tail_tokens.saturating_sub(removed);
+            } else {
+                // User-only turn: the whole turn is one oversized user
+                // message. Keep its head — dropping the newest user
+                // instruction entirely would be worse than a truncated
+                // head.
+                let message = &self.history[abs_start];
+                // Cost that survives truncation: file block budgets plus
+                // the per-text-block overhead (the first text block
+                // keeps its overhead even when shortened).
+                let fixed_tokens: usize = message
+                    .blocks()
+                    .iter()
+                    .map(|block| match block {
+                        ContentBlock::Text(_) => 4,
+                        ContentBlock::File(file) if file.media_type().starts_with("image/") => {
+                            IMAGE_TOKENS_PER_BLOCK
+                        }
+                        ContentBlock::File(_) => OTHER_FILE_TOKENS_PER_BLOCK,
+                    })
+                    .sum();
+                if let Some(ContentBlock::Text(first_text)) = message.blocks().first() {
+                    // Char cap is conservative for any char mix: ASCII
+                    // packs 4 chars/token and CJK packs tighter, so an
+                    // all-ASCII head at the cap is the worst case
+                    // (estimated tokens == max_tokens, not over).
+                    let max_chars = self
+                        .config
+                        .max_tokens
+                        .saturating_sub(fixed_tokens)
+                        .saturating_mul(4);
+                    if first_text.chars().count() > max_chars {
+                        tail_user_truncation = Some((abs_start, max_chars));
+                        let truncated: String = first_text.chars().take(max_chars).collect();
+                        tail_tokens = tail_tokens.saturating_sub(
+                            self.estimator
+                                .estimate_text(first_text)
+                                .saturating_sub(self.estimator.estimate_text(&truncated)),
+                        );
+                    }
+                }
+            }
         }
 
         // Middle window: newest-to-oldest turns between the sticky
         // prefix and the tail, filling the remaining budget.
-        let mut middle_budget = window_budget.saturating_sub(sticky_tokens + tail_tokens);
+        let mut middle_budget = window_budget
+            .saturating_sub(sticky_tokens.saturating_add(tail_tokens));
         let mut keep_from = tail_start;
         while keep_from > 0 {
             let span = turns[keep_from - 1];
@@ -880,6 +1017,7 @@ impl ContextManager {
             sticky_end,
             keep_start: keep_abs_start,
             cuts,
+            tail_user_truncation,
         }
     }
 
@@ -928,6 +1066,10 @@ impl ContextManager {
         );
         let placeholder_tokens = self.estimator.estimate_message(&placeholder);
         let mut remaining = tool_tokens;
+        // Per-call sequence for fabricated ids (AC-25): id-less tool
+        // results pruned in the same pass get distinct `pruned-{n}`
+        // ids instead of colliding on a single "pruned".
+        let mut fabricated_id_seq = 0usize;
         'outer: for span in &turns[..tail_start] {
             for idx in span.0..span.0 + span.1 {
                 let absolute = sticky_end + idx;
@@ -937,10 +1079,21 @@ impl ContextManager {
                 let tokens = self
                     .estimator
                     .estimate_message(&self.history[absolute]);
-                let id = self.history[absolute]
-                    .tool_call_id()
-                    .cloned()
-                    .unwrap_or_else(|| crate::provider::ToolCallId::new("pruned"));
+                // Progress guard (AC-25): a placeholder that costs more
+                // than the output it replaces would grow `remaining`
+                // and prune the whole non-tail region without ever
+                // reaching the target; tiny outputs stay verbatim
+                // instead.
+                if tokens <= placeholder_tokens {
+                    continue;
+                }
+                let id = match self.history[absolute].tool_call_id() {
+                    Some(id) => id.clone(),
+                    None => {
+                        fabricated_id_seq += 1;
+                        crate::provider::ToolCallId::new(format!("pruned-{fabricated_id_seq}"))
+                    }
+                };
                 self.history[absolute] = Message::tool_result(id, TOOL_OUTPUT_PRUNE_PLACEHOLDER);
                 remaining = remaining
                     .saturating_sub(tokens)
@@ -999,7 +1152,15 @@ fn tail_budget(window_budget: usize) -> usize {
 /// character-based (an ASCII approximation of the token budget) with
 /// the truncated marker appended; messages already within budget are
 /// returned unchanged.
-fn truncate_tool_result(message: &Message, record_truncate_tokens: usize) -> Message {
+///
+/// A `tool` result without a `tool_call_id` gets a fabricated
+/// `truncated-{n}` id (AC-25); `fabricated_id_seq` is the per-call
+/// sequence counter that keeps such ids distinct within one commit.
+fn truncate_tool_result(
+    message: &Message,
+    record_truncate_tokens: usize,
+    fabricated_id_seq: &mut usize,
+) -> Message {
     if message.role() != "tool" {
         return message.clone();
     }
@@ -1013,10 +1174,26 @@ fn truncate_tool_result(message: &Message, record_truncate_tokens: usize) -> Mes
         return message.clone();
     }
     let truncated: String = text.chars().take(limit_chars).collect();
-    Message::tool_result(
-        message.tool_call_id().cloned().unwrap_or_else(|| crate::provider::ToolCallId::new("truncated")),
-        format!("{truncated}{TOOL_OUTPUT_TRUNCATED_SUFFIX}"),
-    )
+    let id = match message.tool_call_id() {
+        Some(id) => id.clone(),
+        None => {
+            *fabricated_id_seq += 1;
+            crate::provider::ToolCallId::new(format!("truncated-{fabricated_id_seq}"))
+        }
+    };
+    Message::tool_result(id, format!("{truncated}{TOOL_OUTPUT_TRUNCATED_SUFFIX}"))
+}
+
+/// Truncate the leading `Text` block of `message` to `max_chars`
+/// characters, keeping the message head and any non-text blocks
+/// (AC-25). Used when an oversized user-only newest turn has no
+/// assistant message to cut at.
+fn truncate_user_message(message: &Message, max_chars: usize) -> Message {
+    let mut blocks = message.blocks().to_vec();
+    if let Some(ContentBlock::Text(text)) = blocks.first_mut() {
+        *text = text.chars().take(max_chars).collect();
+    }
+    message.clone().with_blocks(blocks)
 }
 
 /// Parse a persisted session file with schema migration (CM-V2d):
@@ -1394,8 +1571,11 @@ mod tests {
 
     #[test]
     fn window_never_splits_tool_pairs() {
-        // Window budget 100 (10k - 9.9k): only the 2-turn verbatim
-        // tail survives; the middle cannot fit a single turn.
+        // Window budget 100 (10k - 9.9k): the tail budget is clamped to
+        // the window (AC-25), so a single ~116-token turn cannot fit it
+        // verbatim; the tail loop shrinks to the newest turn (tail
+        // protection) and the middle cannot fit a turn either. The
+        // surviving turn's tool pairs stay intact.
         let mut manager = ContextManager::new(window_config(10_000, 9_900, 2));
         for i in 0..10 {
             manager.commit_turn(&tool_turn(i, 100));
@@ -1403,11 +1583,13 @@ mod tests {
 
         manager.prepare_messages("sys", &[]);
         let history = manager.history.clone();
-        // The tail is the last 2 complete turns, tool pairs intact.
-        assert_eq!(history.len(), 8);
+        // Only the newest turn survives, tool pairs intact.
+        assert_eq!(history.len(), 4);
         assert_eq!(history[0].role(), "user");
-        assert_eq!(history[0].content(), format!("u8:{}", "a".repeat(100)));
-        assert_eq!(history[4].role(), "user");
+        assert_eq!(history[0].content(), format!("u9:{}", "a".repeat(100)));
+        assert_eq!(history[1].role(), "assistant");
+        assert_eq!(history[2].role(), "tool");
+        assert_eq!(history[3].role(), "assistant");
         // No orphaned tool results: every tool message has a matching
         // assistant tool call within the kept window.
         for message in &history {
@@ -1535,6 +1717,155 @@ mod tests {
         assert!(history.iter().any(|m| m.content().starts_with("newest:")));
         assert!(!history.iter().any(|m| m.content() == "b".repeat(16_000)));
         assert!(manager.token_count() <= 8_000);
+    }
+
+    #[test]
+    fn user_only_turn_over_hard_limit_is_truncated_to_fit() {
+        // AC-25: a newest turn with no assistant message (user-only)
+        // that exceeds the hard limit cannot be cut at an assistant
+        // half. The user text is truncated to the head that fits the
+        // hard limit instead of blowing it.
+        let mut manager = ContextManager::new(window_config(8_000, 2_000, 2));
+        manager.commit_turn(&turn(0, 100));
+        manager.commit_turn(&[Message::user("huge:".to_owned() + &"a".repeat(60_000))]);
+
+        manager.prepare_messages("sys", &[]);
+        let history = manager.history.clone();
+        // The newest user message survives, but only its head.
+        assert!(history.iter().any(|m| m.content().starts_with("huge:")));
+        let newest = history
+            .iter()
+            .find(|m| m.content().starts_with("huge:"))
+            .expect("newest user message kept");
+        assert!(
+            newest.content().chars().count() < 60_006,
+            "oversized user text must be truncated"
+        );
+        assert!(manager.token_count() <= 8_000);
+        // The smaller older turn was evicted to make room.
+        assert!(!history.iter().any(|m| m.content().starts_with("u0:")));
+    }
+
+    #[test]
+    fn prune_with_tiny_outputs_does_not_thrash() {
+        // AC-25: when placeholders cost more than the outputs they
+        // would replace, pruning cannot reach the target; the loop must
+        // stop instead of pruning the whole non-tail region. Tiny
+        // outputs stay verbatim.
+        let mut manager = ContextManager::new(ContextConfig {
+            prune_threshold_tokens: 4,
+            prune_target_tokens: 0,
+            ..window_config(10_000, 2_000, 2)
+        });
+        for i in 0..4 {
+            manager.commit_turn(&[
+                Message::user(format!("u{i}")),
+                Message::assistant(format!("a{i}")),
+                Message::tool_result(ToolCallId::new(format!("c{i}")), "x"),
+                Message::assistant(format!("a{i}b")),
+            ]);
+        }
+
+        manager.prepare_messages("sys", &[]);
+        let history = manager.history.clone();
+        // None of the ~4-token outputs was replaced by the ~8-token
+        // placeholder: all four raw outputs survive.
+        let raw = history
+            .iter()
+            .filter(|m| m.role() == "tool" && m.content() == "x")
+            .count();
+        assert_eq!(raw, 4, "tiny outputs must not be replaced");
+        assert!(
+            !history
+                .iter()
+                .any(|m| m.role() == "tool" && m.content() == TOOL_OUTPUT_PRUNE_PLACEHOLDER),
+            "no placeholders may be installed when pruning would grow the footprint"
+        );
+    }
+
+    #[test]
+    fn prune_fabricates_unique_ids_for_idless_tool_results() {
+        // AC-25: id-less tool results pruned in the same pass get
+        // distinct fabricated ids (previously every one collided on a
+        // single "pruned" id).
+        let idless_tool_result = |text: &str| -> Message {
+            serde_json::from_str(&format!(
+                r#"{{"role":"tool","content":[{{"type":"text","text":"{text}"}}],"tool_call_id":null,"tool_calls":[]}}"#
+            ))
+            .expect("deserialize id-less tool result")
+        };
+        let mut manager = ContextManager::new(ContextConfig {
+            prune_threshold_tokens: 100,
+            prune_target_tokens: 0,
+            ..window_config(10_000, 2_000, 2)
+        });
+        // 4 turns: the newest 2 are the verbatim tail, the oldest 2 are
+        // the prune region. Tool results are oversized and carry no id.
+        for i in 0..4 {
+            manager.commit_turn(&[
+                Message::user(format!("u{i}")),
+                Message::assistant(format!("a{i}")),
+                idless_tool_result(&"x".repeat(200)),
+                Message::assistant(format!("a{i}b")),
+            ]);
+        }
+
+        manager.prepare_messages("sys", &[]);
+        let pruned: Vec<&Message> = manager
+            .history
+            .iter()
+            .filter(|m| m.role() == "tool" && m.content() == TOOL_OUTPUT_PRUNE_PLACEHOLDER)
+            .collect();
+        assert!(pruned.len() >= 2, "expected at least two pruned outputs");
+        let ids: Vec<&str> = pruned
+            .iter()
+            .map(|m| m.tool_call_id().expect("fabricated id").as_str())
+            .collect();
+        assert!(
+            ids.iter().all(|id| id.starts_with("pruned-")),
+            "fabricated ids must be namespaced: {ids:?}"
+        );
+        let mut unique = ids.to_vec();
+        unique.sort_unstable();
+        unique.dedup();
+        assert_eq!(unique.len(), ids.len(), "pruned ids must be unique: {ids:?}");
+    }
+
+    #[test]
+    fn commit_truncation_fabricates_unique_ids_for_idless_tool_results() {
+        // AC-25: id-less tool results truncated at commit time get
+        // distinct fabricated ids (previously every one collided on a
+        // single "truncated" id).
+        let idless_tool_result = |text: &str| -> Message {
+            serde_json::from_str(&format!(
+                r#"{{"role":"tool","content":[{{"type":"text","text":"{text}"}}],"tool_call_id":null,"tool_calls":[]}}"#
+            ))
+            .expect("deserialize id-less tool result")
+        };
+        let mut manager = ContextManager::new(ContextConfig {
+            record_truncate_tokens: 10,
+            ..window_config(10_000, 2_000, 2)
+        });
+        manager.commit_turn(&[
+            idless_tool_result(&"x".repeat(50)),
+            idless_tool_result(&"y".repeat(50)),
+        ]);
+
+        let truncated: Vec<&Message> = manager
+            .history
+            .iter()
+            .filter(|m| m.content().ends_with(TOOL_OUTPUT_TRUNCATED_SUFFIX))
+            .collect();
+        assert_eq!(truncated.len(), 2);
+        let ids: Vec<&str> = truncated
+            .iter()
+            .map(|m| m.tool_call_id().expect("fabricated id").as_str())
+            .collect();
+        assert!(
+            ids.iter().all(|id| id.starts_with("truncated-")),
+            "fabricated ids must be namespaced: {ids:?}"
+        );
+        assert_ne!(ids[0], ids[1], "fabricated truncated ids must be unique: {ids:?}");
     }
 
     #[test]
@@ -1928,6 +2259,32 @@ mod tests {
     }
 
     #[test]
+    fn persist_writes_atomically_and_cleans_up_temp_file() {
+        // AC-23: persist writes a same-directory temp file and renames
+        // it over the target; no `.tmp` file is left behind and the
+        // target parses as a loadable session.
+        let dir = temp_session_dir("atomic");
+        let mut manager = ContextManager::new(ContextConfig::new(10_000, dir.clone()));
+        manager.commit_turn(&[Message::user("u1"), Message::assistant("a1")]);
+        manager.persist("sess-1").expect("persist failed");
+
+        let target = dir.join("sess-1.json");
+        let tmp = dir.join("sess-1.json.tmp");
+        assert!(target.is_file(), "target session file must exist");
+        assert!(!tmp.exists(), "temp file must not be left behind");
+
+        // A second persist replaces the existing target atomically.
+        manager.commit_turn(&[Message::user("u2")]);
+        manager.persist("sess-1").expect("second persist failed");
+        assert!(!tmp.exists(), "temp file must not be left behind after overwrite");
+
+        let loaded = ContextManager::load("sess-1", ContextConfig::new(10_000, dir))
+            .expect("target parses as a session");
+        assert_eq!(loaded.history.len(), 3);
+        assert_eq!(loaded.history[0].content(), "u1");
+    }
+
+    #[test]
     fn load_missing_session_returns_err() {
         let dir = temp_session_dir("missing");
         let result = ContextManager::load(
@@ -2145,6 +2502,30 @@ mod tests {
     }
 
     #[test]
+    fn transient_failures_do_not_disable_compaction() {
+        // AC-24: transient (recoverable) summarization failures must
+        // not advance the permanent streak that disables compaction at
+        // MAX_CONSECUTIVE_COMPACTION_FAILURES — only
+        // `record_compaction_failure` counts.
+        let mut manager = ContextManager::new(window_config(10_000, 2_000, 2));
+        for i in 0..60 {
+            manager.commit_turn(&turn(i, 400));
+        }
+        for _ in 0..10 {
+            manager.record_transient_compaction_failure();
+        }
+        assert!(manager.should_attempt_compaction());
+        assert_eq!(manager.consecutive_compaction_failures(), 0);
+
+        // Permanent failures still disable compaction as before.
+        for _ in 0..3 {
+            manager.record_compaction_failure();
+        }
+        assert!(!manager.should_attempt_compaction());
+        assert_eq!(manager.consecutive_compaction_failures(), 3);
+    }
+
+    #[test]
     fn compaction_record_round_trips_persistence() {
         let dir = temp_session_dir("record");
         let cfg = ContextConfig {
@@ -2193,17 +2574,21 @@ mod tests {
 
     #[test]
     fn apply_summary_rejects_stale_window() {
-        // Tiny window (100 tokens): only the 2-turn tail fits. Every
-        // committed turn shifts the keep region, so the plan captured
-        // by summarize_request goes stale.
+        // Tiny window (100 tokens, AC-25 tail clamp): only a 1-turn
+        // tail fits. The interrupt turn is oversized enough to shrink
+        // the tail and shift the keep region, so the plan captured by
+        // summarize_request goes stale.
         let mut manager = ContextManager::new(window_config(10_000, 9_900, 2));
         for i in 0..10 {
             manager.commit_turn(&turn(i, 100));
         }
         manager.summarize_request();
-        // The window changes while the model "summarizes": a new turn
-        // is committed, shifting the eviction range.
-        manager.commit_turn(&[Message::user("interrupt"), Message::assistant("ok")]);
+        // The window changes while the model "summarizes": an oversized
+        // new turn is committed, shifting the eviction range.
+        manager.commit_turn(&[
+            Message::user(format!("interrupt:{}", "a".repeat(160))),
+            Message::assistant("ok"),
+        ]);
 
         let err = manager
             .apply_summary("stale summary")
@@ -2212,7 +2597,7 @@ mod tests {
         // Nothing was replaced.
         assert!(manager.compaction_summary().is_none());
         assert_eq!(manager.sticky_count(), 0);
-        assert!(manager.history.iter().any(|m| m.content() == "interrupt"));
+        assert!(manager.history.iter().any(|m| m.content().starts_with("interrupt:")));
     }
 
     // ----- apply_summary invariants (AC-16) -----
@@ -2223,27 +2608,30 @@ mod tests {
     // documents which behavior it pins.
 
     #[test]
-    fn apply_summary_accepts_empty_text() {
-        // Documented gap: the empty-reply guard lives in the loop
-        // caller (`maybe_compact` rejects empty summary text before it
-        // reaches this API), so `apply_summary("")` itself succeeds
-        // today and creates an empty sticky summary.
+    fn apply_summary_rejects_empty_text() {
+        // AC-25/D-6: the API itself rejects empty (whitespace-trimmed)
+        // summary text — an empty sticky summary must never be
+        // installed. The loop driver's empty-reply guard is a harmless
+        // redundancy.
         let mut manager = ContextManager::new(window_config(10_000, 2_000, 2));
         for i in 0..60 {
             manager.commit_turn(&turn(i, 400));
         }
         assert!(manager.has_eviction_pending());
 
-        let record = manager
+        let err = manager
             .apply_summary("")
-            .expect("empty text applies (guard lives in the loop driver)");
-        assert_eq!(record.text, "");
-        // A real eviction range was replaced by the (empty) summary.
-        assert!(record.tokens_before > 0);
-        assert_eq!(manager.sticky_count(), 1);
-        // The empty summary is inserted as a sticky prefix message.
-        assert_eq!(manager.history[0].content(), "");
-        assert!(manager.compaction_summary().is_some());
+            .expect_err("empty text must be rejected");
+        assert!(matches!(err, ContextError::EmptySummary));
+        let err = manager
+            .apply_summary("   \n\t ")
+            .expect_err("whitespace-only text must be rejected");
+        assert!(matches!(err, ContextError::EmptySummary));
+        // Nothing was applied: no sticky summary, no record, and the
+        // eviction range is still pending.
+        assert!(manager.compaction_summary().is_none());
+        assert_eq!(manager.sticky_count(), 0);
+        assert!(manager.has_eviction_pending());
     }
 
     #[test]
@@ -2325,17 +2713,18 @@ mod tests {
     #[test]
     fn load_compaction_summary_without_sticky_count_is_not_pinned() {
         // A schema_version-2 file with a CompactionRecord summary
-        // present but `sticky_count: 0`, plus enough history that the
-        // summary message would be evicted: load succeeds with the
-        // record restored, but the summary is NOT pinned — the window
-        // evicts it on the next prepare. Documented gap: load does not
-        // detect the summary<->sticky inconsistency.
+        // present but `sticky_count: 0`, whose FIRST message does NOT
+        // match the record text: load succeeds with the record
+        // restored, but the summary is NOT pinned — the window evicts
+        // it on the next prepare. AC-25/D-8 repair only fires on an
+        // exact content match; a mismatched first message is left
+        // untouched (no guessing).
         let dir = temp_session_dir("summary-not-pinned");
         std::fs::create_dir_all(&dir).expect("mkdir failed");
 
         let mut history = vec![json!({
             "role": "user",
-            "content": [{"type": "text", "text": "stale summary text"}],
+            "content": [{"type": "text", "text": "summary from a newer build"}],
             "tool_call_id": null,
             "tool_calls": [],
         })];
@@ -2380,18 +2769,87 @@ mod tests {
         };
         let mut loaded = ContextManager::load("sess-1", cfg).expect("load failed");
         // Load succeeds and restores the record, but the sticky count
-        // stays 0 — the file claims no pinned prefix.
+        // stays 0 — the file's first message does not match the record
+        // text, so the D-8 repair does not guess.
         assert_eq!(loaded.sticky_count(), 0);
         let record = loaded.compaction_summary().expect("record restored");
         assert_eq!(record.text, "stale summary text");
 
-        // The summary message is not pinned: the window evicts it on
-        // the next prepare, even though `compaction_summary()` still
-        // reports it.
+        // The mismatched first message is not pinned: the window
+        // evicts it on the next prepare, even though
+        // `compaction_summary()` still reports the record.
         loaded.prepare_messages("sys", &[]);
         assert!(
-            !loaded.history.iter().any(|m| m.content() == "stale summary text"),
-            "unpinned summary must be evicted by the window"
+            !loaded.history.iter().any(|m| m.content() == "summary from a newer build"),
+            "unpinned first message must be evicted by the window"
         );
+    }
+
+    #[test]
+    fn load_repins_summary_when_first_message_matches_record() {
+        // AC-25/D-8: a schema_version-2 file whose first message's
+        // content equals the compaction record's text but whose
+        // `sticky_count` was not persisted (0) loads with the pin
+        // repaired — the summary message is present, it just lost its
+        // sticky flag. The repaired pin survives the window.
+        let dir = temp_session_dir("summary-repin");
+        std::fs::create_dir_all(&dir).expect("mkdir failed");
+
+        let mut history = vec![json!({
+            "role": "user",
+            "content": [{"type": "text", "text": "stale summary text"}],
+            "tool_call_id": null,
+            "tool_calls": [],
+        })];
+        for i in 0..60 {
+            history.push(json!({
+                "role": "user",
+                "content": [{"type": "text", "text": format!("u{i}:{}", "a".repeat(400))}],
+                "tool_call_id": null,
+                "tool_calls": [],
+            }));
+            history.push(json!({
+                "role": "assistant",
+                "content": [{"type": "text", "text": format!("a{i}:{}", "b".repeat(400))}],
+                "tool_call_id": null,
+                "tool_calls": [],
+            }));
+        }
+        let state = json!({
+            "session_id": "sess-1",
+            "created_at": "0",
+            "history": history,
+            "compaction_summary": {
+                "text": "stale summary text",
+                "tokens_before": 12_000,
+                "tokens_after": 7,
+                "created_at": "0",
+                "attempt": 1,
+                "image_refs": [],
+            },
+            "sticky_count": 0,
+            "total_tokens": 12_000,
+            "schema_version": 2,
+        });
+        std::fs::write(dir.join("sess-1.json"), state.to_string()).expect("write failed");
+
+        let cfg = ContextConfig {
+            reserved_tokens: 2_000,
+            tail_turns: 2,
+            ..ContextConfig::new(10_000, dir)
+        };
+        let mut loaded = ContextManager::load("sess-1", cfg).expect("load failed");
+        assert_eq!(loaded.sticky_count(), 1, "matching summary message is re-pinned");
+        let record = loaded.compaction_summary().expect("record restored");
+        assert_eq!(record.text, "stale summary text");
+
+        // The repaired pin survives the window: repeated prepares do
+        // not evict the summary message.
+        loaded.prepare_messages("sys", &[]);
+        assert!(
+            loaded.history.iter().any(|m| m.content() == "stale summary text"),
+            "re-pinned summary must not be evicted by the window"
+        );
+        assert!(loaded.token_count() <= 10_000);
     }
 }
