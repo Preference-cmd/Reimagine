@@ -5,15 +5,19 @@
 //! specs, executes requested tools through the registry, feeds tool
 //! observations back to the provider, emits agent-local events, and
 //! stops when the model produces a final assistant response, the
-//! configured max-tool-step guard trips, or the provider returns an
-//! error.
+//! configured max-tool-step guard trips, the provider returns an error,
+//! the turn deadline passes, or cancellation is requested.
 //!
-//! V1 does not implement streaming turn execution, steering, interruption,
-//! subagents, memory, or skills. Cancellation exists as a stop-reason
-//! placeholder only; the loop never emits `AgentTurnStopReason::Cancelled`
-//! in V1.
+//! Streaming turn execution (`run_turn_streaming`) is implemented
+//! alongside the non-streaming `run_turn`. Steering, subagents, memory,
+//! and skills remain future work. Cancellation aborts in-flight work:
+//! the loop races the request's `CancellationToken` against the
+//! provider call and drops the in-flight future (which cancels the
+//! underlying HTTP request) when it fires, then emits
+//! `AgentTurnStopReason::Cancelled` (AC-07).
 
 use std::sync::{Arc, Mutex};
+use std::time::{Duration, Instant};
 
 use serde_json::{Value, json};
 
@@ -227,30 +231,44 @@ impl AgentLoop {
         loop {
             // Check cancellation before each provider round.
             if request.cancel_token().is_cancelled() {
-                result = result
-                    .with_stop_reason(AgentTurnStopReason::Cancelled)
-                    .with_status(AgentTurnStatus::Stopped)
-                    .with_messages(messages.clone());
-                commit_turn_history(&mut context, request.session(), &messages, pre_run_len);
-                return result;
-            }
-
-            // Check turn timeout.
-            if let Some(timeout_dur) = request.turn_timeout()
-                && turn_start.elapsed() >= timeout_dur
-            {
-                result = result
-                    .with_stop_reason(AgentTurnStopReason::ProviderError)
-                    .with_status(AgentTurnStatus::Stopped)
-                    .with_messages(messages.clone());
-                commit_turn_history(&mut context, request.session(), &messages, pre_run_len);
-                return result;
+                return self.stop_cancelled(&request, result, &mut context, &messages, pre_run_len);
             }
 
             let provider_request = AgentRequest::new(request.model().clone(), messages.clone())
                 .with_tools(tool_defs.clone());
 
-            let response = match self.provider.complete(provider_request).await {
+            // Await the provider call, but abort it the moment
+            // cancellation is requested: the select branch drops the
+            // in-flight future, which cancels the underlying HTTP
+            // request (AC-07). The turn deadline races the same call so
+            // a hung provider cannot outlive it (AC-02).
+            let complete = self.provider.complete(provider_request);
+            tokio::pin!(complete);
+            let deadline = turn_deadline(request.turn_timeout(), turn_start);
+            tokio::pin!(deadline);
+            let response = match tokio::select! {
+                _ = request.cancel_token().cancelled() => {
+                    return self.stop_cancelled(&request, result, &mut context, &messages, pre_run_len);
+                }
+                _ = &mut deadline => {
+                    return self.stop_with_error(
+                        &request,
+                        result,
+                        &mut context,
+                        &messages,
+                        pre_run_len,
+                        ProviderError::new(
+                            "TIMEOUT",
+                            format!(
+                                "turn exceeded the {:?} deadline",
+                                request.turn_timeout().unwrap_or_default()
+                            ),
+                        ),
+                        AgentTurnStopReason::Timeout,
+                    );
+                }
+                res = &mut complete => res,
+            } {
                 Ok(r) => r,
                 Err(err) => {
                     return self.stop_with_provider_error(
@@ -324,12 +342,7 @@ impl AgentLoop {
                 }
                 // Check cancellation before each tool execution.
                 if request.cancel_token().is_cancelled() {
-                    result = result
-                        .with_stop_reason(AgentTurnStopReason::Cancelled)
-                        .with_status(AgentTurnStatus::Stopped)
-                        .with_messages(messages.clone());
-                    commit_turn_history(&mut context, request.session(), &messages, pre_run_len);
-                    return result;
+                    return self.stop_cancelled(&request, result, &mut context, &messages, pre_run_len);
                 }
                 tool_steps_taken += 1;
                 let tool_name = ToolName::new(tool_call.name());
@@ -435,31 +448,42 @@ impl AgentLoop {
         loop {
             // Check cancellation before each provider round.
             if request.cancel_token().is_cancelled() {
-                result = result
-                    .with_stop_reason(AgentTurnStopReason::Cancelled)
-                    .with_status(AgentTurnStatus::Stopped)
-                    .with_messages(messages.clone());
-                commit_turn_history(&mut context, request.session(), &messages, pre_run_len);
-                return result;
-            }
-
-            // Check turn timeout.
-            if let Some(timeout_dur) = request.turn_timeout()
-                && turn_start.elapsed() >= timeout_dur
-            {
-                result = result
-                    .with_stop_reason(AgentTurnStopReason::ProviderError)
-                    .with_status(AgentTurnStatus::Stopped)
-                    .with_messages(messages.clone());
-                commit_turn_history(&mut context, request.session(), &messages, pre_run_len);
-                return result;
+                return self.stop_cancelled(&request, result, &mut context, &messages, pre_run_len);
             }
 
             let provider_request = AgentRequest::new(request.model().clone(), messages.clone())
                 .with_tools(tool_defs.clone());
 
-            // Open a stream from the provider.
-            let mut stream = match self.provider.stream(provider_request).await {
+            // Open a stream from the provider, aborting the open the
+            // moment cancellation is requested (AC-07). The turn
+            // deadline races the open as well (AC-02).
+            let open_stream = self.provider.stream(provider_request);
+            tokio::pin!(open_stream);
+            let deadline = turn_deadline(request.turn_timeout(), turn_start);
+            tokio::pin!(deadline);
+            let mut stream = match tokio::select! {
+                _ = request.cancel_token().cancelled() => {
+                    return self.stop_cancelled(&request, result, &mut context, &messages, pre_run_len);
+                }
+                _ = &mut deadline => {
+                    return self.stop_with_error(
+                        &request,
+                        result,
+                        &mut context,
+                        &messages,
+                        pre_run_len,
+                        ProviderError::new(
+                            "TIMEOUT",
+                            format!(
+                                "turn exceeded the {:?} deadline",
+                                request.turn_timeout().unwrap_or_default()
+                            ),
+                        ),
+                        AgentTurnStopReason::Timeout,
+                    );
+                }
+                res = &mut open_stream => res,
+            } {
                 Ok(s) => s,
                 Err(err) => {
                     return self.stop_with_provider_error(
@@ -473,11 +497,43 @@ impl AgentLoop {
                 }
             };
 
-            // Consume the stream, collecting text and tool calls.
+            // Consume the stream, collecting text and tool calls. The
+            // read races cancellation: when the token fires, the stream
+            // is dropped (closing the underlying HTTP connection) and
+            // the turn stops (AC-07).
             let mut content_text = String::new();
             let mut pending_tool_calls: Vec<crate::provider::ToolCall> = Vec::new();
+            let mut saw_any_event = false;
+            let mut stream_truncated = false;
 
-            while let Some(event) = stream.next_event().await {
+            loop {
+                let event = tokio::select! {
+                    _ = request.cancel_token().cancelled() => {
+                        drop(stream);
+                        return self.stop_cancelled(&request, result, &mut context, &messages, pre_run_len);
+                    }
+                    _ = &mut deadline => {
+                        drop(stream);
+                        return self.stop_with_error(
+                            &request,
+                            result,
+                            &mut context,
+                            &messages,
+                            pre_run_len,
+                            ProviderError::new(
+                                "TIMEOUT",
+                                format!(
+                                    "turn exceeded the {:?} deadline",
+                                    request.turn_timeout().unwrap_or_default()
+                                ),
+                            ),
+                            AgentTurnStopReason::Timeout,
+                        );
+                    }
+                    event = stream.next_event() => event,
+                };
+                let Some(event) = event else { break };
+                saw_any_event = true;
                 match event {
                     crate::provider::AgentStreamEvent::ContentDelta(text) => {
                         content_text.push_str(&text);
@@ -510,17 +566,47 @@ impl AgentLoop {
                             "provider compacted conversation server-side"
                         );
                     }
+                    // A terminal transport failure: surface it as a
+                    // provider error instead of silently treating the
+                    // stream as finished (AC-05).
+                    crate::provider::AgentStreamEvent::Error(message) => {
+                        return self.stop_with_provider_error(
+                            &request,
+                            result,
+                            &mut context,
+                            &messages,
+                            pre_run_len,
+                            ProviderError::new("STREAM", message),
+                        );
+                    }
                     crate::provider::AgentStreamEvent::Done { stop_reason } => {
                         if let Some(reason) = stop_reason {
-                            result = result
-                                .with_stop_reason(crate::turn::AgentTurnStopReason::ProviderError);
-                            let _ = reason;
+                            // "length"/"max_tokens" means the provider
+                            // cut the response short: the final answer
+                            // is incomplete (AC-01).
+                            stream_truncated = is_truncation_reason(&reason);
                         }
                         break;
                     }
                     // ToolCallDelta is informational; we only act on ToolCall (complete).
                     crate::provider::AgentStreamEvent::ToolCallDelta { .. } => {}
                 }
+            }
+
+            // A stream that ended before yielding any event is a
+            // transport-level failure, not a final response (AC-06).
+            if !saw_any_event {
+                return self.stop_with_provider_error(
+                    &request,
+                    result,
+                    &mut context,
+                    &messages,
+                    pre_run_len,
+                    ProviderError::new(
+                        "EMPTY_STREAM",
+                        "provider stream ended before yielding any event",
+                    ),
+                );
             }
 
             // Build the assistant message from accumulated content + tool calls.
@@ -531,13 +617,20 @@ impl AgentLoop {
                 Message::assistant(&content_text)
             };
 
-            // No tool calls → final response.
+            // No tool calls → final response. A truncated stream keeps
+            // the partial response but is reported as incomplete
+            // (AC-01).
             if !has_tool_calls {
                 messages.push(assistant.clone());
+                let (stop_reason, status) = if stream_truncated {
+                    (AgentTurnStopReason::Truncated, AgentTurnStatus::Stopped)
+                } else {
+                    (AgentTurnStopReason::FinalResponse, AgentTurnStatus::Completed)
+                };
                 result = result
                     .with_final_response(assistant)
-                    .with_stop_reason(AgentTurnStopReason::FinalResponse)
-                    .with_status(AgentTurnStatus::Completed)
+                    .with_stop_reason(stop_reason)
+                    .with_status(status)
                     .with_messages(messages.clone());
                 commit_turn_history(&mut context, request.session(), &messages, pre_run_len);
                 return result;
@@ -567,12 +660,7 @@ impl AgentLoop {
                 }
                 // Check cancellation before each tool execution.
                 if request.cancel_token().is_cancelled() {
-                    result = result
-                        .with_stop_reason(AgentTurnStopReason::Cancelled)
-                        .with_status(AgentTurnStatus::Stopped)
-                        .with_messages(messages.clone());
-                    commit_turn_history(&mut context, request.session(), &messages, pre_run_len);
-                    return result;
+                    return self.stop_cancelled(&request, result, &mut context, &messages, pre_run_len);
                 }
                 tool_steps_taken += 1;
                 let tool_name = ToolName::new(tool_call.name());
@@ -611,11 +699,36 @@ impl AgentLoop {
     fn stop_with_provider_error(
         &self,
         request: &AgentTurnRequest,
+        result: AgentTurnResult,
+        context: &mut Option<&mut ContextManager>,
+        messages: &[Message],
+        pre_run_len: usize,
+        err: ProviderError,
+    ) -> AgentTurnResult {
+        self.stop_with_error(
+            request,
+            result,
+            context,
+            messages,
+            pre_run_len,
+            err,
+            AgentTurnStopReason::ProviderError,
+        )
+    }
+
+    /// Like [`Self::stop_with_provider_error`], but with an explicit
+    /// stop reason (used for turn timeout, which is not a provider
+    /// failure but needs the same diagnostic + event + history-commit
+    /// treatment — AC-02).
+    fn stop_with_error(
+        &self,
+        request: &AgentTurnRequest,
         mut result: AgentTurnResult,
         context: &mut Option<&mut ContextManager>,
         messages: &[Message],
         pre_run_len: usize,
         err: ProviderError,
+        reason: AgentTurnStopReason,
     ) -> AgentTurnResult {
         let provider_name = request.session().provider().clone();
         result.push_diagnostic(err.to_diagnostic(None));
@@ -626,7 +739,26 @@ impl AgentLoop {
             message: err.message().to_string(),
         });
         let result = result
-            .with_stop_reason(AgentTurnStopReason::ProviderError)
+            .with_stop_reason(reason)
+            .with_status(AgentTurnStatus::Stopped)
+            .with_messages(messages.to_vec());
+        commit_turn_history(context, request.session(), messages, pre_run_len);
+        result
+    }
+
+    /// Stop the turn on cancellation: mark it stopped with the
+    /// `Cancelled` reason and commit the messages seen so far. Shared
+    /// by the polling checkpoints and the in-flight abort paths.
+    fn stop_cancelled(
+        &self,
+        request: &AgentTurnRequest,
+        result: AgentTurnResult,
+        context: &mut Option<&mut ContextManager>,
+        messages: &[Message],
+        pre_run_len: usize,
+    ) -> AgentTurnResult {
+        let result = result
+            .with_stop_reason(AgentTurnStopReason::Cancelled)
             .with_status(AgentTurnStatus::Stopped)
             .with_messages(messages.to_vec());
         commit_turn_history(context, request.session(), messages, pre_run_len);
@@ -921,6 +1053,24 @@ fn build_tool_definitions(
         .collect()
 }
 
+/// Provider stop reasons that mean the response was cut short before a
+/// natural end (`max_tokens`/`length`). Streams ending with these are
+/// reported as [`AgentTurnStopReason::Truncated`] (AC-01).
+fn is_truncation_reason(reason: &str) -> bool {
+    matches!(reason, "length" | "max_tokens")
+}
+
+/// Future that completes when the turn deadline passes; pending forever
+/// when no deadline is configured. Races the in-flight provider call so
+/// a hung provider cannot outlive the deadline (AC-02).
+async fn turn_deadline(timeout: Option<Duration>, turn_start: Instant) {
+    if let Some(dur) = timeout {
+        tokio::time::sleep(dur.saturating_sub(turn_start.elapsed())).await;
+    } else {
+        std::future::pending::<()>().await;
+    }
+}
+
 /// Serialize a `ToolCallResult` into the JSON text the model receives
 /// as a tool observation. Successful calls carry their raw output
 /// JSON; rejected/failed calls carry a structured diagnostic envelope.
@@ -972,6 +1122,7 @@ mod tests {
     use std::collections::VecDeque;
     use std::path::PathBuf;
     use std::sync::Mutex;
+    use tokio_util::sync::CancellationToken;
 
     // ----- mock provider -----
 
@@ -2189,9 +2340,119 @@ mod tests {
         );
 
         let result = loop_harness.run_turn_streaming(req, None).await;
-        // Empty stream → no content, no tool calls → completed with empty final response.
+        // A zero-event stream is a transport failure, not a completed
+        // empty answer (AC-06).
+        assert_eq!(result.status(), AgentTurnStatus::Stopped);
+        assert_eq!(result.stop_reason(), AgentTurnStopReason::ProviderError);
+        assert!(
+            result
+                .diagnostics()
+                .iter()
+                .any(|d| d.code().as_str().ends_with("EMPTY_STREAM")),
+            "expected an EMPTY_STREAM diagnostic, got {:?}",
+            result.diagnostics()
+        );
+    }
+
+    #[tokio::test]
+    async fn run_turn_streaming_truncated_stream_reports_truncated() {
+        // The provider stops the stream with a truncation reason: the
+        // partial answer must not be reported as a clean final response
+        // (AC-01).
+        let provider = Arc::new(StreamingProvider::new(
+            "mock",
+            vec![vec![
+                AgentStreamEvent::ContentDelta("partial answer".into()),
+                AgentStreamEvent::Done {
+                    stop_reason: Some("length".into()),
+                },
+            ]],
+        ));
+        let sink = Arc::new(VecAgentEventSink::new());
+        let loop_harness = AgentLoop::new(provider, sink);
+
+        let req = AgentTurnRequest::new(
+            make_session(AgentToolRegistry::new()),
+            AgentTurnId::new("stream-truncated"),
+            ModelName::new("test-model"),
+            vec![Message::user("hi")],
+        );
+
+        let result = loop_harness.run_turn_streaming(req, None).await;
+        assert_eq!(result.status(), AgentTurnStatus::Stopped);
+        assert_eq!(result.stop_reason(), AgentTurnStopReason::Truncated);
+        // The partial response is still available to hosts.
+        assert_eq!(
+            result.final_response().unwrap().content(),
+            "partial answer"
+        );
+    }
+
+    #[tokio::test]
+    async fn run_turn_streaming_non_truncation_stop_reason_is_final() {
+        // A normal "stop" reason stays a clean final response (AC-01);
+        // only truncation reasons downgrade the turn.
+        let provider = Arc::new(StreamingProvider::new(
+            "mock",
+            vec![vec![
+                AgentStreamEvent::ContentDelta("done".into()),
+                AgentStreamEvent::Done {
+                    stop_reason: Some("stop".into()),
+                },
+            ]],
+        ));
+        let sink = Arc::new(VecAgentEventSink::new());
+        let loop_harness = AgentLoop::new(provider, sink);
+
+        let req = AgentTurnRequest::new(
+            make_session(AgentToolRegistry::new()),
+            AgentTurnId::new("stream-stop"),
+            ModelName::new("test-model"),
+            vec![Message::user("hi")],
+        );
+
+        let result = loop_harness.run_turn_streaming(req, None).await;
         assert_eq!(result.status(), AgentTurnStatus::Completed);
         assert_eq!(result.stop_reason(), AgentTurnStopReason::FinalResponse);
+        assert_eq!(result.final_response().unwrap().content(), "done");
+    }
+
+    #[tokio::test]
+    async fn run_turn_streaming_error_event_stops_with_provider_error() {
+        // A terminal Error event from the stream is a provider failure,
+        // not a clean end (AC-05).
+        let provider = Arc::new(StreamingProvider::new(
+            "mock",
+            vec![vec![
+                AgentStreamEvent::ContentDelta("partial".into()),
+                AgentStreamEvent::Error("connection dropped".into()),
+            ]],
+        ));
+        let sink = Arc::new(VecAgentEventSink::new());
+        let loop_harness = AgentLoop::new(provider, sink.clone());
+
+        let req = AgentTurnRequest::new(
+            make_session(AgentToolRegistry::new()),
+            AgentTurnId::new("stream-error"),
+            ModelName::new("test-model"),
+            vec![Message::user("hi")],
+        );
+
+        let result = loop_harness.run_turn_streaming(req, None).await;
+        assert_eq!(result.status(), AgentTurnStatus::Stopped);
+        assert_eq!(result.stop_reason(), AgentTurnStopReason::ProviderError);
+        assert!(
+            result
+                .diagnostics()
+                .iter()
+                .any(|d| d.code().as_str().ends_with("STREAM")),
+            "expected a STREAM diagnostic, got {:?}",
+            result.diagnostics()
+        );
+        assert!(sink.events().iter().any(|e| matches!(
+            e,
+            AgentEvent::ProviderError { code, .. } if code == "STREAM"
+        )));
     }
 
     // ------------------------------------------------------------------
@@ -2250,6 +2511,142 @@ mod tests {
         .with_cancel_token(cancel_token);
 
         let result = loop_harness.run_turn_streaming(req, None).await;
+        assert_eq!(result.status(), AgentTurnStatus::Stopped);
+        assert_eq!(result.stop_reason(), AgentTurnStopReason::Cancelled);
+    }
+
+    // ----- hanging mocks (in-flight cancellation / deadline) -----
+
+    /// A provider whose calls never complete: only cancellation or the
+    /// turn deadline can end a turn against it (AC-02, AC-07).
+    struct HangingProvider;
+    #[async_trait]
+    impl AgentProvider for HangingProvider {
+        fn name(&self) -> ProviderName {
+            ProviderName::new("hang")
+        }
+        async fn complete(&self, _request: AgentRequest) -> Result<AgentResponse, ProviderError> {
+            std::future::pending().await
+        }
+        async fn stream(
+            &self,
+            _request: AgentRequest,
+        ) -> Result<Box<dyn AgentStream>, ProviderError> {
+            Ok(Box::new(HangingStream))
+        }
+        async fn list_models(&self) -> Result<Vec<ModelInfo>, ProviderError> {
+            Ok(Vec::new())
+        }
+    }
+
+    /// A stream whose reads never complete.
+    struct HangingStream;
+    #[async_trait]
+    impl AgentStream for HangingStream {
+        async fn next_event(&mut self) -> Option<AgentStreamEvent> {
+            std::future::pending().await
+        }
+    }
+
+    #[tokio::test]
+    async fn run_turn_timeout_stops_with_timeout_and_visible_diagnostics() {
+        // A provider that never answers: only the deadline can end the
+        // turn, and the timeout must be visible to hosts (AC-02).
+        let provider = Arc::new(HangingProvider);
+        let sink = Arc::new(VecAgentEventSink::new());
+        let loop_harness = AgentLoop::new(provider, sink.clone());
+
+        let req = AgentTurnRequest::new(
+            make_session(AgentToolRegistry::new()),
+            AgentTurnId::new("timeout-1"),
+            ModelName::new("test-model"),
+            vec![Message::user("hi")],
+        )
+        .with_turn_timeout(Duration::from_millis(50));
+
+        let result = loop_harness.run_turn(req, None).await;
+        assert_eq!(result.status(), AgentTurnStatus::Stopped);
+        assert_eq!(result.stop_reason(), AgentTurnStopReason::Timeout);
+        // The timeout is observable: a diagnostic plus a ProviderError
+        // event with code TIMEOUT.
+        assert!(
+            result
+                .diagnostics()
+                .iter()
+                .any(|d| d.code().as_str().ends_with("TIMEOUT")),
+            "expected a TIMEOUT diagnostic, got {:?}",
+            result.diagnostics()
+        );
+        assert!(sink.events().iter().any(|e| matches!(
+            e,
+            AgentEvent::ProviderError { code, .. } if code == "TIMEOUT"
+        )));
+    }
+
+    #[tokio::test]
+    async fn run_turn_streaming_timeout_stops_with_timeout() {
+        let provider = Arc::new(HangingProvider);
+        let sink = Arc::new(VecAgentEventSink::new());
+        let loop_harness = AgentLoop::new(provider, sink);
+
+        let req = AgentTurnRequest::new(
+            make_session(AgentToolRegistry::new()),
+            AgentTurnId::new("timeout-2"),
+            ModelName::new("test-model"),
+            vec![Message::user("hi")],
+        )
+        .with_turn_timeout(Duration::from_millis(50));
+
+        let result = loop_harness.run_turn_streaming(req, None).await;
+        assert_eq!(result.status(), AgentTurnStatus::Stopped);
+        assert_eq!(result.stop_reason(), AgentTurnStopReason::Timeout);
+    }
+
+    #[tokio::test]
+    async fn run_turn_cancel_aborts_in_flight_provider_call() {
+        // The provider never returns; cancellation must end the turn
+        // promptly by dropping the in-flight call (AC-07).
+        let provider = Arc::new(HangingProvider);
+        let sink = Arc::new(VecAgentEventSink::new());
+        let loop_harness = AgentLoop::new(provider, sink);
+
+        let cancel_token = CancellationToken::new();
+        let req = AgentTurnRequest::new(
+            make_session(AgentToolRegistry::new()),
+            AgentTurnId::new("cancel-inflight-1"),
+            ModelName::new("test-model"),
+            vec![Message::user("hi")],
+        )
+        .with_cancel_token(cancel_token.clone());
+
+        let handle = tokio::spawn(async move { loop_harness.run_turn(req, None).await });
+        // Give the provider call time to start, then cancel mid-flight.
+        tokio::time::sleep(Duration::from_millis(50)).await;
+        cancel_token.cancel();
+        let result = handle.await.expect("turn finishes promptly after cancel");
+        assert_eq!(result.status(), AgentTurnStatus::Stopped);
+        assert_eq!(result.stop_reason(), AgentTurnStopReason::Cancelled);
+    }
+
+    #[tokio::test]
+    async fn run_turn_streaming_cancel_aborts_in_flight_stream() {
+        let provider = Arc::new(HangingProvider);
+        let sink = Arc::new(VecAgentEventSink::new());
+        let loop_harness = AgentLoop::new(provider, sink);
+
+        let cancel_token = CancellationToken::new();
+        let req = AgentTurnRequest::new(
+            make_session(AgentToolRegistry::new()),
+            AgentTurnId::new("cancel-inflight-2"),
+            ModelName::new("test-model"),
+            vec![Message::user("hi")],
+        )
+        .with_cancel_token(cancel_token.clone());
+
+        let handle = tokio::spawn(async move { loop_harness.run_turn_streaming(req, None).await });
+        tokio::time::sleep(Duration::from_millis(50)).await;
+        cancel_token.cancel();
+        let result = handle.await.expect("turn finishes promptly after cancel");
         assert_eq!(result.status(), AgentTurnStatus::Stopped);
         assert_eq!(result.stop_reason(), AgentTurnStopReason::Cancelled);
     }

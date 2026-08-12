@@ -12,7 +12,9 @@
 //! Token counting is heuristic, without external dependencies. CJK
 //! characters (code point above `0x2E80`) average one token per two
 //! characters; all other characters average one token per four
-//! characters. A fixed per-message overhead of 4 tokens is added.
+//! characters. A fixed overhead of 4 tokens is added per text block (a
+//! message with two text blocks pays 8), plus a fixed per-message
+//! budget for file blocks (image 1024, other 256).
 //!
 //! Estimation is behind the [`TokenEstimator`] seam: the heuristic is
 //! the default implementation, and an exact counter (e.g. tiktoken-rs,
@@ -211,7 +213,8 @@ pub struct ContextConfig {
     /// `max_tokens`.
     pub reserved_tokens: usize,
     /// Verbatim tail length (CM-V2b): the most recent `tail_turns`
-    /// complete turns are kept word-for-word.
+    /// complete turns are kept word-for-word. Coerced to a minimum of 1
+    /// (a value of 0 behaves as 1).
     pub tail_turns: usize,
     /// Compaction target ratio (CM-V2b, consumed by CM-V2c): a
     /// compaction pass aims to leave the history at this fraction of
@@ -569,7 +572,16 @@ impl ContextManager {
         // message. Pinned goal/constraints blocks (future pin API)
         // live behind it and are untouched.
         if self.sticky_count > 0 {
-            self.history[0] = summary_message;
+            if let Some(first) = self.history.first_mut() {
+                *first = summary_message;
+            } else {
+                // Defensive (AC-04): `sticky_count` may outlive its
+                // history if a persisted file was hand-edited or
+                // partially evicted. Install the summary as a fresh
+                // sticky prefix instead of panicking on `history[0]`.
+                self.history.push(summary_message);
+                self.sticky_count = 1;
+            }
         } else {
             self.history.insert(0, summary_message);
             self.sticky_count = 1;
@@ -733,6 +745,11 @@ impl ContextManager {
             }
         })?;
         let (history, compaction_summary, sticky_count) = parse_persisted_session(&json)?;
+        // Defensive clamp (AC-04): a hand-edited or partially written
+        // file may declare more sticky messages than the history holds;
+        // `apply_summary` indexes `history[0]` on this count, so it must
+        // never exceed the length.
+        let sticky_count = sticky_count.min(history.len());
         Ok(Self {
             config,
             history,
@@ -1833,7 +1850,7 @@ mod tests {
             r#"{"session_id":"sess-1","created_at":"0","history":[{"role":"user","content":[{"type":"text","text":"hi"}],"tool_call_id":null,"tool_calls":[]}],"compaction_summary":null,"total_tokens":4}"#,
         )
         .expect("write failed");
-        let mut loaded = ContextManager::load(
+        let loaded = ContextManager::load(
             "sess-1",
             ContextConfig::new(10_000, 2, dir.clone()),
         )
@@ -2026,6 +2043,70 @@ mod tests {
         assert!(history.iter().any(|m| m.content().starts_with("u59")));
         // The oldest evicted turn is gone for good.
         assert!(!history.iter().any(|m| m.content().starts_with("u0")));
+    }
+
+    #[test]
+    fn apply_summary_with_sticky_count_but_empty_history_does_not_panic() {
+        // Defensive guard (AC-04): a hand-edited or partially written
+        // persisted file may carry `sticky_count > 0` with no history.
+        // `apply_summary` must not index `history[0]` blindly.
+        let mut manager = ContextManager::new(config(2));
+        manager.sticky_count = 1; // corrupted / hand-edited persisted state
+
+        let request = manager.summarize_request();
+        assert!(!request.is_empty());
+        let record = manager
+            .apply_summary("summarized after corruption")
+            .expect("apply succeeds");
+        assert_eq!(manager.history.len(), 1);
+        assert_eq!(manager.history[0].content(), "summarized after corruption");
+        assert_eq!(manager.sticky_count, 1);
+        assert_eq!(record.text, "summarized after corruption");
+    }
+
+    #[test]
+    fn load_clamps_sticky_count_to_history_length() {
+        // A file declaring more sticky messages than the history holds
+        // must load with a clamped count instead of panicking later
+        // (AC-04).
+        let dir = temp_session_dir("sticky-clamp");
+        std::fs::create_dir_all(&dir).expect("mkdir failed");
+        std::fs::write(
+            dir.join("sess-1.json"),
+            r#"{"session_id":"sess-1","created_at":"0","history":[
+                {"role":"user","content":[{"type":"text","text":"hi"}],"tool_call_id":null,"tool_calls":[]},
+                {"role":"assistant","content":[{"type":"text","text":"hello"}],"tool_call_id":null,"tool_calls":[]}
+            ],"compaction_summary":null,"sticky_count":5,"total_tokens":8,"schema_version":2}"#,
+        )
+        .expect("write failed");
+        let mut loaded = ContextManager::load("sess-1", ContextConfig::new(10_000, 2, dir.clone()))
+            .expect("load failed");
+        assert_eq!(loaded.sticky_count, 2);
+        // A follow-up compaction on the loaded manager never panics.
+        let record = loaded
+            .apply_summary("compacted after clamp")
+            .expect("apply succeeds");
+        assert_eq!(record.text, "compacted after clamp");
+    }
+
+    #[test]
+    fn load_with_sticky_count_but_empty_history_clamps_to_zero() {
+        let dir = temp_session_dir("sticky-empty");
+        std::fs::create_dir_all(&dir).expect("mkdir failed");
+        std::fs::write(
+            dir.join("sess-1.json"),
+            r#"{"session_id":"sess-1","created_at":"0","history":[],"compaction_summary":null,"sticky_count":1,"total_tokens":0,"schema_version":2}"#,
+        )
+        .expect("write failed");
+        let mut loaded = ContextManager::load("sess-1", ContextConfig::new(10_000, 2, dir.clone()))
+            .expect("load failed");
+        assert_eq!(loaded.sticky_count, 0);
+        // The next compaction installs a fresh sticky prefix.
+        let record = loaded
+            .apply_summary("fresh sticky")
+            .expect("apply succeeds");
+        assert_eq!(loaded.history.len(), 1);
+        assert_eq!(record.text, "fresh sticky");
     }
 
     #[test]

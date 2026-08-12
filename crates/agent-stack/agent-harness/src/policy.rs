@@ -164,10 +164,12 @@ impl ToolPolicy {
         if spec.risk() == ToolRiskLevel::External && mode != AgentMode::Build {
             return PolicyDecision::Deny(PolicyDenialReason::ApprovalRequired);
         }
-        // The caller may pass an "unconstrained" permission sentinel
-        // (empty string) to express "no permission check". Real policy
-        // evaluation should use `ToolPolicy::evaluate` so the context
-        // is consulted.
+        // Known gap: the `permission` argument is never consulted; the
+        // sentinel comment below reflects intended-but-unimplemented
+        // behavior. This helper exists only for direct policy tests —
+        // real evaluation should use `ToolPolicy::evaluate` so the
+        // context is consulted. Cleanup tracked in
+        // docs/roadmap/agent-stack-cleanup-roadmap.md.
         if !permission.as_str().is_empty() {
             let _ = permission;
         }

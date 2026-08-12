@@ -873,8 +873,9 @@ pub enum AgentStreamEvent {
     ReasoningDelta(String),
     /// A complete tool call the model wants to make. Providers that
     /// stream tool calls incrementally may emit one or more
-    /// `ToolCallDelta` events first and finish with a `ToolCallComplete`
-    /// event; the runtime treats both shapes uniformly.
+    /// `ToolCallDelta` events first; the runtime only acts on the
+    /// complete `ToolCall` — deltas are informational and currently
+    /// ignored by the loop.
     ToolCall(ToolCall),
     /// A partial tool call. `index` is the position in the final
     /// tool-call list. `id`, `name`, and `arguments_delta` are optional
@@ -895,6 +896,11 @@ pub enum AgentStreamEvent {
     /// and is never replayed into history (CM-V2e, PV-01b reserved
     /// channel).
     Compacted { item_id: String },
+    /// A transport-level failure occurred while reading the stream
+    /// (e.g. the connection dropped mid-response). The harness stops
+    /// the turn with a provider error (AC-05); the message is
+    /// host-visible diagnostics.
+    Error(String),
     /// Stream completed; the runtime stops reading.
     Done { stop_reason: Option<String> },
 }
@@ -935,9 +941,10 @@ pub trait AgentProvider: Send + Sync {
 
 /// Stream of provider events returned by `AgentProvider::stream`.
 ///
-/// The trait is sealed to a small set of operations the agent runtime
-/// needs: pull the next event, peek at the most recently yielded event
-/// for diagnostics, and signal cancellation.
+/// The trait intentionally exposes a single operation — pull the next
+/// event. Diagnostics and cancellation are handled by the harness loop
+/// between reads; adapters terminate the stream with `None` or a final
+/// `AgentStreamEvent::Done`.
 #[async_trait]
 pub trait AgentStream: Send {
     /// Pull the next event. Returns `None` when the stream is

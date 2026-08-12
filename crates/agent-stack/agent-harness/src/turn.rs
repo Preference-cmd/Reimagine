@@ -115,9 +115,20 @@ pub enum AgentTurnStopReason {
     /// The provider returned `ProviderError`. The harness stops the turn;
     /// the error is also surfaced as a diagnostic on the turn result.
     ProviderError,
-    /// Reserved for future turn cancellation. V1 never emits this
-    /// variant; it exists so downstream callers can pattern-match without
-    /// a `non_exhaustive` boundary.
+    /// The provider reported that generation stopped before a natural
+    /// end — e.g. `max_tokens`/`length` truncation. The streamed
+    /// response is kept, but hosts should surface it as incomplete
+    /// rather than a final answer (AC-01).
+    Truncated,
+    /// The turn exceeded its configured deadline
+    /// (`AgentTurnRequest::with_turn_timeout`). Surfaced with a
+    /// diagnostic and a `ProviderError` event whose code is `TIMEOUT`
+    /// (AC-02).
+    Timeout,
+    /// The turn was cancelled via the request's `CancellationToken`.
+    /// Cancellation aborts in-flight provider work: the loop races the
+    /// token against the provider call and drops the in-flight future
+    /// when it fires (AC-07).
     Cancelled,
 }
 
@@ -127,6 +138,8 @@ impl AgentTurnStopReason {
             Self::FinalResponse => "final_response",
             Self::MaxToolStepsExceeded => "max_tool_steps_exceeded",
             Self::ProviderError => "provider_error",
+            Self::Truncated => "truncated",
+            Self::Timeout => "timeout",
             Self::Cancelled => "cancelled",
         }
     }
@@ -294,7 +307,7 @@ pub struct AgentTurnRequest {
     /// check point and returns `AgentTurnStopReason::Cancelled`.
     cancel_token: CancellationToken,
     /// Optional overall turn timeout. If the turn does not complete
-    /// within this duration, it stops with `ProviderError`.
+    /// within this duration, it stops with `Timeout`.
     turn_timeout: Option<Duration>,
 }
 
@@ -331,7 +344,8 @@ impl AgentTurnRequest {
     }
 
     /// Set an overall turn timeout. The turn will stop with
-    /// `ProviderError` if it does not complete within this duration.
+    /// `AgentTurnStopReason::Timeout` if it does not complete within
+    /// this duration.
     pub fn with_turn_timeout(mut self, timeout: Duration) -> Self {
         self.turn_timeout = Some(timeout);
         self
