@@ -231,40 +231,6 @@ impl std::fmt::Display for ProviderError {
 
 impl std::error::Error for ProviderError {}
 
-/// Top-level Agent error, used for orchestration errors that do not fit
-/// the tool or provider error categories (for example, invalid session
-/// construction).
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct AgentError {
-    code: String,
-    message: String,
-}
-
-impl AgentError {
-    pub fn new(code: impl Into<String>, message: impl Into<String>) -> Self {
-        Self {
-            code: code.into(),
-            message: message.into(),
-        }
-    }
-
-    pub fn code(&self) -> &str {
-        &self.code
-    }
-
-    pub fn message(&self) -> &str {
-        &self.message
-    }
-}
-
-impl std::fmt::Display for AgentError {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(f, "[{}] {}", self.code, self.message)
-    }
-}
-
-impl std::error::Error for AgentError {}
-
 #[cfg(test)]
 mod tests {
     use super::*;

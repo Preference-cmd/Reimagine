@@ -200,10 +200,6 @@ impl std::error::Error for ContextError {
 pub struct ContextConfig {
     /// Token hard limit for the stored history.
     pub max_tokens: usize,
-    /// Rolling window: kept for V1 call-site compatibility. The
-    /// window is now driven by token budgets and `tail_turns`
-    /// (CM-V2b); this field has no effect.
-    pub recent_turns: usize,
     /// Session persistence directory. Stored now for AS-03 session
     /// persistence; not used by the V1 context manager.
     pub session_dir: PathBuf,
@@ -233,12 +229,11 @@ pub struct ContextConfig {
 }
 
 impl ContextConfig {
-    /// V1-compatible constructor: keeps old struct-literal call sites
-    /// readable while defaulting every window-policy parameter.
-    pub fn new(max_tokens: usize, recent_turns: usize, session_dir: PathBuf) -> Self {
+    /// Constructor that defaults every window-policy parameter while
+    /// keeping struct-literal call sites readable.
+    pub fn new(max_tokens: usize, session_dir: PathBuf) -> Self {
         Self {
             max_tokens,
-            recent_turns,
             session_dir,
             reserved_tokens: DEFAULT_RESERVED_TOKENS,
             tail_turns: DEFAULT_TAIL_TURNS,
@@ -1102,13 +1097,13 @@ mod tests {
 
     use crate::provider::{ContentBlock, FileContentBlock, ToolCall, ToolCallId};
 
-    fn config(recent_turns: usize) -> ContextConfig {
-        ContextConfig::new(10_000, recent_turns, PathBuf::from("/tmp/reimagine-test"))
+    fn config() -> ContextConfig {
+        ContextConfig::new(10_000, PathBuf::from("/tmp/reimagine-test"))
     }
 
     #[test]
     fn prepare_keeps_full_history_within_window() {
-        let mut manager = ContextManager::new(config(2));
+        let mut manager = ContextManager::new(config());
         manager.commit_turn(&[Message::user("u1"), Message::assistant("a1")]);
         manager.commit_turn(&[Message::user("u2"), Message::assistant("a2")]);
 
@@ -1125,7 +1120,7 @@ mod tests {
 
     #[test]
     fn prepare_drops_oldest_messages_beyond_window() {
-        let mut manager = ContextManager::new(config(2));
+        let mut manager = ContextManager::new(config());
         for i in 0..3 {
             manager.commit_turn(&[
                 Message::user(format!("u{i}")),
@@ -1146,7 +1141,7 @@ mod tests {
 
     #[test]
     fn prepare_with_empty_input_still_attaches_system() {
-        let mut manager = ContextManager::new(config(2));
+        let mut manager = ContextManager::new(config());
         let messages = manager.prepare_messages("sys", &[]);
         assert_eq!(messages.len(), 1);
         assert_eq!(messages[0].role(), "system");
@@ -1155,7 +1150,7 @@ mod tests {
 
     #[test]
     fn commit_turn_accumulates_history() {
-        let mut manager = ContextManager::new(config(2));
+        let mut manager = ContextManager::new(config());
         assert_eq!(manager.token_count(), 0);
         manager.commit_turn(&[Message::user("u1"), Message::assistant("a1")]);
         manager.commit_turn(&[Message::user("u2")]);
@@ -1166,7 +1161,7 @@ mod tests {
 
     #[test]
     fn token_count_sums_history_content() {
-        let mut manager = ContextManager::new(config(2));
+        let mut manager = ContextManager::new(config());
         manager.commit_turn(&[Message::user("a"), Message::assistant("b")]);
         assert_eq!(manager.token_count(), 8);
     }
@@ -1176,7 +1171,7 @@ mod tests {
         // max_tokens 100, reserved 90 -> soft line at 10.
         let mut manager = ContextManager::new(ContextConfig {
             reserved_tokens: 90,
-            ..ContextConfig::new(100, 2, PathBuf::from("/tmp/reimagine-test"))
+            ..ContextConfig::new(100, PathBuf::from("/tmp/reimagine-test"))
         });
         assert!(!manager.needs_compaction());
         manager.commit_turn(&[Message::user("a"), Message::assistant("b")]);
@@ -1191,7 +1186,6 @@ mod tests {
     fn is_over_hard_limit_flips_at_max_tokens() {
         let mut manager = ContextManager::new(ContextConfig::new(
             20,
-            2,
             PathBuf::from("/tmp/reimagine-test"),
         ));
         manager.commit_turn(&[Message::user("a"), Message::assistant("b")]);
@@ -1210,7 +1204,7 @@ mod tests {
     fn soft_trigger_precedes_hard_limit() {
         let mut manager = ContextManager::new(ContextConfig {
             reserved_tokens: 40,
-            ..ContextConfig::new(100, 2, PathBuf::from("/tmp/reimagine-test"))
+            ..ContextConfig::new(100, PathBuf::from("/tmp/reimagine-test"))
         });
         manager.commit_turn(&[Message::user("a"), Message::assistant("b")]);
         // 8 < 60: neither fires.
@@ -1232,7 +1226,7 @@ mod tests {
 
     #[test]
     fn new_config_defaults_reserved_cushion() {
-        let config = ContextConfig::new(64_000, 20, PathBuf::from("/tmp/reimagine-test"));
+        let config = ContextConfig::new(64_000, PathBuf::from("/tmp/reimagine-test"));
         assert_eq!(config.reserved_tokens, 16_000);
     }
 
@@ -1240,7 +1234,7 @@ mod tests {
     fn budget_snapshot_decomposes_call_budget() {
         let mut manager = ContextManager::new(ContextConfig {
             reserved_tokens: 40,
-            ..ContextConfig::new(100, 2, PathBuf::from("/tmp/reimagine-test"))
+            ..ContextConfig::new(100, PathBuf::from("/tmp/reimagine-test"))
         });
         manager.commit_turn(&[Message::user("a"), Message::assistant("b")]);
         let snapshot = manager.budget_snapshot(/* system */ 20, /* input */ 12);
@@ -1271,7 +1265,7 @@ mod tests {
     fn budget_snapshot_flips_over_budget_with_large_history() {
         let mut manager = ContextManager::new(ContextConfig {
             reserved_tokens: 40,
-            ..ContextConfig::new(100, 2, PathBuf::from("/tmp/reimagine-test"))
+            ..ContextConfig::new(100, PathBuf::from("/tmp/reimagine-test"))
         });
         for i in 0..10 {
             manager.commit_turn(&[
@@ -1296,7 +1290,6 @@ mod tests {
     fn message_tokens_attributes_per_message() {
         let mut manager = ContextManager::new(ContextConfig::new(
             10_000,
-            2,
             PathBuf::from("/tmp/reimagine-test"),
         ));
         manager.commit_turn(&[Message::user("abc"), Message::assistant("defg")]);
@@ -1322,7 +1315,6 @@ mod tests {
     fn custom_estimator_replaces_heuristic() {
         let mut manager = ContextManager::new(ContextConfig::new(
             10_000,
-            2,
             PathBuf::from("/tmp/reimagine-test"),
         ))
         .with_estimator(Box::new(FlatEstimator(7)));
@@ -1338,7 +1330,7 @@ mod tests {
     fn window_config(max_tokens: usize, reserved_tokens: usize, tail_turns: usize) -> ContextConfig {
         ContextConfig {
             tail_turns,
-            ..ContextConfig::new(max_tokens, 20, PathBuf::from("/tmp/reimagine-test"))
+            ..ContextConfig::new(max_tokens, PathBuf::from("/tmp/reimagine-test"))
         }
         .with_reserved(reserved_tokens)
     }
@@ -1662,7 +1654,7 @@ mod tests {
 
     #[test]
     fn image_block_counts_fixed_budget() {
-        let mut manager = ContextManager::new(config(2));
+        let mut manager = ContextManager::new(config());
         manager.commit_turn(&[Message::user_with_blocks(vec![
             ContentBlock::Text("look".into()),
             ContentBlock::File(FileContentBlock::data("image/png", "AAAA")),
@@ -1673,7 +1665,7 @@ mod tests {
 
     #[test]
     fn non_image_file_block_counts_fallback_budget() {
-        let mut manager = ContextManager::new(config(2));
+        let mut manager = ContextManager::new(config());
         manager.commit_turn(&[Message::user_with_blocks(vec![ContentBlock::File(
             FileContentBlock::data("audio/mpeg", "AAAA"),
         )])]);
@@ -1683,7 +1675,7 @@ mod tests {
 
     #[test]
     fn text_only_history_is_unchanged_by_blocks_path() {
-        let mut manager = ContextManager::new(config(2));
+        let mut manager = ContextManager::new(config());
         manager.commit_turn(&[Message::user("a"), Message::assistant("b")]);
         assert_eq!(manager.token_count(), 8);
     }
@@ -1704,7 +1696,7 @@ mod tests {
     #[test]
     fn persist_load_round_trips_history() {
         let dir = temp_session_dir("round-trip");
-        let cfg = ContextConfig::new(10_000, 2, dir.clone());
+        let cfg = ContextConfig::new(10_000, dir.clone());
         let mut manager = ContextManager::new(cfg);
         manager.commit_turn(&[
             Message::user("u1"),
@@ -1723,7 +1715,7 @@ mod tests {
 
         let loaded = ContextManager::load(
             "sess-1",
-            ContextConfig::new(10_000, 2, dir),
+            ContextConfig::new(10_000, dir),
         )
         .expect("load failed");
         assert_eq!(loaded.token_count(), manager.token_count());
@@ -1733,7 +1725,7 @@ mod tests {
     #[test]
     fn persist_round_trips_file_blocks() {
         let dir = temp_session_dir("file-blocks");
-        let cfg = ContextConfig::new(10_000, 2, dir.clone());
+        let cfg = ContextConfig::new(10_000, dir.clone());
         let mut manager = ContextManager::new(cfg);
         manager.commit_turn(&[Message::user_with_blocks(vec![
             ContentBlock::Text("describe".into()),
@@ -1743,7 +1735,7 @@ mod tests {
 
         let loaded = ContextManager::load(
             "sess-1",
-            ContextConfig::new(10_000, 2, dir),
+            ContextConfig::new(10_000, dir),
         )
         .expect("load failed");
         assert_eq!(loaded.history, manager.history);
@@ -1764,7 +1756,7 @@ mod tests {
         .expect("write failed");
         let result = ContextManager::load(
             "sess-1",
-            ContextConfig::new(10_000, 2, dir),
+            ContextConfig::new(10_000, dir),
         );
         assert!(result.is_err());
     }
@@ -1781,7 +1773,7 @@ mod tests {
         .expect("write failed");
         let loaded = ContextManager::load(
             "sess-1",
-            ContextConfig::new(10_000, 2, dir),
+            ContextConfig::new(10_000, dir),
         )
         .expect("v1 load failed");
         assert_eq!(loaded.token_count(), 8);
@@ -1802,7 +1794,7 @@ mod tests {
         .expect("write failed");
         let loaded = ContextManager::load(
             "sess-1",
-            ContextConfig::new(10_000, 2, dir),
+            ContextConfig::new(10_000, dir),
         )
         .expect("v1 load failed");
         assert!(loaded.compaction_summary().is_none());
@@ -1820,7 +1812,7 @@ mod tests {
         .expect("write failed");
         let err = match ContextManager::load(
             "sess-1",
-            ContextConfig::new(10_000, 2, dir),
+            ContextConfig::new(10_000, dir),
         ) {
             Ok(_) => panic!("future version must fail"),
             Err(err) => err,
@@ -1831,7 +1823,7 @@ mod tests {
     #[test]
     fn persist_writes_current_schema_version() {
         let dir = temp_session_dir("schema-version");
-        let manager = ContextManager::new(ContextConfig::new(10_000, 2, dir.clone()));
+        let manager = ContextManager::new(ContextConfig::new(10_000, dir.clone()));
         manager.persist("sess-1").expect("persist failed");
 
         let json = std::fs::read_to_string(dir.join("sess-1.json")).expect("read failed");
@@ -1852,7 +1844,7 @@ mod tests {
         .expect("write failed");
         let loaded = ContextManager::load(
             "sess-1",
-            ContextConfig::new(10_000, 2, dir.clone()),
+            ContextConfig::new(10_000, dir.clone()),
         )
         .expect("v1 load failed");
         loaded.persist("sess-1").expect("persist failed");
@@ -1877,7 +1869,7 @@ mod tests {
         .expect("write failed");
         let loaded = ContextManager::load(
             "sess-1",
-            ContextConfig::new(10_000, 2, dir),
+            ContextConfig::new(10_000, dir),
         )
         .expect("v2c fallback load failed");
         let record = loaded.compaction_summary().expect("summary lost");
@@ -1897,7 +1889,7 @@ mod tests {
         .expect("write failed");
         let err = match ContextManager::load(
             "sess-1",
-            ContextConfig::new(10_000, 2, dir),
+            ContextConfig::new(10_000, dir),
         ) {
             Ok(_) => panic!("future version must fail"),
             Err(err) => err,
@@ -1919,7 +1911,7 @@ mod tests {
         .expect("write failed");
         let err = match ContextManager::load(
             "sess-1",
-            ContextConfig::new(10_000, 2, dir),
+            ContextConfig::new(10_000, dir),
         ) {
             Ok(_) => panic!("huge version must fail"),
             Err(err) => err,
@@ -1930,7 +1922,7 @@ mod tests {
     #[test]
     fn persist_creates_session_dir() {
         let dir = temp_session_dir("mkdir");
-        let manager = ContextManager::new(ContextConfig::new(10_000, 2, dir.clone()));
+        let manager = ContextManager::new(ContextConfig::new(10_000, dir.clone()));
         manager.persist("sess-1").expect("persist failed");
         assert!(dir.join("sess-1.json").is_file());
     }
@@ -1940,7 +1932,7 @@ mod tests {
         let dir = temp_session_dir("missing");
         let result = ContextManager::load(
             "nope",
-            ContextConfig::new(10_000, 2, dir),
+            ContextConfig::new(10_000, dir),
         );
         assert!(result.is_err());
     }
@@ -1948,7 +1940,7 @@ mod tests {
     #[test]
     fn persist_writes_compaction_summary_none() {
         let dir = temp_session_dir("summary");
-        let manager = ContextManager::new(ContextConfig::new(10_000, 2, dir.clone()));
+        let manager = ContextManager::new(ContextConfig::new(10_000, dir.clone()));
         manager.persist("sess-1").expect("persist failed");
 
         let json = std::fs::read_to_string(dir.join("sess-1.json")).expect("read failed");
@@ -2050,7 +2042,7 @@ mod tests {
         // Defensive guard (AC-04): a hand-edited or partially written
         // persisted file may carry `sticky_count > 0` with no history.
         // `apply_summary` must not index `history[0]` blindly.
-        let mut manager = ContextManager::new(config(2));
+        let mut manager = ContextManager::new(config());
         manager.sticky_count = 1; // corrupted / hand-edited persisted state
 
         let request = manager.summarize_request();
@@ -2079,7 +2071,7 @@ mod tests {
             ],"compaction_summary":null,"sticky_count":5,"total_tokens":8,"schema_version":2}"#,
         )
         .expect("write failed");
-        let mut loaded = ContextManager::load("sess-1", ContextConfig::new(10_000, 2, dir.clone()))
+        let mut loaded = ContextManager::load("sess-1", ContextConfig::new(10_000, dir.clone()))
             .expect("load failed");
         assert_eq!(loaded.sticky_count, 2);
         // A follow-up compaction on the loaded manager never panics.
@@ -2098,7 +2090,7 @@ mod tests {
             r#"{"session_id":"sess-1","created_at":"0","history":[],"compaction_summary":null,"sticky_count":1,"total_tokens":0,"schema_version":2}"#,
         )
         .expect("write failed");
-        let mut loaded = ContextManager::load("sess-1", ContextConfig::new(10_000, 2, dir.clone()))
+        let mut loaded = ContextManager::load("sess-1", ContextConfig::new(10_000, dir.clone()))
             .expect("load failed");
         assert_eq!(loaded.sticky_count, 0);
         // The next compaction installs a fresh sticky prefix.
@@ -2156,7 +2148,7 @@ mod tests {
     fn compaction_record_round_trips_persistence() {
         let dir = temp_session_dir("record");
         let cfg = ContextConfig {
-            ..ContextConfig::new(10_000, 2, dir.clone())
+            ..ContextConfig::new(10_000, dir.clone())
         };
         let mut manager = ContextManager::new(cfg);
         for i in 0..60 {
@@ -2167,7 +2159,7 @@ mod tests {
 
         let loaded = ContextManager::load(
             "sess-1",
-            ContextConfig::new(10_000, 2, dir),
+            ContextConfig::new(10_000, dir),
         )
         .expect("load failed");
         let record = loaded.compaction_summary().expect("summary lost");
@@ -2260,7 +2252,7 @@ mod tests {
         // redundant insert. The loop driver skips the summarizer call
         // entirely when `has_eviction_pending()` is false, so this path
         // only fires on direct API use (or a stale-plan bypass).
-        let mut manager = ContextManager::new(config(2));
+        let mut manager = ContextManager::new(config());
         manager.commit_turn(&[Message::user("u1"), Message::assistant("a1")]);
         assert!(!manager.has_eviction_pending());
 
@@ -2308,7 +2300,7 @@ mod tests {
 
     #[test]
     fn has_eviction_pending_false_for_tiny_history() {
-        let mut manager = ContextManager::new(config(2));
+        let mut manager = ContextManager::new(config());
         manager.commit_turn(&[Message::user("u1"), Message::assistant("a1")]);
         assert!(!manager.has_eviction_pending());
         manager.commit_turn(&[Message::user("u2"), Message::assistant("a2")]);
@@ -2384,7 +2376,7 @@ mod tests {
         let cfg = ContextConfig {
             reserved_tokens: 2_000,
             tail_turns: 2,
-            ..ContextConfig::new(10_000, 20, dir)
+            ..ContextConfig::new(10_000, dir)
         };
         let mut loaded = ContextManager::load("sess-1", cfg).expect("load failed");
         // Load succeeds and restores the record, but the sticky count

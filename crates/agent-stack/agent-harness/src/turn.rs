@@ -154,6 +154,10 @@ impl std::fmt::Display for AgentTurnStopReason {
 /// Outcome category for a single tool invocation.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub enum ToolCallStatus {
+    /// `ToolCallResult::new` starts here; a real outcome is stamped
+    /// explicitly via `succeeded` / `rejected` / `failed`. A `Running`
+    /// record should never be observed by a host (AC-20).
+    Running,
     /// Tool executed and returned a value.
     Succeeded,
     /// Policy denied the call before it ran.
@@ -165,6 +169,7 @@ pub enum ToolCallStatus {
 impl ToolCallStatus {
     pub fn as_str(self) -> &'static str {
         match self {
+            Self::Running => "running",
             Self::Succeeded => "succeeded",
             Self::Rejected => "rejected",
             Self::Failed => "failed",
@@ -197,15 +202,19 @@ pub struct ToolCallResult {
 }
 
 impl ToolCallResult {
-    /// Start a new `ToolCallResult` for `tool_call_id` / `tool_name`. Use
-    /// the `succeeded` / `rejected` / `failed` builders to set the outcome
-    /// and `with_session` to attach correlation. `effective` stays `None`
-    /// until `set_effective_from_output` (or `with_effective`) is called.
+    /// Start a new `ToolCallResult` for `tool_call_id` / `tool_name`.
+    ///
+    /// The status starts as [`ToolCallStatus::Running`] — a placeholder,
+    /// not a real outcome. Callers must stamp an explicit terminal
+    /// outcome via the `succeeded` / `rejected` / `failed` builders
+    /// before the record is observed by a host (AC-20). Use
+    /// `with_session` to attach correlation. `effective` stays `None`
+    /// until `set_effective_from_output` is called.
     pub fn new(tool_call_id: ToolCallId, tool_name: ToolName) -> Self {
         Self {
             tool_call_id,
             tool_name,
-            status: ToolCallStatus::Succeeded,
+            status: ToolCallStatus::Running,
             output: None,
             diagnostic: None,
             effective: None,
@@ -253,13 +262,6 @@ impl ToolCallResult {
         {
             self.effective = Some(*b);
         }
-        self
-    }
-
-    /// Explicit override for tests and cases where the harness already
-    /// knows the effective flag from context.
-    pub fn with_effective(mut self, value: bool) -> Self {
-        self.effective = Some(value);
         self
     }
 
@@ -403,8 +405,14 @@ pub struct AgentTurnResult {
     messages: Vec<Message>,
 }
 
-impl Default for AgentTurnResult {
-    fn default() -> Self {
+impl AgentTurnResult {
+    /// Start an empty builder seed. The status starts as `Running` and
+    /// the stop reason as `FinalResponse` — the harness stamps the real
+    /// terminal values before returning the result to a host, so the
+    /// seed combination is intentionally transient and never observed
+    /// (AC-20; the old `Default` impl made this same contradictory state
+    /// look like a meaningful default, so it was removed).
+    pub fn new() -> Self {
         Self {
             turn_id: AgentTurnId::new(""),
             session_id: AgentSessionId::new(""),
@@ -419,12 +427,6 @@ impl Default for AgentTurnResult {
             usage: None,
             messages: Vec::new(),
         }
-    }
-}
-
-impl AgentTurnResult {
-    pub fn new() -> Self {
-        Self::default()
     }
 
     pub fn with_turn_id(mut self, turn_id: AgentTurnId) -> Self {
@@ -721,18 +723,19 @@ mod tests {
     }
 
     #[test]
-    fn tool_call_result_with_effective_override() {
-        let r = ToolCallResult::new(ToolCallId::new("c1"), ToolName::new("x"))
-            .succeeded(json!({}))
-            .with_effective(true);
-        assert_eq!(r.effective(), Some(true));
-    }
-
-    #[test]
     fn tool_call_status_as_str() {
+        assert_eq!(ToolCallStatus::Running.as_str(), "running");
         assert_eq!(ToolCallStatus::Succeeded.as_str(), "succeeded");
         assert_eq!(ToolCallStatus::Rejected.as_str(), "rejected");
         assert_eq!(ToolCallStatus::Failed.as_str(), "failed");
+    }
+
+    #[test]
+    fn tool_call_result_new_defaults_to_running() {
+        // AC-20: `new()` must not fabricate a `Succeeded` outcome; the
+        // caller stamps an explicit status via the terminal builders.
+        let r = ToolCallResult::new(ToolCallId::new("c1"), ToolName::new("x"));
+        assert_eq!(r.status(), ToolCallStatus::Running);
     }
 
     #[test]
@@ -786,7 +789,7 @@ mod tests {
 
     #[test]
     fn agent_turn_result_default_builds_empty() {
-        let r = AgentTurnResult::default();
+        let r = AgentTurnResult::new();
         assert!(r.final_response().is_none());
         assert!(r.tool_calls().is_empty());
         assert!(r.diagnostics().is_empty());
@@ -797,7 +800,7 @@ mod tests {
 
     #[test]
     fn agent_turn_result_push_tool_call_appends() {
-        let mut r = AgentTurnResult::default();
+        let mut r = AgentTurnResult::new();
         r.push_tool_call(
             ToolCallResult::new(ToolCallId::new("a"), ToolName::new("x")).succeeded(json!({})),
         );
@@ -811,15 +814,15 @@ mod tests {
 
     #[test]
     fn agent_turn_result_is_completed_predicate() {
-        let r = AgentTurnResult::default().with_status(AgentTurnStatus::Completed);
+        let r = AgentTurnResult::new().with_status(AgentTurnStatus::Completed);
         assert!(r.is_completed());
-        let r = AgentTurnResult::default().with_status(AgentTurnStatus::Stopped);
+        let r = AgentTurnResult::new().with_status(AgentTurnStatus::Stopped);
         assert!(!r.is_completed());
     }
 
     #[test]
     fn agent_turn_result_tool_steps_count() {
-        let mut r = AgentTurnResult::default();
+        let mut r = AgentTurnResult::new();
         for i in 0..3 {
             r.push_tool_call(
                 ToolCallResult::new(ToolCallId::new(format!("c{i}")), ToolName::new("x"))
@@ -832,7 +835,7 @@ mod tests {
     #[test]
     fn agent_turn_result_with_final_response_and_usage() {
         let resp = Message::assistant("all done");
-        let r = AgentTurnResult::default()
+        let r = AgentTurnResult::new()
             .with_final_response(resp.clone())
             .with_usage(Usage::new(Some(7), Some(11)));
         assert_eq!(r.final_response(), Some(&resp));

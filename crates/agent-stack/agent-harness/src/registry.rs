@@ -183,7 +183,15 @@ impl AgentToolRegistry {
             PolicyDecision::Deny(reason) => {
                 let err = self.policy.denial_to_error(name, reason);
                 return Err(match reason {
+                    // Unreachable (AC-22): the registry resolves `name`
+                    // against its tools before policy evaluation, so a
+                    // missing tool returns `UnknownTool` above and
+                    // `ToolNameMissing` never reaches this match. The
+                    // arm keeps the match total; `denial_to_error`
+                    // (policy.rs) still handles the variant for the
+                    // policy layer.
                     PolicyDenialReason::ToolNameMissing => {
+                        debug_assert!(false, "registry lookup precedes policy evaluation");
                         ToolRegistryError::UnknownTool(name.clone())
                     }
                     _ => ToolRegistryError::PolicyDenied(err),

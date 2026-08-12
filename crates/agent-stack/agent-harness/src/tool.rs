@@ -47,7 +47,10 @@ pub struct ToolSpec {
     /// schema-generation crate. Concrete tools may emit any valid JSON
     /// Schema object.
     input_schema: Option<Value>,
-    /// Optional JSON-Schema for the tool's output shape.
+    /// Optional JSON-Schema for the tool's output shape. No translation
+    /// consumer today — kept because the `#[agent_tool]` macro generates
+    /// it and it is a future provider capability (agent-stack cleanup
+    /// roadmap AC-21, evaluated and kept).
     output_schema: Option<Value>,
 }
 

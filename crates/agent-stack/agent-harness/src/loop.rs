@@ -1245,6 +1245,18 @@ fn tool_observation_text(result: &ToolCallResult) -> String {
             serde_json::to_string(&result.output().cloned().unwrap_or(Value::Null))
                 .unwrap_or_else(|_| "null".to_string())
         }
+        ToolCallStatus::Running => {
+            // Defensive arm (AC-20): `execute_tool` always stamps an
+            // explicit terminal status before a result is observed, so
+            // a `Running` result never reaches the model here. Emit a
+            // neutral envelope rather than panicking on a missing
+            // diagnostic.
+            serde_json::to_string(&json!({
+                "status": "running",
+                "tool": result.tool_name().as_str(),
+            }))
+            .unwrap_or_else(|_| "{\"status\":\"running\"}".to_string())
+        }
         ToolCallStatus::Rejected | ToolCallStatus::Failed => {
             let err = result
                 .diagnostic()
@@ -3019,7 +3031,7 @@ mod tests {
         // prepare/commit wiring only (compaction has dedicated tests).
         let config = ContextConfig {
             reserved_tokens: 0,
-            ..ContextConfig::new(10_000, 2, dir.clone())
+            ..ContextConfig::new(10_000, dir.clone())
         };
         let mut context = ContextManager::new(config);
         let session = make_session(AgentToolRegistry::new());
@@ -3069,7 +3081,7 @@ mod tests {
         // persist/load round trip after a turn: the loaded manager
         // serves the same windowed history as the live one.
         context.persist("sess-ctx").expect("persist failed");
-        let mut loaded = ContextManager::load("sess-ctx", ContextConfig::new(10_000, 2, dir))
+        let mut loaded = ContextManager::load("sess-ctx", ContextConfig::new(10_000, dir))
             .expect("load failed");
         assert_eq!(loaded.token_count(), context.token_count());
         let prepared = loaded.prepare_messages("", &[Message::user("u6")]);
@@ -3210,7 +3222,7 @@ mod tests {
         let config = ContextConfig {
             reserved_tokens: 9_000, // soft line at 1k
             tail_turns: 1,
-            ..ContextConfig::new(10_000, 2, dir)
+            ..ContextConfig::new(10_000, dir)
         };
         let mut context = ContextManager::new(config);
         let session = make_session(AgentToolRegistry::new());
@@ -3278,7 +3290,7 @@ mod tests {
         let config = ContextConfig {
             reserved_tokens: 9_000,
             tail_turns: 1,
-            ..ContextConfig::new(10_000, 2, dir)
+            ..ContextConfig::new(10_000, dir)
         };
         let mut context = ContextManager::new(config);
         let session = make_session(AgentToolRegistry::new());
@@ -3325,7 +3337,7 @@ mod tests {
         let config = ContextConfig {
             reserved_tokens: 9_000,
             tail_turns: 1,
-            ..ContextConfig::new(10_000, 2, dir)
+            ..ContextConfig::new(10_000, dir)
         };
         let mut context = ContextManager::new(config);
         let session = make_session(AgentToolRegistry::new());
@@ -3386,7 +3398,7 @@ mod tests {
         let config = ContextConfig {
             reserved_tokens: 9_000,
             tail_turns: 1,
-            ..ContextConfig::new(10_000, 2, dir)
+            ..ContextConfig::new(10_000, dir)
         };
         let mut context = ContextManager::new(config);
         let session = make_session(AgentToolRegistry::new());
@@ -3445,7 +3457,7 @@ mod tests {
         let config = ContextConfig {
             reserved_tokens: 9_000,
             tail_turns: 1,
-            ..ContextConfig::new(10_000, 2, dir)
+            ..ContextConfig::new(10_000, dir)
         };
         let mut context = ContextManager::new(config);
         let session = make_session(AgentToolRegistry::new());
