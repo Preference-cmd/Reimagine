@@ -923,50 +923,54 @@ impl ContextManager {
             && self.span_tokens(sticky_end, &newest_span) > self.config.max_tokens
         {
             let abs_start = sticky_end + newest_span.0;
+            // The newest user message keeps its head when it alone is
+            // oversized: dropping the newest user instruction entirely
+            // would be worse than a truncated head (AC-25). Applied
+            // whether or not the turn carries an assistant message — a
+            // giant user text plus a short assistant reply used to keep
+            // the user text verbatim and blow the hard limit (R2-05).
+            let message = &self.history[abs_start];
+            // Cost that survives truncation: file block budgets plus
+            // the per-text-block overhead (the first text block keeps
+            // its overhead even when shortened).
+            let fixed_tokens: usize = message
+                .blocks()
+                .iter()
+                .map(|block| match block {
+                    ContentBlock::Text(_) => 4,
+                    ContentBlock::File(file) if file.media_type().starts_with("image/") => {
+                        IMAGE_TOKENS_PER_BLOCK
+                    }
+                    ContentBlock::File(_) => OTHER_FILE_TOKENS_PER_BLOCK,
+                })
+                .sum();
+            if let Some(ContentBlock::Text(first_text)) = message.blocks().first() {
+                // Char cap is conservative for any char mix: ASCII
+                // packs 4 chars/token and CJK packs tighter, so an
+                // all-ASCII head at the cap is the worst case
+                // (estimated tokens == max_tokens, not over).
+                let max_chars = self
+                    .config
+                    .max_tokens
+                    .saturating_sub(fixed_tokens)
+                    .saturating_mul(4);
+                if first_text.chars().count() > max_chars {
+                    tail_user_truncation = Some((abs_start, max_chars));
+                    let truncated: String = first_text.chars().take(max_chars).collect();
+                    tail_tokens = tail_tokens.saturating_sub(
+                        self.estimator
+                            .estimate_text(first_text)
+                            .saturating_sub(self.estimator.estimate_text(&truncated)),
+                    );
+                }
+            }
+            // The assistant half is additionally cut when present so the
+            // hard limit still holds even with the user head kept
+            // (CM-V2e).
             if let Some(off) = first_assistant_offset(&self.history[sticky_end..], newest_span) {
                 tail_cut = Some((abs_start + off, abs_start + newest_span.1));
                 let removed = self.span_tokens(sticky_end, &(newest_span.0 + off, newest_span.1 - off));
                 tail_tokens = tail_tokens.saturating_sub(removed);
-            } else {
-                // User-only turn: the whole turn is one oversized user
-                // message. Keep its head — dropping the newest user
-                // instruction entirely would be worse than a truncated
-                // head.
-                let message = &self.history[abs_start];
-                // Cost that survives truncation: file block budgets plus
-                // the per-text-block overhead (the first text block
-                // keeps its overhead even when shortened).
-                let fixed_tokens: usize = message
-                    .blocks()
-                    .iter()
-                    .map(|block| match block {
-                        ContentBlock::Text(_) => 4,
-                        ContentBlock::File(file) if file.media_type().starts_with("image/") => {
-                            IMAGE_TOKENS_PER_BLOCK
-                        }
-                        ContentBlock::File(_) => OTHER_FILE_TOKENS_PER_BLOCK,
-                    })
-                    .sum();
-                if let Some(ContentBlock::Text(first_text)) = message.blocks().first() {
-                    // Char cap is conservative for any char mix: ASCII
-                    // packs 4 chars/token and CJK packs tighter, so an
-                    // all-ASCII head at the cap is the worst case
-                    // (estimated tokens == max_tokens, not over).
-                    let max_chars = self
-                        .config
-                        .max_tokens
-                        .saturating_sub(fixed_tokens)
-                        .saturating_mul(4);
-                    if first_text.chars().count() > max_chars {
-                        tail_user_truncation = Some((abs_start, max_chars));
-                        let truncated: String = first_text.chars().take(max_chars).collect();
-                        tail_tokens = tail_tokens.saturating_sub(
-                            self.estimator
-                                .estimate_text(first_text)
-                                .saturating_sub(self.estimator.estimate_text(&truncated)),
-                        );
-                    }
-                }
             }
         }
 
@@ -1744,6 +1748,37 @@ mod tests {
         assert!(manager.token_count() <= 8_000);
         // The smaller older turn was evicted to make room.
         assert!(!history.iter().any(|m| m.content().starts_with("u0:")));
+    }
+
+    #[test]
+    fn oversized_user_text_with_assistant_half_is_truncated() {
+        // R2-05: a turn whose user text alone exceeds the hard limit,
+        // with an assistant half present, used to keep the giant user
+        // text verbatim — cutting only the assistant cannot bring the
+        // window under the hard limit. The user text is now truncated
+        // to its head as well.
+        let mut manager = ContextManager::new(window_config(8_000, 2_000, 2));
+        manager.commit_turn(&turn(0, 100));
+        manager.commit_turn(&[
+            Message::user("huge:".to_owned() + &"a".repeat(60_000)),
+            Message::assistant("ok"),
+        ]);
+
+        manager.prepare_messages("sys", &[]);
+        let history = manager.history.clone();
+        let newest = history
+            .iter()
+            .find(|m| m.content().starts_with("huge:"))
+            .expect("newest user message kept");
+        assert!(
+            newest.content().chars().count() < 60_006,
+            "oversized user text must be truncated even with an assistant half"
+        );
+        assert!(
+            !history.iter().any(|m| m.content() == "ok"),
+            "assistant half is cut (hard-limit invariant)"
+        );
+        assert!(manager.token_count() <= 8_000);
     }
 
     #[test]

@@ -1240,10 +1240,15 @@ fn build_tool_definitions(
 }
 
 /// Provider stop reasons that mean the response was cut short before a
-/// natural end (`max_tokens`/`length`). Streams ending with these are
-/// reported as [`AgentTurnStopReason::Truncated`] (AC-01).
+/// natural end: `max_tokens`/`length` (token budgets), `content_filter`
+/// (policy gate), and `refusal` (model declined to answer). Streams
+/// ending with these are reported as
+/// [`AgentTurnStopReason::Truncated`] (AC-01, R2-05).
 fn is_truncation_reason(reason: &str) -> bool {
-    matches!(reason, "length" | "max_tokens")
+    matches!(
+        reason,
+        "length" | "max_tokens" | "content_filter" | "refusal"
+    )
 }
 
 /// Future that completes when the turn deadline passes; pending forever
@@ -2655,6 +2660,36 @@ mod tests {
         assert_eq!(result.status(), AgentTurnStatus::Completed);
         assert_eq!(result.stop_reason(), AgentTurnStopReason::FinalResponse);
         assert_eq!(result.final_response().unwrap().content(), "done");
+    }
+
+    #[tokio::test]
+    async fn run_turn_streaming_content_filter_is_truncated() {
+        // R2-05: a policy gate (`content_filter`) that cuts the stream
+        // short must not be reported as a clean final response, just
+        // like `length`/`max_tokens`.
+        let provider = Arc::new(StreamingProvider::new(
+            "mock",
+            vec![vec![
+                AgentStreamEvent::ContentDelta("partial".into()),
+                AgentStreamEvent::Done {
+                    stop_reason: Some("content_filter".into()),
+                },
+            ]],
+        ));
+        let sink = Arc::new(VecAgentEventSink::new());
+        let loop_harness = AgentLoop::new(provider, sink);
+
+        let req = AgentTurnRequest::new(
+            make_session(AgentToolRegistry::new()),
+            AgentTurnId::new("stream-content-filter"),
+            ModelName::new("test-model"),
+            vec![Message::user("hi")],
+        );
+
+        let result = loop_harness.run_turn_streaming(req, None).await;
+        assert_eq!(result.status(), AgentTurnStatus::Stopped);
+        assert_eq!(result.stop_reason(), AgentTurnStopReason::Truncated);
+        assert_eq!(result.final_response().unwrap().content(), "partial");
     }
 
     #[tokio::test]
