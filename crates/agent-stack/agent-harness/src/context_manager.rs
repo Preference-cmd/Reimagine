@@ -346,6 +346,14 @@ impl WindowPlan {
 /// (CM-V2c, decision table M3: 防 thrash).
 const MAX_CONSECUTIVE_COMPACTION_FAILURES: u32 = 3;
 
+/// Consecutive *transient* summarization failures that stop compaction
+/// attempts for the rest of the session (R2-06, DP-4). A persistently
+/// flapping provider must not retry the (expensive) summarizer call on
+/// every turn — but a single hiccup must not disable compaction either,
+/// so the transient counter is separate from
+/// [`MAX_CONSECUTIVE_COMPACTION_FAILURES`] and resets on any success.
+const MAX_TRANSIENT_COMPACTION_FAILURES: u32 = 5;
+
 /// Summarization prompt head: the domain-structured six-section schema
 /// (CM-V2c, decision table M3). The summarizer is instructed to write
 /// in the conversation's language and to treat the anchor (previous
@@ -421,6 +429,14 @@ pub struct ContextManager {
     /// At [`MAX_CONSECUTIVE_COMPACTION_FAILURES`] attempts stop (防
     /// thrash, CM-V2c decision table M3).
     consecutive_compaction_failures: u32,
+    /// Consecutive *transient* summarization failures since the last
+    /// success (R2-06, DP-4). Unlike
+    /// [`ContextManager::consecutive_compaction_failures`], this counts
+    /// recoverable provider hiccups; at
+    /// [`MAX_TRANSIENT_COMPACTION_FAILURES`] attempts stop for the
+    /// session, so a flapping provider cannot retry the summarizer call
+    /// on every turn. Resets on any successful compaction.
+    transient_compaction_failures: u32,
     /// Window plan captured by the last [`ContextManager::summarize_request`].
     /// [`ContextManager::apply_summary`] verifies the plan is unchanged
     /// before replacing the eviction range, so a summary is never
@@ -437,6 +453,7 @@ impl ContextManager {
             sticky_count: 0,
             compaction_summary: None,
             consecutive_compaction_failures: 0,
+            transient_compaction_failures: 0,
             request_plan: None,
         }
     }
@@ -463,6 +480,12 @@ impl ContextManager {
         self.consecutive_compaction_failures
     }
 
+    /// Consecutive transient summarization failures since the last
+    /// success (R2-06).
+    pub fn transient_compaction_failures(&self) -> u32 {
+        self.transient_compaction_failures
+    }
+
     /// `true` while the window has messages pending eviction (the
     /// range a compaction pass would summarize). Compaction is only
     /// meaningful when this holds — with a single turn the window
@@ -473,11 +496,14 @@ impl ContextManager {
 
     /// `true` while compaction attempts are allowed. Flipped `false`
     /// after [`MAX_CONSECUTIVE_COMPACTION_FAILURES`] consecutive
-    /// failures (防 thrash) and stays `false` for the rest of the
-    /// session (the streak is not persisted; a restart resets it) —
-    /// the caller should surface the error and keep dropping oldest.
+    /// permanent failures or [`MAX_TRANSIENT_COMPACTION_FAILURES`]
+    /// consecutive transient failures (防 thrash, R2-06) and stays
+    /// `false` for the rest of the session (the counters are not
+    /// persisted; a restart resets them) — the caller should surface
+    /// the error and keep dropping oldest.
     pub fn should_attempt_compaction(&self) -> bool {
         self.consecutive_compaction_failures < MAX_CONSECUTIVE_COMPACTION_FAILURES
+            && self.transient_compaction_failures < MAX_TRANSIENT_COMPACTION_FAILURES
     }
 
     /// Register a failed summarization attempt. The caller falls back
@@ -489,17 +515,18 @@ impl ContextManager {
     }
 
     /// Mark a summarization failure as transient and recoverable
-    /// (AC-24). Unlike [`ContextManager::record_compaction_failure`],
-    /// this does NOT advance the consecutive-failure streak:
-    /// [`ContextManager::should_attempt_compaction`] stays `true` and
-    /// compaction is not disabled at
-    /// [`MAX_CONSECUTIVE_COMPACTION_FAILURES`]. The loop driver calls
-    /// this for recoverable provider hiccups (e.g. a transient network
-    /// error mid-summarize) and reserves
-    /// [`ContextManager::record_compaction_failure`] for permanent
-    /// failures. Deliberately a no-op on state: the permanent streak
-    /// only advances through `record_compaction_failure`.
-    pub fn record_transient_compaction_failure(&mut self) {}
+    /// (AC-24, R2-06). Unlike
+    /// [`ContextManager::record_compaction_failure`], this does NOT
+    /// advance the permanent streak; instead it advances the separate
+    /// transient counter, so a single provider hiccup keeps compaction
+    /// enabled while a persistently flapping provider stops attempts
+    /// after [`MAX_TRANSIENT_COMPACTION_FAILURES`] (bounded retry). A
+    /// successful compaction resets both counters.
+    pub fn record_transient_compaction_failure(&mut self) {
+        self.transient_compaction_failures = self
+            .transient_compaction_failures
+            .saturating_add(1);
+    }
 
     /// Build the summarizer input for the messages the window is about
     /// to evict (CM-V2c): a single `user` message containing the
@@ -630,6 +657,7 @@ impl ContextManager {
         };
         self.compaction_summary = Some(record.clone());
         self.consecutive_compaction_failures = 0;
+        self.transient_compaction_failures = 0;
         Ok(record)
     }
 
@@ -824,6 +852,7 @@ impl ContextManager {
             sticky_count,
             compaction_summary,
             consecutive_compaction_failures: 0,
+            transient_compaction_failures: 0,
             request_plan: None,
         })
     }
@@ -2538,26 +2567,42 @@ mod tests {
 
     #[test]
     fn transient_failures_do_not_disable_compaction() {
-        // AC-24: transient (recoverable) summarization failures must
-        // not advance the permanent streak that disables compaction at
-        // MAX_CONSECUTIVE_COMPACTION_FAILURES — only
-        // `record_compaction_failure` counts.
+        // AC-24 + R2-06 (DP-4): transient (recoverable) summarization
+        // failures must not advance the permanent streak that disables
+        // compaction at MAX_CONSECUTIVE_COMPACTION_FAILURES — only
+        // `record_compaction_failure` counts there. But a persistently
+        // flapping provider must not retry the summarizer every turn
+        // either: after MAX_TRANSIENT_COMPACTION_FAILURES consecutive
+        // transients, attempts stop (bounded retry).
         let mut manager = ContextManager::new(window_config(10_000, 2_000, 2));
         for i in 0..60 {
             manager.commit_turn(&turn(i, 400));
         }
-        for _ in 0..10 {
+        for _ in 0..4 {
             manager.record_transient_compaction_failure();
         }
         assert!(manager.should_attempt_compaction());
         assert_eq!(manager.consecutive_compaction_failures(), 0);
+        manager.record_transient_compaction_failure();
+        assert!(
+            !manager.should_attempt_compaction(),
+            "bounded transient retry stops after the cap (R2-06)"
+        );
+        assert_eq!(manager.transient_compaction_failures(), 5);
 
-        // Permanent failures still disable compaction as before.
+        // Permanent failures still disable compaction independently.
         for _ in 0..3 {
             manager.record_compaction_failure();
         }
-        assert!(!manager.should_attempt_compaction());
         assert_eq!(manager.consecutive_compaction_failures(), 3);
+        assert!(!manager.should_attempt_compaction());
+
+        // A success resets both counters and re-enables compaction.
+        let record = manager.apply_summary("recovered").expect("apply failed");
+        assert_eq!(manager.consecutive_compaction_failures(), 0);
+        assert_eq!(manager.transient_compaction_failures(), 0);
+        assert!(manager.should_attempt_compaction());
+        assert_eq!(record.attempt, 4);
     }
 
     #[test]
