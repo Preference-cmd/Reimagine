@@ -412,6 +412,7 @@ impl AgentTurnResult {
     /// seed combination is intentionally transient and never observed
     /// (AC-20; the old `Default` impl made this same contradictory state
     /// look like a meaningful default, so it was removed).
+    #[allow(clippy::new_without_default)]
     pub fn new() -> Self {
         Self {
             turn_id: AgentTurnId::new(""),
