@@ -25,6 +25,7 @@ mod registry;
 mod session;
 mod tool;
 mod turn;
+mod validation;
 
 mod event_adapter;
 mod r#loop;
@@ -44,9 +45,9 @@ pub use event::AgentEvent;
 #[doc(hidden)]
 pub use event_adapter::AgentDomainEventAdapter;
 pub use ids::{AgentSessionId, ModelName, ProviderName, ToolName, WorkspaceScope};
-pub use model_catalog::{LlmCatalogError, LlmModelCatalog, ProviderCatalogEntry};
 pub use r#loop::{AgentEventSink, AgentLoop, VecAgentEventSink};
 pub use mode::AgentMode;
+pub use model_catalog::{LlmCatalogError, LlmModelCatalog, ProviderCatalogEntry};
 pub use permissions::{PermissionSet, ToolPermission, ToolRiskLevel};
 pub use policy::{PolicyDecision, PolicyDenialReason, ToolPolicy};
 pub use provider::{
@@ -61,3 +62,4 @@ pub use turn::{
     AgentTurnId, AgentTurnRequest, AgentTurnResult, AgentTurnStatus, AgentTurnStopReason,
     DEFAULT_MAX_TOOL_STEPS, ToolCallResult, ToolCallStatus,
 };
+pub use validation::{MAX_TOOL_OUTPUT_SIZE, validate_tool_input, validate_tool_output_size};

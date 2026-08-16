@@ -5,7 +5,9 @@
 //! backend-internal types and private fields so frontends never see
 //! agent-crate internals.
 
-use reimagine_agent_harness::{AgentEvent, AgentSession, AgentTurnResult, Message, ToolCallResult, Usage};
+use reimagine_agent_harness::{
+    AgentEvent, AgentSession, AgentTurnResult, Message, ToolCallResult, Usage,
+};
 use serde::{Deserialize, Serialize};
 
 use super::runs::DiagnosticDto;
