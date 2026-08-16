@@ -20,6 +20,7 @@ pub mod event;
 pub mod execution_plan;
 pub mod history;
 pub mod model;
+pub mod project;
 pub mod readiness;
 pub mod session;
 pub mod validation;

@@ -6801,7 +6801,6 @@ name = "reimagine"
 version = "0.1.0"
 dependencies = [
  "opener",
- "reimagine-agent-daemon",
  "reimagine-agent-harness",
  "reimagine-app-host",
  "reimagine-backend-worker-host",

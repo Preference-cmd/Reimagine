@@ -1,8 +1,8 @@
-# AR-10 — Reject mixed protocol provider configuration
+# AR-04 — Add Project types to core
 
-**Ticket:** AR-10
-**Branch:** feat/ar10-mixed-protocol-reject
-**Worktree:** wt-d
+**Ticket:** AR-04
+**Branch:** feat/ar04-project-types
+**Worktree:** wt-b
 
 ## Status
 - [ ] Worktree created
@@ -11,10 +11,10 @@
 - [ ] Ready for review
 
 ## What to Build
-Reject mixed protocol provider configuration
+Add Project types to core
 
 ## Next Steps
-1. Read the ticket file: `.scratch/agent-backend-refine/issues/10-reject-mixed-protocol-provider-configuration.md`
+1. Read the ticket file: `.scratch/agent-backend-refine/issues/04-add-project-types-to-core.md`
 2. Implement the changes
 3. Run tests: `cargo test --workspace`
 4. Run fmt/clippy: `cargo fmt --all -- --check && cargo clippy --workspace --all-targets -- -D warnings`
