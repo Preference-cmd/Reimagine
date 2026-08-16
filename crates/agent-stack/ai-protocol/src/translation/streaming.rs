@@ -727,7 +727,7 @@ fn decode_base64(input: &str) -> Option<Vec<u8>> {
     if bytes.is_empty() {
         return Some(Vec::new());
     }
-    if bytes.len() % 4 != 0 {
+    if !bytes.len().is_multiple_of(4) {
         return None;
     }
     // Locate the trailing padding run, if any.
