@@ -46,6 +46,9 @@ id_ergonomics_test!(command_batch_id_ergonomics, CommandBatchId, "batch-1");
 id_ergonomics_test!(proposal_id_ergonomics, ProposalId, "proposal-1");
 id_ergonomics_test!(model_id_ergonomics, ModelId, "model-1");
 
+// ProjectId tests
+id_ergonomics_test!(project_id_ergonomics, ProjectId, "my-project");
+
 // -----------------------------------------------------------
 // Serde round-trip: IDs serialise as plain strings.
 // -----------------------------------------------------------
@@ -96,7 +99,7 @@ fn id_new_rejects_empty_string() {
 #[test]
 #[should_panic(expected = "ID must be ASCII")]
 fn id_new_rejects_non_ascii() {
-    NodeId::new("node\u{00e9}test");
+    NodeId::new("nodeétest");
 }
 
 #[test]
@@ -122,4 +125,37 @@ fn id_from_str_bypasses_validation() {
     // From<&str> bypasses validation for backwards compatibility
     let id = NodeId::from("../../../etc/passwd");
     assert_eq!(id.as_str(), "../../../etc/passwd");
+}
+
+// -----------------------------------------------------------
+// ProjectId validation tests
+// -----------------------------------------------------------
+#[test]
+#[should_panic(expected = "ID must not be empty")]
+fn project_id_new_rejects_empty_string() {
+    ProjectId::new("");
+}
+
+#[test]
+#[should_panic(expected = "ID must be ASCII")]
+fn project_id_new_rejects_non_ascii() {
+    ProjectId::new("projetétest");
+}
+
+#[test]
+#[should_panic(expected = "ID contains invalid characters")]
+fn project_id_new_rejects_forward_slash() {
+    ProjectId::new("../../../etc/passwd");
+}
+
+#[test]
+#[should_panic(expected = "ID contains invalid characters")]
+fn project_id_new_rejects_backslash() {
+    ProjectId::new("project\\test");
+}
+
+#[test]
+#[should_panic(expected = "ID contains invalid characters")]
+fn project_id_new_rejects_null_byte() {
+    ProjectId::new("project\0test");
 }

@@ -110,7 +110,7 @@ impl ToolPolicy {
             return PolicyDecision::Deny(PolicyDenialReason::PermissionMissing);
         }
 
-        if spec.risk() == ToolRiskLevel::External && ctx.mode() != AgentMode::Build {
+        if spec.risk() == ToolRiskLevel::External {
             return PolicyDecision::Deny(PolicyDenialReason::ApprovalRequired);
         }
 
@@ -264,7 +264,7 @@ mod tests {
     }
 
     #[test]
-    fn policy_allows_external_risk_in_build_mode() {
+    fn policy_denies_external_risk_in_build_mode() {
         let tool = EchoTool {
             spec: ToolSpec::new(
                 ToolName::new("push"),
@@ -279,7 +279,10 @@ mod tests {
             &tool,
             &ctx(AgentMode::Build, &["external.push"]),
         );
-        assert!(decision.is_allow());
+        assert!(matches!(
+            decision,
+            PolicyDecision::Deny(PolicyDenialReason::ApprovalRequired)
+        ));
     }
 
     #[test]
