@@ -14,6 +14,7 @@
 
 #![deny(unsafe_code)]
 
+pub mod board;
 pub mod command;
 pub mod diagnostic;
 pub mod event;
