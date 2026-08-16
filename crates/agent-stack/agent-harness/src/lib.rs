@@ -22,7 +22,6 @@ mod permissions;
 mod policy;
 mod provider;
 mod registry;
-mod report;
 mod session;
 mod tool;
 mod turn;
@@ -35,8 +34,14 @@ pub use context_manager::{
     BudgetSnapshot, CompactionRecord, ContextConfig, ContextManager, HeuristicEstimator,
     TokenEstimator,
 };
-pub use error::{AgentError, ProviderError, ToolError, ToolErrorCode};
+pub use error::{ProviderError, ToolError, ToolErrorCode};
 pub use event::AgentEvent;
+/// Domain-event projection adapter for `AgentEvent`.
+///
+/// No host consumer yet; planned wiring via the core domain-event
+/// stream (agent-stack cleanup roadmap AC-18). Tests keep the
+/// projection contract honest.
+#[doc(hidden)]
 pub use event_adapter::AgentDomainEventAdapter;
 pub use ids::{AgentSessionId, ModelName, ProviderName, ToolName, WorkspaceScope};
 pub use model_catalog::{LlmCatalogError, LlmModelCatalog, ProviderCatalogEntry};
@@ -50,7 +55,6 @@ pub use provider::{
     ToolCall, ToolCallId, Usage,
 };
 pub use registry::{AgentToolRegistry, ToolRegistryError};
-pub use report::{AgentReport, ToolInvocationReport};
 pub use session::AgentSession;
 pub use tool::{AgentTool, ToolInput, ToolOutput, ToolResult, ToolSpec};
 pub use turn::{

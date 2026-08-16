@@ -12,7 +12,9 @@
 //! Token counting is heuristic, without external dependencies. CJK
 //! characters (code point above `0x2E80`) average one token per two
 //! characters; all other characters average one token per four
-//! characters. A fixed per-message overhead of 4 tokens is added.
+//! characters. A fixed overhead of 4 tokens is added per text block (a
+//! message with two text blocks pays 8), plus a fixed per-message
+//! budget for file blocks (image 1024, other 256).
 //!
 //! Estimation is behind the [`TokenEstimator`] seam: the heuristic is
 //! the default implementation, and an exact counter (e.g. tiktoken-rs,
@@ -157,6 +159,10 @@ pub enum ContextError {
     /// and [`ContextManager::apply_summary`]; the summary cannot be
     /// applied to a different conversation (CM-V2c review fix).
     CompactionStale,
+    /// [`ContextManager::apply_summary`] received empty (whitespace-
+    /// trimmed) text; an empty sticky summary must not be installed
+    /// (AC-25/D-6).
+    EmptySummary,
     /// The persisted file was written by a newer build than the
     /// running one.
     UnsupportedVersion(u64),
@@ -175,6 +181,10 @@ impl std::fmt::Display for ContextError {
                 "compaction window changed between summarize_request and apply_summary; \
                  fall back to plain eviction"
             ),
+            Self::EmptySummary => write!(
+                f,
+                "summary text is empty; refusing to install an empty sticky summary"
+            ),
             Self::UnsupportedVersion(version) => write!(
                 f,
                 "persisted session schema version {version} is newer than the supported \
@@ -189,7 +199,10 @@ impl std::error::Error for ContextError {
         match self {
             Self::Io(err) => Some(err),
             Self::Json(err) => Some(err),
-            Self::NotFound(_) | Self::CompactionStale | Self::UnsupportedVersion(_) => None,
+            Self::NotFound(_)
+            | Self::CompactionStale
+            | Self::EmptySummary
+            | Self::UnsupportedVersion(_) => None,
         }
     }
 }
@@ -198,10 +211,6 @@ impl std::error::Error for ContextError {
 pub struct ContextConfig {
     /// Token hard limit for the stored history.
     pub max_tokens: usize,
-    /// Rolling window: kept for V1 call-site compatibility. The
-    /// window is now driven by token budgets and `tail_turns`
-    /// (CM-V2b); this field has no effect.
-    pub recent_turns: usize,
     /// Session persistence directory. Stored now for AS-03 session
     /// persistence; not used by the V1 context manager.
     pub session_dir: PathBuf,
@@ -211,7 +220,8 @@ pub struct ContextConfig {
     /// `max_tokens`.
     pub reserved_tokens: usize,
     /// Verbatim tail length (CM-V2b): the most recent `tail_turns`
-    /// complete turns are kept word-for-word.
+    /// complete turns are kept word-for-word. Coerced to a minimum of 1
+    /// (a value of 0 behaves as 1).
     pub tail_turns: usize,
     /// Compaction target ratio (CM-V2b, consumed by CM-V2c): a
     /// compaction pass aims to leave the history at this fraction of
@@ -230,12 +240,11 @@ pub struct ContextConfig {
 }
 
 impl ContextConfig {
-    /// V1-compatible constructor: keeps old struct-literal call sites
-    /// readable while defaulting every window-policy parameter.
-    pub fn new(max_tokens: usize, recent_turns: usize, session_dir: PathBuf) -> Self {
+    /// Constructor that defaults every window-policy parameter while
+    /// keeping struct-literal call sites readable.
+    pub fn new(max_tokens: usize, session_dir: PathBuf) -> Self {
         Self {
             max_tokens,
-            recent_turns,
             session_dir,
             reserved_tokens: DEFAULT_RESERVED_TOKENS,
             tail_turns: DEFAULT_TAIL_TURNS,
@@ -306,6 +315,12 @@ struct WindowPlan {
     sticky_end: usize,
     keep_start: usize,
     cuts: Vec<(usize, usize)>,
+    /// AC-25: absolute history index and character cap of the newest
+    /// turn's user text when that turn is user-only and exceeds the
+    /// hard limit — there is no assistant message to cut at, so the
+    /// window truncates the user text to its head instead. Applied by
+    /// [`ContextManager::apply_window`]; a `None` means no truncation.
+    tail_user_truncation: Option<(usize, usize)>,
 }
 
 impl WindowPlan {
@@ -330,6 +345,14 @@ impl WindowPlan {
 /// Consecutive summarization failures that stop compaction attempts
 /// (CM-V2c, decision table M3: 防 thrash).
 const MAX_CONSECUTIVE_COMPACTION_FAILURES: u32 = 3;
+
+/// Consecutive *transient* summarization failures that stop compaction
+/// attempts for the rest of the session (R2-06, DP-4). A persistently
+/// flapping provider must not retry the (expensive) summarizer call on
+/// every turn — but a single hiccup must not disable compaction either,
+/// so the transient counter is separate from
+/// [`MAX_CONSECUTIVE_COMPACTION_FAILURES`] and resets on any success.
+const MAX_TRANSIENT_COMPACTION_FAILURES: u32 = 5;
 
 /// Summarization prompt head: the domain-structured six-section schema
 /// (CM-V2c, decision table M3). The summarizer is instructed to write
@@ -406,6 +429,14 @@ pub struct ContextManager {
     /// At [`MAX_CONSECUTIVE_COMPACTION_FAILURES`] attempts stop (防
     /// thrash, CM-V2c decision table M3).
     consecutive_compaction_failures: u32,
+    /// Consecutive *transient* summarization failures since the last
+    /// success (R2-06, DP-4). Unlike
+    /// [`ContextManager::consecutive_compaction_failures`], this counts
+    /// recoverable provider hiccups; at
+    /// [`MAX_TRANSIENT_COMPACTION_FAILURES`] attempts stop for the
+    /// session, so a flapping provider cannot retry the summarizer call
+    /// on every turn. Resets on any successful compaction.
+    transient_compaction_failures: u32,
     /// Window plan captured by the last [`ContextManager::summarize_request`].
     /// [`ContextManager::apply_summary`] verifies the plan is unchanged
     /// before replacing the eviction range, so a summary is never
@@ -422,6 +453,7 @@ impl ContextManager {
             sticky_count: 0,
             compaction_summary: None,
             consecutive_compaction_failures: 0,
+            transient_compaction_failures: 0,
             request_plan: None,
         }
     }
@@ -448,6 +480,12 @@ impl ContextManager {
         self.consecutive_compaction_failures
     }
 
+    /// Consecutive transient summarization failures since the last
+    /// success (R2-06).
+    pub fn transient_compaction_failures(&self) -> u32 {
+        self.transient_compaction_failures
+    }
+
     /// `true` while the window has messages pending eviction (the
     /// range a compaction pass would summarize). Compaction is only
     /// meaningful when this holds — with a single turn the window
@@ -458,11 +496,14 @@ impl ContextManager {
 
     /// `true` while compaction attempts are allowed. Flipped `false`
     /// after [`MAX_CONSECUTIVE_COMPACTION_FAILURES`] consecutive
-    /// failures (防 thrash) and stays `false` for the rest of the
-    /// session (the streak is not persisted; a restart resets it) —
-    /// the caller should surface the error and keep dropping oldest.
+    /// permanent failures or [`MAX_TRANSIENT_COMPACTION_FAILURES`]
+    /// consecutive transient failures (防 thrash, R2-06) and stays
+    /// `false` for the rest of the session (the counters are not
+    /// persisted; a restart resets them) — the caller should surface
+    /// the error and keep dropping oldest.
     pub fn should_attempt_compaction(&self) -> bool {
         self.consecutive_compaction_failures < MAX_CONSECUTIVE_COMPACTION_FAILURES
+            && self.transient_compaction_failures < MAX_TRANSIENT_COMPACTION_FAILURES
     }
 
     /// Register a failed summarization attempt. The caller falls back
@@ -470,6 +511,20 @@ impl ContextManager {
     pub fn record_compaction_failure(&mut self) {
         self.consecutive_compaction_failures = self
             .consecutive_compaction_failures
+            .saturating_add(1);
+    }
+
+    /// Mark a summarization failure as transient and recoverable
+    /// (AC-24, R2-06). Unlike
+    /// [`ContextManager::record_compaction_failure`], this does NOT
+    /// advance the permanent streak; instead it advances the separate
+    /// transient counter, so a single provider hiccup keeps compaction
+    /// enabled while a persistently flapping provider stops attempts
+    /// after [`MAX_TRANSIENT_COMPACTION_FAILURES`] (bounded retry). A
+    /// successful compaction resets both counters.
+    pub fn record_transient_compaction_failure(&mut self) {
+        self.transient_compaction_failures = self
+            .transient_compaction_failures
             .saturating_add(1);
     }
 
@@ -532,10 +587,19 @@ impl ContextManager {
     /// since [`ContextManager::summarize_request`] — the caller must
     /// fall back to plain eviction (drop-oldest) and the turn still
     /// completes.
+    ///
+    /// `Err(ContextError::EmptySummary)` when the text is empty after
+    /// trimming whitespace (AC-25/D-6) — an empty sticky summary is
+    /// never installed. The loop driver's own empty-reply guard is a
+    /// harmless redundancy.
     pub fn apply_summary(
         &mut self,
         text: impl Into<String>,
     ) -> Result<CompactionRecord, ContextError> {
+        let text = text.into();
+        if text.trim().is_empty() {
+            return Err(ContextError::EmptySummary);
+        }
         let plan = self.window_plan();
         if let Some(requested) = &self.request_plan
             && *requested != plan
@@ -554,7 +618,6 @@ impl ContextManager {
             })
             .sum();
 
-        let text = text.into();
         let summary_message = Message::user(text.clone());
         let tokens_after = self.estimator.estimate_message(&summary_message);
         let image_refs = self.collect_image_refs(&ranges);
@@ -569,7 +632,16 @@ impl ContextManager {
         // message. Pinned goal/constraints blocks (future pin API)
         // live behind it and are untouched.
         if self.sticky_count > 0 {
-            self.history[0] = summary_message;
+            if let Some(first) = self.history.first_mut() {
+                *first = summary_message;
+            } else {
+                // Defensive (AC-04): `sticky_count` may outlive its
+                // history if a persisted file was hand-edited or
+                // partially evicted. Install the summary as a fresh
+                // sticky prefix instead of panicking on `history[0]`.
+                self.history.push(summary_message);
+                self.sticky_count = 1;
+            }
         } else {
             self.history.insert(0, summary_message);
             self.sticky_count = 1;
@@ -585,6 +657,7 @@ impl ContextManager {
         };
         self.compaction_summary = Some(record.clone());
         self.consecutive_compaction_failures = 0;
+        self.transient_compaction_failures = 0;
         Ok(record)
     }
 
@@ -634,9 +707,17 @@ impl ContextManager {
     /// conversation history. Tool results are truncated to
     /// `record_truncate_tokens` at commit time (CM-V2b).
     pub fn commit_turn(&mut self, messages: &[Message]) {
+        // Per-call sequence for fabricated ids (AC-25): id-less tool
+        // results truncated in the same commit get distinct
+        // `truncated-{n}` ids.
+        let mut fabricated_id_seq = 0usize;
         for message in messages {
             if message.role() == "tool" {
-                self.history.push(truncate_tool_result(message, self.config.record_truncate_tokens));
+                self.history.push(truncate_tool_result(
+                    message,
+                    self.config.record_truncate_tokens,
+                    &mut fabricated_id_seq,
+                ));
             } else {
                 self.history.push(message.clone());
             }
@@ -707,7 +788,18 @@ impl ContextManager {
         std::fs::create_dir_all(&self.config.session_dir).map_err(ContextError::Io)?;
         let path = self.config.session_dir.join(format!("{session_id}.json"));
         let json = serde_json::to_string_pretty(&state).map_err(ContextError::Json)?;
-        std::fs::write(path, json).map_err(ContextError::Io)
+        // Atomic write (AC-23): write to a same-directory temp file,
+        // then rename over the target. A reader (or a crash) never
+        // observes a partially written session file, and the rename is
+        // atomic on the same filesystem.
+        let tmp_path = self.config.session_dir.join(format!("{session_id}.json.tmp"));
+        std::fs::write(&tmp_path, json).map_err(ContextError::Io)?;
+        std::fs::rename(&tmp_path, &path).map_err(|err| {
+            // Best-effort cleanup so a failed rename does not leave the
+            // temp file behind for the next persist to trip over.
+            let _ = std::fs::remove_file(&tmp_path);
+            ContextError::Io(err)
+        })
     }
 
     /// Load a session's context previously written by
@@ -733,6 +825,26 @@ impl ContextManager {
             }
         })?;
         let (history, compaction_summary, sticky_count) = parse_persisted_session(&json)?;
+        // Auto-repair summary<->sticky inconsistency (AC-25/D-8): a
+        // file whose summary message is present in the history but was
+        // not pinned (`sticky_count: 0`) re-pins it when the first
+        // message's content matches the record's summary text exactly —
+        // the summary exists, it just lost its pin. A non-matching
+        // first message is left untouched (no guessing).
+        let sticky_count = if sticky_count == 0
+            && let Some(record) = &compaction_summary
+            && let Some(first) = history.first()
+            && first.content() == record.text
+        {
+            1
+        } else {
+            sticky_count
+        };
+        // Defensive clamp (AC-04): a hand-edited or partially written
+        // file may declare more sticky messages than the history holds;
+        // `apply_summary` indexes `history[0]` on this count, so it must
+        // never exceed the length.
+        let sticky_count = sticky_count.min(history.len());
         Ok(Self {
             config,
             history,
@@ -740,6 +852,7 @@ impl ContextManager {
             sticky_count,
             compaction_summary,
             consecutive_compaction_failures: 0,
+            transient_compaction_failures: 0,
             request_plan: None,
         })
     }
@@ -750,6 +863,14 @@ impl ContextManager {
     fn apply_window(&mut self) {
         self.prune_old_tool_outputs();
         let plan = self.window_plan();
+        // AC-25: truncate an oversized user-only newest turn's text to
+        // its head before the range drains, so the plan's absolute
+        // indexes stay valid (truncation changes no message count).
+        if let Some((idx, max_chars)) = plan.tail_user_truncation
+            && let Some(message) = self.history.get_mut(idx)
+        {
+            *message = truncate_user_message(message, max_chars);
+        }
         // Cuts lie inside the keep region: drain from the back so
         // earlier absolute indexes stay valid, then evict the front
         // range.
@@ -789,7 +910,19 @@ impl ContextManager {
             .config
             .max_tokens
             .saturating_sub(self.config.reserved_tokens);
-        let tail_budget = tail_budget(window_budget);
+        // AC-25: the tail budget never exceeds the (positive) soft
+        // window — the 2k floor would otherwise refuse to shrink the
+        // tail for tiny windows and starve the middle budget to 0. A
+        // saturated soft window (`reserved_tokens >= max_tokens`,
+        // `window_budget == 0`) has no positive budget to clamp to:
+        // the 2k floor stays so the verbatim tail survives, and the
+        // hard-limit branch below still caps the newest turn at
+        // `max_tokens`.
+        let tail_budget = if window_budget > 0 {
+            tail_budget(window_budget).min(window_budget)
+        } else {
+            tail_budget(window_budget)
+        };
         let sticky_tokens: usize = (0..sticky_end)
             .map(|i| self.message_tokens(i).unwrap_or(0))
             .sum();
@@ -810,21 +943,70 @@ impl ContextManager {
         // The newest turn always survives the tail loop. Verbatim-tail
         // protection wins over the soft window, but a turn that alone
         // exceeds the hard limit (`max_tokens`) is cut at its first
-        // assistant message so the hard limit still holds.
+        // assistant message so the hard limit still holds; a user-only
+        // turn has no assistant message to cut at, so its user text is
+        // truncated to the head that fits (AC-25).
         let mut tail_cut: Option<(usize, usize)> = None;
+        let mut tail_user_truncation: Option<(usize, usize)> = None;
         if let Some(&newest_span) = turns.get(tail_start)
             && self.span_tokens(sticky_end, &newest_span) > self.config.max_tokens
-            && let Some(off) = first_assistant_offset(&self.history[sticky_end..], newest_span)
         {
             let abs_start = sticky_end + newest_span.0;
-            tail_cut = Some((abs_start + off, abs_start + newest_span.1));
-            let removed = self.span_tokens(sticky_end, &(newest_span.0 + off, newest_span.1 - off));
-            tail_tokens = tail_tokens.saturating_sub(removed);
+            // The newest user message keeps its head when it alone is
+            // oversized: dropping the newest user instruction entirely
+            // would be worse than a truncated head (AC-25). Applied
+            // whether or not the turn carries an assistant message — a
+            // giant user text plus a short assistant reply used to keep
+            // the user text verbatim and blow the hard limit (R2-05).
+            let message = &self.history[abs_start];
+            // Cost that survives truncation: file block budgets plus
+            // the per-text-block overhead (the first text block keeps
+            // its overhead even when shortened).
+            let fixed_tokens: usize = message
+                .blocks()
+                .iter()
+                .map(|block| match block {
+                    ContentBlock::Text(_) => 4,
+                    ContentBlock::File(file) if file.media_type().starts_with("image/") => {
+                        IMAGE_TOKENS_PER_BLOCK
+                    }
+                    ContentBlock::File(_) => OTHER_FILE_TOKENS_PER_BLOCK,
+                })
+                .sum();
+            if let Some(ContentBlock::Text(first_text)) = message.blocks().first() {
+                // Char cap is conservative for any char mix: ASCII
+                // packs 4 chars/token and CJK packs tighter, so an
+                // all-ASCII head at the cap is the worst case
+                // (estimated tokens == max_tokens, not over).
+                let max_chars = self
+                    .config
+                    .max_tokens
+                    .saturating_sub(fixed_tokens)
+                    .saturating_mul(4);
+                if first_text.chars().count() > max_chars {
+                    tail_user_truncation = Some((abs_start, max_chars));
+                    let truncated: String = first_text.chars().take(max_chars).collect();
+                    tail_tokens = tail_tokens.saturating_sub(
+                        self.estimator
+                            .estimate_text(first_text)
+                            .saturating_sub(self.estimator.estimate_text(&truncated)),
+                    );
+                }
+            }
+            // The assistant half is additionally cut when present so the
+            // hard limit still holds even with the user head kept
+            // (CM-V2e).
+            if let Some(off) = first_assistant_offset(&self.history[sticky_end..], newest_span) {
+                tail_cut = Some((abs_start + off, abs_start + newest_span.1));
+                let removed = self.span_tokens(sticky_end, &(newest_span.0 + off, newest_span.1 - off));
+                tail_tokens = tail_tokens.saturating_sub(removed);
+            }
         }
 
         // Middle window: newest-to-oldest turns between the sticky
         // prefix and the tail, filling the remaining budget.
-        let mut middle_budget = window_budget.saturating_sub(sticky_tokens + tail_tokens);
+        let mut middle_budget = window_budget
+            .saturating_sub(sticky_tokens.saturating_add(tail_tokens));
         let mut keep_from = tail_start;
         while keep_from > 0 {
             let span = turns[keep_from - 1];
@@ -868,6 +1050,7 @@ impl ContextManager {
             sticky_end,
             keep_start: keep_abs_start,
             cuts,
+            tail_user_truncation,
         }
     }
 
@@ -916,6 +1099,10 @@ impl ContextManager {
         );
         let placeholder_tokens = self.estimator.estimate_message(&placeholder);
         let mut remaining = tool_tokens;
+        // Per-call sequence for fabricated ids (AC-25): id-less tool
+        // results pruned in the same pass get distinct `pruned-{n}`
+        // ids instead of colliding on a single "pruned".
+        let mut fabricated_id_seq = 0usize;
         'outer: for span in &turns[..tail_start] {
             for idx in span.0..span.0 + span.1 {
                 let absolute = sticky_end + idx;
@@ -925,10 +1112,21 @@ impl ContextManager {
                 let tokens = self
                     .estimator
                     .estimate_message(&self.history[absolute]);
-                let id = self.history[absolute]
-                    .tool_call_id()
-                    .cloned()
-                    .unwrap_or_else(|| crate::provider::ToolCallId::new("pruned"));
+                // Progress guard (AC-25): a placeholder that costs more
+                // than the output it replaces would grow `remaining`
+                // and prune the whole non-tail region without ever
+                // reaching the target; tiny outputs stay verbatim
+                // instead.
+                if tokens <= placeholder_tokens {
+                    continue;
+                }
+                let id = match self.history[absolute].tool_call_id() {
+                    Some(id) => id.clone(),
+                    None => {
+                        fabricated_id_seq += 1;
+                        crate::provider::ToolCallId::new(format!("pruned-{fabricated_id_seq}"))
+                    }
+                };
                 self.history[absolute] = Message::tool_result(id, TOOL_OUTPUT_PRUNE_PLACEHOLDER);
                 remaining = remaining
                     .saturating_sub(tokens)
@@ -987,7 +1185,15 @@ fn tail_budget(window_budget: usize) -> usize {
 /// character-based (an ASCII approximation of the token budget) with
 /// the truncated marker appended; messages already within budget are
 /// returned unchanged.
-fn truncate_tool_result(message: &Message, record_truncate_tokens: usize) -> Message {
+///
+/// A `tool` result without a `tool_call_id` gets a fabricated
+/// `truncated-{n}` id (AC-25); `fabricated_id_seq` is the per-call
+/// sequence counter that keeps such ids distinct within one commit.
+fn truncate_tool_result(
+    message: &Message,
+    record_truncate_tokens: usize,
+    fabricated_id_seq: &mut usize,
+) -> Message {
     if message.role() != "tool" {
         return message.clone();
     }
@@ -1001,10 +1207,26 @@ fn truncate_tool_result(message: &Message, record_truncate_tokens: usize) -> Mes
         return message.clone();
     }
     let truncated: String = text.chars().take(limit_chars).collect();
-    Message::tool_result(
-        message.tool_call_id().cloned().unwrap_or_else(|| crate::provider::ToolCallId::new("truncated")),
-        format!("{truncated}{TOOL_OUTPUT_TRUNCATED_SUFFIX}"),
-    )
+    let id = match message.tool_call_id() {
+        Some(id) => id.clone(),
+        None => {
+            *fabricated_id_seq += 1;
+            crate::provider::ToolCallId::new(format!("truncated-{fabricated_id_seq}"))
+        }
+    };
+    Message::tool_result(id, format!("{truncated}{TOOL_OUTPUT_TRUNCATED_SUFFIX}"))
+}
+
+/// Truncate the leading `Text` block of `message` to `max_chars`
+/// characters, keeping the message head and any non-text blocks
+/// (AC-25). Used when an oversized user-only newest turn has no
+/// assistant message to cut at.
+fn truncate_user_message(message: &Message, max_chars: usize) -> Message {
+    let mut blocks = message.blocks().to_vec();
+    if let Some(ContentBlock::Text(text)) = blocks.first_mut() {
+        *text = text.chars().take(max_chars).collect();
+    }
+    message.clone().with_blocks(blocks)
 }
 
 /// Parse a persisted session file with schema migration (CM-V2d):
@@ -1085,13 +1307,13 @@ mod tests {
 
     use crate::provider::{ContentBlock, FileContentBlock, ToolCall, ToolCallId};
 
-    fn config(recent_turns: usize) -> ContextConfig {
-        ContextConfig::new(10_000, recent_turns, PathBuf::from("/tmp/reimagine-test"))
+    fn config() -> ContextConfig {
+        ContextConfig::new(10_000, PathBuf::from("/tmp/reimagine-test"))
     }
 
     #[test]
     fn prepare_keeps_full_history_within_window() {
-        let mut manager = ContextManager::new(config(2));
+        let mut manager = ContextManager::new(config());
         manager.commit_turn(&[Message::user("u1"), Message::assistant("a1")]);
         manager.commit_turn(&[Message::user("u2"), Message::assistant("a2")]);
 
@@ -1108,7 +1330,7 @@ mod tests {
 
     #[test]
     fn prepare_drops_oldest_messages_beyond_window() {
-        let mut manager = ContextManager::new(config(2));
+        let mut manager = ContextManager::new(config());
         for i in 0..3 {
             manager.commit_turn(&[
                 Message::user(format!("u{i}")),
@@ -1129,7 +1351,7 @@ mod tests {
 
     #[test]
     fn prepare_with_empty_input_still_attaches_system() {
-        let mut manager = ContextManager::new(config(2));
+        let mut manager = ContextManager::new(config());
         let messages = manager.prepare_messages("sys", &[]);
         assert_eq!(messages.len(), 1);
         assert_eq!(messages[0].role(), "system");
@@ -1138,7 +1360,7 @@ mod tests {
 
     #[test]
     fn commit_turn_accumulates_history() {
-        let mut manager = ContextManager::new(config(2));
+        let mut manager = ContextManager::new(config());
         assert_eq!(manager.token_count(), 0);
         manager.commit_turn(&[Message::user("u1"), Message::assistant("a1")]);
         manager.commit_turn(&[Message::user("u2")]);
@@ -1149,7 +1371,7 @@ mod tests {
 
     #[test]
     fn token_count_sums_history_content() {
-        let mut manager = ContextManager::new(config(2));
+        let mut manager = ContextManager::new(config());
         manager.commit_turn(&[Message::user("a"), Message::assistant("b")]);
         assert_eq!(manager.token_count(), 8);
     }
@@ -1159,7 +1381,7 @@ mod tests {
         // max_tokens 100, reserved 90 -> soft line at 10.
         let mut manager = ContextManager::new(ContextConfig {
             reserved_tokens: 90,
-            ..ContextConfig::new(100, 2, PathBuf::from("/tmp/reimagine-test"))
+            ..ContextConfig::new(100, PathBuf::from("/tmp/reimagine-test"))
         });
         assert!(!manager.needs_compaction());
         manager.commit_turn(&[Message::user("a"), Message::assistant("b")]);
@@ -1174,7 +1396,6 @@ mod tests {
     fn is_over_hard_limit_flips_at_max_tokens() {
         let mut manager = ContextManager::new(ContextConfig::new(
             20,
-            2,
             PathBuf::from("/tmp/reimagine-test"),
         ));
         manager.commit_turn(&[Message::user("a"), Message::assistant("b")]);
@@ -1193,7 +1414,7 @@ mod tests {
     fn soft_trigger_precedes_hard_limit() {
         let mut manager = ContextManager::new(ContextConfig {
             reserved_tokens: 40,
-            ..ContextConfig::new(100, 2, PathBuf::from("/tmp/reimagine-test"))
+            ..ContextConfig::new(100, PathBuf::from("/tmp/reimagine-test"))
         });
         manager.commit_turn(&[Message::user("a"), Message::assistant("b")]);
         // 8 < 60: neither fires.
@@ -1215,7 +1436,7 @@ mod tests {
 
     #[test]
     fn new_config_defaults_reserved_cushion() {
-        let config = ContextConfig::new(64_000, 20, PathBuf::from("/tmp/reimagine-test"));
+        let config = ContextConfig::new(64_000, PathBuf::from("/tmp/reimagine-test"));
         assert_eq!(config.reserved_tokens, 16_000);
     }
 
@@ -1223,7 +1444,7 @@ mod tests {
     fn budget_snapshot_decomposes_call_budget() {
         let mut manager = ContextManager::new(ContextConfig {
             reserved_tokens: 40,
-            ..ContextConfig::new(100, 2, PathBuf::from("/tmp/reimagine-test"))
+            ..ContextConfig::new(100, PathBuf::from("/tmp/reimagine-test"))
         });
         manager.commit_turn(&[Message::user("a"), Message::assistant("b")]);
         let snapshot = manager.budget_snapshot(/* system */ 20, /* input */ 12);
@@ -1254,7 +1475,7 @@ mod tests {
     fn budget_snapshot_flips_over_budget_with_large_history() {
         let mut manager = ContextManager::new(ContextConfig {
             reserved_tokens: 40,
-            ..ContextConfig::new(100, 2, PathBuf::from("/tmp/reimagine-test"))
+            ..ContextConfig::new(100, PathBuf::from("/tmp/reimagine-test"))
         });
         for i in 0..10 {
             manager.commit_turn(&[
@@ -1279,7 +1500,6 @@ mod tests {
     fn message_tokens_attributes_per_message() {
         let mut manager = ContextManager::new(ContextConfig::new(
             10_000,
-            2,
             PathBuf::from("/tmp/reimagine-test"),
         ));
         manager.commit_turn(&[Message::user("abc"), Message::assistant("defg")]);
@@ -1305,7 +1525,6 @@ mod tests {
     fn custom_estimator_replaces_heuristic() {
         let mut manager = ContextManager::new(ContextConfig::new(
             10_000,
-            2,
             PathBuf::from("/tmp/reimagine-test"),
         ))
         .with_estimator(Box::new(FlatEstimator(7)));
@@ -1321,7 +1540,7 @@ mod tests {
     fn window_config(max_tokens: usize, reserved_tokens: usize, tail_turns: usize) -> ContextConfig {
         ContextConfig {
             tail_turns,
-            ..ContextConfig::new(max_tokens, 20, PathBuf::from("/tmp/reimagine-test"))
+            ..ContextConfig::new(max_tokens, PathBuf::from("/tmp/reimagine-test"))
         }
         .with_reserved(reserved_tokens)
     }
@@ -1385,8 +1604,11 @@ mod tests {
 
     #[test]
     fn window_never_splits_tool_pairs() {
-        // Window budget 100 (10k - 9.9k): only the 2-turn verbatim
-        // tail survives; the middle cannot fit a single turn.
+        // Window budget 100 (10k - 9.9k): the tail budget is clamped to
+        // the window (AC-25), so a single ~116-token turn cannot fit it
+        // verbatim; the tail loop shrinks to the newest turn (tail
+        // protection) and the middle cannot fit a turn either. The
+        // surviving turn's tool pairs stay intact.
         let mut manager = ContextManager::new(window_config(10_000, 9_900, 2));
         for i in 0..10 {
             manager.commit_turn(&tool_turn(i, 100));
@@ -1394,11 +1616,13 @@ mod tests {
 
         manager.prepare_messages("sys", &[]);
         let history = manager.history.clone();
-        // The tail is the last 2 complete turns, tool pairs intact.
-        assert_eq!(history.len(), 8);
+        // Only the newest turn survives, tool pairs intact.
+        assert_eq!(history.len(), 4);
         assert_eq!(history[0].role(), "user");
-        assert_eq!(history[0].content(), format!("u8:{}", "a".repeat(100)));
-        assert_eq!(history[4].role(), "user");
+        assert_eq!(history[0].content(), format!("u9:{}", "a".repeat(100)));
+        assert_eq!(history[1].role(), "assistant");
+        assert_eq!(history[2].role(), "tool");
+        assert_eq!(history[3].role(), "assistant");
         // No orphaned tool results: every tool message has a matching
         // assistant tool call within the kept window.
         for message in &history {
@@ -1529,6 +1753,186 @@ mod tests {
     }
 
     #[test]
+    fn user_only_turn_over_hard_limit_is_truncated_to_fit() {
+        // AC-25: a newest turn with no assistant message (user-only)
+        // that exceeds the hard limit cannot be cut at an assistant
+        // half. The user text is truncated to the head that fits the
+        // hard limit instead of blowing it.
+        let mut manager = ContextManager::new(window_config(8_000, 2_000, 2));
+        manager.commit_turn(&turn(0, 100));
+        manager.commit_turn(&[Message::user("huge:".to_owned() + &"a".repeat(60_000))]);
+
+        manager.prepare_messages("sys", &[]);
+        let history = manager.history.clone();
+        // The newest user message survives, but only its head.
+        assert!(history.iter().any(|m| m.content().starts_with("huge:")));
+        let newest = history
+            .iter()
+            .find(|m| m.content().starts_with("huge:"))
+            .expect("newest user message kept");
+        assert!(
+            newest.content().chars().count() < 60_006,
+            "oversized user text must be truncated"
+        );
+        assert!(manager.token_count() <= 8_000);
+        // The smaller older turn was evicted to make room.
+        assert!(!history.iter().any(|m| m.content().starts_with("u0:")));
+    }
+
+    #[test]
+    fn oversized_user_text_with_assistant_half_is_truncated() {
+        // R2-05: a turn whose user text alone exceeds the hard limit,
+        // with an assistant half present, used to keep the giant user
+        // text verbatim — cutting only the assistant cannot bring the
+        // window under the hard limit. The user text is now truncated
+        // to its head as well.
+        let mut manager = ContextManager::new(window_config(8_000, 2_000, 2));
+        manager.commit_turn(&turn(0, 100));
+        manager.commit_turn(&[
+            Message::user("huge:".to_owned() + &"a".repeat(60_000)),
+            Message::assistant("ok"),
+        ]);
+
+        manager.prepare_messages("sys", &[]);
+        let history = manager.history.clone();
+        let newest = history
+            .iter()
+            .find(|m| m.content().starts_with("huge:"))
+            .expect("newest user message kept");
+        assert!(
+            newest.content().chars().count() < 60_006,
+            "oversized user text must be truncated even with an assistant half"
+        );
+        assert!(
+            !history.iter().any(|m| m.content() == "ok"),
+            "assistant half is cut (hard-limit invariant)"
+        );
+        assert!(manager.token_count() <= 8_000);
+    }
+
+    #[test]
+    fn prune_with_tiny_outputs_does_not_thrash() {
+        // AC-25: when placeholders cost more than the outputs they
+        // would replace, pruning cannot reach the target; the loop must
+        // stop instead of pruning the whole non-tail region. Tiny
+        // outputs stay verbatim.
+        let mut manager = ContextManager::new(ContextConfig {
+            prune_threshold_tokens: 4,
+            prune_target_tokens: 0,
+            ..window_config(10_000, 2_000, 2)
+        });
+        for i in 0..4 {
+            manager.commit_turn(&[
+                Message::user(format!("u{i}")),
+                Message::assistant(format!("a{i}")),
+                Message::tool_result(ToolCallId::new(format!("c{i}")), "x"),
+                Message::assistant(format!("a{i}b")),
+            ]);
+        }
+
+        manager.prepare_messages("sys", &[]);
+        let history = manager.history.clone();
+        // None of the ~4-token outputs was replaced by the ~8-token
+        // placeholder: all four raw outputs survive.
+        let raw = history
+            .iter()
+            .filter(|m| m.role() == "tool" && m.content() == "x")
+            .count();
+        assert_eq!(raw, 4, "tiny outputs must not be replaced");
+        assert!(
+            !history
+                .iter()
+                .any(|m| m.role() == "tool" && m.content() == TOOL_OUTPUT_PRUNE_PLACEHOLDER),
+            "no placeholders may be installed when pruning would grow the footprint"
+        );
+    }
+
+    #[test]
+    fn prune_fabricates_unique_ids_for_idless_tool_results() {
+        // AC-25: id-less tool results pruned in the same pass get
+        // distinct fabricated ids (previously every one collided on a
+        // single "pruned" id).
+        let idless_tool_result = |text: &str| -> Message {
+            serde_json::from_str(&format!(
+                r#"{{"role":"tool","content":[{{"type":"text","text":"{text}"}}],"tool_call_id":null,"tool_calls":[]}}"#
+            ))
+            .expect("deserialize id-less tool result")
+        };
+        let mut manager = ContextManager::new(ContextConfig {
+            prune_threshold_tokens: 100,
+            prune_target_tokens: 0,
+            ..window_config(10_000, 2_000, 2)
+        });
+        // 4 turns: the newest 2 are the verbatim tail, the oldest 2 are
+        // the prune region. Tool results are oversized and carry no id.
+        for i in 0..4 {
+            manager.commit_turn(&[
+                Message::user(format!("u{i}")),
+                Message::assistant(format!("a{i}")),
+                idless_tool_result(&"x".repeat(200)),
+                Message::assistant(format!("a{i}b")),
+            ]);
+        }
+
+        manager.prepare_messages("sys", &[]);
+        let pruned: Vec<&Message> = manager
+            .history
+            .iter()
+            .filter(|m| m.role() == "tool" && m.content() == TOOL_OUTPUT_PRUNE_PLACEHOLDER)
+            .collect();
+        assert!(pruned.len() >= 2, "expected at least two pruned outputs");
+        let ids: Vec<&str> = pruned
+            .iter()
+            .map(|m| m.tool_call_id().expect("fabricated id").as_str())
+            .collect();
+        assert!(
+            ids.iter().all(|id| id.starts_with("pruned-")),
+            "fabricated ids must be namespaced: {ids:?}"
+        );
+        let mut unique = ids.to_vec();
+        unique.sort_unstable();
+        unique.dedup();
+        assert_eq!(unique.len(), ids.len(), "pruned ids must be unique: {ids:?}");
+    }
+
+    #[test]
+    fn commit_truncation_fabricates_unique_ids_for_idless_tool_results() {
+        // AC-25: id-less tool results truncated at commit time get
+        // distinct fabricated ids (previously every one collided on a
+        // single "truncated" id).
+        let idless_tool_result = |text: &str| -> Message {
+            serde_json::from_str(&format!(
+                r#"{{"role":"tool","content":[{{"type":"text","text":"{text}"}}],"tool_call_id":null,"tool_calls":[]}}"#
+            ))
+            .expect("deserialize id-less tool result")
+        };
+        let mut manager = ContextManager::new(ContextConfig {
+            record_truncate_tokens: 10,
+            ..window_config(10_000, 2_000, 2)
+        });
+        manager.commit_turn(&[
+            idless_tool_result(&"x".repeat(50)),
+            idless_tool_result(&"y".repeat(50)),
+        ]);
+
+        let truncated: Vec<&Message> = manager
+            .history
+            .iter()
+            .filter(|m| m.content().ends_with(TOOL_OUTPUT_TRUNCATED_SUFFIX))
+            .collect();
+        assert_eq!(truncated.len(), 2);
+        let ids: Vec<&str> = truncated
+            .iter()
+            .map(|m| m.tool_call_id().expect("fabricated id").as_str())
+            .collect();
+        assert!(
+            ids.iter().all(|id| id.starts_with("truncated-")),
+            "fabricated ids must be namespaced: {ids:?}"
+        );
+        assert_ne!(ids[0], ids[1], "fabricated truncated ids must be unique: {ids:?}");
+    }
+
+    #[test]
     fn newest_turn_within_hard_limit_survives_verbatim() {
         // A newest turn between the window budget and the hard limit is
         // kept verbatim: tail protection wins over the soft window.
@@ -1645,7 +2049,7 @@ mod tests {
 
     #[test]
     fn image_block_counts_fixed_budget() {
-        let mut manager = ContextManager::new(config(2));
+        let mut manager = ContextManager::new(config());
         manager.commit_turn(&[Message::user_with_blocks(vec![
             ContentBlock::Text("look".into()),
             ContentBlock::File(FileContentBlock::data("image/png", "AAAA")),
@@ -1656,7 +2060,7 @@ mod tests {
 
     #[test]
     fn non_image_file_block_counts_fallback_budget() {
-        let mut manager = ContextManager::new(config(2));
+        let mut manager = ContextManager::new(config());
         manager.commit_turn(&[Message::user_with_blocks(vec![ContentBlock::File(
             FileContentBlock::data("audio/mpeg", "AAAA"),
         )])]);
@@ -1666,7 +2070,7 @@ mod tests {
 
     #[test]
     fn text_only_history_is_unchanged_by_blocks_path() {
-        let mut manager = ContextManager::new(config(2));
+        let mut manager = ContextManager::new(config());
         manager.commit_turn(&[Message::user("a"), Message::assistant("b")]);
         assert_eq!(manager.token_count(), 8);
     }
@@ -1687,7 +2091,7 @@ mod tests {
     #[test]
     fn persist_load_round_trips_history() {
         let dir = temp_session_dir("round-trip");
-        let cfg = ContextConfig::new(10_000, 2, dir.clone());
+        let cfg = ContextConfig::new(10_000, dir.clone());
         let mut manager = ContextManager::new(cfg);
         manager.commit_turn(&[
             Message::user("u1"),
@@ -1706,7 +2110,7 @@ mod tests {
 
         let loaded = ContextManager::load(
             "sess-1",
-            ContextConfig::new(10_000, 2, dir),
+            ContextConfig::new(10_000, dir),
         )
         .expect("load failed");
         assert_eq!(loaded.token_count(), manager.token_count());
@@ -1716,7 +2120,7 @@ mod tests {
     #[test]
     fn persist_round_trips_file_blocks() {
         let dir = temp_session_dir("file-blocks");
-        let cfg = ContextConfig::new(10_000, 2, dir.clone());
+        let cfg = ContextConfig::new(10_000, dir.clone());
         let mut manager = ContextManager::new(cfg);
         manager.commit_turn(&[Message::user_with_blocks(vec![
             ContentBlock::Text("describe".into()),
@@ -1726,7 +2130,7 @@ mod tests {
 
         let loaded = ContextManager::load(
             "sess-1",
-            ContextConfig::new(10_000, 2, dir),
+            ContextConfig::new(10_000, dir),
         )
         .expect("load failed");
         assert_eq!(loaded.history, manager.history);
@@ -1747,7 +2151,7 @@ mod tests {
         .expect("write failed");
         let result = ContextManager::load(
             "sess-1",
-            ContextConfig::new(10_000, 2, dir),
+            ContextConfig::new(10_000, dir),
         );
         assert!(result.is_err());
     }
@@ -1764,7 +2168,7 @@ mod tests {
         .expect("write failed");
         let loaded = ContextManager::load(
             "sess-1",
-            ContextConfig::new(10_000, 2, dir),
+            ContextConfig::new(10_000, dir),
         )
         .expect("v1 load failed");
         assert_eq!(loaded.token_count(), 8);
@@ -1785,7 +2189,7 @@ mod tests {
         .expect("write failed");
         let loaded = ContextManager::load(
             "sess-1",
-            ContextConfig::new(10_000, 2, dir),
+            ContextConfig::new(10_000, dir),
         )
         .expect("v1 load failed");
         assert!(loaded.compaction_summary().is_none());
@@ -1803,7 +2207,7 @@ mod tests {
         .expect("write failed");
         let err = match ContextManager::load(
             "sess-1",
-            ContextConfig::new(10_000, 2, dir),
+            ContextConfig::new(10_000, dir),
         ) {
             Ok(_) => panic!("future version must fail"),
             Err(err) => err,
@@ -1814,7 +2218,7 @@ mod tests {
     #[test]
     fn persist_writes_current_schema_version() {
         let dir = temp_session_dir("schema-version");
-        let manager = ContextManager::new(ContextConfig::new(10_000, 2, dir.clone()));
+        let manager = ContextManager::new(ContextConfig::new(10_000, dir.clone()));
         manager.persist("sess-1").expect("persist failed");
 
         let json = std::fs::read_to_string(dir.join("sess-1.json")).expect("read failed");
@@ -1833,9 +2237,9 @@ mod tests {
             r#"{"session_id":"sess-1","created_at":"0","history":[{"role":"user","content":[{"type":"text","text":"hi"}],"tool_call_id":null,"tool_calls":[]}],"compaction_summary":null,"total_tokens":4}"#,
         )
         .expect("write failed");
-        let mut loaded = ContextManager::load(
+        let loaded = ContextManager::load(
             "sess-1",
-            ContextConfig::new(10_000, 2, dir.clone()),
+            ContextConfig::new(10_000, dir.clone()),
         )
         .expect("v1 load failed");
         loaded.persist("sess-1").expect("persist failed");
@@ -1860,7 +2264,7 @@ mod tests {
         .expect("write failed");
         let loaded = ContextManager::load(
             "sess-1",
-            ContextConfig::new(10_000, 2, dir),
+            ContextConfig::new(10_000, dir),
         )
         .expect("v2c fallback load failed");
         let record = loaded.compaction_summary().expect("summary lost");
@@ -1880,7 +2284,7 @@ mod tests {
         .expect("write failed");
         let err = match ContextManager::load(
             "sess-1",
-            ContextConfig::new(10_000, 2, dir),
+            ContextConfig::new(10_000, dir),
         ) {
             Ok(_) => panic!("future version must fail"),
             Err(err) => err,
@@ -1902,7 +2306,7 @@ mod tests {
         .expect("write failed");
         let err = match ContextManager::load(
             "sess-1",
-            ContextConfig::new(10_000, 2, dir),
+            ContextConfig::new(10_000, dir),
         ) {
             Ok(_) => panic!("huge version must fail"),
             Err(err) => err,
@@ -1913,9 +2317,35 @@ mod tests {
     #[test]
     fn persist_creates_session_dir() {
         let dir = temp_session_dir("mkdir");
-        let manager = ContextManager::new(ContextConfig::new(10_000, 2, dir.clone()));
+        let manager = ContextManager::new(ContextConfig::new(10_000, dir.clone()));
         manager.persist("sess-1").expect("persist failed");
         assert!(dir.join("sess-1.json").is_file());
+    }
+
+    #[test]
+    fn persist_writes_atomically_and_cleans_up_temp_file() {
+        // AC-23: persist writes a same-directory temp file and renames
+        // it over the target; no `.tmp` file is left behind and the
+        // target parses as a loadable session.
+        let dir = temp_session_dir("atomic");
+        let mut manager = ContextManager::new(ContextConfig::new(10_000, dir.clone()));
+        manager.commit_turn(&[Message::user("u1"), Message::assistant("a1")]);
+        manager.persist("sess-1").expect("persist failed");
+
+        let target = dir.join("sess-1.json");
+        let tmp = dir.join("sess-1.json.tmp");
+        assert!(target.is_file(), "target session file must exist");
+        assert!(!tmp.exists(), "temp file must not be left behind");
+
+        // A second persist replaces the existing target atomically.
+        manager.commit_turn(&[Message::user("u2")]);
+        manager.persist("sess-1").expect("second persist failed");
+        assert!(!tmp.exists(), "temp file must not be left behind after overwrite");
+
+        let loaded = ContextManager::load("sess-1", ContextConfig::new(10_000, dir))
+            .expect("target parses as a session");
+        assert_eq!(loaded.history.len(), 3);
+        assert_eq!(loaded.history[0].content(), "u1");
     }
 
     #[test]
@@ -1923,7 +2353,7 @@ mod tests {
         let dir = temp_session_dir("missing");
         let result = ContextManager::load(
             "nope",
-            ContextConfig::new(10_000, 2, dir),
+            ContextConfig::new(10_000, dir),
         );
         assert!(result.is_err());
     }
@@ -1931,7 +2361,7 @@ mod tests {
     #[test]
     fn persist_writes_compaction_summary_none() {
         let dir = temp_session_dir("summary");
-        let manager = ContextManager::new(ContextConfig::new(10_000, 2, dir.clone()));
+        let manager = ContextManager::new(ContextConfig::new(10_000, dir.clone()));
         manager.persist("sess-1").expect("persist failed");
 
         let json = std::fs::read_to_string(dir.join("sess-1.json")).expect("read failed");
@@ -2029,6 +2459,70 @@ mod tests {
     }
 
     #[test]
+    fn apply_summary_with_sticky_count_but_empty_history_does_not_panic() {
+        // Defensive guard (AC-04): a hand-edited or partially written
+        // persisted file may carry `sticky_count > 0` with no history.
+        // `apply_summary` must not index `history[0]` blindly.
+        let mut manager = ContextManager::new(config());
+        manager.sticky_count = 1; // corrupted / hand-edited persisted state
+
+        let request = manager.summarize_request();
+        assert!(!request.is_empty());
+        let record = manager
+            .apply_summary("summarized after corruption")
+            .expect("apply succeeds");
+        assert_eq!(manager.history.len(), 1);
+        assert_eq!(manager.history[0].content(), "summarized after corruption");
+        assert_eq!(manager.sticky_count, 1);
+        assert_eq!(record.text, "summarized after corruption");
+    }
+
+    #[test]
+    fn load_clamps_sticky_count_to_history_length() {
+        // A file declaring more sticky messages than the history holds
+        // must load with a clamped count instead of panicking later
+        // (AC-04).
+        let dir = temp_session_dir("sticky-clamp");
+        std::fs::create_dir_all(&dir).expect("mkdir failed");
+        std::fs::write(
+            dir.join("sess-1.json"),
+            r#"{"session_id":"sess-1","created_at":"0","history":[
+                {"role":"user","content":[{"type":"text","text":"hi"}],"tool_call_id":null,"tool_calls":[]},
+                {"role":"assistant","content":[{"type":"text","text":"hello"}],"tool_call_id":null,"tool_calls":[]}
+            ],"compaction_summary":null,"sticky_count":5,"total_tokens":8,"schema_version":2}"#,
+        )
+        .expect("write failed");
+        let mut loaded = ContextManager::load("sess-1", ContextConfig::new(10_000, dir.clone()))
+            .expect("load failed");
+        assert_eq!(loaded.sticky_count, 2);
+        // A follow-up compaction on the loaded manager never panics.
+        let record = loaded
+            .apply_summary("compacted after clamp")
+            .expect("apply succeeds");
+        assert_eq!(record.text, "compacted after clamp");
+    }
+
+    #[test]
+    fn load_with_sticky_count_but_empty_history_clamps_to_zero() {
+        let dir = temp_session_dir("sticky-empty");
+        std::fs::create_dir_all(&dir).expect("mkdir failed");
+        std::fs::write(
+            dir.join("sess-1.json"),
+            r#"{"session_id":"sess-1","created_at":"0","history":[],"compaction_summary":null,"sticky_count":1,"total_tokens":0,"schema_version":2}"#,
+        )
+        .expect("write failed");
+        let mut loaded = ContextManager::load("sess-1", ContextConfig::new(10_000, dir.clone()))
+            .expect("load failed");
+        assert_eq!(loaded.sticky_count, 0);
+        // The next compaction installs a fresh sticky prefix.
+        let record = loaded
+            .apply_summary("fresh sticky")
+            .expect("apply succeeds");
+        assert_eq!(loaded.history.len(), 1);
+        assert_eq!(record.text, "fresh sticky");
+    }
+
+    #[test]
     fn summary_collects_image_refs_from_evicted_messages() {
         let mut manager = ContextManager::new(window_config(10_000, 9_500, 2));
         for i in 0..10 {
@@ -2072,10 +2566,50 @@ mod tests {
     }
 
     #[test]
+    fn transient_failures_do_not_disable_compaction() {
+        // AC-24 + R2-06 (DP-4): transient (recoverable) summarization
+        // failures must not advance the permanent streak that disables
+        // compaction at MAX_CONSECUTIVE_COMPACTION_FAILURES — only
+        // `record_compaction_failure` counts there. But a persistently
+        // flapping provider must not retry the summarizer every turn
+        // either: after MAX_TRANSIENT_COMPACTION_FAILURES consecutive
+        // transients, attempts stop (bounded retry).
+        let mut manager = ContextManager::new(window_config(10_000, 2_000, 2));
+        for i in 0..60 {
+            manager.commit_turn(&turn(i, 400));
+        }
+        for _ in 0..4 {
+            manager.record_transient_compaction_failure();
+        }
+        assert!(manager.should_attempt_compaction());
+        assert_eq!(manager.consecutive_compaction_failures(), 0);
+        manager.record_transient_compaction_failure();
+        assert!(
+            !manager.should_attempt_compaction(),
+            "bounded transient retry stops after the cap (R2-06)"
+        );
+        assert_eq!(manager.transient_compaction_failures(), 5);
+
+        // Permanent failures still disable compaction independently.
+        for _ in 0..3 {
+            manager.record_compaction_failure();
+        }
+        assert_eq!(manager.consecutive_compaction_failures(), 3);
+        assert!(!manager.should_attempt_compaction());
+
+        // A success resets both counters and re-enables compaction.
+        let record = manager.apply_summary("recovered").expect("apply failed");
+        assert_eq!(manager.consecutive_compaction_failures(), 0);
+        assert_eq!(manager.transient_compaction_failures(), 0);
+        assert!(manager.should_attempt_compaction());
+        assert_eq!(record.attempt, 4);
+    }
+
+    #[test]
     fn compaction_record_round_trips_persistence() {
         let dir = temp_session_dir("record");
         let cfg = ContextConfig {
-            ..ContextConfig::new(10_000, 2, dir.clone())
+            ..ContextConfig::new(10_000, dir.clone())
         };
         let mut manager = ContextManager::new(cfg);
         for i in 0..60 {
@@ -2086,7 +2620,7 @@ mod tests {
 
         let loaded = ContextManager::load(
             "sess-1",
-            ContextConfig::new(10_000, 2, dir),
+            ContextConfig::new(10_000, dir),
         )
         .expect("load failed");
         let record = loaded.compaction_summary().expect("summary lost");
@@ -2120,17 +2654,21 @@ mod tests {
 
     #[test]
     fn apply_summary_rejects_stale_window() {
-        // Tiny window (100 tokens): only the 2-turn tail fits. Every
-        // committed turn shifts the keep region, so the plan captured
-        // by summarize_request goes stale.
+        // Tiny window (100 tokens, AC-25 tail clamp): only a 1-turn
+        // tail fits. The interrupt turn is oversized enough to shrink
+        // the tail and shift the keep region, so the plan captured by
+        // summarize_request goes stale.
         let mut manager = ContextManager::new(window_config(10_000, 9_900, 2));
         for i in 0..10 {
             manager.commit_turn(&turn(i, 100));
         }
         manager.summarize_request();
-        // The window changes while the model "summarizes": a new turn
-        // is committed, shifting the eviction range.
-        manager.commit_turn(&[Message::user("interrupt"), Message::assistant("ok")]);
+        // The window changes while the model "summarizes": an oversized
+        // new turn is committed, shifting the eviction range.
+        manager.commit_turn(&[
+            Message::user(format!("interrupt:{}", "a".repeat(160))),
+            Message::assistant("ok"),
+        ]);
 
         let err = manager
             .apply_summary("stale summary")
@@ -2139,6 +2677,259 @@ mod tests {
         // Nothing was replaced.
         assert!(manager.compaction_summary().is_none());
         assert_eq!(manager.sticky_count(), 0);
-        assert!(manager.history.iter().any(|m| m.content() == "interrupt"));
+        assert!(manager.history.iter().any(|m| m.content().starts_with("interrupt:")));
+    }
+
+    // ----- apply_summary invariants (AC-16) -----
+    //
+    // These tests pin the CURRENT behavior of `apply_summary` as the
+    // API-level contract. Several behaviors are known gaps guarded in
+    // the loop driver (`maybe_compact`) rather than here; each test
+    // documents which behavior it pins.
+
+    #[test]
+    fn apply_summary_rejects_empty_text() {
+        // AC-25/D-6: the API itself rejects empty (whitespace-trimmed)
+        // summary text — an empty sticky summary must never be
+        // installed. The loop driver's empty-reply guard is a harmless
+        // redundancy.
+        let mut manager = ContextManager::new(window_config(10_000, 2_000, 2));
+        for i in 0..60 {
+            manager.commit_turn(&turn(i, 400));
+        }
+        assert!(manager.has_eviction_pending());
+
+        let err = manager
+            .apply_summary("")
+            .expect_err("empty text must be rejected");
+        assert!(matches!(err, ContextError::EmptySummary));
+        let err = manager
+            .apply_summary("   \n\t ")
+            .expect_err("whitespace-only text must be rejected");
+        assert!(matches!(err, ContextError::EmptySummary));
+        // Nothing was applied: no sticky summary, no record, and the
+        // eviction range is still pending.
+        assert!(manager.compaction_summary().is_none());
+        assert_eq!(manager.sticky_count(), 0);
+        assert!(manager.has_eviction_pending());
+    }
+
+    #[test]
+    fn apply_summary_without_eviction_range_still_inserts_sticky() {
+        // A manager whose window has nothing to evict still applies: a
+        // redundant insert. The loop driver skips the summarizer call
+        // entirely when `has_eviction_pending()` is false, so this path
+        // only fires on direct API use (or a stale-plan bypass).
+        let mut manager = ContextManager::new(config());
+        manager.commit_turn(&[Message::user("u1"), Message::assistant("a1")]);
+        assert!(!manager.has_eviction_pending());
+
+        let record = manager
+            .apply_summary("redundant")
+            .expect("apply succeeds with no eviction range");
+        assert_eq!(record.tokens_before, 0);
+        // The summary was prepended; nothing was evicted.
+        assert_eq!(manager.history.len(), 3);
+        assert_eq!(manager.history[0].content(), "redundant");
+        assert_eq!(manager.sticky_count(), 1);
+    }
+
+    #[test]
+    fn apply_summary_twice_without_request_applies_both() {
+        // No pairing enforcement: two `apply_summary` calls in a row
+        // (no `summarize_request` between them) both succeed — the
+        // stale check is skipped because `request_plan` is None.
+        let mut manager = ContextManager::new(window_config(10_000, 2_000, 2));
+        for i in 0..60 {
+            manager.commit_turn(&turn(i, 400));
+        }
+
+        let first = manager
+            .apply_summary("first")
+            .expect("first apply succeeds");
+        assert_eq!(first.text, "first");
+        assert_eq!(manager.sticky_count(), 1);
+        assert_eq!(manager.history[0].content(), "first");
+
+        let second = manager
+            .apply_summary("second")
+            .expect("second apply succeeds without a new summarize_request");
+        assert_eq!(second.text, "second");
+        // Single-generation: the second summary replaced the first in
+        // place.
+        assert_eq!(manager.sticky_count(), 1);
+        assert_eq!(manager.history[0].content(), "second");
+        assert!(!manager.history.iter().any(|m| m.content() == "first"));
+        assert_eq!(
+            manager.compaction_summary().map(|r| r.text.as_str()),
+            Some("second")
+        );
+    }
+
+    #[test]
+    fn has_eviction_pending_false_for_tiny_history() {
+        let mut manager = ContextManager::new(config());
+        manager.commit_turn(&[Message::user("u1"), Message::assistant("a1")]);
+        assert!(!manager.has_eviction_pending());
+        manager.commit_turn(&[Message::user("u2"), Message::assistant("a2")]);
+        // Still within the window: nothing would be summarized.
+        assert!(!manager.has_eviction_pending());
+    }
+
+    #[test]
+    fn has_eviction_pending_true_when_window_has_eviction_range() {
+        let mut manager = ContextManager::new(window_config(10_000, 2_000, 2));
+        for i in 0..60 {
+            manager.commit_turn(&turn(i, 400));
+        }
+        assert!(manager.has_eviction_pending());
+        // The accessor reflects the same eviction range the
+        // summarization prompt would cover: at least the oldest turn.
+        let ranges = manager.window_plan().disappearing_ranges();
+        assert!(!ranges.is_empty());
+        assert!(ranges.iter().any(|(start, end)| end > start));
+    }
+
+    #[test]
+    fn load_compaction_summary_without_sticky_count_is_not_pinned() {
+        // A schema_version-2 file with a CompactionRecord summary
+        // present but `sticky_count: 0`, whose FIRST message does NOT
+        // match the record text: load succeeds with the record
+        // restored, but the summary is NOT pinned — the window evicts
+        // it on the next prepare. AC-25/D-8 repair only fires on an
+        // exact content match; a mismatched first message is left
+        // untouched (no guessing).
+        let dir = temp_session_dir("summary-not-pinned");
+        std::fs::create_dir_all(&dir).expect("mkdir failed");
+
+        let mut history = vec![json!({
+            "role": "user",
+            "content": [{"type": "text", "text": "summary from a newer build"}],
+            "tool_call_id": null,
+            "tool_calls": [],
+        })];
+        for i in 0..60 {
+            history.push(json!({
+                "role": "user",
+                "content": [{"type": "text", "text": format!("u{i}:{}", "a".repeat(400))}],
+                "tool_call_id": null,
+                "tool_calls": [],
+            }));
+            history.push(json!({
+                "role": "assistant",
+                "content": [{"type": "text", "text": format!("a{i}:{}", "b".repeat(400))}],
+                "tool_call_id": null,
+                "tool_calls": [],
+            }));
+        }
+        let state = json!({
+            "session_id": "sess-1",
+            "created_at": "0",
+            "history": history,
+            "compaction_summary": {
+                "text": "stale summary text",
+                "tokens_before": 12_000,
+                "tokens_after": 7,
+                "created_at": "0",
+                "attempt": 1,
+                "image_refs": [],
+            },
+            "sticky_count": 0,
+            "total_tokens": 12_000,
+            "schema_version": 2,
+        });
+        std::fs::write(dir.join("sess-1.json"), state.to_string()).expect("write failed");
+
+        // Same window shape as `window_config(10_000, 2_000, 2)`, but
+        // pointed at the temp session dir the file was written to.
+        let cfg = ContextConfig {
+            reserved_tokens: 2_000,
+            tail_turns: 2,
+            ..ContextConfig::new(10_000, dir)
+        };
+        let mut loaded = ContextManager::load("sess-1", cfg).expect("load failed");
+        // Load succeeds and restores the record, but the sticky count
+        // stays 0 — the file's first message does not match the record
+        // text, so the D-8 repair does not guess.
+        assert_eq!(loaded.sticky_count(), 0);
+        let record = loaded.compaction_summary().expect("record restored");
+        assert_eq!(record.text, "stale summary text");
+
+        // The mismatched first message is not pinned: the window
+        // evicts it on the next prepare, even though
+        // `compaction_summary()` still reports the record.
+        loaded.prepare_messages("sys", &[]);
+        assert!(
+            !loaded.history.iter().any(|m| m.content() == "summary from a newer build"),
+            "unpinned first message must be evicted by the window"
+        );
+    }
+
+    #[test]
+    fn load_repins_summary_when_first_message_matches_record() {
+        // AC-25/D-8: a schema_version-2 file whose first message's
+        // content equals the compaction record's text but whose
+        // `sticky_count` was not persisted (0) loads with the pin
+        // repaired — the summary message is present, it just lost its
+        // sticky flag. The repaired pin survives the window.
+        let dir = temp_session_dir("summary-repin");
+        std::fs::create_dir_all(&dir).expect("mkdir failed");
+
+        let mut history = vec![json!({
+            "role": "user",
+            "content": [{"type": "text", "text": "stale summary text"}],
+            "tool_call_id": null,
+            "tool_calls": [],
+        })];
+        for i in 0..60 {
+            history.push(json!({
+                "role": "user",
+                "content": [{"type": "text", "text": format!("u{i}:{}", "a".repeat(400))}],
+                "tool_call_id": null,
+                "tool_calls": [],
+            }));
+            history.push(json!({
+                "role": "assistant",
+                "content": [{"type": "text", "text": format!("a{i}:{}", "b".repeat(400))}],
+                "tool_call_id": null,
+                "tool_calls": [],
+            }));
+        }
+        let state = json!({
+            "session_id": "sess-1",
+            "created_at": "0",
+            "history": history,
+            "compaction_summary": {
+                "text": "stale summary text",
+                "tokens_before": 12_000,
+                "tokens_after": 7,
+                "created_at": "0",
+                "attempt": 1,
+                "image_refs": [],
+            },
+            "sticky_count": 0,
+            "total_tokens": 12_000,
+            "schema_version": 2,
+        });
+        std::fs::write(dir.join("sess-1.json"), state.to_string()).expect("write failed");
+
+        let cfg = ContextConfig {
+            reserved_tokens: 2_000,
+            tail_turns: 2,
+            ..ContextConfig::new(10_000, dir)
+        };
+        let mut loaded = ContextManager::load("sess-1", cfg).expect("load failed");
+        assert_eq!(loaded.sticky_count(), 1, "matching summary message is re-pinned");
+        let record = loaded.compaction_summary().expect("record restored");
+        assert_eq!(record.text, "stale summary text");
+
+        // The repaired pin survives the window: repeated prepares do
+        // not evict the summary message.
+        loaded.prepare_messages("sys", &[]);
+        assert!(
+            loaded.history.iter().any(|m| m.content() == "stale summary text"),
+            "re-pinned summary must not be evicted by the window"
+        );
+        assert!(loaded.token_count() <= 10_000);
     }
 }

@@ -7,8 +7,8 @@ use crate::context::ToolContext;
 use crate::error::{ToolError, ToolErrorCode};
 use crate::ids::ToolName;
 use crate::mode::AgentMode;
-use crate::permissions::{ToolPermission, ToolRiskLevel};
-use crate::tool::{AgentTool, ToolSpec};
+use crate::permissions::ToolRiskLevel;
+use crate::tool::AgentTool;
 
 /// Decision returned by `ToolPolicy::evaluate`. The `Allow` variant
 /// carries no payload; the `Deny` variant carries the reason the policy
@@ -143,45 +143,15 @@ impl ToolPolicy {
             .with_tool(name.clone()),
         }
     }
-
-    /// Convenience: a permissive variant of the policy used by tests. It
-    /// checks only the mode and risk gates; it does not enforce
-    /// permissions. Never construct this in production paths.
-    pub fn permissive_for_tests() -> ToolPolicy {
-        ToolPolicy
-    }
-
-    /// Helper: check whether a spec is allowed in `mode` for the given
-    /// `permission`. Exposed for direct policy tests.
-    pub fn spec_allowed(
-        spec: &ToolSpec,
-        mode: AgentMode,
-        permission: &ToolPermission,
-    ) -> PolicyDecision {
-        if !spec.allows_mode(mode) {
-            return PolicyDecision::Deny(PolicyDenialReason::ModeNotAllowed);
-        }
-        if spec.risk() == ToolRiskLevel::External && mode != AgentMode::Build {
-            return PolicyDecision::Deny(PolicyDenialReason::ApprovalRequired);
-        }
-        // The caller may pass an "unconstrained" permission sentinel
-        // (empty string) to express "no permission check". Real policy
-        // evaluation should use `ToolPolicy::evaluate` so the context
-        // is consulted.
-        if !permission.as_str().is_empty() {
-            let _ = permission;
-        }
-        PolicyDecision::Allow
-    }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::permissions::PermissionSet;
-    use crate::tool::ToolResult;
+    use crate::permissions::{PermissionSet, ToolPermission};
+    use crate::tool::{ToolResult, ToolSpec};
     use async_trait::async_trait;
-    use serde_json::{Value, json};
+    use serde_json::Value;
 
     fn ctx(mode: AgentMode, perms: &[&str]) -> ToolContext {
         ToolContext::new(
@@ -346,25 +316,5 @@ mod tests {
         assert_eq!(err.code(), ToolErrorCode::ApprovalRequired);
         let err = policy.denial_to_error(&name, PolicyDenialReason::ToolNameMissing);
         assert_eq!(err.code(), ToolErrorCode::UnknownTool);
-    }
-
-    #[test]
-    fn spec_allowed_helper() {
-        let spec = ToolSpec::new(
-            ToolName::new("a"),
-            "a",
-            [AgentMode::Build],
-            ToolPermission::new("x"),
-            ToolRiskLevel::External,
-        );
-        assert!(matches!(
-            ToolPolicy::spec_allowed(&spec, AgentMode::Build, &ToolPermission::new("")),
-            PolicyDecision::Allow
-        ));
-        assert!(matches!(
-            ToolPolicy::spec_allowed(&spec, AgentMode::Agent, &ToolPermission::new("")),
-            PolicyDecision::Deny(PolicyDenialReason::ModeNotAllowed)
-        ));
-        let _ = json!({});
     }
 }

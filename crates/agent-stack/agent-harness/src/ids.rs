@@ -45,6 +45,10 @@ macro_rules! agent_id_type {
     };
 }
 
+// Re-export for sibling modules (e.g. provider.rs) so the id newtypes
+// can be generated from one place instead of being hand-rolled (AC-22).
+pub(crate) use agent_id_type;
+
 agent_id_type!(AgentSessionId);
 agent_id_type!(WorkspaceScope);
 agent_id_type!(ToolName);
