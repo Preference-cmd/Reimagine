@@ -199,6 +199,8 @@ impl reimagine_config::ConfigDocument for AgentProviderConfigDocument {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use reimagine_config::ConfigDocument;
+    use reimagine_config::ConfigValidationContext;
 
     #[test]
     fn protocol_as_str() {
@@ -216,5 +218,238 @@ mod tests {
         assert_eq!(cfg.base_url(), "https://api.example.com/v1");
         assert_eq!(cfg.api_key(), "sk-test");
         assert_eq!(cfg.default_model(), "gpt-5-mini");
+    }
+
+    #[test]
+    fn mixed_protocol_provider_rejected() {
+        // Create a provider with multiple inner configs populated (mixed protocols)
+        let openai_config = OpenAiChatCompletionsConfig::new(
+            "https://api.example.com/v1",
+            "sk-test",
+            "gpt-4o-mini",
+        );
+        let anthropic_config = AnthropicMessagesConfig::new("sk-ant-test", "claude-3-5-sonnet");
+
+        // Manually create a ProviderConfig with multiple inner configs
+        let mixed_provider = ProviderConfig {
+            name: "mixed-provider".to_string(),
+            enabled: true,
+            protocol: Protocol::OpenAiChatCompletions,
+            base_url: Some("https://api.example.com/v1".to_string()),
+            api_key: Some("sk-test".to_string()),
+            default_model: Some("gpt-4o-mini".to_string()),
+            openai_chat_completions: Some(openai_config),
+            anthropic_messages: Some(anthropic_config),
+            openai_responses: None,
+        };
+
+        let doc = AgentProviderConfigDocument::new(vec![mixed_provider]);
+        let key = reimagine_config::ConfigKey::new("agent-providers.json").unwrap();
+        let context = ConfigValidationContext::new(key, "/test/config");
+        let diagnostics = doc.validate(&context);
+
+        // Should have exactly one diagnostic for mixed protocols
+        assert_eq!(diagnostics.len(), 1);
+        assert_eq!(
+            diagnostics[0].code().as_str(),
+            "CONFIG/AGENT_PROVIDER_MIXED_PROTOCOL"
+        );
+        assert!(diagnostics[0].message().contains("mixed-provider"));
+        assert!(
+            diagnostics[0]
+                .message()
+                .contains("multiple protocol configs")
+        );
+        assert!(diagnostics[0].message().contains("openai_chat_completions"));
+        assert!(diagnostics[0].message().contains("anthropic_messages"));
+    }
+
+    #[test]
+    fn single_protocol_provider_accepted() {
+        // Create a provider with only one inner config populated
+        let openai_config = OpenAiChatCompletionsConfig::new(
+            "https://api.example.com/v1",
+            "sk-test",
+            "gpt-4o-mini",
+        );
+
+        let provider =
+            ProviderConfig::with_openai_chat_completions("single-provider", openai_config);
+
+        let doc = AgentProviderConfigDocument::new(vec![provider]);
+        let key = reimagine_config::ConfigKey::new("agent-providers.json").unwrap();
+        let context = ConfigValidationContext::new(key, "/test/config");
+        let diagnostics = doc.validate(&context);
+
+        // Should have no diagnostics (valid configuration)
+        assert!(diagnostics.is_empty());
+    }
+
+    #[test]
+    fn mixed_protocol_with_all_three_protocols_rejected() {
+        // Create a provider with all three inner configs populated
+        let openai_config = OpenAiChatCompletionsConfig::new(
+            "https://api.example.com/v1",
+            "sk-test",
+            "gpt-4o-mini",
+        );
+        let anthropic_config = AnthropicMessagesConfig::new("sk-ant-test", "claude-3-5-sonnet");
+        let responses_config =
+            OpenAiResponsesConfig::new("https://api.example.com/v1", "sk-test", "gpt-5-mini");
+
+        let mixed_provider = ProviderConfig {
+            name: "all-protocols-provider".to_string(),
+            enabled: true,
+            protocol: Protocol::OpenAiChatCompletions,
+            base_url: Some("https://api.example.com/v1".to_string()),
+            api_key: Some("sk-test".to_string()),
+            default_model: Some("gpt-4o-mini".to_string()),
+            openai_chat_completions: Some(openai_config),
+            anthropic_messages: Some(anthropic_config),
+            openai_responses: Some(responses_config),
+        };
+
+        let doc = AgentProviderConfigDocument::new(vec![mixed_provider]);
+        let key = reimagine_config::ConfigKey::new("agent-providers.json").unwrap();
+        let context = ConfigValidationContext::new(key, "/test/config");
+        let diagnostics = doc.validate(&context);
+
+        // Should have exactly one diagnostic for mixed protocols
+        assert_eq!(diagnostics.len(), 1);
+        assert_eq!(
+            diagnostics[0].code().as_str(),
+            "CONFIG/AGENT_PROVIDER_MIXED_PROTOCOL"
+        );
+        assert!(diagnostics[0].message().contains("all-protocols-provider"));
+        assert!(diagnostics[0].message().contains("openai_chat_completions"));
+        assert!(diagnostics[0].message().contains("anthropic_messages"));
+        assert!(diagnostics[0].message().contains("openai_responses"));
+    }
+
+    #[test]
+    fn mixed_protocol_diagnostic_message_contains_protocol_names() {
+        // Create a provider with two inner configs populated
+        let openai_config = OpenAiChatCompletionsConfig::new(
+            "https://api.example.com/v1",
+            "sk-test",
+            "gpt-4o-mini",
+        );
+        let responses_config =
+            OpenAiResponsesConfig::new("https://api.example.com/v1", "sk-test", "gpt-5-mini");
+
+        let mixed_provider = ProviderConfig {
+            name: "test-provider".to_string(),
+            enabled: true,
+            protocol: Protocol::OpenAiChatCompletions,
+            base_url: Some("https://api.example.com/v1".to_string()),
+            api_key: Some("sk-test".to_string()),
+            default_model: Some("gpt-4o-mini".to_string()),
+            openai_chat_completions: Some(openai_config),
+            anthropic_messages: None,
+            openai_responses: Some(responses_config),
+        };
+
+        let doc = AgentProviderConfigDocument::new(vec![mixed_provider]);
+        let key = reimagine_config::ConfigKey::new("agent-providers.json").unwrap();
+        let context = ConfigValidationContext::new(key, "/test/config");
+        let diagnostics = doc.validate(&context);
+
+        // Should have exactly one diagnostic for mixed protocols
+        assert_eq!(diagnostics.len(), 1);
+
+        // Check that the message contains the expected format
+        let message = diagnostics[0].message();
+        assert!(message.contains("test-provider"));
+        assert!(message.contains("A provider must use exactly one protocol"));
+        assert!(message.contains("openai_chat_completions"));
+        assert!(message.contains("openai_responses"));
+    }
+
+    #[test]
+    fn multiple_providers_with_mixed_protocols_each_rejected() {
+        // Create two providers, each with mixed protocols
+        let openai_config1 = OpenAiChatCompletionsConfig::new(
+            "https://api.example.com/v1",
+            "sk-test",
+            "gpt-4o-mini",
+        );
+        let anthropic_config1 = AnthropicMessagesConfig::new("sk-ant-test", "claude-3-5-sonnet");
+
+        let mixed_provider1 = ProviderConfig {
+            name: "mixed-provider-1".to_string(),
+            enabled: true,
+            protocol: Protocol::OpenAiChatCompletions,
+            base_url: Some("https://api.example.com/v1".to_string()),
+            api_key: Some("sk-test".to_string()),
+            default_model: Some("gpt-4o-mini".to_string()),
+            openai_chat_completions: Some(openai_config1),
+            anthropic_messages: Some(anthropic_config1),
+            openai_responses: None,
+        };
+
+        let openai_config2 =
+            OpenAiChatCompletionsConfig::new("https://api2.example.com/v1", "sk-test2", "gpt-4o");
+        let responses_config2 =
+            OpenAiResponsesConfig::new("https://api2.example.com/v1", "sk-test2", "gpt-5");
+
+        let mixed_provider2 = ProviderConfig {
+            name: "mixed-provider-2".to_string(),
+            enabled: true,
+            protocol: Protocol::OpenAiChatCompletions,
+            base_url: Some("https://api2.example.com/v1".to_string()),
+            api_key: Some("sk-test2".to_string()),
+            default_model: Some("gpt-4o".to_string()),
+            openai_chat_completions: Some(openai_config2),
+            anthropic_messages: None,
+            openai_responses: Some(responses_config2),
+        };
+
+        let doc = AgentProviderConfigDocument::new(vec![mixed_provider1, mixed_provider2]);
+        let key = reimagine_config::ConfigKey::new("agent-providers.json").unwrap();
+        let context = ConfigValidationContext::new(key, "/test/config");
+        let diagnostics = doc.validate(&context);
+
+        // Should have exactly two diagnostics (one for each mixed provider)
+        assert_eq!(diagnostics.len(), 2);
+
+        // Both should have the mixed protocol error code
+        for diag in &diagnostics {
+            assert_eq!(diag.code().as_str(), "CONFIG/AGENT_PROVIDER_MIXED_PROTOCOL");
+        }
+    }
+
+    #[test]
+    fn mixed_protocol_provider_with_disabled_flag_still_validated() {
+        // Create a disabled provider with mixed protocols
+        let openai_config = OpenAiChatCompletionsConfig::new(
+            "https://api.example.com/v1",
+            "sk-test",
+            "gpt-4o-mini",
+        );
+        let anthropic_config = AnthropicMessagesConfig::new("sk-ant-test", "claude-3-5-sonnet");
+
+        let mixed_provider = ProviderConfig {
+            name: "disabled-mixed-provider".to_string(),
+            enabled: false,
+            protocol: Protocol::OpenAiChatCompletions,
+            base_url: Some("https://api.example.com/v1".to_string()),
+            api_key: Some("sk-test".to_string()),
+            default_model: Some("gpt-4o-mini".to_string()),
+            openai_chat_completions: Some(openai_config),
+            anthropic_messages: Some(anthropic_config),
+            openai_responses: None,
+        };
+
+        let doc = AgentProviderConfigDocument::new(vec![mixed_provider]);
+        let key = reimagine_config::ConfigKey::new("agent-providers.json").unwrap();
+        let context = ConfigValidationContext::new(key, "/test/config");
+        let diagnostics = doc.validate(&context);
+
+        // Should still validate and reject even if disabled
+        assert_eq!(diagnostics.len(), 1);
+        assert_eq!(
+            diagnostics[0].code().as_str(),
+            "CONFIG/AGENT_PROVIDER_MIXED_PROTOCOL"
+        );
     }
 }
