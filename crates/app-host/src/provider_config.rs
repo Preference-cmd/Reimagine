@@ -191,41 +191,6 @@ impl reimagine_config::ConfigDocument for AgentProviderConfigDocument {
                         .with_id("agent-providers.json"),
                 ));
             }
-
-            // Check for mixed protocols: provider has multiple inner configs populated
-            let mut populated_protocols = Vec::new();
-            if provider.openai_chat_completions().is_some() {
-                populated_protocols.push(Protocol::OpenAiChatCompletions);
-            }
-            if provider.anthropic_messages().is_some() {
-                populated_protocols.push(Protocol::AnthropicMessages);
-            }
-            if provider.openai_responses().is_some() {
-                populated_protocols.push(Protocol::OpenAiResponses);
-            }
-
-            if populated_protocols.len() > 1 {
-                let protocol_names: Vec<&str> =
-                    populated_protocols.iter().map(|p| p.as_str()).collect();
-                diagnostics.push(
-                    Diagnostic::new(
-                        DiagnosticId::new(format!(
-                            "config:agent_providers:{}:mixed_protocols",
-                            provider.name()
-                        )),
-                        DiagnosticCode::new("CONFIG/AGENT_PROVIDER_MIXED_PROTOCOL"),
-                        DiagnosticSeverity::Error,
-                        DiagnosticSourceName::new("config"),
-                        format!(
-                            "provider `{}` has multiple protocol configs: {}. A provider must use exactly one protocol.",
-                            provider.name(),
-                            protocol_names.join(", ")
-                        ),
-                        DiagnosticTarget::new(DiagnosticTargetDomain::new("config"))
-                            .with_id("agent-providers.json"),
-                    ),
-                );
-            }
         }
         diagnostics
     }
