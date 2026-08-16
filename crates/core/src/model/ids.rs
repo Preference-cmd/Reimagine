@@ -62,6 +62,7 @@ macro_rules! id_type {
 }
 
 id_type!(WorkflowId);
+id_type!(ProjectId);
 id_type!(NodeId);
 id_type!(EdgeId);
 id_type!(NodeTypeId);
