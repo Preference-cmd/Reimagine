@@ -434,7 +434,11 @@ async fn workflow_get_returns_snapshot() {
     let ctx = agent_ctx(host.workspace_scope().clone(), AgentMode::Agent);
     let registry = Arc::clone(host.agent_service().registry());
     let output = registry
-        .invoke(&reimagine_agent_harness::ToolName::new("workflow.get"), &ctx, input)
+        .invoke(
+            &reimagine_agent_harness::ToolName::new("workflow.get"),
+            &ctx,
+            input,
+        )
         .await
         .expect("get should succeed");
 

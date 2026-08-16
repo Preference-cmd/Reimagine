@@ -10,7 +10,8 @@ use std::sync::{Arc, Mutex, PoisonError};
 use reimagine_agent_harness::{
     AgentEvent, AgentEventSink, AgentLoop, AgentMode, AgentSessionId, AgentTurnId,
     AgentTurnRequest, AgentTurnResult, ContentBlock, ContextConfig, ContextManager, Message,
-    ModelName, PermissionSet, ProviderName, ToolCallId, ToolName, ToolPermission, VecAgentEventSink,
+    ModelName, PermissionSet, ProviderName, ToolCallId, ToolName, ToolPermission,
+    VecAgentEventSink,
 };
 use serde::Serialize;
 use serde::de::DeserializeOwned;
@@ -20,20 +21,18 @@ use tokio_util::sync::CancellationToken;
 
 use crate::init::{DaemonInitError, DaemonWorkspace};
 use crate::protocol::{
-    AgentErrorParams, ClientInfo, ContentDeltaParams, InitializeRequest, InitializeResponse,
-    JsonRpcError, JsonRpcNotification, JsonRpcRequest, JsonRpcResponse, METHOD_AGENT_CONTENT_DELTA,
-    METHOD_AGENT_CONTEXT_COMPACTED, METHOD_AGENT_ERROR, METHOD_AGENT_PROPOSAL_READY,
-    METHOD_AGENT_REASONING_DELTA,
-    METHOD_AGENT_SESSION_STARTED, METHOD_AGENT_SESSION_STOPPED, METHOD_AGENT_TOOL_COMPLETED,
-    METHOD_AGENT_TOOL_FAILED, METHOD_AGENT_TOOL_INVOKED, METHOD_AGENT_TURN_COMPLETED,
-    METHOD_INITIALIZE, METHOD_INITIALIZED, METHOD_PROVIDERS_LIST, METHOD_SESSION_CREATE,
-    METHOD_SESSION_GET, METHOD_SESSION_LIST, METHOD_TURN_CANCEL, METHOD_TURN_RUN, METHOD_TURN_STEER,
-    ContextCompactedParams, ProposalReadyParams, ProviderInfo, ProvidersListResult,
-    ReasoningDeltaParams,
-    ServerCapabilities, ServerInfo, SessionCreateParams, SessionCreateResult, SessionGetParams,
-    SessionInfo, SessionListResult, SessionStartedParams, SessionStoppedParams, ToolEventParams,
-    TurnCancelParams, TurnCancelResult, TurnCancelStatus, TurnCompletedParams,
-    TurnRunParams, TurnRunResult, TurnRunStatus,
+    AgentErrorParams, ClientInfo, ContentDeltaParams, ContextCompactedParams, InitializeRequest,
+    InitializeResponse, JsonRpcError, JsonRpcNotification, JsonRpcRequest, JsonRpcResponse,
+    METHOD_AGENT_CONTENT_DELTA, METHOD_AGENT_CONTEXT_COMPACTED, METHOD_AGENT_ERROR,
+    METHOD_AGENT_PROPOSAL_READY, METHOD_AGENT_REASONING_DELTA, METHOD_AGENT_SESSION_STARTED,
+    METHOD_AGENT_SESSION_STOPPED, METHOD_AGENT_TOOL_COMPLETED, METHOD_AGENT_TOOL_FAILED,
+    METHOD_AGENT_TOOL_INVOKED, METHOD_AGENT_TURN_COMPLETED, METHOD_INITIALIZE, METHOD_INITIALIZED,
+    METHOD_PROVIDERS_LIST, METHOD_SESSION_CREATE, METHOD_SESSION_GET, METHOD_SESSION_LIST,
+    METHOD_TURN_CANCEL, METHOD_TURN_RUN, METHOD_TURN_STEER, ProposalReadyParams, ProviderInfo,
+    ProvidersListResult, ReasoningDeltaParams, ServerCapabilities, ServerInfo, SessionCreateParams,
+    SessionCreateResult, SessionGetParams, SessionInfo, SessionListResult, SessionStartedParams,
+    SessionStoppedParams, ToolEventParams, TurnCancelParams, TurnCancelResult, TurnCancelStatus,
+    TurnCompletedParams, TurnRunParams, TurnRunResult, TurnRunStatus,
 };
 use crate::transport::StdioTransport;
 
@@ -243,7 +242,10 @@ impl AgentDaemon {
     /// Context configuration shared by new and resumed sessions: the
     /// persistence directory under the workspace base path.
     fn session_config(&self) -> ContextConfig {
-        ContextConfig::new(64_000, self.workspace.host().base_path().join("agent-sessions"))
+        ContextConfig::new(
+            64_000,
+            self.workspace.host().base_path().join("agent-sessions"),
+        )
     }
 
     /// Provider bound to resumed sessions. V1 does not persist the
@@ -763,7 +765,7 @@ fn turn_input_blocks(input: &Value) -> Result<Vec<ContentBlock>, JsonRpcError> {
         _ => {
             return Err(invalid_input(
                 "turn input must be a string, a `{text}` object, or a content-block array",
-            ))
+            ));
         }
     };
     validate_turn_blocks(&blocks)?;
@@ -788,9 +790,7 @@ fn validate_turn_blocks(blocks: &[ContentBlock]) -> Result<(), JsonRpcError> {
             if let Some(base64) = file.source().base64()
                 && base64.len() > MAX_INLINE_FILE_BASE64_CHARS
             {
-                return Err(invalid_input(
-                    "inline file base64 exceeds the 10MB limit",
-                ));
+                return Err(invalid_input("inline file base64 exceeds the 10MB limit"));
             }
         }
     }
@@ -882,7 +882,10 @@ mod tests {
 
     #[test]
     fn string_input_becomes_text_block() {
-        assert_eq!(parse(json!("hi")).unwrap(), vec![ContentBlock::Text("hi".into())]);
+        assert_eq!(
+            parse(json!("hi")).unwrap(),
+            vec![ContentBlock::Text("hi".into())]
+        );
     }
 
     #[test]
@@ -932,13 +935,14 @@ mod tests {
     fn empty_media_type_is_rejected() {
         let err = parse(json!([file_block("", "AAAA")])).unwrap_err();
         assert_eq!(err.code, -32602);
-        assert!(err
-            .data
-            .as_ref()
-            .and_then(|data| data.get("reason"))
-            .and_then(Value::as_str)
-            .unwrap_or_default()
-            .contains("media_type"));
+        assert!(
+            err.data
+                .as_ref()
+                .and_then(|data| data.get("reason"))
+                .and_then(Value::as_str)
+                .unwrap_or_default()
+                .contains("media_type")
+        );
     }
 
     #[test]
@@ -946,13 +950,14 @@ mod tests {
         let big = "A".repeat(MAX_INLINE_FILE_BASE64_CHARS + 1);
         let err = parse(json!([file_block("image/png", &big)])).unwrap_err();
         assert_eq!(err.code, -32602);
-        assert!(err
-            .data
-            .as_ref()
-            .and_then(|data| data.get("reason"))
-            .and_then(Value::as_str)
-            .unwrap_or_default()
-            .contains("10MB"));
+        assert!(
+            err.data
+                .as_ref()
+                .and_then(|data| data.get("reason"))
+                .and_then(Value::as_str)
+                .unwrap_or_default()
+                .contains("10MB")
+        );
     }
 
     #[test]
@@ -969,13 +974,14 @@ mod tests {
             .collect();
         let err = parse(Value::Array(blocks)).unwrap_err();
         assert_eq!(err.code, -32602);
-        assert!(err
-            .data
-            .as_ref()
-            .and_then(|data| data.get("reason"))
-            .and_then(Value::as_str)
-            .unwrap_or_default()
-            .contains("4 file blocks"));
+        assert!(
+            err.data
+                .as_ref()
+                .and_then(|data| data.get("reason"))
+                .and_then(Value::as_str)
+                .unwrap_or_default()
+                .contains("4 file blocks")
+        );
     }
 
     #[test]

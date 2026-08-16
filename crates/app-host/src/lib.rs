@@ -31,9 +31,7 @@ mod worker_management;
 mod workflow_service;
 mod workspace;
 
-pub use agent_provider::{
-    AgentProviderCatalog, build_provider, register_providers_from_document,
-};
+pub use agent_provider::{AgentProviderCatalog, build_provider, register_providers_from_document};
 pub use agent_service::{AgentService, AgentServiceTurnRequest};
 pub use app_host::AppHost;
 pub use artifact_access::{

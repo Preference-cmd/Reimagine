@@ -4,9 +4,7 @@ use std::sync::{Arc, RwLock};
 
 use reimagine_agent_harness::{AgentProvider, ProviderName};
 
-use crate::provider_config::{
-    AgentProviderConfigDocument, Protocol, ProviderConfig,
-};
+use crate::provider_config::{AgentProviderConfigDocument, Protocol, ProviderConfig};
 
 #[derive(Clone, Default)]
 pub struct AgentProviderCatalog {

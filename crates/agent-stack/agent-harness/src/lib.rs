@@ -44,9 +44,9 @@ pub use event::AgentEvent;
 #[doc(hidden)]
 pub use event_adapter::AgentDomainEventAdapter;
 pub use ids::{AgentSessionId, ModelName, ProviderName, ToolName, WorkspaceScope};
-pub use model_catalog::{LlmCatalogError, LlmModelCatalog, ProviderCatalogEntry};
 pub use r#loop::{AgentEventSink, AgentLoop, VecAgentEventSink};
 pub use mode::AgentMode;
+pub use model_catalog::{LlmCatalogError, LlmModelCatalog, ProviderCatalogEntry};
 pub use permissions::{PermissionSet, ToolPermission, ToolRiskLevel};
 pub use policy::{PolicyDecision, PolicyDenialReason, ToolPolicy};
 pub use provider::{

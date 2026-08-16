@@ -7062,6 +7062,7 @@ dependencies = [
  "reimagine-core",
  "serde",
  "serde_json",
+ "tempfile",
  "tokio",
 ]
 
