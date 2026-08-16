@@ -1,4 +1,3 @@
-mod agent_bridge;
 mod desktop_host;
 mod download_event_hub;
 mod event_hub;
@@ -6,7 +5,7 @@ mod event_hub;
 
 use desktop_host::{DesktopHostState, WorkerSwitchResultDto, default_workspace_path};
 use event_hub::RunEventPayload;
-use reimagine_agent_daemon::protocol::TurnRunResult;
+use reimagine_app_host::TurnRunResult;
 use reimagine_app_host::{
     AppHostError, AppHostErrorCode, BackendSelection, WorkerInstallationDto, WorkerSwitchError,
     dto::{

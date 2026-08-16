@@ -2,7 +2,7 @@ use std::path::{Path, PathBuf};
 use std::sync::{Arc, RwLock};
 
 use reimagine_agent_harness::{AgentEventSink, WorkspaceScope};
-use reimagine_agent_daemon::protocol::{TurnRunParams, TurnRunResult};
+use reimagine_app_host::{TurnRunResult, TurnRunParams};
 use reimagine_app_host::dto::{
     AgentEventPayload, AgentSessionInfo, ArtifactMetadataDto, ComputeProfileDto, HealthResponse,
     ModelInfoDto, NodeCatalogResponse, RunWorkflowResponse,
@@ -20,7 +20,6 @@ use reimagine_core::workflow::Workflow;
 use reimagine_runtime::BoxedRunEventSink;
 use serde::Serialize;
 use tauri::ipc::Channel;
-use tokio::sync::{Mutex as AsyncMutex, MutexGuard as AsyncMutexGuard};
 
 use crate::download_event_hub::TauriDownloadEventHub;
 use crate::event_hub::{RunEventPayload, TauriRunEventHub};
@@ -373,7 +372,7 @@ impl DesktopHostState {
         
         // Convert result to TurnRunResult
         Ok(TurnRunResult {
-            status: reimagine_agent_daemon::protocol::TurnRunStatus::Accepted,
+            status: reimagine_app_host::TurnRunStatus::Accepted,
             session_id: result.session_id().to_string(),
             turn_id: result.turn_id().to_string(),
         })
