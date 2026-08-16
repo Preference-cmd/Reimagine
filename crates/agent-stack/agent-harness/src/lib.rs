@@ -25,6 +25,7 @@ mod registry;
 mod session;
 mod tool;
 mod turn;
+mod validation;
 
 mod event_adapter;
 mod r#loop;
@@ -61,3 +62,4 @@ pub use turn::{
     AgentTurnId, AgentTurnRequest, AgentTurnResult, AgentTurnStatus, AgentTurnStopReason,
     DEFAULT_MAX_TOOL_STEPS, ToolCallResult, ToolCallStatus,
 };
+pub use validation::{MAX_TOOL_OUTPUT_SIZE, validate_tool_input, validate_tool_output_size};

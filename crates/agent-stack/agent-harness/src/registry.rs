@@ -13,6 +13,7 @@ use crate::error::{ToolError, ToolErrorCode};
 use crate::ids::ToolName;
 use crate::policy::{PolicyDecision, PolicyDenialReason, ToolPolicy};
 use crate::tool::{AgentTool, ToolInput, ToolSpec};
+use crate::validation::{validate_tool_input, validate_tool_output_size};
 
 /// Errors that the registry can return to its caller.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -199,9 +200,21 @@ impl AgentToolRegistry {
             }
         }
 
-        tool.invoke(ctx, input)
+        // Validate input against tool schema if provided
+        let spec = tool.spec();
+        if let Some(schema) = spec.input_schema() {
+            validate_tool_input(schema, &input, name).map_err(ToolRegistryError::ToolReturned)?;
+        }
+
+        let output = tool
+            .invoke(ctx, input)
             .await
-            .map_err(ToolRegistryError::ToolReturned)
+            .map_err(ToolRegistryError::ToolReturned)?;
+
+        // Validate output size
+        validate_tool_output_size(&output, name).map_err(ToolRegistryError::ToolReturned)?;
+
+        Ok(output)
     }
 
     /// Apply policy to a tool spec without invoking it. Useful for hosts

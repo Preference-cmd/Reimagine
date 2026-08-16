@@ -405,6 +405,7 @@ pub struct AgentTurnResult {
     messages: Vec<Message>,
 }
 
+#[allow(clippy::new_without_default)]
 impl AgentTurnResult {
     /// Start an empty builder seed. The status starts as `Running` and
     /// the stop reason as `FinalResponse` — the harness stamps the real
