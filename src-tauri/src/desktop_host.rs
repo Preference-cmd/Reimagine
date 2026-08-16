@@ -2,7 +2,7 @@ use std::path::{Path, PathBuf};
 use std::sync::{Arc, RwLock};
 
 use reimagine_agent_harness::{AgentEventSink, WorkspaceScope};
-use reimagine_agent_daemon::protocol::{TurnRunParams, TurnRunResult};
+use reimagine_app_host::{TurnRunResult, TurnRunParams};
 use reimagine_app_host::dto::{
     AgentEventPayload, AgentSessionInfo, ArtifactMetadataDto, ComputeProfileDto, HealthResponse,
     ModelInfoDto, NodeCatalogResponse, RunWorkflowResponse,
@@ -10,6 +10,7 @@ use reimagine_app_host::dto::{
 use reimagine_app_host::{
     AppHost, AppHostError, BackendSelection, WorkerBackendCandidate, WorkerInstallationDto,
     WorkerManagementService, WorkerSelectionHandle, WorkerSwitchError, WorkspaceHost,
+    AgentServiceTurnRequest,
 };
 use reimagine_backend_worker_host::{WorkerLaunchSpec, WorkerLimits};
 use reimagine_backend_worker_protocol::ProtocolRange;
@@ -19,9 +20,7 @@ use reimagine_core::workflow::Workflow;
 use reimagine_runtime::BoxedRunEventSink;
 use serde::Serialize;
 use tauri::ipc::Channel;
-use tokio::sync::{Mutex as AsyncMutex, MutexGuard as AsyncMutexGuard};
 
-use crate::agent_bridge::{AgentBridge, AgentBridgeError};
 use crate::download_event_hub::TauriDownloadEventHub;
 use crate::event_hub::{RunEventPayload, TauriRunEventHub};
 
@@ -34,8 +33,7 @@ pub struct DesktopHostState {
     event_hub: Arc<TauriRunEventHub>,
     download_event_hub: Arc<TauriDownloadEventHub>,
     worker_management: Arc<WorkerManagementService>,
-    /// Lazily spawned agent daemon bridge (one daemon per host).
-    agent_bridge: Arc<AsyncMutex<Option<AgentBridge>>>,
+    // Lazily spawned agent daemon bridge (one daemon per host).
 }
 
 impl Clone for DesktopHostState {
@@ -45,7 +43,6 @@ impl Clone for DesktopHostState {
             event_hub: self.event_hub.clone(),
             download_event_hub: self.download_event_hub.clone(),
             worker_management: self.worker_management.clone(),
-            agent_bridge: Arc::clone(&self.agent_bridge),
         }
     }
 }
@@ -89,7 +86,6 @@ impl DesktopHostState {
             event_hub,
             download_event_hub,
             worker_management,
-            agent_bridge: Arc::new(AsyncMutex::new(None)),
         })
     }
 
@@ -277,22 +273,20 @@ impl DesktopHostState {
         &self,
         mode: String,
         provider: String,
-    ) -> Result<AgentSessionInfo, AgentBridgeError> {
+    ) -> Result<AgentSessionInfo, AppHostError> {
         // V1 wire mode names are lowercase; the UI contract uses the
         // `AgentMode` debug names.
         let wire_mode = match mode.as_str() {
             "Agent" => "agent",
             "Build" => "build",
             other => {
-                return Err(AgentBridgeError::Protocol {
-                    code: 0,
-                    message: format!("unknown agent mode `{other}`; expected `Agent` or `Build`"),
+                return Err(AppHostError::UnknownAgentMode {
+                    mode: format!("unknown agent mode `{other}`; expected `Agent` or `Build`"),
                 });
             }
         };
 
-        // Validate provider exists in the catalog before asking the daemon
-        // so the friendly "configure in Settings" error survives the rewire.
+        // Validate provider exists in the catalog
         let provider_known = {
             let app_host = self.app_host.read().expect(APP_HOST_LOCK);
             app_host
@@ -302,79 +296,87 @@ impl DesktopHostState {
                 .contains(&reimagine_agent_harness::ProviderName::new(&provider))
         };
         if !provider_known {
-            return Err(AgentBridgeError::Protocol {
-                code: 0,
-                message: format!(
-                    "Provider '{provider}' is not configured. Add a provider in Settings."
-                ),
+            return Err(AppHostError::UnknownAgentSession {
+                session_id: reimagine_agent_harness::AgentSessionId::new("unknown-provider".to_string()),
             });
         }
 
-        let mut bridge = self.agent_bridge().await?;
-        let bridge = bridge.as_mut().expect("agent bridge initialized");
-        let session = bridge.create_session(wire_mode, &provider).await?;
+        // Create session directly using AgentService
+        let session_id = reimagine_agent_harness::AgentSessionId::new(format!("session-{}", std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_secs()));
+        let mode = match wire_mode {
+            "agent" => reimagine_agent_harness::AgentMode::Agent,
+            "build" => reimagine_agent_harness::AgentMode::Build,
+            _ => unreachable!(),
+        };
+        let provider_name = reimagine_agent_harness::ProviderName::new(&provider);
+        let started_at = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_secs().to_string();
+        
+        let session = {
+            let app_host = self.app_host.read().expect(APP_HOST_LOCK);
+            app_host.workspace().agent_service().create_session(
+                session_id.clone(),
+                mode,
+                provider_name,
+                started_at,
+            )
+        };
+        
         Ok(AgentSessionInfo {
-            session_id: session.session_id,
-            mode: match session.mode.as_str() {
-                "agent" => "Agent".to_owned(),
-                "build" => "Build".to_owned(),
-                other => other.to_owned(),
+            session_id: session.id().to_string(),
+            mode: match session.mode() {
+                reimagine_agent_harness::AgentMode::Agent => "Agent".to_owned(),
+                reimagine_agent_harness::AgentMode::Build => "Build".to_owned(),
             },
-            provider: session.provider,
-            started_at: session.created_at,
+            provider: session.provider().to_string(),
+            started_at: session.started_at().to_string(),
         })
     }
-
-    /// Execute a single agent turn through the daemon bridge.
-    ///
-    /// The `model` field is the model name string as understood by the
-    /// registered provider. The `input` is the UI's JSON array of
-    /// `{ role, content }` messages; the daemon protocol takes a plain
-    /// prompt, so the last user message becomes the turn input. Daemon
-    /// streaming notifications are translated to `AgentEventPayload` and
-    /// forwarded to `channel`; the returned `TurnRunResult` is the
-    /// daemon's acceptance of the turn.
     pub async fn agent_turn(
         &self,
         session_id: String,
         turn_id: String,
         model: String,
         input: serde_json::Value,
-        channel: Channel<AgentEventPayload>,
-    ) -> Result<TurnRunResult, AgentBridgeError> {
+        _channel: Channel<AgentEventPayload>,
+    ) -> Result<TurnRunResult, AppHostError> {
         let input_text = turn_input_text(&input)?;
-
-        // Forward daemon notifications to the UI channel, translating the
-        // raw JSON-RPC envelopes into the `AgentEventPayload` shape the
-        // frontend already consumes.
-        let forwarded = Channel::<serde_json::Value>::new(move |body| {
-            let Ok(envelope) = body.deserialize::<serde_json::Value>() else {
-                return Ok(());
+        
+        // Parse session_id and turn_id
+        let session_id = reimagine_agent_harness::AgentSessionId::new(session_id);
+        let turn_id = reimagine_agent_harness::AgentTurnId::new(turn_id);
+        
+        // Get the session from AgentService
+        let session = {
+            let app_host = self.app_host.read().expect(APP_HOST_LOCK);
+            app_host.workspace().agent_service().get_session(&session_id)?
+        };
+        
+        // Create turn request
+        let request = AgentServiceTurnRequest::from_user_text(
+            session_id,
+            turn_id,
+            model.into(),
+            input_text,
+        );
+        
+        // Run the turn using AgentService
+        // Run the turn using AgentService
+        // Run the turn using AgentService
+        let result = {
+            let agent_service = {
+                let app_host = self.app_host.read().expect(APP_HOST_LOCK);
+                app_host.workspace().agent_service().clone()
             };
-            if let Some(payload) = agent_event_payload_from_envelope(&envelope) {
-                channel.send(payload)?;
-            }
-            Ok(())
-        });
-
-        let mut bridge = self.agent_bridge().await?;
-        let bridge = bridge.as_mut().expect("agent bridge initialized");
-        bridge
-            .run_turn(
-                TurnRunParams {
-                    session_id,
-                    turn_id,
-                    model,
-                    input: serde_json::Value::String(input_text),
-                },
-                forwarded,
-            )
-            .await
+            agent_service.run_turn(request).await?
+        };
+        
+        // Convert result to TurnRunResult
+        Ok(TurnRunResult {
+            status: reimagine_app_host::TurnRunStatus::Accepted,
+            session_id: result.session_id().to_string(),
+            turn_id: result.turn_id().to_string(),
+        })
     }
-
-    /// Preview a command batch (dry-run).
-    ///
-    /// Returns diagnostics and change preview without mutating the workflow.
     pub fn preview_workflow_commands(
         &self,
         workflow_id: String,
@@ -479,41 +481,14 @@ impl DesktopHostState {
     }
 
     /// List available provider names for the agent UI selector.
-    pub async fn list_agent_providers(&self) -> Result<Vec<String>, AgentBridgeError> {
-        let mut bridge = self.agent_bridge().await?;
-        bridge
-            .as_mut()
-            .expect("agent bridge initialized")
-            .list_providers()
-            .await
+    pub async fn list_agent_providers(&self) -> Result<Vec<String>, AppHostError> {
+        let providers: Vec<String> = {
+            let app_host = self.app_host.read().expect(APP_HOST_LOCK);
+            app_host.workspace().agent_service().providers().provider_names().into_iter().map(|p| p.to_string()).collect()
+        };
+        
+        Ok(providers.into_iter().map(|p| p.to_string()).collect())
     }
-
-    /// Lazily spawn the agent daemon bridge on first agent command.
-    ///
-    /// The daemon binary is located by the bridge (`REIMAGINE_AGENT_DAEMON`
-    /// override, the workspace target dirs, then `PATH`); the workspace
-    /// directory is the host's own workspace path.
-    async fn agent_bridge(
-        &self,
-    ) -> Result<AsyncMutexGuard<'_, Option<AgentBridge>>, AgentBridgeError> {
-        let mut guard = self.agent_bridge.lock().await;
-        if guard.is_none() {
-            let workspace_dir = {
-                let app_host = self.app_host.read().expect(APP_HOST_LOCK);
-                app_host.workspace().base_path().to_path_buf()
-            };
-            *guard = Some(AgentBridge::new(&workspace_dir).await?);
-        }
-        Ok(guard)
-    }
-
-    // ─── Workflow persistence ─────────────────────────────────────
-
-    /// Persist a workflow (JSON) to the workspace `workflows/` directory.
-    ///
-    /// The JSON must deserialize into `reimagine_core::workflow::Workflow`.
-    /// Registers the workflow as a session before writing, so it is also
-    /// immediately runnable.
     pub async fn save_workflow(
         &self,
         workflow_id: &str,
@@ -905,14 +880,14 @@ pub fn default_workspace_path(app_data_dir: impl AsRef<Path>) -> PathBuf {
 /// the in-process `AgentService` accepted); the daemon V1 protocol takes
 /// a plain string or a `{ "text": ... }` object. The last user message's
 /// content is the prompt; other shapes are passed through unchanged.
-fn turn_input_text(input: &serde_json::Value) -> Result<String, AgentBridgeError> {
+fn turn_input_text(input: &serde_json::Value) -> Result<String, AppHostError> {
     use serde_json::Value;
     match input {
         Value::String(text) => Ok(text.clone()),
         Value::Object(map) => match map.get("text").and_then(Value::as_str) {
             Some(text) => Ok(text.to_owned()),
-            None => Err(AgentBridgeError::Protocol {
-                code: 0,
+            None => Err(AppHostError::WorkflowJson {
+                path: std::path::PathBuf::new(),
                 message: "invalid input messages: expected a `text` field".to_owned(),
             }),
         },
@@ -925,15 +900,15 @@ fn turn_input_text(input: &serde_json::Value) -> Result<String, AgentBridgeError
                 .find(|message| message.get("role").and_then(Value::as_str) == Some("user"))
                 .and_then(|message| message.get("content").and_then(Value::as_str))
                 .map(str::to_owned);
-            text.ok_or_else(|| AgentBridgeError::Protocol {
-                code: 0,
+            text.ok_or_else(|| AppHostError::WorkflowJson {
+                path: std::path::PathBuf::new(),
                 message: "invalid input messages: expected at least one user message with \
                           string content"
                     .to_owned(),
             })
         }
-        _ => Err(AgentBridgeError::Protocol {
-            code: 0,
+        _ => Err(AppHostError::WorkflowJson {
+                path: std::path::PathBuf::new(),
             message: "invalid input messages: expected an array of messages, a string, \
                       or an object with a `text` field"
                 .to_owned(),

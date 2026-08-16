@@ -7,10 +7,6 @@ use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 use async_trait::async_trait;
-use reimagine_agent_harness::{
-    AgentProvider, AgentRequest, AgentResponse, AgentSessionId, AgentStream, AgentStreamEvent,
-    Message, ModelInfo, ProviderError, ProviderName, ToolCall, ToolCallId,
-};
 use reimagine_agent_daemon::{
     protocol::{
         METHOD_AGENT_CONTENT_DELTA, METHOD_AGENT_TOOL_COMPLETED, METHOD_AGENT_TOOL_FAILED,
@@ -20,6 +16,10 @@ use reimagine_agent_daemon::{
     },
     server::{AgentDaemon, SharedWriter},
     transport::StdioTransport,
+};
+use reimagine_agent_harness::{
+    AgentProvider, AgentRequest, AgentResponse, AgentSessionId, AgentStream, AgentStreamEvent,
+    Message, ModelInfo, ProviderError, ProviderName, ToolCall, ToolCallId,
 };
 use serde_json::{Value, json};
 

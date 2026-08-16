@@ -1,13 +1,11 @@
-mod agent_bridge;
 mod desktop_host;
 mod download_event_hub;
 mod event_hub;
 
-pub use agent_bridge::{AgentBridge, AgentBridgeError};
 
 use desktop_host::{DesktopHostState, WorkerSwitchResultDto, default_workspace_path};
 use event_hub::RunEventPayload;
-use reimagine_agent_daemon::protocol::TurnRunResult;
+use reimagine_app_host::TurnRunResult;
 use reimagine_app_host::{
     AppHostError, AppHostErrorCode, BackendSelection, WorkerInstallationDto, WorkerSwitchError,
     dto::{
@@ -76,11 +74,11 @@ fn app_host_command_error(error: AppHostError) -> TauriCommandError {
     }
 }
 
-fn agent_bridge_command_error(error: AgentBridgeError) -> TauriCommandError {
+fn agent_bridge_command_error(error: AppHostError) -> TauriCommandError {
     // Protocol errors carry a clean client-facing message; everything else
     // falls back to the display text.
     match error {
-        AgentBridgeError::Protocol { message, .. } => TauriCommandError::command(message),
+        AppHostError::WorkflowJson { message, .. } => TauriCommandError::command(message),
         other => TauriCommandError::command(other.to_string()),
     }
 }
