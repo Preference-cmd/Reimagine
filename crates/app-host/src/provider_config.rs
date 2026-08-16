@@ -175,23 +175,21 @@ impl reimagine_config::ConfigDocument for AgentProviderConfigDocument {
                 Protocol::OpenAiResponses => provider.openai_responses().is_some(),
             };
             if !has_inner {
-                diagnostics.push(
-                    Diagnostic::new(
-                        DiagnosticId::new(format!(
-                            "config:agent_providers:{}:missing_config",
-                            provider.name()
-                        )),
-                        DiagnosticCode::new("CONFIG/AGENT_PROVIDER_MISSING_CONFIG"),
-                        DiagnosticSeverity::Error,
-                        DiagnosticSourceName::new("config"),
-                        format!(
-                            "provider `{}` missing config for protocol `{expected}`",
-                            provider.name()
-                        ),
-                        DiagnosticTarget::new(DiagnosticTargetDomain::new("config"))
-                            .with_id("agent-providers.json"),
+                diagnostics.push(Diagnostic::new(
+                    DiagnosticId::new(format!(
+                        "config:agent_providers:{}:missing_config",
+                        provider.name()
+                    )),
+                    DiagnosticCode::new("CONFIG/AGENT_PROVIDER_MISSING_CONFIG"),
+                    DiagnosticSeverity::Error,
+                    DiagnosticSourceName::new("config"),
+                    format!(
+                        "provider `{}` missing config for protocol `{expected}`",
+                        provider.name()
                     ),
-                );
+                    DiagnosticTarget::new(DiagnosticTargetDomain::new("config"))
+                        .with_id("agent-providers.json"),
+                ));
             }
         }
         diagnostics

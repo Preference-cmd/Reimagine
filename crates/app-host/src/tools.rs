@@ -120,7 +120,7 @@ pub fn register_app_tools(registry: &mut AgentToolRegistry, services: Arc<Worksp
             "Download a HuggingFace model into the workspace models directory.",
             &[AgentMode::Agent, AgentMode::Build],
             "model.write",
-            ToolRiskLevel::Editor,
+            ToolRiskLevel::External,
         ),
         model_download,
     );

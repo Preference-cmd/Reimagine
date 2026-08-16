@@ -2739,9 +2739,7 @@ mod tests {
         let provider = Arc::new(StreamingProvider::new(
             "mock",
             vec![vec![
-                AgentStreamEvent::Warning(
-                    "stream ended with incomplete tool call(s)".into(),
-                ),
+                AgentStreamEvent::Warning("stream ended with incomplete tool call(s)".into()),
                 AgentStreamEvent::ContentDelta("final".into()),
                 AgentStreamEvent::Done {
                     stop_reason: Some("stop".into()),
@@ -2771,10 +2769,12 @@ mod tests {
                 .all(|d| !d.code().as_str().ends_with("STREAM")),
             "the Warning must not surface a provider error diagnostic"
         );
-        assert!(!sink.events().iter().any(|e| matches!(
-            e,
-            AgentEvent::ProviderError { .. }
-        )));
+        assert!(
+            !sink
+                .events()
+                .iter()
+                .any(|e| matches!(e, AgentEvent::ProviderError { .. }))
+        );
         // The deltas after the warning still reach the sink.
         let events = sink.events();
         let deltas: Vec<&str> = events
@@ -3194,8 +3194,8 @@ mod tests {
         // persist/load round trip after a turn: the loaded manager
         // serves the same windowed history as the live one.
         context.persist("sess-ctx").expect("persist failed");
-        let mut loaded = ContextManager::load("sess-ctx", ContextConfig::new(10_000, dir))
-            .expect("load failed");
+        let mut loaded =
+            ContextManager::load("sess-ctx", ContextConfig::new(10_000, dir)).expect("load failed");
         assert_eq!(loaded.token_count(), context.token_count());
         let prepared = loaded.prepare_messages("", &[Message::user("u6")]);
         let contents: Vec<String> = prepared.iter().map(|m| m.content().to_string()).collect();
@@ -3313,7 +3313,9 @@ mod tests {
         async fn complete(&self, request: AgentRequest) -> Result<AgentResponse, ProviderError> {
             if SummarizingProvider::is_summarize_request(&request) {
                 *self.summarize_calls.lock().unwrap() += 1;
-                return Ok(response_with_text(&self.summary_text.lock().unwrap().clone()));
+                return Ok(response_with_text(
+                    &self.summary_text.lock().unwrap().clone(),
+                ));
             }
             Ok(response_with_text("done"))
         }
@@ -3696,7 +3698,9 @@ mod tests {
                 ModelName::new("test-model"),
                 big_turn_input(i),
             );
-            let result = loop_harness.run_turn_streaming(req, Some(&mut context)).await;
+            let result = loop_harness
+                .run_turn_streaming(req, Some(&mut context))
+                .await;
             assert_eq!(result.status(), AgentTurnStatus::Completed);
         }
         assert!(context.needs_compaction());
@@ -3708,7 +3712,9 @@ mod tests {
             ModelName::new("test-model"),
             big_turn_input(3),
         );
-        let result = loop_harness.run_turn_streaming(req, Some(&mut context)).await;
+        let result = loop_harness
+            .run_turn_streaming(req, Some(&mut context))
+            .await;
         assert_eq!(result.status(), AgentTurnStatus::Completed);
         assert_eq!(result.stop_reason(), AgentTurnStopReason::FinalResponse);
         assert_eq!(result.final_response().unwrap().content(), "final");
@@ -3718,7 +3724,9 @@ mod tests {
         assert_eq!(*provider.summarize_calls.lock().unwrap(), 1);
         assert_eq!(context.sticky_count(), 1);
         assert_eq!(
-            context.compaction_summary().map(|record| record.text.as_str()),
+            context
+                .compaction_summary()
+                .map(|record| record.text.as_str()),
             Some("summary-text")
         );
 

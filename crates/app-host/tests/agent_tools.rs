@@ -434,7 +434,11 @@ async fn workflow_get_returns_snapshot() {
     let ctx = agent_ctx(host.workspace_scope().clone(), AgentMode::Agent);
     let registry = Arc::clone(host.agent_service().registry());
     let output = registry
-        .invoke(&reimagine_agent_harness::ToolName::new("workflow.get"), &ctx, input)
+        .invoke(
+            &reimagine_agent_harness::ToolName::new("workflow.get"),
+            &ctx,
+            input,
+        )
         .await
         .expect("get should succeed");
 
@@ -715,4 +719,92 @@ fn workflow_command_policy_allows_only_agent_actor_kind() {
     assert!(!policy.allowed_actor_kind(CommandActorKind::Human));
     assert!(!policy.allowed_actor_kind(CommandActorKind::System));
     assert!(!policy.allowed_actor_kind(CommandActorKind::Importer));
+}
+
+#[tokio::test]
+async fn model_download_rejected_in_agent_mode() {
+    let host = build_host("ws-model-download-agent");
+    let registry = Arc::clone(host.agent_service().registry());
+
+    let ctx = agent_ctx(host.workspace_scope().clone(), AgentMode::Agent);
+    let input = serde_json::json!({
+        "model_ref": "test-model",
+    });
+
+    let result = registry
+        .invoke(
+            &reimagine_agent_harness::ToolName::new("model.download"),
+            &ctx,
+            input,
+        )
+        .await;
+
+    let err = result.expect_err("model.download should be rejected in Agent mode");
+    let msg = format!("{err}");
+    assert!(
+        msg.contains("APPROVAL_REQUIRED"),
+        "expected approval required error, got: {msg}"
+    );
+}
+
+#[tokio::test]
+async fn model_download_rejected_in_build_mode() {
+    let host = build_host("ws-model-download-build");
+    let registry = Arc::clone(host.agent_service().registry());
+
+    let ctx = agent_ctx(host.workspace_scope().clone(), AgentMode::Build);
+    let input = serde_json::json!({
+        "model_ref": "test-model",
+    });
+
+    let result = registry
+        .invoke(
+            &reimagine_agent_harness::ToolName::new("model.download"),
+            &ctx,
+            input,
+        )
+        .await;
+
+    let err = result.expect_err("model.download should be rejected in Build mode");
+    let msg = format!("{err}");
+    assert!(
+        msg.contains("APPROVAL_REQUIRED"),
+        "expected approval required error, got: {msg}"
+    );
+}
+
+#[tokio::test]
+async fn model_download_rejected_even_with_model_write_permission() {
+    let host = build_host("ws-model-download-permission");
+    let registry = Arc::clone(host.agent_service().registry());
+
+    // Create context with model.write permission
+    let ctx = ToolContext::new(
+        host.workspace_scope().clone(),
+        AgentSessionId::new("sess-1"),
+        AgentMode::Agent,
+    )
+    .with_permissions(PermissionSet::from_iter([ToolPermission::new(
+        "model.write",
+    )]));
+
+    let input = serde_json::json!({
+        "model_ref": "test-model",
+    });
+
+    let result = registry
+        .invoke(
+            &reimagine_agent_harness::ToolName::new("model.download"),
+            &ctx,
+            input,
+        )
+        .await;
+
+    let err =
+        result.expect_err("model.download should be rejected even with model.write permission");
+    let msg = format!("{err}");
+    assert!(
+        msg.contains("APPROVAL_REQUIRED"),
+        "expected approval required error, got: {msg}"
+    );
 }
