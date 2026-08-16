@@ -331,12 +331,7 @@ impl WindowPlan {
         if self.keep_start > self.sticky_end {
             ranges.push((self.sticky_end, self.keep_start));
         }
-        ranges.extend(
-            self.cuts
-                .iter()
-                .copied()
-                .filter(|(start, end)| end > start),
-        );
+        ranges.extend(self.cuts.iter().copied().filter(|(start, end)| end > start));
         ranges.sort_unstable();
         ranges
     }
@@ -509,9 +504,8 @@ impl ContextManager {
     /// Register a failed summarization attempt. The caller falls back
     /// to plain eviction (drop-oldest) and the turn still completes.
     pub fn record_compaction_failure(&mut self) {
-        self.consecutive_compaction_failures = self
-            .consecutive_compaction_failures
-            .saturating_add(1);
+        self.consecutive_compaction_failures =
+            self.consecutive_compaction_failures.saturating_add(1);
     }
 
     /// Mark a summarization failure as transient and recoverable
@@ -523,9 +517,7 @@ impl ContextManager {
     /// after [`MAX_TRANSIENT_COMPACTION_FAILURES`] (bounded retry). A
     /// successful compaction resets both counters.
     pub fn record_transient_compaction_failure(&mut self) {
-        self.transient_compaction_failures = self
-            .transient_compaction_failures
-            .saturating_add(1);
+        self.transient_compaction_failures = self.transient_compaction_failures.saturating_add(1);
     }
 
     /// Build the summarizer input for the messages the window is about
@@ -559,10 +551,7 @@ impl ContextManager {
 
         let refs = self.collect_image_refs(&ranges);
         if !refs.is_empty() {
-            sections.push(format!(
-                "{IMAGE_REFS_PROMPT}\n{}",
-                refs.join("\n")
-            ));
+            sections.push(format!("{IMAGE_REFS_PROMPT}\n{}", refs.join("\n")));
         }
 
         let mut evicted = String::new();
@@ -735,7 +724,9 @@ impl ContextManager {
     /// Estimated tokens of the history message at `index`. Returns
     /// `None` when `index` is outside the stored history.
     pub fn message_tokens(&self, index: usize) -> Option<usize> {
-        self.history.get(index).map(|m| self.estimator.estimate_message(m))
+        self.history
+            .get(index)
+            .map(|m| self.estimator.estimate_message(m))
     }
 
     /// Budget decomposition of the next provider call: `system`,
@@ -763,7 +754,11 @@ impl ContextManager {
     /// (`max_tokens - reserved_tokens`); the turn should compact
     /// before sending.
     pub fn needs_compaction(&self) -> bool {
-        self.token_count() > self.config.max_tokens.saturating_sub(self.config.reserved_tokens)
+        self.token_count()
+            > self
+                .config
+                .max_tokens
+                .saturating_sub(self.config.reserved_tokens)
     }
 
     /// `true` when the stored history exceeds `max_tokens`; the turn
@@ -792,7 +787,10 @@ impl ContextManager {
         // then rename over the target. A reader (or a crash) never
         // observes a partially written session file, and the rename is
         // atomic on the same filesystem.
-        let tmp_path = self.config.session_dir.join(format!("{session_id}.json.tmp"));
+        let tmp_path = self
+            .config
+            .session_dir
+            .join(format!("{session_id}.json.tmp"));
         std::fs::write(&tmp_path, json).map_err(ContextError::Io)?;
         std::fs::rename(&tmp_path, &path).map_err(|err| {
             // Best-effort cleanup so a failed rename does not leave the
@@ -936,7 +934,8 @@ impl ContextManager {
             .map(|span| self.span_tokens(sticky_end, span))
             .sum();
         while tail_start + 1 < turns.len() && tail_tokens > tail_budget {
-            tail_tokens = tail_tokens.saturating_sub(self.span_tokens(sticky_end, &turns[tail_start]));
+            tail_tokens =
+                tail_tokens.saturating_sub(self.span_tokens(sticky_end, &turns[tail_start]));
             tail_start += 1;
         }
 
@@ -998,15 +997,16 @@ impl ContextManager {
             // (CM-V2e).
             if let Some(off) = first_assistant_offset(&self.history[sticky_end..], newest_span) {
                 tail_cut = Some((abs_start + off, abs_start + newest_span.1));
-                let removed = self.span_tokens(sticky_end, &(newest_span.0 + off, newest_span.1 - off));
+                let removed =
+                    self.span_tokens(sticky_end, &(newest_span.0 + off, newest_span.1 - off));
                 tail_tokens = tail_tokens.saturating_sub(removed);
             }
         }
 
         // Middle window: newest-to-oldest turns between the sticky
         // prefix and the tail, filling the remaining budget.
-        let mut middle_budget = window_budget
-            .saturating_sub(sticky_tokens.saturating_add(tail_tokens));
+        let mut middle_budget =
+            window_budget.saturating_sub(sticky_tokens.saturating_add(tail_tokens));
         let mut keep_from = tail_start;
         while keep_from > 0 {
             let span = turns[keep_from - 1];
@@ -1037,7 +1037,9 @@ impl ContextManager {
         }
 
         let keep_abs_start = if keep_from >= turns.len() {
-            self.history.len().min(sticky_end + turns.last().map(|s| s.0 + s.1).unwrap_or(0))
+            self.history
+                .len()
+                .min(sticky_end + turns.last().map(|s| s.0 + s.1).unwrap_or(0))
         } else {
             sticky_end + turns[keep_from].0
         };
@@ -1071,9 +1073,7 @@ impl ContextManager {
     fn prune_old_tool_outputs(&mut self) {
         let sticky_end = self.sticky_count.min(self.history.len());
         let turns = turn_spans(&self.history[sticky_end..]);
-        let tail_start = turns
-            .len()
-            .saturating_sub(self.config.tail_turns.max(1));
+        let tail_start = turns.len().saturating_sub(self.config.tail_turns.max(1));
 
         // Only the tool outputs outside the verbatim tail count toward
         // the threshold: the tail is never pruned.
@@ -1109,9 +1109,7 @@ impl ContextManager {
                 if self.history[absolute].role() != "tool" {
                     continue;
                 }
-                let tokens = self
-                    .estimator
-                    .estimate_message(&self.history[absolute]);
+                let tokens = self.estimator.estimate_message(&self.history[absolute]);
                 // Progress guard (AC-25): a placeholder that costs more
                 // than the output it replaces would grow `remaining`
                 // and prune the whole non-tail region without ever
@@ -1169,8 +1167,7 @@ fn turn_spans(messages: &[Message]) -> Vec<(usize, usize)> {
 /// any — the cut point for a turn that alone exceeds the window
 /// budget.
 fn first_assistant_offset(messages: &[Message], span: (usize, usize)) -> Option<usize> {
-    (0..span.1)
-        .find(|offset| messages[span.0 + offset].role() == "assistant")
+    (0..span.1).find(|offset| messages[span.0 + offset].role() == "assistant")
 }
 
 /// Verbatim tail budget: `25%` of the available window, clamped to
@@ -1394,10 +1391,8 @@ mod tests {
 
     #[test]
     fn is_over_hard_limit_flips_at_max_tokens() {
-        let mut manager = ContextManager::new(ContextConfig::new(
-            20,
-            PathBuf::from("/tmp/reimagine-test"),
-        ));
+        let mut manager =
+            ContextManager::new(ContextConfig::new(20, PathBuf::from("/tmp/reimagine-test")));
         manager.commit_turn(&[Message::user("a"), Message::assistant("b")]);
         // 8 <= 20; soft line (20 - 16k -> 0) already fired, hard has not.
         assert!(manager.needs_compaction());
@@ -1531,13 +1526,14 @@ mod tests {
         manager.commit_turn(&[Message::user("a"), Message::assistant("b")]);
         assert_eq!(manager.token_count(), 14);
         assert_eq!(manager.message_tokens(0), Some(7));
-        assert_eq!(
-            manager.budget_snapshot(7, 7).history_tokens,
-            14
-        );
+        assert_eq!(manager.budget_snapshot(7, 7).history_tokens, 14);
     }
 
-    fn window_config(max_tokens: usize, reserved_tokens: usize, tail_turns: usize) -> ContextConfig {
+    fn window_config(
+        max_tokens: usize,
+        reserved_tokens: usize,
+        tail_turns: usize,
+    ) -> ContextConfig {
         ContextConfig {
             tail_turns,
             ..ContextConfig::new(max_tokens, PathBuf::from("/tmp/reimagine-test"))
@@ -1629,8 +1625,7 @@ mod tests {
             if message.role() == "tool" {
                 let id = message.tool_call_id().expect("tool id");
                 let matched = history.iter().any(|m| {
-                    m.role() == "assistant"
-                        && m.tool_calls().iter().any(|call| call.id() == id)
+                    m.role() == "assistant" && m.tool_calls().iter().any(|call| call.id() == id)
                 });
                 assert!(matched, "orphan tool result {id}");
             }
@@ -1660,7 +1655,10 @@ mod tests {
         // Window budget 500: only sticky + tail fit.
         let mut manager = ContextManager::new(window_config(10_000, 9_500, 2));
         manager.sticky_count = 2;
-        manager.commit_turn(&[Message::user("pinned-goal"), Message::assistant("pinned-plan")]);
+        manager.commit_turn(&[
+            Message::user("pinned-goal"),
+            Message::assistant("pinned-plan"),
+        ]);
         for i in 0..10 {
             manager.commit_turn(&turn(i, 100));
         }
@@ -1690,7 +1688,10 @@ mod tests {
         let history = manager.history.clone();
         // The last 2 turns keep their raw outputs; older ones are
         // placeholders with their tool_call_id preserved.
-        let last_turn: Vec<&Message> = history.iter().filter(|m| m.content().starts_with("a4")).collect();
+        let last_turn: Vec<&Message> = history
+            .iter()
+            .filter(|m| m.content().starts_with("a4"))
+            .collect();
         assert!(!last_turn.is_empty());
         let pruned: Vec<&Message> = history
             .iter()
@@ -1698,11 +1699,13 @@ mod tests {
             .collect();
         assert!(!pruned.is_empty(), "no tool outputs were pruned");
         assert!(pruned.iter().all(|m| m.tool_call_id().is_some()));
-        assert!(history
-            .iter()
-            .filter(|m| m.role() == "tool" && m.content().starts_with("xxxxx"))
-            .count()
-            >= 2);
+        assert!(
+            history
+                .iter()
+                .filter(|m| m.role() == "tool" && m.content().starts_with("xxxxx"))
+                .count()
+                >= 2
+        );
     }
 
     #[test]
@@ -1717,7 +1720,9 @@ mod tests {
         assert_eq!(stored.role(), "tool");
         assert!(stored.content().ends_with(TOOL_OUTPUT_TRUNCATED_SUFFIX));
         assert_eq!(stored.tool_call_id().map(|id| id.as_str()), Some("c1"));
-        assert!(stored.content().chars().count() <= 40 + TOOL_OUTPUT_TRUNCATED_SUFFIX.chars().count());
+        assert!(
+            stored.content().chars().count() <= 40 + TOOL_OUTPUT_TRUNCATED_SUFFIX.chars().count()
+        );
     }
 
     #[test]
@@ -1725,7 +1730,10 @@ mod tests {
         // A single turn larger than the whole window budget (~8k): its
         // assistant half is cut, the user message survives.
         let mut manager = ContextManager::new(window_config(10_000, 2_000, 2));
-        manager.commit_turn(&[Message::user("huge:".to_owned() + &"a".repeat(16_000)), Message::assistant("b".repeat(16_000))]);
+        manager.commit_turn(&[
+            Message::user("huge:".to_owned() + &"a".repeat(16_000)),
+            Message::assistant("b".repeat(16_000)),
+        ]);
         manager.commit_turn(&turn(1, 100));
         manager.commit_turn(&turn(2, 100));
 
@@ -1743,7 +1751,10 @@ mod tests {
         // blowing the hard limit.
         let mut manager = ContextManager::new(window_config(8_000, 2_000, 2));
         manager.commit_turn(&turn(0, 100));
-        manager.commit_turn(&[Message::user("newest:".to_owned() + &"a".repeat(16_000)), Message::assistant("b".repeat(16_000))]);
+        manager.commit_turn(&[
+            Message::user("newest:".to_owned() + &"a".repeat(16_000)),
+            Message::assistant("b".repeat(16_000)),
+        ]);
 
         let messages = manager.prepare_messages("sys", &[]);
         let history: Vec<Message> = messages[1..].to_vec();
@@ -1892,7 +1903,11 @@ mod tests {
         let mut unique = ids.to_vec();
         unique.sort_unstable();
         unique.dedup();
-        assert_eq!(unique.len(), ids.len(), "pruned ids must be unique: {ids:?}");
+        assert_eq!(
+            unique.len(),
+            ids.len(),
+            "pruned ids must be unique: {ids:?}"
+        );
     }
 
     #[test]
@@ -1929,7 +1944,10 @@ mod tests {
             ids.iter().all(|id| id.starts_with("truncated-")),
             "fabricated ids must be namespaced: {ids:?}"
         );
-        assert_ne!(ids[0], ids[1], "fabricated truncated ids must be unique: {ids:?}");
+        assert_ne!(
+            ids[0], ids[1],
+            "fabricated truncated ids must be unique: {ids:?}"
+        );
     }
 
     #[test]
@@ -1938,12 +1956,19 @@ mod tests {
         // kept verbatim: tail protection wins over the soft window.
         let mut manager = ContextManager::new(window_config(10_000, 9_900, 2));
         manager.commit_turn(&turn(0, 100));
-        manager.commit_turn(&[Message::user("big:".to_owned() + &"a".repeat(900)), Message::assistant("b".repeat(900))]);
+        manager.commit_turn(&[
+            Message::user("big:".to_owned() + &"a".repeat(900)),
+            Message::assistant("b".repeat(900)),
+        ]);
 
         let messages = manager.prepare_messages("sys", &[]);
         let history: Vec<Message> = messages[1..].to_vec();
         assert!(history.iter().any(|m| m.content().starts_with("big:")));
-        assert!(history.iter().any(|m| m.content().starts_with("b".repeat(900).as_str())));
+        assert!(
+            history
+                .iter()
+                .any(|m| m.content().starts_with("b".repeat(900).as_str()))
+        );
     }
 
     #[test]
@@ -1971,9 +1996,11 @@ mod tests {
         manager.prepare_messages("sys", &[]);
         let history = manager.history.clone();
         // The tail tool output keeps its raw content (not pruned).
-        assert!(history
-            .iter()
-            .any(|m| m.role() == "tool" && m.content().chars().count() > 1_000));
+        assert!(
+            history
+                .iter()
+                .any(|m| m.role() == "tool" && m.content().chars().count() > 1_000)
+        );
     }
 
     #[test]
@@ -2108,11 +2135,8 @@ mod tests {
         ]);
         manager.persist("sess-1").expect("persist failed");
 
-        let loaded = ContextManager::load(
-            "sess-1",
-            ContextConfig::new(10_000, dir),
-        )
-        .expect("load failed");
+        let loaded =
+            ContextManager::load("sess-1", ContextConfig::new(10_000, dir)).expect("load failed");
         assert_eq!(loaded.token_count(), manager.token_count());
         assert_eq!(loaded.history, manager.history);
     }
@@ -2128,11 +2152,8 @@ mod tests {
         ])]);
         manager.persist("sess-1").expect("persist failed");
 
-        let loaded = ContextManager::load(
-            "sess-1",
-            ContextConfig::new(10_000, dir),
-        )
-        .expect("load failed");
+        let loaded =
+            ContextManager::load("sess-1", ContextConfig::new(10_000, dir)).expect("load failed");
         assert_eq!(loaded.history, manager.history);
         assert_eq!(loaded.token_count(), manager.token_count());
     }
@@ -2149,10 +2170,7 @@ mod tests {
             r#"{"session_id":"sess-1","created_at":"0","history":[{"role":"user","content":"hi"}],"compaction_summary":null,"total_tokens":4}"#,
         )
         .expect("write failed");
-        let result = ContextManager::load(
-            "sess-1",
-            ContextConfig::new(10_000, dir),
-        );
+        let result = ContextManager::load("sess-1", ContextConfig::new(10_000, dir));
         assert!(result.is_err());
     }
 
@@ -2166,11 +2184,8 @@ mod tests {
             dir.join("sess-1.json"),
             r#"{"session_id":"sess-1","created_at":"0","history":[{"role":"user","content":[{"type":"text","text":"hi"}],"tool_call_id":null,"tool_calls":[]},{"role":"assistant","content":[{"type":"text","text":"yo"}],"tool_call_id":null,"tool_calls":[]}],"compaction_summary":null,"total_tokens":8}"#,        )
         .expect("write failed");
-        let loaded = ContextManager::load(
-            "sess-1",
-            ContextConfig::new(10_000, dir),
-        )
-        .expect("v1 load failed");
+        let loaded = ContextManager::load("sess-1", ContextConfig::new(10_000, dir))
+            .expect("v1 load failed");
         assert_eq!(loaded.token_count(), 8);
         assert!(loaded.compaction_summary().is_none());
         assert_eq!(loaded.sticky_count(), 0);
@@ -2187,11 +2202,8 @@ mod tests {
             r#"{"session_id":"sess-1","created_at":"0","history":[{"role":"user","content":[{"type":"text","text":"hi"}],"tool_call_id":null,"tool_calls":[]}],"compaction_summary":"old summary","total_tokens":4}"#,
         )
         .expect("write failed");
-        let loaded = ContextManager::load(
-            "sess-1",
-            ContextConfig::new(10_000, dir),
-        )
-        .expect("v1 load failed");
+        let loaded = ContextManager::load("sess-1", ContextConfig::new(10_000, dir))
+            .expect("v1 load failed");
         assert!(loaded.compaction_summary().is_none());
         assert_eq!(loaded.history.len(), 1);
     }
@@ -2205,10 +2217,7 @@ mod tests {
             r#"{"session_id":"sess-1","created_at":"0","history":[],"compaction_summary":null,"sticky_count":0,"total_tokens":0,"schema_version":999}"#,
         )
         .expect("write failed");
-        let err = match ContextManager::load(
-            "sess-1",
-            ContextConfig::new(10_000, dir),
-        ) {
+        let err = match ContextManager::load("sess-1", ContextConfig::new(10_000, dir)) {
             Ok(_) => panic!("future version must fail"),
             Err(err) => err,
         };
@@ -2237,11 +2246,8 @@ mod tests {
             r#"{"session_id":"sess-1","created_at":"0","history":[{"role":"user","content":[{"type":"text","text":"hi"}],"tool_call_id":null,"tool_calls":[]}],"compaction_summary":null,"total_tokens":4}"#,
         )
         .expect("write failed");
-        let loaded = ContextManager::load(
-            "sess-1",
-            ContextConfig::new(10_000, dir.clone()),
-        )
-        .expect("v1 load failed");
+        let loaded = ContextManager::load("sess-1", ContextConfig::new(10_000, dir.clone()))
+            .expect("v1 load failed");
         loaded.persist("sess-1").expect("persist failed");
 
         let json = std::fs::read_to_string(dir.join("sess-1.json")).expect("read failed");
@@ -2262,11 +2268,8 @@ mod tests {
             r#"{"session_id":"sess-1","created_at":"0","history":[{"role":"user","content":[{"type":"text","text":"hi"}],"tool_call_id":null,"tool_calls":[]}],"compaction_summary":{"text":"gen-1","tokens_before":100,"tokens_after":7,"created_at":"0","attempt":1,"image_refs":["assets/a.png"]},"sticky_count":1,"total_tokens":7}"#,
         )
         .expect("write failed");
-        let loaded = ContextManager::load(
-            "sess-1",
-            ContextConfig::new(10_000, dir),
-        )
-        .expect("v2c fallback load failed");
+        let loaded = ContextManager::load("sess-1", ContextConfig::new(10_000, dir))
+            .expect("v2c fallback load failed");
         let record = loaded.compaction_summary().expect("summary lost");
         assert_eq!(record.text, "gen-1");
         assert_eq!(record.image_refs, vec!["assets/a.png"]);
@@ -2282,10 +2285,7 @@ mod tests {
             r#"{"session_id":"sess-1","created_at":"0","history":[],"compaction_summary":null,"sticky_count":0,"total_tokens":0,"schema_version":999}"#,
         )
         .expect("write failed");
-        let err = match ContextManager::load(
-            "sess-1",
-            ContextConfig::new(10_000, dir),
-        ) {
+        let err = match ContextManager::load("sess-1", ContextConfig::new(10_000, dir)) {
             Ok(_) => panic!("future version must fail"),
             Err(err) => err,
         };
@@ -2304,10 +2304,7 @@ mod tests {
             r#"{"session_id":"sess-1","created_at":"0","history":[],"compaction_summary":null,"sticky_count":0,"total_tokens":0,"schema_version":4294967298}"#,
         )
         .expect("write failed");
-        let err = match ContextManager::load(
-            "sess-1",
-            ContextConfig::new(10_000, dir),
-        ) {
+        let err = match ContextManager::load("sess-1", ContextConfig::new(10_000, dir)) {
             Ok(_) => panic!("huge version must fail"),
             Err(err) => err,
         };
@@ -2340,7 +2337,10 @@ mod tests {
         // A second persist replaces the existing target atomically.
         manager.commit_turn(&[Message::user("u2")]);
         manager.persist("sess-1").expect("second persist failed");
-        assert!(!tmp.exists(), "temp file must not be left behind after overwrite");
+        assert!(
+            !tmp.exists(),
+            "temp file must not be left behind after overwrite"
+        );
 
         let loaded = ContextManager::load("sess-1", ContextConfig::new(10_000, dir))
             .expect("target parses as a session");
@@ -2351,10 +2351,7 @@ mod tests {
     #[test]
     fn load_missing_session_returns_err() {
         let dir = temp_session_dir("missing");
-        let result = ContextManager::load(
-            "nope",
-            ContextConfig::new(10_000, dir),
-        );
+        let result = ContextManager::load("nope", ContextConfig::new(10_000, dir));
         assert!(result.is_err());
     }
 
@@ -2407,7 +2404,9 @@ mod tests {
         for i in 0..60 {
             manager.commit_turn(&turn(i, 400));
         }
-        manager.apply_summary("summary-one: goal preserved").expect("apply failed");
+        manager
+            .apply_summary("summary-one: goal preserved")
+            .expect("apply failed");
 
         let request = manager.summarize_request();
         let prompt = request[0].content().to_owned();
@@ -2425,7 +2424,9 @@ mod tests {
             manager.commit_turn(&turn(i, 400));
         }
 
-        let record = manager.apply_summary("goal: continue artwork refinement").expect("apply failed");
+        let record = manager
+            .apply_summary("goal: continue artwork refinement")
+            .expect("apply failed");
         assert_eq!(record.attempt, 1);
         // tokens_before counts the evicted range only, not all history.
         assert!(record.tokens_before > 0);
@@ -2433,12 +2434,18 @@ mod tests {
         assert!(record.tokens_after > 0);
         assert!(manager.compaction_summary().is_some());
         assert_eq!(manager.sticky_count(), 1);
-        assert_eq!(manager.history[0].content(), "goal: continue artwork refinement");
+        assert_eq!(
+            manager.history[0].content(),
+            "goal: continue artwork refinement"
+        );
 
         // The sticky summary survives the window: repeated prepares do
         // not evict it.
         manager.prepare_messages("sys", &[]);
-        assert_eq!(manager.history[0].content(), "goal: continue artwork refinement");
+        assert_eq!(
+            manager.history[0].content(),
+            "goal: continue artwork refinement"
+        );
         assert!(manager.token_count() <= 10_000);
     }
 
@@ -2448,7 +2455,9 @@ mod tests {
         for i in 0..60 {
             manager.commit_turn(&turn(i, 400));
         }
-        manager.apply_summary("anchor-summary").expect("apply failed");
+        manager
+            .apply_summary("anchor-summary")
+            .expect("apply failed");
 
         manager.prepare_messages("sys", &[]);
         let history: Vec<Message> = manager.history.clone();
@@ -2531,16 +2540,15 @@ mod tests {
         // An old evicted turn carries an image reference.
         manager.history[1] = Message::user_with_blocks(vec![
             ContentBlock::Text("img".into()),
-            ContentBlock::File(FileContentBlock::url(
-                "image/png",
-                "assets/reference.png",
-            )),
+            ContentBlock::File(FileContentBlock::url("image/png", "assets/reference.png")),
         ]);
 
         let request = manager.summarize_request();
         assert!(request[0].content().contains("assets/reference.png"));
 
-        let record = manager.apply_summary("summary with image ref").expect("apply failed");
+        let record = manager
+            .apply_summary("summary with image ref")
+            .expect("apply failed");
         assert_eq!(record.image_refs, vec!["assets/reference.png"]);
     }
 
@@ -2615,14 +2623,13 @@ mod tests {
         for i in 0..60 {
             manager.commit_turn(&turn(i, 400));
         }
-        manager.apply_summary("persisted summary").expect("apply failed");
+        manager
+            .apply_summary("persisted summary")
+            .expect("apply failed");
         manager.persist("sess-1").expect("persist failed");
 
-        let loaded = ContextManager::load(
-            "sess-1",
-            ContextConfig::new(10_000, dir),
-        )
-        .expect("load failed");
+        let loaded =
+            ContextManager::load("sess-1", ContextConfig::new(10_000, dir)).expect("load failed");
         let record = loaded.compaction_summary().expect("summary lost");
         assert_eq!(record.text, "persisted summary");
         assert_eq!(loaded.sticky_count(), 1);
@@ -2677,7 +2684,12 @@ mod tests {
         // Nothing was replaced.
         assert!(manager.compaction_summary().is_none());
         assert_eq!(manager.sticky_count(), 0);
-        assert!(manager.history.iter().any(|m| m.content().starts_with("interrupt:")));
+        assert!(
+            manager
+                .history
+                .iter()
+                .any(|m| m.content().starts_with("interrupt:"))
+        );
     }
 
     // ----- apply_summary invariants (AC-16) -----
@@ -2860,7 +2872,10 @@ mod tests {
         // `compaction_summary()` still reports the record.
         loaded.prepare_messages("sys", &[]);
         assert!(
-            !loaded.history.iter().any(|m| m.content() == "summary from a newer build"),
+            !loaded
+                .history
+                .iter()
+                .any(|m| m.content() == "summary from a newer build"),
             "unpinned first message must be evicted by the window"
         );
     }
@@ -2919,7 +2934,11 @@ mod tests {
             ..ContextConfig::new(10_000, dir)
         };
         let mut loaded = ContextManager::load("sess-1", cfg).expect("load failed");
-        assert_eq!(loaded.sticky_count(), 1, "matching summary message is re-pinned");
+        assert_eq!(
+            loaded.sticky_count(),
+            1,
+            "matching summary message is re-pinned"
+        );
         let record = loaded.compaction_summary().expect("record restored");
         assert_eq!(record.text, "stale summary text");
 
@@ -2927,7 +2946,10 @@ mod tests {
         // not evict the summary message.
         loaded.prepare_messages("sys", &[]);
         assert!(
-            loaded.history.iter().any(|m| m.content() == "stale summary text"),
+            loaded
+                .history
+                .iter()
+                .any(|m| m.content() == "stale summary text"),
             "re-pinned summary must not be evicted by the window"
         );
         assert!(loaded.token_count() <= 10_000);

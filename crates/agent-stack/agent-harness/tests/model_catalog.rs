@@ -81,7 +81,10 @@ async fn serve_payload(server: &MockServer, payload: Value) {
         .await;
 }
 
-async fn refresh_all(catalog: &mut LlmModelCatalog, paths: &AppPaths) -> Result<(), LlmCatalogError> {
+async fn refresh_all(
+    catalog: &mut LlmModelCatalog,
+    paths: &AppPaths,
+) -> Result<(), LlmCatalogError> {
     let server = MockServer::start().await;
     serve_payload(&server, api_payload()).await;
     let client = reqwest::Client::new();
