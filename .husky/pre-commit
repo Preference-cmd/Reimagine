@@ -1,11 +1,10 @@
-#!/usr/bin/env sh
-. "$(dirname -- "$0")/_/husky.sh"
-
 # Frontend lint-staged
 cd ui && npx lint-staged
 
 # Rust format check (only on staged .rs files)
-STAGED_RS=$(git diff --cached --name-only --diff-filter=ACM -- '*.rs')
+# NOTE: match staged .rs paths by grep (not a '*.rs' pathspec) so the check
+# stays independent of the cwd changed by the 'cd ui' above.
+STAGED_RS=$(git diff --cached --name-only --diff-filter=ACM | grep '\.rs$' || true)
 if [ -n "$STAGED_RS" ]; then
   echo "Checking Rust formatting on staged files..."
   if ! cargo fmt --all -- --check; then
