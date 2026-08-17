@@ -62,4 +62,6 @@ pub use turn::{
     AgentTurnId, AgentTurnRequest, AgentTurnResult, AgentTurnStatus, AgentTurnStopReason,
     DEFAULT_MAX_TOOL_STEPS, ToolCallResult, ToolCallStatus,
 };
-pub use validation::{MAX_TOOL_OUTPUT_SIZE, validate_tool_input, validate_tool_output_size};
+pub use validation::{
+    MAX_TOOL_OUTPUT_SIZE, validate_json_value, validate_tool_input, validate_tool_output_size,
+};

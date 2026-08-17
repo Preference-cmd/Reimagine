@@ -311,6 +311,11 @@ pub struct AgentTurnRequest {
     /// Optional overall turn timeout. If the turn does not complete
     /// within this duration, it stops with `Timeout`.
     turn_timeout: Option<Duration>,
+    /// Optional JSON Schema the final assistant response must satisfy
+    /// (AR-30). The harness validates the final response, retries once
+    /// with a corrective message on failure, then stops with a
+    /// `STRUCTURED_OUTPUT_INVALID` provider error.
+    output_schema: Option<Value>,
 }
 
 impl AgentTurnRequest {
@@ -330,12 +335,20 @@ impl AgentTurnRequest {
             max_tool_steps: 0,
             cancel_token: CancellationToken::new(),
             turn_timeout: None,
+            output_schema: None,
         }
     }
 
     /// Override the max-tool-step guard. `0` falls back to the default.
     pub fn with_max_tool_steps(mut self, max_tool_steps: usize) -> Self {
         self.max_tool_steps = max_tool_steps;
+        self
+    }
+
+    /// Require the final assistant response to be a JSON document
+    /// valid against `schema` (AR-30).
+    pub fn with_output_schema(mut self, schema: Value) -> Self {
+        self.output_schema = Some(schema);
         self
     }
 
@@ -375,6 +388,10 @@ impl AgentTurnRequest {
 
     pub fn turn_timeout(&self) -> Option<Duration> {
         self.turn_timeout
+    }
+
+    pub fn output_schema(&self) -> Option<&Value> {
+        self.output_schema.as_ref()
     }
 
     /// Effective max-tool-step guard. Falls back to

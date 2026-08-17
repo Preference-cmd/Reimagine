@@ -6,6 +6,7 @@
 use crate::context::ToolContext;
 use crate::error::{ToolError, ToolErrorCode};
 use crate::ids::ToolName;
+#[cfg(test)]
 use crate::mode::AgentMode;
 use crate::permissions::ToolRiskLevel;
 use crate::tool::AgentTool;

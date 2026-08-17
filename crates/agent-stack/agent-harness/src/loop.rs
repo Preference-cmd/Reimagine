@@ -40,6 +40,11 @@ use crate::turn::{
     AgentTurnRequest, AgentTurnResult, AgentTurnStatus, AgentTurnStopReason, ToolCallResult,
     ToolCallStatus,
 };
+use crate::validation::validate_json_value;
+
+/// How many corrective retries a structured-output turn gets before it
+/// stops with `STRUCTURED_OUTPUT_INVALID` (AR-30).
+const MAX_STRUCTURED_OUTPUT_RETRIES: usize = 1;
 
 /// Host-neutral event sink for agent-local events.
 ///
@@ -218,6 +223,7 @@ impl AgentLoop {
         let tool_defs = build_tool_definitions(&registry, request.session().mode());
         let max_tool_steps = request.max_tool_steps();
         let mut tool_steps_taken: usize = 0;
+        let mut structured_output_retries: usize = 0;
         let turn_start = std::time::Instant::now();
 
         loop {
@@ -277,14 +283,50 @@ impl AgentLoop {
             // partial response but is reported as incomplete (AC-01).
             if !has_tool_calls {
                 messages.push(assistant.clone());
-                let (stop_reason, status) = if truncated {
-                    (AgentTurnStopReason::Truncated, AgentTurnStatus::Stopped)
-                } else {
-                    (
-                        AgentTurnStopReason::FinalResponse,
-                        AgentTurnStatus::Completed,
-                    )
-                };
+                if truncated {
+                    return self.finish(
+                        &request,
+                        &mut result,
+                        &mut context,
+                        &messages,
+                        pre_run_len,
+                        Some(assistant),
+                        AgentTurnStopReason::Truncated,
+                        AgentTurnStatus::Stopped,
+                    );
+                }
+
+                // Structured output gate (AR-30): when the caller
+                // requested a schema, the final response must be a JSON
+                // value valid against it. The first failure feeds a
+                // corrective message back and retries one provider
+                // round; a second failure stops with a structured
+                // `STRUCTURED_OUTPUT_INVALID` error.
+                if let Some(schema) = request.output_schema() {
+                    if let Err(validation_error) =
+                        validate_structured_output(assistant.content(), schema)
+                    {
+                        if structured_output_retries < MAX_STRUCTURED_OUTPUT_RETRIES {
+                            structured_output_retries += 1;
+                            messages.push(Message::user(format!(
+                                "Your final response failed JSON Schema validation: \
+                                 {validation_error}. Required schema: {schema}. \
+                                 Return only a corrected JSON value that satisfies the schema."
+                            )));
+                            continue;
+                        }
+                        return self.stop_with_error(
+                            &request,
+                            &mut result,
+                            &mut context,
+                            &messages,
+                            pre_run_len,
+                            ProviderError::new("STRUCTURED_OUTPUT_INVALID", validation_error),
+                            AgentTurnStopReason::ProviderError,
+                        );
+                    }
+                }
+
                 return self.finish(
                     &request,
                     &mut result,
@@ -292,8 +334,8 @@ impl AgentLoop {
                     &messages,
                     pre_run_len,
                     Some(assistant),
-                    stop_reason,
-                    status,
+                    AgentTurnStopReason::FinalResponse,
+                    AgentTurnStatus::Completed,
                 );
             }
 
@@ -1260,6 +1302,17 @@ async fn turn_deadline(timeout: Option<Duration>, turn_start: Instant) {
     } else {
         std::future::pending::<()>().await;
     }
+}
+
+/// Validate a final assistant response against a structured-output
+/// JSON Schema (AR-30). The response must parse as JSON and satisfy
+/// the schema; the error string is designed to be fed back to the model
+/// for one corrective retry.
+fn validate_structured_output(content: &str, schema: &Value) -> Result<(), String> {
+    let value: Value = serde_json::from_str(content)
+        .map_err(|error| format!("final response is not valid JSON: {error}"))?;
+    validate_json_value(schema, &value)
+        .map_err(|error| format!("final response does not satisfy the schema: {error}"))
 }
 
 /// Maximum serialized bytes of a successful tool observation sent back
@@ -2446,6 +2499,169 @@ mod tests {
                 .is_some_and(|n| n > 32_768)
         );
         assert!(tool_message.content().len() <= 2 * MAX_TOOL_OBSERVATION_BYTES);
+    }
+
+    #[tokio::test]
+    async fn run_turn_structured_output_accepts_valid_json() {
+        let provider = Arc::new(ScriptedProvider::new(
+            "mock",
+            vec![ScriptedStep::Respond(AgentResponse::new(
+                Message::assistant(r#"{"title":"reimagine"}"#),
+            ))],
+        ));
+        let loop_harness = AgentLoop::new(provider.clone(), Arc::new(VecAgentEventSink::new()));
+
+        let schema = json!({
+            "type": "object",
+            "properties": { "title": { "type": "string" } },
+            "required": ["title"]
+        });
+        let req = AgentTurnRequest::new(
+            make_session(AgentToolRegistry::new()),
+            AgentTurnId::new("structured-valid"),
+            ModelName::new("test-model"),
+            vec![Message::user("produce the json")],
+        )
+        .with_output_schema(schema);
+
+        let result = loop_harness.run_turn(req, None).await;
+        assert_eq!(result.status(), AgentTurnStatus::Completed);
+        assert_eq!(result.stop_reason(), AgentTurnStopReason::FinalResponse);
+        assert_eq!(
+            result.final_response().expect("final response").content(),
+            r#"{"title":"reimagine"}"#
+        );
+        assert_eq!(provider.call_count(), 1, "valid response needs no retry");
+    }
+
+    #[tokio::test]
+    async fn run_turn_structured_output_retries_once_with_corrective_message() {
+        struct CapturingProvider {
+            name: ProviderName,
+            responses: Mutex<VecDeque<AgentResponse>>,
+            captured: Mutex<Vec<Vec<Message>>>,
+        }
+
+        #[async_trait]
+        impl AgentProvider for CapturingProvider {
+            fn name(&self) -> ProviderName {
+                self.name.clone()
+            }
+
+            async fn complete(
+                &self,
+                request: AgentRequest,
+            ) -> Result<AgentResponse, ProviderError> {
+                self.captured
+                    .lock()
+                    .unwrap()
+                    .push(request.messages().to_vec());
+                self.responses
+                    .lock()
+                    .unwrap()
+                    .pop_front()
+                    .ok_or_else(|| ProviderError::new("EXHAUSTED", "no response"))
+            }
+
+            async fn stream(
+                &self,
+                _request: AgentRequest,
+            ) -> Result<Box<dyn AgentStream>, ProviderError> {
+                Ok(Box::new(UnusedStream))
+            }
+
+            async fn list_models(&self) -> Result<Vec<ModelInfo>, ProviderError> {
+                Ok(Vec::new())
+            }
+        }
+
+        let provider = Arc::new(CapturingProvider {
+            name: ProviderName::new("capture"),
+            responses: Mutex::new(VecDeque::from([
+                AgentResponse::new(Message::assistant("definitely not json")),
+                AgentResponse::new(Message::assistant(r#"{"title":"fixed"}"#)),
+            ])),
+            captured: Mutex::new(Vec::new()),
+        });
+        let loop_harness = AgentLoop::new(provider.clone(), Arc::new(VecAgentEventSink::new()));
+
+        let schema = json!({
+            "type": "object",
+            "properties": { "title": { "type": "string" } },
+            "required": ["title"]
+        });
+        let req = AgentTurnRequest::new(
+            make_session(AgentToolRegistry::new()),
+            AgentTurnId::new("structured-retry"),
+            ModelName::new("test-model"),
+            vec![Message::user("produce the json")],
+        )
+        .with_output_schema(schema);
+
+        let result = loop_harness.run_turn(req, None).await;
+        assert_eq!(result.status(), AgentTurnStatus::Completed);
+        assert_eq!(
+            result.final_response().expect("final response").content(),
+            r#"{"title":"fixed"}"#
+        );
+
+        let captured = provider.captured.lock().unwrap().clone();
+        assert_eq!(captured.len(), 2, "one corrective retry round");
+        let corrective = captured[1]
+            .iter()
+            .find(|m| m.role() == "user" && m.content().contains("JSON Schema validation"))
+            .expect("retry round carries the validation error back to the model");
+        assert!(corrective.content().contains("not valid JSON"));
+    }
+
+    #[tokio::test]
+    async fn run_turn_structured_output_fails_with_structured_error_after_retry_budget() {
+        let provider = Arc::new(ScriptedProvider::new(
+            "mock",
+            vec![
+                ScriptedStep::Respond(AgentResponse::new(Message::assistant(
+                    r#"{"wrong":"shape"}"#,
+                ))),
+                ScriptedStep::Respond(AgentResponse::new(Message::assistant("still not json"))),
+            ],
+        ));
+        let sink = Arc::new(VecAgentEventSink::new());
+        let loop_harness = AgentLoop::new(provider.clone(), sink.clone());
+
+        let schema = json!({
+            "type": "object",
+            "properties": { "title": { "type": "string" } },
+            "required": ["title"]
+        });
+        let req = AgentTurnRequest::new(
+            make_session(AgentToolRegistry::new()),
+            AgentTurnId::new("structured-fail"),
+            ModelName::new("test-model"),
+            vec![Message::user("produce the json")],
+        )
+        .with_output_schema(schema);
+
+        let result = loop_harness.run_turn(req, None).await;
+        assert_eq!(result.status(), AgentTurnStatus::Stopped);
+        assert_eq!(result.stop_reason(), AgentTurnStopReason::ProviderError);
+        assert!(
+            result
+                .diagnostics()
+                .iter()
+                .any(|d| d.code().as_str().contains("STRUCTURED_OUTPUT_INVALID")),
+            "structured error diagnostic expected, got {:?}",
+            result.diagnostics()
+        );
+        assert_eq!(provider.call_count(), 2, "retry budget is one round");
+
+        let events = sink.events();
+        let error_events: Vec<&AgentEvent> = events
+            .iter()
+            .filter(|event| {
+                matches!(event, AgentEvent::ProviderError { code, .. } if code == "STRUCTURED_OUTPUT_INVALID")
+            })
+            .collect();
+        assert_eq!(error_events.len(), 1, "one structured error event");
     }
 
     #[test]

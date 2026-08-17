@@ -2,6 +2,7 @@ use std::path::{Path, PathBuf};
 use std::sync::{Arc, RwLock};
 
 use reimagine_agent_harness::{AgentEventSink, WorkspaceScope};
+use reimagine_app_host::TurnRunResult;
 use reimagine_app_host::dto::{
     AgentEventPayload, AgentSessionInfo, ArtifactMetadataDto, ComputeProfileDto, HealthResponse,
     ModelInfoDto, NodeCatalogResponse, RunWorkflowResponse,
@@ -11,7 +12,6 @@ use reimagine_app_host::{
     WorkerInstallationDto, WorkerManagementService, WorkerSelectionHandle, WorkerSwitchError,
     WorkspaceHost,
 };
-use reimagine_app_host::{TurnRunParams, TurnRunResult};
 use reimagine_backend_worker_host::{WorkerLaunchSpec, WorkerLimits};
 use reimagine_backend_worker_protocol::ProtocolRange;
 use reimagine_config::AppPaths;
@@ -349,6 +349,7 @@ impl DesktopHostState {
         turn_id: String,
         model: String,
         input: serde_json::Value,
+        output_schema: Option<serde_json::Value>,
         _channel: Channel<AgentEventPayload>,
     ) -> Result<TurnRunResult, AppHostError> {
         let input_text = turn_input_text(&input)?;
@@ -358,7 +359,7 @@ impl DesktopHostState {
         let turn_id = reimagine_agent_harness::AgentTurnId::new(turn_id);
 
         // Get the session from AgentService
-        let session = {
+        let _session = {
             let app_host = self.app_host.read().expect(APP_HOST_LOCK);
             app_host
                 .workspace()
@@ -367,11 +368,12 @@ impl DesktopHostState {
         };
 
         // Create turn request
-        let request =
+        let mut request =
             AgentServiceTurnRequest::from_user_text(session_id, turn_id, model.into(), input_text);
+        if let Some(output_schema) = output_schema {
+            request = request.with_output_schema(output_schema);
+        }
 
-        // Run the turn using AgentService
-        // Run the turn using AgentService
         // Run the turn using AgentService
         let result = {
             let agent_service = {
@@ -938,7 +940,9 @@ fn turn_input_text(input: &serde_json::Value) -> Result<String, AppHostError> {
 /// `AgentEventPayload` shape the UI already consumes.
 ///
 /// Unknown or malformed envelopes yield `None` and are dropped so the
-/// stream stays resilient to protocol additions.
+/// stream stays resilient to protocol additions. Retained for the
+/// mapping tests until AR-03 replaces it with the embedded event sink.
+#[cfg(test)]
 fn agent_event_payload_from_envelope(envelope: &serde_json::Value) -> Option<AgentEventPayload> {
     use serde_json::Value;
     let method = envelope.get("method").and_then(Value::as_str)?;
@@ -1035,6 +1039,7 @@ fn agent_event_payload_from_envelope(envelope: &serde_json::Value) -> Option<Age
 }
 
 /// Build a tool-event payload row from `agent.tool_*` notification params.
+#[cfg(test)]
 fn tool_event_payload(
     kind: &'static str,
     params: &serde_json::Value,
@@ -1063,6 +1068,7 @@ fn tool_event_payload(
 
 /// Project a `turn_completed` result into the payload message: the final
 /// response text when present, otherwise the serialized result.
+#[cfg(test)]
 fn turn_completed_message(result: &serde_json::Value) -> Option<String> {
     match result {
         serde_json::Value::String(text) => Some(text.clone()),

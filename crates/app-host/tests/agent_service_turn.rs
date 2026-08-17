@@ -835,6 +835,58 @@ async fn turn_initializes_and_persists_per_session_context() {
     assert!(parsed["history"].is_array());
 }
 
+#[tokio::test]
+async fn agent_service_passes_structured_output_schema_through_to_harness() {
+    let host = build_host("ws-agent-structured-output");
+    let provider = Arc::new(ScriptedProvider::new(
+        "mock",
+        vec![
+            AgentResponse::new(Message::assistant("not json")),
+            AgentResponse::new(Message::assistant(r#"{"title":"fixed"}"#)),
+        ],
+    ));
+    host.agent_service().providers().register(provider.clone());
+    host.agent_service().create_session(
+        AgentSessionId::new("sess-1"),
+        AgentMode::Agent,
+        ProviderName::new("mock"),
+        "2026-06-12T00:00:00Z",
+    );
+
+    let schema = json!({
+        "type": "object",
+        "properties": { "title": { "type": "string" } },
+        "required": ["title"]
+    });
+    let result = host
+        .agent_service()
+        .run_turn(
+            AgentServiceTurnRequest::from_user_text(
+                AgentSessionId::new("sess-1"),
+                AgentTurnId::new("turn-1"),
+                ModelName::new("test-model"),
+                "produce the json",
+            )
+            .with_output_schema(schema),
+        )
+        .await
+        .expect("turn succeeds after one corrective retry");
+
+    assert!(result.is_completed());
+    assert_eq!(
+        result.final_response().expect("final response").content(),
+        r#"{"title":"fixed"}"#
+    );
+    assert_eq!(provider.requests().len(), 2);
+    assert!(
+        provider.requests()[1]
+            .messages()
+            .iter()
+            .any(|m| m.role() == "user" && m.content().contains("JSON Schema validation")),
+        "retry round carries the validation error back to the model"
+    );
+}
+
 fn build_host(scope: &str) -> WorkspaceHost {
     WorkspaceHost::with_defaults(WorkspaceScope::new(scope), temp_dir(scope))
 }

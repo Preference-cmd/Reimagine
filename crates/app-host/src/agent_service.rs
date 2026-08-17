@@ -134,6 +134,7 @@ pub struct AgentServiceTurnRequest {
     model: ModelName,
     input: Vec<Message>,
     max_tool_steps: Option<usize>,
+    output_schema: Option<serde_json::Value>,
 }
 
 impl AgentServiceTurnRequest {
@@ -149,6 +150,7 @@ impl AgentServiceTurnRequest {
             model,
             input,
             max_tool_steps: None,
+            output_schema: None,
         }
     }
 
@@ -163,6 +165,13 @@ impl AgentServiceTurnRequest {
 
     pub fn with_max_tool_steps(mut self, max_tool_steps: usize) -> Self {
         self.max_tool_steps = Some(max_tool_steps);
+        self
+    }
+
+    /// Require the final assistant response to satisfy `schema`
+    /// (AR-30 structured output).
+    pub fn with_output_schema(mut self, schema: serde_json::Value) -> Self {
+        self.output_schema = Some(schema);
         self
     }
 
@@ -184,6 +193,10 @@ impl AgentServiceTurnRequest {
 
     pub fn max_tool_steps(&self) -> Option<usize> {
         self.max_tool_steps
+    }
+
+    pub fn output_schema(&self) -> Option<&serde_json::Value> {
+        self.output_schema.as_ref()
     }
 }
 
@@ -370,6 +383,9 @@ impl AgentService {
         .with_cancel_token(cancel_token);
         if let Some(max_tool_steps) = request.max_tool_steps() {
             turn_request = turn_request.with_max_tool_steps(max_tool_steps);
+        }
+        if let Some(output_schema) = request.output_schema() {
+            turn_request = turn_request.with_output_schema(output_schema.clone());
         }
 
         let loop_harness = AgentLoop::new(provider, Arc::clone(&self.event_sink));
