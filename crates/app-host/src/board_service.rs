@@ -81,29 +81,38 @@ impl BoardService {
     /// returned document is the current in-memory snapshot shared by
     /// this service.
     pub async fn load_or_create(&self, project_id: &ProjectId) -> AppHostResult<BoardDocument> {
-        if let Some(session) = self
+        let cached = self
             .sessions
             .read()
             .expect("board session registry poisoned")
             .get(project_id)
-            .cloned()
-        {
+            .cloned();
+        if let Some(session) = cached {
             return Ok(session.lock().await.board().clone());
         }
 
         let board = self.read_board_from_disk(project_id).await?;
         let session = Arc::new(AsyncMutex::new(BoardSession::new(board)));
-        let mut sessions = self
-            .sessions
-            .write()
-            .expect("board session registry poisoned");
+
         // Double-check: another task may have created the session while
-        // we read from disk.
-        if let Some(existing) = sessions.get(project_id) {
-            return Ok(existing.lock().await.board().clone());
+        // we read from disk. No registry guard is held across the
+        // awaited session lock below.
+        let winner = {
+            let mut sessions = self
+                .sessions
+                .write()
+                .expect("board session registry poisoned");
+            if let Some(existing) = sessions.get(project_id) {
+                Some(existing.clone())
+            } else {
+                sessions.insert(project_id.clone(), Arc::clone(&session));
+                None
+            }
+        };
+        match winner {
+            Some(existing) => Ok(existing.lock().await.board().clone()),
+            None => Ok(session.lock().await.board().clone()),
         }
-        sessions.insert(project_id.clone(), Arc::clone(&session));
-        Ok(session.lock().await.board().clone())
     }
 
     async fn read_board_from_disk(&self, project_id: &ProjectId) -> AppHostResult<BoardDocument> {

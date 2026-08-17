@@ -302,29 +302,28 @@ impl AgentLoop {
                 // corrective message back and retries one provider
                 // round; a second failure stops with a structured
                 // `STRUCTURED_OUTPUT_INVALID` error.
-                if let Some(schema) = request.output_schema() {
-                    if let Err(validation_error) =
+                if let Some(schema) = request.output_schema()
+                    && let Err(validation_error) =
                         validate_structured_output(assistant.content(), schema)
-                    {
-                        if structured_output_retries < MAX_STRUCTURED_OUTPUT_RETRIES {
-                            structured_output_retries += 1;
-                            messages.push(Message::user(format!(
-                                "Your final response failed JSON Schema validation: \
-                                 {validation_error}. Required schema: {schema}. \
-                                 Return only a corrected JSON value that satisfies the schema."
-                            )));
-                            continue;
-                        }
-                        return self.stop_with_error(
-                            &request,
-                            &mut result,
-                            &mut context,
-                            &messages,
-                            pre_run_len,
-                            ProviderError::new("STRUCTURED_OUTPUT_INVALID", validation_error),
-                            AgentTurnStopReason::ProviderError,
-                        );
+                {
+                    if structured_output_retries < MAX_STRUCTURED_OUTPUT_RETRIES {
+                        structured_output_retries += 1;
+                        messages.push(Message::user(format!(
+                            "Your final response failed JSON Schema validation: \
+                             {validation_error}. Required schema: {schema}. \
+                             Return only a corrected JSON value that satisfies the schema."
+                        )));
+                        continue;
                     }
+                    return self.stop_with_error(
+                        &request,
+                        &mut result,
+                        &mut context,
+                        &messages,
+                        pre_run_len,
+                        ProviderError::new("STRUCTURED_OUTPUT_INVALID", validation_error),
+                        AgentTurnStopReason::ProviderError,
+                    );
                 }
 
                 return self.finish(
