@@ -21,6 +21,7 @@ mod model_service;
 mod node_catalog;
 mod policy;
 mod proposal;
+mod protocol;
 mod provider_config;
 mod readiness;
 mod run_observation;
@@ -28,13 +29,11 @@ mod run_workflow;
 mod services;
 mod tools;
 mod worker_management;
-mod protocol;
 mod workflow_service;
 mod workspace;
 
 pub use agent_provider::{AgentProviderCatalog, build_provider, register_providers_from_document};
 pub use agent_service::{AgentService, AgentServiceTurnRequest};
-pub use protocol::{TurnRunResult, TurnRunStatus, TurnRunParams};
 pub use app_host::AppHost;
 pub use artifact_access::{
     ArtifactAccess, ArtifactAccessError, media_type_for_reference, resolve_artifact_path,
@@ -66,6 +65,7 @@ pub use model_service::{AcquireAndConvertReport, AcquireAndConvertRequest, Model
 pub use node_catalog::{NodeCatalogAlignment, NodeCatalogService};
 pub use policy::WorkflowCommandPolicy;
 pub use proposal::{ProposalReceipt, ProposalStatus, WorkflowProposal};
+pub use protocol::{TurnRunParams, TurnRunResult, TurnRunStatus};
 pub use provider_config::{
     AgentProviderConfigDocument, AnthropicMessagesConfig, OpenAiChatCompletionsConfig,
     OpenAiResponsesConfig, Protocol, ProviderConfig,

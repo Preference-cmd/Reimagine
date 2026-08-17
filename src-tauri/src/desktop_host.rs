@@ -2,16 +2,16 @@ use std::path::{Path, PathBuf};
 use std::sync::{Arc, RwLock};
 
 use reimagine_agent_harness::{AgentEventSink, WorkspaceScope};
-use reimagine_app_host::{TurnRunResult, TurnRunParams};
 use reimagine_app_host::dto::{
     AgentEventPayload, AgentSessionInfo, ArtifactMetadataDto, ComputeProfileDto, HealthResponse,
     ModelInfoDto, NodeCatalogResponse, RunWorkflowResponse,
 };
 use reimagine_app_host::{
-    AppHost, AppHostError, BackendSelection, WorkerBackendCandidate, WorkerInstallationDto,
-    WorkerManagementService, WorkerSelectionHandle, WorkerSwitchError, WorkspaceHost,
-    AgentServiceTurnRequest,
+    AgentServiceTurnRequest, AppHost, AppHostError, BackendSelection, WorkerBackendCandidate,
+    WorkerInstallationDto, WorkerManagementService, WorkerSelectionHandle, WorkerSwitchError,
+    WorkspaceHost,
 };
+use reimagine_app_host::{TurnRunParams, TurnRunResult};
 use reimagine_backend_worker_host::{WorkerLaunchSpec, WorkerLimits};
 use reimagine_backend_worker_protocol::ProtocolRange;
 use reimagine_config::AppPaths;
@@ -297,20 +297,32 @@ impl DesktopHostState {
         };
         if !provider_known {
             return Err(AppHostError::UnknownAgentSession {
-                session_id: reimagine_agent_harness::AgentSessionId::new("unknown-provider".to_string()),
+                session_id: reimagine_agent_harness::AgentSessionId::new(
+                    "unknown-provider".to_string(),
+                ),
             });
         }
 
         // Create session directly using AgentService
-        let session_id = reimagine_agent_harness::AgentSessionId::new(format!("session-{}", std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_secs()));
+        let session_id = reimagine_agent_harness::AgentSessionId::new(format!(
+            "session-{}",
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_secs()
+        ));
         let mode = match wire_mode {
             "agent" => reimagine_agent_harness::AgentMode::Agent,
             "build" => reimagine_agent_harness::AgentMode::Build,
             _ => unreachable!(),
         };
         let provider_name = reimagine_agent_harness::ProviderName::new(&provider);
-        let started_at = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_secs().to_string();
-        
+        let started_at = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_secs()
+            .to_string();
+
         let session = {
             let app_host = self.app_host.read().expect(APP_HOST_LOCK);
             app_host.workspace().agent_service().create_session(
@@ -320,7 +332,7 @@ impl DesktopHostState {
                 started_at,
             )
         };
-        
+
         Ok(AgentSessionInfo {
             session_id: session.id().to_string(),
             mode: match session.mode() {
@@ -340,25 +352,24 @@ impl DesktopHostState {
         _channel: Channel<AgentEventPayload>,
     ) -> Result<TurnRunResult, AppHostError> {
         let input_text = turn_input_text(&input)?;
-        
+
         // Parse session_id and turn_id
         let session_id = reimagine_agent_harness::AgentSessionId::new(session_id);
         let turn_id = reimagine_agent_harness::AgentTurnId::new(turn_id);
-        
+
         // Get the session from AgentService
         let session = {
             let app_host = self.app_host.read().expect(APP_HOST_LOCK);
-            app_host.workspace().agent_service().get_session(&session_id)?
+            app_host
+                .workspace()
+                .agent_service()
+                .get_session(&session_id)?
         };
-        
+
         // Create turn request
-        let request = AgentServiceTurnRequest::from_user_text(
-            session_id,
-            turn_id,
-            model.into(),
-            input_text,
-        );
-        
+        let request =
+            AgentServiceTurnRequest::from_user_text(session_id, turn_id, model.into(), input_text);
+
         // Run the turn using AgentService
         // Run the turn using AgentService
         // Run the turn using AgentService
@@ -369,7 +380,7 @@ impl DesktopHostState {
             };
             agent_service.run_turn(request).await?
         };
-        
+
         // Convert result to TurnRunResult
         Ok(TurnRunResult {
             status: reimagine_app_host::TurnRunStatus::Accepted,
@@ -484,9 +495,16 @@ impl DesktopHostState {
     pub async fn list_agent_providers(&self) -> Result<Vec<String>, AppHostError> {
         let providers: Vec<String> = {
             let app_host = self.app_host.read().expect(APP_HOST_LOCK);
-            app_host.workspace().agent_service().providers().provider_names().into_iter().map(|p| p.to_string()).collect()
+            app_host
+                .workspace()
+                .agent_service()
+                .providers()
+                .provider_names()
+                .into_iter()
+                .map(|p| p.to_string())
+                .collect()
         };
-        
+
         Ok(providers.into_iter().map(|p| p.to_string()).collect())
     }
     pub async fn save_workflow(
@@ -908,7 +926,7 @@ fn turn_input_text(input: &serde_json::Value) -> Result<String, AppHostError> {
             })
         }
         _ => Err(AppHostError::WorkflowJson {
-                path: std::path::PathBuf::new(),
+            path: std::path::PathBuf::new(),
             message: "invalid input messages: expected an array of messages, a string, \
                       or an object with a `text` field"
                 .to_owned(),
