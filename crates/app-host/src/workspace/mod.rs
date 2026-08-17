@@ -24,7 +24,10 @@ use crate::model_acquisition_service::ModelAcquisitionService;
 use crate::node_catalog::{NodeCatalogAlignment, NodeCatalogService};
 use crate::services::WorkspaceServices;
 use crate::tools::register_app_tools;
-use crate::{AgentService, AppHostError, BackendSelection, ModelService, WorkflowService};
+use crate::{
+    AgentService, AppHostError, BackendSelection, BoardService, ModelService, ProjectService,
+    WorkflowService,
+};
 use crate::{InstalledWorkerInventoryProvider, WorkerInventoryProvider};
 
 /// How long a re-bootstrap waits for in-flight runs to drain before giving
@@ -35,6 +38,8 @@ pub struct WorkspaceHost {
     pub(crate) workspace_scope: WorkspaceScope,
     pub(crate) config: Arc<AppConfig>,
     pub(crate) backend_config: InferenceBackendConfig,
+    pub(crate) project_service: Arc<ProjectService>,
+    pub(crate) board_service: Arc<BoardService>,
     pub(crate) workflow_service: Arc<WorkflowService>,
     pub(crate) model_service: Arc<ModelService>,
     pub(crate) runtime_service: Arc<RuntimeService>,
@@ -79,6 +84,11 @@ impl WorkspaceHost {
         resolved_backend_instance: reimagine_inference::BackendInstance,
     ) -> Self {
         let config = Arc::new(config);
+        let board_service = Arc::new(BoardService::new(config.paths().clone()));
+        let project_service = Arc::new(ProjectService::new(
+            config.paths().clone(),
+            Arc::clone(&board_service),
+        ));
         let workflow_service = Arc::new(WorkflowService::new(config.paths().clone()));
         let acquisition_service = Arc::new(ModelAcquisitionService::new(
             config.paths().clone(),
@@ -114,6 +124,8 @@ impl WorkspaceHost {
             workspace_scope,
             config,
             backend_config,
+            project_service,
+            board_service,
             workflow_service,
             model_service,
             runtime_service,
@@ -490,6 +502,12 @@ impl WorkspaceHost {
     }
     pub fn workflow_service(&self) -> &Arc<WorkflowService> {
         &self.workflow_service
+    }
+    pub fn project_service(&self) -> &Arc<ProjectService> {
+        &self.project_service
+    }
+    pub fn board_service(&self) -> &Arc<BoardService> {
+        &self.board_service
     }
     pub fn model_service(&self) -> &Arc<ModelService> {
         &self.model_service

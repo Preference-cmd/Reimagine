@@ -14,8 +14,8 @@ use crate::provider_config::AgentProviderConfigDocument;
 use crate::services::WorkspaceServices;
 use crate::tools::register_app_tools;
 use crate::{
-    AgentService, AppHostError, BackendSelection, ModelService, WorkerInventoryProvider,
-    WorkflowService,
+    AgentService, AppHostError, BackendSelection, BoardService, ModelService, ProjectService,
+    WorkerInventoryProvider, WorkflowService,
 };
 
 use super::{WorkspaceHost, load_backend_config_result};
@@ -212,6 +212,11 @@ impl WorkspaceHostBuilder {
             backend,
         ));
         let workflow_service = Arc::new(WorkflowService::new(config.paths().clone()));
+        let board_service = Arc::new(BoardService::new(config.paths().clone()));
+        let project_service = Arc::new(ProjectService::new(
+            config.paths().clone(),
+            Arc::clone(&board_service),
+        ));
         let services = Arc::new(WorkspaceServices::new(
             self.workspace_scope.clone(),
             Arc::new(config.clone()),
@@ -259,11 +264,12 @@ impl WorkspaceHostBuilder {
             tracing::warn!("{error}");
         }
 
-        let agent_service = Arc::new(AgentService::with_registry_providers_and_sink(
+        let agent_service = Arc::new(AgentService::with_registry_providers_sink_and_session_dir(
             self.workspace_scope.clone(),
             registry,
             providers,
             agent_event_sink.clone(),
+            self.base_path.join("agent-sessions"),
         ));
 
         // Assemble workspace
@@ -271,6 +277,8 @@ impl WorkspaceHostBuilder {
             workspace_scope: self.workspace_scope,
             config: Arc::new(config),
             backend_config,
+            project_service,
+            board_service,
             workflow_service,
             model_service,
             runtime_service,

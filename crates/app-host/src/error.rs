@@ -1,5 +1,5 @@
 use reimagine_config::ConfigError;
-use reimagine_core::model::{RunId, WorkflowId, WorkflowVersion};
+use reimagine_core::model::{ProjectId, RunId, WorkflowId, WorkflowVersion};
 use reimagine_runtime::RuntimeServiceError;
 
 use crate::artifact_access::ArtifactAccessError;
@@ -9,6 +9,15 @@ pub type AppHostResult<T> = Result<T, AppHostError>;
 
 #[derive(Debug)]
 pub enum AppHostError {
+    UnknownProject {
+        project_id: ProjectId,
+    },
+    ProjectAlreadyExists {
+        project_id: ProjectId,
+    },
+    UnknownBoard {
+        project_id: ProjectId,
+    },
     UnknownWorkflow {
         workflow_id: WorkflowId,
     },
@@ -76,6 +85,15 @@ pub enum AppHostError {
 impl std::fmt::Display for AppHostError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
+            Self::UnknownProject { project_id } => {
+                write!(f, "unknown project `{project_id}`")
+            }
+            Self::ProjectAlreadyExists { project_id } => {
+                write!(f, "project `{project_id}` already exists")
+            }
+            Self::UnknownBoard { project_id } => {
+                write!(f, "project `{project_id}` has no board")
+            }
             Self::UnknownWorkflow { workflow_id } => {
                 write!(f, "unknown workflow `{workflow_id}`")
             }
@@ -162,6 +180,9 @@ impl AppHostError {
     /// Machine-readable classification for IPC error payloads.
     pub fn code(&self) -> AppHostErrorCode {
         match self {
+            Self::UnknownProject { .. } => AppHostErrorCode::NotFound,
+            Self::ProjectAlreadyExists { .. } => AppHostErrorCode::Conflict,
+            Self::UnknownBoard { .. } => AppHostErrorCode::NotFound,
             Self::UnknownWorkflow { .. } => AppHostErrorCode::NotFound,
             Self::NoPendingProposal { .. } => AppHostErrorCode::NotFound,
             Self::ProposalStale { .. } => AppHostErrorCode::Conflict,
@@ -204,6 +225,11 @@ impl AppHostError {
     /// Optional structured context for the IPC error payload.
     pub fn details(&self) -> Option<serde_json::Value> {
         match self {
+            Self::UnknownProject { project_id }
+            | Self::ProjectAlreadyExists { project_id }
+            | Self::UnknownBoard { project_id } => {
+                Some(serde_json::json!({ "project_id": project_id.to_string() }))
+            }
             Self::UnknownWorkflow { workflow_id } => {
                 Some(serde_json::json!({ "workflow_id": workflow_id.to_string() }))
             }
