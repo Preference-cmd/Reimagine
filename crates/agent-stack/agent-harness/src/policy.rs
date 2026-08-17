@@ -79,12 +79,13 @@ impl ToolPolicy {
     /// Checks performed, in order:
     /// 1. The tool's spec name matches the requested name.
     /// 2. The spec allows the context's mode.
-    /// 3. The context's permissions contain the spec's required
+    /// 3. The tool's risk level is compatible with the mode:
+    ///    `External` risk is never auto-applied — it denies with
+    ///    `approval_required` in both modes. The risk gate runs before
+    ///    the permission gate so a missing permission cannot mask the
+    ///    risk classification; `Editor` and `Read` risks are allowed.
+    /// 4. The context's permissions contain the spec's required
     ///    permission.
-    /// 4. The tool's risk level is compatible with the mode:
-    ///    `External` risk is only allowed in `Build` mode (which still
-    ///    requires human approval downstream); `Editor` risk is allowed
-    ///    in either mode; `Read` risk is allowed in either mode.
     ///
     /// Note: the `workspace_scope` mismatch check is the responsibility
     /// of the app-host tool boundary; this policy does not see
@@ -106,12 +107,12 @@ impl ToolPolicy {
             return PolicyDecision::Deny(PolicyDenialReason::ModeNotAllowed);
         }
 
-        if !ctx.permissions().contains(spec.permission()) {
-            return PolicyDecision::Deny(PolicyDenialReason::PermissionMissing);
-        }
-
         if spec.risk() == ToolRiskLevel::External {
             return PolicyDecision::Deny(PolicyDenialReason::ApprovalRequired);
+        }
+
+        if !ctx.permissions().contains(spec.permission()) {
+            return PolicyDecision::Deny(PolicyDenialReason::PermissionMissing);
         }
 
         PolicyDecision::Allow
