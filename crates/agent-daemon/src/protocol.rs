@@ -253,6 +253,11 @@ pub struct ServerInfo {
 pub struct ServerCapabilities {}
 
 /// `session.create` request params.
+///
+/// Field audit (AR-35): V1 previously accepted `system_prompt` and
+/// `workspace_dir` here but ignored both — the daemon session is always
+/// rooted at the process-level `--workspace-dir` and has no per-session
+/// prompt. The fields are removed instead of silently dropped.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub struct SessionCreateParams {
@@ -260,11 +265,6 @@ pub struct SessionCreateParams {
     pub mode: String,
     /// Provider id the session is bound to.
     pub provider: String,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub system_prompt: Option<String>,
-    /// Workspace directory the session operates in.
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub workspace_dir: Option<String>,
 }
 
 /// `session.create` response result.
@@ -515,8 +515,6 @@ mod tests {
             SessionCreateParams {
                 mode: "agent".into(),
                 provider: "openai".into(),
-                system_prompt: Some("be concise".into()),
-                workspace_dir: None,
             },
         );
         assert_eq!(req.jsonrpc, "2.0");
@@ -617,10 +615,14 @@ mod tests {
         let create_params = SessionCreateParams {
             mode: "build".into(),
             provider: "anthropic".into(),
-            system_prompt: None,
-            workspace_dir: Some("/tmp/ws".into()),
         };
         assert_roundtrip(&create_params);
+
+        // AR-35: fields the server used to accept and ignore must not
+        // exist on the wire shape anymore.
+        let wire = serde_json::to_value(&create_params).unwrap();
+        assert!(wire.get("system_prompt").is_none());
+        assert!(wire.get("workspace_dir").is_none());
 
         let create_result = SessionCreateResult {
             session_id: "s1".into(),
