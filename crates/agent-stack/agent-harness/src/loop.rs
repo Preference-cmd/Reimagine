@@ -1262,14 +1262,36 @@ async fn turn_deadline(timeout: Option<Duration>, turn_start: Instant) {
     }
 }
 
+/// Maximum serialized bytes of a successful tool observation sent back
+/// to the model in a single tool-result message (RF-B4 / AR-20).
+///
+/// The cap applies when the observation text is built — *before* the
+/// next provider request in the same turn — so an oversized
+/// `workflow.get` / `model.list` output can never blow up the prompt.
+pub const MAX_TOOL_OBSERVATION_BYTES: usize = 32 * 1024;
+
+/// Longest raw-output prefix embedded in a truncated observation
+/// envelope. The prefix is stored as an escaped JSON string, so the
+/// worst-case envelope stays on the same order as
+/// [`MAX_TOOL_OBSERVATION_BYTES`].
+const TRUNCATED_OUTPUT_PREFIX_BYTES: usize = MAX_TOOL_OBSERVATION_BYTES / 2;
+
 /// Serialize a `ToolCallResult` into the JSON text the model receives
 /// as a tool observation. Successful calls carry their raw output
 /// JSON; rejected/failed calls carry a structured diagnostic envelope.
+///
+/// Successful outputs larger than [`MAX_TOOL_OBSERVATION_BYTES`] are
+/// replaced by a truncation envelope that keeps a bounded prefix, the
+/// original byte size, and an explicit `output_truncated` marker. The
+/// `tool_call_id` pairing lives on the surrounding `Message`, which is
+/// unchanged.
 fn tool_observation_text(result: &ToolCallResult) -> String {
     match result.status() {
         ToolCallStatus::Succeeded => {
-            serde_json::to_string(&result.output().cloned().unwrap_or(Value::Null))
-                .unwrap_or_else(|_| "null".to_string())
+            let serialized =
+                serde_json::to_string(&result.output().cloned().unwrap_or(Value::Null))
+                    .unwrap_or_else(|_| "null".to_string());
+            cap_succeeded_tool_observation(&serialized, result.tool_name().as_str())
         }
         ToolCallStatus::Running => {
             // Defensive arm (AC-20): `execute_tool` always stamps an
@@ -1303,6 +1325,41 @@ fn tool_observation_text(result: &ToolCallResult) -> String {
             })
         }
     }
+}
+
+/// Cap a serialized successful tool output before it reaches the model.
+///
+/// Outputs within [`MAX_TOOL_OBSERVATION_BYTES`] pass through
+/// unchanged, preserving the existing wire behavior for normal tools.
+/// Oversized outputs are replaced by a valid JSON envelope with a
+/// bounded `output_prefix`, the original byte count, and an explicit
+/// `output_truncated` marker so the model can see that information is
+/// missing and ask for a narrower read.
+fn cap_succeeded_tool_observation(serialized_output: &str, tool_name: &str) -> String {
+    if serialized_output.len() <= MAX_TOOL_OBSERVATION_BYTES {
+        return serialized_output.to_owned();
+    }
+
+    let mut prefix_end = TRUNCATED_OUTPUT_PREFIX_BYTES.min(serialized_output.len());
+    while !serialized_output.is_char_boundary(prefix_end) {
+        prefix_end -= 1;
+    }
+    let output_prefix = &serialized_output[..prefix_end];
+
+    serde_json::to_string(&json!({
+        "status": "succeeded",
+        "tool": tool_name,
+        "output_truncated": true,
+        "original_output_bytes": serialized_output.len(),
+        "output_prefix": output_prefix,
+    }))
+    .unwrap_or_else(|_| {
+        format!(
+            "{{\"status\":\"succeeded\",\"tool\":{tool_name:?},\"output_truncated\":true,\
+             \"original_output_bytes\":{}}}",
+            serialized_output.len()
+        )
+    })
 }
 
 #[cfg(test)]
@@ -2273,6 +2330,122 @@ mod tests {
         let parsed: Value = serde_json::from_str(&text).unwrap();
         assert_eq!(parsed["status"], "failed");
         assert_eq!(parsed["code"], "AGENT/TOOL_EXECUTION_FAILED");
+    }
+
+    #[test]
+    fn tool_observation_text_for_oversized_success_is_truncated_with_marker() {
+        let payload = "x".repeat(MAX_TOOL_OBSERVATION_BYTES + 1_024);
+        let result = ToolCallResult::new(ToolCallId::new("c1"), ToolName::new("workflow.get"))
+            .succeeded(json!({ "data": payload }));
+        let text = tool_observation_text(&result);
+
+        let parsed: Value = serde_json::from_str(&text).expect("truncation envelope is valid JSON");
+        assert_eq!(parsed["status"], "succeeded");
+        assert_eq!(parsed["tool"], "workflow.get");
+        assert_eq!(parsed["output_truncated"], true);
+        assert_eq!(
+            parsed["original_output_bytes"]
+                .as_u64()
+                .expect("original byte count"),
+            (MAX_TOOL_OBSERVATION_BYTES + 1_024 + 11) as u64 // json!({"data":"..."}) overhead
+        );
+        let prefix = parsed["output_prefix"]
+            .as_str()
+            .expect("output prefix is a string");
+        assert!(!prefix.is_empty());
+        assert!(prefix.len() <= TRUNCATED_OUTPUT_PREFIX_BYTES);
+        assert!(prefix.contains("xxx"));
+    }
+
+    #[tokio::test]
+    async fn run_turn_feeds_truncated_observation_with_matching_tool_call_id() {
+        // A turn that executes a large-output tool must feed the next
+        // provider round a truncated observation, while the surrounding
+        // tool-result message keeps the original tool_call_id pairing.
+        struct CapturingProvider {
+            name: ProviderName,
+            first_call: Mutex<bool>,
+            captured: Mutex<Vec<Message>>,
+        }
+
+        #[async_trait]
+        impl AgentProvider for CapturingProvider {
+            fn name(&self) -> ProviderName {
+                self.name.clone()
+            }
+
+            async fn complete(
+                &self,
+                request: AgentRequest,
+            ) -> Result<AgentResponse, ProviderError> {
+                let mut first = self.first_call.lock().unwrap();
+                if *first {
+                    *first = false;
+                    Ok(response_with_tool_calls(vec![ToolCall::new(
+                        ToolCallId::new("big-1"),
+                        "big",
+                        json!({}),
+                    )]))
+                } else {
+                    *self.captured.lock().unwrap() = request.messages().to_vec();
+                    Ok(response_with_text("done"))
+                }
+            }
+
+            async fn stream(
+                &self,
+                _request: AgentRequest,
+            ) -> Result<Box<dyn AgentStream>, ProviderError> {
+                Ok(Box::new(UnusedStream))
+            }
+
+            async fn list_models(&self) -> Result<Vec<ModelInfo>, ProviderError> {
+                Ok(Vec::new())
+            }
+        }
+
+        let provider = Arc::new(CapturingProvider {
+            name: ProviderName::new("capture"),
+            first_call: Mutex::new(true),
+            captured: Mutex::new(Vec::new()),
+        });
+        let loop_harness = AgentLoop::new(provider.clone(), Arc::new(VecAgentEventSink::new()));
+
+        let req = AgentTurnRequest::new(
+            session_with(|reg| {
+                reg.register(ScriptedTool::success(
+                    "big",
+                    vec![json!({ "data": "y".repeat(MAX_TOOL_OBSERVATION_BYTES + 512) })],
+                ))
+                .unwrap();
+            }),
+            AgentTurnId::new("truncation-turn"),
+            ModelName::new("test-model"),
+            vec![Message::user("read the big tool")],
+        );
+
+        let result = loop_harness.run_turn(req, None).await;
+        assert_eq!(result.status(), AgentTurnStatus::Completed);
+
+        let captured = provider.captured.lock().unwrap().clone();
+        let tool_message = captured
+            .iter()
+            .find(|m| m.tool_call_id() == Some(&ToolCallId::new("big-1")))
+            .expect("second provider round carries the tool result");
+
+        // Pairing is preserved at the message level.
+        assert_eq!(tool_message.tool_call_id(), Some(&ToolCallId::new("big-1")));
+
+        let parsed: Value =
+            serde_json::from_str(tool_message.content()).expect("truncation envelope is JSON");
+        assert_eq!(parsed["output_truncated"], true);
+        assert_eq!(parsed["tool"], "big");
+        assert!(
+            parsed["original_output_bytes"]
+                .as_u64()
+                .is_some_and(|n| n > 32_768)
+        );
+        assert!(tool_message.content().len() <= 2 * MAX_TOOL_OBSERVATION_BYTES);
     }
 
     #[test]
