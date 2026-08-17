@@ -105,9 +105,10 @@ impl WorkspaceHost {
         let mut registry = AgentToolRegistry::new();
         register_app_tools(&mut registry, Arc::clone(&services));
         let registry = Arc::new(registry);
-        let agent_service = Arc::new(AgentService::with_registry(
+        let agent_service = Arc::new(AgentService::with_registry_and_session_dir(
             workspace_scope.clone(),
             Arc::clone(&registry),
+            config.paths().base_path().join("agent-sessions"),
         ));
         Self {
             workspace_scope,
@@ -363,6 +364,7 @@ impl WorkspaceHost {
             worker_switch.set_run_cancellation(cancellation);
         }
         let builtin_catalog = Arc::new(BuiltinNodeCatalog::v1());
+        let agent_session_dir = config.paths().base_path().join("agent-sessions");
         let mut host = Self::new(
             workspace_scope,
             config,
@@ -376,11 +378,12 @@ impl WorkspaceHost {
         // Replace the default AgentService with one that uses the injected event sink
         let registry = host.agent_service.registry().clone();
         let providers = host.agent_service.providers().clone();
-        host.agent_service = Arc::new(AgentService::with_registry_providers_and_sink(
+        host.agent_service = Arc::new(AgentService::with_registry_providers_sink_and_session_dir(
             host.workspace_scope.clone(),
             registry,
             providers,
             agent_event_sink,
+            agent_session_dir,
         ));
         host
     }
@@ -430,6 +433,7 @@ impl WorkspaceHost {
             worker_switch.set_run_cancellation(cancellation);
         }
         let builtin_catalog = Arc::new(BuiltinNodeCatalog::v1());
+        let agent_session_dir = config.paths().base_path().join("agent-sessions");
         let mut host = Self::new(
             workspace_scope,
             config,
@@ -447,11 +451,12 @@ impl WorkspaceHost {
         host.agent_event_sink = agent_event_sink;
         let registry = host.agent_service.registry().clone();
         let providers = host.agent_service.providers().clone();
-        host.agent_service = Arc::new(AgentService::with_registry_providers_and_sink(
+        host.agent_service = Arc::new(AgentService::with_registry_providers_sink_and_session_dir(
             host.workspace_scope.clone(),
             registry,
             providers,
             host.agent_event_sink.clone(),
+            agent_session_dir,
         ));
         Ok(host)
     }
@@ -459,11 +464,13 @@ impl WorkspaceHost {
     pub fn with_agent_event_sink(self, event_sink: Arc<dyn AgentEventSink>) -> Self {
         let registry = self.agent_service.registry().clone();
         let providers = self.agent_service.providers().clone();
-        let agent_service = Arc::new(AgentService::with_registry_providers_and_sink(
+        let session_dir = self.agent_service.session_dir().to_path_buf();
+        let agent_service = Arc::new(AgentService::with_registry_providers_sink_and_session_dir(
             self.workspace_scope.clone(),
             registry,
             providers,
             Arc::clone(&event_sink),
+            session_dir,
         ));
         Self {
             agent_service,

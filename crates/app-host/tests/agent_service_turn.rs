@@ -1,12 +1,14 @@
 use std::collections::VecDeque;
 use std::sync::{Arc, Mutex};
+use std::time::Duration;
 
 use async_trait::async_trait;
 use reimagine_agent_harness::{
     AgentEvent, AgentMode, AgentProvider, AgentRequest, AgentResponse, AgentSessionId, AgentStream,
-    AgentStreamEvent, AgentTool, AgentToolRegistry, AgentTurnId, Message, ModelInfo, ModelName,
-    PermissionSet, ProviderError, ProviderName, ToolCall, ToolCallId, ToolContext, ToolName,
-    ToolPermission, ToolResult, ToolRiskLevel, ToolSpec, VecAgentEventSink, WorkspaceScope,
+    AgentStreamEvent, AgentTool, AgentToolRegistry, AgentTurnId, AgentTurnStopReason, Message,
+    ModelInfo, ModelName, PermissionSet, ProviderError, ProviderName, ToolCall, ToolCallId,
+    ToolContext, ToolName, ToolPermission, ToolResult, ToolRiskLevel, ToolSpec, VecAgentEventSink,
+    WorkspaceScope,
 };
 use reimagine_app_host::{
     AgentProviderCatalog, AgentService, AgentServiceTurnRequest, AppHostError, WorkspaceHost,
@@ -21,6 +23,7 @@ use reimagine_core::model::{
 use reimagine_core::workflow::Workflow;
 use reimagine_nodes::BUILTIN_STRING;
 use serde_json::json;
+use tokio::sync::{Barrier, Notify};
 
 struct ScriptedProvider {
     name: ProviderName,
@@ -99,6 +102,75 @@ impl ScriptedStream {
 impl AgentStream for ScriptedStream {
     async fn next_event(&mut self) -> Option<AgentStreamEvent> {
         self.events.pop_front()
+    }
+}
+
+/// Stream that blocks until `release` fires, then yields one content
+/// delta and a clean `Done`. Lets tests hold a turn open deterministically.
+struct WaitForNotifyStream {
+    release: Arc<Notify>,
+    queued: Mutex<VecDeque<AgentStreamEvent>>,
+}
+
+impl WaitForNotifyStream {
+    fn new(release: Arc<Notify>) -> Self {
+        Self {
+            release,
+            queued: Mutex::new(VecDeque::new()),
+        }
+    }
+}
+
+#[async_trait]
+impl AgentStream for WaitForNotifyStream {
+    async fn next_event(&mut self) -> Option<AgentStreamEvent> {
+        let empty = self.queued.lock().unwrap().is_empty();
+        if empty {
+            let _ = tokio::time::timeout(Duration::from_secs(10), self.release.notified()).await;
+            *self.queued.lock().unwrap() = VecDeque::from([
+                AgentStreamEvent::ContentDelta("released".into()),
+                AgentStreamEvent::Done {
+                    stop_reason: Some("stop".into()),
+                },
+            ]);
+        }
+        self.queued.lock().unwrap().pop_front()
+    }
+}
+
+/// Stream that immediately reports a normal final answer.
+struct DoneStream {
+    queued: Mutex<VecDeque<AgentStreamEvent>>,
+}
+
+impl DoneStream {
+    fn new() -> Self {
+        Self {
+            queued: Mutex::new(VecDeque::from([
+                AgentStreamEvent::ContentDelta("done".into()),
+                AgentStreamEvent::Done {
+                    stop_reason: Some("stop".into()),
+                },
+            ])),
+        }
+    }
+}
+
+#[async_trait]
+impl AgentStream for DoneStream {
+    async fn next_event(&mut self) -> Option<AgentStreamEvent> {
+        self.queued.lock().unwrap().pop_front()
+    }
+}
+
+/// Stream whose `next_event` never resolves; cancellation must drop it.
+struct NeverStream;
+
+#[async_trait]
+impl AgentStream for NeverStream {
+    async fn next_event(&mut self) -> Option<AgentStreamEvent> {
+        std::future::pending::<()>().await;
+        unreachable!("never stream is dropped by cancellation")
     }
 }
 
@@ -235,13 +307,22 @@ async fn run_turn_preserves_session_history_between_turns() {
         .unwrap();
 
     let session = service.get_session(&AgentSessionId::new("sess-1")).unwrap();
-    let history = session.history();
-    let roles: Vec<&str> = history.iter().map(|m| m.role()).collect();
-    assert_eq!(roles, vec!["user", "assistant", "user", "assistant"]);
+    // Embedded turns run through the per-session ContextManager, which
+    // owns the rolling history; the session's own vector stays empty
+    // (the old V1 seed path only applies when no context is supplied).
+    assert!(
+        session.history().is_empty(),
+        "ContextManager owns history, not AgentSession"
+    );
 
     let requests = provider.requests();
     let second_request_roles: Vec<&str> = requests[1].messages().iter().map(|m| m.role()).collect();
-    assert_eq!(second_request_roles, vec!["user", "assistant", "user"]);
+    // ContextManager seeds its own system slot ahead of the windowed
+    // history: system, turn-1 user + assistant, turn-2 user.
+    assert_eq!(
+        second_request_roles,
+        vec!["system", "user", "assistant", "user"]
+    );
 }
 
 #[tokio::test]
@@ -440,6 +521,318 @@ fn explicit_session_permissions_are_attached() {
             .permissions()
             .contains(&ToolPermission::new("workflow.write"))
     );
+}
+
+#[tokio::test]
+async fn concurrent_turn_on_same_session_is_rejected() {
+    struct HangingProvider {
+        name: ProviderName,
+        started: Arc<Notify>,
+        release: Arc<Notify>,
+    }
+
+    #[async_trait]
+    impl AgentProvider for HangingProvider {
+        fn name(&self) -> ProviderName {
+            self.name.clone()
+        }
+
+        async fn complete(&self, _request: AgentRequest) -> Result<AgentResponse, ProviderError> {
+            Err(ProviderError::new("stream_only", "streaming provider"))
+        }
+
+        async fn stream(
+            &self,
+            _request: AgentRequest,
+        ) -> Result<Box<dyn AgentStream>, ProviderError> {
+            self.started.notify_one();
+            Ok(Box::new(WaitForNotifyStream::new(Arc::clone(
+                &self.release,
+            ))))
+        }
+
+        async fn list_models(&self) -> Result<Vec<ModelInfo>, ProviderError> {
+            Ok(Vec::new())
+        }
+    }
+
+    let host = build_host("ws-agent-same-session-lock");
+    let started = Arc::new(Notify::new());
+    let release = Arc::new(Notify::new());
+    host.agent_service()
+        .providers()
+        .register(Arc::new(HangingProvider {
+            name: ProviderName::new("mock"),
+            started: Arc::clone(&started),
+            release: Arc::clone(&release),
+        }));
+    host.agent_service().create_session(
+        AgentSessionId::new("sess-1"),
+        AgentMode::Agent,
+        ProviderName::new("mock"),
+        "2026-06-12T00:00:00Z",
+    );
+
+    let service = host.agent_service().clone();
+    let first = tokio::spawn({
+        let service = Arc::clone(&service);
+        async move {
+            service
+                .run_turn(AgentServiceTurnRequest::from_user_text(
+                    AgentSessionId::new("sess-1"),
+                    AgentTurnId::new("turn-1"),
+                    ModelName::new("test-model"),
+                    "first",
+                ))
+                .await
+        }
+    });
+
+    tokio::time::timeout(Duration::from_secs(5), started.notified())
+        .await
+        .expect("first turn reaches the provider");
+
+    let second = service
+        .run_turn(AgentServiceTurnRequest::from_user_text(
+            AgentSessionId::new("sess-1"),
+            AgentTurnId::new("turn-2"),
+            ModelName::new("test-model"),
+            "second",
+        ))
+        .await;
+    assert!(
+        matches!(second, Err(AppHostError::AgentTurnInProgress { .. })),
+        "expected AgentTurnInProgress, got: {second:?}"
+    );
+
+    release.notify_one();
+    let first_result = tokio::time::timeout(Duration::from_secs(10), first)
+        .await
+        .expect("first turn finishes")
+        .expect("first turn task joins")
+        .expect("first turn succeeds");
+    assert!(first_result.is_completed());
+}
+
+#[tokio::test]
+async fn different_sessions_run_turns_in_parallel() {
+    struct BarrierProvider {
+        name: ProviderName,
+        barrier: Arc<Barrier>,
+    }
+
+    #[async_trait]
+    impl AgentProvider for BarrierProvider {
+        fn name(&self) -> ProviderName {
+            self.name.clone()
+        }
+
+        async fn complete(&self, _request: AgentRequest) -> Result<AgentResponse, ProviderError> {
+            Err(ProviderError::new("stream_only", "streaming provider"))
+        }
+
+        async fn stream(
+            &self,
+            _request: AgentRequest,
+        ) -> Result<Box<dyn AgentStream>, ProviderError> {
+            match tokio::time::timeout(Duration::from_secs(5), self.barrier.wait()).await {
+                Ok(_) => Ok(Box::new(DoneStream::new())),
+                Err(_) => Err(ProviderError::new(
+                    "BARRIER_TIMEOUT",
+                    "second session never started its turn",
+                )),
+            }
+        }
+
+        async fn list_models(&self) -> Result<Vec<ModelInfo>, ProviderError> {
+            Ok(Vec::new())
+        }
+    }
+
+    let host = build_host("ws-agent-parallel-sessions");
+    let barrier = Arc::new(Barrier::new(2));
+    host.agent_service()
+        .providers()
+        .register(Arc::new(BarrierProvider {
+            name: ProviderName::new("mock"),
+            barrier: Arc::clone(&barrier),
+        }));
+    host.agent_service().create_session(
+        AgentSessionId::new("sess-a"),
+        AgentMode::Agent,
+        ProviderName::new("mock"),
+        "2026-06-12T00:00:00Z",
+    );
+    host.agent_service().create_session(
+        AgentSessionId::new("sess-b"),
+        AgentMode::Agent,
+        ProviderName::new("mock"),
+        "2026-06-12T00:00:00Z",
+    );
+
+    let service = host.agent_service().clone();
+    let turn_a = {
+        let service = Arc::clone(&service);
+        tokio::spawn(async move {
+            service
+                .run_turn(AgentServiceTurnRequest::from_user_text(
+                    AgentSessionId::new("sess-a"),
+                    AgentTurnId::new("turn-a"),
+                    ModelName::new("test-model"),
+                    "a",
+                ))
+                .await
+        })
+    };
+    let turn_b = {
+        let service = Arc::clone(&service);
+        tokio::spawn(async move {
+            service
+                .run_turn(AgentServiceTurnRequest::from_user_text(
+                    AgentSessionId::new("sess-b"),
+                    AgentTurnId::new("turn-b"),
+                    ModelName::new("test-model"),
+                    "b",
+                ))
+                .await
+        })
+    };
+
+    let (a, b) = tokio::time::timeout(Duration::from_secs(15), async {
+        let a = turn_a
+            .await
+            .expect("turn-a joins")
+            .expect("turn-a succeeds");
+        let b = turn_b
+            .await
+            .expect("turn-b joins")
+            .expect("turn-b succeeds");
+        (a, b)
+    })
+    .await
+    .expect("both parallel turns finish");
+
+    assert!(a.is_completed());
+    assert!(b.is_completed());
+}
+
+#[tokio::test]
+async fn cancel_turn_aborts_in_flight_turn() {
+    struct NeverProvider {
+        name: ProviderName,
+        started: Arc<Notify>,
+    }
+
+    #[async_trait]
+    impl AgentProvider for NeverProvider {
+        fn name(&self) -> ProviderName {
+            self.name.clone()
+        }
+
+        async fn complete(&self, _request: AgentRequest) -> Result<AgentResponse, ProviderError> {
+            Err(ProviderError::new("stream_only", "streaming provider"))
+        }
+
+        async fn stream(
+            &self,
+            _request: AgentRequest,
+        ) -> Result<Box<dyn AgentStream>, ProviderError> {
+            self.started.notify_one();
+            Ok(Box::new(NeverStream))
+        }
+
+        async fn list_models(&self) -> Result<Vec<ModelInfo>, ProviderError> {
+            Ok(Vec::new())
+        }
+    }
+
+    let host = build_host("ws-agent-cancel");
+    let started = Arc::new(Notify::new());
+    host.agent_service()
+        .providers()
+        .register(Arc::new(NeverProvider {
+            name: ProviderName::new("mock"),
+            started: Arc::clone(&started),
+        }));
+    host.agent_service().create_session(
+        AgentSessionId::new("sess-1"),
+        AgentMode::Agent,
+        ProviderName::new("mock"),
+        "2026-06-12T00:00:00Z",
+    );
+
+    let service = host.agent_service().clone();
+    let turn = tokio::spawn({
+        let service = Arc::clone(&service);
+        async move {
+            service
+                .run_turn(AgentServiceTurnRequest::from_user_text(
+                    AgentSessionId::new("sess-1"),
+                    AgentTurnId::new("turn-1"),
+                    ModelName::new("test-model"),
+                    "never finishes",
+                ))
+                .await
+        }
+    });
+
+    tokio::time::timeout(Duration::from_secs(5), started.notified())
+        .await
+        .expect("turn reaches the provider");
+    service
+        .cancel_turn(&AgentSessionId::new("sess-1"))
+        .expect("active turn cancels");
+
+    let result = tokio::time::timeout(Duration::from_secs(10), turn)
+        .await
+        .expect("cancelled turn finishes")
+        .expect("turn task joins")
+        .expect("cancelled turn returns a result");
+    assert_eq!(result.stop_reason(), AgentTurnStopReason::Cancelled);
+    assert!(!result.is_completed());
+
+    assert!(matches!(
+        service.cancel_turn(&AgentSessionId::new("sess-1")),
+        Err(AppHostError::NoActiveAgentTurn { .. })
+    ));
+    assert!(matches!(
+        service.cancel_turn(&AgentSessionId::new("missing")),
+        Err(AppHostError::UnknownAgentSession { .. })
+    ));
+}
+
+#[tokio::test]
+async fn turn_initializes_and_persists_per_session_context() {
+    let host = build_host("ws-agent-context-persist");
+    host.agent_service()
+        .providers()
+        .register(Arc::new(ScriptedProvider::new(
+            "mock",
+            vec![AgentResponse::new(Message::assistant("persisted context"))],
+        )));
+    host.agent_service().create_session(
+        AgentSessionId::new("sess-1"),
+        AgentMode::Agent,
+        ProviderName::new("mock"),
+        "2026-06-12T00:00:00Z",
+    );
+
+    host.agent_service()
+        .run_turn(AgentServiceTurnRequest::from_user_text(
+            AgentSessionId::new("sess-1"),
+            AgentTurnId::new("turn-1"),
+            ModelName::new("test-model"),
+            "hello",
+        ))
+        .await
+        .expect("turn succeeds");
+
+    let context_file = host.base_path().join("agent-sessions").join("sess-1.json");
+    let contents = std::fs::read_to_string(&context_file).expect("per-session context file exists");
+    let parsed: serde_json::Value =
+        serde_json::from_str(&contents).expect("persisted context is JSON");
+    assert_eq!(parsed["session_id"], "sess-1");
+    assert!(parsed["history"].is_array());
 }
 
 fn build_host(scope: &str) -> WorkspaceHost {
