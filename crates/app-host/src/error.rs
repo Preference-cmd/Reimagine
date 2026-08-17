@@ -1,5 +1,5 @@
 use reimagine_config::ConfigError;
-use reimagine_core::model::{RunId, WorkflowId, WorkflowVersion};
+use reimagine_core::model::{ProjectId, RunId, WorkflowId, WorkflowVersion};
 use reimagine_runtime::RuntimeServiceError;
 
 use crate::artifact_access::ArtifactAccessError;
@@ -9,6 +9,15 @@ pub type AppHostResult<T> = Result<T, AppHostError>;
 
 #[derive(Debug)]
 pub enum AppHostError {
+    UnknownProject {
+        project_id: ProjectId,
+    },
+    ProjectAlreadyExists {
+        project_id: ProjectId,
+    },
+    UnknownBoard {
+        project_id: ProjectId,
+    },
     UnknownWorkflow {
         workflow_id: WorkflowId,
     },
@@ -21,6 +30,12 @@ pub enum AppHostError {
         current_version: WorkflowVersion,
     },
     UnknownAgentSession {
+        session_id: reimagine_agent_harness::AgentSessionId,
+    },
+    AgentTurnInProgress {
+        session_id: reimagine_agent_harness::AgentSessionId,
+    },
+    NoActiveAgentTurn {
         session_id: reimagine_agent_harness::AgentSessionId,
     },
     UnknownAgentProvider {
@@ -70,6 +85,15 @@ pub enum AppHostError {
 impl std::fmt::Display for AppHostError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
+            Self::UnknownProject { project_id } => {
+                write!(f, "unknown project `{project_id}`")
+            }
+            Self::ProjectAlreadyExists { project_id } => {
+                write!(f, "project `{project_id}` already exists")
+            }
+            Self::UnknownBoard { project_id } => {
+                write!(f, "project `{project_id}` has no board")
+            }
             Self::UnknownWorkflow { workflow_id } => {
                 write!(f, "unknown workflow `{workflow_id}`")
             }
@@ -86,6 +110,18 @@ impl std::fmt::Display for AppHostError {
             ),
             Self::UnknownAgentSession { session_id } => {
                 write!(f, "unknown agent session `{session_id}`")
+            }
+            Self::AgentTurnInProgress { session_id } => {
+                write!(
+                    f,
+                    "agent session `{session_id}` already has a turn in progress"
+                )
+            }
+            Self::NoActiveAgentTurn { session_id } => {
+                write!(
+                    f,
+                    "agent session `{session_id}` has no active turn to cancel"
+                )
             }
             Self::UnknownAgentProvider { provider } => {
                 write!(f, "unknown agent provider `{provider}`")
@@ -144,10 +180,15 @@ impl AppHostError {
     /// Machine-readable classification for IPC error payloads.
     pub fn code(&self) -> AppHostErrorCode {
         match self {
+            Self::UnknownProject { .. } => AppHostErrorCode::NotFound,
+            Self::ProjectAlreadyExists { .. } => AppHostErrorCode::Conflict,
+            Self::UnknownBoard { .. } => AppHostErrorCode::NotFound,
             Self::UnknownWorkflow { .. } => AppHostErrorCode::NotFound,
             Self::NoPendingProposal { .. } => AppHostErrorCode::NotFound,
             Self::ProposalStale { .. } => AppHostErrorCode::Conflict,
             Self::UnknownAgentSession { .. } => AppHostErrorCode::NotFound,
+            Self::AgentTurnInProgress { .. } => AppHostErrorCode::Conflict,
+            Self::NoActiveAgentTurn { .. } => AppHostErrorCode::NotFound,
             Self::UnknownAgentProvider { .. } => AppHostErrorCode::UnknownProvider,
             Self::UnknownAgentMode { .. } => AppHostErrorCode::CommandFailed,
             Self::UnknownRun { .. } => AppHostErrorCode::NotFound,
@@ -184,6 +225,11 @@ impl AppHostError {
     /// Optional structured context for the IPC error payload.
     pub fn details(&self) -> Option<serde_json::Value> {
         match self {
+            Self::UnknownProject { project_id }
+            | Self::ProjectAlreadyExists { project_id }
+            | Self::UnknownBoard { project_id } => {
+                Some(serde_json::json!({ "project_id": project_id.to_string() }))
+            }
             Self::UnknownWorkflow { workflow_id } => {
                 Some(serde_json::json!({ "workflow_id": workflow_id.to_string() }))
             }
@@ -199,7 +245,9 @@ impl AppHostError {
                 "proposal_base_version": proposal_base_version.to_string(),
                 "current_version": current_version.to_string(),
             })),
-            Self::UnknownAgentSession { session_id } => {
+            Self::UnknownAgentSession { session_id }
+            | Self::AgentTurnInProgress { session_id }
+            | Self::NoActiveAgentTurn { session_id } => {
                 Some(serde_json::json!({ "session_id": session_id.to_string() }))
             }
             Self::UnknownRun { run_id } => {

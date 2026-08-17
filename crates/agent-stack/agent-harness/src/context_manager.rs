@@ -211,8 +211,8 @@ impl std::error::Error for ContextError {
 pub struct ContextConfig {
     /// Token hard limit for the stored history.
     pub max_tokens: usize,
-    /// Session persistence directory. Stored now for AS-03 session
-    /// persistence; not used by the V1 context manager.
+    /// Session persistence directory used by [`ContextManager::persist`]
+    /// and [`ContextManager::load`] (AS-03, AR-02 embedded path).
     pub session_dir: PathBuf,
     /// Soft-trigger cushion (CM-V2a, decision table M1):
     /// `needs_compaction()` fires once the history exceeds

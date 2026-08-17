@@ -24,7 +24,7 @@ pub fn validate_tool_input(
     tool_name: &ToolName,
 ) -> Result<(), ToolError> {
     // Basic JSON Schema validation
-    if let Err(e) = validate_value_against_schema(schema, input) {
+    if let Err(e) = validate_json_value(schema, input) {
         return Err(ToolError::new(
             ToolErrorCode::InvalidInput,
             format!("input validation failed: {e}"),
@@ -33,6 +33,16 @@ pub fn validate_tool_input(
     }
 
     Ok(())
+}
+
+/// Validate an arbitrary JSON value against a JSON Schema document.
+///
+/// This is the schema core shared by tool-input validation and
+/// structured-output validation. The V1 validator covers the subset the
+/// tool and structured-output contracts use: `type`, `properties`,
+/// `required`, nested property schemas, and `enum`.
+pub fn validate_json_value(schema: &Value, value: &Value) -> Result<(), String> {
+    validate_value_against_schema(schema, value)
 }
 
 /// Validate tool output size against the configured limit.

@@ -37,11 +37,3 @@ opener = "0.7"
 
 [dev-dependencies]
 tempfile = { workspace = true }
-
-# Scripted mock daemon used by the agent bridge tests. Compiled as a
-# plain binary (no test harness) so the bridge test can spawn it as a
-# child process.
-[[test]]
-name = "mock_daemon"
-path = "tests/mock_daemon.rs"
-harness = false

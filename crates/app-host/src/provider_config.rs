@@ -168,6 +168,50 @@ impl reimagine_config::ConfigDocument for AgentProviderConfigDocument {
 
         let mut diagnostics = Vec::new();
         for provider in &self.providers {
+            let present_protocols = [
+                (
+                    Protocol::OpenAiChatCompletions,
+                    provider.openai_chat_completions().is_some(),
+                ),
+                (
+                    Protocol::AnthropicMessages,
+                    provider.anthropic_messages().is_some(),
+                ),
+                (
+                    Protocol::OpenAiResponses,
+                    provider.openai_responses().is_some(),
+                ),
+            ];
+            let present: Vec<&str> = present_protocols
+                .iter()
+                .filter_map(|(protocol, is_present)| is_present.then_some(protocol.as_str()))
+                .collect();
+
+            // AR-10: a single provider must select exactly one wire
+            // protocol. Reject mixed inner configs regardless of the
+            // `enabled` flag so a disabled-but-misconfigured entry
+            // cannot surprise a later re-enable.
+            if present.len() > 1 {
+                diagnostics.push(Diagnostic::new(
+                    DiagnosticId::new(format!(
+                        "config:agent_providers:{}:mixed_protocol",
+                        provider.name()
+                    )),
+                    DiagnosticCode::new("CONFIG/AGENT_PROVIDER_MIXED_PROTOCOL"),
+                    DiagnosticSeverity::Error,
+                    DiagnosticSourceName::new("config"),
+                    format!(
+                        "provider `{}` rejected: multiple protocol configs detected; \
+                         A provider must use exactly one protocol; found {}: {}",
+                        provider.name(),
+                        present.len(),
+                        present.join(", ")
+                    ),
+                    DiagnosticTarget::new(DiagnosticTargetDomain::new("config"))
+                        .with_id("agent-providers.json"),
+                ));
+            }
+
             let expected = provider.protocol();
             let has_inner = match expected {
                 Protocol::OpenAiChatCompletions => provider.openai_chat_completions().is_some(),

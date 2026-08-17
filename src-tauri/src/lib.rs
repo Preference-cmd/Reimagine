@@ -2,7 +2,6 @@ mod desktop_host;
 mod download_event_hub;
 mod event_hub;
 
-
 use desktop_host::{DesktopHostState, WorkerSwitchResultDto, default_workspace_path};
 use event_hub::RunEventPayload;
 use reimagine_app_host::TurnRunResult;
@@ -194,6 +193,8 @@ async fn create_agent_session(
 /// `turn_id` is a caller-generated id for this turn (idempotent retries).
 /// `model` is the model name string for the registered provider.
 /// `input` is a JSON array of `{ role, content }` message objects.
+/// `output_schema`, when present, requires the final assistant response
+/// to be valid JSON matching the schema (AR-30 structured output).
 /// Resolves once the daemon accepts the turn; daemon notifications stream
 /// `AgentEventPayload` events through the channel.
 #[tauri::command]
@@ -203,10 +204,11 @@ async fn agent_turn(
     turn_id: String,
     model: String,
     input: serde_json::Value,
+    output_schema: Option<serde_json::Value>,
     channel: Channel<AgentEventPayload>,
 ) -> Result<TurnRunResult, TauriCommandError> {
     state
-        .agent_turn(session_id, turn_id, model, input, channel)
+        .agent_turn(session_id, turn_id, model, input, output_schema, channel)
         .await
         .map_err(agent_bridge_command_error)
 }
@@ -893,24 +895,15 @@ mod tests {
     }
 
     #[test]
-    fn agent_bridge_errors_map_to_command_failed() {
-        use super::AgentBridgeError;
+    fn agent_command_errors_map_to_command_failed() {
+        use reimagine_app_host::AppHostError;
         use reimagine_app_host::AppHostErrorCode;
 
-        let protocol = agent_bridge_command_error(AgentBridgeError::Protocol {
-            code: -32602,
-            message: "Provider 'openai' is not configured. Add a provider in Settings.".to_owned(),
+        let mapped = agent_bridge_command_error(AppHostError::UnknownAgentProvider {
+            provider: reimagine_agent_harness::ProviderName::new("openai"),
         });
-        assert_eq!(protocol.code, AppHostErrorCode::CommandFailed);
-        assert_eq!(
-            protocol.message,
-            "Provider 'openai' is not configured. Add a provider in Settings."
-        );
-
-        let not_found =
-            agent_bridge_command_error(AgentBridgeError::DaemonNotFound { searched: vec![] });
-        assert_eq!(not_found.code, AppHostErrorCode::CommandFailed);
-        assert!(not_found.message.contains("not installed"));
+        assert_eq!(mapped.code, AppHostErrorCode::CommandFailed);
+        assert!(mapped.message.contains("openai"));
     }
 
     #[test]
