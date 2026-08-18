@@ -21,6 +21,7 @@ use reimagine_runtime::BoxedRunEventSink;
 use serde::Serialize;
 use tauri::ipc::Channel;
 
+use crate::agent_event_hub::TauriAgentEventHub;
 use crate::download_event_hub::TauriDownloadEventHub;
 use crate::event_hub::{RunEventPayload, TauriRunEventHub};
 
@@ -31,9 +32,9 @@ const APP_HOST_LOCK: &str = "desktop app_host lock poisoned";
 pub struct DesktopHostState {
     app_host: RwLock<AppHost>,
     event_hub: Arc<TauriRunEventHub>,
+    agent_event_hub: Arc<TauriAgentEventHub>,
     download_event_hub: Arc<TauriDownloadEventHub>,
     worker_management: Arc<WorkerManagementService>,
-    // Lazily spawned agent daemon bridge (one daemon per host).
 }
 
 impl Clone for DesktopHostState {
@@ -41,6 +42,7 @@ impl Clone for DesktopHostState {
         Self {
             app_host: RwLock::new(self.app_host.read().expect(APP_HOST_LOCK).clone()),
             event_hub: self.event_hub.clone(),
+            agent_event_hub: self.agent_event_hub.clone(),
             download_event_hub: self.download_event_hub.clone(),
             worker_management: self.worker_management.clone(),
         }
@@ -64,11 +66,10 @@ impl DesktopHostState {
         AppPaths::new(&workspace_base_path).ensure_all().await?;
         let event_hub = Arc::new(TauriRunEventHub::new());
         let event_sink: BoxedRunEventSink = event_hub.clone();
-        // Agent events now stream from the daemon through the bridge; the
-        // in-process agent service is retained for backward compatibility
-        // only, so its events go to a discard sink.
-        let agent_event_sink: Arc<dyn AgentEventSink> =
-            Arc::new(reimagine_agent_harness::VecAgentEventSink::new());
+        // AR-03: agent events stream through the TauriChannel hub (the
+        // embedded TurnEventSink), not the frozen daemon JSON-RPC path.
+        let agent_event_hub = Arc::new(TauriAgentEventHub::new());
+        let agent_event_sink: Arc<dyn AgentEventSink> = agent_event_hub.clone();
         let workspace = WorkspaceHost::try_with_app_data_root_and_event_sinks(
             WorkspaceScope::new(WORKSPACE_SCOPE),
             &workspace_base_path,
@@ -84,6 +85,7 @@ impl DesktopHostState {
         Ok(Self {
             app_host: RwLock::new(AppHost::new(workspace)),
             event_hub,
+            agent_event_hub,
             download_event_hub,
             worker_management,
         })
@@ -350,7 +352,7 @@ impl DesktopHostState {
         model: String,
         input: serde_json::Value,
         output_schema: Option<serde_json::Value>,
-        _channel: Channel<AgentEventPayload>,
+        channel: Channel<AgentEventPayload>,
     ) -> Result<TurnRunResult, AppHostError> {
         let input_text = turn_input_text(&input)?;
 
@@ -367,9 +369,18 @@ impl DesktopHostState {
                 .get_session(&session_id)?
         };
 
+        // AR-03: subscribe the channel so embedded AgentEvents stream to
+        // the UI, then drop the subscription (backend drops its sender)
+        // when the turn finishes.
+        self.agent_event_hub.subscribe(&session_id, channel);
+
         // Create turn request
-        let mut request =
-            AgentServiceTurnRequest::from_user_text(session_id, turn_id, model.into(), input_text);
+        let mut request = AgentServiceTurnRequest::from_user_text(
+            session_id.clone(),
+            turn_id,
+            model.into(),
+            input_text,
+        );
         if let Some(output_schema) = output_schema {
             request = request.with_output_schema(output_schema);
         }
@@ -380,8 +391,20 @@ impl DesktopHostState {
                 let app_host = self.app_host.read().expect(APP_HOST_LOCK);
                 app_host.workspace().agent_service().clone()
             };
-            agent_service.run_turn(request).await?
+            agent_service.run_turn(request).await
         };
+
+        // On success, emit the synthetic turn_completed marker, then
+        // disconnect the channel. On error, the harness already emitted
+        // provider_error through the hub; still unsubscribing so a failed
+        // turn cannot leak a live sender.
+        let completed = result.as_ref().map(agent_turn_completed_message).ok();
+        self.agent_event_hub.send_turn_completed(
+            &session_id,
+            completed.unwrap_or_else(|| "turn failed".to_string()),
+        );
+        self.agent_event_hub.unsubscribe(&session_id);
+        let result = result?;
 
         // Convert result to TurnRunResult
         Ok(TurnRunResult {
@@ -1082,6 +1105,19 @@ fn turn_completed_message(result: &serde_json::Value) -> Option<String> {
             }
         }
         _ => Some(result.to_string()),
+    }
+}
+
+/// Build the end-of-turn marker message for the turn_completed payload:
+/// the final response text when present, otherwise a status summary.
+fn agent_turn_completed_message(result: &reimagine_agent_harness::AgentTurnResult) -> String {
+    match result.final_response() {
+        Some(message) if !message.content().is_empty() => message.content().to_string(),
+        _ => format!(
+            "status={:?} stop_reason={:?}",
+            result.status(),
+            result.stop_reason()
+        ),
     }
 }
 
