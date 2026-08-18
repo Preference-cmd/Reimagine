@@ -16,12 +16,17 @@ use crate::mode::AgentMode;
 use crate::permissions::PermissionSet;
 use crate::provider::Message;
 use crate::registry::AgentToolRegistry;
+use reimagine_core::model::ProjectId;
 
 /// In-memory V1 agent session. Bound to a single workspace scope.
 #[derive(Clone)]
 pub struct AgentSession {
     id: AgentSessionId,
     workspace_scope: WorkspaceScope,
+    /// The project this thread belongs to (AR-14). None for legacy
+    /// unbound sessions; app-host binds via with_project_id or
+    /// AgentService::create_thread.
+    project_id: Option<ProjectId>,
     mode: AgentMode,
     provider: ProviderName,
     registry: Arc<AgentToolRegistry>,
@@ -44,6 +49,7 @@ impl std::fmt::Debug for AgentSession {
         f.debug_struct("AgentSession")
             .field("id", &self.id)
             .field("workspace_scope", &self.workspace_scope)
+            .field("project_id", &self.project_id)
             .field("mode", &self.mode)
             .field("provider", &self.provider)
             .field("registry", &"Arc<AgentToolRegistry>")
@@ -68,6 +74,7 @@ impl AgentSession {
         Self {
             id,
             workspace_scope,
+            project_id: None,
             mode,
             provider,
             registry,
@@ -91,6 +98,12 @@ impl AgentSession {
         self
     }
 
+    /// Builder-style: bind this thread to a project (AR-14).
+    pub fn with_project_id(mut self, project_id: ProjectId) -> Self {
+        self.project_id = Some(project_id);
+        self
+    }
+
     /// Builder-style: pre-populate the conversation history. Replaces
     /// any previously set history. Used by hosts that hydrate a
     /// session from persistent storage; in normal turn flow the loop
@@ -106,6 +119,10 @@ impl AgentSession {
 
     pub fn workspace_scope(&self) -> &WorkspaceScope {
         &self.workspace_scope
+    }
+
+    pub fn project_id(&self) -> Option<&ProjectId> {
+        self.project_id.as_ref()
     }
 
     pub fn mode(&self) -> AgentMode {
@@ -225,6 +242,14 @@ mod tests {
         // Cloned session sees the same history.
         assert_eq!(clone.history_len(), 1);
         assert_eq!(clone.history()[0].content(), "from-original");
+    }
+
+    #[test]
+    fn session_can_be_bound_to_project() {
+        let sess = empty_session().with_project_id(reimagine_core::model::ProjectId::new("proj-a"));
+        assert_eq!(sess.project_id().unwrap().as_str(), "proj-a");
+        // Default remains unbound (legacy sessions).
+        assert!(empty_session().project_id().is_none());
     }
 
     #[test]

@@ -8,6 +8,7 @@
 //! workspace.
 
 use reimagine_core::diagnostic::CorrelationId;
+use reimagine_core::model::ProjectId;
 
 use crate::ids::{AgentSessionId, WorkspaceScope};
 use crate::mode::AgentMode;
@@ -62,6 +63,9 @@ impl Default for Actor {
 pub struct ToolContext {
     workspace_scope: WorkspaceScope,
     agent_session_id: AgentSessionId,
+    /// The project the invoking thread belongs to (AR-14). None when the
+    /// host has not bound the session to a project.
+    project_id: Option<ProjectId>,
     mode: AgentMode,
     correlation_id: Option<CorrelationId>,
     actor: Actor,
@@ -80,6 +84,7 @@ impl ToolContext {
         Self {
             workspace_scope,
             agent_session_id,
+            project_id: None,
             mode,
             correlation_id: None,
             actor: Actor::default(),
@@ -105,12 +110,28 @@ impl ToolContext {
         self
     }
 
+    /// Bind this context to a project (AR-14).
+    pub fn with_project_id(self, project_id: ProjectId) -> Self {
+        self.with_project_id_opt(Some(project_id))
+    }
+
+    /// Bind this context to a project, or leave it unbound when None
+    /// (AR-14). The loop passes the session's project id here.
+    pub fn with_project_id_opt(mut self, project_id: Option<ProjectId>) -> Self {
+        self.project_id = project_id;
+        self
+    }
+
     pub fn workspace_scope(&self) -> &WorkspaceScope {
         &self.workspace_scope
     }
 
     pub fn agent_session_id(&self) -> &AgentSessionId {
         &self.agent_session_id
+    }
+
+    pub fn project_id(&self) -> Option<&ProjectId> {
+        self.project_id.as_ref()
     }
 
     pub fn mode(&self) -> AgentMode {
