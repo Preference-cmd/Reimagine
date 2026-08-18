@@ -10,7 +10,7 @@
 //! keeps the lifecycle model easy to unit-test and easy to reuse from
 //! `app-host`, future Axum adapters, and tests.
 
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
@@ -420,6 +420,10 @@ pub struct AgentTurnResult {
     diagnostics: Vec<Diagnostic>,
     usage: Option<Usage>,
     messages: Vec<Message>,
+    /// Wall-clock duration of the turn (AR-29). Measured from the turn
+    /// start stamp to the terminal result; None while the turn is
+    /// running or for hand-built seeds.
+    duration: Option<Duration>,
 }
 
 #[allow(clippy::new_without_default)]
@@ -445,6 +449,7 @@ impl AgentTurnResult {
             diagnostics: Vec::new(),
             usage: None,
             messages: Vec::new(),
+            duration: None,
         }
     }
 
@@ -499,6 +504,37 @@ impl AgentTurnResult {
     pub fn with_usage(mut self, usage: Usage) -> Self {
         self.usage = Some(usage);
         self
+    }
+
+    /// Accumulate a usage sample across rounds instead of overwriting
+    /// (AR-29): each round's token buckets are summed into the running
+    /// result, so a multi-round turn reports cumulative usage.
+    pub fn accumulate_usage(&mut self, usage: Usage) {
+        match &mut self.usage {
+            Some(acc) => acc.merge(usage),
+            None => self.usage = Some(usage),
+        }
+    }
+
+    /// Stamp the elapsed wall-clock time of the turn (AR-29). Call with
+    /// a `turn_start` recorded at the beginning of `run_turn`.
+    pub fn with_duration_since(mut self, turn_start: Instant) -> Self {
+        self.duration = Some(turn_start.elapsed());
+        self
+    }
+
+    /// Wall-clock duration of the turn, when measured.
+    pub fn duration(&self) -> Option<Duration> {
+        self.duration
+    }
+
+    /// Estimate the monetary cost of the turn using per-million-token
+    /// prices (AR-29). Returns None when usage is unavailable.
+    pub fn estimated_cost(&self, input_per_million: f64, output_per_million: f64) -> Option<f64> {
+        let usage = self.usage.as_ref()?;
+        let input = usage.input_tokens().unwrap_or(0) as f64 / 1_000_000.0;
+        let output = usage.output_tokens().unwrap_or(0) as f64 / 1_000_000.0;
+        Some(input * input_per_million + output * output_per_million)
     }
 
     pub fn with_messages(mut self, messages: Vec<Message>) -> Self {
@@ -815,6 +851,30 @@ mod tests {
         assert!(r.usage().is_none());
         assert!(r.messages().is_empty());
         assert_eq!(r.tool_steps(), 0);
+    }
+
+    #[test]
+    fn agent_turn_result_accumulates_usage_across_rounds() {
+        let mut r = AgentTurnResult::new();
+        r.accumulate_usage(Usage::new(Some(10), Some(20)).with_reasoning_tokens(Some(3)));
+        r.accumulate_usage(Usage::new(Some(15), Some(5)));
+        let usage = r.usage().unwrap();
+        assert_eq!(usage.input_tokens(), Some(25));
+        assert_eq!(usage.output_tokens(), Some(25));
+        assert_eq!(usage.reasoning_tokens(), Some(3));
+    }
+
+    #[test]
+    fn agent_turn_result_duration_and_cost_estimate() {
+        use std::time::Instant;
+        let start = Instant::now();
+        let r = AgentTurnResult::new()
+            .with_usage(Usage::new(Some(1_000_000), Some(500_000)))
+            .with_duration_since(start);
+        assert!(r.duration().is_some());
+        // 1M input @ $3 + 0.5M output @ $15 = $3 + $7.5
+        let cost = r.estimated_cost(3.0, 15.0).unwrap();
+        assert!((cost - 10.5).abs() < 1e-6);
     }
 
     #[test]

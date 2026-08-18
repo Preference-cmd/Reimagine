@@ -204,8 +204,10 @@ impl AgentLoop {
         request: AgentTurnRequest,
         context: Option<&mut ContextManager>,
     ) -> AgentTurnResult {
+        let turn_start = Instant::now();
         self.run_turn_inner(request, context, TurnRound::Complete)
             .await
+            .with_duration_since(turn_start)
     }
 
     /// Shared turn skeleton (AC-08): both turn paths run through this
@@ -558,7 +560,8 @@ impl AgentLoop {
         };
 
         if let Some(usage) = response.usage().cloned() {
-            *result = take_result(result).with_usage(usage);
+            // AR-29: accumulate across rounds (not overwrite).
+            result.accumulate_usage(usage);
         }
 
         RoundOutcome::Assistant {
@@ -672,7 +675,8 @@ impl AgentLoop {
                     pending_tool_calls.push(tc);
                 }
                 AgentStreamEvent::Usage(u) => {
-                    *result = take_result(result).with_usage(u);
+                    // AR-29: accumulate across rounds (not overwrite).
+                    result.accumulate_usage(u);
                 }
                 // Server-side compaction (Responses API, PV-01b
                 // reserved channel): informational. The opaque
@@ -760,8 +764,10 @@ impl AgentLoop {
         request: AgentTurnRequest,
         context: Option<&mut ContextManager>,
     ) -> AgentTurnResult {
+        let turn_start = Instant::now();
         self.run_turn_inner(request, context, TurnRound::Streaming)
             .await
+            .with_duration_since(turn_start)
     }
 
     /// Stop the turn with a provider-level failure: record the
@@ -981,7 +987,8 @@ impl AgentLoop {
                         request.session().id().clone(),
                         request.session().mode(),
                     )
-                    .with_permissions(request.session().permissions().clone());
+                    .with_permissions(request.session().permissions().clone())
+                    .with_project_id_opt(request.session().project_id().cloned());
                     let name = ToolName::new(tc.name());
                     let tc_owned = tc.clone();
                     let cancel = request.cancel_token().clone();
@@ -1012,7 +1019,8 @@ impl AgentLoop {
                     request.session().id().clone(),
                     request.session().mode(),
                 )
-                .with_permissions(request.session().permissions().clone());
+                .with_permissions(request.session().permissions().clone())
+                .with_project_id_opt(request.session().project_id().cloned());
                 let tool_result = self
                     .execute_tool(
                         registry,
