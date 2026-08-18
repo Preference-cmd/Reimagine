@@ -19,7 +19,15 @@ pub(super) struct WorkspaceToolSpec {
     pub(super) modes: &'static [AgentMode],
     pub(super) permission: &'static str,
     pub(super) risk: ToolRiskLevel,
+    /// JSON Schema (draft-07 subset) for the tool input, as text so it
+    /// stays Copy. Defaults to a transparent `object`; tools advertise
+    /// field-accurate schemas via `with_schemas` (AR-38).
+    pub(super) input_schema: &'static str,
+    /// JSON Schema (draft-07 subset) for the tool output.
+    pub(super) output_schema: &'static str,
 }
+
+pub(super) const OBJECT_SCHEMA: &str = r#"{"type":"object"}"#;
 
 impl WorkspaceToolSpec {
     pub(super) const fn new(
@@ -35,7 +43,21 @@ impl WorkspaceToolSpec {
             modes,
             permission,
             risk,
+            input_schema: OBJECT_SCHEMA,
+            output_schema: OBJECT_SCHEMA,
         }
+    }
+
+    /// Attach field-accurate input/output JSON Schemas (AR-38). Schemas
+    /// are raw JSON text kept const so the spec stays Copy.
+    pub(super) const fn with_schemas(
+        mut self,
+        input_schema: &'static str,
+        output_schema: &'static str,
+    ) -> Self {
+        self.input_schema = input_schema;
+        self.output_schema = output_schema;
+        self
     }
 }
 
@@ -135,8 +157,8 @@ where
             ToolPermission::new(self.spec.permission),
             self.spec.risk,
         )
-        .with_input_schema(object_schema())
-        .with_output_schema(object_schema())
+        .with_input_schema(parse_schema(self.spec.input_schema))
+        .with_output_schema(parse_schema(self.spec.output_schema))
     }
 
     async fn invoke(&self, ctx: &ToolContext, input: ToolInput) -> ToolResult {
@@ -176,6 +198,9 @@ pub(super) fn register_workspace_tool<I, O, H>(
     }
 }
 
-fn object_schema() -> serde_json::Value {
-    serde_json::json!({"type": "object"})
+/// Parse a JSON Schema from its const text. A malformed string falls
+/// back to a transparent object so a typo cannot panic tool listing
+/// (AR-38).
+fn parse_schema(text: &str) -> serde_json::Value {
+    serde_json::from_str(text).unwrap_or_else(|_| serde_json::json!({"type": "object"}))
 }
