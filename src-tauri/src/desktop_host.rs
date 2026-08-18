@@ -345,6 +345,7 @@ impl DesktopHostState {
             started_at: session.started_at().to_string(),
         })
     }
+    #[allow(clippy::too_many_arguments)]
     pub async fn agent_turn(
         &self,
         session_id: String,
@@ -352,6 +353,7 @@ impl DesktopHostState {
         model: String,
         input: serde_json::Value,
         output_schema: Option<serde_json::Value>,
+        timeout_ms: Option<u64>,
         channel: Channel<AgentEventPayload>,
     ) -> Result<TurnRunResult, AppHostError> {
         let input_text = turn_input_text(&input)?;
@@ -383,6 +385,9 @@ impl DesktopHostState {
         );
         if let Some(output_schema) = output_schema {
             request = request.with_output_schema(output_schema);
+        }
+        if let Some(timeout_ms) = timeout_ms {
+            request = request.with_turn_timeout(std::time::Duration::from_millis(timeout_ms));
         }
 
         // Run the turn using AgentService

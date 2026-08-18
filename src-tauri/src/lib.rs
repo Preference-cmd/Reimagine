@@ -201,6 +201,7 @@ async fn create_agent_session(
 /// `turn_completed`, ...) stream through the provided channel, which is
 /// closed when the turn finishes.
 #[tauri::command]
+#[allow(clippy::too_many_arguments)]
 async fn agent_turn(
     state: tauri::State<'_, DesktopHostState>,
     session_id: String,
@@ -208,10 +209,19 @@ async fn agent_turn(
     model: String,
     input: serde_json::Value,
     output_schema: Option<serde_json::Value>,
+    timeout_ms: Option<u64>,
     channel: Channel<AgentEventPayload>,
 ) -> Result<TurnRunResult, TauriCommandError> {
     state
-        .agent_turn(session_id, turn_id, model, input, output_schema, channel)
+        .agent_turn(
+            session_id,
+            turn_id,
+            model,
+            input,
+            output_schema,
+            timeout_ms,
+            channel,
+        )
         .await
         .map_err(agent_bridge_command_error)
 }

@@ -1,6 +1,7 @@
 use std::collections::BTreeMap;
 use std::path::PathBuf;
 use std::sync::{Arc, Mutex, RwLock};
+use std::time::Duration;
 
 use reimagine_agent_harness::{
     AgentEventSink, AgentLoop, AgentMode, AgentSession, AgentSessionId, AgentToolRegistry,
@@ -135,6 +136,7 @@ pub struct AgentServiceTurnRequest {
     input: Vec<Message>,
     max_tool_steps: Option<usize>,
     output_schema: Option<serde_json::Value>,
+    turn_timeout: Option<Duration>,
 }
 
 impl AgentServiceTurnRequest {
@@ -151,6 +153,7 @@ impl AgentServiceTurnRequest {
             input,
             max_tool_steps: None,
             output_schema: None,
+            turn_timeout: None,
         }
     }
 
@@ -173,6 +176,15 @@ impl AgentServiceTurnRequest {
     pub fn with_output_schema(mut self, schema: serde_json::Value) -> Self {
         self.output_schema = Some(schema);
         self
+    }
+
+    pub fn with_turn_timeout(mut self, timeout: Duration) -> Self {
+        self.turn_timeout = Some(timeout);
+        self
+    }
+
+    pub fn turn_timeout(&self) -> Option<Duration> {
+        self.turn_timeout
     }
 
     pub fn session_id(&self) -> &AgentSessionId {
@@ -387,6 +399,8 @@ impl AgentService {
         if let Some(output_schema) = request.output_schema() {
             turn_request = turn_request.with_output_schema(output_schema.clone());
         }
+        turn_request = turn_request
+            .with_turn_timeout(request.turn_timeout().unwrap_or(Duration::from_secs(300)));
 
         let loop_harness = AgentLoop::new(provider, Arc::clone(&self.event_sink));
         let mut context_guard = runtime.context.lock().await;

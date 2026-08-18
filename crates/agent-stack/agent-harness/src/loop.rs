@@ -46,6 +46,12 @@ use crate::validation::validate_json_value;
 /// stops with `STRUCTURED_OUTPUT_INVALID` (AR-30).
 const MAX_STRUCTURED_OUTPUT_RETRIES: usize = 1;
 
+/// How long a context-compaction summarizer call may run before it is
+/// abandoned (AR-19). A stuck summarizer must not wedge the turn; the
+/// abandoned summary is treated as transient so compaction retries next
+/// turn.
+const COMPACTION_DEADLINE: Duration = Duration::from_secs(60);
+
 /// Host-neutral event sink for agent-local events.
 ///
 /// `AgentLoop` forwards `AgentEvent` values through an `AgentEventSink`
@@ -409,6 +415,7 @@ impl AgentLoop {
                 self.provider.as_ref(),
                 request.model(),
                 request.session().id(),
+                request.cancel_token(),
             )
             .await
             {
@@ -944,7 +951,14 @@ impl AgentLoop {
             .with_permissions(request.session().permissions().clone());
 
             let tool_result = self
-                .execute_tool(registry, &tool_name, tool_call, &tool_context)
+                .execute_tool(
+                    registry,
+                    &tool_name,
+                    tool_call,
+                    &tool_context,
+                    request.cancel_token(),
+                    request.turn_timeout(),
+                )
                 .await;
 
             let observation_content = tool_observation_text(&tool_result);
@@ -966,15 +980,22 @@ impl AgentLoop {
         tool_name: &ToolName,
         tool_call: &crate::provider::ToolCall,
         tool_context: &ToolContext,
+        cancel_token: &tokio_util::sync::CancellationToken,
+        turn_timeout: Option<Duration>,
     ) -> ToolCallResult {
         let session_id = tool_context.agent_session_id().clone();
         let tool_call_id = tool_call.id().clone();
         let tool_name_owned = tool_name.clone();
 
-        match registry
-            .invoke(tool_name, tool_context, tool_call.arguments().clone())
-            .await
-        {
+        let invocation = registry.invoke(tool_name, tool_context, tool_call.arguments().clone());
+        let deadline = tokio::time::sleep(turn_timeout.unwrap_or(Duration::from_secs(300)));
+        tokio::pin!(deadline);
+        let invocation_result = tokio::select! {
+            _ = cancel_token.cancelled() => Err(ToolRegistryError::ToolReturned(ToolError::new(ToolErrorCode::ExecutionFailed, "tool execution cancelled"))),
+            _ = &mut deadline => Err(ToolRegistryError::ToolReturned(ToolError::new(ToolErrorCode::ExecutionFailed, "tool execution timed out"))),
+            result = invocation => result,
+        };
+        match invocation_result {
             Ok(output) => {
                 self.sink.handle(&AgentEvent::ToolCompleted {
                     session_id: session_id.clone(),
@@ -1174,6 +1195,7 @@ async fn maybe_compact(
     provider: &dyn AgentProvider,
     model: &ModelName,
     session_id: &AgentSessionId,
+    cancel_token: &tokio_util::sync::CancellationToken,
 ) -> Option<AgentEvent> {
     if !manager.needs_compaction() || !manager.should_attempt_compaction() {
         return None;
@@ -1186,7 +1208,19 @@ async fn maybe_compact(
     let summarize_messages = manager.summarize_request();
     let provider_request = AgentRequest::new(model.clone(), summarize_messages)
         .with_options(serde_json::json!({ "max_tokens": SUMMARY_MAX_TOKENS }));
-    let summary_text = match provider.complete(provider_request).await {
+    // The summarizer call races two stops (AR-19): user cancellation
+    // aborts the summary immediately, and a 60s deadline guarantees a
+    // stuck summarizer cannot wedge the turn. A cancelled/timed-out
+    // summary is recorded as a transient failure so compaction retries
+    // next turn instead of advancing the permanent-failure streak.
+    let compaction = provider.complete(provider_request);
+    let deadline = tokio::time::sleep(COMPACTION_DEADLINE);
+    tokio::pin!(deadline);
+    let summary_text = match tokio::select! {
+        _ = cancel_token.cancelled() => Err(ProviderError::new("CANCELLED", "compaction cancelled")),
+        _ = &mut deadline => Err(ProviderError::new("TIMEOUT", "compaction deadline exceeded")),
+        result = compaction => result,
+    } {
         Ok(response) => response.message().content().to_owned(),
         Err(err) => {
             // AC-24: transient provider hiccups (transport, timeout,
@@ -3369,6 +3403,113 @@ mod tests {
         let result = handle.await.expect("turn finishes promptly after cancel");
         assert_eq!(result.status(), AgentTurnStatus::Stopped);
         assert_eq!(result.stop_reason(), AgentTurnStopReason::Cancelled);
+    }
+
+    // ----- execute_tool cancel / deadline (AR-19) -----
+
+    /// A tool whose invocation never completes: only the execute_tool
+    /// cancel/deadline race can end it (AR-19).
+    struct HangingTool {
+        spec: ToolSpec,
+    }
+
+    #[async_trait]
+    impl AgentTool for HangingTool {
+        fn spec(&self) -> ToolSpec {
+            self.spec.clone()
+        }
+
+        async fn invoke(&self, _ctx: &ToolContext, _input: Value) -> ToolResult {
+            std::future::pending().await
+        }
+    }
+
+    fn session_with_hanging_tool(name: &str) -> AgentSession {
+        session_with(|reg| {
+            let spec = ToolSpec::new(
+                ToolName::new(name),
+                "hangs forever",
+                [AgentMode::Agent, AgentMode::Build],
+                ToolPermission::new("workflow.read"),
+                ToolRiskLevel::Read,
+            );
+            reg.register(HangingTool { spec }).unwrap();
+        })
+    }
+
+    #[tokio::test]
+    async fn run_turn_cancel_aborts_hanging_tool_execution() {
+        // A tool whose invoke never resolves: cancellation must end the
+        // turn promptly via the execute_tool select! race (AR-19), not
+        // wedge on the in-flight tool future.
+        let provider = Arc::new(ScriptedProvider::new(
+            "mock",
+            vec![ScriptedStep::Respond(response_with_tool_calls(vec![
+                ToolCall::new(ToolCallId::new("hc1"), "hang", json!({})),
+            ]))],
+        ));
+        let sink = Arc::new(VecAgentEventSink::new());
+        let loop_harness = AgentLoop::new(provider, sink.clone());
+
+        let cancel_token = CancellationToken::new();
+        let req = AgentTurnRequest::new(
+            session_with_hanging_tool("hang"),
+            AgentTurnId::new("cancel-tool-1"),
+            ModelName::new("test-model"),
+            vec![Message::user("hi")],
+        )
+        .with_cancel_token(cancel_token.clone());
+
+        let handle = tokio::spawn(async move { loop_harness.run_turn(req, None).await });
+        tokio::time::sleep(Duration::from_millis(50)).await;
+        cancel_token.cancel();
+        let result = handle
+            .await
+            .expect("turn finishes promptly after tool cancel");
+        assert_eq!(result.status(), AgentTurnStatus::Stopped);
+        assert_eq!(result.stop_reason(), AgentTurnStopReason::Cancelled);
+        // The tool failure is observable as a tool_failed event.
+        assert!(sink.events().iter().any(
+            |e| matches!(e, AgentEvent::ToolFailed { id: Some(id), .. } if id.as_str() == "hc1")
+        ));
+    }
+
+    #[tokio::test]
+    async fn run_turn_tool_execution_deadline_stops_turn() {
+        // A hanging tool plus a short turn timeout: the execute_tool
+        // deadline fires, marking the tool failed, then the loop's next
+        // round observes no more provider steps and completes. AR-19's
+        // tool deadline must not hang the turn past the timeout.
+        let provider = Arc::new(ScriptedProvider::new(
+            "mock",
+            vec![ScriptedStep::Respond(response_with_tool_calls(vec![
+                ToolCall::new(ToolCallId::new("hd1"), "hang", json!({})),
+            ]))],
+        ));
+        let sink = Arc::new(VecAgentEventSink::new());
+        let loop_harness = AgentLoop::new(provider, sink.clone());
+
+        let req = AgentTurnRequest::new(
+            session_with_hanging_tool("hang"),
+            AgentTurnId::new("deadline-tool-1"),
+            ModelName::new("test-model"),
+            vec![Message::user("hi")],
+        )
+        .with_turn_timeout(Duration::from_millis(80));
+
+        let result = tokio::time::timeout(Duration::from_secs(5), loop_harness.run_turn(req, None))
+            .await
+            .expect("turn must not hang past the tool deadline");
+        // Scripted provider is exhausted after the tool round, so the
+        // turn ends (Stopped, FinalResponse-free) — the key assertion is
+        // that it did not hang.
+        // Scripted provider is exhausted after the tool round, so the
+        // turn ends with ProviderError — the key assertion is that it
+        // did not hang.
+        assert_eq!(result.stop_reason(), AgentTurnStopReason::ProviderError);
+        assert!(sink.events().iter().any(
+            |e| matches!(e, AgentEvent::ToolFailed { id: Some(id), .. } if id.as_str() == "hd1")
+        ));
     }
 
     // ----- mid-turn cancellation checkpoints (AC-15) -----
