@@ -74,6 +74,21 @@ impl AgentProviderCatalog {
     pub fn is_empty(&self) -> bool {
         self.len() == 0
     }
+
+    /// Atomically replace the whole catalog with the given built
+    /// providers (AR-13). Callers build the full set first (so a build
+    /// failure never leaves a half-updated catalog); this method only
+    /// swaps the backing map under the write lock.
+    pub fn replace_all(&self, providers: Vec<Arc<dyn AgentProvider>>) {
+        let mut map = std::collections::BTreeMap::new();
+        for provider in providers {
+            map.insert(provider.name(), provider);
+        }
+        *self
+            .providers
+            .write()
+            .expect("agent provider catalog poisoned") = map;
+    }
 }
 
 /// Build an `Arc<dyn AgentProvider>` from a `ProviderConfig`.

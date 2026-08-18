@@ -25,6 +25,7 @@ mod project_service;
 mod proposal;
 mod protocol;
 mod provider_config;
+mod provider_service;
 mod readiness;
 mod run_observation;
 mod run_workflow;
@@ -74,6 +75,7 @@ pub use provider_config::{
     AgentProviderConfigDocument, AnthropicMessagesConfig, OpenAiChatCompletionsConfig,
     OpenAiResponsesConfig, Protocol, ProviderConfig,
 };
+pub use provider_service::{ProviderMutationResult, ProviderService, ProviderSummary};
 pub use readiness::SnapshotExternalReadinessProvider;
 pub use reimagine_backend_worker_transport_grpc::{GrpcAuth, GrpcTls};
 pub use reimagine_inference::{BackendInstance, WorkspaceComputeProfile};
