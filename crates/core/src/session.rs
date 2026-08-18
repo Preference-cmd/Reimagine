@@ -129,6 +129,22 @@ impl WorkflowSession {
         }
     }
 
+    /// Roll the session back to `workflow` (a
+    /// pre-apply snapshot) when on-disk persistence fails.
+    ///
+    /// AR-08: an applied change that cannot be persisted must not leave
+    /// memory and disk at divergent accepted versions. The just-applied
+    /// history entry is dropped and the workflow is restored so the
+    /// caller can surface a clearly-failed result instead of a
+    /// phantom success.
+    pub fn restore(&mut self, workflow: Workflow) {
+        if self.history.cursor() > 0 {
+            self.history.move_cursor_back();
+            self.history.truncate_to_cursor();
+        }
+        self.workflow = workflow;
+    }
+
     pub fn undo(&mut self) -> Option<CommandResult> {
         let entry = self.history.entry_to_undo()?.clone();
         let current_version = self.version();

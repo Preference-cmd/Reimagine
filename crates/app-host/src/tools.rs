@@ -325,10 +325,13 @@ async fn workflow_apply_commands(
         });
     }
 
-    // Apply.
+    // Apply through the persisted path (AR-08): the accepted snapshot
+    // is written atomically to the project-owned workflow document, so
+    // agent edits share the same durable workflow file as human edits.
     let result = services
         .workflow_service()
-        .apply_batch(&req.workflow_id, services.node_catalog().as_ref(), batch)
+        .apply_commands(&req.workflow_id, services.node_catalog().as_ref(), batch)
+        .await
         .map_err(|e| tool_error_from_app_host(e, "workflow.apply_commands"))?;
 
     let effective = matches!(result.status(), CommandResultStatus::Applied);

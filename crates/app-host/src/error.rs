@@ -55,6 +55,13 @@ pub enum AppHostError {
         expected: WorkflowVersion,
         actual: WorkflowVersion,
     },
+    /// The workflow commands applied in memory but their atomic
+    /// persistence to `projects/{project_id}/workflows/` failed (AR-08).
+    /// The session was rolled back; the caller must not report success.
+    WorkflowPersistFailed {
+        workflow_id: WorkflowId,
+        message: String,
+    },
     Io {
         path: std::path::PathBuf,
         message: String,
@@ -143,6 +150,13 @@ impl std::fmt::Display for AppHostError {
                 f,
                 "workflow `{workflow_id}` version conflict: expected {expected}, got {actual}"
             ),
+            Self::WorkflowPersistFailed {
+                workflow_id,
+                message,
+            } => write!(
+                f,
+                "workflow `{workflow_id}` could not be persisted after apply: {message}"
+            ),
             Self::Io { path, message } => {
                 write!(f, "io error at `{}`: {message}", path.display())
             }
@@ -194,6 +208,7 @@ impl AppHostError {
             Self::UnknownRun { .. } => AppHostErrorCode::NotFound,
             Self::WorkflowIdPathUnsafe { .. } => AppHostErrorCode::PermissionDenied,
             Self::WorkflowVersionConflict { .. } => AppHostErrorCode::Conflict,
+            Self::WorkflowPersistFailed { .. } => AppHostErrorCode::Io,
             Self::Io { .. } => AppHostErrorCode::Io,
             Self::WorkflowJson { .. } => AppHostErrorCode::WorkflowInvalid,
             Self::BootstrapConfig(_)
@@ -262,6 +277,9 @@ impl AppHostError {
                 "expected": expected.to_string(),
                 "actual": actual.to_string(),
             })),
+            Self::WorkflowPersistFailed { workflow_id, .. } => {
+                Some(serde_json::json!({ "workflow_id": workflow_id.to_string() }))
+            }
             Self::Io { path, .. } => {
                 Some(serde_json::json!({ "path": path.display().to_string() }))
             }
