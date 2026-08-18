@@ -31,6 +31,7 @@ use crate::context_manager::ContextManager;
 use crate::error::{ProviderError, ToolError, ToolErrorCode};
 use crate::event::AgentEvent;
 use crate::ids::{AgentSessionId, ModelName, ToolName};
+use crate::permissions::ToolRiskLevel;
 use crate::provider::{
     AgentProvider, AgentRequest, AgentStreamEvent, AgentToolDefinition, ContentBlock, Message,
     ToolCall,
@@ -930,50 +931,114 @@ impl AgentLoop {
         max_tool_steps: usize,
         tool_steps_taken: &mut usize,
     ) -> Option<AgentTurnResult> {
-        for tool_call in tool_calls {
-            // The guard fires *before* each tool call so the limit is
+        // AR-25: Read tools in a contiguous run execute concurrently;
+        // Editor/External tools execute serially. Observations and
+        // tool_result messages are appended in provider order so the
+        // model sees the full batch deterministically.
+        let mut i = 0usize;
+        while i < tool_calls.len() {
+            // The guard fires *before* each tool slot so the limit is
             // exact, not just per-round.
             if *tool_steps_taken >= max_tool_steps {
                 return Some(self.stop_max_steps(request, result, context, messages, pre_run_len));
             }
-            // Check cancellation before each tool execution.
+            // Check cancellation before each execution step.
             if request.cancel_token().is_cancelled() {
                 return Some(self.stop_cancelled(request, result, context, messages, pre_run_len));
             }
-            *tool_steps_taken += 1;
+            let tool_call = &tool_calls[i];
             let tool_name = ToolName::new(tool_call.name());
-
-            self.sink.handle(&AgentEvent::ToolInvoked {
-                session_id: request.session().id().clone(),
-                tool: tool_name.clone(),
-                id: Some(tool_call.id().clone()),
-            });
-
-            let tool_context = ToolContext::new(
-                request.session().workspace_scope().clone(),
-                request.session().id().clone(),
-                request.session().mode(),
-            )
-            .with_permissions(request.session().permissions().clone())
-            .with_project_id_opt(request.session().project_id().cloned());
-
-            let tool_result = self
-                .execute_tool(
-                    registry,
-                    &tool_name,
-                    tool_call,
-                    &tool_context,
-                    request.cancel_token(),
-                    request.turn_timeout(),
+            let risk = registry
+                .spec(&tool_name)
+                .map(|s| s.risk())
+                .unwrap_or(ToolRiskLevel::External);
+            if risk == ToolRiskLevel::Read {
+                // Gather the contiguous run of Read calls, bounded by the
+                // remaining tool-step budget.
+                let start = i;
+                let mut end = i;
+                while end < tool_calls.len() {
+                    if *tool_steps_taken + (end - start) >= max_tool_steps {
+                        break;
+                    }
+                    let n = ToolName::new(tool_calls[end].name());
+                    let r = registry
+                        .spec(&n)
+                        .map(|s| s.risk())
+                        .unwrap_or(ToolRiskLevel::External);
+                    if r != ToolRiskLevel::Read {
+                        break;
+                    }
+                    end += 1;
+                }
+                let run = &tool_calls[start..end];
+                // Emit ToolInvoked for every call in the run first, then
+                // execute concurrently (observations stay in provider order).
+                for tc in run {
+                    self.sink.handle(&AgentEvent::ToolInvoked {
+                        session_id: request.session().id().clone(),
+                        tool: ToolName::new(tc.name()),
+                        id: Some(tc.id().clone()),
+                    });
+                }
+                let futures = run.iter().map(|tc| {
+                    let ctx = ToolContext::new(
+                        request.session().workspace_scope().clone(),
+                        request.session().id().clone(),
+                        request.session().mode(),
+                    )
+                    .with_permissions(request.session().permissions().clone())
+                    .with_project_id_opt(request.session().project_id().cloned());
+                    let name = ToolName::new(tc.name());
+                    let tc_owned = tc.clone();
+                    let cancel = request.cancel_token().clone();
+                    let timeout = request.turn_timeout();
+                    async move {
+                        self.execute_tool(registry, &name, &tc_owned, &ctx, &cancel, timeout)
+                            .await
+                    }
+                });
+                let results = futures_util::future::join_all(futures).await;
+                *tool_steps_taken += run.len();
+                for (tc, tcr) in run.iter().zip(results) {
+                    let observation_content = tool_observation_text(&tcr);
+                    result.push_tool_call(tcr);
+                    messages.push(Message::tool_result(tc.id().clone(), observation_content));
+                }
+                i = end;
+            } else {
+                // Editor/External: serial, one at a time.
+                *tool_steps_taken += 1;
+                self.sink.handle(&AgentEvent::ToolInvoked {
+                    session_id: request.session().id().clone(),
+                    tool: tool_name.clone(),
+                    id: Some(tool_call.id().clone()),
+                });
+                let ctx = ToolContext::new(
+                    request.session().workspace_scope().clone(),
+                    request.session().id().clone(),
+                    request.session().mode(),
                 )
-                .await;
-
-            let observation_content = tool_observation_text(&tool_result);
-            result.push_tool_call(tool_result);
-            messages.push(Message::tool_result(
-                tool_call.id().clone(),
-                observation_content,
-            ));
+                .with_permissions(request.session().permissions().clone())
+                .with_project_id_opt(request.session().project_id().cloned());
+                let tool_result = self
+                    .execute_tool(
+                        registry,
+                        &tool_name,
+                        tool_call,
+                        &ctx,
+                        request.cancel_token(),
+                        request.turn_timeout(),
+                    )
+                    .await;
+                let observation_content = tool_observation_text(&tool_result);
+                result.push_tool_call(tool_result);
+                messages.push(Message::tool_result(
+                    tool_call.id().clone(),
+                    observation_content,
+                ));
+                i += 1;
+            }
         }
         None
     }
@@ -3610,21 +3675,117 @@ mod tests {
         let result = loop_harness.run_turn(req, None).await;
         assert_eq!(result.status(), AgentTurnStatus::Stopped);
         assert_eq!(result.stop_reason(), AgentTurnStopReason::Cancelled);
-        // The first tool ran; the second never executed.
+        // AR-25: Read tools in one round run as a concurrent batch. The
+        // canceller's sibling may have started concurrently (both calls
+        // are atomic); cancellation stops the loop at the batch boundary
+        // and must never produce a phantom success beyond it.
         assert_eq!(canceller.recorded_inputs().len(), 1);
-        assert_eq!(
-            second.recorded_inputs().len(),
-            0,
-            "the second tool call must not execute after mid-round cancel"
-        );
+        // The sibling may or may not have started before the boundary;
+        // it must never be re-invoked.
+        assert!(second.recorded_inputs().len() <= 1, "no re-invocation");
         assert_eq!(provider.call_count(), 1);
-        assert_eq!(result.tool_calls().len(), 1);
-        // The transcript ends on the first tool observation (the
-        // unexecuted second call has no observation).
+        assert!(result.tool_calls().len() <= 2, "no tools beyond the batch");
+        // The transcript ends on the observed batch: assistant + at least
+        // the first tool observation.
         let messages = result.messages();
-        assert_eq!(messages.len(), 3);
+        assert!(messages.len() >= 3);
         assert_eq!(messages[2].role(), "tool");
-        assert_eq!(messages[2].tool_call_id().unwrap().as_str(), "c1");
+    }
+
+    #[tokio::test]
+    async fn run_turn_read_tools_execute_in_parallel_preserving_order() {
+        // AR-25: two Read tools in one round run concurrently, but their
+        // observation messages are appended in provider order.
+        let alpha = Arc::new(ScriptedTool::success(
+            "alpha",
+            vec![json!({"a": 1}), json!({"a": 2})],
+        ));
+        let beta = Arc::new(ScriptedTool::success(
+            "beta",
+            vec![json!({"b": 1}), json!({"b": 2})],
+        ));
+
+        let provider = Arc::new(ScriptedProvider::new(
+            "mock",
+            vec![ScriptedStep::Respond(response_with_tool_calls(vec![
+                ToolCall::new(ToolCallId::new("c1"), "alpha", json!({})),
+                ToolCall::new(ToolCallId::new("c2"), "beta", json!({})),
+            ]))],
+        ));
+        let loop_harness = AgentLoop::new(provider.clone(), Arc::new(VecAgentEventSink::new()));
+        let session = session_with(|reg| {
+            reg.register((*alpha).clone()).unwrap();
+            reg.register((*beta).clone()).unwrap();
+        });
+
+        let req = AgentTurnRequest::new(
+            session,
+            AgentTurnId::new("parallel-read"),
+            ModelName::new("test-model"),
+            vec![Message::user("hi")],
+        );
+        let result = loop_harness.run_turn(req, None).await;
+
+        // Both tools executed exactly once each.
+        assert_eq!(alpha.recorded_inputs().len(), 1);
+        assert_eq!(beta.recorded_inputs().len(), 1);
+        // Both observations present and ordered c1 then c2.
+        let tool_msgs: Vec<_> = result
+            .messages()
+            .iter()
+            .filter(|m| m.role() == "tool")
+            .collect();
+        assert_eq!(tool_msgs.len(), 2);
+        assert_eq!(tool_msgs[0].tool_call_id().unwrap().as_str(), "c1");
+        assert_eq!(tool_msgs[1].tool_call_id().unwrap().as_str(), "c2");
+    }
+
+    #[tokio::test]
+    async fn run_turn_read_failure_isolates_siblings() {
+        // AR-25: a failing Read tool does not cancel sibling Read tools;
+        // both still produce observations and the loop continues.
+        let ok = Arc::new(ScriptedTool::success("ok", vec![json!({"x": 1})]));
+        let boom = Arc::new(ScriptedTool::failing("boom", "kaboom"));
+
+        let provider = Arc::new(ScriptedProvider::new(
+            "mock",
+            vec![
+                ScriptedStep::Respond(response_with_tool_calls(vec![
+                    ToolCall::new(ToolCallId::new("c1"), "ok", json!({})),
+                    ToolCall::new(ToolCallId::new("c2"), "boom", json!({})),
+                ])),
+                ScriptedStep::Respond(response_with_text("done")),
+            ],
+        ));
+        let loop_harness = AgentLoop::new(provider.clone(), Arc::new(VecAgentEventSink::new()));
+        let session = session_with(|reg| {
+            reg.register((*ok).clone()).unwrap();
+            reg.register((*boom).clone()).unwrap();
+        });
+
+        let req = AgentTurnRequest::new(
+            session,
+            AgentTurnId::new("isolation"),
+            ModelName::new("test-model"),
+            vec![Message::user("hi")],
+        );
+        let result = loop_harness.run_turn(req, None).await;
+
+        // Both ran; boom failed but did not cancel ok.
+        assert_eq!(ok.recorded_inputs().len(), 1, "sibling must still run");
+        assert_eq!(boom.recorded_inputs().len(), 1);
+        // One success and one failure observation, then the final answer.
+        assert_eq!(result.tool_calls().len(), 2);
+        let ok_call = result
+            .tool_calls()
+            .iter()
+            .find(|tc| tc.tool_name().as_str() == "ok")
+            .expect("ok");
+        assert!(
+            ok_call.output().is_some(),
+            "ok tool produced an observation"
+        );
+        assert_eq!(result.stop_reason(), AgentTurnStopReason::FinalResponse);
     }
 
     // ------------------------------------------------------------------
