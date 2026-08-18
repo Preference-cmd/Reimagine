@@ -46,6 +46,7 @@ toml = "0.8"
 safetensors = "0.7"
 tokio = "1"
 tokio-util = { version = "0.7", features = ["io", "rt"] }
+futures-util = "0.3"
 glob-match = "0.2"
 sha2 = "0.10"
 async-trait = "0.1"

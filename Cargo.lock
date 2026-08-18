@@ -6840,6 +6840,7 @@ name = "reimagine-agent-harness"
 version = "0.1.0"
 dependencies = [
  "async-trait",
+ "futures-util",
  "reimagine-config",
  "reimagine-core",
  "reqwest 0.12.28",
