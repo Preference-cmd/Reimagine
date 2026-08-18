@@ -482,6 +482,30 @@ impl Usage {
         self
     }
 
+    /// Merge another usage sample into this one, accumulating each
+    /// token bucket (AR-29). `None` buckets remain `None` unless the
+    /// incoming sample carries a value.
+    pub fn merge(&mut self, other: Usage) {
+        self.input_tokens = Self::add_or(other.input_tokens, self.input_tokens);
+        self.output_tokens = Self::add_or(other.output_tokens, self.output_tokens);
+        self.reasoning_tokens = Self::add_or(other.reasoning_tokens, self.reasoning_tokens);
+        self.cache_creation_input_tokens = Self::add_or(
+            other.cache_creation_input_tokens,
+            self.cache_creation_input_tokens,
+        );
+        self.cache_read_input_tokens =
+            Self::add_or(other.cache_read_input_tokens, self.cache_read_input_tokens);
+    }
+
+    fn add_or(a: Option<u64>, b: Option<u64>) -> Option<u64> {
+        match (a, b) {
+            (Some(x), Some(y)) => Some(x + y),
+            (Some(x), None) => Some(x),
+            (None, Some(y)) => Some(y),
+            (None, None) => None,
+        }
+    }
+
     pub fn input_tokens(&self) -> Option<u64> {
         self.input_tokens
     }
