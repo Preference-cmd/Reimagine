@@ -246,7 +246,7 @@ async fn read_project_atomic_source(path: &Path) -> AppHostResult<Project> {
     }
 }
 
-async fn write_project_atomic(path: &Path, project: &Project) -> AppHostResult<()> {
+pub(crate) async fn write_project_atomic(path: &Path, project: &Project) -> AppHostResult<()> {
     if let Some(parent) = path.parent() {
         tokio::fs::create_dir_all(parent)
             .await

@@ -1,5 +1,5 @@
 use std::collections::BTreeMap;
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
 use std::sync::{Arc, Mutex, RwLock};
 use std::time::UNIX_EPOCH;
 
@@ -12,7 +12,7 @@ use reimagine_core::diagnostic::{
     Diagnostic, DiagnosticCode, DiagnosticSeverity, DiagnosticSourceName, DiagnosticTarget,
     DiagnosticTargetDomain,
 };
-use reimagine_core::model::{DiagnosticId, NodeCatalog, WorkflowId};
+use reimagine_core::model::{DiagnosticId, NodeCatalog, ProjectId, WorkflowId};
 use reimagine_core::session::WorkflowSession;
 use reimagine_core::workflow::Workflow;
 
@@ -31,6 +31,11 @@ pub struct SavedWorkflowInfo {
 
 pub struct WorkflowService {
     app_paths: AppPaths,
+    /// The project this service is scoped to. `WorkflowService::new`
+    /// binds the default project (`"default"`); `for_project` selects an
+    /// explicit project. All persisted workflow paths resolve under
+    /// `projects/{project_id}/workflows/` (AR-08).
+    project_id: ProjectId,
     sessions: RwLock<BTreeMap<WorkflowId, Arc<Mutex<WorkflowSession>>>>,
     proposals: RwLock<BTreeMap<WorkflowId, WorkflowProposal>>,
 }
@@ -48,7 +53,8 @@ impl std::fmt::Debug for WorkflowService {
             .map(|proposals| proposals.len())
             .unwrap_or_default();
         f.debug_struct("WorkflowService")
-            .field("workflows_dir", &self.app_paths.workflows_dir())
+            .field("project_id", &self.project_id)
+            .field("workflows_dir", &self.workflows_dir())
             .field("workflow_count", &workflow_count)
             .field("proposal_count", &proposal_count)
             .finish()
@@ -57,11 +63,23 @@ impl std::fmt::Debug for WorkflowService {
 
 impl WorkflowService {
     pub fn new(app_paths: AppPaths) -> Self {
+        Self::for_project(app_paths, ProjectId::new("default"))
+    }
+
+    /// Bind this service to an explicit project. All persisted workflow
+    /// documents resolve under `projects/{project_id}/workflows/`
+    /// (AR-08); cross-project workflows are rejected by ownership checks.
+    pub fn for_project(app_paths: AppPaths, project_id: ProjectId) -> Self {
         Self {
             app_paths,
+            project_id,
             sessions: RwLock::new(BTreeMap::new()),
             proposals: RwLock::new(BTreeMap::new()),
         }
+    }
+
+    pub fn project_id(&self) -> &ProjectId {
+        &self.project_id
     }
 
     pub fn register_workflow(&self, workflow: Workflow) -> WorkflowId {
@@ -116,6 +134,43 @@ impl WorkflowService {
         let session = self.session(workflow_id)?;
         let mut guard = session.lock().expect("workflow session poisoned");
         Ok(guard.apply_batch(node_catalog, batch))
+    }
+
+    /// Apply a command batch and persist the accepted workflow
+    /// atomically (AR-08).
+    ///
+    /// Difference from [`Self::apply_batch`]: after a successful apply
+    /// the accepted snapshot is written to `projects/{project_id}/
+    /// workflows/{workflow_id}.json`. If persistence fails, the
+    /// in-memory session is rolled back to the pre-apply snapshot and a
+    /// clearly-failed result is returned, so memory and disk can never
+    /// silently diverge at two different accepted versions.
+    pub async fn apply_commands(
+        &self,
+        workflow_id: &WorkflowId,
+        node_catalog: &impl NodeCatalog,
+        batch: CommandBatch,
+    ) -> AppHostResult<CommandResult> {
+        let session = self.session(workflow_id)?;
+        let (pre_apply, result) = {
+            let mut guard = session.lock().expect("workflow session poisoned");
+            let pre_apply = guard.workflow().clone();
+            let result = guard.apply_batch(node_catalog, batch);
+            (pre_apply, result)
+        };
+        if result.status() != CommandResultStatus::Applied {
+            return Ok(result);
+        }
+        let accepted = self.snapshot(workflow_id)?;
+        if let Err(error) = self.save_workflow_snapshot(&accepted).await {
+            let mut guard = session.lock().expect("workflow session poisoned");
+            guard.restore(pre_apply);
+            return Err(AppHostError::WorkflowPersistFailed {
+                workflow_id: workflow_id.clone(),
+                message: error.to_string(),
+            });
+        }
+        Ok(result)
     }
 
     pub async fn save_workflow(&self, workflow_id: &WorkflowId) -> AppHostResult<PathBuf> {
@@ -173,8 +228,13 @@ impl WorkflowService {
         Ok(self.register_workflow(workflow))
     }
 
-    pub fn workflows_dir(&self) -> &Path {
-        self.app_paths.workflows_dir()
+    /// The project-scoped workflows directory
+    /// ("projects/{project_id}/workflows/", AR-08). Existing top-level
+    /// "workflows/" files are migrated by
+    /// WorkspaceHost::migrate_to_project_layout.
+    pub fn workflows_dir(&self) -> std::path::PathBuf {
+        self.app_paths
+            .project_workflows_dir(self.project_id.as_str())
     }
 
     /// List workflow files persisted on disk (newest first).
@@ -183,8 +243,8 @@ impl WorkflowService {
     /// anything else that might have been dropped into the directory.
     #[allow(private_interfaces)]
     pub fn list_saved_workflows(&self) -> AppHostResult<Vec<SavedWorkflowInfo>> {
-        let dir = self.app_paths.workflows_dir();
-        let entries = match std::fs::read_dir(dir) {
+        let dir = self.workflows_dir();
+        let entries = match std::fs::read_dir(&dir) {
             Ok(entries) => entries,
             Err(error) => {
                 return Err(AppHostError::Io {
@@ -240,7 +300,7 @@ impl WorkflowService {
         ensure_safe_file_stem(workflow_id)?;
         Ok(self
             .app_paths
-            .workflows_dir()
+            .project_workflows_dir(self.project_id.as_str())
             .join(format!("{workflow_id}.json")))
     }
 

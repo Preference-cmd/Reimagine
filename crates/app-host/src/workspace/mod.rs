@@ -35,6 +35,53 @@ use crate::{InstalledWorkerInventoryProvider, WorkerInventoryProvider};
 /// up and keeping the current backend in place.
 const REBOOTSTRAP_DRAIN_DEADLINE: std::time::Duration = std::time::Duration::from_secs(30);
 
+/// Establish the AR-08 project workflow layout (idempotent).
+///
+/// Called by the async production bootstrap BEFORE any discovery
+/// poll loop is spawned, so this await can never sit between the
+/// discovery spawn and host construction (AR-37 constraint). It
+/// delegates file migration to `reimagine_config::migrate_to_project_layout`
+/// (moves legacy `workflows/*.json` into `projects/default/workflows/`,
+/// keeping `.backup` originals) and then materialises the default
+/// project's `project.json` + `board.json` documents so the project
+/// is discoverable by `ProjectService::list_projects` from the first
+/// bootstrap. The documents are written directly because the default
+/// project directory tree already exists after the config-level
+/// migration, so `create_project`'s ProjectAlreadyExists guard would
+/// reject a re-run on a partially-migrated workspace.
+async fn migrate_project_layout(config: &AppConfig) -> Result<(), AppHostError> {
+    use crate::board_service::ensure_board_file;
+    use reimagine_core::event::Timestamp;
+    use reimagine_core::model::ProjectId;
+    use reimagine_core::project::{Project, ProjectMetadata};
+
+    let paths = config.paths();
+
+    // 1. Move legacy top-level workflow documents into the default
+    //    project's layout (idempotent; originals kept as .backup).
+    reimagine_config::migrate_to_project_layout(paths)
+        .await
+        .map_err(AppHostError::BootstrapConfig)?;
+
+    // 2. Materialise a discoverable default project document set.
+    let default_project_id = ProjectId::new("default");
+    let project_file = paths
+        .project_dir(default_project_id.as_str())
+        .join("project.json");
+    if !project_file.is_file() {
+        let metadata = ProjectMetadata::new(
+            "Default",
+            "Default workspace project created by the AR-08 project-layout migration.",
+            Timestamp::new("2026-08-18T00:00:00Z"),
+            Timestamp::new("2026-08-18T00:00:00Z"),
+        );
+        let project = Project::new(default_project_id.clone(), metadata);
+        crate::project_service::write_project_atomic(&project_file, &project).await?;
+    }
+    ensure_board_file(paths, &default_project_id).await?;
+    Ok(())
+}
+
 pub struct WorkspaceHost {
     pub(crate) workspace_scope: WorkspaceScope,
     pub(crate) config: Arc<AppConfig>,
@@ -431,6 +478,12 @@ impl WorkspaceHost {
         };
         let provider_base_path = config.paths().base_path().to_path_buf();
 
+        // AR-08: establish the project workflow layout (default project +
+        // legacy migration) BEFORE bootstrapping inference, so no await
+        // sits between the discovery poll loop spawn and host
+        // construction (AR-37 constraint).
+        migrate_project_layout(&config).await?;
+
         let bootstrapped = bootstrap_inference_with_worker_inventory(
             &config,
             &backend_config,
@@ -507,6 +560,19 @@ impl WorkspaceHost {
             agent_session_dir,
         ));
         Ok(host)
+    }
+
+    /// Establish the AR-08 project workflow layout (idempotent).
+    ///
+    /// Called by production bootstrap BEFORE any discovery poll loop is
+    /// spawned, so the file migration never adds an await between the
+    /// discovery spawn and host construction (AR-37 constraint). Moves
+    /// legacy top-level `workflows/*.json` into
+    /// `projects/default/workflows/` (originals kept as .backup) and
+    /// materialises the default project's `project.json` +
+    /// `board.json` documents.
+    pub async fn migrate_to_project_layout(&self) -> Result<(), AppHostError> {
+        migrate_project_layout(&self.config).await
     }
 
     pub fn with_agent_event_sink(self, event_sink: Arc<dyn AgentEventSink>) -> Self {
@@ -1576,6 +1642,126 @@ mod tests {
         let providers = workspace.agent_service.providers();
         assert!(!providers.contains(&reimagine_agent_harness::ProviderName::new("broken")));
         assert!(providers.contains(&reimagine_agent_harness::ProviderName::new("openai")));
+        let _ = fs::remove_dir_all(&base);
+    }
+
+    #[tokio::test]
+    async fn production_bootstrap_creates_discoverable_default_project() {
+        let base = temp_dir("ar08-default-project");
+        let app_data_root = base.join("app-data");
+        let backend_config = InferenceBackendConfig {
+            backend: InferenceBackendKind::Candle,
+            candle_device: "cpu".to_string(),
+            selected_instance: Some("candle:cpu".to_string()),
+            ..InferenceBackendConfig::default()
+        };
+        let workspace = WorkspaceHost::try_with_app_data_root_and_backend_config(
+            WorkspaceScope::new("ar08-default-project"),
+            &base,
+            &app_data_root,
+            backend_config.clone(),
+            Arc::new(VecRunEventSink::new()),
+            Arc::new(reimagine_agent_harness::VecAgentEventSink::new()),
+        )
+        .await
+        .expect("production bootstrap establishes the project layout");
+
+        // The default project is discoverable with valid documents.
+        let projects = workspace
+            .project_service()
+            .list_projects()
+            .await
+            .expect("list projects after bootstrap");
+        assert!(
+            projects.iter().any(|p| p.id().as_str() == "default"),
+            "default project must be discoverable after production bootstrap"
+        );
+        assert!(base.join("projects/default/project.json").is_file());
+        assert!(base.join("projects/default/board.json").is_file());
+
+        // Idempotent: a second bootstrap still finds exactly one default.
+        let workspace2 = WorkspaceHost::try_with_app_data_root_and_backend_config(
+            WorkspaceScope::new("ar08-default-project-2"),
+            &base,
+            &app_data_root,
+            backend_config.clone(),
+            Arc::new(VecRunEventSink::new()),
+            Arc::new(reimagine_agent_harness::VecAgentEventSink::new()),
+        )
+        .await
+        .expect("second production bootstrap stays idempotent");
+        let projects2 = workspace2
+            .project_service()
+            .list_projects()
+            .await
+            .expect("list projects after second bootstrap");
+        assert_eq!(
+            projects2
+                .iter()
+                .filter(|p| p.id().as_str() == "default")
+                .count(),
+            1,
+            "migration must be idempotent"
+        );
+        let _ = fs::remove_dir_all(&base);
+    }
+
+    #[tokio::test]
+    async fn migration_copies_legacy_workflows_into_default_project() {
+        let base = temp_dir("ar08-legacy-migrate");
+        let app_data_root = base.join("app-data");
+
+        // Seed a legacy top-level workflow document.
+        let legacy_dir = base.join("workflows");
+        fs::create_dir_all(&legacy_dir).unwrap();
+        let legacy = serde_json::json!({
+            "schema_version": "reimagine.workflow.v1",
+            "id": "legacy-wf",
+            "version": 1,
+            "metadata": { "name": "Legacy" },
+            "interface": { "inputs": [], "outputs": [] },
+            "nodes": [],
+            "edges": [],
+            "layout": { "nodes": {} }
+        });
+        fs::write(
+            legacy_dir.join("legacy-wf.json"),
+            serde_json::to_vec_pretty(&legacy).unwrap(),
+        )
+        .unwrap();
+
+        let backend_config = InferenceBackendConfig {
+            backend: InferenceBackendKind::Candle,
+            candle_device: "cpu".to_string(),
+            selected_instance: Some("candle:cpu".to_string()),
+            ..InferenceBackendConfig::default()
+        };
+        let workspace = WorkspaceHost::try_with_app_data_root_and_backend_config(
+            WorkspaceScope::new("ar08-legacy-migrate"),
+            &base,
+            &app_data_root,
+            backend_config,
+            Arc::new(VecRunEventSink::new()),
+            Arc::new(reimagine_agent_harness::VecAgentEventSink::new()),
+        )
+        .await
+        .expect("bootstrap with legacy workflows");
+
+        // The migrated copy lives under the default project and
+        // the workflow service can load it by id.
+        let migrated = base.join("projects/default/workflows/legacy-wf.json");
+        assert!(
+            migrated.is_file(),
+            "legacy workflow migrated into default project"
+        );
+        // The workflow service discovers the migrated document via the
+        // default project directory listing.
+        let migrated_id = workspace
+            .workflow_service()
+            .load_workflow(&reimagine_core::model::WorkflowId::new("legacy-wf"))
+            .await
+            .expect("migrated workflow loads by id");
+        assert_eq!(migrated_id.as_str(), "legacy-wf");
         let _ = fs::remove_dir_all(&base);
     }
 }

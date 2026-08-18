@@ -8,7 +8,7 @@ use reimagine_core::command::{
 use reimagine_core::event::Timestamp;
 use reimagine_core::model::{
     CommandBatchId, ModelId, ModelRef, ModelRole, ModelSeries, ModelVariant, NodeCatalog, NodeId,
-    NodeTypeId, ParamValue, SlotId, WorkflowVersion,
+    NodeTypeId, ParamValue, ProjectId, SlotId, WorkflowVersion,
 };
 use reimagine_core::workflow::Workflow;
 use reimagine_inference_candle::{
@@ -75,7 +75,11 @@ async fn workflow_service_previews_applies_saves_and_loads_workflow_json() {
         .save_workflow(&workflow_id)
         .await
         .expect("workflow should save");
-    assert_eq!(saved_path, paths.workflows_dir().join("wf-1.json"));
+    // AR-08: workflows persist under the default project layout.
+    assert_eq!(
+        saved_path,
+        paths.project_workflows_dir("default").join("wf-1.json")
+    );
 
     let reloaded = WorkflowService::new(paths);
     let loaded_id = reloaded
@@ -746,4 +750,58 @@ fn temp_dir(prefix: &str) -> std::path::PathBuf {
         .as_nanos();
     let tid = std::thread::current().id();
     std::env::temp_dir().join(format!("reimagine-app-host-{prefix}-{nonce:?}-{tid:?}"))
+}
+
+// ─── AR-08: project workflow persistence / migration / rollback ───
+
+#[tokio::test]
+async fn apply_commands_persists_accepted_workflow_and_survives_restart() {
+    let paths = AppPaths::new(temp_dir("ar08-apply"));
+    let service = WorkflowService::new(paths.clone());
+    let catalog = BuiltinNodeCatalog::v1();
+    let workflow = Workflow::new("wf-persist", WorkflowVersion::new(0));
+    let workflow_id = service.register_workflow(workflow);
+
+    let batch = add_string_node_batch(WorkflowVersion::new(0), "persisted");
+    let result = service
+        .apply_commands(&workflow_id, &catalog, batch)
+        .await
+        .expect("apply_commands should succeed");
+    assert_eq!(result.status(), CommandResultStatus::Applied);
+
+    // The accepted snapshot is on disk under the default project.
+    let persisted = paths
+        .project_workflows_dir("default")
+        .join("wf-persist.json");
+    assert!(persisted.is_file(), "accepted workflow must be persisted");
+
+    // A fresh service discovers it (restart recovery).
+    let reloaded = WorkflowService::new(paths);
+    let loaded = reloaded
+        .load_workflow(&workflow_id)
+        .await
+        .expect("workflow reloads after restart");
+    assert_eq!(loaded, workflow_id);
+    let snapshot = reloaded.snapshot(&workflow_id).unwrap();
+    assert_eq!(snapshot.nodes().len(), 1);
+    assert_eq!(snapshot.version(), WorkflowVersion::new(1));
+}
+
+#[tokio::test]
+async fn for_project_isolates_cross_project_workflow_paths() {
+    let paths = AppPaths::new(temp_dir("ar08-projects"));
+    let service_a = WorkflowService::for_project(paths.clone(), ProjectId::new("alpha"));
+    let service_b = WorkflowService::for_project(paths.clone(), ProjectId::new("beta"));
+
+    let workflow = Workflow::new("wf-cross", WorkflowVersion::new(0));
+    let id = service_a.register_workflow(workflow);
+    let a_path = service_a.path_for_workflow_id(&id).unwrap();
+    let b_path = service_b.path_for_workflow_id(&id).unwrap();
+    assert!(
+        a_path
+            .to_string_lossy()
+            .contains("projects/alpha/workflows")
+    );
+    assert!(b_path.to_string_lossy().contains("projects/beta/workflows"));
+    assert_ne!(a_path, b_path);
 }
