@@ -107,6 +107,21 @@ impl From<ToolCallResult> for AgentToolCallDto {
 ///
 /// This is the event shape sent over `Channel<AgentEventPayload>` from
 /// `TauriAgentEventHub`. Mirrors `RunEventPayload` in naming convention.
+///
+/// # Kind semantics (AR-11)
+/// The backend emits two terminal milestones with canonical names:
+/// - `error` — the turn ended in failure (sent by the host via
+///   `TauriAgentEventHub::send_error` after the harness surfaced a provider
+///   error);
+/// - `turn_completed` — the turn ended normally.
+///
+/// In-flight kinds mirror the harness projection and are consumed directly
+/// by the UI: `content_delta`, `reasoning_delta`, `tool_invoked`,
+/// `tool_completed`, `tool_failed`, `session_started`, `session_stopped`,
+/// `context_compacted`. The `provider_error` kind is the UI short-term
+/// compatibility spelling for provider failures and is grouped with
+/// `error` by [`Self::is_error`], so clients treat error semantics
+/// uniformly.
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct AgentEventPayload {
@@ -116,6 +131,18 @@ pub struct AgentEventPayload {
     pub tool_call_id: Option<String>,
     pub code: Option<String>,
     pub message: Option<String>,
+}
+
+impl AgentEventPayload {
+    /// True for every event kind that signals a failure. The backend
+    /// normalises on `error` semantics while keeping the `provider_error`
+    /// spelling for UI compatibility (AR-11).
+    pub fn is_error(&self) -> bool {
+        matches!(
+            self.kind.as_str(),
+            "error" | "provider_error" | "tool_failed"
+        )
+    }
 }
 
 impl From<&AgentEvent> for AgentEventPayload {

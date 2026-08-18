@@ -239,6 +239,20 @@ export function createAgentSession(
   );
 }
 
+/**
+ * One streaming agent event (AR-11 contract).
+ *
+ * kind semantics:
+ *   - terminal milestones: "turn_completed" (normal) | "error" (failed)
+ *   - in-flight: "content_delta", "reasoning_delta", "tool_invoked",
+ *     "tool_completed", "tool_failed", "session_started",
+ *     "session_stopped", "context_compacted"
+ *   - compatibility: "provider_error" groups under error semantics;
+ *     consumers should treat kind error | provider_error | tool_failed
+ *     as failures and stop the thread.
+
+ * A turn always ends with exactly one terminal marker.
+ */
 export interface AgentEventPayload {
   sessionId: string;
   kind: string;
