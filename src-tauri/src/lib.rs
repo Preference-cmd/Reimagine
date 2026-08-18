@@ -1,3 +1,4 @@
+mod agent_event_hub;
 mod desktop_host;
 mod download_event_hub;
 mod event_hub;
@@ -171,7 +172,7 @@ async fn open_artifact(
 
 // ─── Agent commands ──────────────────────────────────────────────
 
-/// Create a new agent session on the daemon.
+/// Create a new agent session.
 ///
 /// `mode` must be "Agent" or "Build".
 /// `provider` must match a registered provider in the catalog.
@@ -187,16 +188,18 @@ async fn create_agent_session(
         .map_err(agent_bridge_command_error)
 }
 
-/// Execute a single agent turn with live event streaming via the daemon.
+/// Execute a single agent turn with live event streaming over the
+/// embedded `AgentService` path (AR-03).
 ///
-/// `session_id` must be a valid existing session on the daemon.
+/// `session_id` must be a valid existing session in the service.
 /// `turn_id` is a caller-generated id for this turn (idempotent retries).
 /// `model` is the model name string for the registered provider.
 /// `input` is a JSON array of `{ role, content }` message objects.
 /// `output_schema`, when present, requires the final assistant response
 /// to be valid JSON matching the schema (AR-30 structured output).
-/// Resolves once the daemon accepts the turn; daemon notifications stream
-/// `AgentEventPayload` events through the channel.
+/// Events (`content_delta`, `tool_*`, `provider_error`,
+/// `turn_completed`, ...) stream through the provided channel, which is
+/// closed when the turn finishes.
 #[tauri::command]
 async fn agent_turn(
     state: tauri::State<'_, DesktopHostState>,
