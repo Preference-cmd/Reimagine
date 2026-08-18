@@ -22,6 +22,7 @@ use crate::inference::compose::{
 use crate::inference::selection::resolved_candle_device_label;
 use crate::model_acquisition_service::ModelAcquisitionService;
 use crate::node_catalog::{NodeCatalogAlignment, NodeCatalogService};
+use crate::provider_config::AgentProviderConfigDocument;
 use crate::services::WorkspaceServices;
 use crate::tools::register_app_tools;
 use crate::{
@@ -416,6 +417,20 @@ impl WorkspaceHost {
             config.paths().clone(),
             acquisition_service.clone(),
         ));
+
+        // AR-37: load the app-host-owned provider config document before
+        // bootstrapping inference, so no additional await sits between the
+        // discovery poll loop spawn and the host construction (the topology
+        // integration tests assert the first reconcile pass registers the
+        // config endpoints). A missing file yields an empty document (no
+        // providers registered).
+        let provider_document = {
+            let handle = config.config::<AgentProviderConfigDocument>()?;
+            let (document, _report) = handle.load().await?;
+            document
+        };
+        let provider_base_path = config.paths().base_path().to_path_buf();
+
         let bootstrapped = bootstrap_inference_with_worker_inventory(
             &config,
             &backend_config,
@@ -463,6 +478,27 @@ impl WorkspaceHost {
         host.agent_event_sink = agent_event_sink;
         let registry = host.agent_service.registry().clone();
         let providers = host.agent_service.providers().clone();
+
+        // AR-37: register concrete providers from the loaded document so
+        // the production desktop bootstrap path (not just
+        // WorkspaceHostBuilder) sees configured providers. App-host is
+        // the owner of provider file/secrets loading; Tauri never
+        // touches API keys directly.
+        let (registered, errors) = crate::register_providers_from_document(
+            &providers,
+            &provider_document,
+            Some(&provider_base_path),
+        );
+        if !registered.is_empty() {
+            tracing::info!(
+                providers = ?registered.iter().map(|p| p.as_str()).collect::<Vec<_>>(),
+                "registered agent providers (production bootstrap)"
+            );
+        }
+        for error in &errors {
+            tracing::warn!(%error, "skipping provider");
+        }
+
         host.agent_service = Arc::new(AgentService::with_registry_providers_sink_and_session_dir(
             host.workspace_scope.clone(),
             registry,
@@ -1420,6 +1456,126 @@ mod tests {
                 .get(&NodeTypeId::new("builtin.ksampler"))
                 .is_some()
         );
+        let _ = fs::remove_dir_all(&base);
+    }
+
+    // ---- AR-37: production provider bootstrap ----
+
+    fn seed_valid_provider_config(base: &std::path::Path) {
+        use crate::provider_config::{AgentProviderConfigDocument, ProviderConfig};
+        use reimagine_agent_provider::OpenAiChatCompletionsConfig;
+        let openai = OpenAiChatCompletionsConfig::new(
+            "https://api.example.com/v1",
+            "sk-test",
+            "gpt-4o-mini",
+        );
+        let provider = ProviderConfig::with_openai_chat_completions("openai", openai);
+        let doc = AgentProviderConfigDocument::new(vec![provider]);
+        let config_dir = base.join("config");
+        fs::create_dir_all(&config_dir).unwrap();
+        let json = serde_json::to_string_pretty(&doc).unwrap();
+        fs::write(config_dir.join("agent-providers.json"), json).unwrap();
+    }
+
+    fn seed_provider_with_missing_inner_config(base: &std::path::Path) {
+        use crate::provider_config::{AgentProviderConfigDocument, ProviderConfig};
+        use reimagine_agent_provider::OpenAiChatCompletionsConfig;
+        let openai = OpenAiChatCompletionsConfig::new(
+            "https://api.example.com/v1",
+            "sk-test",
+            "gpt-4o-mini",
+        );
+        let broken = ProviderConfig::with_openai_chat_completions("broken", openai.clone());
+        let good = ProviderConfig::with_openai_chat_completions("openai", openai);
+        let doc = AgentProviderConfigDocument::new(vec![broken, good]);
+        let config_dir = base.join("config");
+        fs::create_dir_all(&config_dir).unwrap();
+        // Null out the first provider inner typed config to simulate
+        // a missing-inner entry; build_provider must skip it.
+        let mut value = serde_json::to_value(&doc).unwrap();
+        value["providers"][0]["openai_chat_completions"] = serde_json::Value::Null;
+        let json = serde_json::to_string_pretty(&value).unwrap();
+        fs::write(config_dir.join("agent-providers.json"), json).unwrap();
+    }
+
+    #[tokio::test]
+    async fn production_bootstrap_registers_configured_providers() {
+        let base = temp_dir("ar37-valid");
+        let app_data_root = base.join("app-data");
+        seed_valid_provider_config(&base);
+        let backend_config = InferenceBackendConfig {
+            backend: InferenceBackendKind::Candle,
+            candle_device: "cpu".to_string(),
+            selected_instance: Some("candle:cpu".to_string()),
+            ..InferenceBackendConfig::default()
+        };
+        let workspace = WorkspaceHost::try_with_app_data_root_and_backend_config(
+            WorkspaceScope::new("ar37-valid"),
+            &base,
+            &app_data_root,
+            backend_config,
+            Arc::new(VecRunEventSink::new()),
+            Arc::new(reimagine_agent_harness::VecAgentEventSink::new()),
+        )
+        .await
+        .expect("production bootstrap with valid provider config");
+        let providers = workspace.agent_service.providers();
+        assert_eq!(
+            providers.provider_names(),
+            vec![reimagine_agent_harness::ProviderName::new("openai")],
+            "configured provider must be registered by the production path"
+        );
+        let _ = fs::remove_dir_all(&base);
+    }
+
+    #[tokio::test]
+    async fn production_bootstrap_missing_config_registers_none_without_panic() {
+        let base = temp_dir("ar37-missing");
+        let app_data_root = base.join("app-data");
+        let backend_config = InferenceBackendConfig {
+            backend: InferenceBackendKind::Candle,
+            candle_device: "cpu".to_string(),
+            selected_instance: Some("candle:cpu".to_string()),
+            ..InferenceBackendConfig::default()
+        };
+        let workspace = WorkspaceHost::try_with_app_data_root_and_backend_config(
+            WorkspaceScope::new("ar37-missing"),
+            &base,
+            &app_data_root,
+            backend_config,
+            Arc::new(VecRunEventSink::new()),
+            Arc::new(reimagine_agent_harness::VecAgentEventSink::new()),
+        )
+        .await
+        .expect("bootstrap succeeds with no provider config file");
+        assert!(workspace.agent_service.providers().is_empty());
+        let _ = fs::remove_dir_all(&base);
+    }
+
+    #[tokio::test]
+    async fn production_bootstrap_missing_inner_config_skips_that_provider_only() {
+        let base = temp_dir("ar37-broken");
+        let app_data_root = base.join("app-data");
+        seed_provider_with_missing_inner_config(&base);
+        let backend_config = InferenceBackendConfig {
+            backend: InferenceBackendKind::Candle,
+            candle_device: "cpu".to_string(),
+            selected_instance: Some("candle:cpu".to_string()),
+            ..InferenceBackendConfig::default()
+        };
+        let workspace = WorkspaceHost::try_with_app_data_root_and_backend_config(
+            WorkspaceScope::new("ar37-broken"),
+            &base,
+            &app_data_root,
+            backend_config,
+            Arc::new(VecRunEventSink::new()),
+            Arc::new(reimagine_agent_harness::VecAgentEventSink::new()),
+        )
+        .await
+        .expect("bootstrap with one broken provider entry");
+        let providers = workspace.agent_service.providers();
+        assert!(!providers.contains(&reimagine_agent_harness::ProviderName::new("broken")));
+        assert!(providers.contains(&reimagine_agent_harness::ProviderName::new("openai")));
         let _ = fs::remove_dir_all(&base);
     }
 }
