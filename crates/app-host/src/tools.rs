@@ -37,7 +37,8 @@ pub fn register_app_tools(registry: &mut AgentToolRegistry, services: Arc<Worksp
             &[AgentMode::Agent, AgentMode::Build],
             "workflow.read",
             ToolRiskLevel::Read,
-        ),
+        )
+            .with_schemas("{\"type\":\"object\",\"properties\":{\"workflow_id\":{\"type\":\"string\"}},\"required\":[\"workflow_id\"]}", "{\"type\":\"object\"}"),
         workflow_get,
     );
     register_workspace_tool(
@@ -49,7 +50,8 @@ pub fn register_app_tools(registry: &mut AgentToolRegistry, services: Arc<Worksp
             &[AgentMode::Agent, AgentMode::Build],
             "workflow.write",
             ToolRiskLevel::Read,
-        ),
+        )
+            .with_schemas("{\"type\":\"object\",\"properties\":{\"workflow_id\":{\"type\":\"string\"},\"batch\":{\"type\":\"object\"}},\"required\":[\"workflow_id\",\"batch\"]}", "{\"type\":\"object\"}"),
         workflow_preview_commands,
     );
     register_workspace_tool(
@@ -61,7 +63,8 @@ pub fn register_app_tools(registry: &mut AgentToolRegistry, services: Arc<Worksp
             &[AgentMode::Agent, AgentMode::Build],
             "workflow.write",
             ToolRiskLevel::Editor,
-        ),
+        )
+            .with_schemas("{\"type\":\"object\",\"properties\":{\"workflow_id\":{\"type\":\"string\"},\"proposal_id\":{\"type\":\"string\"},\"batch\":{\"type\":\"object\"},\"created_at\":{\"type\":\"string\"}},\"required\":[\"workflow_id\",\"proposal_id\",\"batch\",\"created_at\"]}", "{\"type\":\"object\"}"),
         workflow_propose_commands,
     );
     register_workspace_tool(
@@ -73,7 +76,8 @@ pub fn register_app_tools(registry: &mut AgentToolRegistry, services: Arc<Worksp
             &[AgentMode::Agent, AgentMode::Build],
             "workflow.write",
             ToolRiskLevel::Editor,
-        ),
+        )
+            .with_schemas("{\"type\":\"object\",\"properties\":{\"workflow_id\":{\"type\":\"string\"},\"batch\":{\"type\":\"object\"}},\"required\":[\"workflow_id\",\"batch\"]}", "{\"type\":\"object\"}"),
         workflow_apply_commands,
     );
     register_workspace_tool(
@@ -85,6 +89,10 @@ pub fn register_app_tools(registry: &mut AgentToolRegistry, services: Arc<Worksp
             &[AgentMode::Agent, AgentMode::Build],
             "model.read",
             ToolRiskLevel::Read,
+        )
+        .with_schemas(
+            "{\"type\":\"object\",\"properties\":{}}",
+            "{\"type\":\"object\"}",
         ),
         model_list,
     );
@@ -97,7 +105,8 @@ pub fn register_app_tools(registry: &mut AgentToolRegistry, services: Arc<Worksp
             &[AgentMode::Agent, AgentMode::Build],
             "model.read",
             ToolRiskLevel::Read,
-        ),
+        )
+            .with_schemas("{\"type\":\"object\",\"properties\":{\"model_ref\":{\"type\":\"object\"}},\"required\":[\"model_ref\"]}", "{\"type\":\"object\"}"),
         model_resolve_ref,
     );
     register_workspace_tool(
@@ -109,7 +118,8 @@ pub fn register_app_tools(registry: &mut AgentToolRegistry, services: Arc<Worksp
             &[AgentMode::Agent, AgentMode::Build],
             "workflow.read",
             ToolRiskLevel::Read,
-        ),
+        )
+            .with_schemas("{\"type\":\"object\",\"properties\":{\"workflow_id\":{\"type\":\"string\"}},\"required\":[\"workflow_id\"]}", "{\"type\":\"object\"}"),
         diagnostics_for_workflow,
     );
     register_workspace_tool(
@@ -121,7 +131,8 @@ pub fn register_app_tools(registry: &mut AgentToolRegistry, services: Arc<Worksp
             &[AgentMode::Agent, AgentMode::Build],
             "model.write",
             ToolRiskLevel::External,
-        ),
+        )
+            .with_schemas("{\"type\":\"object\",\"properties\":{\"repo_id\":{\"type\":\"string\"}},\"required\":[\"repo_id\"]}", "{\"type\":\"object\"}"),
         model_download,
     );
 }
