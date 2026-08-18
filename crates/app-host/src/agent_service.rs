@@ -333,6 +333,59 @@ impl AgentService {
         session
     }
 
+    /// Create a project-scoped agent thread (AR-14).
+    ///
+    /// Unlike [`Self::create_session`], the resulting `AgentSession` is
+    /// bound to `project_id` (project_id is carried on the session and
+    /// propagated into every tool context), so project-owned tools can
+    /// reject cross-project calls. Sessions remain globally keyed by
+    /// `AgentSessionId`; `list_threads(project_id)` filters the same
+    /// registry.
+    pub fn create_thread(
+        &self,
+        project_id: reimagine_core::model::ProjectId,
+        id: AgentSessionId,
+        mode: AgentMode,
+        provider: ProviderName,
+        started_at: impl Into<String>,
+    ) -> AgentSession {
+        let session = AgentSession::new(
+            id.clone(),
+            self.workspace_scope.clone(),
+            mode,
+            provider,
+            Arc::clone(&self.registry),
+        )
+        .with_started_at(started_at)
+        .with_permissions(PermissionSet::new())
+        .with_project_id(project_id);
+        let runtime = Arc::new(SessionRuntime::new(
+            session.clone(),
+            self.session_dir.clone(),
+        ));
+        self.sessions
+            .write()
+            .expect("agent session registry poisoned")
+            .insert(id, runtime);
+        session
+    }
+
+    /// List the threads bound to `project_id` (AR-14).
+    pub fn list_threads(&self, project_id: &reimagine_core::model::ProjectId) -> Vec<AgentSession> {
+        self.sessions
+            .read()
+            .expect("agent session registry poisoned")
+            .values()
+            .filter_map(|runtime| {
+                let session = runtime.session();
+                match session.project_id() {
+                    Some(pid) if pid == project_id => Some(session.clone()),
+                    _ => None,
+                }
+            })
+            .collect()
+    }
+
     fn get_runtime(&self, id: &AgentSessionId) -> AppHostResult<Arc<SessionRuntime>> {
         self.sessions
             .read()

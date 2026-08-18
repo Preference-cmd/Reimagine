@@ -948,7 +948,8 @@ impl AgentLoop {
                 request.session().id().clone(),
                 request.session().mode(),
             )
-            .with_permissions(request.session().permissions().clone());
+            .with_permissions(request.session().permissions().clone())
+            .with_project_id_opt(request.session().project_id().cloned());
 
             let tool_result = self
                 .execute_tool(

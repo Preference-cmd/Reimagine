@@ -97,6 +97,25 @@ impl<I, O, H> WorkspaceTool<I, O, H> {
             )
             .with_tool(ToolName::new(self.spec.name)));
         }
+        // AR-14: project ownership. A thread bound to a project may only
+        // drive tools whose target service is scoped to that same
+        // project; unbound sessions (ctx has no project) keep legacy
+        // single-project behaviour.
+        if let Some(ctx_project) = ctx.project_id() {
+            let service_project = self.services.workflow_service().project_id();
+            if ctx_project != service_project {
+                return Err(ToolError::new(
+                    ToolErrorCode::WorkspaceMismatch,
+                    format!(
+                        "tool `{}` was invoked for project `{}` but the workspace is scoped to `{}`",
+                        self.spec.name,
+                        ctx_project.as_str(),
+                        service_project.as_str(),
+                    ),
+                )
+                .with_tool(ToolName::new(self.spec.name)));
+            }
+        }
         Ok(())
     }
 }
