@@ -112,6 +112,14 @@ impl ProviderConfig {
         self.enabled = value;
     }
 
+    /// Clone with a different name. Used by `ProviderService::update`
+    /// so a mutation can never silently rename an entry into a
+    /// duplicate (AR-13).
+    pub fn with_name(mut self, name: String) -> Self {
+        self.name = name;
+        self
+    }
+
     pub fn openai_chat_completions(&self) -> Option<&OpenAiChatCompletionsConfig> {
         self.openai_chat_completions.as_ref()
     }
@@ -122,6 +130,18 @@ impl ProviderConfig {
 
     pub fn openai_responses(&self) -> Option<&OpenAiResponsesConfig> {
         self.openai_responses.as_ref()
+    }
+
+    pub fn base_url(&self) -> Option<&str> {
+        self.base_url.as_deref()
+    }
+
+    pub fn default_model(&self) -> Option<&str> {
+        self.default_model.as_deref()
+    }
+
+    pub fn api_key(&self) -> Option<&str> {
+        self.api_key.as_deref()
     }
 }
 
