@@ -93,6 +93,27 @@ impl TauriAgentEventHub {
             },
         );
     }
+    /// Terminal error payload for a failed turn.
+    ///
+    /// AR-11 canonicalises failure as kind "error"; the harness itself
+    /// emits in-flight "provider_error" events, and tools surface
+    /// "tool_failed". The host sends this synthetic event after a
+    /// failed turn so the UI sees an explicit end-of-stream error
+    /// marker (the counterpart of send_turn_completed).
+    #[allow(dead_code)] // wired by hosts that surface end-of-turn failures (AR-11)
+    pub fn send_error(&self, session_id: &AgentSessionId, message: String) {
+        self.send(
+            session_id,
+            AgentEventPayload {
+                session_id: session_id.to_string(),
+                kind: "error".to_string(),
+                tool_name: None,
+                tool_call_id: None,
+                code: None,
+                message: Some(message),
+            },
+        );
+    }
 }
 
 impl AgentEventSink for TauriAgentEventHub {
@@ -273,5 +294,57 @@ mod tests {
         assert_eq!(error.kind, "provider_error");
         assert_eq!(error.code.as_deref(), Some("rate_limit"));
         assert_eq!(error.message.as_deref(), Some("upstream 429"));
+    }
+    // AR-11: the backend canonicalises failure as "error" while the
+    // UI keeps the short-term "provider_error" spelling; both group
+    // under error semantics so clients handle them uniformly.
+    #[test]
+    fn error_semantics_group_provider_and_tool_failures() {
+        let sid = session();
+        let provider_err = AgentEventPayload::from(&AgentEvent::ProviderError {
+            session_id: sid.clone(),
+            provider: ProviderName::new("openai"),
+            code: "timeout".to_string(),
+            message: "upstream timed out".to_string(),
+        });
+        assert!(
+            provider_err.is_error(),
+            "provider_error carries error semantics"
+        );
+
+        let tool_err = AgentEventPayload {
+            session_id: sid.to_string(),
+            kind: "tool_failed".to_string(),
+            tool_name: Some("workflow.read".to_string()),
+            tool_call_id: Some("call-1".to_string()),
+            code: None,
+            message: Some("boom".to_string()),
+        };
+        assert!(tool_err.is_error(), "tool_failed carries error semantics");
+
+        let delta = AgentEventPayload::from(&AgentEvent::ContentDelta {
+            session_id: sid.clone(),
+            text: "hi".to_string(),
+        });
+        assert!(!delta.is_error(), "content is not an error");
+    }
+
+    // The terminal error marker is the failure counterpart of the
+    // turn_completed marker (AR-11): a failed turn still emits an
+    // explicit end-of-stream event so the UI never hangs waiting.
+    #[test]
+    fn send_error_emits_terminal_error_marker() {
+        let hub = TauriAgentEventHub::new();
+        let sid = session();
+        let (channel, rx) = fake_channel();
+        hub.subscribe(&sid, channel);
+
+        hub.send_error(&sid, "upstream refused".to_string());
+
+        assert!(
+            rx.recv_timeout(std::time::Duration::from_millis(100))
+                .is_ok(),
+            "should deliver the terminal error marker"
+        );
     }
 }
