@@ -11,6 +11,7 @@ mod agent_service;
 mod app_host;
 pub mod artifact_access;
 mod board_service;
+mod canvas_context;
 mod document_events;
 pub mod dto;
 mod error;
@@ -43,6 +44,7 @@ pub use artifact_access::{
     ArtifactAccess, ArtifactAccessError, media_type_for_reference, resolve_artifact_path,
 };
 pub use board_service::{BoardChangedEvent, BoardService};
+pub use canvas_context::{CanvasContext, CanvasFocus, CanvasSelection, ProjectContextAssembler};
 pub use document_events::{DocumentChangedEvent, DocumentEventBus};
 pub use error::{AppHostError, AppHostResult};
 pub use error_code::{AppHostErrorCode, worker_switch_error_code, worker_switch_error_details};

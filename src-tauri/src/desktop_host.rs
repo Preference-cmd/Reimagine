@@ -9,9 +9,9 @@ use reimagine_app_host::dto::{
     ProjectDto, ProjectMetadataInputDto, RunWorkflowResponse,
 };
 use reimagine_app_host::{
-    AgentServiceTurnRequest, AppHost, AppHostError, BackendSelection, WorkerBackendCandidate,
-    WorkerInstallationDto, WorkerManagementService, WorkerSelectionHandle, WorkerSwitchError,
-    WorkspaceHost,
+    AgentServiceTurnRequest, AppHost, AppHostError, BackendSelection, CanvasContext,
+    ProjectContextAssembler, WorkerBackendCandidate, WorkerInstallationDto,
+    WorkerManagementService, WorkerSelectionHandle, WorkerSwitchError, WorkspaceHost,
 };
 use reimagine_backend_worker_host::{WorkerLaunchSpec, WorkerLimits};
 use reimagine_backend_worker_protocol::ProtocolRange;
@@ -590,6 +590,7 @@ impl DesktopHostState {
         input: serde_json::Value,
         output_schema: Option<serde_json::Value>,
         timeout_ms: Option<u64>,
+        context: Option<serde_json::Value>,
         channel: Channel<AgentEventPayload>,
     ) -> Result<TurnRunResult, AppHostError> {
         let input_text = turn_input_text(&input)?;
@@ -599,12 +600,38 @@ impl DesktopHostState {
         let turn_id = reimagine_agent_harness::AgentTurnId::new(turn_id);
 
         // Get the session from AgentService
-        let _session = {
+        let session = {
             let app_host = self.app_host.read().expect(APP_HOST_LOCK);
             app_host
                 .workspace()
                 .agent_service()
                 .get_session(&session_id)?
+        };
+
+        let input_text = match context {
+            Some(value) => match serde_json::from_value::<CanvasContext>(value) {
+                Ok(canvas) => {
+                    let compatible = canvas.project_id.as_str()
+                        == session.project_id().map(|id| id.as_str()).unwrap_or("");
+                    if compatible {
+                        format!(
+                            "{}\n\n{}",
+                            ProjectContextAssembler::assemble(&canvas),
+                            input_text
+                        )
+                    } else {
+                        eprintln!(
+                            "[reimagine] dropping canvas context hint for session with different project"
+                        );
+                        input_text
+                    }
+                }
+                Err(error) => {
+                    eprintln!("[reimagine] dropping malformed canvas context hint: {error}");
+                    input_text
+                }
+            },
+            None => input_text,
         };
 
         // AR-03: subscribe the channel so embedded AgentEvents stream to

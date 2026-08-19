@@ -367,6 +367,7 @@ export async function agentTurn(
   input: unknown[],
   onEvent?: (event: AgentEventPayload) => void,
   outputSchema?: unknown,
+  context?: unknown,
 ): Promise<unknown> {
   return invokeWithFallback(
     async () => {
@@ -381,6 +382,7 @@ export async function agentTurn(
         model,
         input,
         outputSchema: outputSchema ?? null,
+        context: context ?? null,
         channel,
       });
     },

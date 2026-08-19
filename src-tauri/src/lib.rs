@@ -212,6 +212,7 @@ async fn agent_turn(
     input: serde_json::Value,
     output_schema: Option<serde_json::Value>,
     timeout_ms: Option<u64>,
+    context: Option<serde_json::Value>,
     channel: Channel<AgentEventPayload>,
 ) -> Result<TurnRunResult, TauriCommandError> {
     state
@@ -222,6 +223,7 @@ async fn agent_turn(
             input,
             output_schema,
             timeout_ms,
+            context,
             channel,
         )
         .await
