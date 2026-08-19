@@ -261,6 +261,9 @@ fn parse_schema(text: &str) -> Result<serde_json::Value, serde_json::Error> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use reimagine_agent_harness::{
+        AgentSessionId, PermissionSet, ToolRegistryError, WorkspaceScope,
+    };
 
     #[test]
     fn parse_schema_accepts_valid_json() {
@@ -276,5 +279,98 @@ mod tests {
         // it is never silently downgraded to a transparent object.
         assert!(parse_schema("not json").is_err());
         assert!(parse_schema("{\"type\": \"object\"").is_err());
+    }
+
+    #[tokio::test]
+    async fn malformed_schema_is_skipped_and_invalid_input_never_calls_handler() {
+        use serde::{Deserialize, Serialize};
+        use std::sync::atomic::{AtomicUsize, Ordering};
+
+        #[derive(Deserialize)]
+        struct Input {
+            // Intentionally unread: its existence + `required` entry in the
+            // advertised schema is the whole point - invalid input must be
+            // rejected by schema validation *before* the handler runs.
+            #[allow(dead_code)]
+            required: String,
+        }
+        #[derive(Serialize)]
+        struct Output {
+            ok: bool,
+        }
+
+        let base = std::env::temp_dir().join(format!(
+            "reimagine-ar40-workspace-tool-{}",
+            std::process::id(),
+        ));
+        let host = crate::WorkspaceHost::with_defaults(WorkspaceScope::new("ws-ar40-unit"), &base);
+        let services = Arc::clone(host.services());
+
+        let mut malformed_registry = AgentToolRegistry::new();
+        let malformed_spec = WorkspaceToolSpec::new(
+            "test.malformed",
+            "test malformed schema",
+            &[AgentMode::Agent],
+            "test.read",
+            ToolRiskLevel::Read,
+        )
+        .with_schemas("not-json", OBJECT_SCHEMA);
+        register_workspace_tool(
+            &mut malformed_registry,
+            Arc::clone(&services),
+            malformed_spec,
+            |_services, _ctx, _input: Input| async { Ok(Output { ok: true }) },
+        );
+        assert!(
+            malformed_registry.is_empty(),
+            "malformed schema must skip registration",
+        );
+
+        let calls = Arc::new(AtomicUsize::new(0));
+        let calls_for_handler = Arc::clone(&calls);
+        let mut registry = AgentToolRegistry::new();
+        let valid_spec = WorkspaceToolSpec::new(
+            "test.valid",
+            "test valid schema",
+            &[AgentMode::Agent],
+            "test.read",
+            ToolRiskLevel::Read,
+        )
+        .with_schemas(
+            r#"{"type":"object","properties":{"required":{"type":"string"}},"required":["required"]}"#,
+            OBJECT_SCHEMA,
+        );
+        register_workspace_tool(
+            &mut registry,
+            services,
+            valid_spec,
+            move |_services, _ctx, _input: Input| {
+                calls_for_handler.fetch_add(1, Ordering::SeqCst);
+                async { Ok(Output { ok: true }) }
+            },
+        );
+
+        let ctx = ToolContext::new(
+            WorkspaceScope::new("ws-ar40-unit"),
+            AgentSessionId::new("schema-test"),
+            AgentMode::Agent,
+        )
+        .with_permissions(PermissionSet::from_iter([ToolPermission::new("test.read")]));
+        let error = registry
+            .invoke(&ToolName::new("test.valid"), &ctx, serde_json::json!({}))
+            .await
+            .expect_err("missing required input must fail before the handler");
+        match error {
+            ToolRegistryError::ToolReturned(error) => {
+                assert_eq!(error.code(), ToolErrorCode::InvalidInput);
+            }
+            other => panic!("expected ToolReturned, got {other:?}"),
+        }
+        assert_eq!(
+            calls.load(Ordering::SeqCst),
+            0,
+            "schema validation must run before the handler",
+        );
+        let _ = std::fs::remove_dir_all(base);
     }
 }

@@ -68,6 +68,25 @@ fn workspace_tools_advertise_input_schemas() {
                 "{name}.{field} must declare a description"
             );
         }
+        // AR-40: declared fields must be pinned as `required` (V1
+        // subset). `model.list` is the one tool with no inputs; every
+        // other workspace tool pins its fields so drift back toward a
+        // transparent `{}` is caught here.
+        if !properties.is_empty() {
+            let required = input
+                .get("required")
+                .and_then(|r| r.as_array())
+                .unwrap_or_else(|| panic!("{name} input schema must declare required"));
+            for entry in required {
+                let field = entry
+                    .as_str()
+                    .unwrap_or_else(|| panic!("{name} required entry must be a string"));
+                assert!(
+                    properties.contains_key(field),
+                    "{name} required field '{field}' must be declared in properties"
+                );
+            }
+        }
         let output = spec.output_schema().expect("output schema present");
         assert_eq!(
             output.get("type").and_then(|t| t.as_str()),
