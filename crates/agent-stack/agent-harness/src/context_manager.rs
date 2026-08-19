@@ -460,6 +460,18 @@ impl ContextManager {
         self
     }
 
+    /// Re-target the window budget (AR-17). The host adjusts the budget
+    /// to the per-model `context_window` before a turn; the rolling
+    /// window and next compaction pass honour the new limit.
+    pub fn set_max_tokens(&mut self, max_tokens: usize) {
+        self.config.max_tokens = max_tokens;
+    }
+
+    /// Current window budget (hard history limit).
+    pub fn max_tokens(&self) -> usize {
+        self.config.max_tokens
+    }
+
     /// Number of sticky front messages the window never evicts.
     pub fn sticky_count(&self) -> usize {
         self.sticky_count

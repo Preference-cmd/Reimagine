@@ -424,17 +424,27 @@ impl AgentLoop {
             {
                 self.sink.handle(&event);
             }
-            let messages = manager.prepare_messages("", request.input());
+            let messages = manager.prepare_messages(
+                request
+                    .system_prompt()
+                    .or(request.session().system_prompt())
+                    .unwrap_or(""),
+                request.input(),
+            );
             let pre_run_len = messages.len() - request.input().len();
             (messages, pre_run_len)
         } else {
             let prior_history = request.session().history();
             let pre_run_len = prior_history.len();
-            let messages = prior_history
-                .iter()
-                .cloned()
-                .chain(request.input().iter().cloned())
-                .collect();
+            let mut messages = Vec::new();
+            if let Some(prompt) = request
+                .system_prompt()
+                .or(request.session().system_prompt())
+            {
+                messages.push(Message::system(prompt));
+            }
+            messages.extend(prior_history.iter().cloned());
+            messages.extend(request.input().iter().cloned());
             (messages, pre_run_len)
         };
 
@@ -542,7 +552,8 @@ impl AgentLoop {
         tool_defs: &[AgentToolDefinition],
     ) -> RoundOutcome {
         let provider_request = AgentRequest::new(request.model().clone(), messages.to_vec())
-            .with_tools(tool_defs.to_vec());
+            .with_tools(tool_defs.to_vec())
+            .with_options(request.options().clone());
         let response = match self
             .race_provider_call(
                 request,
@@ -593,7 +604,8 @@ impl AgentLoop {
         tool_defs: &[AgentToolDefinition],
     ) -> RoundOutcome {
         let provider_request = AgentRequest::new(request.model().clone(), messages.to_vec())
-            .with_tools(tool_defs.to_vec());
+            .with_tools(tool_defs.to_vec())
+            .with_options(request.options().clone());
         let mut stream = match self
             .race_provider_call(
                 request,
@@ -1581,6 +1593,7 @@ mod tests {
         name: ProviderName,
         steps: Mutex<VecDeque<ScriptedStep>>,
         call_count: Mutex<usize>,
+        requests: Mutex<Vec<AgentRequest>>,
     }
 
     impl ScriptedProvider {
@@ -1589,11 +1602,16 @@ mod tests {
                 name: ProviderName::new(name),
                 steps: Mutex::new(steps.into()),
                 call_count: Mutex::new(0),
+                requests: Mutex::new(Vec::new()),
             }
         }
 
         fn call_count(&self) -> usize {
             *self.call_count.lock().unwrap()
+        }
+
+        fn requests(&self) -> Vec<AgentRequest> {
+            self.requests.lock().unwrap().clone()
         }
     }
 
@@ -1603,7 +1621,8 @@ mod tests {
             self.name.clone()
         }
 
-        async fn complete(&self, _request: AgentRequest) -> Result<AgentResponse, ProviderError> {
+        async fn complete(&self, request: AgentRequest) -> Result<AgentResponse, ProviderError> {
+            self.requests.lock().unwrap().push(request);
             let mut count = self.call_count.lock().unwrap();
             *count += 1;
             drop(count);
@@ -3943,6 +3962,110 @@ mod tests {
             0,
             "no provider call after pre-cancel"
         );
+    }
+
+    // ------------------------------------------------------------------
+    // AR-17: system prompt + model options reach the wire request
+    // ------------------------------------------------------------------
+
+    #[tokio::test]
+    async fn run_turn_injects_system_prompt_on_non_context_path() {
+        let provider = Arc::new(ScriptedProvider::new(
+            "mock",
+            vec![ScriptedStep::Respond(response_with_text("done"))],
+        ));
+        let loop_harness = AgentLoop::new(provider.clone(), Arc::new(VecAgentEventSink::new()));
+        let session = session_with(|_| {});
+        let req = AgentTurnRequest::new(
+            session,
+            AgentTurnId::new("sys-non-cm"),
+            ModelName::new("test-model"),
+            vec![Message::user("hi")],
+        )
+        .with_system_prompt("you are a careful agent");
+        let result = loop_harness.run_turn(req, None).await;
+        assert_eq!(result.stop_reason(), AgentTurnStopReason::FinalResponse);
+        let requests = provider.requests();
+        assert_eq!(requests.len(), 1);
+        assert_eq!(requests[0].messages()[0].role(), "system");
+        assert_eq!(
+            requests[0].messages()[0].content(),
+            "you are a careful agent"
+        );
+    }
+
+    #[tokio::test]
+    async fn run_turn_session_system_prompt_override_wins() {
+        let provider = Arc::new(ScriptedProvider::new(
+            "mock",
+            vec![ScriptedStep::Respond(response_with_text("done"))],
+        ));
+        let loop_harness = AgentLoop::new(provider.clone(), Arc::new(VecAgentEventSink::new()));
+        let session = session_with(|_| {}).with_system_prompt("session-level prompt");
+        let req = AgentTurnRequest::new(
+            session,
+            AgentTurnId::new("sys-session"),
+            ModelName::new("test-model"),
+            vec![Message::user("hi")],
+        );
+        let result = loop_harness.run_turn(req, None).await;
+        assert_eq!(result.stop_reason(), AgentTurnStopReason::FinalResponse);
+        assert_eq!(provider.requests()[0].messages()[0].role(), "system");
+        assert_eq!(
+            provider.requests()[0].messages()[0].content(),
+            "session-level prompt"
+        );
+    }
+
+    #[tokio::test]
+    async fn run_turn_forwards_turn_options_to_wire_request() {
+        let provider = Arc::new(ScriptedProvider::new(
+            "mock",
+            vec![ScriptedStep::Respond(response_with_text("done"))],
+        ));
+        let loop_harness = AgentLoop::new(provider.clone(), Arc::new(VecAgentEventSink::new()));
+        let session = session_with(|_| {});
+        let req = AgentTurnRequest::new(
+            session,
+            AgentTurnId::new("opts"),
+            ModelName::new("test-model"),
+            vec![Message::user("hi")],
+        )
+        .with_options(serde_json::json!({"temperature": 0.5, "max_tokens": 123}));
+        let result = loop_harness.run_turn(req, None).await;
+        assert_eq!(result.stop_reason(), AgentTurnStopReason::FinalResponse);
+        let requests = provider.requests();
+        let options = requests[0].options();
+        assert_eq!(options["temperature"], 0.5);
+        assert_eq!(options["max_tokens"], 123);
+    }
+
+    #[tokio::test]
+    async fn run_turn_streaming_injects_system_prompt_with_context_manager() {
+        let provider = Arc::new(ScriptedProvider::new(
+            "mock",
+            vec![ScriptedStep::Respond(response_with_text("done"))],
+        ));
+        let loop_harness = AgentLoop::new(provider.clone(), Arc::new(VecAgentEventSink::new()));
+        let dir = temp_session_dir("ar17-sys-cm");
+        let mut manager = ContextManager::new(ContextConfig::new(10_000, dir.clone()));
+        let session = session_with(|_| {});
+        let req = AgentTurnRequest::new(
+            session,
+            AgentTurnId::new("sys-cm"),
+            ModelName::new("test-model"),
+            vec![Message::user("hi")],
+        )
+        .with_system_prompt("cm system prompt");
+        // `run_turn` (complete path) still exercises the ContextManager
+        // branch of `prepare_turn` and injects the system prompt.
+        let result = loop_harness.run_turn(req, Some(&mut manager)).await;
+        assert_eq!(result.stop_reason(), AgentTurnStopReason::FinalResponse);
+        let requests = provider.requests();
+        assert_eq!(requests.len(), 1);
+        assert_eq!(requests[0].messages()[0].role(), "system");
+        assert_eq!(requests[0].messages()[0].content(), "cm system prompt");
+        let _ = std::fs::remove_dir_all(dir);
     }
 
     // ------------------------------------------------------------------

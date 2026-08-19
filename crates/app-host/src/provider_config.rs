@@ -20,7 +20,7 @@ use serde::{Deserialize, Serialize};
 /// A single provider entry. `protocol` discriminates which inner config is
 /// present. `enabled` defaults to `true`; hosts may disable a provider
 /// without removing it from the config file.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct ProviderConfig {
     name: String,
     #[serde(default = "default_enabled")]
@@ -32,6 +32,16 @@ pub struct ProviderConfig {
     api_key: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     default_model: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    max_tokens: Option<usize>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    temperature: Option<f32>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    top_p: Option<f32>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    top_k: Option<usize>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    context_window: Option<usize>,
     /// Strongly-typed inner configs. Only the one matching `protocol` is
     /// populated. The flat fields above exist so the on-disk JSON is
     /// readable; the typed fields are the source of truth at runtime.
@@ -59,6 +69,11 @@ impl ProviderConfig {
             base_url: Some(inner.base_url().to_string()),
             api_key: Some(inner.api_key().to_string()),
             default_model: Some(inner.default_model().to_string()),
+            max_tokens: None,
+            temperature: None,
+            top_p: None,
+            top_k: None,
+            context_window: None,
             openai_chat_completions: Some(inner),
             anthropic_messages: None,
             openai_responses: None,
@@ -76,6 +91,11 @@ impl ProviderConfig {
             base_url: inner.base_url().map(|s| s.to_string()),
             api_key: Some(inner.api_key().to_string()),
             default_model: Some(inner.default_model().to_string()),
+            max_tokens: None,
+            temperature: None,
+            top_p: None,
+            top_k: None,
+            context_window: None,
             openai_chat_completions: None,
             anthropic_messages: Some(inner),
             openai_responses: None,
@@ -90,6 +110,11 @@ impl ProviderConfig {
             base_url: Some(inner.base_url().to_string()),
             api_key: Some(inner.api_key().to_string()),
             default_model: Some(inner.default_model().to_string()),
+            max_tokens: None,
+            temperature: None,
+            top_p: None,
+            top_k: None,
+            context_window: None,
             openai_chat_completions: None,
             anthropic_messages: None,
             openai_responses: Some(inner),
@@ -140,6 +165,22 @@ impl ProviderConfig {
         self.default_model.as_deref()
     }
 
+    pub fn max_tokens(&self) -> Option<usize> {
+        self.max_tokens
+    }
+    pub fn temperature(&self) -> Option<f32> {
+        self.temperature
+    }
+    pub fn top_p(&self) -> Option<f32> {
+        self.top_p
+    }
+    pub fn top_k(&self) -> Option<usize> {
+        self.top_k
+    }
+    pub fn context_window(&self) -> Option<usize> {
+        self.context_window
+    }
+
     pub fn api_key(&self) -> Option<&str> {
         self.api_key.as_deref()
     }
@@ -149,7 +190,7 @@ impl ProviderConfig {
 /// flat per entry so a human can edit it. `AgentProviderConfigDocument`
 /// is what `app-host` parses; the `build_provider` helper in `lib.rs`
 /// turns each entry into an `Arc<dyn AgentProvider>`.
-#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
 pub struct AgentProviderConfigDocument {
     providers: Vec<ProviderConfig>,
 }
@@ -285,6 +326,30 @@ mod tests {
     }
 
     #[test]
+    fn ar17_sampling_fields_default_to_none_for_old_documents() {
+        // AR-17: an existing provider document (no sampling/context fields)
+        // must keep parsing with backward-compatible defaults.
+        let json = r#"{"name":"mock","protocol":"openai_chat_completions","base_url":"https://x","api_key":"k","default_model":"m"}"#;
+        let cfg: ProviderConfig = serde_json::from_str(json).expect("old document parses");
+        assert_eq!(cfg.max_tokens(), None);
+        assert_eq!(cfg.temperature(), None);
+        assert_eq!(cfg.top_p(), None);
+        assert_eq!(cfg.top_k(), None);
+        assert_eq!(cfg.context_window(), None);
+    }
+
+    #[test]
+    fn ar17_sampling_fields_round_trip() {
+        let json = r#"{"name":"mock","protocol":"openai_chat_completions","max_tokens":1024,"temperature":0.5,"top_p":0.9,"top_k":32,"context_window":128000}"#;
+        let cfg: ProviderConfig = serde_json::from_str(json).expect("new document parses");
+        assert_eq!(cfg.max_tokens(), Some(1024));
+        assert_eq!(cfg.temperature(), Some(0.5));
+        assert_eq!(cfg.top_p(), Some(0.9));
+        assert_eq!(cfg.top_k(), Some(32));
+        assert_eq!(cfg.context_window(), Some(128000));
+    }
+
+    #[test]
     fn mixed_protocol_provider_rejected() {
         // Create a provider with multiple inner configs populated (mixed protocols)
         let openai_config = OpenAiChatCompletionsConfig::new(
@@ -302,6 +367,11 @@ mod tests {
             base_url: Some("https://api.example.com/v1".to_string()),
             api_key: Some("sk-test".to_string()),
             default_model: Some("gpt-4o-mini".to_string()),
+            max_tokens: None,
+            temperature: None,
+            top_p: None,
+            top_k: None,
+            context_window: None,
             openai_chat_completions: Some(openai_config),
             anthropic_messages: Some(anthropic_config),
             openai_responses: None,
@@ -368,6 +438,11 @@ mod tests {
             base_url: Some("https://api.example.com/v1".to_string()),
             api_key: Some("sk-test".to_string()),
             default_model: Some("gpt-4o-mini".to_string()),
+            max_tokens: None,
+            temperature: None,
+            top_p: None,
+            top_k: None,
+            context_window: None,
             openai_chat_completions: Some(openai_config),
             anthropic_messages: Some(anthropic_config),
             openai_responses: Some(responses_config),
@@ -408,6 +483,11 @@ mod tests {
             base_url: Some("https://api.example.com/v1".to_string()),
             api_key: Some("sk-test".to_string()),
             default_model: Some("gpt-4o-mini".to_string()),
+            max_tokens: None,
+            temperature: None,
+            top_p: None,
+            top_k: None,
+            context_window: None,
             openai_chat_completions: Some(openai_config),
             anthropic_messages: None,
             openai_responses: Some(responses_config),
@@ -446,6 +526,11 @@ mod tests {
             base_url: Some("https://api.example.com/v1".to_string()),
             api_key: Some("sk-test".to_string()),
             default_model: Some("gpt-4o-mini".to_string()),
+            max_tokens: None,
+            temperature: None,
+            top_p: None,
+            top_k: None,
+            context_window: None,
             openai_chat_completions: Some(openai_config1),
             anthropic_messages: Some(anthropic_config1),
             openai_responses: None,
@@ -463,6 +548,11 @@ mod tests {
             base_url: Some("https://api2.example.com/v1".to_string()),
             api_key: Some("sk-test2".to_string()),
             default_model: Some("gpt-4o".to_string()),
+            max_tokens: None,
+            temperature: None,
+            top_p: None,
+            top_k: None,
+            context_window: None,
             openai_chat_completions: Some(openai_config2),
             anthropic_messages: None,
             openai_responses: Some(responses_config2),
@@ -499,6 +589,11 @@ mod tests {
             base_url: Some("https://api.example.com/v1".to_string()),
             api_key: Some("sk-test".to_string()),
             default_model: Some("gpt-4o-mini".to_string()),
+            max_tokens: None,
+            temperature: None,
+            top_p: None,
+            top_k: None,
+            context_window: None,
             openai_chat_completions: Some(openai_config),
             anthropic_messages: Some(anthropic_config),
             openai_responses: None,

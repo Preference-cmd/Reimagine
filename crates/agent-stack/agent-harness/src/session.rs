@@ -42,6 +42,7 @@ pub struct AgentSession {
     /// memory / summarization / compaction / external persistence in
     /// V1.
     history: Arc<Mutex<Vec<Message>>>,
+    system_prompt: Option<String>,
 }
 
 impl std::fmt::Debug for AgentSession {
@@ -81,6 +82,7 @@ impl AgentSession {
             started_at: String::new(),
             permissions: PermissionSet::new(),
             history: Arc::new(Mutex::new(Vec::new())),
+            system_prompt: None,
         }
     }
 
@@ -108,6 +110,16 @@ impl AgentSession {
     /// any previously set history. Used by hosts that hydrate a
     /// session from persistent storage; in normal turn flow the loop
     /// appends via [`AgentSession::append_history`].
+    /// Set an in-memory session system prompt override.
+    pub fn with_system_prompt(mut self, prompt: impl Into<String>) -> Self {
+        self.system_prompt = Some(prompt.into());
+        self
+    }
+
+    pub fn system_prompt(&self) -> Option<&str> {
+        self.system_prompt.as_deref()
+    }
+
     pub fn with_history(self, history: Vec<Message>) -> Self {
         *self.history.lock().unwrap() = history;
         self

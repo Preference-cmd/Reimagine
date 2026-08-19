@@ -887,6 +887,70 @@ async fn agent_service_passes_structured_output_schema_through_to_harness() {
     );
 }
 
+#[tokio::test]
+async fn run_turn_injects_default_system_prompt_and_session_override() {
+    // AR-17: the turn's first message is the effective system prompt -
+    // the default template when the session has no override, and the
+    // session override when one is set.
+    let host = build_host("ws-agent-sys-prompt");
+    let provider = Arc::new(ScriptedProvider::new(
+        "mock",
+        vec![
+            AgentResponse::new(Message::assistant("one")),
+            AgentResponse::new(Message::assistant("two")),
+        ],
+    ));
+    host.agent_service().providers().register(provider.clone());
+    host.agent_service().create_session_with_permissions(
+        AgentSessionId::new("sess-sys"),
+        AgentMode::Agent,
+        ProviderName::new("mock"),
+        "2026-08-19T00:00:00Z",
+        workflow_permissions(),
+    );
+
+    // Default template (no override).
+    host.agent_service()
+        .run_turn(AgentServiceTurnRequest::from_user_text(
+            AgentSessionId::new("sess-sys"),
+            AgentTurnId::new("t1"),
+            ModelName::new("test-model"),
+            "hello",
+        ))
+        .await
+        .expect("turn 1");
+    let after_first = provider.requests();
+    assert_eq!(after_first[0].messages()[0].role(), "system");
+    assert!(
+        !after_first[0].messages()[0].content().is_empty(),
+        "default template is present"
+    );
+
+    // Session override wins on the next turn.
+    host.agent_service()
+        .set_session_system_prompt(
+            &AgentSessionId::new("sess-sys"),
+            "custom thread instructions",
+        )
+        .expect("override set");
+    host.agent_service()
+        .run_turn(AgentServiceTurnRequest::from_user_text(
+            AgentSessionId::new("sess-sys"),
+            AgentTurnId::new("t2"),
+            ModelName::new("test-model"),
+            "hello again",
+        ))
+        .await
+        .expect("turn 2");
+    let after_second = provider.requests();
+    assert_eq!(after_second.len(), 2);
+    assert_eq!(after_second[1].messages()[0].role(), "system");
+    assert_eq!(
+        after_second[1].messages()[0].content(),
+        "custom thread instructions"
+    );
+}
+
 fn build_host(scope: &str) -> WorkspaceHost {
     WorkspaceHost::with_defaults(WorkspaceScope::new(scope), temp_dir(scope))
 }

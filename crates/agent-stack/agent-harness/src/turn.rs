@@ -332,6 +332,10 @@ pub struct AgentTurnRequest {
     /// with a corrective message on failure, then stops with a
     /// `STRUCTURED_OUTPUT_INVALID` provider error.
     output_schema: Option<Value>,
+    /// Optional system instruction for this turn. Never persisted in history.
+    system_prompt: Option<String>,
+    /// Opaque provider generation options for this turn.
+    options: Value,
 }
 
 impl AgentTurnRequest {
@@ -352,6 +356,8 @@ impl AgentTurnRequest {
             cancel_token: CancellationToken::new(),
             turn_timeout: None,
             output_schema: None,
+            system_prompt: None,
+            options: Value::Object(Default::default()),
         }
     }
 
@@ -366,6 +372,26 @@ impl AgentTurnRequest {
     pub fn with_output_schema(mut self, schema: Value) -> Self {
         self.output_schema = Some(schema);
         self
+    }
+
+    /// Set the system prompt for this turn.
+    pub fn with_system_prompt(mut self, prompt: impl Into<String>) -> Self {
+        self.system_prompt = Some(prompt.into());
+        self
+    }
+
+    pub fn system_prompt(&self) -> Option<&str> {
+        self.system_prompt.as_deref()
+    }
+
+    /// Set opaque provider generation options for this turn.
+    pub fn with_options(mut self, options: Value) -> Self {
+        self.options = options;
+        self
+    }
+
+    pub fn options(&self) -> &Value {
+        &self.options
     }
 
     /// Set the cancellation token for this turn.

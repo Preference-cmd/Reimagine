@@ -12,6 +12,88 @@ use tokio::sync::{Mutex as AsyncMutex, Semaphore};
 use tokio_util::sync::CancellationToken;
 
 use crate::AgentProviderCatalog;
+use serde_json::json;
+
+const DEFAULT_SYSTEM_PROMPT: &str = "You are Reimagine, a careful creative agent. Use tools deliberately and explain actions. Board edits must preserve project intent; Workflow edits must remain valid and use the workflow command path. Prefer inspection before mutation and respect tool results.";
+
+fn model_options(config: Option<&crate::ProviderConfig>) -> serde_json::Value {
+    let mut out = serde_json::Map::new();
+    if let Some(c) = config {
+        if let Some(v) = c.max_tokens() {
+            out.insert("max_tokens".into(), json!(v));
+        }
+        if let Some(v) = c.temperature() {
+            out.insert("temperature".into(), json!(v));
+        }
+        if let Some(v) = c.top_p() {
+            out.insert("top_p".into(), json!(v));
+        }
+        if let Some(v) = c.top_k() {
+            out.insert("top_k".into(), json!(v));
+        }
+    }
+    serde_json::Value::Object(out)
+}
+
+/// Conservative minimum window budget (RF-B1 / AR-17): a model whose
+/// window cannot be determined (or a broken config) must never produce a
+/// sub-usable budget.
+const MINIMUM_CONTEXT_BUDGET: usize = 16_000;
+
+/// Known model-family context windows (RF-B1 / AR-17), used when the
+/// provider config does not declare `context_window`. Values are
+/// conservative; unknown models fall back to
+/// `DEFAULT_CONTEXT_WINDOW_TOKENS` with a warning.
+fn model_context_window(model: &ModelName) -> Option<usize> {
+    let name = model.as_str();
+    if name.starts_with("gpt-5")
+        || name.starts_with("gpt-4o")
+        || name.starts_with("gpt-4.1")
+        || name.starts_with("chatgpt-4o")
+    {
+        Some(128_000)
+    } else if name.starts_with("gpt-4") {
+        // gpt-4 family (8k/32k variants) - conservative.
+        Some(32_000)
+    } else if name.starts_with("claude") {
+        Some(200_000)
+    } else if name.starts_with("gemini") {
+        Some(1_000_000)
+    } else if name.starts_with("o1-") || name.starts_with("o3-") || name.starts_with("o4-") {
+        Some(200_000)
+    } else {
+        None
+    }
+}
+
+/// Resolve the per-turn window budget (RF-B1 / AR-17).
+///
+/// Source order: provider config `context_window` (honoured exactly when
+/// it is non-zero and at least the conservative minimum; a zero or
+/// garbage value falls back) -> known model-family table ->
+/// `DEFAULT_CONTEXT_WINDOW_TOKENS`. Every non-explicit resolution logs a
+/// warning so silent regressions are audible.
+fn resolve_context_budget(
+    model: &ModelName,
+    provider_config: Option<&crate::ProviderConfig>,
+) -> usize {
+    if let Some(window) = provider_config.and_then(|c| c.context_window()) {
+        if window == 0 {
+            tracing::warn!(%model, "provider context_window is 0; using default budget");
+            return DEFAULT_CONTEXT_WINDOW_TOKENS;
+        }
+        if window < MINIMUM_CONTEXT_BUDGET {
+            tracing::warn!(%model, window, "context_window below conservative minimum; using minimum");
+            return MINIMUM_CONTEXT_BUDGET;
+        }
+        return window;
+    }
+    if let Some(window) = model_context_window(model) {
+        return window;
+    }
+    tracing::warn!(%model, "no context window known for model; using default budget");
+    DEFAULT_CONTEXT_WINDOW_TOKENS
+}
 use crate::{AppHostError, AppHostResult};
 
 /// Conservative V1 context budget per embedded agent session (AR-02).
@@ -39,6 +121,7 @@ pub struct SessionRuntime {
     context: Arc<AsyncMutex<ContextManager>>,
     turn_lock: Arc<Semaphore>,
     active_turn: Mutex<Option<CancellationToken>>,
+    system_prompt_override: Mutex<Option<String>>,
 }
 
 impl std::fmt::Debug for SessionRuntime {
@@ -62,11 +145,31 @@ impl SessionRuntime {
             context: Arc::new(AsyncMutex::new(context)),
             turn_lock: Arc::new(Semaphore::new(1)),
             active_turn: Mutex::new(None),
+            system_prompt_override: Mutex::new(None),
         }
     }
 
     pub fn session(&self) -> &AgentSession {
         &self.session
+    }
+
+    /// Set the in-memory session system prompt override (AR-17). Durable
+    /// thread metadata (thread.json) remains AR-22's scope.
+    pub fn set_system_prompt(&self, prompt: impl Into<String>) {
+        *self
+            .system_prompt_override
+            .lock()
+            .expect("agent prompt lock poisoned") = Some(prompt.into());
+    }
+
+    /// Effective system prompt: the runtime override wins over the
+    /// session's own (builder-set) prompt.
+    pub fn effective_system_prompt(&self) -> Option<String> {
+        self.system_prompt_override
+            .lock()
+            .expect("agent prompt lock poisoned")
+            .clone()
+            .or_else(|| self.session.system_prompt().map(str::to_owned))
     }
 
     fn set_active_turn(&self, token: CancellationToken) {
@@ -450,7 +553,15 @@ impl AgentService {
             request.model().clone(),
             request.input().to_vec(),
         )
-        .with_cancel_token(cancel_token);
+        .with_cancel_token(cancel_token)
+        .with_system_prompt(
+            runtime
+                .effective_system_prompt()
+                .unwrap_or_else(|| DEFAULT_SYSTEM_PROMPT.to_owned()),
+        )
+        .with_options(model_options(
+            self.providers.config(runtime.session().provider()).as_ref(),
+        ));
         if let Some(max_tool_steps) = request.max_tool_steps() {
             turn_request = turn_request.with_max_tool_steps(max_tool_steps);
         }
@@ -462,6 +573,12 @@ impl AgentService {
 
         let loop_harness = AgentLoop::new(provider, Arc::clone(&self.event_sink));
         let mut context_guard = runtime.context.lock().await;
+        // AR-17: target the window budget to the model's context window
+        // (configured value, else known-family table, else default).
+        context_guard.set_max_tokens(resolve_context_budget(
+            request.model(),
+            self.providers.config(runtime.session().provider()).as_ref(),
+        ));
         let result = loop_harness
             .run_turn_streaming(turn_request, Some(&mut context_guard))
             .await;
@@ -498,5 +615,105 @@ impl AgentService {
                 session_id: session_id.clone(),
             })
         }
+    }
+
+    /// Set the in-memory system prompt override for a thread (AR-17).
+    /// The override wins over the default template on the next turn.
+    pub fn set_session_system_prompt(
+        &self,
+        session_id: &AgentSessionId,
+        prompt: impl Into<String>,
+    ) -> AppHostResult<()> {
+        let runtime = self.get_runtime(session_id)?;
+        runtime.set_system_prompt(prompt);
+        Ok(())
+    }
+}
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use reimagine_agent_harness::ModelName;
+
+    fn provider_config_with(
+        window: Option<usize>,
+        temperature: Option<f32>,
+    ) -> crate::ProviderConfig {
+        let mut json = serde_json::json!({
+            "name": "mock",
+            "protocol": "openai_chat_completions",
+        });
+        if let Some(w) = window {
+            json["context_window"] = serde_json::json!(w);
+        }
+        if let Some(t) = temperature {
+            json["temperature"] = serde_json::json!(t);
+        }
+        serde_json::from_value(json).expect("provider config parses")
+    }
+
+    #[test]
+    fn resolve_context_budget_honors_explicit_config_window() {
+        let config = provider_config_with(Some(20_000), None);
+        let budget = resolve_context_budget(&ModelName::new("ghi"), Some(&config));
+        assert_eq!(budget, 20_000, "explicit config window wins");
+    }
+
+    #[test]
+    fn resolve_context_budget_zero_and_tiny_config_windows_fall_back() {
+        let zero = provider_config_with(Some(0), None);
+        assert_eq!(
+            resolve_context_budget(&ModelName::new("x"), Some(&zero)),
+            DEFAULT_CONTEXT_WINDOW_TOKENS,
+            "zero window uses the default"
+        );
+        let tiny = provider_config_with(Some(100), None);
+        assert_eq!(
+            resolve_context_budget(&ModelName::new("x"), Some(&tiny)),
+            MINIMUM_CONTEXT_BUDGET,
+            "sub-minimum window clamps to the conservative floor"
+        );
+    }
+
+    #[test]
+    fn resolve_context_budget_uses_model_table_when_config_is_absent() {
+        assert_eq!(
+            resolve_context_budget(&ModelName::new("gpt-4o"), None),
+            128_000,
+            "128k-class model"
+        );
+        assert_eq!(
+            resolve_context_budget(&ModelName::new("gpt-4"), None),
+            32_000,
+            "32k-class model differs from 128k"
+        );
+        assert_eq!(
+            resolve_context_budget(&ModelName::new("unknown-model"), None),
+            DEFAULT_CONTEXT_WINDOW_TOKENS,
+            "unknown model falls back to the default"
+        );
+    }
+
+    #[test]
+    fn model_options_only_include_configured_fields() {
+        let config = provider_config_with(None, Some(0.7));
+        let options = model_options(Some(&config));
+        let map = options.as_object().expect("options is an object");
+        let temperature = map
+            .get("temperature")
+            .and_then(|v| v.as_f64())
+            .expect("temperature present");
+        assert!(
+            (temperature - 0.7).abs() < 1e-6,
+            "temperature {temperature} within tolerance"
+        );
+        assert!(!map.contains_key("max_tokens"), "unset fields are omitted");
+        assert!(!map.contains_key("top_p"));
+        assert!(!map.contains_key("top_k"));
+    }
+
+    #[test]
+    fn model_options_are_empty_without_config() {
+        let options = model_options(None);
+        assert_eq!(options, serde_json::json!({}));
     }
 }

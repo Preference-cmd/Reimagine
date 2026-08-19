@@ -9,6 +9,7 @@ use crate::provider_config::{AgentProviderConfigDocument, Protocol, ProviderConf
 #[derive(Clone, Default)]
 pub struct AgentProviderCatalog {
     providers: Arc<RwLock<BTreeMap<ProviderName, Arc<dyn AgentProvider>>>>,
+    configs: Arc<RwLock<BTreeMap<ProviderName, ProviderConfig>>>,
 }
 
 impl std::fmt::Debug for AgentProviderCatalog {
@@ -44,6 +45,21 @@ impl AgentProviderCatalog {
         self.providers
             .read()
             .expect("agent provider catalog poisoned")
+            .get(name)
+            .cloned()
+    }
+
+    pub fn register_config(&self, config: ProviderConfig) {
+        self.configs
+            .write()
+            .expect("provider catalog poisoned")
+            .insert(ProviderName::new(config.name()), config);
+    }
+
+    pub fn config(&self, name: &ProviderName) -> Option<ProviderConfig> {
+        self.configs
+            .read()
+            .expect("provider catalog poisoned")
             .get(name)
             .cloned()
     }
@@ -169,6 +185,7 @@ pub fn register_providers_from_document(
     let mut registered = Vec::new();
     let mut errors = Vec::new();
     for config in document.enabled() {
+        catalog.register_config(config.clone());
         match build_provider(config, workspace_dir) {
             Ok(provider) => {
                 let name = catalog.register(provider);
