@@ -22,6 +22,7 @@ vi.mock("@tanstack/react-router", () => ({
 }));
 
 vi.mock("$paraglide/messages", () => ({
+  "sidebar.new": () => "New",
   "sidebar.workflows": () => "Workflows",
   "sidebar.models": () => "Models",
   "sidebar.runs": () => "Runs",
@@ -31,7 +32,7 @@ vi.mock("$paraglide/messages", () => ({
 describe("SidebarNav", () => {
   test("renders all primary navigation items", () => {
     render(<SidebarNav />);
-    expect(screen.getByText("Workflows")).toBeInTheDocument();
+    expect(screen.getByText("New")).toBeInTheDocument();
     expect(screen.getByText("Models")).toBeInTheDocument();
     expect(screen.getByText("Runs")).toBeInTheDocument();
     expect(screen.getByText("Assets")).toBeInTheDocument();
@@ -46,7 +47,7 @@ describe("SidebarNav", () => {
     render(<SidebarNav />);
     const links = screen.getAllByRole("link");
     const hrefs = links.map((link) => link.getAttribute("href"));
-    expect(hrefs).toContain("/workflows");
+    expect(hrefs).toContain("/new");
     expect(hrefs).toContain("/models");
     expect(hrefs).toContain("/runs");
     expect(hrefs).toContain("/assets");

@@ -1,6 +1,11 @@
 import {
   type ArtifactMetadata,
+  type BoardCommandResult,
+  type BoardSnapshot,
   type ComputeProfile,
+  type DocumentChangedEvent,
+  type Project,
+  type ProjectMetadataInput,
   type DownloadEventPayload,
   type DownloadHuggingfaceModelArgs,
   type ModelCard,
@@ -123,6 +128,12 @@ export async function mockCancelRun(_runId: string): Promise<void> {
    on-disk `workflows/` behavior of the real backend. */
 
 const PERSISTENCE_KEY = "reimagine.mock.workflows";
+const PROJECTS_KEY = "reimagine.mock.projects";
+const documentSubscribers = new Set<(event: DocumentChangedEvent) => void>();
+
+function emitDocumentEvent(event: DocumentChangedEvent): void {
+  for (const subscriber of documentSubscribers) subscriber(event);
+}
 
 function mockReadAll(): Record<string, string> {
   try {
@@ -132,46 +143,134 @@ function mockReadAll(): Record<string, string> {
   }
 }
 
+function mockReadProjects(): Record<string, Project> {
+  const fallback: Project = {
+    id: "default",
+    name: "Default",
+    description: "Default workspace project",
+    createdAt: "2026-08-18T00:00:00Z",
+    updatedAt: "2026-08-18T00:00:00Z",
+  };
+  try {
+    const parsed = JSON.parse(localStorage.getItem(PROJECTS_KEY) ?? "{}");
+    return Object.keys(parsed).length > 0 ? parsed : { default: fallback };
+  } catch {
+    return { default: fallback };
+  }
+}
+
+function mockWriteProjects(projects: Record<string, Project>): void {
+  localStorage.setItem(PROJECTS_KEY, JSON.stringify(projects));
+}
+
 function mockWriteAll(all: Record<string, string>): void {
   localStorage.setItem(PERSISTENCE_KEY, JSON.stringify(all));
 }
 
 export async function mockSaveWorkflow(input: {
+  projectId: string;
   workflowId: string;
   workflowJson: unknown;
 }): Promise<string> {
   await delay(50);
   const all = mockReadAll();
-  all[input.workflowId] = JSON.stringify(input.workflowJson);
+  const key = `${input.projectId}/${input.workflowId}`;
+  all[key] = JSON.stringify(input.workflowJson);
+  emitDocumentEvent({
+    kind: "workflow.changed",
+    projectId: input.projectId,
+    documentId: input.workflowId,
+    version: Number((input.workflowJson as { version?: unknown })?.version ?? 0),
+  });
   mockWriteAll(all);
-  return `mock:/workflows/${input.workflowId}.json`;
+  return `mock:/projects/${input.projectId}/workflows/${input.workflowId}.json`;
 }
 
-export async function mockLoadWorkflow(input: { workflowId: string }): Promise<unknown> {
+export async function mockLoadWorkflow(input: { projectId: string; workflowId: string }): Promise<unknown> {
   await delay(50);
-  const raw = mockReadAll()[input.workflowId];
+  const key = `${input.projectId}/${input.workflowId}`;
+  const raw = mockReadAll()[key];
   if (!raw) {
-    throw new Error(`mock workflow not found: ${input.workflowId}`);
+    throw new Error(`mock workflow not found: ${key}`);
   }
   return JSON.parse(raw);
 }
 
-export async function mockListWorkflows(): Promise<WorkflowFileSummary[]> {
+export async function mockListWorkflows(input: { projectId: string }): Promise<WorkflowFileSummary[]> {
   await delay(30);
-  const all = mockReadAll();
-  return Object.entries(all).map(([id], index, entries) => ({
-    id,
-    // Entries are in insertion order, so the last-saved workflow gets the
-    // largest timestamp and sorts first (newest-first), like the backend.
+  const prefix = `${input.projectId}/`;
+  const entries = Object.entries(mockReadAll()).filter(([key]) => key.startsWith(prefix));
+  return entries.map(([key], index) => ({
+    id: key.slice(prefix.length),
     modified_millis: entries.length - index,
   }));
 }
+
+export async function mockSubscribeDocumentEvents(
+  onEvent: (event: DocumentChangedEvent) => void,
+): Promise<void> {
+  documentSubscribers.add(onEvent);
+}
+
+export async function mockListProjects(): Promise<Project[]> {
+  await delay(30);
+  return Object.values(mockReadProjects());
+}
+
+export async function mockCreateProject(input: { projectId: string; metadata: ProjectMetadataInput }): Promise<Project> {
+  const projects = mockReadProjects();
+  const now = new Date().toISOString();
+  const project: Project = { id: input.projectId, name: input.metadata.name, description: input.metadata.description, createdAt: input.metadata.createdAt ?? now, updatedAt: input.metadata.updatedAt ?? now };
+  projects[input.projectId] = project;
+  mockWriteProjects(projects);
+  return project;
+}
+
+export async function mockLoadProject(input: { projectId: string }): Promise<Project> {
+  const project = mockReadProjects()[input.projectId];
+  if (!project) throw new Error("mock project not found: " + input.projectId);
+  return project;
+}
+
+export async function mockUpdateProject(input: { projectId: string; metadata: ProjectMetadataInput }): Promise<Project> {
+  const current = await mockLoadProject({ projectId: input.projectId });
+  const project = { ...current, name: input.metadata.name, description: input.metadata.description, updatedAt: input.metadata.updatedAt ?? new Date().toISOString() };
+  const projects = mockReadProjects();
+  projects[input.projectId] = project;
+  mockWriteProjects(projects);
+  return project;
+}
+
+export async function mockDeleteProject(input: { projectId: string }): Promise<void> {
+  const projects = mockReadProjects();
+  delete projects[input.projectId];
+  mockWriteProjects(projects);
+}
+
+export async function mockSetActiveProject(input: { projectId: string }): Promise<Project> { return mockLoadProject(input); }
+
+export async function mockGetBoardSnapshot(input: { projectId: string }): Promise<BoardSnapshot> {
+  return { id: "board-" + input.projectId, projectId: input.projectId, version: 0, items: [] };
+}
+
+const noOpBoardResult = (version = 0): BoardCommandResult => ({ status: "no_op", boardVersion: version, changes: [], diagnostics: [], historyEntryId: null });
+
+export async function mockPreviewBoardCommands(_input: { projectId: string; commandBatch: unknown }): Promise<BoardCommandResult> { return noOpBoardResult(); }
+
+export async function mockApplyBoardCommands(input: { projectId: string; commandBatch: unknown }): Promise<BoardCommandResult> {
+  const result = { ...noOpBoardResult(1), status: "applied" as const, boardVersion: 1 };
+  emitDocumentEvent({ kind: "board.changed", projectId: input.projectId, documentId: "board-" + input.projectId, version: 1 });
+  return result;
+}
+
+
+export async function mockUndoBoard(_input: { projectId: string }): Promise<BoardCommandResult | null> { return null; }
+export async function mockRedoBoard(_input: { projectId: string }): Promise<BoardCommandResult | null> { return null; }
 
 export async function mockListModels(): Promise<ModelInfo[]> {
   await delay(150);
   return [...MOCK_MODELS];
 }
-
 export async function mockGetNodeDefs(): Promise<NodeDef[]> {
   await delay(120);
   // Mirrors crates/nodes builtins — same type ids, categories, socket kinds

@@ -1,14 +1,15 @@
 pub mod builder;
 
+use std::collections::BTreeMap;
 use std::path::Path;
-use std::sync::Arc;
+use std::sync::{Arc, RwLock};
 
 pub use builder::WorkspaceHostBuilder;
 
 use reimagine_agent_harness::{AgentEventSink, AgentToolRegistry, WorkspaceScope};
 use reimagine_backend_worker_host::WorkerStorePaths;
 use reimagine_config::{AppConfig, AppPaths, ConfigDocument, InferenceBackendConfig};
-use reimagine_core::model::NodeDef;
+use reimagine_core::model::{NodeDef, ProjectId};
 use reimagine_inference::WorkspaceComputeProfile;
 use reimagine_nodes::BuiltinNodeCatalog;
 use reimagine_runtime::{BoxedRunEventSink, RuntimeService, VecRunEventSink};
@@ -26,8 +27,8 @@ use crate::provider_config::AgentProviderConfigDocument;
 use crate::services::WorkspaceServices;
 use crate::tools::register_app_tools;
 use crate::{
-    AgentService, AppHostError, BackendSelection, BoardService, ModelService, ProjectService,
-    WorkflowService,
+    AgentService, AppHostError, BackendSelection, BoardService, DocumentEventBus, ModelService,
+    ProjectService, WorkflowService,
 };
 use crate::{InstalledWorkerInventoryProvider, WorkerInventoryProvider};
 
@@ -89,6 +90,8 @@ pub struct WorkspaceHost {
     pub(crate) project_service: Arc<ProjectService>,
     pub(crate) board_service: Arc<BoardService>,
     pub(crate) workflow_service: Arc<WorkflowService>,
+    pub(crate) workflow_services: RwLock<BTreeMap<ProjectId, Arc<WorkflowService>>>,
+    pub(crate) document_events: Arc<DocumentEventBus>,
     pub(crate) model_service: Arc<ModelService>,
     pub(crate) runtime_service: Arc<RuntimeService>,
     pub(crate) agent_service: Arc<AgentService>,
@@ -131,13 +134,46 @@ impl WorkspaceHost {
         compute_profile: Arc<WorkspaceComputeProfile>,
         resolved_backend_instance: reimagine_inference::BackendInstance,
     ) -> Self {
+        Self::new_with_document_events(
+            workspace_scope,
+            config,
+            backend_config,
+            runtime_service,
+            builtin_catalog,
+            compute_profile,
+            resolved_backend_instance,
+            Arc::new(DocumentEventBus::new()),
+        )
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    fn new_with_document_events(
+        workspace_scope: WorkspaceScope,
+        config: AppConfig,
+        backend_config: InferenceBackendConfig,
+        runtime_service: Arc<RuntimeService>,
+        builtin_catalog: Arc<BuiltinNodeCatalog>,
+        compute_profile: Arc<WorkspaceComputeProfile>,
+        resolved_backend_instance: reimagine_inference::BackendInstance,
+        document_events: Arc<DocumentEventBus>,
+    ) -> Self {
         let config = Arc::new(config);
-        let board_service = Arc::new(BoardService::new(config.paths().clone()));
+        let board_service = Arc::new(BoardService::with_document_events(
+            config.paths().clone(),
+            Arc::clone(&document_events),
+        ));
         let project_service = Arc::new(ProjectService::new(
             config.paths().clone(),
             Arc::clone(&board_service),
         ));
-        let workflow_service = Arc::new(WorkflowService::new(config.paths().clone()));
+        let default_project_id = ProjectId::new("default");
+        let workflow_service = Arc::new(WorkflowService::for_project_with_events(
+            config.paths().clone(),
+            default_project_id.clone(),
+            Arc::clone(&document_events),
+        ));
+        let mut workflow_services = BTreeMap::new();
+        workflow_services.insert(default_project_id, Arc::clone(&workflow_service));
         let acquisition_service = Arc::new(ModelAcquisitionService::new(
             config.paths().clone(),
             &config,
@@ -175,6 +211,8 @@ impl WorkspaceHost {
             project_service,
             board_service,
             workflow_service,
+            workflow_services: RwLock::new(workflow_services),
+            document_events,
             model_service,
             runtime_service,
             agent_service,
@@ -235,6 +273,7 @@ impl WorkspaceHost {
             event_sink,
             agent_event_sink,
             Arc::new(InstalledWorkerInventoryProvider::for_base_path(&base_path)),
+            None,
         )
         .await
     }
@@ -287,6 +326,7 @@ impl WorkspaceHost {
             Arc::new(InstalledWorkerInventoryProvider::new(
                 WorkerStorePaths::new(app_data_root),
             )),
+            None,
         )
         .await
     }
@@ -306,6 +346,7 @@ impl WorkspaceHost {
             event_sink,
             Arc::new(reimagine_agent_harness::VecAgentEventSink::new()),
             worker_inventory,
+            None,
         )
         .await
     }
@@ -455,6 +496,7 @@ impl WorkspaceHost {
         event_sink: BoxedRunEventSink,
         agent_event_sink: Arc<dyn AgentEventSink>,
         worker_inventory: Arc<dyn WorkerInventoryProvider>,
+        document_events_override: Option<Arc<DocumentEventBus>>,
     ) -> Result<Self, AppHostError> {
         let acquisition_service = Arc::new(ModelAcquisitionService::new(
             config.paths().clone(),
@@ -514,7 +556,9 @@ impl WorkspaceHost {
         }
         let builtin_catalog = Arc::new(BuiltinNodeCatalog::v1());
         let agent_session_dir = config.paths().base_path().join("agent-sessions");
-        let mut host = Self::new(
+        let document_events =
+            document_events_override.unwrap_or_else(|| Arc::new(DocumentEventBus::new()));
+        let mut host = Self::new_with_document_events(
             workspace_scope,
             config,
             backend_config,
@@ -522,6 +566,7 @@ impl WorkspaceHost {
             builtin_catalog,
             Arc::new(bootstrapped.compute_profile),
             bootstrapped.runtime.selected_instance,
+            document_events,
         );
         host.worker_switch = worker_switch;
         host.worker_inventory = Arc::clone(&worker_inventory);
@@ -531,7 +576,6 @@ impl WorkspaceHost {
         host.agent_event_sink = agent_event_sink;
         let registry = host.agent_service.registry().clone();
         let providers = host.agent_service.providers().clone();
-
         // AR-37: register concrete providers from the loaded document so
         // the production desktop bootstrap path (not just
         // WorkspaceHostBuilder) sees configured providers. App-host is
@@ -605,6 +649,53 @@ impl WorkspaceHost {
     pub fn workflow_service(&self) -> &Arc<WorkflowService> {
         &self.workflow_service
     }
+
+    /// Return the project-owned workflow service, creating its in-memory
+    /// session registry lazily. Callers must validate project existence
+    /// through ProjectService before requesting a new project service.
+    pub fn workflow_service_for_project(&self, project_id: &ProjectId) -> Arc<WorkflowService> {
+        if let Some(service) = self
+            .workflow_services
+            .read()
+            .expect("workflow service registry poisoned")
+            .get(project_id)
+            .cloned()
+        {
+            return service;
+        }
+        let service = Arc::new(WorkflowService::for_project_with_events(
+            self.config.paths().clone(),
+            project_id.clone(),
+            Arc::clone(&self.document_events),
+        ));
+        self.workflow_services
+            .write()
+            .expect("workflow service registry poisoned")
+            .insert(project_id.clone(), Arc::clone(&service));
+        service
+    }
+
+    /// Delete a project and clear its in-memory workflow session registry.
+    /// AgentThread ownership remains with the later lifecycle ticket.
+    pub async fn delete_project(&self, project_id: &ProjectId) -> Result<(), AppHostError> {
+        self.project_service.delete_project(project_id).await?;
+        if project_id.as_str() == "default" {
+            self.workflow_service.clear();
+        } else if let Some(service) = self
+            .workflow_services
+            .write()
+            .expect("workflow service registry poisoned")
+            .remove(project_id)
+        {
+            service.clear();
+        }
+        Ok(())
+    }
+
+    pub fn document_events(&self) -> Arc<DocumentEventBus> {
+        Arc::clone(&self.document_events)
+    }
+
     pub fn project_service(&self) -> &Arc<ProjectService> {
         &self.project_service
     }
@@ -697,6 +788,7 @@ impl WorkspaceHost {
             current.event_sink.clone(),
             current.agent_event_sink.clone(),
             Arc::clone(&current.worker_inventory),
+            Some(Arc::clone(&current.document_events)),
         )
         .await?;
         if let Err(error) = current

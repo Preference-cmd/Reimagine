@@ -19,11 +19,13 @@
 
 mod agent;
 mod artifacts;
+mod boards;
 mod compute_profile;
 mod health;
 pub mod model_acquisition;
 mod models;
 mod nodes;
+mod projects;
 mod runs;
 mod workflows;
 
@@ -32,6 +34,7 @@ pub use agent::{
     AgentUsageDto,
 };
 pub use artifacts::{ArtifactDto, ArtifactMetadataDto};
+pub use boards::{BoardCommandResultDto, BoardSnapshotDto};
 pub use compute_profile::{
     BackendInstanceProfileDto, BackendProfileDto, ComputeProfileDto, DTypeProfileDto,
     DeviceProfileDto, MemoryProfileDto, TopologyWorkerDto, topology_workers_from_pool,
@@ -48,6 +51,7 @@ pub use models::{
     format_status,
 };
 pub use nodes::{NodeCatalogResponse, NodeDefDto, ParamSpecDto, SocketSpecDto};
+pub use projects::{ProjectDto, ProjectMetadataInputDto};
 pub use reimagine_core::command::{CommandResult, CommandResultStatus};
 pub use runs::{
     DiagnosticDto, NodeStateDto, RunDto, RunEventDto, RunEventsResponse, RunSnapshotDto,

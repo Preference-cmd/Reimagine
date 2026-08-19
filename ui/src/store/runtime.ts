@@ -2,6 +2,7 @@ import { create } from "zustand";
 import type { RunEventPayload } from "@/ipc/schemas";
 import { runWorkflow as ipcRunWorkflow, cancelRun as ipcCancelRun } from "@/ipc";
 import { useArtifactStore } from "./artifacts";
+import { useProjectStore } from "./project";
 
 export type RuntimePhase = "idle" | "starting" | "running" | "completed" | "failed" | "cancelled";
 
@@ -69,7 +70,11 @@ export const useRuntimeStore = create<RuntimeState>()((set, get) => ({
     };
 
     try {
-      const response = await ipcRunWorkflow(workflowJson as any, handleEvent);
+      const response = await ipcRunWorkflow(
+        useProjectStore.getState().activeProjectId,
+        workflowJson as any,
+        handleEvent,
+      );
 
       if (response.outcome === "started") {
         set({

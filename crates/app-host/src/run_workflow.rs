@@ -9,7 +9,7 @@ use std::sync::Arc;
 
 use reimagine_core::diagnostic::CorrelationId;
 use reimagine_core::event::OperationReport;
-use reimagine_core::model::{RunId, WorkflowId};
+use reimagine_core::model::{ProjectId, RunId, WorkflowId};
 use reimagine_core::readiness::{ExecutionPlanResult, RunTargetSelection, build_execution_plan};
 use reimagine_core::workflow::Workflow;
 use reimagine_runtime::{RunHandle, RunInputs, RunSnapshot, RuntimeOptions};
@@ -24,6 +24,7 @@ use crate::{AppHostResult, WorkspaceHost};
 /// `run_workflow` directly.
 #[derive(Debug, Clone)]
 pub struct RunWorkflowRequest {
+    pub project_id: ProjectId,
     pub workflow_id: WorkflowId,
     pub target_selection: RunTargetSelection,
     pub run_inputs: RunInputs,
@@ -34,6 +35,22 @@ pub struct RunWorkflowRequest {
 impl RunWorkflowRequest {
     pub fn new(workflow_id: WorkflowId, target_selection: RunTargetSelection) -> Self {
         Self {
+            project_id: ProjectId::new("default"),
+            workflow_id,
+            target_selection,
+            run_inputs: RunInputs::new(),
+            options: RuntimeOptions::default(),
+            correlation_id: None,
+        }
+    }
+
+    pub fn for_project(
+        project_id: ProjectId,
+        workflow_id: WorkflowId,
+        target_selection: RunTargetSelection,
+    ) -> Self {
+        Self {
+            project_id,
             workflow_id,
             target_selection,
             run_inputs: RunInputs::new(),
@@ -99,8 +116,10 @@ impl WorkspaceHost {
         &self,
         request: RunWorkflowRequest,
     ) -> AppHostResult<RunWorkflowResult> {
-        let workflow = self.workflow_service().snapshot(&request.workflow_id)?;
+        let workflow_service = self.workflow_service_for_project(&request.project_id);
+        let workflow = workflow_service.snapshot(&request.workflow_id)?;
         let RunWorkflowRequest {
+            project_id: _,
             workflow_id: _,
             target_selection,
             mut run_inputs,

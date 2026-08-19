@@ -90,6 +90,61 @@ export const WorkflowFileSummarySchema = z.object({
 });
 export type WorkflowFileSummary = z.infer<typeof WorkflowFileSummarySchema>;
 
+
+/* ───── Project / Board surface (AR-39) ─────────────────────── */
+
+export const ProjectSchema = z.object({
+  id: z.string(),
+  name: z.string(),
+  description: z.string(),
+  createdAt: z.string(),
+  updatedAt: z.string(),
+});
+export type Project = z.infer<typeof ProjectSchema>;
+
+export const ProjectMetadataInputSchema = z.object({
+  name: z.string(),
+  description: z.string(),
+  createdAt: z.string().optional(),
+  updatedAt: z.string().optional(),
+});
+export type ProjectMetadataInput = z.infer<typeof ProjectMetadataInputSchema>;
+
+export const BoardItemSchema = z.object({
+  id: z.string(),
+  kind: z.record(z.string(), z.unknown()),
+  position: z.object({ x: z.number(), y: z.number() }),
+  size: z.object({ width: z.number(), height: z.number() }),
+  z: z.number(),
+  locked: z.boolean(),
+});
+export type BoardItem = z.infer<typeof BoardItemSchema>;
+
+export const BoardSnapshotSchema = z.object({
+  id: z.string(),
+  projectId: z.string(),
+  version: z.number(),
+  items: z.array(BoardItemSchema),
+});
+export type BoardSnapshot = z.infer<typeof BoardSnapshotSchema>;
+
+export const BoardCommandResultSchema = z.object({
+  status: z.enum(["applied", "rejected", "no_op"]),
+  boardVersion: z.number(),
+  changes: z.array(z.unknown()),
+  diagnostics: z.array(z.unknown()),
+  historyEntryId: z.string().nullable().optional(),
+});
+export type BoardCommandResult = z.infer<typeof BoardCommandResultSchema>;
+
+export const DocumentChangedEventSchema = z.object({
+  kind: z.enum(["board.changed", "workflow.changed"]),
+  projectId: z.string(),
+  documentId: z.string(),
+  version: z.number(),
+});
+export type DocumentChangedEvent = z.infer<typeof DocumentChangedEventSchema>;
+
 /* ───── Misc ───── */
 
 export const RunIdSchema = z.string().regex(/^run_[a-z0-9]+$/);

@@ -11,6 +11,7 @@ import {
 import { cn } from "@/lib/utils";
 import { RuntimeIsland } from "./RuntimeIsland";
 import { useRuntimeStore } from "@/store/runtime";
+import { useProjectStore } from "@/store/project";
 import { saveWorkflowNow } from "@/hooks/useWorkflowPersistence";
 
 function Logo({ className }: { className?: string }) {
@@ -65,16 +66,29 @@ function TopBarButton({
   );
 }
 
-function ProjectSelector({ name }: { name: string }) {
+function ProjectSelector() {
+  const projects = useProjectStore((s) => s.projects);
+  const activeProjectId = useProjectStore((s) => s.activeProjectId);
+  const switchProject = useProjectStore((s) => s.switchProject);
+  const name = projects.find((project) => project.id === activeProjectId)?.name ?? activeProjectId;
   return (
-    <button
-      type="button"
-      aria-label={`Switch project, current project ${name}`}
-      className="panel-flat ml-1.5 flex h-11 min-w-0 cursor-pointer items-center gap-1.5 rounded-2xl px-sm text-body-sm font-medium text-on-surface-variant transition-colors hover:bg-control-hover hover:text-on-surface focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary/30 focus-visible:ring-offset-2 focus-visible:ring-offset-background"
-    >
-      <span className="truncate max-w-36">{name}</span>
+    <label className="panel-flat ml-1.5 flex h-11 min-w-0 items-center gap-1.5 rounded-2xl px-sm text-body-sm font-medium text-on-surface-variant">
+      <span className="sr-only">Switch project, current project {name}</span>
+      <select
+        aria-label={`Switch project, current project ${name}`}
+        value={activeProjectId}
+        onChange={(event) => void switchProject(event.target.value)}
+        className="max-w-36 cursor-pointer truncate bg-transparent outline-none"
+      >
+        {projects.length === 0 && <option value={activeProjectId}>{name}</option>}
+        {projects.map((project) => (
+          <option key={project.id} value={project.id}>
+            {project.name}
+          </option>
+        ))}
+      </select>
       <ChevronDown className="h-3.5 w-3.5 shrink-0" />
-    </button>
+    </label>
   );
 }
 
@@ -90,7 +104,7 @@ export function TopBar({ forceRuntimeCollapsed = false }: { forceRuntimeCollapse
           <Logo className="h-5 w-5" />
         </div>
 
-        <ProjectSelector name="Black bear" />
+        <ProjectSelector />
 
         <TopBarButton
           ariaLabel="Search commands"

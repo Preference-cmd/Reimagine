@@ -12,10 +12,11 @@ use reimagine_core::diagnostic::{
     Diagnostic, DiagnosticCode, DiagnosticSeverity, DiagnosticSourceName, DiagnosticTarget,
     DiagnosticTargetDomain,
 };
-use reimagine_core::model::{DiagnosticId, NodeCatalog, ProjectId, WorkflowId};
+use reimagine_core::model::{DiagnosticId, NodeCatalog, ProjectId, WorkflowId, WorkflowVersion};
 use reimagine_core::session::WorkflowSession;
 use reimagine_core::workflow::Workflow;
 
+use crate::document_events::{DocumentChangedEvent, DocumentEventBus};
 use crate::proposal::WorkflowProposal;
 use crate::{AppHostError, AppHostResult};
 
@@ -38,6 +39,7 @@ pub struct WorkflowService {
     project_id: ProjectId,
     sessions: RwLock<BTreeMap<WorkflowId, Arc<Mutex<WorkflowSession>>>>,
     proposals: RwLock<BTreeMap<WorkflowId, WorkflowProposal>>,
+    document_events: Arc<DocumentEventBus>,
 }
 
 impl std::fmt::Debug for WorkflowService {
@@ -70,12 +72,38 @@ impl WorkflowService {
     /// documents resolve under `projects/{project_id}/workflows/`
     /// (AR-08); cross-project workflows are rejected by ownership checks.
     pub fn for_project(app_paths: AppPaths, project_id: ProjectId) -> Self {
+        Self::for_project_with_events(app_paths, project_id, Arc::new(DocumentEventBus::new()))
+    }
+
+    pub fn for_project_with_events(
+        app_paths: AppPaths,
+        project_id: ProjectId,
+        document_events: Arc<DocumentEventBus>,
+    ) -> Self {
         Self {
             app_paths,
             project_id,
             sessions: RwLock::new(BTreeMap::new()),
             proposals: RwLock::new(BTreeMap::new()),
+            document_events,
         }
+    }
+
+    pub fn document_events(&self) -> Arc<DocumentEventBus> {
+        Arc::clone(&self.document_events)
+    }
+
+    /// Clear in-memory workflow sessions and proposals when a project is
+    /// deleted. The project-owned directory is removed by ProjectService.
+    pub fn clear(&self) {
+        self.sessions
+            .write()
+            .expect("workflow registry poisoned")
+            .clear();
+        self.proposals
+            .write()
+            .expect("proposal registry poisoned")
+            .clear();
     }
 
     pub fn project_id(&self) -> &ProjectId {
@@ -199,9 +227,51 @@ impl WorkflowService {
                 path: path.clone(),
                 message: error.to_string(),
             })?;
+        self.document_events.publish(DocumentChangedEvent {
+            kind: "workflow.changed".to_owned(),
+            project_id: self.project_id.to_string(),
+            document_id: workflow.id().to_string(),
+            version: workflow.version().get(),
+        });
         Ok(path)
     }
 
+    /// Persist a host-provided workflow snapshot with a monotonic version guard.
+    /// This is the human-editor path; command applications use `apply_commands`,
+    /// which advances the session version before calling `save_workflow_snapshot`.
+    pub async fn save_external_workflow(&self, workflow: Workflow) -> AppHostResult<PathBuf> {
+        let workflow_id = workflow.id().clone();
+        let path = self.path_for_workflow_id(&workflow_id)?;
+        let current = if self.contains(&workflow_id) {
+            Some(self.snapshot(&workflow_id)?)
+        } else {
+            match tokio::fs::read(&path).await {
+                Ok(bytes) => Some(serde_json::from_slice::<Workflow>(&bytes).map_err(|error| {
+                    AppHostError::WorkflowJson {
+                        path: path.clone(),
+                        message: error.to_string(),
+                    }
+                })?),
+                Err(error) if error.kind() == std::io::ErrorKind::NotFound => None,
+                Err(error) => {
+                    return Err(AppHostError::Io {
+                        path: path.clone(),
+                        message: error.to_string(),
+                    });
+                }
+            }
+        };
+        if let Some(current) = current
+            && workflow.version() <= current.version()
+        {
+            return Err(AppHostError::WorkflowVersionConflict {
+                workflow_id,
+                expected: WorkflowVersion::new(current.version().get() + 1),
+                actual: workflow.version(),
+            });
+        }
+        self.save_workflow_snapshot(&workflow).await
+    }
     pub async fn load_workflow(&self, workflow_id: &WorkflowId) -> AppHostResult<WorkflowId> {
         let path = self.path_for_workflow_id(workflow_id)?;
         let bytes = tokio::fs::read(&path)
@@ -379,6 +449,68 @@ impl WorkflowService {
         Ok(result)
     }
 
+    /// Approve and apply a proposal through the same atomic persistence path
+    /// used by human and agent direct edits.
+    pub async fn apply_pending_proposal_persisted(
+        &self,
+        workflow_id: &WorkflowId,
+        node_catalog: &impl NodeCatalog,
+        approved_by: Option<reimagine_core::command::CommandActor>,
+    ) -> AppHostResult<CommandResult> {
+        let proposal = self.get_pending_proposal(workflow_id).ok_or_else(|| {
+            AppHostError::NoPendingProposal {
+                workflow_id: workflow_id.clone(),
+            }
+        })?;
+        let current_version = self.snapshot(workflow_id)?.version();
+        if current_version != proposal.base_version() {
+            let diagnostic = Diagnostic::new(
+                DiagnosticId::new(format!(
+                    "app-host:proposal-stale:{}",
+                    proposal.proposal_id().as_str()
+                )),
+                DiagnosticCode::new("APP_HOST/PROPOSAL_STALE"),
+                DiagnosticSeverity::Error,
+                DiagnosticSourceName::new("app-host"),
+                format!(
+                    "proposal base version {} does not match current workflow version {}; refusing stale approval",
+                    proposal.base_version().get(),
+                    current_version.get()
+                ),
+                DiagnosticTarget::new(DiagnosticTargetDomain::new("workflow"))
+                    .with_id(workflow_id.as_str()),
+            );
+            return Ok(CommandResult::new(
+                CommandResultStatus::Rejected,
+                current_version,
+                Vec::new(),
+                vec![diagnostic],
+                None,
+            ));
+        }
+        let mut batch = CommandBatch::new(
+            proposal.command_batch().id().clone(),
+            CommandActor::new(CommandActorKind::Agent)
+                .with_id(proposal.agent_session_id().as_str()),
+            proposal.base_version(),
+            CommandProvenance::AgentProposal {
+                proposal_id: proposal.proposal_id().clone(),
+                approved_by,
+            },
+            proposal.command_batch().created_at().clone(),
+            proposal.command_batch().commands().to_vec(),
+        );
+        if let Some(cid) = proposal.command_batch().correlation_id() {
+            batch = batch.with_correlation_id(cid.clone());
+        }
+        let result = self
+            .apply_commands(workflow_id, node_catalog, batch)
+            .await?;
+        if result.status() != CommandResultStatus::Rejected {
+            self.remove_proposal(workflow_id);
+        }
+        Ok(result)
+    }
     pub fn get_pending_proposal(&self, workflow_id: &WorkflowId) -> Option<WorkflowProposal> {
         self.proposals
             .read()

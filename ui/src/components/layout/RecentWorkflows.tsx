@@ -2,6 +2,7 @@ import { useEffect } from "react";
 import { FileText } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { useWorkflowStore } from "@/store/workflow";
+import { useProjectStore } from "@/store/project";
 import { useRecentWorkflowsStore } from "@/store/recentWorkflows";
 import { useWorkflows } from "@/hooks/queries";
 import { loadWorkflow } from "@/ipc";
@@ -19,19 +20,23 @@ type RecentWorkflowsProps = {
 export function RecentWorkflows({ collapsed }: RecentWorkflowsProps) {
   const entries = useRecentWorkflowsStore((s) => s.entries);
   const currentId = useWorkflowStore((s) => s.id);
-  const { data: savedWorkflows } = useWorkflows();
+  const activeProjectId = useProjectStore((s) => s.activeProjectId);
+  const projectEntries = entries.filter((entry) => entry.projectId === activeProjectId);
+  const { data: savedWorkflows } = useWorkflows(activeProjectId);
   const updateNames = useRecentWorkflowsStore((s) => s.updateNames);
 
   // Validate and update names on mount
   useEffect(() => {
-    if (!savedWorkflows || entries.length === 0) return;
+    if (!savedWorkflows || projectEntries.length === 0) return;
 
     const savedIds = new Set(savedWorkflows.map((w) => w.id));
-    const validEntries = entries.filter((e) => savedIds.has(e.id));
+    const validEntries = projectEntries.filter((e) => savedIds.has(e.id));
 
     // Remove entries for deleted workflows
-    if (validEntries.length !== entries.length) {
-      useRecentWorkflowsStore.setState({ entries: validEntries });
+    if (validEntries.length !== projectEntries.length) {
+      useRecentWorkflowsStore.setState((state) => ({
+        entries: [...state.entries.filter((entry) => entry.projectId !== activeProjectId), ...validEntries],
+      }));
     }
 
     // Fetch names for entries missing them
@@ -40,30 +45,30 @@ export function RecentWorkflows({ collapsed }: RecentWorkflowsProps) {
       Promise.all(
         needsNames.map(async (entry) => {
           try {
-            const json = await loadWorkflow(entry.id);
+            const json = await loadWorkflow(activeProjectId, entry.id);
             const { name } = workflowFromJson(json);
             return { id: entry.id, name };
           } catch {
             return { id: entry.id, name: entry.id };
           }
         }),
-      ).then(updateNames);
+      ).then((updates) => updateNames(activeProjectId, updates));
     }
-  }, [savedWorkflows, entries, updateNames]);
+  }, [activeProjectId, savedWorkflows, entries, updateNames]);
 
   const handleOpenWorkflow = async (id: string) => {
     try {
-      const json = await loadWorkflow(id);
-      const { nodes, edges, name } = workflowFromJson(json);
-      useWorkflowStore.getState().hydrate(nodes, edges, id, name);
-      useRecentWorkflowsStore.getState().addRecent(id, name);
+      const json = await loadWorkflow(activeProjectId, id);
+      const { nodes, edges, name, version } = workflowFromJson(json);
+      useWorkflowStore.getState().hydrate(nodes, edges, id, name, activeProjectId, version);
+      useRecentWorkflowsStore.getState().addRecent(activeProjectId, id, name);
       useWorkflowStore.temporal.getState().clear();
     } catch (error) {
       console.error("Failed to load workflow:", error);
     }
   };
 
-  if (entries.length === 0) {
+  if (projectEntries.length === 0) {
     if (collapsed) return null;
     return (
       <div className="py-2">
@@ -88,7 +93,7 @@ export function RecentWorkflows({ collapsed }: RecentWorkflowsProps) {
       )}
 
       <ul className="space-y-0.5">
-        {entries.slice(0, collapsed ? 3 : 10).map((entry) => (
+        {projectEntries.slice(0, collapsed ? 3 : 10).map((entry) => (
           <li key={entry.id}>
             <button
               type="button"

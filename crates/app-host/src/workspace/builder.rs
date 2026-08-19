@@ -1,5 +1,6 @@
+use std::collections::BTreeMap;
 use std::path::PathBuf;
-use std::sync::Arc;
+use std::sync::{Arc, RwLock};
 
 use reimagine_agent_harness::{AgentEventSink, WorkspaceScope};
 use reimagine_backend_worker_host::WorkerStorePaths;
@@ -14,8 +15,8 @@ use crate::provider_config::AgentProviderConfigDocument;
 use crate::services::WorkspaceServices;
 use crate::tools::register_app_tools;
 use crate::{
-    AgentService, AppHostError, BackendSelection, BoardService, ModelService, ProjectService,
-    WorkerInventoryProvider, WorkflowService,
+    AgentService, AppHostError, BackendSelection, BoardService, DocumentEventBus, ModelService,
+    ProjectService, WorkerInventoryProvider, WorkflowService,
 };
 
 use super::{WorkspaceHost, load_backend_config_result};
@@ -211,8 +212,19 @@ impl WorkspaceHostBuilder {
             Arc::clone(&builtin_catalog),
             backend,
         ));
-        let workflow_service = Arc::new(WorkflowService::new(config.paths().clone()));
-        let board_service = Arc::new(BoardService::new(config.paths().clone()));
+        let document_events = Arc::new(DocumentEventBus::new());
+        let default_project_id = reimagine_core::model::ProjectId::new("default");
+        let workflow_service = Arc::new(WorkflowService::for_project_with_events(
+            config.paths().clone(),
+            default_project_id.clone(),
+            Arc::clone(&document_events),
+        ));
+        let mut workflow_services = BTreeMap::new();
+        workflow_services.insert(default_project_id, Arc::clone(&workflow_service));
+        let board_service = Arc::new(BoardService::with_document_events(
+            config.paths().clone(),
+            Arc::clone(&document_events),
+        ));
         let project_service = Arc::new(ProjectService::new(
             config.paths().clone(),
             Arc::clone(&board_service),
@@ -280,6 +292,8 @@ impl WorkspaceHostBuilder {
             project_service,
             board_service,
             workflow_service,
+            workflow_services: RwLock::new(workflow_services),
+            document_events,
             model_service,
             runtime_service,
             agent_service,

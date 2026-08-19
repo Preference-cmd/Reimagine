@@ -4,8 +4,9 @@ use std::sync::{Arc, RwLock};
 use reimagine_agent_harness::{AgentEventSink, WorkspaceScope};
 use reimagine_app_host::TurnRunResult;
 use reimagine_app_host::dto::{
-    AgentEventPayload, AgentSessionInfo, ArtifactMetadataDto, ComputeProfileDto, HealthResponse,
-    ModelInfoDto, NodeCatalogResponse, RunWorkflowResponse,
+    AgentEventPayload, AgentSessionInfo, ArtifactMetadataDto, BoardCommandResultDto,
+    BoardSnapshotDto, ComputeProfileDto, HealthResponse, ModelInfoDto, NodeCatalogResponse,
+    ProjectDto, ProjectMetadataInputDto, RunWorkflowResponse,
 };
 use reimagine_app_host::{
     AgentServiceTurnRequest, AppHost, AppHostError, BackendSelection, WorkerBackendCandidate,
@@ -15,13 +16,16 @@ use reimagine_app_host::{
 use reimagine_backend_worker_host::{WorkerLaunchSpec, WorkerLimits};
 use reimagine_backend_worker_protocol::ProtocolRange;
 use reimagine_config::AppPaths;
+use reimagine_core::board::BoardCommandBatch;
 use reimagine_core::command::CommandResult;
+use reimagine_core::model::ProjectId;
 use reimagine_core::workflow::Workflow;
 use reimagine_runtime::BoxedRunEventSink;
 use serde::Serialize;
 use tauri::ipc::Channel;
 
 use crate::agent_event_hub::TauriAgentEventHub;
+use crate::document_event_hub::TauriDocumentEventHub;
 use crate::download_event_hub::TauriDownloadEventHub;
 use crate::event_hub::{RunEventPayload, TauriRunEventHub};
 
@@ -33,6 +37,8 @@ pub struct DesktopHostState {
     app_host: RwLock<AppHost>,
     event_hub: Arc<TauriRunEventHub>,
     agent_event_hub: Arc<TauriAgentEventHub>,
+    document_event_hub: Arc<TauriDocumentEventHub>,
+    active_project: RwLock<ProjectId>,
     download_event_hub: Arc<TauriDownloadEventHub>,
     worker_management: Arc<WorkerManagementService>,
 }
@@ -43,6 +49,8 @@ impl Clone for DesktopHostState {
             app_host: RwLock::new(self.app_host.read().expect(APP_HOST_LOCK).clone()),
             event_hub: self.event_hub.clone(),
             agent_event_hub: self.agent_event_hub.clone(),
+            document_event_hub: self.document_event_hub.clone(),
+            active_project: RwLock::new(self.active_project.read().expect(APP_HOST_LOCK).clone()),
             download_event_hub: self.download_event_hub.clone(),
             worker_management: self.worker_management.clone(),
         }
@@ -79,6 +87,19 @@ impl DesktopHostState {
         )
         .await?;
 
+        let document_event_hub = Arc::new(TauriDocumentEventHub::new());
+        let mut document_events = workspace.document_events().subscribe();
+        let event_forwarder = Arc::clone(&document_event_hub);
+        tokio::spawn(async move {
+            loop {
+                match document_events.recv().await {
+                    Ok(event) => event_forwarder.send(event),
+                    Err(tokio::sync::broadcast::error::RecvError::Lagged(_)) => continue,
+                    Err(tokio::sync::broadcast::error::RecvError::Closed) => break,
+                }
+            }
+        });
+
         let download_event_hub = Arc::new(TauriDownloadEventHub::new());
         let worker_management = Arc::new(WorkerManagementService::offline(&app_data_root)?);
 
@@ -86,6 +107,8 @@ impl DesktopHostState {
             app_host: RwLock::new(AppHost::new(workspace)),
             event_hub,
             agent_event_hub,
+            document_event_hub,
+            active_project: RwLock::new(ProjectId::new("default")),
             download_event_hub,
             worker_management,
         })
@@ -104,6 +127,205 @@ impl DesktopHostState {
     #[allow(dead_code)]
     pub fn worker_management(&self) -> &WorkerManagementService {
         &self.worker_management
+    }
+
+    pub fn active_project_id(&self) -> ProjectId {
+        self.active_project.read().expect(APP_HOST_LOCK).clone()
+    }
+
+    pub fn subscribe_document_events(
+        &self,
+        channel: Channel<reimagine_app_host::DocumentChangedEvent>,
+    ) {
+        self.document_event_hub.subscribe(channel);
+    }
+
+    pub async fn list_projects(&self) -> Result<Vec<ProjectDto>, AppHostError> {
+        let workspace = self.workspace_arc();
+        Ok(workspace
+            .project_service()
+            .list_projects()
+            .await?
+            .into_iter()
+            .map(ProjectDto::from)
+            .collect())
+    }
+
+    pub async fn create_project(
+        &self,
+        project_id: String,
+        metadata: ProjectMetadataInputDto,
+    ) -> Result<ProjectDto, AppHostError> {
+        let project_id = parse_project_id(&project_id)?;
+        let now = chrono::Utc::now().to_rfc3339();
+        let workspace = self.workspace_arc();
+        let project = workspace
+            .project_service()
+            .create_project(project_id, metadata.into_domain(&now))
+            .await?;
+        Ok(project.into())
+    }
+
+    pub async fn load_project(&self, project_id: &str) -> Result<ProjectDto, AppHostError> {
+        let project_id = parse_project_id(project_id)?;
+        let workspace = self.workspace_arc();
+        Ok(workspace
+            .project_service()
+            .load_project(&project_id)
+            .await?
+            .into())
+    }
+
+    pub async fn update_project(
+        &self,
+        project_id: &str,
+        metadata: ProjectMetadataInputDto,
+    ) -> Result<ProjectDto, AppHostError> {
+        let project_id = parse_project_id(project_id)?;
+        let now = chrono::Utc::now().to_rfc3339();
+        let workspace = self.workspace_arc();
+        let current = workspace
+            .project_service()
+            .load_project(&project_id)
+            .await?;
+        Ok(workspace
+            .project_service()
+            .update_project(
+                &project_id,
+                metadata.into_updated_domain(current.metadata().created_at().clone(), &now),
+            )
+            .await?
+            .into())
+    }
+
+    pub async fn delete_project(&self, project_id: &str) -> Result<(), AppHostError> {
+        let project_id = parse_project_id(project_id)?;
+        let workspace = self.workspace_arc();
+        workspace
+            .project_service()
+            .load_project(&project_id)
+            .await?;
+        workspace.delete_project(&project_id).await?;
+        if self.active_project_id() == project_id {
+            let fallback = workspace
+                .project_service()
+                .list_projects()
+                .await?
+                .into_iter()
+                .next()
+                .map(|project| project.id().clone())
+                .unwrap_or_else(|| ProjectId::new("default"));
+            *self.active_project.write().expect(APP_HOST_LOCK) = fallback;
+        }
+        Ok(())
+    }
+
+    pub async fn set_active_project(&self, project_id: &str) -> Result<ProjectDto, AppHostError> {
+        let project_id = parse_project_id(project_id)?;
+        let workspace = self.workspace_arc();
+        let project = workspace
+            .project_service()
+            .load_project(&project_id)
+            .await?;
+        *self.active_project.write().expect(APP_HOST_LOCK) = project_id;
+        Ok(project.into())
+    }
+
+    pub async fn board_snapshot(&self, project_id: &str) -> Result<BoardSnapshotDto, AppHostError> {
+        let project_id = self.require_project(project_id).await?;
+        let workspace = self.workspace_arc();
+        Ok(workspace
+            .board_service()
+            .snapshot(&project_id)
+            .await?
+            .into())
+    }
+
+    pub async fn preview_board_commands(
+        &self,
+        project_id: &str,
+        batch: serde_json::Value,
+    ) -> Result<BoardCommandResultDto, AppHostError> {
+        let project_id = self.require_project(project_id).await?;
+        let batch: BoardCommandBatch =
+            serde_json::from_value(batch).map_err(|error| AppHostError::WorkflowJson {
+                path: PathBuf::new(),
+                message: format!("invalid board command batch: {error}"),
+            })?;
+        let workspace = self.workspace_arc();
+        Ok(workspace
+            .board_service()
+            .preview_batch(&project_id, batch)
+            .await?
+            .into())
+    }
+
+    pub async fn apply_board_commands(
+        &self,
+        project_id: &str,
+        batch: serde_json::Value,
+    ) -> Result<BoardCommandResultDto, AppHostError> {
+        let project_id = self.require_project(project_id).await?;
+        let batch: BoardCommandBatch =
+            serde_json::from_value(batch).map_err(|error| AppHostError::WorkflowJson {
+                path: PathBuf::new(),
+                message: format!("invalid board command batch: {error}"),
+            })?;
+        let workspace = self.workspace_arc();
+        Ok(workspace
+            .board_service()
+            .apply_batch(&project_id, batch)
+            .await?
+            .into())
+    }
+
+    pub async fn undo_board(
+        &self,
+        project_id: &str,
+    ) -> Result<Option<BoardCommandResultDto>, AppHostError> {
+        let project_id = self.require_project(project_id).await?;
+        let workspace = self.workspace_arc();
+        Ok(workspace
+            .board_service()
+            .undo(&project_id)
+            .await?
+            .map(Into::into))
+    }
+
+    pub async fn redo_board(
+        &self,
+        project_id: &str,
+    ) -> Result<Option<BoardCommandResultDto>, AppHostError> {
+        let project_id = self.require_project(project_id).await?;
+        let workspace = self.workspace_arc();
+        Ok(workspace
+            .board_service()
+            .redo(&project_id)
+            .await?
+            .map(Into::into))
+    }
+
+    async fn require_project(&self, project_id: &str) -> Result<ProjectId, AppHostError> {
+        let project_id = parse_project_id(project_id)?;
+        let workspace = self.workspace_arc();
+        workspace
+            .project_service()
+            .load_project(&project_id)
+            .await?;
+        Ok(project_id)
+    }
+
+    fn require_project_sync(&self, project_id: &str) -> Result<ProjectId, AppHostError> {
+        let project_id = parse_project_id(project_id)?;
+        let workspace = self.workspace_arc();
+        if !workspace.project_service().contains_project(&project_id) {
+            return Err(AppHostError::UnknownProject { project_id });
+        }
+        Ok(project_id)
+    }
+
+    fn workspace_arc(&self) -> Arc<WorkspaceHost> {
+        Arc::clone(self.app_host.read().expect(APP_HOST_LOCK).workspace())
     }
 
     pub fn health(&self) -> HealthResponse {
@@ -150,12 +372,25 @@ impl DesktopHostState {
         Ok(descriptors.into_iter().map(ModelInfoDto::from).collect())
     }
 
+    #[allow(dead_code)]
     pub async fn run_workflow(
         &self,
         workflow_value: serde_json::Value,
         channel: Channel<RunEventPayload>,
     ) -> Result<RunWorkflowResponse, AppHostError> {
+        self.run_workflow_for_project("default", workflow_value, channel)
+            .await
+    }
+
+    pub async fn run_workflow_for_project(
+        &self,
+        project_id: &str,
+        workflow_value: serde_json::Value,
+        channel: Channel<RunEventPayload>,
+    ) -> Result<RunWorkflowResponse, AppHostError> {
         use reimagine_app_host::RunWorkflowRequest;
+
+        let project_id = self.require_project(project_id).await?;
 
         // 1. Deserialize and register the workflow
         let workflow: Workflow =
@@ -167,12 +402,13 @@ impl DesktopHostState {
             let app_host = self.app_host.read().expect(APP_HOST_LOCK);
             app_host
                 .workspace()
-                .workflow_service()
+                .workflow_service_for_project(&project_id)
                 .register_workflow(workflow)
         };
 
         // 2. Build run request
-        let request = RunWorkflowRequest::new(
+        let request = RunWorkflowRequest::for_project(
+            project_id,
             workflow_id.clone(),
             reimagine_core::readiness::RunTargetSelection::AllDefaultTargets,
         );
@@ -436,6 +672,7 @@ impl DesktopHostState {
     }
     pub fn preview_workflow_commands(
         &self,
+        project_id: String,
         workflow_id: String,
         command_batch: serde_json::Value,
     ) -> Result<CommandResult, AppHostError> {
@@ -447,12 +684,13 @@ impl DesktopHostState {
                 message: format!("invalid command batch: {e}"),
             })?;
 
+        let project_id = self.require_project_sync(&project_id)?;
         let (node_catalog, workflow_service) = {
             let app_host = self.app_host.read().expect(APP_HOST_LOCK);
             let workspace = app_host.workspace();
             (
                 Arc::clone(workspace.node_catalog()),
-                Arc::clone(workspace.workflow_service()),
+                workspace.workflow_service_for_project(&project_id),
             )
         };
 
@@ -466,8 +704,9 @@ impl DesktopHostState {
     /// Apply a command batch directly.
     ///
     /// Returns the applied `CommandResult` with changes and diagnostics.
-    pub fn apply_workflow_commands(
+    pub async fn apply_workflow_commands(
         &self,
+        project_id: String,
         workflow_id: String,
         command_batch: serde_json::Value,
         _approved_by: Option<serde_json::Value>,
@@ -480,20 +719,23 @@ impl DesktopHostState {
                 message: format!("invalid command batch: {e}"),
             })?;
 
+        let project_id = self.require_project(&project_id).await?;
         let (node_catalog, workflow_service) = {
             let app_host = self.app_host.read().expect(APP_HOST_LOCK);
             let workspace = app_host.workspace();
             (
                 Arc::clone(workspace.node_catalog()),
-                Arc::clone(workspace.workflow_service()),
+                workspace.workflow_service_for_project(&project_id),
             )
         };
 
-        workflow_service.apply_batch(
-            &reimagine_core::model::WorkflowId::new(workflow_id),
-            node_catalog.as_ref(),
-            batch,
-        )
+        workflow_service
+            .apply_commands(
+                &reimagine_core::model::WorkflowId::new(workflow_id),
+                node_catalog.as_ref(),
+                batch,
+            )
+            .await
     }
 
     /// Approve a pending workflow proposal.
@@ -501,21 +743,28 @@ impl DesktopHostState {
     /// Calls `WorkflowService::apply_pending_proposal()` and returns the
     /// resulting `CommandResult`. Returns an error if no pending proposal
     /// exists for the workflow.
-    pub fn approve_proposal(&self, workflow_id: String) -> Result<CommandResult, AppHostError> {
+    pub async fn approve_proposal(
+        &self,
+        project_id: String,
+        workflow_id: String,
+    ) -> Result<CommandResult, AppHostError> {
+        let project_id = self.require_project(&project_id).await?;
         let (node_catalog, workflow_service) = {
             let app_host = self.app_host.read().expect(APP_HOST_LOCK);
             let workspace = app_host.workspace();
             (
                 Arc::clone(workspace.node_catalog()),
-                Arc::clone(workspace.workflow_service()),
+                workspace.workflow_service_for_project(&project_id),
             )
         };
 
-        workflow_service.apply_pending_proposal(
-            &reimagine_core::model::WorkflowId::new(workflow_id),
-            node_catalog.as_ref(),
-            None, // approved_by — Tauri thin shell, no human actor identity
-        )
+        workflow_service
+            .apply_pending_proposal_persisted(
+                &reimagine_core::model::WorkflowId::new(workflow_id),
+                node_catalog.as_ref(),
+                None, // approved_by — Tauri thin shell, no human actor identity
+            )
+            .await
     }
 
     /// List pending proposals from all workflows.
@@ -553,13 +802,25 @@ impl DesktopHostState {
 
         Ok(providers.into_iter().map(|p| p.to_string()).collect())
     }
+    #[allow(dead_code)]
     pub async fn save_workflow(
         &self,
         workflow_id: &str,
         workflow_value: serde_json::Value,
     ) -> Result<PathBuf, AppHostError> {
+        self.save_workflow_for_project("default", workflow_id, workflow_value)
+            .await
+    }
+
+    pub async fn save_workflow_for_project(
+        &self,
+        project_id: &str,
+        workflow_id: &str,
+        workflow_value: serde_json::Value,
+    ) -> Result<PathBuf, AppHostError> {
         use reimagine_core::workflow::Workflow;
 
+        let project_id = self.require_project(project_id).await?;
         workflow_id_from_str(workflow_id)?;
         let workflow: Workflow =
             serde_json::from_value(workflow_value).map_err(|e| AppHostError::WorkflowJson {
@@ -569,23 +830,35 @@ impl DesktopHostState {
 
         let workflow_service = {
             let app_host = self.app_host.read().expect(APP_HOST_LOCK);
-            Arc::clone(app_host.workspace().workflow_service())
+            let workspace = app_host.workspace();
+            workspace.workflow_service_for_project(&project_id)
         };
-        workflow_service.register_workflow(workflow.clone());
-        workflow_service.save_workflow_snapshot(&workflow).await
+        workflow_service.save_external_workflow(workflow).await
     }
 
     /// Load a workflow (JSON) from the workspace `workflows/` directory.
     ///
     /// Registers the loaded workflow as a session and returns its JSON.
+    #[allow(dead_code)]
     pub async fn load_workflow_json(
         &self,
         workflow_id: &str,
     ) -> Result<serde_json::Value, AppHostError> {
+        self.load_workflow_json_for_project("default", workflow_id)
+            .await
+    }
+
+    pub async fn load_workflow_json_for_project(
+        &self,
+        project_id: &str,
+        workflow_id: &str,
+    ) -> Result<serde_json::Value, AppHostError> {
+        let project_id = self.require_project(project_id).await?;
         let id = workflow_id_from_str(workflow_id)?;
         let workflow_service = {
             let app_host = self.app_host.read().expect(APP_HOST_LOCK);
-            Arc::clone(app_host.workspace().workflow_service())
+            let workspace = app_host.workspace();
+            workspace.workflow_service_for_project(&project_id)
         };
         workflow_service.load_workflow(&id).await?;
         let workflow = workflow_service.snapshot(&id)?;
@@ -599,10 +872,20 @@ impl DesktopHostState {
     ///
     /// Returns JSON summaries `{ id, modified_millis }` so the adapter layer
     /// never has to name the (crate-private) summary type.
+    #[allow(dead_code)]
     pub fn list_saved_workflows(&self) -> Result<Vec<serde_json::Value>, AppHostError> {
+        self.list_saved_workflows_for_project("default")
+    }
+
+    pub fn list_saved_workflows_for_project(
+        &self,
+        project_id: &str,
+    ) -> Result<Vec<serde_json::Value>, AppHostError> {
+        let project_id = self.require_project_sync(project_id)?;
         let workflow_service = {
             let app_host = self.app_host.read().expect(APP_HOST_LOCK);
-            Arc::clone(app_host.workspace().workflow_service())
+            let workspace = app_host.workspace();
+            workspace.workflow_service_for_project(&project_id)
         };
         let infos = workflow_service.list_saved_workflows()?;
         infos
@@ -1145,6 +1428,21 @@ fn agent_turn_completed_message(result: &reimagine_agent_harness::AgentTurnResul
 
 /// Validate a user-supplied workflow id before it reaches `WorkflowId::new`
 /// (which asserts — and would panic — on invalid input).
+fn parse_project_id(id: &str) -> Result<ProjectId, AppHostError> {
+    let safe = !id.is_empty()
+        && id.is_ascii()
+        && !id.contains('/')
+        && !id.contains('\\')
+        && id != "."
+        && id != "..";
+    if !safe {
+        return Err(AppHostError::ProjectIdPathUnsafe {
+            project_id: id.to_owned(),
+        });
+    }
+    Ok(ProjectId::new(id))
+}
+
 fn workflow_id_from_str(id: &str) -> Result<reimagine_core::model::WorkflowId, AppHostError> {
     let safe = !id.is_empty()
         && id.is_ascii()

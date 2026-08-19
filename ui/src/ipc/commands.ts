@@ -1,7 +1,12 @@
 import {
   type ArtifactMetadata,
+  type BoardCommandResult,
+  type BoardSnapshot,
   type CommandError,
   type ComputeProfile,
+  type DocumentChangedEvent,
+  type Project,
+  type ProjectMetadataInput,
   type DownloadEventPayload,
   type DownloadHuggingfaceModelArgs,
   type ModelCard,
@@ -19,6 +24,8 @@ import {
   type WorkerSwitchResult,
   type WorkerSwitchTarget,
   CommandErrorSchema,
+  DocumentChangedEventSchema,
+  ProjectMetadataInputSchema,
   DownloadHuggingfaceModelArgsSchema,
   RebootBackendArgsSchema,
   WorkerSwitchArgsSchema,
@@ -26,6 +33,18 @@ import {
 import {
   mockCancelAndSwitchWorker,
   mockCancelRun,
+  mockCreateProject,
+  mockDeleteProject,
+  mockGetBoardSnapshot,
+  mockListProjects,
+  mockLoadProject,
+  mockSetActiveProject,
+  mockSubscribeDocumentEvents,
+  mockUndoBoard,
+  mockRedoBoard,
+  mockApplyBoardCommands,
+  mockPreviewBoardCommands,
+  mockUpdateProject,
   mockDownloadHuggingfaceModel,
   mockDrainAndSwitchWorker,
   mockGetModelCard,
@@ -112,6 +131,7 @@ async function invokeWithFallback<T>(real: () => Promise<T>, mock: () => Promise
 }
 
 export async function runWorkflow(
+  projectId: string,
   workflow: Workflow,
   onEvent?: (event: RunEventPayload) => void,
 ): Promise<RunWorkflowResponse> {
@@ -122,7 +142,7 @@ export async function runWorkflow(
       if (onEvent) {
         channel.onmessage = onEvent;
       }
-      return invoke<RunWorkflowResponse>("run_workflow", { workflow, channel });
+      return invoke<RunWorkflowResponse>("run_workflow", { projectId, workflow, channel });
     },
     () => mockRunWorkflow(workflow, onEvent),
   );
@@ -201,21 +221,84 @@ export async function downloadHuggingfaceModel(
   );
 }
 
+/* ───── Project / Board surface (AR-39) ───── */
+
+export function listProjects(): Promise<Project[]> {
+  return dispatch("list_projects", null, undefined, mockListProjects);
+}
+
+export function createProject(projectId: string, metadata: ProjectMetadataInput): Promise<Project> {
+  ProjectMetadataInputSchema.parse(metadata);
+  return dispatch("create_project", null, { projectId, metadata }, mockCreateProject);
+}
+
+export function loadProject(projectId: string): Promise<Project> {
+  return dispatch("load_project", null, { projectId }, mockLoadProject);
+}
+
+export function updateProject(projectId: string, metadata: ProjectMetadataInput): Promise<Project> {
+  ProjectMetadataInputSchema.parse(metadata);
+  return dispatch("update_project", null, { projectId, metadata }, mockUpdateProject);
+}
+
+export function deleteProject(projectId: string): Promise<void> {
+  return dispatch("delete_project", null, { projectId }, mockDeleteProject);
+}
+
+export function setActiveProject(projectId: string): Promise<Project> {
+  return dispatch("set_active_project", null, { projectId }, mockSetActiveProject);
+}
+
+export function subscribeDocumentEvents(onEvent: (event: DocumentChangedEvent) => void): Promise<void> {
+  return invokeWithFallback(
+    async () => {
+      const { Channel, invoke } = await import("@tauri-apps/api/core");
+      const channel = new Channel<DocumentChangedEvent>();
+      channel.onmessage = (payload) => {
+        const event = DocumentChangedEventSchema.safeParse(payload);
+        if (event.success) onEvent(event.data);
+      };
+      return invoke<void>("subscribe_document_events", { channel });
+    },
+    () => mockSubscribeDocumentEvents(onEvent),
+  );
+}
+
+export function getBoardSnapshot(projectId: string): Promise<BoardSnapshot> {
+  return dispatch("board_snapshot", null, { projectId }, mockGetBoardSnapshot);
+}
+
+export function previewBoardCommands(projectId: string, commandBatch: unknown): Promise<BoardCommandResult> {
+  return dispatch("preview_board_commands", null, { projectId, commandBatch }, mockPreviewBoardCommands);
+}
+
+export function applyBoardCommands(projectId: string, commandBatch: unknown): Promise<BoardCommandResult> {
+  return dispatch("apply_board_commands", null, { projectId, commandBatch }, mockApplyBoardCommands);
+}
+
+export function undoBoard(projectId: string): Promise<BoardCommandResult | null> {
+  return dispatch("undo_board", null, { projectId }, mockUndoBoard);
+}
+
+export function redoBoard(projectId: string): Promise<BoardCommandResult | null> {
+  return dispatch("redo_board", null, { projectId }, mockRedoBoard);
+}
+
 /* ───── Workflow persistence (F1-1/F1-2) ───── */
 
 /** Save a workflow to the workspace `workflows/` dir; resolves to the file path. */
-export function saveWorkflow(workflowId: string, workflowJson: unknown): Promise<string> {
-  return dispatch("save_workflow", null, { workflowId, workflowJson }, mockSaveWorkflow);
+export function saveWorkflow(projectId: string, workflowId: string, workflowJson: unknown): Promise<string> {
+  return dispatch("save_workflow", null, { projectId, workflowId, workflowJson }, mockSaveWorkflow);
 }
 
 /** Load a saved workflow (backend `Workflow` JSON) by id. */
-export function loadWorkflow(workflowId: string): Promise<unknown> {
-  return dispatch("load_workflow", null, { workflowId }, mockLoadWorkflow);
+export function loadWorkflow(projectId: string, workflowId: string): Promise<unknown> {
+  return dispatch("load_workflow", null, { projectId, workflowId }, mockLoadWorkflow);
 }
 
 /** List saved workflows (newest first). */
-export function listWorkflows(): Promise<WorkflowFileSummary[]> {
-  return dispatch("list_workflows", null, undefined, mockListWorkflows);
+export function listWorkflows(projectId: string): Promise<WorkflowFileSummary[]> {
+  return dispatch("list_workflows", null, { projectId }, mockListWorkflows);
 }
 
 /* ───── Agent (BE-19 streaming) ───── */

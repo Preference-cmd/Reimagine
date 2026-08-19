@@ -18,6 +18,7 @@ import { routeTree } from "./routeTree.gen";
 import { ThemeProvider } from "@/lib/theme";
 import { useUndoRedoShortcuts } from "@/hooks/useUndoRedo";
 import { useWorkflowPersistence } from "@/hooks/useWorkflowPersistence";
+import { useWorkspaceSurface } from "@/hooks/useWorkspaceSurface";
 import { TooltipProvider } from "@/components/ui/tooltip";
 import { setArtifactQueryClient } from "@/store/artifacts";
 
@@ -47,6 +48,7 @@ declare module "@tanstack/react-router" {
 
 function RootEffects() {
   useUndoRedoShortcuts();
+  useWorkspaceSurface();
   useWorkflowPersistence();
   return null;
 }

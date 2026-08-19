@@ -17,6 +17,7 @@ use reimagine_core::board::{
 use reimagine_core::model::{BoardId, BoardVersion, ProjectId};
 use tokio::sync::{Mutex as AsyncMutex, broadcast};
 
+use crate::document_events::{DocumentChangedEvent, DocumentEventBus};
 use crate::{AppHostError, AppHostResult};
 
 /// Domain event emitted after a board document changes on disk.
@@ -30,12 +31,16 @@ pub struct BoardChangedEvent {
     pub project_id: String,
     pub board_id: String,
     pub board_version: u64,
+    /// Stable document-oriented aliases used by host adapters.
+    pub document_id: String,
+    pub version: u64,
 }
 
 pub struct BoardService {
     paths: AppPaths,
     sessions: RwLock<BTreeMap<ProjectId, Arc<AsyncMutex<BoardSession>>>>,
     events: broadcast::Sender<BoardChangedEvent>,
+    document_events: Arc<DocumentEventBus>,
 }
 
 impl std::fmt::Debug for BoardService {
@@ -54,12 +59,21 @@ impl std::fmt::Debug for BoardService {
 
 impl BoardService {
     pub fn new(paths: AppPaths) -> Self {
+        Self::with_document_events(paths, Arc::new(DocumentEventBus::new()))
+    }
+
+    pub fn with_document_events(paths: AppPaths, document_events: Arc<DocumentEventBus>) -> Self {
         let (events, _) = broadcast::channel(64);
         Self {
             paths,
             sessions: RwLock::new(BTreeMap::new()),
             events,
+            document_events,
         }
+    }
+
+    pub fn document_events(&self) -> Arc<DocumentEventBus> {
+        Arc::clone(&self.document_events)
     }
 
     /// Subscribe to `board.changed` events. Events are broadcast; a
@@ -217,11 +231,22 @@ impl BoardService {
 
     fn emit_changed(&self, session: &BoardSession) {
         let board = session.board();
+        let project_id = board.project_id().to_string();
+        let board_id = board.id().to_string();
+        let version = board.version().get();
         let _ = self.events.send(BoardChangedEvent {
             kind: "board.changed".to_owned(),
-            project_id: board.project_id().to_string(),
-            board_id: board.id().to_string(),
-            board_version: board.version().get(),
+            project_id: project_id.clone(),
+            board_id: board_id.clone(),
+            board_version: version,
+            document_id: board_id.clone(),
+            version,
+        });
+        self.document_events.publish(DocumentChangedEvent {
+            kind: "board.changed".to_owned(),
+            project_id,
+            document_id: board_id,
+            version,
         });
     }
 

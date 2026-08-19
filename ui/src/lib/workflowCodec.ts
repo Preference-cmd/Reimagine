@@ -55,6 +55,7 @@ export type WorkflowGraph = {
   nodes: Node[];
   edges: FlowEdge[];
   name: string;
+  version: number;
 };
 
 /** Serialize the editor graph into a backend `Workflow` payload. */
@@ -63,11 +64,12 @@ export function workflowToJson(
   edges: FlowEdge[],
   id: string,
   name: string,
+  version = 0,
 ): BackendWorkflow {
   return {
     schema_version: WORKFLOW_SCHEMA_VERSION,
     id,
-    version: 1,
+    version,
     metadata: { name },
     interface: { inputs: [], outputs: [] },
     nodes: nodes.map((node) => ({
@@ -138,6 +140,7 @@ export function workflowFromJson(json: unknown): WorkflowGraph {
     nodes,
     edges,
     name: workflow.metadata?.name ?? "Untitled Workflow",
+    version: typeof workflow.version === "number" ? workflow.version : 0,
   };
 }
 

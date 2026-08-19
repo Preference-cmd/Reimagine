@@ -1,6 +1,7 @@
 import { useEffect } from "react";
 import { useQueryClient } from "@tanstack/react-query";
 import { useWorkflowStore } from "@/store/workflow";
+import { useProjectStore } from "@/store/project";
 import { useRecentWorkflowsStore } from "@/store/recentWorkflows";
 import { saveWorkflow, loadWorkflow } from "@/ipc";
 import { workflowFromJson, workflowToJson } from "@/lib/workflowCodec";
@@ -29,13 +30,15 @@ export async function saveWorkflowNow(queryClient?: {
     autosaveTimer = null;
   }
   if (saveInFlight) return;
-  const { nodes, edges, id, name } = useWorkflowStore.getState();
+  const { nodes, edges, id, name, projectId, version } = useWorkflowStore.getState();
+  const nextVersion = version + 1;
   saveInFlight = true;
   try {
-    await saveWorkflow(id, workflowToJson(nodes, edges, id, name));
-    useRecentWorkflowsStore.getState().addRecent(id, name);
+    await saveWorkflow(projectId, id, workflowToJson(nodes, edges, id, name, nextVersion));
+    useWorkflowStore.setState({ version: nextVersion });
+    useRecentWorkflowsStore.getState().addRecent(projectId, id, name);
     // Invalidate the workflows list cache so other consumers see fresh data
-    await queryClient?.invalidateQueries({ queryKey: queryKeys.workflows });
+    await queryClient?.invalidateQueries({ queryKey: queryKeys.workflows(projectId) });
   } catch (error) {
     console.error("[persistence] save failed:", error);
   } finally {
@@ -45,6 +48,7 @@ export async function saveWorkflowNow(queryClient?: {
 
 export function useWorkflowPersistence() {
   const queryClient = useQueryClient();
+  const activeProjectId = useProjectStore((state) => state.activeProjectId);
 
   // Load the most recent saved workflow on app start. If none exists (or the
   // load fails), the initial demo graph remains as the default content.
@@ -54,18 +58,18 @@ export function useWorkflowPersistence() {
       try {
         // Use the query cache — populates it for other consumers
         const summaries = await queryClient.fetchQuery({
-          queryKey: queryKeys.workflows,
-          queryFn: () => import("@/ipc").then((m) => m.listWorkflows()),
+          queryKey: queryKeys.workflows(activeProjectId),
+          queryFn: () => import("@/ipc").then((m) => m.listWorkflows(activeProjectId)),
           staleTime: Infinity,
         });
         if (cancelled) return;
         const mostRecent = summaries[0];
         if (!mostRecent) return;
-        const json = await loadWorkflow(mostRecent.id);
+        const json = await loadWorkflow(activeProjectId, mostRecent.id);
         if (cancelled) return;
-        const { nodes, edges, name } = workflowFromJson(json);
-        useWorkflowStore.getState().hydrate(nodes, edges, mostRecent.id, name);
-        useRecentWorkflowsStore.getState().addRecent(mostRecent.id, name);
+        const { nodes, edges, name, version } = workflowFromJson(json);
+        useWorkflowStore.getState().hydrate(nodes, edges, mostRecent.id, name, activeProjectId, version);
+        useRecentWorkflowsStore.getState().addRecent(activeProjectId, mostRecent.id, name);
         // The pre-load demo graph must not be reachable via undo.
         useWorkflowStore.temporal.getState().clear();
       } catch (error) {
@@ -75,7 +79,7 @@ export function useWorkflowPersistence() {
     return () => {
       cancelled = true;
     };
-  }, [queryClient]);
+  }, [activeProjectId, queryClient]);
 
   // Cmd/Ctrl+S — immediate save.
   useEffect(() => {
@@ -87,12 +91,12 @@ export function useWorkflowPersistence() {
     };
     window.addEventListener("keydown", handler);
     return () => window.removeEventListener("keydown", handler);
-  }, [queryClient]);
+  }, [activeProjectId, queryClient]);
 
   // Auto-save — debounced 5s after the last nodes/edges change.
   useEffect(() => {
     const unsubscribe = useWorkflowStore.subscribe((state, prev) => {
-      if (state.nodes === prev.nodes && state.edges === prev.edges) return;
+      if (state.hydrating || (state.nodes === prev.nodes && state.edges === prev.edges)) return;
       if (autosaveTimer !== null) clearTimeout(autosaveTimer);
       autosaveTimer = setTimeout(() => {
         autosaveTimer = null;
@@ -106,5 +110,5 @@ export function useWorkflowPersistence() {
         autosaveTimer = null;
       }
     };
-  }, [queryClient]);
+  }, [activeProjectId, queryClient]);
 }

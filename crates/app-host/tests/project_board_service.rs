@@ -222,6 +222,79 @@ async fn board_apply_persists_emits_changed_and_rejects_stale_versions() {
     ));
 }
 
+#[tokio::test]
+async fn workflow_noop_does_not_emit_changed_event() {
+    let host = build_host("workflow-event");
+    let project_id = ProjectId::new("workflow-project");
+    host.project_service()
+        .create_project(
+            project_id.clone(),
+            metadata("Workflow project", "2026-06-12T00:01:00Z"),
+        )
+        .await
+        .expect("project creates");
+    let workflow_service = host.workflow_service_for_project(&project_id);
+    let workflow_id = workflow_service.register_workflow(reimagine_core::workflow::Workflow::new(
+        "workflow-event",
+        reimagine_core::model::WorkflowVersion::new(0),
+    ));
+    let mut events = host.document_events().subscribe();
+    let batch = reimagine_core::command::CommandBatch::new(
+        CommandBatchId::new("workflow-event-batch"),
+        CommandActor::new(CommandActorKind::Human),
+        reimagine_core::model::WorkflowVersion::new(0),
+        CommandProvenance::Direct,
+        Timestamp::new("2026-06-12T00:00:00Z"),
+        Vec::new(),
+    );
+    let result = workflow_service
+        .apply_commands(&workflow_id, host.node_catalog().as_ref(), batch)
+        .await
+        .expect("workflow apply returns");
+    assert_eq!(
+        result.status(),
+        reimagine_core::command::CommandResultStatus::NoOp
+    );
+    assert!(
+        tokio::time::timeout(std::time::Duration::from_millis(50), events.recv())
+            .await
+            .is_err()
+    );
+    let _ = std::fs::remove_dir_all(host.base_path());
+}
+
+#[tokio::test]
+async fn host_project_delete_clears_workflow_registry_for_recreate() {
+    let host = build_host("workflow-registry-delete");
+    let project_id = ProjectId::new("registry-project");
+    host.project_service()
+        .create_project(
+            project_id.clone(),
+            metadata("Registry", "2026-06-12T00:01:00Z"),
+        )
+        .await
+        .expect("project creates");
+    let first = host.workflow_service_for_project(&project_id);
+    let workflow_id = first.register_workflow(reimagine_core::workflow::Workflow::new(
+        "wf-deleted",
+        reimagine_core::model::WorkflowVersion::new(0),
+    ));
+    assert!(first.contains(&workflow_id));
+    host.delete_project(&project_id)
+        .await
+        .expect("host deletes project");
+    host.project_service()
+        .create_project(
+            project_id.clone(),
+            metadata("Registry recreated", "2026-06-12T00:02:00Z"),
+        )
+        .await
+        .expect("project recreates");
+    let second = host.workflow_service_for_project(&project_id);
+    assert!(!second.contains(&workflow_id));
+    let _ = std::fs::remove_dir_all(host.base_path());
+}
+
 fn temp_dir(prefix: &str) -> std::path::PathBuf {
     let nonce = std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)

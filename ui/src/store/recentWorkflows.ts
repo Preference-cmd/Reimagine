@@ -3,16 +3,17 @@ import { persist } from "zustand/middleware";
 
 type RecentWorkflowEntry = {
   id: string;
+  projectId: string;
   name: string;
   lastOpened: number;
 };
 
 type RecentWorkflowsState = {
   entries: RecentWorkflowEntry[];
-  addRecent: (id: string, name: string) => void;
-  removeRecent: (id: string) => void;
+  addRecent: (projectId: string, id: string, name: string) => void;
+  removeRecent: (projectId: string, id: string) => void;
   clearRecent: () => void;
-  updateNames: (updates: Array<{ id: string; name: string }>) => void;
+  updateNames: (projectId: string, updates: Array<{ id: string; name: string }>) => void;
 };
 
 const MAX_RECENT = 10;
@@ -23,22 +24,23 @@ export const useRecentWorkflowsStore = create<RecentWorkflowsState>()(
     (set, get) => ({
       entries: [],
 
-      addRecent: (id: string, name: string) => {
-        const entries = get().entries.filter((e) => e.id !== id);
-        entries.unshift({ id, name, lastOpened: Date.now() });
+      addRecent: (projectId: string, id: string, name: string) => {
+        const entries = get().entries.filter((e) => !(e.projectId === projectId && e.id === id));
+        entries.unshift({ projectId, id, name, lastOpened: Date.now() });
         set({ entries: entries.slice(0, MAX_RECENT) });
       },
 
-      removeRecent: (id: string) => {
-        set({ entries: get().entries.filter((e) => e.id !== id) });
+      removeRecent: (projectId: string, id: string) => {
+        set({ entries: get().entries.filter((e) => !(e.projectId === projectId && e.id === id)) });
       },
 
       clearRecent: () => set({ entries: [] }),
 
-      updateNames: (updates: Array<{ id: string; name: string }>) => {
+      updateNames: (projectId: string, updates: Array<{ id: string; name: string }>) => {
         const nameMap = new Map(updates.map((u) => [u.id, u.name]));
         set({
           entries: get().entries.map((e) => {
+            if (e.projectId !== projectId) return e;
             const newName = nameMap.get(e.id);
             return newName ? { ...e, name: newName } : e;
           }),

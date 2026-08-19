@@ -63,6 +63,16 @@ impl ProjectService {
         self.project_dir(project_id).join("project.json")
     }
 
+    /// Return whether the project is known to the in-memory registry or has
+    /// a durable project document on disk.
+    pub fn contains_project(&self, project_id: &ProjectId) -> bool {
+        self.projects
+            .read()
+            .expect("project registry poisoned")
+            .contains_key(project_id)
+            || self.project_file(project_id).is_file()
+    }
+
     /// Create a project, persisting `project.json` and an empty
     /// `board.json` before the project becomes visible.
     pub async fn create_project(
@@ -89,6 +99,12 @@ impl ProjectService {
             .await
             .map_err(|error| AppHostError::Io {
                 path: project_dir.clone(),
+                message: error.to_string(),
+            })?;
+        tokio::fs::create_dir_all(self.paths.project_workflows_dir(project_id.as_str()))
+            .await
+            .map_err(|error| AppHostError::Io {
+                path: self.paths.project_workflows_dir(project_id.as_str()),
                 message: error.to_string(),
             })?;
 

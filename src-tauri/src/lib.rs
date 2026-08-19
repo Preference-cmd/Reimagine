@@ -1,5 +1,6 @@
 mod agent_event_hub;
 mod desktop_host;
+mod document_event_hub;
 mod download_event_hub;
 mod event_hub;
 
@@ -133,11 +134,12 @@ async fn list_models(
 #[tauri::command]
 async fn run_workflow(
     state: tauri::State<'_, DesktopHostState>,
+    project_id: String,
     workflow: serde_json::Value,
     channel: Channel<RunEventPayload>,
 ) -> Result<RunWorkflowResponse, TauriCommandError> {
     state
-        .run_workflow(workflow, channel)
+        .run_workflow_for_project(&project_id, workflow, channel)
         .await
         .map_err(app_host_command_error)
 }
@@ -373,41 +375,178 @@ async fn rebootstrap_backend(
         .map_err(app_host_command_error)
 }
 
+// ─── Project / board surface (AR-39) ───────────────────────────────
+
+#[tauri::command]
+async fn list_projects(
+    state: tauri::State<'_, DesktopHostState>,
+) -> Result<Vec<reimagine_app_host::dto::ProjectDto>, TauriCommandError> {
+    state.list_projects().await.map_err(app_host_command_error)
+}
+
+#[tauri::command]
+async fn create_project(
+    state: tauri::State<'_, DesktopHostState>,
+    project_id: String,
+    metadata: reimagine_app_host::dto::ProjectMetadataInputDto,
+) -> Result<reimagine_app_host::dto::ProjectDto, TauriCommandError> {
+    state
+        .create_project(project_id, metadata)
+        .await
+        .map_err(app_host_command_error)
+}
+
+#[tauri::command]
+async fn load_project(
+    state: tauri::State<'_, DesktopHostState>,
+    project_id: String,
+) -> Result<reimagine_app_host::dto::ProjectDto, TauriCommandError> {
+    state
+        .load_project(&project_id)
+        .await
+        .map_err(app_host_command_error)
+}
+
+#[tauri::command]
+async fn update_project(
+    state: tauri::State<'_, DesktopHostState>,
+    project_id: String,
+    metadata: reimagine_app_host::dto::ProjectMetadataInputDto,
+) -> Result<reimagine_app_host::dto::ProjectDto, TauriCommandError> {
+    state
+        .update_project(&project_id, metadata)
+        .await
+        .map_err(app_host_command_error)
+}
+
+#[tauri::command]
+async fn delete_project(
+    state: tauri::State<'_, DesktopHostState>,
+    project_id: String,
+) -> Result<(), TauriCommandError> {
+    state
+        .delete_project(&project_id)
+        .await
+        .map_err(app_host_command_error)
+}
+
+#[tauri::command]
+async fn set_active_project(
+    state: tauri::State<'_, DesktopHostState>,
+    project_id: String,
+) -> Result<reimagine_app_host::dto::ProjectDto, TauriCommandError> {
+    state
+        .set_active_project(&project_id)
+        .await
+        .map_err(app_host_command_error)
+}
+
+#[tauri::command]
+async fn subscribe_document_events(
+    state: tauri::State<'_, DesktopHostState>,
+    channel: Channel<reimagine_app_host::DocumentChangedEvent>,
+) -> Result<(), TauriCommandError> {
+    state.subscribe_document_events(channel);
+    Ok(())
+}
+
+#[tauri::command]
+async fn board_snapshot(
+    state: tauri::State<'_, DesktopHostState>,
+    project_id: String,
+) -> Result<reimagine_app_host::dto::BoardSnapshotDto, TauriCommandError> {
+    state
+        .board_snapshot(&project_id)
+        .await
+        .map_err(app_host_command_error)
+}
+
+#[tauri::command]
+async fn preview_board_commands(
+    state: tauri::State<'_, DesktopHostState>,
+    project_id: String,
+    command_batch: serde_json::Value,
+) -> Result<reimagine_app_host::dto::BoardCommandResultDto, TauriCommandError> {
+    state
+        .preview_board_commands(&project_id, command_batch)
+        .await
+        .map_err(app_host_command_error)
+}
+
+#[tauri::command]
+async fn apply_board_commands(
+    state: tauri::State<'_, DesktopHostState>,
+    project_id: String,
+    command_batch: serde_json::Value,
+) -> Result<reimagine_app_host::dto::BoardCommandResultDto, TauriCommandError> {
+    state
+        .apply_board_commands(&project_id, command_batch)
+        .await
+        .map_err(app_host_command_error)
+}
+
+#[tauri::command]
+async fn undo_board(
+    state: tauri::State<'_, DesktopHostState>,
+    project_id: String,
+) -> Result<Option<reimagine_app_host::dto::BoardCommandResultDto>, TauriCommandError> {
+    state
+        .undo_board(&project_id)
+        .await
+        .map_err(app_host_command_error)
+}
+
+#[tauri::command]
+async fn redo_board(
+    state: tauri::State<'_, DesktopHostState>,
+    project_id: String,
+) -> Result<Option<reimagine_app_host::dto::BoardCommandResultDto>, TauriCommandError> {
+    state
+        .redo_board(&project_id)
+        .await
+        .map_err(app_host_command_error)
+}
+
 // ─── Workflow command commands ───────────────────────────────────
 
 /// Preview a command batch (dry-run). Returns diagnostics without mutating.
 #[tauri::command]
 fn preview_workflow_commands(
     state: tauri::State<'_, DesktopHostState>,
+    project_id: String,
     workflow_id: String,
     command_batch: serde_json::Value,
 ) -> Result<CommandResult, TauriCommandError> {
     state
-        .preview_workflow_commands(workflow_id, command_batch)
+        .preview_workflow_commands(project_id, workflow_id, command_batch)
         .map_err(app_host_command_error)
 }
 
 /// Apply a command batch directly.
 #[tauri::command]
-fn apply_workflow_commands(
+async fn apply_workflow_commands(
     state: tauri::State<'_, DesktopHostState>,
+    project_id: String,
     workflow_id: String,
     command_batch: serde_json::Value,
     _approved_by: Option<serde_json::Value>,
 ) -> Result<CommandResult, TauriCommandError> {
     state
-        .apply_workflow_commands(workflow_id, command_batch, _approved_by)
+        .apply_workflow_commands(project_id, workflow_id, command_batch, _approved_by)
+        .await
         .map_err(app_host_command_error)
 }
 
 /// Approve a pending workflow proposal (human approval of build-mode output).
 #[tauri::command]
-fn approve_proposal(
+async fn approve_proposal(
     state: tauri::State<'_, DesktopHostState>,
+    project_id: String,
     workflow_id: String,
 ) -> Result<CommandResult, TauriCommandError> {
     state
-        .approve_proposal(workflow_id)
+        .approve_proposal(project_id, workflow_id)
+        .await
         .map_err(app_host_command_error)
 }
 
@@ -420,11 +559,12 @@ fn approve_proposal(
 #[tauri::command]
 async fn save_workflow(
     state: tauri::State<'_, DesktopHostState>,
+    project_id: String,
     workflow_id: String,
     workflow_json: serde_json::Value,
 ) -> Result<String, TauriCommandError> {
     state
-        .save_workflow(&workflow_id, workflow_json)
+        .save_workflow_for_project(&project_id, &workflow_id, workflow_json)
         .await
         .map(|path| path.display().to_string())
         .map_err(app_host_command_error)
@@ -434,10 +574,11 @@ async fn save_workflow(
 #[tauri::command]
 async fn load_workflow(
     state: tauri::State<'_, DesktopHostState>,
+    project_id: String,
     workflow_id: String,
 ) -> Result<serde_json::Value, TauriCommandError> {
     state
-        .load_workflow_json(&workflow_id)
+        .load_workflow_json_for_project(&project_id, &workflow_id)
         .await
         .map_err(app_host_command_error)
 }
@@ -446,8 +587,11 @@ async fn load_workflow(
 #[tauri::command]
 fn list_workflows(
     state: tauri::State<'_, DesktopHostState>,
+    project_id: String,
 ) -> Result<Vec<serde_json::Value>, TauriCommandError> {
-    state.list_saved_workflows().map_err(app_host_command_error)
+    state
+        .list_saved_workflows_for_project(&project_id)
+        .map_err(app_host_command_error)
 }
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
@@ -481,6 +625,19 @@ pub fn run() {
             create_agent_session,
             agent_turn,
             list_agent_providers,
+            // Project / board commands (AR-39)
+            list_projects,
+            create_project,
+            load_project,
+            update_project,
+            delete_project,
+            set_active_project,
+            subscribe_document_events,
+            board_snapshot,
+            preview_board_commands,
+            apply_board_commands,
+            undo_board,
+            redo_board,
             // Workflow command commands
             preview_workflow_commands,
             apply_workflow_commands,
@@ -596,6 +753,62 @@ mod tests {
         let _ = std::fs::remove_dir_all(&base_path);
     }
 
+    #[test]
+    fn project_board_workflow_surface_is_project_scoped() {
+        let base_path = temp_dir("project-board-surface");
+        let state = tauri::async_runtime::block_on(DesktopHostState::bootstrap(&base_path))
+            .expect("desktop host state should bootstrap");
+        let metadata = reimagine_app_host::dto::ProjectMetadataInputDto {
+            name: "Project A".to_owned(),
+            description: "A project".to_owned(),
+            created_at: Some("2026-08-20T00:00:00Z".to_owned()),
+            updated_at: Some("2026-08-20T00:00:00Z".to_owned()),
+        };
+        tauri::async_runtime::block_on(
+            state.create_project("project-a".to_owned(), metadata.clone()),
+        )
+        .expect("project A creates");
+        tauri::async_runtime::block_on(state.create_project("project-b".to_owned(), metadata))
+            .expect("project B creates");
+        let board = tauri::async_runtime::block_on(state.board_snapshot("project-a"))
+            .expect("project A board loads");
+        assert_eq!(board.project_id, "project-a");
+        assert_eq!(board.version, 0);
+        let workflow = serde_json::json!({
+            "schema_version": "reimagine.workflow.v1",
+            "id": "wf-a",
+            "version": 1,
+            "metadata": { "name": "Project A workflow" },
+            "interface": { "inputs": [], "outputs": [] },
+            "nodes": [],
+            "edges": [],
+            "layout": { "nodes": {} }
+        });
+        let path = tauri::async_runtime::block_on(state.save_workflow_for_project(
+            "project-a",
+            "wf-a",
+            workflow,
+        ))
+        .expect("project A workflow saves");
+        assert!(path.ends_with("projects/project-a/workflows/wf-a.json"));
+        let loaded = tauri::async_runtime::block_on(
+            state.load_workflow_json_for_project("project-a", "wf-a"),
+        )
+        .expect("project A workflow loads");
+        assert_eq!(loaded["metadata"]["name"], "Project A workflow");
+        tauri::async_runtime::block_on(state.delete_project("project-a"))
+            .expect("project A deletes");
+        assert!(!base_path.join("projects/project-a").exists());
+        assert!(tauri::async_runtime::block_on(state.load_project("project-a")).is_err());
+        assert!(tauri::async_runtime::block_on(state.board_snapshot("project-a")).is_err());
+        assert!(
+            tauri::async_runtime::block_on(
+                state.load_workflow_json_for_project("project-a", "wf-a")
+            )
+            .is_err()
+        );
+        let _ = std::fs::remove_dir_all(&base_path);
+    }
     #[test]
     fn default_workspace_path_uses_app_data_workspace_child() {
         let app_data_dir = temp_dir("app-data");

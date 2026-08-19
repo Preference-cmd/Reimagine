@@ -755,6 +755,66 @@ fn temp_dir(prefix: &str) -> std::path::PathBuf {
 // ─── AR-08: project workflow persistence / migration / rollback ───
 
 #[tokio::test]
+async fn project_workflow_apply_persists_and_emits_changed_event() {
+    let base = temp_dir("workflow-event-project");
+    let host = WorkspaceHost::with_defaults(WorkspaceScope::new("workflow-event"), &base);
+    let project_id = ProjectId::new("project-a");
+    host.project_service()
+        .create_project(
+            project_id.clone(),
+            reimagine_core::project::ProjectMetadata::new(
+                "Project A",
+                "workflow event test",
+                Timestamp::new("2026-08-20T00:00:00Z"),
+                Timestamp::new("2026-08-20T00:00:00Z"),
+            ),
+        )
+        .await
+        .expect("project creates");
+    let service = host.workflow_service_for_project(&project_id);
+    let workflow_id = service.register_workflow(Workflow::new("wf-event", WorkflowVersion::new(0)));
+    let mut events = host.document_events().subscribe();
+    let result = service
+        .apply_commands(
+            &workflow_id,
+            host.node_catalog().as_ref(),
+            add_string_node_batch(WorkflowVersion::new(0), "event"),
+        )
+        .await
+        .expect("workflow apply");
+    assert_eq!(result.status(), CommandResultStatus::Applied);
+    let event = tokio::time::timeout(std::time::Duration::from_secs(2), events.recv())
+        .await
+        .expect("workflow event arrives")
+        .expect("event channel remains open");
+    assert_eq!(event.kind, "workflow.changed");
+    assert_eq!(event.project_id, "project-a");
+    assert_eq!(event.document_id, "wf-event");
+    assert_eq!(event.version, 1);
+    assert!(
+        base.join("projects/project-a/workflows/wf-event.json")
+            .is_file()
+    );
+    let _ = std::fs::remove_dir_all(base);
+}
+
+#[tokio::test]
+async fn external_workflow_save_rejects_non_monotonic_version() {
+    let paths = AppPaths::new(temp_dir("workflow-version-guard"));
+    let service = WorkflowService::for_project(paths, ProjectId::new("version-project"));
+    service
+        .save_external_workflow(Workflow::new("wf-version", WorkflowVersion::new(1)))
+        .await
+        .expect("first external save");
+    let result = service
+        .save_external_workflow(Workflow::new("wf-version", WorkflowVersion::new(1)))
+        .await;
+    assert!(matches!(
+        result,
+        Err(reimagine_app_host::AppHostError::WorkflowVersionConflict { .. })
+    ));
+}
+#[tokio::test]
 async fn apply_commands_persists_accepted_workflow_and_survives_restart() {
     let paths = AppPaths::new(temp_dir("ar08-apply"));
     let service = WorkflowService::new(paths.clone());

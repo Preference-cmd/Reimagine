@@ -17,8 +17,14 @@ export type SelectionInfo = {
 export type ParamPatch = Record<string, ParamValue>;
 
 type WorkflowState = {
-  /** Stable workflow id — the file name in the workspace `workflows/` dir. */
+  /** Stable workflow id within the active project. */
   id: string;
+  /** Owning project; every persistence request carries this value. */
+  projectId: string;
+  /** Server document version used for changed-event ordering. */
+  version: number;
+  /** True only during a snapshot replacement; autosave ignores that change. */
+  hydrating: boolean;
   name: string;
   nodes: Node[];
   edges: FlowEdge[];
@@ -34,7 +40,7 @@ type WorkflowState = {
   /** Edit the legacy free-text `data.prompt` field (F2-4). */
   updateNodePrompt: (nodeId: string, prompt: string) => void;
   /** Replace the whole graph (used by workflow persistence on load). */
-  hydrate: (nodes: Node[], edges: FlowEdge[], workflowId: string, name: string) => void;
+  hydrate: (nodes: Node[], edges: FlowEdge[], workflowId: string, name: string, projectId?: string, version?: number) => void;
   // ── graph mutations (F2-2/F2-3/F3-1) ───────────────────────────────
   addNode: (node: Node) => void;
   removeNodes: (ids: string[]) => void;
@@ -189,6 +195,9 @@ export const useWorkflowStore = create<WorkflowState>()(
     (set, get) => {
       const initial = {
         id: "main",
+        projectId: "default",
+        version: 0,
+        hydrating: false,
         name: "Untitled Workflow",
         nodes: initialNodes,
         edges: initialEdges,
@@ -234,8 +243,17 @@ export const useWorkflowStore = create<WorkflowState>()(
               node.id === nodeId ? { ...node, data: { ...node.data, prompt } } : node,
             ),
           })),
-        hydrate: (nodes: Node[], edges: FlowEdge[], workflowId: string, name: string) =>
-          set({ nodes, edges, id: workflowId, name }),
+        hydrate: (
+          nodes: Node[],
+          edges: FlowEdge[],
+          workflowId: string,
+          name: string,
+          projectId = get().projectId,
+          version = 0,
+        ) => {
+          set({ nodes, edges, id: workflowId, name, projectId, version, hydrating: true });
+          queueMicrotask(() => set({ hydrating: false }));
+        },
         addNode: (node: Node) => set((s) => ({ nodes: [...s.nodes, node] })),
         removeNodes: (ids: string[]) =>
           set((s) => {

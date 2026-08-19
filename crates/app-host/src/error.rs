@@ -15,6 +15,9 @@ pub enum AppHostError {
     ProjectAlreadyExists {
         project_id: ProjectId,
     },
+    ProjectIdPathUnsafe {
+        project_id: String,
+    },
     UnknownBoard {
         project_id: ProjectId,
     },
@@ -97,6 +100,12 @@ impl std::fmt::Display for AppHostError {
             }
             Self::ProjectAlreadyExists { project_id } => {
                 write!(f, "project `{project_id}` already exists")
+            }
+            Self::ProjectIdPathUnsafe { project_id } => {
+                write!(
+                    f,
+                    "project id `{project_id}` is not safe as a project directory name"
+                )
             }
             Self::UnknownBoard { project_id } => {
                 write!(f, "project `{project_id}` has no board")
@@ -196,6 +205,7 @@ impl AppHostError {
         match self {
             Self::UnknownProject { .. } => AppHostErrorCode::NotFound,
             Self::ProjectAlreadyExists { .. } => AppHostErrorCode::Conflict,
+            Self::ProjectIdPathUnsafe { .. } => AppHostErrorCode::PermissionDenied,
             Self::UnknownBoard { .. } => AppHostErrorCode::NotFound,
             Self::UnknownWorkflow { .. } => AppHostErrorCode::NotFound,
             Self::NoPendingProposal { .. } => AppHostErrorCode::NotFound,
@@ -244,6 +254,9 @@ impl AppHostError {
             | Self::ProjectAlreadyExists { project_id }
             | Self::UnknownBoard { project_id } => {
                 Some(serde_json::json!({ "project_id": project_id.to_string() }))
+            }
+            Self::ProjectIdPathUnsafe { project_id } => {
+                Some(serde_json::json!({ "project_id": project_id }))
             }
             Self::UnknownWorkflow { workflow_id } => {
                 Some(serde_json::json!({ "workflow_id": workflow_id.to_string() }))

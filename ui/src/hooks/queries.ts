@@ -24,7 +24,7 @@ export const queryKeys = {
   modelSearch: (query: string) => ["modelSearch", query] as const,
   modelCard: (repoId: string) => ["modelCard", repoId] as const,
   artifact: (artifactId: string) => ["artifact", artifactId] as const,
-  workflows: ["workflows"] as const,
+  workflows: (projectId: string) => ["workflows", projectId] as const,
   agentProviders: ["agentProviders"] as const,
 } as const;
 
@@ -79,10 +79,10 @@ export function useArtifactQuery(artifactId: string | null) {
 }
 
 /** Saved workflows list — one-shot load. */
-export function useWorkflows() {
+export function useWorkflows(projectId: string) {
   return useQuery({
-    queryKey: queryKeys.workflows,
-    queryFn: listWorkflows,
+    queryKey: queryKeys.workflows(projectId),
+    queryFn: () => listWorkflows(projectId),
     staleTime: Infinity,
   });
 }
@@ -102,9 +102,10 @@ export function useAgentProviders() {
 export function useSaveWorkflow() {
   const queryClient = useQueryClient();
   return useMutation({
-    mutationFn: ({ id, json }: { id: string; json: unknown }) => saveWorkflow(id, json),
-    onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: queryKeys.workflows });
+    mutationFn: ({ projectId, id, json }: { projectId: string; id: string; json: unknown }) =>
+      saveWorkflow(projectId, id, json),
+    onSuccess: (_data, variables) => {
+      queryClient.invalidateQueries({ queryKey: queryKeys.workflows(variables.projectId) });
     },
   });
 }
