@@ -260,6 +260,16 @@ export interface AgentEventPayload {
   toolCallId?: string;
   code?: string;
   message?: string;
+  /** Turn-level observability, populated on turn_completed. */
+  durationMs?: number;
+  estimatedCost?: number;
+  usage?: {
+    inputTokens?: number;
+    outputTokens?: number;
+    reasoningTokens?: number;
+    cacheCreationInputTokens?: number;
+    cacheReadInputTokens?: number;
+  };
 }
 
 /**

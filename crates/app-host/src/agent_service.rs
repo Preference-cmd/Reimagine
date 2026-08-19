@@ -221,6 +221,9 @@ impl AgentService {
         workspace_scope: WorkspaceScope,
         registry: Arc<AgentToolRegistry>,
     ) -> Self {
+        // `VecAgentEventSink` is a test/minimal fallback only. Production
+        // bootstrap injects `TauriAgentEventHub` (or another real sink) via
+        // `with_registry_providers_and_sink`.
         Self::with_registry_providers_and_sink(
             workspace_scope,
             registry,
@@ -234,6 +237,8 @@ impl AgentService {
         registry: Arc<AgentToolRegistry>,
         session_dir: impl Into<PathBuf>,
     ) -> Self {
+        // `VecAgentEventSink` is a test/minimal fallback only; callers
+        // on the production path should inject the host event hub.
         Self::with_registry_providers_sink_and_session_dir(
             workspace_scope,
             registry,

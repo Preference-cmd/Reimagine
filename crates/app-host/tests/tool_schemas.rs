@@ -46,15 +46,33 @@ fn workspace_tools_advertise_input_schemas() {
             .find(|s| s.name().as_str() == name)
             .unwrap_or_else(|| panic!("missing tool {name}"));
         let input = spec.input_schema().expect("input schema present");
-        // Non-placeholder: must declare properties (empty object is
-        // still marked so a bare {type:object} placeholder is gone).
-        assert!(
-            input.get("properties").is_some(),
-            "{name} input schema must declare properties"
+        // AR-38/AR-40: field-accurate — type object, declared
+        // properties, and every property typed + described. This is what
+        // keeps the catalog from drifting back into placeholders.
+        assert_eq!(
+            input.get("type").and_then(|t| t.as_str()),
+            Some("object"),
+            "{name} input schema must be an object"
         );
-        assert!(
-            spec.output_schema().is_some(),
-            "{name} output schema present"
+        let properties = input
+            .get("properties")
+            .and_then(|p| p.as_object())
+            .unwrap_or_else(|| panic!("{name} input schema must declare properties"));
+        for (field, prop_schema) in properties {
+            assert!(
+                prop_schema.get("type").is_some(),
+                "{name}.{field} must declare a type"
+            );
+            assert!(
+                prop_schema.get("description").is_some(),
+                "{name}.{field} must declare a description"
+            );
+        }
+        let output = spec.output_schema().expect("output schema present");
+        assert_eq!(
+            output.get("type").and_then(|t| t.as_str()),
+            Some("object"),
+            "{name} output schema must be an object"
         );
     }
     let _ = std::fs::remove_dir_all(&base);

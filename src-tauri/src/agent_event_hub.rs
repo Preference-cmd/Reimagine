@@ -11,7 +11,7 @@ use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
 
 use reimagine_agent_harness::{AgentEvent, AgentEventSink, AgentSessionId};
-use reimagine_app_host::dto::AgentEventPayload;
+use reimagine_app_host::dto::{AgentEventPayload, AgentUsageDto};
 use tauri::ipc::Channel;
 
 #[derive(Debug, Clone)]
@@ -80,16 +80,31 @@ impl TauriAgentEventHub {
     /// sends this synthetic event after run_turn resolves so the UI sees
     /// an explicit end-of-stream marker (mirrors the frozen daemon
     /// agent.turn_completed notification).
+    #[allow(dead_code)] // compatibility helper; production uses observability variant
     pub fn send_turn_completed(&self, session_id: &AgentSessionId, message: String) {
+        self.send_turn_completed_with_observability(session_id, message, None, None, None);
+    }
+
+    /// Send the terminal marker together with the turn's aggregated
+    /// observability fields (AR-41).
+    pub fn send_turn_completed_with_observability(
+        &self,
+        session_id: &AgentSessionId,
+        message: String,
+        duration_ms: Option<u64>,
+        estimated_cost: Option<f64>,
+        usage: Option<AgentUsageDto>,
+    ) {
         self.send(
             session_id,
             AgentEventPayload {
                 session_id: session_id.to_string(),
                 kind: "turn_completed".to_string(),
-                tool_name: None,
-                tool_call_id: None,
-                code: None,
                 message: Some(message),
+                duration_ms,
+                estimated_cost,
+                usage,
+                ..Default::default()
             },
         );
     }
@@ -111,6 +126,7 @@ impl TauriAgentEventHub {
                 tool_call_id: None,
                 code: None,
                 message: Some(message),
+                ..Default::default()
             },
         );
     }
@@ -319,6 +335,7 @@ mod tests {
             tool_call_id: Some("call-1".to_string()),
             code: None,
             message: Some("boom".to_string()),
+            ..Default::default()
         };
         assert!(tool_err.is_error(), "tool_failed carries error semantics");
 

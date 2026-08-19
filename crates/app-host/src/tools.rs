@@ -38,7 +38,10 @@ pub fn register_app_tools(registry: &mut AgentToolRegistry, services: Arc<Worksp
             "workflow.read",
             ToolRiskLevel::Read,
         )
-            .with_schemas("{\"type\":\"object\",\"properties\":{\"workflow_id\":{\"type\":\"string\"}},\"required\":[\"workflow_id\"]}", "{\"type\":\"object\"}"),
+            .with_schemas(
+                r#"{"type":"object","properties":{"workflow_id":{"type":"string","description":"The WorkflowId to snapshot."}},"required":["workflow_id"]}"#,
+                r#"{"type":"object"}"#,
+            ),
         workflow_get,
     );
     register_workspace_tool(
@@ -51,7 +54,10 @@ pub fn register_app_tools(registry: &mut AgentToolRegistry, services: Arc<Worksp
             "workflow.write",
             ToolRiskLevel::Read,
         )
-            .with_schemas("{\"type\":\"object\",\"properties\":{\"workflow_id\":{\"type\":\"string\"},\"batch\":{\"type\":\"object\"}},\"required\":[\"workflow_id\",\"batch\"]}", "{\"type\":\"object\"}"),
+            .with_schemas(
+                r#"{"type":"object","properties":{"workflow_id":{"type":"string","description":"The WorkflowId the batch targets."},"batch":{"type":"object","description":"The CommandBatch to preview without mutating."}},"required":["workflow_id","batch"]}"#,
+                r#"{"type":"object"}"#,
+            ),
         workflow_preview_commands,
     );
     register_workspace_tool(
@@ -64,7 +70,10 @@ pub fn register_app_tools(registry: &mut AgentToolRegistry, services: Arc<Worksp
             "workflow.write",
             ToolRiskLevel::Editor,
         )
-            .with_schemas("{\"type\":\"object\",\"properties\":{\"workflow_id\":{\"type\":\"string\"},\"proposal_id\":{\"type\":\"string\"},\"batch\":{\"type\":\"object\"},\"created_at\":{\"type\":\"string\"}},\"required\":[\"workflow_id\",\"proposal_id\",\"batch\",\"created_at\"]}", "{\"type\":\"object\"}"),
+            .with_schemas(
+                r#"{"type":"object","properties":{"workflow_id":{"type":"string","description":"The WorkflowId the proposal targets."},"proposal_id":{"type":"string","description":"Client-supplied stable id for the pending proposal."},"batch":{"type":"object","description":"The CommandBatch to preview and store as the proposal."},"created_at":{"type":"string","description":"RFC3339 timestamp for proposal creation."}},"required":["workflow_id","proposal_id","batch","created_at"]}"#,
+                r#"{"type":"object"}"#,
+            ),
         workflow_propose_commands,
     );
     register_workspace_tool(
@@ -77,7 +86,10 @@ pub fn register_app_tools(registry: &mut AgentToolRegistry, services: Arc<Worksp
             "workflow.write",
             ToolRiskLevel::Editor,
         )
-            .with_schemas("{\"type\":\"object\",\"properties\":{\"workflow_id\":{\"type\":\"string\"},\"batch\":{\"type\":\"object\"}},\"required\":[\"workflow_id\",\"batch\"]}", "{\"type\":\"object\"}"),
+            .with_schemas(
+                r#"{"type":"object","properties":{"workflow_id":{"type":"string","description":"The WorkflowId the batch is applied to."},"batch":{"type":"object","description":"The CommandBatch to apply."}},"required":["workflow_id","batch"]}"#,
+                r#"{"type":"object"}"#,
+            ),
         workflow_apply_commands,
     );
     register_workspace_tool(
@@ -91,8 +103,8 @@ pub fn register_app_tools(registry: &mut AgentToolRegistry, services: Arc<Worksp
             ToolRiskLevel::Read,
         )
         .with_schemas(
-            "{\"type\":\"object\",\"properties\":{}}",
-            "{\"type\":\"object\"}",
+            r#"{"type":"object","properties":{}}"#,
+            r#"{"type":"object"}"#,
         ),
         model_list,
     );
@@ -106,7 +118,10 @@ pub fn register_app_tools(registry: &mut AgentToolRegistry, services: Arc<Worksp
             "model.read",
             ToolRiskLevel::Read,
         )
-            .with_schemas("{\"type\":\"object\",\"properties\":{\"model_ref\":{\"type\":\"object\"}},\"required\":[\"model_ref\"]}", "{\"type\":\"object\"}"),
+            .with_schemas(
+                r#"{"type":"object","properties":{"model_ref":{"type":"object","description":"The model reference (id/series/variant) to resolve to readiness or descriptor info."}},"required":["model_ref"]}"#,
+                r#"{"type":"object"}"#,
+            ),
         model_resolve_ref,
     );
     register_workspace_tool(
@@ -119,7 +134,10 @@ pub fn register_app_tools(registry: &mut AgentToolRegistry, services: Arc<Worksp
             "workflow.read",
             ToolRiskLevel::Read,
         )
-            .with_schemas("{\"type\":\"object\",\"properties\":{\"workflow_id\":{\"type\":\"string\"}},\"required\":[\"workflow_id\"]}", "{\"type\":\"object\"}"),
+            .with_schemas(
+                r#"{"type":"object","properties":{"workflow_id":{"type":"string","description":"The WorkflowId to fetch diagnostics for."}},"required":["workflow_id"]}"#,
+                r#"{"type":"object"}"#,
+            ),
         diagnostics_for_workflow,
     );
     register_workspace_tool(
@@ -132,7 +150,10 @@ pub fn register_app_tools(registry: &mut AgentToolRegistry, services: Arc<Worksp
             "model.write",
             ToolRiskLevel::External,
         )
-            .with_schemas("{\"type\":\"object\",\"properties\":{\"repo_id\":{\"type\":\"string\"}},\"required\":[\"repo_id\"]}", "{\"type\":\"object\"}"),
+            .with_schemas(
+                r#"{"type":"object","properties":{"repo_id":{"type":"string","description":"HuggingFace model repo id (owner/name) to download."}},"required":["repo_id"]}"#,
+                r#"{"type":"object"}"#,
+            ),
         model_download,
     );
 }

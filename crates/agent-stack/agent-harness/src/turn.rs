@@ -199,6 +199,10 @@ pub struct ToolCallResult {
     diagnostic: Option<ToolError>,
     effective: Option<bool>,
     session_id: AgentSessionId,
+    /// Wall-clock duration of the invocation, when measured (AR-41).
+    /// Stamped by the harness around `execute_tool` so hosts and tests
+    /// get per-tool timing without re-wiring timers.
+    duration: Option<Duration>,
 }
 
 impl ToolCallResult {
@@ -219,6 +223,7 @@ impl ToolCallResult {
             diagnostic: None,
             effective: None,
             session_id: AgentSessionId::new(""),
+            duration: None,
         }
     }
 
@@ -291,6 +296,17 @@ impl ToolCallResult {
 
     pub fn session_id(&self) -> &AgentSessionId {
         &self.session_id
+    }
+
+    /// Attach the wall-clock duration of the invocation (AR-41).
+    pub fn with_duration(mut self, duration: Duration) -> Self {
+        self.duration = Some(duration);
+        self
+    }
+
+    /// Wall-clock duration of the invocation, when measured (AR-41).
+    pub fn duration(&self) -> Option<Duration> {
+        self.duration
     }
 }
 
@@ -889,6 +905,23 @@ mod tests {
         assert_eq!(r.tool_calls().len(), 2);
         assert_eq!(r.tool_calls()[0].tool_call_id().as_str(), "a");
         assert_eq!(r.tool_calls()[1].tool_call_id().as_str(), "b");
+    }
+
+    #[test]
+    fn tool_call_result_round_trips_duration() {
+        // AR-41: per-tool wall-clock timing is stamped by the harness.
+        let r = ToolCallResult::new(ToolCallId::new("c1"), ToolName::new("echo"))
+            .with_session(AgentSessionId::new("s1"))
+            .succeeded(json!({"ok": true}))
+            .with_duration(Duration::from_millis(12));
+        assert_eq!(r.duration(), Some(Duration::from_millis(12)));
+        // Serialized form carries the timing (hosts read it over IPC).
+        let restored: ToolCallResult =
+            serde_json::from_value(serde_json::to_value(&r).unwrap()).unwrap();
+        assert_eq!(restored.duration(), Some(Duration::from_millis(12)));
+        // Unmeasured invocations default to None.
+        let no_dur = ToolCallResult::new(ToolCallId::new("c2"), ToolName::new("x"));
+        assert_eq!(no_dur.duration(), None);
     }
 
     #[test]

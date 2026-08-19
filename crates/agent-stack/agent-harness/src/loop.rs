@@ -1046,7 +1046,34 @@ impl AgentLoop {
     /// Execute a single tool call through the registry, translating
     /// every registry error into the appropriate `ToolCallResult`
     /// shape and emitting the matching `AgentEvent`.
+    /// Execute a single tool call and stamp the invocation's wall-clock
+    /// duration onto the result (AR-41). Delegates to
+    /// `execute_tool_inner`, which holds the registry-error mapping; the
+    /// timer wraps every terminal path (succeeded / rejected / failed).
     async fn execute_tool(
+        &self,
+        registry: &Arc<AgentToolRegistry>,
+        tool_name: &ToolName,
+        tool_call: &crate::provider::ToolCall,
+        tool_context: &ToolContext,
+        cancel_token: &tokio_util::sync::CancellationToken,
+        turn_timeout: Option<Duration>,
+    ) -> ToolCallResult {
+        let started = Instant::now();
+        let result = self
+            .execute_tool_inner(
+                registry,
+                tool_name,
+                tool_call,
+                tool_context,
+                cancel_token,
+                turn_timeout,
+            )
+            .await;
+        result.with_duration(started.elapsed())
+    }
+
+    async fn execute_tool_inner(
         &self,
         registry: &Arc<AgentToolRegistry>,
         tool_name: &ToolName,
@@ -1627,6 +1654,9 @@ mod tests {
         // `recorded_inputs` after the turn.
         outputs: Arc<Mutex<VecDeque<Result<Value, ToolError>>>>,
         recorded_inputs: Arc<Mutex<Vec<Value>>>,
+        // Optional per-invocation delay so wall-clock concurrency of
+        // Read batches can be asserted (AR-42).
+        delay: Duration,
     }
 
     impl Clone for ScriptedTool {
@@ -1635,6 +1665,7 @@ mod tests {
                 spec: self.spec.clone(),
                 outputs: Arc::clone(&self.outputs),
                 recorded_inputs: Arc::clone(&self.recorded_inputs),
+                delay: self.delay,
             }
         }
     }
@@ -1652,6 +1683,25 @@ mod tests {
                 spec,
                 outputs: Arc::new(Mutex::new(outputs.into_iter().map(Ok).collect())),
                 recorded_inputs: Arc::new(Mutex::new(Vec::new())),
+                delay: Duration::ZERO,
+            }
+        }
+
+        /// A Read tool that sleeps `delay` before recording its input, so
+        /// tests can assert wall-clock concurrency of a Read batch.
+        fn success_delayed(name: &str, outputs: Vec<Value>, delay: Duration) -> Self {
+            let spec = ToolSpec::new(
+                ToolName::new(name),
+                "scripted success tool",
+                [AgentMode::Agent, AgentMode::Build],
+                ToolPermission::new("workflow.read"),
+                ToolRiskLevel::Read,
+            );
+            Self {
+                spec,
+                outputs: Arc::new(Mutex::new(outputs.into_iter().map(Ok).collect())),
+                recorded_inputs: Arc::new(Mutex::new(Vec::new())),
+                delay,
             }
         }
 
@@ -1669,6 +1719,7 @@ mod tests {
                     vec![Err(ToolError::new(ToolErrorCode::ExecutionFailed, message))].into(),
                 )),
                 recorded_inputs: Arc::new(Mutex::new(Vec::new())),
+                delay: Duration::ZERO,
             }
         }
 
@@ -1684,6 +1735,9 @@ mod tests {
         }
 
         async fn invoke(&self, _ctx: &ToolContext, input: Value) -> ToolResult {
+            if !self.delay.is_zero() {
+                tokio::time::sleep(self.delay).await;
+            }
             self.recorded_inputs.lock().unwrap().push(input.clone());
             let mut outputs = self.outputs.lock().unwrap();
             outputs.pop_front().unwrap_or(Ok(Value::Null))
@@ -2437,6 +2491,7 @@ mod tests {
             ),
             outputs: Arc::new(Mutex::new(VecDeque::new())),
             recorded_inputs: Arc::new(Mutex::new(Vec::new())),
+            delay: Duration::ZERO,
         };
         let build_only = ScriptedTool {
             spec: ToolSpec::new(
@@ -2448,6 +2503,7 @@ mod tests {
             ),
             outputs: Arc::new(Mutex::new(VecDeque::new())),
             recorded_inputs: Arc::new(Mutex::new(Vec::new())),
+            delay: Duration::ZERO,
         };
         registry.register(agent_only).unwrap();
         registry.register(build_only).unwrap();
@@ -3786,6 +3842,107 @@ mod tests {
             "ok tool produced an observation"
         );
         assert_eq!(result.stop_reason(), AgentTurnStopReason::FinalResponse);
+    }
+
+    #[tokio::test]
+    async fn run_turn_read_tools_execute_concurrently_by_wall_clock() {
+        // AR-42 (AR-25 follow-up): two slow Read tools in one round must
+        // run concurrently — the round's wall time stays near a single
+        // delay instead of the serial sum.
+        let delay = Duration::from_millis(150);
+        let alpha = Arc::new(ScriptedTool::success_delayed(
+            "alpha",
+            vec![json!({"a": 1})],
+            delay,
+        ));
+        let beta = Arc::new(ScriptedTool::success_delayed(
+            "beta",
+            vec![json!({"b": 1})],
+            delay,
+        ));
+
+        let provider = Arc::new(ScriptedProvider::new(
+            "mock",
+            vec![
+                ScriptedStep::Respond(response_with_tool_calls(vec![
+                    ToolCall::new(ToolCallId::new("c1"), "alpha", json!({})),
+                    ToolCall::new(ToolCallId::new("c2"), "beta", json!({})),
+                ])),
+                ScriptedStep::Respond(response_with_text("done")),
+            ],
+        ));
+        let loop_harness = AgentLoop::new(provider.clone(), Arc::new(VecAgentEventSink::new()));
+        let session = session_with(|reg| {
+            reg.register((*alpha).clone()).unwrap();
+            reg.register((*beta).clone()).unwrap();
+        });
+
+        let req = AgentTurnRequest::new(
+            session,
+            AgentTurnId::new("parallel-wallclock"),
+            ModelName::new("test-model"),
+            vec![Message::user("hi")],
+        );
+        let started = Instant::now();
+        let result = loop_harness.run_turn(req, None).await;
+        let elapsed = started.elapsed();
+
+        assert_eq!(result.status(), AgentTurnStatus::Completed);
+        assert_eq!(result.stop_reason(), AgentTurnStopReason::FinalResponse);
+        assert_eq!(alpha.recorded_inputs().len(), 1);
+        assert_eq!(beta.recorded_inputs().len(), 1);
+        // Serial would take ~2x delay plus overhead (~300ms); a concurrent
+        // batch stays near one delay (~150ms). Assert well under the serial
+        // bound with margin so slow CI runners cannot flake it.
+        assert!(
+            elapsed < Duration::from_millis(260),
+            "concurrent Read batch took {elapsed:?}; expected well under the serial sum (~300ms)"
+        );
+    }
+
+    #[tokio::test]
+    async fn run_turn_cancel_before_batch_is_admitted_starts_no_tool() {
+        // AR-42: a cancel that lands before the Read batch is admitted
+        // must start nothing — the loop's entry checkpoint stops the turn
+        // before any sibling invocation.
+        let cancel_token = CancellationToken::new();
+        let alpha = Arc::new(ScriptedTool::success("alpha", vec![json!({"a": 1})]));
+        let beta = Arc::new(ScriptedTool::success("beta", vec![json!({"b": 1})]));
+
+        let provider = Arc::new(ScriptedProvider::new(
+            "mock",
+            vec![ScriptedStep::Respond(response_with_tool_calls(vec![
+                ToolCall::new(ToolCallId::new("c1"), "alpha", json!({})),
+                ToolCall::new(ToolCallId::new("c2"), "beta", json!({})),
+            ]))],
+        ));
+        let loop_harness = AgentLoop::new(provider.clone(), Arc::new(VecAgentEventSink::new()));
+        let session = session_with(|reg| {
+            reg.register((*alpha).clone()).unwrap();
+            reg.register((*beta).clone()).unwrap();
+        });
+
+        // Cancel before the turn starts: the very first loop checkpoint
+        // fires and no tool in the batch is ever invoked.
+        cancel_token.cancel();
+        let req = AgentTurnRequest::new(
+            session.clone(),
+            AgentTurnId::new("cancel-pre-batch"),
+            ModelName::new("test-model"),
+            vec![Message::user("hi")],
+        )
+        .with_cancel_token(cancel_token.clone());
+
+        let result = loop_harness.run_turn(req, None).await;
+        assert_eq!(result.status(), AgentTurnStatus::Stopped);
+        assert_eq!(result.stop_reason(), AgentTurnStopReason::Cancelled);
+        assert_eq!(alpha.recorded_inputs().len(), 0, "batch never admitted");
+        assert_eq!(beta.recorded_inputs().len(), 0, "batch never admitted");
+        assert_eq!(
+            provider.call_count(),
+            0,
+            "no provider call after pre-cancel"
+        );
     }
 
     // ------------------------------------------------------------------

@@ -404,9 +404,25 @@ impl DesktopHostState {
         // provider_error through the hub; still unsubscribing so a failed
         // turn cannot leak a live sender.
         let completed = result.as_ref().map(agent_turn_completed_message).ok();
-        self.agent_event_hub.send_turn_completed(
+        let duration_ms = result
+            .as_ref()
+            .ok()
+            .and_then(|turn| turn.duration().map(|duration| duration.as_millis() as u64));
+        let estimated_cost = result
+            .as_ref()
+            .ok()
+            .and_then(|turn| turn.estimated_cost(3.0, 15.0));
+        let usage = result
+            .as_ref()
+            .ok()
+            .and_then(|turn| turn.usage().cloned())
+            .map(Into::into);
+        self.agent_event_hub.send_turn_completed_with_observability(
             &session_id,
             completed.unwrap_or_else(|| "turn failed".to_string()),
+            duration_ms,
+            estimated_cost,
+            usage,
         );
         self.agent_event_hub.unsubscribe(&session_id);
         let result = result?;
@@ -1063,6 +1079,7 @@ fn agent_event_payload_from_envelope(envelope: &serde_json::Value) -> Option<Age
         tool_call_id,
         code,
         message,
+        ..Default::default()
     })
 }
 

@@ -93,15 +93,28 @@ pub(super) struct WorkspaceTool<I, O, H> {
     services: Arc<WorkspaceServices>,
     spec: WorkspaceToolSpec,
     handler: H,
+    /// Field-accurate input/output JSON Schemas (AR-38), parsed once at
+    /// registration time so a malformed schema surfaces there instead of
+    /// degrading at listing time (AR-40).
+    input_schema: serde_json::Value,
+    output_schema: serde_json::Value,
     _marker: PhantomData<fn(I) -> O>,
 }
 
 impl<I, O, H> WorkspaceTool<I, O, H> {
-    fn new(services: Arc<WorkspaceServices>, spec: WorkspaceToolSpec, handler: H) -> Self {
+    fn new(
+        services: Arc<WorkspaceServices>,
+        spec: WorkspaceToolSpec,
+        handler: H,
+        input_schema: serde_json::Value,
+        output_schema: serde_json::Value,
+    ) -> Self {
         Self {
             services,
             spec,
             handler,
+            input_schema,
+            output_schema,
             _marker: PhantomData,
         }
     }
@@ -157,8 +170,8 @@ where
             ToolPermission::new(self.spec.permission),
             self.spec.risk,
         )
-        .with_input_schema(parse_schema(self.spec.input_schema))
-        .with_output_schema(parse_schema(self.spec.output_schema))
+        .with_input_schema(self.input_schema.clone())
+        .with_output_schema(self.output_schema.clone())
     }
 
     async fn invoke(&self, ctx: &ToolContext, input: ToolInput) -> ToolResult {
@@ -191,16 +204,77 @@ pub(super) fn register_workspace_tool<I, O, H>(
     O: Serialize + Send + 'static,
     H: WorkspaceToolHandler<I, O>,
 {
+    // AR-40: fail closed on a malformed schema. A broken schema is a
+    // registration-time defect — diagnose and skip the tool rather than
+    // silently advertising a transparent object the model cannot use.
+    let input_schema = match parse_schema(spec.input_schema) {
+        Ok(schema) => schema,
+        Err(error) => {
+            tracing::error!(
+                tool = spec.name,
+                %error,
+                "invalid input schema text; skipping tool",
+            );
+            return;
+        }
+    };
+    let output_schema = match parse_schema(spec.output_schema) {
+        Ok(schema) => schema,
+        Err(error) => {
+            tracing::error!(
+                tool = spec.name,
+                %error,
+                "invalid output schema text; skipping tool",
+            );
+            return;
+        }
+    };
     if let Err(error) = registry.register_arc(Arc::new(WorkspaceTool::<I, O, H>::new(
-        services, spec, handler,
+        services,
+        spec,
+        handler,
+        input_schema,
+        output_schema,
     ))) {
         tracing::error!(%error, "failed to register workspace tool; skipping it");
     }
 }
 
-/// Parse a JSON Schema from its const text. A malformed string falls
-/// back to a transparent object so a typo cannot panic tool listing
-/// (AR-38).
-fn parse_schema(text: &str) -> serde_json::Value {
-    serde_json::from_str(text).unwrap_or_else(|_| serde_json::json!({"type": "object"}))
+/// Parse a JSON Schema from its const text.
+///
+/// AR-40 (fail-closed): a malformed schema text is returned as `Err` —
+/// registration skips the tool with a diagnostic instead of silently
+/// degrading to `{type: object}`. The "tool listing must not panic"
+/// guarantee from AR-38 is preserved because parsing happens once at
+/// registration, never inside the listing path.
+///
+/// Supported validator keyword subset (V1, enforced by the harness's
+/// `validate_json_value`): `type`, `required`, `properties`
+/// (recursively, including nested schemas), and `enum`. Any other
+/// draft-07 keyword is intentionally not interpreted here — an
+/// unsupported keyword is carried as a model-visible annotation, not
+/// enforced. Workspace tools must stay within this subset.
+fn parse_schema(text: &str) -> Result<serde_json::Value, serde_json::Error> {
+    serde_json::from_str(text)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn parse_schema_accepts_valid_json() {
+        let schema =
+            parse_schema(r#"{"type":"object","properties":{}}"#).expect("valid schema parses");
+        assert_eq!(schema["type"], "object");
+    }
+
+    #[test]
+    fn parse_schema_rejects_malformed_text() {
+        // AR-40 fail-closed: a typo'd schema text must surface as an
+        // error here — registration skips the tool with a diagnostic;
+        // it is never silently downgraded to a transparent object.
+        assert!(parse_schema("not json").is_err());
+        assert!(parse_schema("{\"type\": \"object\"").is_err());
+    }
 }
