@@ -5,6 +5,7 @@ use reimagine_config::AppConfig;
 use reimagine_runtime::RuntimeService;
 
 use crate::model_acquisition_service::ModelAcquisitionService;
+use crate::project_memory::ProjectMemoryService;
 use crate::node_catalog::NodeCatalogService;
 use crate::{ModelService, WorkflowService};
 
@@ -22,6 +23,7 @@ pub struct WorkspaceServices {
     model_acquisition_service: Arc<ModelAcquisitionService>,
     runtime_service: Arc<RuntimeService>,
     node_catalog: Arc<NodeCatalogService>,
+    project_memory_service: Arc<ProjectMemoryService>,
 }
 
 impl WorkspaceServices {
@@ -33,6 +35,7 @@ impl WorkspaceServices {
         model_acquisition_service: Arc<ModelAcquisitionService>,
         runtime_service: Arc<RuntimeService>,
         node_catalog: Arc<NodeCatalogService>,
+        project_memory_service: Arc<ProjectMemoryService>,
     ) -> Self {
         Self {
             workspace_scope,
@@ -42,6 +45,7 @@ impl WorkspaceServices {
             model_acquisition_service,
             runtime_service,
             node_catalog,
+            project_memory_service,
         }
     }
 

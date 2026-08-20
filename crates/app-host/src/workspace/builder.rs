@@ -12,6 +12,7 @@ use crate::InstalledWorkerInventoryProvider;
 use crate::inference::compose::bootstrap_inference_with_worker_inventory;
 use crate::model_acquisition_service::ModelAcquisitionService;
 use crate::provider_config::AgentProviderConfigDocument;
+use crate::project_memory::ProjectMemoryService;
 use crate::services::WorkspaceServices;
 use crate::tools::register_app_tools;
 use crate::{
@@ -229,6 +230,7 @@ impl WorkspaceHostBuilder {
             config.paths().clone(),
             Arc::clone(&board_service),
         ));
+        let project_memory_service = Arc::new(ProjectMemoryService::new(config.paths().clone()));
         let services = Arc::new(WorkspaceServices::new(
             self.workspace_scope.clone(),
             Arc::new(config.clone()),
@@ -237,6 +239,7 @@ impl WorkspaceHostBuilder {
             acquisition_service,
             Arc::clone(&runtime_service),
             Arc::clone(&node_catalog),
+            Arc::clone(&project_memory_service),
         ));
 
         // Create agent service: first create a temporary one to get default registry/providers,
