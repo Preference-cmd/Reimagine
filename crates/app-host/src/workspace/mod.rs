@@ -24,6 +24,7 @@ use crate::inference::selection::resolved_candle_device_label;
 use crate::model_acquisition_service::ModelAcquisitionService;
 use crate::node_catalog::{NodeCatalogAlignment, NodeCatalogService};
 use crate::provider_config::AgentProviderConfigDocument;
+use crate::project_memory::ProjectMemoryService;
 use crate::services::WorkspaceServices;
 use crate::tools::register_app_tools;
 use crate::{
@@ -187,6 +188,7 @@ impl WorkspaceHost {
             Arc::clone(&builtin_catalog),
             backend,
         ));
+        let project_memory_service = Arc::new(ProjectMemoryService::new(config.paths().clone()));
         let services = Arc::new(WorkspaceServices::new(
             workspace_scope.clone(),
             Arc::clone(&config),
@@ -195,6 +197,7 @@ impl WorkspaceHost {
             acquisition_service,
             Arc::clone(&runtime_service),
             Arc::clone(&node_catalog),
+            Arc::clone(&project_memory_service),
         ));
         let mut registry = AgentToolRegistry::new();
         register_app_tools(&mut registry, Arc::clone(&services));
