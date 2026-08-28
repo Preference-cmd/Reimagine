@@ -6,11 +6,6 @@ peer operator, not an external tool; it shares the same domain model and
 operation paths as the user, across image generation, video, animation, and
 audio.
 
-> V1 architecture decision (2026-08-15): the agent runs **embedded in
-> `app-host`**. `agent-daemon` and `AgentBridge` are frozen experimental code,
-> not part of the V1 production path.
-> See `docs/roadmap/agent-backend-refine-roadmap.md`.
-
 - `AGENTS.local.md` Additional local specs. Must loaded after this file if exists.
 
 ## Workspace
