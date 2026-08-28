@@ -20,8 +20,9 @@ audio.
 - `crates/inference-backends/` - Concrete backend adapters (Burn primary, Candle deprecated).
 - `crates/app-host/` - `reimagine-app-host`: WorkspaceHost, Project/Board/Workflow/Agent services, Agent tools, provider config + adapter wiring.
 - `crates/agent-stack/` - Agent libraries:
+  - `context-kernel/` - `reimagine-context-kernel`: ContextBlock conversation kernel (Slice 1 single-turn harness; canonical replacement for `agent-harness` semantics, see `.agents/pipelines/proposals/architecture/2026-08-23-context-block-conversation-kernel.md`).
   - `ai-protocol/` - `reimagine-ai-protocol`: wire-protocol layer (`Protocol` discriminator, DTO translation, `CompletionBackend` seam). Transport-free.
-  - `agent-harness/` - `reimagine-agent-harness`: host-neutral agent harness domain (tool registry, policy, provider boundary, Agent loop, ContextManager, `LlmModelCatalog`).
+  - `agent-harness/` - `reimagine-agent-harness`: **frozen legacy** host-neutral agent harness domain (tool registry, policy, provider boundary, Agent loop, ContextManager, `LlmModelCatalog`); no new production semantics.
   - `agent-provider/` - `reimagine-agent-provider`: concrete provider adapters (reqwest OpenAI-compatible / Anthropic / Responses).
   - `agent-macros/` - `reimagine-agent-macros`: `#[agent_tool]` attribute macro. Candidate for removal or real adoption; see refine roadmap DP-4.
 - `crates/agent-daemon/` - `reimagine-agent-daemon`: **frozen experimental sidecar**. Not used by the V1 production path.
