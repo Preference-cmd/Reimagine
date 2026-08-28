@@ -23,7 +23,10 @@ pre-commit:
 
     - name: module layout guard (staged)
       glob: "*.rs"
-      run: bash -c 'if rg --files --glob "**/mod.rs" --glob "!**/target/**" crates src-tauri | grep -q .; then echo "::error::mod.rs is not allowed — use foo.rs + foo/ instead"; rg --files --glob "**/mod.rs" --glob "!**/target/**" crates src-tauri; exit 1; fi; if rg -n "^#\\[path" --glob "!**/target/**" crates src-tauri | grep -q .; then echo "::error::#[path] is not allowed"; rg -n "^#\\[path" --glob "!**/target/**" crates src-tauri; exit 1; fi'
+      # tests/benches/examples keep shared `mod.rs` modules — moving them to a
+      # root-level foo.rs would make Cargo auto-discover them as test/bench
+      # targets (E0583). The foo.rs + foo/ convention applies to src trees only.
+      run: bash -c 'if rg --files --glob "**/mod.rs" --glob "!**/target/**" --glob "!**/tests/**" --glob "!**/benches/**" --glob "!**/examples/**" crates src-tauri | grep -q .; then echo "::error::mod.rs is not allowed in src trees — use foo.rs + foo/ instead"; rg --files --glob "**/mod.rs" --glob "!**/target/**" --glob "!**/tests/**" --glob "!**/benches/**" --glob "!**/examples/**" crates src-tauri; exit 1; fi; if rg -n "^#\\[path" --glob "!**/target/**" crates src-tauri | grep -q .; then echo "::error::#[path] is not allowed"; rg -n "^#\\[path" --glob "!**/target/**" crates src-tauri; exit 1; fi'
 
     - name: proposals naming
       run: node scripts/verify-proposals.mjs
