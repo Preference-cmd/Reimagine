@@ -7070,6 +7070,19 @@ dependencies = [
 ]
 
 [[package]]
+name = "reimagine-context-x"
+version = "0.1.0"
+dependencies = [
+ "async-trait",
+ "blake3",
+ "serde",
+ "serde_json",
+ "thiserror 2.0.19",
+ "tokio",
+ "tokio-util",
+]
+
+[[package]]
 name = "reimagine-core"
 version = "0.1.0"
 dependencies = [
