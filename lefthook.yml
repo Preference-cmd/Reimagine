@@ -1,0 +1,38 @@
+# Git hooks (lefthook). Keep these local checkpoints fast; CI owns the full gate matrix.
+# Install: `bunx lefthook install` or `npx lefthook install`
+# Migrated from husky on 2026-08-20 — mirrors deepseek-harness lefthook.yml philosophy.
+
+pre-commit:
+  jobs:
+    - name: frontend lint (staged)
+      glob: "ui/**/*.{ts,tsx,js,jsx,mjs,cjs}"
+      run: cd ui && npx eslint --fix {staged_files}
+      stage_fixed: true
+
+    - name: frontend format (staged)
+      glob: "ui/**/*.{ts,tsx,js,jsx,json,md,css}"
+      run: cd ui && npx prettier --write {staged_files}
+      stage_fixed: true
+
+    - name: rust fmt (staged)
+      glob: "*.rs"
+      run: cargo fmt --all -- --check
+
+    - name: whitespace (staged)
+      run: git diff --cached --check
+
+    - name: module layout guard (staged)
+      glob: "*.rs"
+      run: bash -c 'if rg --files --glob "**/mod.rs" --glob "!**/target/**" crates src-tauri | grep -q .; then echo "::error::mod.rs is not allowed — use foo.rs + foo/ instead"; rg --files --glob "**/mod.rs" --glob "!**/target/**" crates src-tauri; exit 1; fi; if rg -n "^#\\[path" --glob "!**/target/**" crates src-tauri | grep -q .; then echo "::error::#[path] is not allowed"; rg -n "^#\\[path" --glob "!**/target/**" crates src-tauri; exit 1; fi'
+
+    - name: proposals naming
+      run: node scripts/verify-proposals.mjs
+
+    - name: generated catalogs freshness
+      glob: "{crates/app-host/src/tools.rs,crates/nodes/src/**,docs/generated/**}"
+      run: node scripts/gen-tool-catalog.mjs --check && node scripts/gen-node-catalog.mjs --check
+
+pre-push:
+  jobs:
+    - name: typecheck (rust + ui)
+      run: bash -c 'cargo check --workspace --all-targets 2>&1 | head -n 100; cargo check --workspace --all-targets'

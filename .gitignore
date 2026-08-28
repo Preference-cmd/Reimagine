@@ -48,11 +48,7 @@ workspace/
 
 # ----- Local planning / agent scratch -----
 .zcode/
-.scratch/
-.sc/
-.claude/
-.playwright-mcp/
-.mimocode/
+.agents/
 .worktrees/
 .impeccable/
 CONTEXT.md
@@ -60,10 +56,22 @@ AGENTS.local.md
 PRODUCT.md
 DESIGN.md
 reports/
+.sc/
+.claude/
+.playwright-mcp/
+.mimocode/
+
+# Retired: .scratch/ and .agents/work/ are historical only. Current agent pipelines live under .agents/pipelines/.
+.scratch/
 
 
 # Project docs.
-docs/
+docs/**
+!docs/generated/
+!docs/generated/**
+
+# ----- Local scripts (gitignored per workspace cleanup) -----
+scripts/
 
 # ----- Editor / OS -----
 .vscode/*
