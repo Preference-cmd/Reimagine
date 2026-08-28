@@ -42,6 +42,18 @@ pub struct BlockId {
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub struct FrameId(pub String);
+impl FrameId {
+    pub fn deterministic(
+        turn_id: &TurnId,
+        source_version: ContextVersion,
+        round_id: RoundId,
+    ) -> Self {
+        let input = format!("{}:{}:{}", turn_id.0, source_version.0, round_id.0);
+        let hash = blake3::hash(input.as_bytes());
+        let hex = hash.to_hex();
+        Self(hex[..16].to_string())
+    }
+}
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub struct ConversationId(pub String);

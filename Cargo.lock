@@ -7070,11 +7070,12 @@ dependencies = [
 ]
 
 [[package]]
-name = "reimagine-context-x"
+name = "reimagine-context-kernel"
 version = "0.1.0"
 dependencies = [
  "async-trait",
  "blake3",
+ "futures-util",
  "serde",
  "serde_json",
  "thiserror 2.0.19",

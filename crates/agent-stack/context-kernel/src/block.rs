@@ -1,7 +1,7 @@
 use serde::{Deserialize, Serialize};
 
 use crate::ids::{BlockId, BlockSequence};
-use crate::tool::{ToolOutput, ToolResultStatus};
+pub use crate::tool::{ToolOutput, ToolResultPayload, ToolResultStatus};
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct BlockMeta {}
@@ -25,13 +25,6 @@ pub struct ToolCallPayload {
     pub call_id: crate::tool::ToolCallId,
     pub tool_name: String,
     pub arguments: serde_json::Value,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct ToolResultPayload {
-    pub call_id: crate::tool::ToolCallId,
-    pub status: ToolResultStatus,
-    pub output: ToolOutput,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
