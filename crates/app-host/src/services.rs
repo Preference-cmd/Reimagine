@@ -5,8 +5,8 @@ use reimagine_config::AppConfig;
 use reimagine_runtime::RuntimeService;
 
 use crate::model_acquisition_service::ModelAcquisitionService;
-use crate::project_memory::ProjectMemoryService;
 use crate::node_catalog::NodeCatalogService;
+use crate::project_memory::ProjectMemoryService;
 use crate::{ModelService, WorkflowService};
 
 /// Service container captured by app-host agent tools.
@@ -23,10 +23,12 @@ pub struct WorkspaceServices {
     model_acquisition_service: Arc<ModelAcquisitionService>,
     runtime_service: Arc<RuntimeService>,
     node_catalog: Arc<NodeCatalogService>,
+    #[allow(dead_code)]
     project_memory_service: Arc<ProjectMemoryService>,
 }
 
 impl WorkspaceServices {
+    #[allow(clippy::too_many_arguments)]
     pub fn new(
         workspace_scope: WorkspaceScope,
         config: Arc<AppConfig>,

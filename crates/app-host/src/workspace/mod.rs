@@ -23,8 +23,8 @@ use crate::inference::compose::{
 use crate::inference::selection::resolved_candle_device_label;
 use crate::model_acquisition_service::ModelAcquisitionService;
 use crate::node_catalog::{NodeCatalogAlignment, NodeCatalogService};
-use crate::provider_config::AgentProviderConfigDocument;
 use crate::project_memory::ProjectMemoryService;
+use crate::provider_config::AgentProviderConfigDocument;
 use crate::services::WorkspaceServices;
 use crate::tools::register_app_tools;
 use crate::{

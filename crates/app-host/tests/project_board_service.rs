@@ -148,7 +148,7 @@ async fn board_apply_persists_emits_changed_and_rejects_stale_versions() {
         .await
         .expect("project creates");
 
-    let mut events = host.board_service().subscribe();
+    let mut events = host.document_events().subscribe();
     let project_id = ProjectId::new("proj-board");
 
     let result = host
@@ -168,7 +168,15 @@ async fn board_apply_persists_emits_changed_and_rejects_stale_versions() {
         .expect("event channel open");
     assert_eq!(event.kind, "board.changed");
     assert_eq!(event.project_id, "proj-board");
-    assert_eq!(event.board_version, 1);
+    assert_eq!(event.document_id, "board-proj-board");
+    assert_eq!(event.version, 1);
+    assert!(
+        matches!(
+            events.try_recv(),
+            Err(tokio::sync::broadcast::error::TryRecvError::Empty)
+        ),
+        "one durable Board change must publish exactly one workspace event"
+    );
 
     // The change is durable on disk, not just in the session cache.
     let persisted: reimagine_core::board::BoardDocument = serde_json::from_slice(
@@ -209,7 +217,39 @@ async fn board_apply_persists_emits_changed_and_rejects_stale_versions() {
         .await
         .expect("undo event arrives")
         .expect("event channel open");
-    assert_eq!(undo_event.board_version, 2);
+    assert_eq!(undo_event.kind, "board.changed");
+    assert_eq!(undo_event.document_id, "board-proj-board");
+    assert_eq!(undo_event.version, 2);
+    assert!(
+        matches!(
+            events.try_recv(),
+            Err(tokio::sync::broadcast::error::TryRecvError::Empty)
+        ),
+        "undo must also publish exactly one workspace event"
+    );
+
+    // Redo persists the restored item and publishes one more shared event.
+    let redo = host
+        .board_service()
+        .redo(&project_id)
+        .await
+        .expect("redo succeeds")
+        .expect("history entry exists");
+    assert_eq!(redo.status(), BoardCommandResultStatus::Applied);
+    let redo_event = tokio::time::timeout(std::time::Duration::from_secs(5), events.recv())
+        .await
+        .expect("redo event arrives")
+        .expect("event channel open");
+    assert_eq!(redo_event.kind, "board.changed");
+    assert_eq!(redo_event.document_id, "board-proj-board");
+    assert_eq!(redo_event.version, 3);
+    assert!(
+        matches!(
+            events.try_recv(),
+            Err(tokio::sync::broadcast::error::TryRecvError::Empty)
+        ),
+        "redo must also publish exactly one workspace event"
+    );
 
     // Deleting the project drops the in-memory board session.
     host.project_service()

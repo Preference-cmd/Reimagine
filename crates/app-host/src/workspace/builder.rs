@@ -11,8 +11,8 @@ use reimagine_runtime::VecRunEventSink;
 use crate::InstalledWorkerInventoryProvider;
 use crate::inference::compose::bootstrap_inference_with_worker_inventory;
 use crate::model_acquisition_service::ModelAcquisitionService;
-use crate::provider_config::AgentProviderConfigDocument;
 use crate::project_memory::ProjectMemoryService;
+use crate::provider_config::AgentProviderConfigDocument;
 use crate::services::WorkspaceServices;
 use crate::tools::register_app_tools;
 use crate::{

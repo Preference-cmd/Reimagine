@@ -43,7 +43,7 @@ pub use app_host::AppHost;
 pub use artifact_access::{
     ArtifactAccess, ArtifactAccessError, media_type_for_reference, resolve_artifact_path,
 };
-pub use board_service::{BoardChangedEvent, BoardService};
+pub use board_service::BoardService;
 pub use canvas_context::{CanvasContext, CanvasFocus, CanvasSelection, ProjectContextAssembler};
 pub use document_events::{DocumentChangedEvent, DocumentEventBus};
 pub use error::{AppHostError, AppHostResult};

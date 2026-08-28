@@ -3,8 +3,8 @@
 //!
 //! Every board is 1:1 with a project and lives at
 //! `projects/{project_id}/board.json`. Successful command application
-//! saves the document atomically and emits a `board.changed` event on
-//! the service's broadcast channel.
+//! saves the document atomically and emits one `board.changed` event on
+//! the shared workspace document event bus.
 
 use std::collections::BTreeMap;
 use std::path::Path;
@@ -15,31 +15,14 @@ use reimagine_core::board::{
     BoardCommandBatch, BoardCommandResult, BoardCommandResultStatus, BoardDocument, BoardSession,
 };
 use reimagine_core::model::{BoardId, BoardVersion, ProjectId};
-use tokio::sync::{Mutex as AsyncMutex, broadcast};
+use tokio::sync::Mutex as AsyncMutex;
 
 use crate::document_events::{DocumentChangedEvent, DocumentEventBus};
 use crate::{AppHostError, AppHostResult};
 
-/// Domain event emitted after a board document changes on disk.
-///
-/// The payload is deliberately flat so UI listeners never depend on
-/// `reimagine-core` board internals.
-#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
-#[serde(rename_all = "camelCase")]
-pub struct BoardChangedEvent {
-    pub kind: String,
-    pub project_id: String,
-    pub board_id: String,
-    pub board_version: u64,
-    /// Stable document-oriented aliases used by host adapters.
-    pub document_id: String,
-    pub version: u64,
-}
-
 pub struct BoardService {
     paths: AppPaths,
     sessions: RwLock<BTreeMap<ProjectId, Arc<AsyncMutex<BoardSession>>>>,
-    events: broadcast::Sender<BoardChangedEvent>,
     document_events: Arc<DocumentEventBus>,
 }
 
@@ -63,24 +46,11 @@ impl BoardService {
     }
 
     pub fn with_document_events(paths: AppPaths, document_events: Arc<DocumentEventBus>) -> Self {
-        let (events, _) = broadcast::channel(64);
         Self {
             paths,
             sessions: RwLock::new(BTreeMap::new()),
-            events,
             document_events,
         }
-    }
-
-    pub fn document_events(&self) -> Arc<DocumentEventBus> {
-        Arc::clone(&self.document_events)
-    }
-
-    /// Subscribe to `board.changed` events. Events are broadcast; a
-    /// lagging subscriber is dropped by `tokio::sync::broadcast`
-    /// semantics.
-    pub fn subscribe(&self) -> broadcast::Receiver<BoardChangedEvent> {
-        self.events.subscribe()
     }
 
     pub fn board_path(&self, project_id: &ProjectId) -> std::path::PathBuf {
@@ -231,22 +201,11 @@ impl BoardService {
 
     fn emit_changed(&self, session: &BoardSession) {
         let board = session.board();
-        let project_id = board.project_id().to_string();
-        let board_id = board.id().to_string();
-        let version = board.version().get();
-        let _ = self.events.send(BoardChangedEvent {
-            kind: "board.changed".to_owned(),
-            project_id: project_id.clone(),
-            board_id: board_id.clone(),
-            board_version: version,
-            document_id: board_id.clone(),
-            version,
-        });
         self.document_events.publish(DocumentChangedEvent {
             kind: "board.changed".to_owned(),
-            project_id,
-            document_id: board_id,
-            version,
+            project_id: board.project_id().to_string(),
+            document_id: board.id().to_string(),
+            version: board.version().get(),
         });
     }
 
