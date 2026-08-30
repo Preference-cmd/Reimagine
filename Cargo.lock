@@ -6879,6 +6879,7 @@ dependencies = [
  "base64 0.22.1",
  "reimagine-agent-harness",
  "reimagine-ai-protocol",
+ "reimagine-context-kernel",
  "reqwest 0.12.28",
  "serde_json",
  "tempfile",
