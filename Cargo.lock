@@ -6893,6 +6893,7 @@ version = "0.1.0"
 dependencies = [
  "async-trait",
  "reimagine-agent-harness",
+ "reimagine-context-kernel",
  "serde",
  "serde_json",
  "tokio",
