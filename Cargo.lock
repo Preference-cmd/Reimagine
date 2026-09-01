@@ -6889,6 +6889,20 @@ dependencies = [
 ]
 
 [[package]]
+name = "reimagine-agent-runtime"
+version = "0.1.0"
+dependencies = [
+ "async-trait",
+ "futures-util",
+ "reimagine-context-kernel",
+ "serde",
+ "serde_json",
+ "thiserror 2.0.19",
+ "tokio",
+ "tokio-util",
+]
+
+[[package]]
 name = "reimagine-ai-protocol"
 version = "0.1.0"
 dependencies = [
