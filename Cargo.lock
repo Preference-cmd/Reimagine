@@ -6837,6 +6837,18 @@ dependencies = [
 ]
 
 [[package]]
+name = "reimagine-agent-extension"
+version = "0.1.0"
+dependencies = [
+ "async-trait",
+ "reimagine-context-kernel",
+ "serde",
+ "serde_json",
+ "tempfile",
+ "tokio",
+]
+
+[[package]]
 name = "reimagine-agent-harness"
 version = "0.1.0"
 dependencies = [
@@ -6878,6 +6890,7 @@ dependencies = [
  "async-trait",
  "base64 0.22.1",
  "reimagine-agent-harness",
+ "reimagine-agent-runtime",
  "reimagine-ai-protocol",
  "reimagine-context-kernel",
  "reqwest 0.12.28",
@@ -6893,7 +6906,9 @@ name = "reimagine-agent-runtime"
 version = "0.1.0"
 dependencies = [
  "async-trait",
+ "blake3",
  "futures-util",
+ "reimagine-agent-extension",
  "reimagine-context-kernel",
  "serde",
  "serde_json",
@@ -7092,7 +7107,6 @@ version = "0.1.0"
 dependencies = [
  "async-trait",
  "blake3",
- "futures-util",
  "serde",
  "serde_json",
  "thiserror 2.0.19",
