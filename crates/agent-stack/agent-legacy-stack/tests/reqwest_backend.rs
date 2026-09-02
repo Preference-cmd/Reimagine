@@ -11,7 +11,7 @@ use reimagine_agent_harness::{
     AgentRequest, AgentToolDefinition, ContentBlock, FileContentBlock, Message, ModelCapability,
     ModelName, ProviderName,
 };
-use reimagine_agent_provider::{
+use reimagine_agent_legacy_stack::{
     AnthropicMessagesConfig, CompletionBackend, OpenAiChatCompletionsConfig, OpenAiResponsesConfig,
     ProviderAdapterError, ReqwestBackend,
 };

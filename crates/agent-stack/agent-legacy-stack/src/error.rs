@@ -14,7 +14,7 @@ use std::time::Duration;
 
 use reimagine_agent_harness::{ProviderError, ProviderName};
 
-use crate::protocol::Protocol;
+use reimagine_ai_protocol::Protocol;
 
 /// Internal error type for the `agent-provider` crate. The public
 /// provider boundary is `reimagine_agent_harness::ProviderError`; this type is

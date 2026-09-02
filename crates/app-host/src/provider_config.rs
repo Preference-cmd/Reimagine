@@ -11,7 +11,7 @@
 //! is a provider-adapter concept) and is re-exported here for callers
 //! of the config document.
 
-pub use reimagine_agent_provider::{
+pub use reimagine_agent_legacy_stack::{
     AnthropicMessagesConfig, OpenAiChatCompletionsConfig, OpenAiResponsesConfig, Protocol,
 };
 

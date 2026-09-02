@@ -21,10 +21,11 @@ audio.
 - `crates/app-host/` - `reimagine-app-host`: WorkspaceHost, Project/Board/Workflow/Agent services, Agent tools, provider config + adapter wiring.
 - `crates/agent-stack/` - Agent libraries:
   - `context-kernel/` - `reimagine-context-kernel`: ContextBlock conversation kernel (Slice 1 single-turn harness; canonical replacement for `agent-harness` semantics, see `.agents/pipelines/proposals/architecture/2026-08-23-context-block-conversation-kernel.md`).
-  - `ai-protocol/` - `reimagine-ai-protocol`: wire-protocol layer (`Protocol` discriminator, DTO translation, `CompletionBackend` seam). Transport-free.
+  - `ai-protocol/` - `reimagine-ai-protocol`: wire-protocol layer (`Protocol` discriminator, kernel-native DTO translation for the `ModelGateway` seam). Transport-free and harness-free.
   - `agent-harness/` - `reimagine-agent-harness`: **frozen legacy** host-neutral agent harness domain (tool registry, policy, provider boundary, Agent loop, ContextManager, `LlmModelCatalog`); no new production semantics.
+  - `agent-legacy-stack/` - `reimagine-agent-legacy-stack`: **frozen** harness-shaped provider stack (relocated from `ai-protocol` / `agent-provider` frozen faces: `BackendProvider`, `ReqwestBackend`, harness-shaped translation). Serves `agent-harness` consumers; dies with Slice 9. Not in the OSS publish set.
   - `agent-runtime/` - `reimagine-agent-runtime`: framework primitives (FilterChain, isolation, harness extension points). Pure; does not depend on agent-harness.
-  - `agent-provider/` - `reimagine-agent-provider`: concrete provider adapters (reqwest OpenAI-compatible / Anthropic / Responses).
+  - `agent-provider/` - `reimagine-agent-provider`: concrete kernel-face provider adapters (reqwest OpenAI-compatible / Anthropic / Responses gateways for the kernel `ModelGateway` seam).
   - `agent-macros/` - `reimagine-agent-macros`: `#[agent_tool]` attribute macro. Candidate for removal or real adoption; see refine roadmap DP-4.
 - `crates/agent-daemon/` - `reimagine-agent-daemon`: **frozen experimental sidecar**. Not used by the V1 production path.
 - `crates/axum-host/` - `reimagine-axum-host`: HTTP E2E test harness.
@@ -85,7 +86,7 @@ sidecar must not duplicate domain state.
 
 - Domain crates must not depend on `tauri`.
 - `agent-daemon` is frozen; do not add production wiring that spawns it from Tauri.
-- Agent layering mirrors the Pi agent toolkit: `agent-harness` (loop, tools, policy, model catalog) ← `ai-protocol` (Protocol discriminator, DTO translation, `CompletionBackend` seam — transport-free) ← `agent-provider` (concrete reqwest adapters, must not depend on `app-host`) ← `app-host` (provider config documents, adapter wiring, `AgentProviderCatalog`).
+- Layering (two chains, no cross-deps): the kernel chain — `context-kernel` ← `ai-protocol` (kernel-native translation, transport-free) ← `agent-provider` (kernel gateways; must not depend on `app-host`) — is the OSS publish set; the frozen chain — `agent-harness` (frozen legacy) ← `agent-legacy-stack` (frozen harness-shaped provider stack) ← `app-host` (provider config documents, adapter wiring, `AgentProviderCatalog`) — dies with Slice 9.
 - Dependency versions are centralized in root `Cargo.toml` under `[workspace.dependencies]`.
 - AI/ML inference backend code belongs in `crates/inference-backends/`.
 - Do not commit generated build outputs, local runtime data, model weights, secrets, or machine-local planning files.

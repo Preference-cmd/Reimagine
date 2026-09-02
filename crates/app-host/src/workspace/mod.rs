@@ -1624,7 +1624,7 @@ mod tests {
 
     fn seed_valid_provider_config(base: &std::path::Path) {
         use crate::provider_config::{AgentProviderConfigDocument, ProviderConfig};
-        use reimagine_agent_provider::OpenAiChatCompletionsConfig;
+        use reimagine_agent_legacy_stack::OpenAiChatCompletionsConfig;
         let openai = OpenAiChatCompletionsConfig::new(
             "https://api.example.com/v1",
             "sk-test",
@@ -1640,7 +1640,7 @@ mod tests {
 
     fn seed_provider_with_missing_inner_config(base: &std::path::Path) {
         use crate::provider_config::{AgentProviderConfigDocument, ProviderConfig};
-        use reimagine_agent_provider::OpenAiChatCompletionsConfig;
+        use reimagine_agent_legacy_stack::OpenAiChatCompletionsConfig;
         let openai = OpenAiChatCompletionsConfig::new(
             "https://api.example.com/v1",
             "sk-test",

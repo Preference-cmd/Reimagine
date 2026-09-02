@@ -1,5 +1,5 @@
 use reimagine_agent_harness::{ProviderError, ProviderName};
-use reimagine_ai_protocol::ProviderAdapterError;
+use reimagine_agent_legacy_stack::ProviderAdapterError;
 
 #[test]
 fn transport_error_carries_code_and_message() {
@@ -45,7 +45,7 @@ fn streaming_unsupported_carries_distinct_code() {
 fn missing_config_carries_provider_name_and_protocol() {
     let e = ProviderAdapterError::MissingConfig {
         provider: "broken".into(),
-        protocol: reimagine_agent_provider::Protocol::AnthropicMessages,
+        protocol: reimagine_agent_legacy_stack::Protocol::AnthropicMessages,
     };
     let s = format!("{e}");
     assert!(s.contains("broken"));
@@ -56,7 +56,7 @@ fn missing_config_carries_provider_name_and_protocol() {
 fn missing_config_maps_to_configuration_error() {
     let e = ProviderAdapterError::MissingConfig {
         provider: "broken".into(),
-        protocol: reimagine_agent_provider::Protocol::AnthropicMessages,
+        protocol: reimagine_agent_legacy_stack::Protocol::AnthropicMessages,
     };
     let mapped: ProviderError = e.to_provider_error(None);
     assert_eq!(mapped.code(), "CONFIGURATION");

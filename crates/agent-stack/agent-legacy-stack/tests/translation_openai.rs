@@ -1,5 +1,5 @@
 use reimagine_agent_harness::{AgentRequest, AgentToolDefinition, Message, ModelName};
-use reimagine_ai_protocol::translation;
+use reimagine_agent_legacy_stack::translation;
 use serde_json::json;
 
 #[test]
@@ -71,7 +71,7 @@ fn openai_response_translation_missing_choices_is_serialization_error() {
     let err = translation::response::from_openai_response(&payload).unwrap_err();
     assert!(matches!(
         err,
-        reimagine_ai_protocol::ProviderAdapterError::Serialization(_)
+        reimagine_agent_legacy_stack::ProviderAdapterError::Serialization(_)
     ));
 }
 
@@ -93,6 +93,6 @@ fn openai_response_translation_malformed_tool_call_arguments_is_serialization_er
     let err = translation::response::from_openai_response(&payload).unwrap_err();
     assert!(matches!(
         err,
-        reimagine_ai_protocol::ProviderAdapterError::Serialization(_)
+        reimagine_agent_legacy_stack::ProviderAdapterError::Serialization(_)
     ));
 }

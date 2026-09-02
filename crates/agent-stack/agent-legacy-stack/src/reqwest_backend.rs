@@ -13,17 +13,17 @@ use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::time::Duration;
 
+use crate::translation;
+use crate::translation::sse_parser::{SseEvent, SseParser};
+use crate::{
+    AnthropicMessagesConfig, CompletionBackend, OpenAiChatCompletionsConfig, OpenAiResponsesConfig,
+    Protocol, ProviderAdapterError,
+};
 use async_trait::async_trait;
 use base64::Engine as _;
 use reimagine_agent_harness::{
     AgentRequest, AgentResponse, AgentStream, AgentStreamEvent, ContentBlock, FileSource, Message,
     ModelInfo, ProviderName,
-};
-use reimagine_ai_protocol::translation;
-use reimagine_ai_protocol::translation::sse_parser::{SseEvent, SseParser};
-use reimagine_ai_protocol::{
-    AnthropicMessagesConfig, CompletionBackend, OpenAiChatCompletionsConfig, OpenAiResponsesConfig,
-    Protocol, ProviderAdapterError,
 };
 use serde_json::{Value, json};
 
@@ -77,7 +77,7 @@ impl std::fmt::Debug for ReqwestBackend {
 }
 
 /// A protocol paired with its typed config. `protocol()` derives the
-/// [`Protocol`](reimagine_ai_protocol::Protocol) discriminator from the variant.
+/// [`Protocol`](crate::Protocol) discriminator from the variant.
 #[derive(Debug, Clone)]
 pub enum BackendConfig {
     OpenAiChatCompletions(OpenAiChatCompletionsConfig),
@@ -729,7 +729,7 @@ enum StreamKind {
 ///
 /// Reads chunks from the HTTP response, feeds them through the SSE
 /// parser, and routes parsed events through the protocol-layer
-/// accumulators in `reimagine_ai_protocol::translation::streaming` —
+/// accumulators in `crate::translation::streaming` —
 /// the single implementation of streaming delta translation in the
 /// workspace. This struct owns only transport concerns: HTTP reads,
 /// incremental UTF-8 decoding (`feed_sse_bytes`, AC-03), and terminal

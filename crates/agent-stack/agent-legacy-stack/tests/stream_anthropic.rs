@@ -1,5 +1,5 @@
 use reimagine_agent_harness::AgentStreamEvent;
-use reimagine_ai_protocol::translation::streaming::AnthropicStreamAccumulator;
+use reimagine_agent_legacy_stack::translation::streaming::AnthropicStreamAccumulator;
 use serde_json::{Value, json};
 
 /// Feed an SSE event (its `event:` field name plus parsed JSON payload)

@@ -112,7 +112,7 @@ impl AgentProviderCatalog {
 /// The protocol discriminator selects which concrete adapter in
 /// `reimagine-agent-provider` is constructed. Missing inner config is
 /// rejected with
-/// [`reimagine_agent_provider::ProviderAdapterError::MissingConfig`].
+/// [`reimagine_agent_legacy_stack::ProviderAdapterError::MissingConfig`].
 ///
 /// `workspace_dir`, when present, roots `FileSource::Url` resolution:
 /// file blocks referencing workspace-relative paths are read from the
@@ -120,15 +120,15 @@ impl AgentProviderCatalog {
 pub fn build_provider(
     config: &ProviderConfig,
     workspace_dir: Option<&Path>,
-) -> Result<Arc<dyn AgentProvider>, reimagine_agent_provider::ProviderAdapterError> {
-    use reimagine_agent_provider::{
+) -> Result<Arc<dyn AgentProvider>, reimagine_agent_legacy_stack::ProviderAdapterError> {
+    use reimagine_agent_legacy_stack::{
         AnthropicMessagesProvider, OpenAiChatCompletionsProvider, OpenAiResponsesProvider,
     };
     let name = ProviderName::new(config.name().to_string());
     match config.protocol() {
         Protocol::OpenAiChatCompletions => {
             let inner = config.openai_chat_completions().ok_or_else(|| {
-                reimagine_agent_provider::ProviderAdapterError::MissingConfig {
+                reimagine_agent_legacy_stack::ProviderAdapterError::MissingConfig {
                     provider: config.name().to_string(),
                     protocol: Protocol::OpenAiChatCompletions,
                 }
@@ -141,7 +141,7 @@ pub fn build_provider(
         }
         Protocol::AnthropicMessages => {
             let inner = config.anthropic_messages().ok_or_else(|| {
-                reimagine_agent_provider::ProviderAdapterError::MissingConfig {
+                reimagine_agent_legacy_stack::ProviderAdapterError::MissingConfig {
                     provider: config.name().to_string(),
                     protocol: Protocol::AnthropicMessages,
                 }
@@ -154,7 +154,7 @@ pub fn build_provider(
         }
         Protocol::OpenAiResponses => {
             let inner = config.openai_responses().ok_or_else(|| {
-                reimagine_agent_provider::ProviderAdapterError::MissingConfig {
+                reimagine_agent_legacy_stack::ProviderAdapterError::MissingConfig {
                     provider: config.name().to_string(),
                     protocol: Protocol::OpenAiResponses,
                 }

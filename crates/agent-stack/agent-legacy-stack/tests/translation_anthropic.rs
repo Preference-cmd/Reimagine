@@ -1,4 +1,4 @@
-use reimagine_ai_protocol::translation;
+use reimagine_agent_legacy_stack::translation;
 use serde_json::json;
 
 #[test]
@@ -39,7 +39,7 @@ fn anthropic_response_translation_missing_content_array_is_serialization_error()
     let err = translation::response::from_anthropic_response(&payload).unwrap_err();
     assert!(matches!(
         err,
-        reimagine_ai_protocol::ProviderAdapterError::Serialization(_)
+        reimagine_agent_legacy_stack::ProviderAdapterError::Serialization(_)
     ));
 }
 

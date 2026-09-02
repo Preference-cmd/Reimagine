@@ -1,5 +1,5 @@
 use reimagine_agent_harness::{AgentRequest, AgentStreamEvent, Message, ModelInfo};
-use reimagine_agent_provider::{CompletionBackend, FakeCompletionBackend, ScriptedBackendStep};
+use reimagine_agent_legacy_stack::{CompletionBackend, FakeCompletionBackend, ScriptedBackendStep};
 
 // The plan's test file had a bare `impl CompletionBackend for FakeCompletionBackend {}`
 // as a compile-time trait-in-scope check, but Rust's orphan rules forbid
@@ -27,7 +27,7 @@ async fn fake_backend_replays_scripted_complete_steps() {
 #[tokio::test]
 async fn fake_backend_replays_scripted_complete_error() {
     let backend = FakeCompletionBackend::new(vec![ScriptedBackendStep::Complete(Err(
-        reimagine_ai_protocol::ProviderAdapterError::transport("connection refused"),
+        reimagine_agent_legacy_stack::ProviderAdapterError::transport("connection refused"),
     ))]);
     let req = AgentRequest::new(
         reimagine_agent_harness::ModelName::new("gpt-test"),
@@ -36,7 +36,7 @@ async fn fake_backend_replays_scripted_complete_error() {
     let resp = backend.complete(req).await.expect_err("err");
     assert_eq!(
         resp,
-        reimagine_ai_protocol::ProviderAdapterError::transport("connection refused")
+        reimagine_agent_legacy_stack::ProviderAdapterError::transport("connection refused")
     );
 }
 

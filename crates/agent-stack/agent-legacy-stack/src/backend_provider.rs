@@ -9,11 +9,11 @@
 use std::path::PathBuf;
 use std::sync::Arc;
 
+use crate::CompletionBackend;
 use async_trait::async_trait;
 use reimagine_agent_harness::{
     AgentProvider, AgentRequest, AgentResponse, AgentStream, ModelInfo, ProviderName,
 };
-use reimagine_ai_protocol::CompletionBackend;
 
 /// Configuration types usable with [`BackendProvider`]: construction
 /// parameters plus the display fields hosts see in `Debug`.

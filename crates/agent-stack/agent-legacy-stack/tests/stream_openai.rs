@@ -1,11 +1,11 @@
 use reimagine_agent_harness::{
     AgentProvider, AgentRequest, AgentResponse, AgentStreamEvent, Message, ModelName, ProviderName,
 };
-use reimagine_agent_provider::{
+use reimagine_agent_legacy_stack::translation::streaming::OpenAiStreamAccumulator;
+use reimagine_agent_legacy_stack::{
     CompletionBackend, FakeCompletionBackend, OpenAiChatCompletionsConfig,
     OpenAiChatCompletionsProvider, ScriptedBackendStep,
 };
-use reimagine_ai_protocol::translation::streaming::OpenAiStreamAccumulator;
 use serde_json::json;
 use std::sync::Arc;
 
@@ -30,9 +30,9 @@ async fn openai_adapter_complete_returns_response_and_maps_error() {
 #[tokio::test]
 async fn openai_adapter_complete_maps_backend_error_to_provider_error() {
     let backend: Arc<dyn CompletionBackend> = Arc::new(FakeCompletionBackend::new(vec![
-        ScriptedBackendStep::Complete(Err(reimagine_ai_protocol::ProviderAdapterError::transport(
-            "connection refused",
-        ))),
+        ScriptedBackendStep::Complete(Err(
+            reimagine_agent_legacy_stack::ProviderAdapterError::transport("connection refused"),
+        )),
     ]));
     let provider = OpenAiChatCompletionsProvider::with_backend(
         ProviderName::new("openai"),
