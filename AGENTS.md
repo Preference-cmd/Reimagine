@@ -19,14 +19,12 @@ audio.
 - `crates/inference/` - `reimagine-inference`: backend contract, router, execution values, built-in executors.
 - `crates/inference-backends/` - Concrete backend adapters (Burn primary, Candle deprecated).
 - `crates/app-host/` - `reimagine-app-host`: WorkspaceHost, Project/Board/Workflow/Agent services, Agent tools, provider config + adapter wiring.
-- `crates/agent-stack/` - Agent libraries:
-  - `context-kernel/` - `reimagine-context-kernel`: ContextBlock conversation kernel (Slice 1 single-turn harness; canonical replacement for `agent-harness` semantics, see `.agents/pipelines/proposals/architecture/2026-08-23-context-block-conversation-kernel.md`).
-  - `ai-protocol/` - `reimagine-ai-protocol`: wire-protocol layer (`Protocol` discriminator, kernel-native DTO translation for the `ModelGateway` seam). Transport-free and harness-free.
+- `crates/agent-stack/` - Agent libraries (frozen chain + staging; the OSS publish set lives in the sibling repo `../agent-stack-oss`):
   - `agent-harness/` - `reimagine-agent-harness`: **frozen legacy** host-neutral agent harness domain (tool registry, policy, provider boundary, Agent loop, ContextManager, `LlmModelCatalog`); no new production semantics.
   - `agent-legacy-stack/` - `reimagine-agent-legacy-stack`: **frozen** harness-shaped provider stack (relocated from `ai-protocol` / `agent-provider` frozen faces: `BackendProvider`, `ReqwestBackend`, harness-shaped translation). Serves `agent-harness` consumers; dies with Slice 9. Not in the OSS publish set.
-  - `agent-runtime/` - `reimagine-agent-runtime`: framework primitives (FilterChain, isolation, harness extension points). Pure; does not depend on agent-harness.
-  - `agent-provider/` - `reimagine-agent-provider`: concrete kernel-face provider adapters (reqwest OpenAI-compatible / Anthropic / Responses gateways for the kernel `ModelGateway` seam).
+  - `agent-extension/` - `reimagine-agent-extension`: staging crate for implemented entities whose layer assignment is still undecided (see its charter).
   - `agent-macros/` - `reimagine-agent-macros`: `#[agent_tool]` attribute macro. Candidate for removal or real adoption; see refine roadmap DP-4.
+  - `../agent-stack-oss/` - the OSS publish set (Slice 11 Phase A split, path-depped during transition): `context-kernel` / `ai-protocol` / `agent-runtime` / `agent-provider` / `agent-mcp`.
 - `crates/agent-daemon/` - `reimagine-agent-daemon`: **frozen experimental sidecar**. Not used by the V1 production path.
 - `crates/axum-host/` - `reimagine-axum-host`: HTTP E2E test harness.
 - `ui/` - React 19 + Vite 7 frontend: infinite project canvas + WorkflowFrame editing, managed with Bun.
@@ -86,7 +84,7 @@ sidecar must not duplicate domain state.
 
 - Domain crates must not depend on `tauri`.
 - `agent-daemon` is frozen; do not add production wiring that spawns it from Tauri.
-- Layering (two chains, no cross-deps): the kernel chain — `context-kernel` ← `ai-protocol` (kernel-native translation, transport-free) ← `agent-provider` (kernel gateways; must not depend on `app-host`) — is the OSS publish set; the frozen chain — `agent-harness` (frozen legacy) ← `agent-legacy-stack` (frozen harness-shaped provider stack) ← `app-host` (provider config documents, adapter wiring, `AgentProviderCatalog`) — dies with Slice 9.
+- Layering (two chains, no cross-deps): the kernel chain — `context-kernel` ← `ai-protocol` (kernel-native translation, transport-free) ← `agent-provider` (kernel gateways) — lives in the sibling OSS repo `../agent-stack-oss` and is the publish set; the frozen chain — `agent-harness` (frozen legacy) ← `agent-legacy-stack` (frozen harness-shaped provider stack) ← `app-host` (provider config documents, adapter wiring, `AgentProviderCatalog`) — dies with Slice 9.
 - Dependency versions are centralized in root `Cargo.toml` under `[workspace.dependencies]`.
 - AI/ML inference backend code belongs in `crates/inference-backends/`.
 - Do not commit generated build outputs, local runtime data, model weights, secrets, or machine-local planning files.
