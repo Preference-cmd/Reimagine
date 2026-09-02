@@ -8,15 +8,10 @@ members = [
     "crates/model-acquisition",
     "crates/nodes",
     "crates/runtime",
-    "crates/agent-stack/ai-protocol",
-    "crates/agent-stack/context-kernel",
-    "crates/agent-stack/agent-runtime",
     "crates/agent-stack/agent-extension",
-    "crates/agent-stack/agent-mcp",
     "crates/agent-stack/agent-harness",
     "crates/agent-stack/agent-macros",
     "crates/agent-stack/agent-legacy-stack",
-    "crates/agent-stack/agent-provider",
     "crates/app-host",
     "crates/agent-daemon",
     "crates/axum-host",
@@ -42,6 +37,10 @@ license = "GPL-3.0-or-later"
 
 
 [workspace.dependencies]
+# Slice 11 Phase A: the OSS publish set lives in the sibling checkout
+# (../agent-stack-oss); path deps until Slice 9 rewires Reimagine fully.
+reimagine-ai-protocol = { path = "../agent-stack-oss/crates/ai-protocol" }
+reimagine-context-kernel = { path = "../agent-stack-oss/crates/context-kernel" }
 tauri = { version = "2", features = [] }
 tauri-build = { version = "2", features = [] }
 tauri-plugin-opener = "2"
@@ -92,13 +91,3 @@ base64 = "0.22"
 arc-swap = "1"
 blake3 = "1"
 thiserror = "2"
-# rmcp — official Model Context Protocol Rust SDK (client role only;
-# server features are used by agent-mcp's dev-dependencies for the
-# in-process test fixture)
-rmcp = { version = "3.2.0", default-features = false, features = [
-    "client",
-    "reqwest",
-    "schemars",
-    "transport-child-process",
-    "transport-streamable-http-client-reqwest",
-] }
