@@ -29,7 +29,9 @@ pre-commit:
       run: bash -c 'if rg --files --glob "**/mod.rs" --glob "!**/target/**" --glob "!**/tests/**" --glob "!**/benches/**" --glob "!**/examples/**" crates src-tauri | grep -q .; then echo "::error::mod.rs is not allowed in src trees — use foo.rs + foo/ instead"; rg --files --glob "**/mod.rs" --glob "!**/target/**" --glob "!**/tests/**" --glob "!**/benches/**" --glob "!**/examples/**" crates src-tauri; exit 1; fi; if rg -n "^#\\[path" --glob "!**/target/**" crates src-tauri | grep -q .; then echo "::error::#[path] is not allowed"; rg -n "^#\\[path" --glob "!**/target/**" crates src-tauri; exit 1; fi'
 
     - name: proposals naming
-      run: node scripts/verify-proposals.mjs
+      # proposals validator lives in the OSS checkout (Slice 11 Phase A);
+      # single home, path-imported — validates this repo's tree via cwd
+      run: node ../agent-stack-oss/scripts/verify-proposals.mjs
 
     - name: generated catalogs freshness
       glob: "{crates/app-host/src/tools.rs,crates/nodes/src/**,docs/generated/**}"
