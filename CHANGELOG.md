@@ -12,6 +12,8 @@ both check it.
 
 ### Security
 
+- Locked webpki-roots 1.0.10 and webpki-root-certs 1.0.10 to clear RustSec
+  advisories RUSTSEC-2026-0381 and RUSTSEC-2026-0383.
 - Locked h2 0.4.20, quinn-proto 0.11.19 and rustls 0.23.46 (with
   rustls-webpki 0.103.16 and aws-lc-rs 1.18.2) to clear their RustSec
   advisories, and chacha20 0.10.2 in place of the yanked 0.10.1.
