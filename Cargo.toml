@@ -39,10 +39,10 @@ publish = false
 
 
 [workspace.dependencies]
-# Slice 11 Phase A: the OSS publish set lives in the sibling checkout
-# (../agent-stack-oss); path deps until Slice 9 rewires Reimagine fully.
-reimagine-ai-protocol = { path = "../agent-stack-oss/crates/ai-protocol" }
-reimagine-context-kernel = { path = "../agent-stack-oss/crates/context-kernel" }
+# Transitional pin to a Causa commit so the workspace and CI resolve without
+# the sibling checkout; removed together with the legacy agent stack.
+reimagine-ai-protocol = { git = "https://github.com/Preference-cmd/causa.git", rev = "09918f3f1faf2f9d6fe2a66d3e2b5a02a40950dc" }
+reimagine-context-kernel = { git = "https://github.com/Preference-cmd/causa.git", rev = "09918f3f1faf2f9d6fe2a66d3e2b5a02a40950dc" }
 tauri = { version = "2", features = [] }
 tauri-build = { version = "2", features = [] }
 tauri-plugin-opener = "2"

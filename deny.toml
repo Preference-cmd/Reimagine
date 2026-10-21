@@ -66,3 +66,6 @@ allow-wildcard-paths = true
 unknown-registry = "deny"
 unknown-git = "deny"
 allow-registry = ["https://github.com/rust-lang/crates.io-index"]
+# Transitional pin to a Causa commit so the workspace and CI resolve without
+# the sibling checkout; removed together with the legacy agent stack.
+allow-git = ["https://github.com/Preference-cmd/causa.git"]

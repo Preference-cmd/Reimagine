@@ -25,8 +25,8 @@ docs/           machine-local architecture notes, design and generated catalogs 
 
 The sibling `../agent-stack-oss` is **Causa**, the open-source publish set
 (`causa` + `causa-{kernel,protocol,runtime,provider,extension}`). Root
-`Cargo.toml` still aliases two of its crates to directories Causa renamed - see
-Commands.
+`Cargo.toml` pins two legacy kernel crates to a Causa commit until the legacy
+agent stack is removed.
 
 ## Commands
 
@@ -74,13 +74,9 @@ pre-push runs the check and the layering guard. The proposal verifier is
 machine-local, so it runs from the gitignored `lefthook-local.yml` rather than
 from a tracked job. Hooks report early; the list above, run by CI, is the gate.
 
-**The workspace does not resolve today.** `Cargo.toml` maps
-`reimagine-ai-protocol` / `reimagine-context-kernel` at Causa directories renamed
-to `causa-protocol` / `causa-kernel`, so `cargo metadata` fails and with it every
-cargo line, the layering guard, `cargo deny` and `cargo tauri`. CI never has the
-sibling checkout, so the fix is a Causa dependency CI can fetch (`causa` is on
-crates.io), made as part of replacing the legacy agent harness with `causa`; do not
-delete the dependency lines to make it resolve.
+The workspace resolves through a temporary git pin of the two legacy kernel
+crates to a Causa commit. This allows the workspace and CI to resolve without
+the sibling checkout. The pin is removed together with the legacy agent stack.
 
 Toolchain: MSRV **1.96**, edition 2024. Do not raise `rust-version` or add a
 dependency without a reason stated in the commit. Tests run offline; the

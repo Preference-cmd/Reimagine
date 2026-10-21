@@ -6904,6 +6904,7 @@ dependencies = [
 [[package]]
 name = "reimagine-ai-protocol"
 version = "0.1.0"
+source = "git+https://github.com/Preference-cmd/causa.git?rev=09918f3f1faf2f9d6fe2a66d3e2b5a02a40950dc#09918f3f1faf2f9d6fe2a66d3e2b5a02a40950dc"
 dependencies = [
  "async-trait",
  "reimagine-context-kernel",
@@ -7085,6 +7086,7 @@ dependencies = [
 [[package]]
 name = "reimagine-context-kernel"
 version = "0.1.0"
+source = "git+https://github.com/Preference-cmd/causa.git?rev=09918f3f1faf2f9d6fe2a66d3e2b5a02a40950dc#09918f3f1faf2f9d6fe2a66d3e2b5a02a40950dc"
 dependencies = [
  "async-trait",
  "blake3",
