@@ -44,34 +44,31 @@ src-tauri/WixTools/
 .env.*.local
 
 # ----- Local runtime workspace -----
-workspace/
+# Root runtime workspace only: crates/app-host/src/workspace/ is source code.
+/workspace/
 
 # ----- Local planning / agent scratch -----
 .zcode/
 .agents/
 .worktrees/
 .impeccable/
-CONTEXT.md
 AGENTS.local.md
-PRODUCT.md
-DESIGN.md
-reports/
+CLAUDE.local.md
 .sc/
 .claude/
-.playwright-mcp/
 .mimocode/
 
-# Retired: .scratch/ and .agents/work/ are historical only. Current agent pipelines live under .agents/pipelines/.
-.scratch/
+# Project docs: machine-local working memory. Nothing under docs/ is tracked,
+# including the generated catalogs (regenerate with scripts/gen-*-catalog.mjs).
+docs/
 
+# ----- Local scripts -----
+# Machine-local helpers only. .github/scripts/ is tracked: those are the gates.
+/scripts/
 
-# Project docs.
-docs/**
-!docs/generated/
-!docs/generated/**
-
-# ----- Local scripts (gitignored per workspace cleanup) -----
-scripts/
+# Machine-local git hooks, merged into lefthook.yml at run time (proposal tree,
+# .agents/): gitignored like the tree it checks, never tracked.
+lefthook-local.yml
 
 # ----- Editor / OS -----
 .vscode/*
