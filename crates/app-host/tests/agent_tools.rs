@@ -33,7 +33,10 @@ fn temp_dir(prefix: &str) -> std::path::PathBuf {
 }
 
 fn build_host(scope: &str) -> WorkspaceHost {
-    WorkspaceHost::with_defaults(WorkspaceScope::new(scope), temp_dir(scope))
+    WorkspaceHost::with_defaults(
+        reimagine_app_host::WorkspaceScope::new(scope),
+        temp_dir(scope),
+    )
 }
 
 fn agent_ctx(workspace_scope: WorkspaceScope, mode: AgentMode) -> ToolContext {
@@ -155,7 +158,10 @@ async fn preview_commands_does_not_mutate_workflow() {
         "batch": batch,
     });
 
-    let ctx = agent_ctx(host.workspace_scope().clone(), AgentMode::Agent);
+    let ctx = agent_ctx(
+        WorkspaceScope::new(host.workspace_scope().as_str()),
+        AgentMode::Agent,
+    );
     let registry = Arc::clone(host.agent_service().registry());
     let output = registry
         .invoke(
@@ -191,7 +197,10 @@ async fn propose_commands_stores_pending_proposal_without_mutation() {
         "created_at": "2026-06-10T12:00:00Z",
     });
 
-    let ctx = agent_ctx(host.workspace_scope().clone(), AgentMode::Build);
+    let ctx = agent_ctx(
+        WorkspaceScope::new(host.workspace_scope().as_str()),
+        AgentMode::Build,
+    );
     let registry = Arc::clone(host.agent_service().registry());
     let output = registry
         .invoke(
@@ -231,7 +240,10 @@ async fn propose_commands_replaces_previous_pending_proposal() {
     let workflow = build_workflow("wf-supersede");
     let workflow_id = service.register_workflow(workflow);
 
-    let ctx = agent_ctx(host.workspace_scope().clone(), AgentMode::Build);
+    let ctx = agent_ctx(
+        WorkspaceScope::new(host.workspace_scope().as_str()),
+        AgentMode::Build,
+    );
     let registry = Arc::clone(host.agent_service().registry());
 
     for (prop_id, node_id) in [("prop-1", "node-a"), ("prop-2", "node-b")] {
@@ -271,7 +283,10 @@ async fn apply_commands_in_build_mode_is_not_effective() {
         "batch": batch,
     });
 
-    let ctx = agent_ctx(host.workspace_scope().clone(), AgentMode::Build);
+    let ctx = agent_ctx(
+        WorkspaceScope::new(host.workspace_scope().as_str()),
+        AgentMode::Build,
+    );
     let registry = Arc::clone(host.agent_service().registry());
     let output = registry
         .invoke(
@@ -303,7 +318,10 @@ async fn apply_commands_in_agent_mode_applies_editor_only_batch() {
         "batch": batch,
     });
 
-    let ctx = agent_ctx(host.workspace_scope().clone(), AgentMode::Agent);
+    let ctx = agent_ctx(
+        WorkspaceScope::new(host.workspace_scope().as_str()),
+        AgentMode::Agent,
+    );
     let registry = Arc::clone(host.agent_service().registry());
     let output = registry
         .invoke(
@@ -336,7 +354,10 @@ async fn apply_commands_in_agent_mode_rejects_graph_semantic_batch() {
         "batch": batch,
     });
 
-    let ctx = agent_ctx(host.workspace_scope().clone(), AgentMode::Agent);
+    let ctx = agent_ctx(
+        WorkspaceScope::new(host.workspace_scope().as_str()),
+        AgentMode::Agent,
+    );
     let registry = Arc::clone(host.agent_service().registry());
     let output = registry
         .invoke(
@@ -370,7 +391,10 @@ async fn apply_commands_returns_effective_false_when_preview_rejects() {
         "batch": batch,
     });
 
-    let ctx = agent_ctx(host.workspace_scope().clone(), AgentMode::Agent);
+    let ctx = agent_ctx(
+        WorkspaceScope::new(host.workspace_scope().as_str()),
+        AgentMode::Agent,
+    );
     let registry = Arc::clone(host.agent_service().registry());
     let output = registry
         .invoke(
@@ -431,7 +455,10 @@ async fn workflow_get_returns_snapshot() {
     let workflow_id = service.register_workflow(workflow);
 
     let input = serde_json::json!({ "workflow_id": workflow_id.as_str() });
-    let ctx = agent_ctx(host.workspace_scope().clone(), AgentMode::Agent);
+    let ctx = agent_ctx(
+        WorkspaceScope::new(host.workspace_scope().as_str()),
+        AgentMode::Agent,
+    );
     let registry = Arc::clone(host.agent_service().registry());
     let output = registry
         .invoke(
@@ -462,7 +489,10 @@ async fn approved_proposal_apply_through_host_api() {
         "batch": batch.clone(),
         "created_at": "2026-06-10T12:00:00Z",
     });
-    let ctx = agent_ctx(host.workspace_scope().clone(), AgentMode::Build);
+    let ctx = agent_ctx(
+        WorkspaceScope::new(host.workspace_scope().as_str()),
+        AgentMode::Build,
+    );
     let registry = Arc::clone(host.agent_service().registry());
     let _receipt = registry
         .invoke(
@@ -507,7 +537,10 @@ async fn rejected_proposal_apply_keeps_pending_proposal() {
         "batch": proposed_batch,
         "created_at": "2026-06-10T12:00:00Z",
     });
-    let ctx = agent_ctx(host.workspace_scope().clone(), AgentMode::Build);
+    let ctx = agent_ctx(
+        WorkspaceScope::new(host.workspace_scope().as_str()),
+        AgentMode::Build,
+    );
     let registry = Arc::clone(host.agent_service().registry());
     let _receipt = registry
         .invoke(
@@ -649,7 +682,10 @@ async fn propose_commands_returns_rejected_when_preview_fails() {
         "created_at": "2026-06-10T12:00:00Z",
     });
 
-    let ctx = agent_ctx(host.workspace_scope().clone(), AgentMode::Agent);
+    let ctx = agent_ctx(
+        WorkspaceScope::new(host.workspace_scope().as_str()),
+        AgentMode::Agent,
+    );
     let registry = Arc::clone(host.agent_service().registry());
     let output = registry
         .invoke(
@@ -696,7 +732,10 @@ async fn apply_commands_ignores_input_actor_kind() {
         "batch": batch,
     });
 
-    let ctx = agent_ctx(host.workspace_scope().clone(), AgentMode::Agent);
+    let ctx = agent_ctx(
+        WorkspaceScope::new(host.workspace_scope().as_str()),
+        AgentMode::Agent,
+    );
     let registry = Arc::clone(host.agent_service().registry());
     let output = registry
         .invoke(
@@ -726,7 +765,10 @@ async fn model_download_rejected_in_agent_mode() {
     let host = build_host("ws-model-download-agent");
     let registry = Arc::clone(host.agent_service().registry());
 
-    let ctx = agent_ctx(host.workspace_scope().clone(), AgentMode::Agent);
+    let ctx = agent_ctx(
+        WorkspaceScope::new(host.workspace_scope().as_str()),
+        AgentMode::Agent,
+    );
     let input = serde_json::json!({
         "model_ref": "test-model",
     });
@@ -752,7 +794,10 @@ async fn model_download_rejected_in_build_mode() {
     let host = build_host("ws-model-download-build");
     let registry = Arc::clone(host.agent_service().registry());
 
-    let ctx = agent_ctx(host.workspace_scope().clone(), AgentMode::Build);
+    let ctx = agent_ctx(
+        WorkspaceScope::new(host.workspace_scope().as_str()),
+        AgentMode::Build,
+    );
     let input = serde_json::json!({
         "model_ref": "test-model",
     });
@@ -780,7 +825,7 @@ async fn model_download_rejected_even_with_model_write_permission() {
 
     // Create context with model.write permission
     let ctx = ToolContext::new(
-        host.workspace_scope().clone(),
+        WorkspaceScope::new(host.workspace_scope().as_str()),
         AgentSessionId::new("sess-1"),
         AgentMode::Agent,
     )

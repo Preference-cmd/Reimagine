@@ -1,5 +1,4 @@
-use reimagine_agent_harness::AgentSessionId;
-use reimagine_core::command::{CommandBatch, CommandResult};
+use reimagine_core::command::{CommandActor, CommandBatch, CommandResult};
 use reimagine_core::model::{ProposalId, WorkflowId, WorkflowVersion};
 
 /// Status of a workflow proposal.
@@ -81,7 +80,7 @@ pub struct WorkflowProposal {
     proposal_id: ProposalId,
     workflow_id: WorkflowId,
     base_version: WorkflowVersion,
-    agent_session_id: AgentSessionId,
+    proposed_by: CommandActor,
     command_batch: CommandBatch,
     preview_result: CommandResult,
     created_at: String,
@@ -93,7 +92,7 @@ impl WorkflowProposal {
         proposal_id: ProposalId,
         workflow_id: WorkflowId,
         base_version: WorkflowVersion,
-        agent_session_id: AgentSessionId,
+        proposed_by: CommandActor,
         command_batch: CommandBatch,
         preview_result: CommandResult,
         created_at: impl Into<String>,
@@ -102,7 +101,7 @@ impl WorkflowProposal {
             proposal_id,
             workflow_id,
             base_version,
-            agent_session_id,
+            proposed_by,
             command_batch,
             preview_result,
             created_at: created_at.into(),
@@ -122,8 +121,10 @@ impl WorkflowProposal {
         self.base_version
     }
 
-    pub fn agent_session_id(&self) -> &AgentSessionId {
-        &self.agent_session_id
+    /// The operator that proposed the batch; it becomes the batch actor when
+    /// the proposal is applied.
+    pub fn proposed_by(&self) -> &CommandActor {
+        &self.proposed_by
     }
 
     pub fn command_batch(&self) -> &CommandBatch {

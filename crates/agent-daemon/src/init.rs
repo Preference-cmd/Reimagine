@@ -3,7 +3,8 @@
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
-use reimagine_agent_harness::{AgentEventSink, AgentToolRegistry, WorkspaceScope};
+use reimagine_agent_harness::{AgentEventSink, AgentToolRegistry};
+use reimagine_app_host::WorkspaceScope;
 use reimagine_app_host::{AgentProviderCatalog, AgentService, AppHostError, WorkspaceHost};
 use reimagine_runtime::{BoxedRunEventSink, VecRunEventSink};
 

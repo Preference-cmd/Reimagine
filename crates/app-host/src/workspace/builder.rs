@@ -2,7 +2,9 @@ use std::collections::BTreeMap;
 use std::path::PathBuf;
 use std::sync::{Arc, RwLock};
 
-use reimagine_agent_harness::{AgentEventSink, WorkspaceScope};
+use reimagine_agent_harness::AgentEventSink;
+
+use crate::WorkspaceScope;
 use reimagine_backend_worker_host::WorkerStorePaths;
 use reimagine_config::{AppConfig, AppPaths, InferenceBackendConfig};
 use reimagine_runtime::BoxedRunEventSink;
@@ -31,7 +33,7 @@ use super::{WorkspaceHost, load_backend_config_result};
 ///
 /// ```rust,no_run
 /// # use reimagine_app_host::WorkspaceHostBuilder;
-/// # use reimagine_agent_harness::WorkspaceScope;
+/// # use reimagine_app_host::WorkspaceScope;
 /// # async fn example() -> Result<(), Box<dyn std::error::Error>> {
 /// let host = WorkspaceHostBuilder::new(WorkspaceScope::new("my-workspace"), "/tmp/workspace")
 ///     .build()
@@ -248,7 +250,7 @@ impl WorkspaceHostBuilder {
         register_app_tools(&mut registry, Arc::clone(&services));
         let registry = Arc::new(registry);
         let temp_agent_service = Arc::new(AgentService::with_registry(
-            self.workspace_scope.clone(),
+            reimagine_agent_harness::WorkspaceScope::new(self.workspace_scope.as_str()),
             Arc::clone(&registry),
         ));
         let providers = temp_agent_service.providers().clone();
@@ -280,7 +282,7 @@ impl WorkspaceHostBuilder {
         }
 
         let agent_service = Arc::new(AgentService::with_registry_providers_sink_and_session_dir(
-            self.workspace_scope.clone(),
+            reimagine_agent_harness::WorkspaceScope::new(self.workspace_scope.as_str()),
             registry,
             providers,
             agent_event_sink.clone(),

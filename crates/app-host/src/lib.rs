@@ -23,6 +23,7 @@ mod model_conversion;
 mod model_service;
 mod node_catalog;
 mod policy;
+mod project_memory;
 mod project_service;
 mod proposal;
 mod protocol;
@@ -36,6 +37,7 @@ mod tools;
 mod worker_management;
 mod workflow_service;
 mod workspace;
+mod workspace_scope;
 
 pub use agent_provider::{AgentProviderCatalog, build_provider, register_providers_from_document};
 pub use agent_service::{AgentService, AgentServiceTurnRequest};
@@ -92,4 +94,4 @@ pub use worker_management::{
 pub use workflow_service::WorkflowService;
 pub use workspace::WorkspaceHost;
 pub use workspace::WorkspaceHostBuilder;
-mod project_memory;
+pub use workspace_scope::WorkspaceScope;

@@ -5,8 +5,7 @@ use std::time::UNIX_EPOCH;
 
 use reimagine_config::{AppPaths, atomic_write};
 use reimagine_core::command::{
-    CommandActor, CommandActorKind, CommandBatch, CommandProvenance, CommandResult,
-    CommandResultStatus,
+    CommandBatch, CommandProvenance, CommandResult, CommandResultStatus,
 };
 use reimagine_core::diagnostic::{
     Diagnostic, DiagnosticCode, DiagnosticSeverity, DiagnosticSourceName, DiagnosticTarget,
@@ -428,8 +427,7 @@ impl WorkflowService {
 
         let mut batch = CommandBatch::new(
             proposal.command_batch().id().clone(),
-            CommandActor::new(CommandActorKind::Agent)
-                .with_id(proposal.agent_session_id().as_str()),
+            proposal.proposed_by().clone(),
             proposal.base_version(),
             CommandProvenance::AgentProposal {
                 proposal_id: proposal.proposal_id().clone(),
@@ -490,8 +488,7 @@ impl WorkflowService {
         }
         let mut batch = CommandBatch::new(
             proposal.command_batch().id().clone(),
-            CommandActor::new(CommandActorKind::Agent)
-                .with_id(proposal.agent_session_id().as_str()),
+            proposal.proposed_by().clone(),
             proposal.base_version(),
             CommandProvenance::AgentProposal {
                 proposal_id: proposal.proposal_id().clone(),

@@ -6,7 +6,8 @@ use std::sync::{Arc, RwLock};
 
 pub use builder::WorkspaceHostBuilder;
 
-use reimagine_agent_harness::{AgentEventSink, AgentToolRegistry, WorkspaceScope};
+use crate::WorkspaceScope;
+use reimagine_agent_harness::{AgentEventSink, AgentToolRegistry};
 use reimagine_backend_worker_host::WorkerStorePaths;
 use reimagine_config::{AppConfig, AppPaths, ConfigDocument, InferenceBackendConfig};
 use reimagine_core::model::{NodeDef, ProjectId};
@@ -203,7 +204,7 @@ impl WorkspaceHost {
         register_app_tools(&mut registry, Arc::clone(&services));
         let registry = Arc::new(registry);
         let agent_service = Arc::new(AgentService::with_registry_and_session_dir(
-            workspace_scope.clone(),
+            reimagine_agent_harness::WorkspaceScope::new(workspace_scope.as_str()),
             Arc::clone(&registry),
             config.paths().base_path().join("agent-sessions"),
         ));
@@ -483,7 +484,7 @@ impl WorkspaceHost {
         let registry = host.agent_service.registry().clone();
         let providers = host.agent_service.providers().clone();
         host.agent_service = Arc::new(AgentService::with_registry_providers_sink_and_session_dir(
-            host.workspace_scope.clone(),
+            reimagine_agent_harness::WorkspaceScope::new(host.workspace_scope.as_str()),
             registry,
             providers,
             agent_event_sink,
@@ -600,7 +601,7 @@ impl WorkspaceHost {
         }
 
         host.agent_service = Arc::new(AgentService::with_registry_providers_sink_and_session_dir(
-            host.workspace_scope.clone(),
+            reimagine_agent_harness::WorkspaceScope::new(host.workspace_scope.as_str()),
             registry,
             providers,
             host.agent_event_sink.clone(),
@@ -627,7 +628,7 @@ impl WorkspaceHost {
         let providers = self.agent_service.providers().clone();
         let session_dir = self.agent_service.session_dir().to_path_buf();
         let agent_service = Arc::new(AgentService::with_registry_providers_sink_and_session_dir(
-            self.workspace_scope.clone(),
+            reimagine_agent_harness::WorkspaceScope::new(self.workspace_scope.as_str()),
             registry,
             providers,
             Arc::clone(&event_sink),

@@ -58,8 +58,8 @@ mod tests {
     use std::sync::Arc;
     use tower::ServiceExt;
 
-    use reimagine_agent_harness::WorkspaceScope;
     use reimagine_app_host::WorkspaceHost;
+    use reimagine_app_host::WorkspaceScope;
 
     use crate::recorder::RunEventRecorder;
     use crate::state::AxumHostState;

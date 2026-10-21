@@ -952,7 +952,10 @@ async fn run_turn_injects_default_system_prompt_and_session_override() {
 }
 
 fn build_host(scope: &str) -> WorkspaceHost {
-    WorkspaceHost::with_defaults(WorkspaceScope::new(scope), temp_dir(scope))
+    WorkspaceHost::with_defaults(
+        reimagine_app_host::WorkspaceScope::new(scope),
+        temp_dir(scope),
+    )
 }
 
 fn workflow_permissions() -> PermissionSet {

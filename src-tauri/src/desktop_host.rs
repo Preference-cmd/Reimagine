@@ -1,8 +1,9 @@
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, RwLock};
 
-use reimagine_agent_harness::{AgentEventSink, WorkspaceScope};
+use reimagine_agent_harness::AgentEventSink;
 use reimagine_app_host::TurnRunResult;
+use reimagine_app_host::WorkspaceScope;
 use reimagine_app_host::dto::{
     AgentEventPayload, AgentSessionInfo, ArtifactMetadataDto, BoardCommandResultDto,
     BoardSnapshotDto, ComputeProfileDto, HealthResponse, ModelInfoDto, NodeCatalogResponse,

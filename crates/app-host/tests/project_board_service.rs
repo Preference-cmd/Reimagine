@@ -2,7 +2,7 @@
 //! project CRUD with atomic persistence, auto-created board document,
 //! cascade deletion, and board.changed domain events.
 
-use reimagine_agent_harness::WorkspaceScope;
+use reimagine_app_host::WorkspaceScope;
 use reimagine_app_host::{AppHostError, WorkspaceHost};
 use reimagine_core::board::{
     BoardCommand, BoardCommandBatch, BoardCommandResultStatus, BoardItemKind, BoardItemPosition,

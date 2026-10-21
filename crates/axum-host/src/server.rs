@@ -91,8 +91,8 @@ mod tests {
     use super::*;
     use std::sync::Arc;
 
-    use reimagine_agent_harness::WorkspaceScope;
     use reimagine_app_host::WorkspaceHost;
+    use reimagine_app_host::WorkspaceScope;
     use reimagine_runtime::RunEventSink;
 
     use crate::recorder::RunEventRecorder;

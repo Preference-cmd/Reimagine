@@ -257,7 +257,7 @@ async fn workflow_propose_commands(
         req.proposal_id.clone(),
         req.workflow_id.clone(),
         base_version,
-        ctx.agent_session_id().clone(),
+        CommandActor::new(CommandActorKind::Agent).with_id(ctx.agent_session_id().as_str()),
         req.batch,
         preview.clone(),
         req.created_at,

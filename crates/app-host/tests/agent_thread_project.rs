@@ -34,7 +34,7 @@ fn temp_dir(prefix: &str) -> std::path::PathBuf {
 
 fn make_service(base: &std::path::Path) -> (AgentService, Arc<WorkspaceHost>) {
     let host = Arc::new(WorkspaceHost::with_defaults(
-        WorkspaceScope::new("ws-ar14"),
+        reimagine_app_host::WorkspaceScope::new("ws-ar14"),
         base,
     ));
     let svc = AgentService::with_registry_providers_and_sink(
@@ -204,7 +204,7 @@ impl AgentStream for ScriptedStream {
 async fn agent_loop_end_to_end_rejects_cross_project_get() {
     let base = temp_dir("e2e");
     let host = Arc::new(WorkspaceHost::with_defaults(
-        WorkspaceScope::new("ws-ar14"),
+        reimagine_app_host::WorkspaceScope::new("ws-ar14"),
         &base,
     ));
     // Target lives in the default project's workflow service.

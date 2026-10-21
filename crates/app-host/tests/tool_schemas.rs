@@ -25,7 +25,7 @@ fn temp_dir(prefix: &str) -> std::path::PathBuf {
 fn workspace_tools_advertise_input_schemas() {
     let base = temp_dir("schemas");
     let host = Arc::new(WorkspaceHost::with_defaults(
-        WorkspaceScope::new("ws-ar38"),
+        reimagine_app_host::WorkspaceScope::new("ws-ar38"),
         &base,
     ));
     let registry = Arc::clone(host.agent_service().registry());
@@ -101,7 +101,7 @@ fn workspace_tools_advertise_input_schemas() {
 fn invalid_workflow_get_input_rejected_before_handler() {
     let base = temp_dir("invalid");
     let host = Arc::new(WorkspaceHost::with_defaults(
-        WorkspaceScope::new("ws-ar38"),
+        reimagine_app_host::WorkspaceScope::new("ws-ar38"),
         &base,
     ));
     let registry = Arc::clone(host.agent_service().registry());

@@ -1,12 +1,12 @@
 use std::sync::Arc;
 
-use reimagine_agent_harness::WorkspaceScope;
 use reimagine_config::AppConfig;
 use reimagine_runtime::RuntimeService;
 
 use crate::model_acquisition_service::ModelAcquisitionService;
 use crate::node_catalog::NodeCatalogService;
 use crate::project_memory::ProjectMemoryService;
+use crate::workspace_scope::WorkspaceScope;
 use crate::{ModelService, WorkflowService};
 
 /// Service container captured by app-host agent tools.

@@ -120,7 +120,7 @@ impl<I, O, H> WorkspaceTool<I, O, H> {
     }
 
     fn verify_workspace_scope(&self, ctx: &ToolContext) -> ToolResult<()> {
-        if self.services.workspace_scope() != ctx.workspace_scope() {
+        if self.services.workspace_scope().as_str() != ctx.workspace_scope().as_str() {
             return Err(ToolError::new(
                 ToolErrorCode::WorkspaceMismatch,
                 format!(
@@ -303,7 +303,8 @@ mod tests {
             "reimagine-ar40-workspace-tool-{}",
             std::process::id(),
         ));
-        let host = crate::WorkspaceHost::with_defaults(WorkspaceScope::new("ws-ar40-unit"), &base);
+        let host =
+            crate::WorkspaceHost::with_defaults(crate::WorkspaceScope::new("ws-ar40-unit"), &base);
         let services = Arc::clone(host.services());
 
         let mut malformed_registry = AgentToolRegistry::new();
