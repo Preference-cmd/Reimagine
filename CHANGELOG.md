@@ -10,6 +10,14 @@ both check it.
 
 ## [Unreleased]
 
+### Security
+
+- Locked h2 0.4.20, quinn-proto 0.11.19 and rustls 0.23.46 (with
+  rustls-webpki 0.103.16 and aws-lc-rs 1.18.2) to clear their RustSec
+  advisories, and chacha20 0.10.2 in place of the yanked 0.10.1.
+- Added a `cargo deny` policy (`deny.toml`) for advisories, licenses, bans
+  and sources, run by the CI guards job.
+
 ## [0.1.0] - baseline
 
 - Baseline entry: this file was introduced with the development-workflow

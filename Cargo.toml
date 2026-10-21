@@ -34,6 +34,8 @@ rust-version = "1.96"
 authors = ["Preference"]
 description = "Reimagine"
 license = "GPL-3.0-or-later"
+# A desktop application: no crate is published to a registry.
+publish = false
 
 
 [workspace.dependencies]

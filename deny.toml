@@ -1,0 +1,68 @@
+# cargo-deny: security advisories, licenses, duplicate versions and
+# dependency sources for the workspace graph (dev-dependencies included).
+# CI runs `cargo deny check` in the ci-tauri "guards" job.
+#
+# Reimagine ships binaries built from this Cargo.lock, so users get exactly
+# the versions locked here: an advisory against a locked version reaches them.
+
+[graph]
+all-features = true
+
+[advisories]
+# Vulnerabilities and unsound advisories fail everywhere. Unmaintained
+# advisories fail only for crates a workspace crate depends on directly;
+# unmaintained crates deeper in the Tauri, Burn or tokenizers trees are
+# their upstream's to replace.
+unmaintained = "workspace"
+# An accepted advisory goes here with the reason beside it.
+ignore = [
+    # zip 7.2.0 reaches the build only through candle-core, which opens
+    # archives with `ZipArchive::new` to read tensors and never calls
+    # `extract`, the API all three advisories concern. The fix needs zip >= 9,
+    # which candle-core does not accept yet. Candle is the deprecated
+    # fallback backend; removing it removes zip.
+    { id = "RUSTSEC-2026-0367", reason = "zip via candle-core: extract() is never called" },
+    { id = "RUSTSEC-2026-0368", reason = "zip via candle-core: extract() is never called" },
+    { id = "RUSTSEC-2026-0369", reason = "zip via candle-core: extract() is never called" },
+]
+
+[licenses]
+# Every license must be compatible with GPL-3.0-or-later, because the
+# shipped binary bundles the whole graph. Measured against the dependency
+# graph: each entry is needed by at least one dependency that offers no
+# license already listed here.
+allow = [
+    "Apache-2.0",
+    "Apache-2.0 WITH LLVM-exception",
+    "BSD-2-Clause",
+    "BSD-3-Clause",
+    "BSL-1.0",
+    "CC0-1.0",
+    "CDLA-Permissive-2.0",
+    "ISC",
+    "MIT",
+    "MPL-2.0",
+    "NCSA",
+    "Unicode-3.0",
+    "Zlib",
+]
+confidence-threshold = 0.93
+
+[licenses.private]
+# The workspace crates are `publish = false` and carry the repository
+# license, so they are not checked.
+ignore = true
+
+[bans]
+# Tauri, Burn and the async stack pull several versions of some crates;
+# report them without failing.
+multiple-versions = "warn"
+wildcards = "deny"
+# Path dependencies between the private workspace crates carry no version;
+# `publish = false` makes them private, so they are not wildcards.
+allow-wildcard-paths = true
+
+[sources]
+unknown-registry = "deny"
+unknown-git = "deny"
+allow-registry = ["https://github.com/rust-lang/crates.io-index"]

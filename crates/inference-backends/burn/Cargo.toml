@@ -6,6 +6,7 @@ authors.workspace = true
 edition.workspace = true
 rust-version.workspace = true
 license.workspace = true
+publish.workspace = true
 
 [features]
 # Default to GPU compute via the burn-wgpu stack
