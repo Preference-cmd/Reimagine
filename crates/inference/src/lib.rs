@@ -21,8 +21,10 @@
 //! values, backend contracts, router contracts, backend-instance hook
 //! contracts, and executor contracts from `reimagine_inference::*`.
 //!
-//! See `docs/architecture/modules/inference.md` for the
-//! architecture source of truth.
+//! The runtime calls `NodeExecutor::execute` for each node; the built-in
+//! executors turn that call into typed capability requests, which the
+//! `InferenceRouter` (shared as a hot-swappable `RouterRef`) dispatches to the
+//! selected backend.
 
 #![deny(unsafe_code)]
 // BE-39: no panicking `unwrap()` in non-test code. Test modules are

@@ -7,8 +7,9 @@
 //! shared state. It must not reimplement workflow, model, runtime, or
 //! Agent semantics; those live in the lower-level crates.
 //!
-//! See `docs/architecture/modules/axum-host.md` for the architecture
-//! source of truth.
+//! Handlers delegate all workflow, run, model, and diagnostic operations to
+//! `WorkspaceHost` in `app-host`, keeping this crate focused on HTTP routing,
+//! transport framing, request tracing, and wire DTO serialization.
 
 #![deny(unsafe_code)]
 

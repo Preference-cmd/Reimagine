@@ -9,7 +9,10 @@
 //! backend are described as plugins at compile time. Runtime loading of
 //! third-party plugins is deferred.
 //!
-//! See `docs/architecture/modules/plugin.md` for the full module architecture.
+//! Packages implement [`PluginPackage`] to declare a [`PluginDescriptor`] and
+//! enumerate [`PluginExtension`] records targeted at host extension slots
+//! ([`HostSurface`]), keeping extension identity decoupled from concrete host
+//! execution logic.
 
 #![deny(unsafe_code)]
 

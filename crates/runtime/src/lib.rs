@@ -1,9 +1,9 @@
 //! Host-independent workflow runtime.
 //!
-//! See `docs/architecture/modules/runtime.md` for the architecture source of
-//! truth. This crate owns the [`RuntimeService`] and the run/snapshot/summary
-//! state machine, but does not depend on Tauri, Axum, model-manager, or
-//! Candle integration.
+//! This crate executes prepared workflow execution plans through
+//! [`RuntimeService`], managing run state, stage scheduling, cancellation, and
+//! artifact collection. It does not depend on a host adapter (Tauri, Axum),
+//! `reimagine-model-manager` or a concrete inference backend.
 //!
 //! The executor contract (`NodeExecutor`, `NodeExecutionContext`,
 //! `NodeInputs`/`NodeParams`, `NodeExecutorRegistry`, `ArtifactPublisher`,

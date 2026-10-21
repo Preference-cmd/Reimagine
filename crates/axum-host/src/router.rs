@@ -1,8 +1,9 @@
 //! Axum router construction for the V1 HTTP surface.
 //!
-//! See `docs/architecture/modules/axum-host.md` for the V1 route
-//! surface. The router is the single source of truth for which paths
-//! are mounted; tests and `server.rs` both go through [`build_router`].
+//! Mounts endpoints for health, compute profile, node catalog, workflow
+//! execution, run tracking, artifact inspection, and model management.
+//! The router is the single source of truth for which paths are mounted;
+//! tests and `server.rs` both go through [`build_router`].
 
 use axum::Router;
 use axum::routing::{get, post};

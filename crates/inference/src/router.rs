@@ -46,7 +46,7 @@ pub type RouterRef = Arc<arc_swap::ArcSwap<InferenceRouter>>;
 /// cross-backend handle conflicts, and dispatches the typed capability
 /// call to the selected backend.
 ///
-/// Selection precedence (deterministic, see `docs/architecture/modules/inference.md`):
+/// Selection precedence (deterministic):
 ///
 /// 1. Existing backend-bound handle affinities. Conflicting
 ///    affinities ask the bridge policy; no silent fallback.

@@ -20,7 +20,11 @@
 //! - The runtime executor registry remains execution behavior only. The
 //!   registry is *not* a node metadata source.
 //!
-//! See `docs/architecture/modules/app-host.md` for the spec.
+//! [`NodeCatalogService::check_alignment`] compares the catalog with the
+//! executor registry: catalog entries without an executor for the selected
+//! backend and executors without a catalog entry are reported as diagnostics
+//! on the execution plan, and a workflow that uses a node without an executor
+//! gets no plan.
 
 use std::sync::Arc;
 
