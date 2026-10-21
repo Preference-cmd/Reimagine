@@ -49,9 +49,9 @@ Workflows built in the GUI run on the server without changes.
 
 ### Cross-platform inference
 
-Two interchangeable inference backends ship with the app. One is optimized
-for Apple Silicon; the other covers Windows, Linux, and macOS with GPU
-acceleration and a CPU fallback. Pick the best fit for your hardware.
+Burn is the primary inference backend: it runs on Metal, Vulkan or the CPU
+`flex` backend, so one workflow runs on Apple Silicon, Windows, and Linux.
+Candle, the earlier backend, is deprecated and kept only as a V1 fallback.
 
 ### Local-first models
 
@@ -98,25 +98,48 @@ Sample workflows live under `examples/workflows/`.
 
 ## Workspace layout
 
+All 24 Cargo workspace members are listed here; `Cargo.toml` `[workspace]` is the
+authority.
+
 ```text
-src-tauri/        Tauri 2 desktop shell
-crates/           Domain modules (workflow model, runtime, inference, agent, …)
-ui/               React 19 + Vite 7 frontend
-assets/           Static placeholders
-examples/         Sample workflow JSON
+src-tauri/                       reimagine - Tauri 2 desktop shell, thin IPC layer
+crates/core/                     reimagine-core - project, board, workflow DSL, commands, history, events
+crates/config/                   reimagine-config - workspace config, path layout
+crates/model-manager/            reimagine-model-manager - manifest, scan, series config, resolver
+crates/model-acquisition/        reimagine-model-acquisition - HF catalog, component resolution, staged download
+crates/nodes/                    reimagine-nodes - V1 builtin SDXL node catalog
+crates/runtime/                  reimagine-runtime - RuntimeService, scheduler, run/value store
+crates/inference/                reimagine-inference - backend contract, router, execution values, executors
+crates/inference-backends/       candle/ burn/ burn-worker/ - concrete backends (Burn primary, Candle deprecated)
+crates/plugin/                   reimagine-plugin - plugin package and extension metadata contract
+crates/app-host/                 reimagine-app-host - WorkspaceHost, Project/Board/Workflow/Agent services, agent tools
+crates/axum-host/                reimagine-axum-host - HTTP E2E test harness
+crates/agent-daemon/             reimagine-agent-daemon - frozen experimental sidecar
+crates/agent-stack/              agent-harness/ agent-legacy-stack/ agent-extension/ agent-macros/
+crates/backend-worker-protocol/  reimagine-backend-worker-protocol - worker wire protocol
+crates/backend-worker-host/      reimagine-backend-worker-host - out-of-process worker management
+crates/backend-worker-transport-quic/   reimagine-backend-worker-transport-quic - QUIC transport
+crates/backend-worker-transport-grpc/   reimagine-backend-worker-transport-grpc - gRPC transport
+crates/backend-worker-transfer/  reimagine-backend-worker-transfer - transfer planning and execution
+ui/                              React 19 + Vite 7 frontend, Bun-managed
+assets/                          static placeholders and non-secret assets
+examples/                        sample workflow JSON
 ```
 
 `src-tauri/` and `crates/axum-host/` are thin host adapters that share the
 `reimagine-app-host` facade; all domain logic lives under `crates/`.
 
+The agent-stack crates are frozen or staging code. The open-source publish set
+lives in the sibling repository `../agent-stack-oss` (`Causa`: `causa`,
+`causa-kernel`, `causa-protocol`, `causa-runtime`, `causa-provider`,
+`causa-extension`) and is consumed through path dependencies while the
+extraction is in transition.
+
 ## Conventions
 
-- `src-tauri/` and `crates/axum-host/` are thin host adapters. Domain
-  logic belongs in `crates/`.
-- Domain crates must not depend on `tauri`.
-- Dependency versions are centralized in the root `Cargo.toml` under
-  `[workspace.dependencies]`.
-- AI/ML inference backend code belongs in `crates/inference-backends/`.
+Repository conventions - enforced layering, module layout, commit titles,
+generated catalogs, dependency policy - are in [AGENTS.md](AGENTS.md)
+`Conventions` and `Layering`. Do not keep a second copy here.
 
 ## Local data
 
