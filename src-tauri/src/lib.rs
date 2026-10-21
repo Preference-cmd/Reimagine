@@ -1,4 +1,3 @@
-mod agent_event_hub;
 mod desktop_host;
 mod document_event_hub;
 mod download_event_hub;
@@ -6,13 +5,12 @@ mod event_hub;
 
 use desktop_host::{DesktopHostState, WorkerSwitchResultDto, default_workspace_path};
 use event_hub::RunEventPayload;
-use reimagine_app_host::TurnRunResult;
 use reimagine_app_host::{
     AppHostError, AppHostErrorCode, BackendSelection, WorkerInstallationDto, WorkerSwitchError,
     dto::{
-        AgentEventPayload, AgentSessionInfo, ArtifactMetadataDto, ComputeProfileDto,
-        DownloadEventPayload, HealthResponse, ModelCardDto, ModelCatalogEntryDto,
-        ModelDownloadOutput, ModelFilters, ModelInfoDto, NodeDefDto, RunWorkflowResponse,
+        ArtifactMetadataDto, ComputeProfileDto, DownloadEventPayload, HealthResponse, ModelCardDto,
+        ModelCatalogEntryDto, ModelDownloadOutput, ModelFilters, ModelInfoDto, NodeDefDto,
+        RunWorkflowResponse,
     },
 };
 use reimagine_core::command::CommandResult;
@@ -72,15 +70,6 @@ fn app_host_command_error(error: AppHostError) -> TauriCommandError {
         code: error.code(),
         message: error.to_string(),
         details: error.details(),
-    }
-}
-
-fn agent_bridge_command_error(error: AppHostError) -> TauriCommandError {
-    // Protocol errors carry a clean client-facing message; everything else
-    // falls back to the display text.
-    match error {
-        AppHostError::WorkflowJson { message, .. } => TauriCommandError::command(message),
-        other => TauriCommandError::command(other.to_string()),
     }
 }
 
@@ -170,75 +159,6 @@ async fn open_artifact(
     state
         .open_artifact(&artifact_id)
         .map_err(app_host_command_error)
-}
-
-// ─── Agent commands ──────────────────────────────────────────────
-
-/// Create a new agent session.
-///
-/// `mode` must be "Agent" or "Build".
-/// `provider` must match a registered provider in the catalog.
-#[tauri::command]
-async fn create_agent_session(
-    state: tauri::State<'_, DesktopHostState>,
-    mode: String,
-    provider: String,
-) -> Result<AgentSessionInfo, TauriCommandError> {
-    state
-        .create_agent_session(mode, provider)
-        .await
-        .map_err(agent_bridge_command_error)
-}
-
-/// Execute a single agent turn with live event streaming over the
-/// embedded `AgentService` path (AR-03).
-///
-/// `session_id` must be a valid existing session in the service.
-/// `turn_id` is a caller-generated id for this turn (idempotent retries).
-/// `model` is the model name string for the registered provider.
-/// `input` is a JSON array of `{ role, content }` message objects.
-/// `output_schema`, when present, requires the final assistant response
-/// to be valid JSON matching the schema (AR-30 structured output).
-/// Events (`content_delta`, `tool_*`, `provider_error`,
-/// `turn_completed`, ...) stream through the provided channel, which is
-/// closed when the turn finishes.
-#[tauri::command]
-#[allow(clippy::too_many_arguments)]
-async fn agent_turn(
-    state: tauri::State<'_, DesktopHostState>,
-    session_id: String,
-    turn_id: String,
-    model: String,
-    input: serde_json::Value,
-    output_schema: Option<serde_json::Value>,
-    timeout_ms: Option<u64>,
-    context: Option<serde_json::Value>,
-    channel: Channel<AgentEventPayload>,
-) -> Result<TurnRunResult, TauriCommandError> {
-    state
-        .agent_turn(
-            session_id,
-            turn_id,
-            model,
-            input,
-            output_schema,
-            timeout_ms,
-            context,
-            channel,
-        )
-        .await
-        .map_err(agent_bridge_command_error)
-}
-
-/// List available agent providers for the UI selector.
-#[tauri::command]
-async fn list_agent_providers(
-    state: tauri::State<'_, DesktopHostState>,
-) -> Result<Vec<String>, TauriCommandError> {
-    state
-        .list_agent_providers()
-        .await
-        .map_err(agent_bridge_command_error)
 }
 
 // ─── Model download commands ───────────────────────────────────────
@@ -623,10 +543,6 @@ pub fn run() {
             cancel_run,
             resolve_artifact,
             open_artifact,
-            // Agent commands
-            create_agent_session,
-            agent_turn,
-            list_agent_providers,
             // Project / board commands (AR-39)
             list_projects,
             create_project,
@@ -694,10 +610,7 @@ pub fn run() {
 #[cfg(test)]
 mod tests {
     use super::desktop_host::{DesktopHostState, default_workspace_path};
-    use super::{
-        TauriCommandError, agent_bridge_command_error, app_host_command_error,
-        worker_switch_command_error,
-    };
+    use super::{TauriCommandError, app_host_command_error, worker_switch_command_error};
 
     fn temp_dir(prefix: &str) -> std::path::PathBuf {
         let nonce = std::time::SystemTime::now()
@@ -1120,18 +1033,6 @@ mod tests {
         });
         assert_eq!(mapped.code, AppHostErrorCode::UnknownProvider);
         assert!(mapped.message.contains("Settings"));
-    }
-
-    #[test]
-    fn agent_command_errors_map_to_command_failed() {
-        use reimagine_app_host::AppHostError;
-        use reimagine_app_host::AppHostErrorCode;
-
-        let mapped = agent_bridge_command_error(AppHostError::UnknownAgentProvider {
-            provider: reimagine_agent_harness::ProviderName::new("openai"),
-        });
-        assert_eq!(mapped.code, AppHostErrorCode::CommandFailed);
-        assert!(mapped.message.contains("openai"));
     }
 
     #[test]

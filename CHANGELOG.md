@@ -10,6 +10,13 @@ both check it.
 
 ## [Unreleased]
 
+### Removed
+
+- The desktop IPC commands `create_agent_session`, `agent_turn` and
+  `list_agent_providers`, and their frontend wrappers. The legacy native-agent
+  integration is being removed; human editing, saving, running and proposal
+  approval (`approve_proposal`) are unaffected.
+
 ### Security
 
 - Locked webpki-roots 1.0.10 and webpki-root-certs 1.0.10 to clear RustSec
