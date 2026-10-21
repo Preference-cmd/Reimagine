@@ -7,7 +7,6 @@ import {
   resolveArtifact,
   listWorkflows,
   saveWorkflow,
-  listAgentProviders,
 } from "@/ipc";
 import type {
   DownloadHuggingfaceModelArgs,
@@ -25,7 +24,6 @@ export const queryKeys = {
   modelCard: (repoId: string) => ["modelCard", repoId] as const,
   artifact: (artifactId: string) => ["artifact", artifactId] as const,
   workflows: (projectId: string) => ["workflows", projectId] as const,
-  agentProviders: ["agentProviders"] as const,
 } as const;
 
 /* ─── Queries ────────────────────────────────────────────── */
@@ -83,15 +81,6 @@ export function useWorkflows(projectId: string) {
   return useQuery({
     queryKey: queryKeys.workflows(projectId),
     queryFn: () => listWorkflows(projectId),
-    staleTime: Infinity,
-  });
-}
-
-/** Agent providers — prepare for future agent UI. */
-export function useAgentProviders() {
-  return useQuery({
-    queryKey: queryKeys.agentProviders,
-    queryFn: listAgentProviders,
     staleTime: Infinity,
   });
 }

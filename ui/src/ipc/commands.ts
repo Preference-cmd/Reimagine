@@ -249,7 +249,9 @@ export function setActiveProject(projectId: string): Promise<Project> {
   return dispatch("set_active_project", null, { projectId }, mockSetActiveProject);
 }
 
-export function subscribeDocumentEvents(onEvent: (event: DocumentChangedEvent) => void): Promise<void> {
+export function subscribeDocumentEvents(
+  onEvent: (event: DocumentChangedEvent) => void,
+): Promise<void> {
   return invokeWithFallback(
     async () => {
       const { Channel, invoke } = await import("@tauri-apps/api/core");
@@ -268,12 +270,28 @@ export function getBoardSnapshot(projectId: string): Promise<BoardSnapshot> {
   return dispatch("board_snapshot", null, { projectId }, mockGetBoardSnapshot);
 }
 
-export function previewBoardCommands(projectId: string, commandBatch: unknown): Promise<BoardCommandResult> {
-  return dispatch("preview_board_commands", null, { projectId, commandBatch }, mockPreviewBoardCommands);
+export function previewBoardCommands(
+  projectId: string,
+  commandBatch: unknown,
+): Promise<BoardCommandResult> {
+  return dispatch(
+    "preview_board_commands",
+    null,
+    { projectId, commandBatch },
+    mockPreviewBoardCommands,
+  );
 }
 
-export function applyBoardCommands(projectId: string, commandBatch: unknown): Promise<BoardCommandResult> {
-  return dispatch("apply_board_commands", null, { projectId, commandBatch }, mockApplyBoardCommands);
+export function applyBoardCommands(
+  projectId: string,
+  commandBatch: unknown,
+): Promise<BoardCommandResult> {
+  return dispatch(
+    "apply_board_commands",
+    null,
+    { projectId, commandBatch },
+    mockApplyBoardCommands,
+  );
 }
 
 export function undoBoard(projectId: string): Promise<BoardCommandResult | null> {
@@ -287,7 +305,11 @@ export function redoBoard(projectId: string): Promise<BoardCommandResult | null>
 /* ───── Workflow persistence (F1-1/F1-2) ───── */
 
 /** Save a workflow to the workspace `workflows/` dir; resolves to the file path. */
-export function saveWorkflow(projectId: string, workflowId: string, workflowJson: unknown): Promise<string> {
+export function saveWorkflow(
+  projectId: string,
+  workflowId: string,
+  workflowJson: unknown,
+): Promise<string> {
   return dispatch("save_workflow", null, { projectId, workflowId, workflowJson }, mockSaveWorkflow);
 }
 
@@ -299,113 +321,6 @@ export function loadWorkflow(projectId: string, workflowId: string): Promise<unk
 /** List saved workflows (newest first). */
 export function listWorkflows(projectId: string): Promise<WorkflowFileSummary[]> {
   return dispatch("list_workflows", null, { projectId }, mockListWorkflows);
-}
-
-/* ───── Agent (BE-19 streaming) ───── */
-
-/** Create a new agent session in the given mode with the specified provider. */
-export function createAgentSession(
-  mode: string,
-  provider: string,
-): Promise<{ sessionId: string; mode: string; provider: string; startedAt: string }> {
-  return invokeWithFallback(
-    async () => {
-      const { invoke } = await import("@tauri-apps/api/core");
-      return invoke("create_agent_session", { mode, provider });
-    },
-    async () => ({
-      sessionId: crypto.randomUUID(),
-      mode,
-      provider,
-      startedAt: new Date().toISOString(),
-    }),
-  );
-}
-
-/**
- * One streaming agent event (AR-11 contract).
- *
- * kind semantics:
- *   - terminal milestones: "turn_completed" (normal) | "error" (failed)
- *   - in-flight: "content_delta", "reasoning_delta", "tool_invoked",
- *     "tool_completed", "tool_failed", "session_started",
- *     "session_stopped", "context_compacted"
- *   - compatibility: "provider_error" groups under error semantics;
- *     consumers should treat kind error | provider_error | tool_failed
- *     as failures and stop the thread.
-
- * A turn always ends with exactly one terminal marker.
- */
-export interface AgentEventPayload {
-  sessionId: string;
-  kind: string;
-  toolName?: string;
-  toolCallId?: string;
-  code?: string;
-  message?: string;
-  /** Turn-level observability, populated on turn_completed. */
-  durationMs?: number;
-  estimatedCost?: number;
-  usage?: {
-    inputTokens?: number;
-    outputTokens?: number;
-    reasoningTokens?: number;
-    cacheCreationInputTokens?: number;
-    cacheReadInputTokens?: number;
-  };
-}
-
-/**
- * Execute an agent turn with live streaming events.
- * `onEvent` is called for each `AgentEvent` (including `content_delta`)
- * as the model generates tokens.
- */
-export async function agentTurn(
-  sessionId: string,
-  turnId: string,
-  model: string,
-  input: unknown[],
-  onEvent?: (event: AgentEventPayload) => void,
-  outputSchema?: unknown,
-  context?: unknown,
-): Promise<unknown> {
-  return invokeWithFallback(
-    async () => {
-      const { Channel, invoke } = await import("@tauri-apps/api/core");
-      const channel = new Channel<AgentEventPayload>();
-      if (onEvent) {
-        channel.onmessage = onEvent;
-      }
-      return invoke("agent_turn", {
-        sessionId,
-        turnId,
-        model,
-        input,
-        outputSchema: outputSchema ?? null,
-        context: context ?? null,
-        channel,
-      });
-    },
-    async () => {
-      // Mock: simulate a short streaming response
-      if (onEvent) {
-        onEvent({ sessionId, kind: "content_delta", message: "Hello! " });
-        onEvent({ sessionId, kind: "content_delta", message: "This is a mock response." });
-      }
-      return { status: "completed", stopReason: "final_response" };
-    },
-  );
-}
-
-/** List available agent providers for the UI selector. */
-export function listAgentProviders(): Promise<string[]> {
-  return invokeWithFallback(
-    async () => {
-      const { invoke } = await import("@tauri-apps/api/core");
-      return invoke<string[]>("list_agent_providers");
-    },
-    async () => ["openai", "anthropic"],
-  );
 }
 
 /* ───── Worker switching (BE-32) ───── */
