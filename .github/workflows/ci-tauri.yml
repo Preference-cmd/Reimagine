@@ -2,31 +2,39 @@ name: ci-tauri
 
 on:
   push:
-    branches: [main, develop]
+    branches: [main]
     paths:
       - 'crates/**'
       - 'src-tauri/**'
       - 'ui/**'
       - 'Cargo.toml'
       - 'Cargo.lock'
-      - 'rust-toolchain.toml'
-      - '.github/workflows/ci-tauri.yml'
+      - 'deny.toml'
+      - 'CHANGELOG.md'
+      - 'lefthook.yml'
+      - '.github/**'
   pull_request:
-    branches: [main, develop]
+    branches: [main]
     paths:
       - 'crates/**'
       - 'src-tauri/**'
       - 'ui/**'
       - 'Cargo.toml'
       - 'Cargo.lock'
-      - 'rust-toolchain.toml'
-      - '.github/workflows/ci-tauri.yml'
+      - 'deny.toml'
+      - 'CHANGELOG.md'
+      - 'lefthook.yml'
+      - '.github/**'
   workflow_dispatch:
-  merge_group:
 
+# A new push to a pull request cancels its older run. Every other run (pushes
+# to main, manual dispatches) gets a group of its own, so none is cancelled.
 concurrency:
-  group: ci-tauri-${{ github.workflow }}-${{ github.ref }}
+  group: ci-tauri-${{ github.event_name == 'pull_request' && github.ref || github.run_id }}
   cancel-in-progress: true
+
+permissions:
+  contents: read
 
 env:
   CARGO_TERM_COLOR: always
@@ -99,34 +107,9 @@ jobs:
         working-directory: ui
         run: bun run build
 
-      - name: Module layout scan
+      - name: Module layout guard
         if: matrix.platform == 'linux'
-        shell: bash
-        run: |
-          set -euo pipefail
-
-          # These four pre-existing backend-worker-host modules are tracked
-          # migration debt. Keep the gate useful by rejecting every other
-          # mod.rs rather than making the workflow permanently red.
-          if mod_rs=$(rg --files \
-                --glob '**/mod.rs' \
-                --glob '!**/target/**' \
-                crates src-tauri | rg -v \
-                '^crates/backend-worker-host/src/(catalog|install|inventory|package)/mod\.rs$' \
-                '^crates/backend-worker-host/tests/fixtures/mod\.rs$'); then
-            echo "::error title=mod.rs is not allowed::Use foo.rs + foo/ instead of mod.rs."
-            echo "${mod_rs}" >&2
-            exit 1
-          fi
-
-          if path_attr=$(rg -n --type rust \
-                -e '^#\[path\s*=' \
-                --glob '!**/target/**' \
-                crates src-tauri); then
-            echo "::error title=#[path] is not allowed::Use Cargo's standard module resolution."
-            echo "${path_attr}" >&2
-            exit 1
-          fi
+        run: python3 .github/scripts/check-module-layout.py
 
       - name: Rust format check
         if: matrix.platform == 'linux'
@@ -238,3 +221,56 @@ jobs:
         uses: tauri-apps/tauri-action@v1
         with:
           args: --no-bundle
+
+  guards:
+    name: guards
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v5
+        with:
+          fetch-depth: 0
+
+      - name: Setup Rust 1.96
+        uses: dtolnay/rust-toolchain@1.96
+
+      - name: Cache Rust build
+        uses: Swatinem/rust-cache@v2.9.1
+        with:
+          workspaces: .
+          shared-key: guards
+
+      - name: Module layout
+        run: python3 .github/scripts/check-module-layout.py
+
+      - name: Workspace resolves
+        # Known block: root Cargo.toml path-depends on the sibling
+        # ../agent-stack-oss checkout, which this job does not have and whose
+        # crates were renamed to causa-*, so cargo metadata fails today. Warn
+        # and skip the graph checks instead of a permanently red job; they run
+        # again as soon as the Causa dependency rewire lands.
+        id: workspace
+        run: |
+          if cargo metadata --no-deps --format-version 1 >/dev/null 2>&1; then
+            echo "resolves=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "::warning::cargo metadata failed (stale ../agent-stack-oss path deps); skipping the layering guard and cargo-deny until the Causa dependency rewire"
+            echo "resolves=false" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Dependency directions
+        if: steps.workspace.outputs.resolves == 'true'
+        run: bash .github/scripts/check-dependency-directions.sh
+
+      - name: Dependency policy (cargo-deny)
+        # Advisories, licenses, bans and sources, configured in deny.toml.
+        if: steps.workspace.outputs.resolves == 'true'
+        uses: EmbarkStudios/cargo-deny-action@v2
+
+      - name: Breaking commits update CHANGELOG.md
+        env:
+          BASE: ${{ github.event.pull_request.base.sha || github.event.before }}
+          HEAD: ${{ github.event.pull_request.head.sha || github.sha }}
+        run: python3 .github/scripts/check-commit-messages.py range "$BASE" "$HEAD"

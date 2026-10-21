@@ -14,19 +14,39 @@
 #
 # ## Before activating
 #
-# 1. Provision a self-hosted runner with the labels, GPU driver, and SDXL
-#    test model as described in `.scratch/multi-backend/issues/hardware-smoke-runbook.md`.
-# 2. Add the runner to the repository.
-# 3. Trigger manually via `workflow_dispatch` with a safe commit and
+# 1. Provision a dedicated (non-shared) GPU machine per label set:
+#    - `[self-hosted, gpu, metal]`: macOS 14 or newer with a Metal GPU.
+#    - `[self-hosted, gpu, vulkan]`: Linux x86_64 with `libvulkan1` and the
+#      GPU's Vulkan ICD (NVIDIA proprietary driver, or `mesa-vulkan-drivers`
+#      for AMD/Intel); `vulkaninfo --summary` must list the device.
+# 2. Register it at the repository level (not the organisation), so only
+#    these runners match: `./config.sh --url <repo-url> --labels
+#    self-hosted,gpu,vulkan` (or `metal`).
+# 3. Place a small SDXL test model at a fixed path the worker can read; it
+#    must give deterministic output for a fixed prompt.
+# 4. Trigger manually via `workflow_dispatch` with a safe commit and
 #    artifact run ID, or push a `hardware-smoke-*` tag to the default
-#    branch.
-# 4. Do NOT promote a candidate after a smoke failure.
+#    branch. If the runner was offline, re-run through `workflow_dispatch`.
+# 5. Do NOT push a `worker-catalog-v*` tag after a smoke failure, and never
+#    attach smoke evidence to a release. The evidence artifact is kept 90
+#    days for audit; this workflow never receives `secrets.CATALOG_*`.
 #
 # ## Evidentiary contract
 #
 # Every run MUST produce a JSON file named `evidence.json` at the root of
 # the uploaded artifact containing at minimum the fields below.  The job
 # fails if `overall` is not `"pass"` or if any required field is missing.
+#
+#   overall (pass|fail), workflow_run_id, attempt, source_ref, commit_sha,
+#   worker_kind, worker_version, binary_digest, installation_id,
+#   backend_instance_id, manifest_digest, protocol_version, platform, os,
+#   arch, runner_labels, adapter, vendor_id, device_id, driver_api,
+#   test_model_id, test_model_digest, started_at, ended_at, duration_ms,
+#   probe_result (pass|fail), sdxl_smoke_result (pass|fail|timeout),
+#   output_digest
+#
+# The probe and SDXL steps are placeholders until the worker gains its
+# `--probe` / `--smoke` subcommands, so the emitted evidence is a subset.
 
 name: ci-workers-hardware-smoke
 
@@ -157,8 +177,7 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          # See the evidence schema at
-          # .scratch/multi-backend/issues/hardware-smoke-runbook.md
+          # Schema: the evidentiary contract in this file's header.
           COMMIT_SHA="${{ needs.validate-input.outputs.commit_sha }}"
           cat > evidence.json <<JSON
           {

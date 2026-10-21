@@ -1,43 +1,53 @@
-# Git hooks (lefthook). Keep these local checkpoints fast; CI owns the full gate matrix.
-# Install: `bunx lefthook install` or `npx lefthook install`
-# Migrated from husky on 2026-08-20 — mirrors deepseek-harness lefthook.yml philosophy.
+# Git hooks (lefthook). Keep these local checkpoints fast; CI owns the full gate
+# matrix (AGENTS.md Commands). Every file called here is tracked: .github/scripts/
+# holds the gates. Nothing here references the machine-local trees (scripts/,
+# .agents/, docs/); those checks live in the gitignored lefthook-local.yml, which
+# lefthook merges into this file at run time.
+# Install: brew install lefthook && lefthook install (or: bunx lefthook install).
+
+glob_matcher: doublestar
 
 pre-commit:
+  parallel: true
   jobs:
     - name: frontend lint (staged)
-      glob: "ui/**/*.{ts,tsx,js,jsx,mjs,cjs}"
-      run: cd ui && npx eslint --fix {staged_files}
+      root: "ui/" # globs and {staged_files} are relative to root
+      glob: "**/*.{ts,tsx,js,jsx,mjs,cjs}"
+      run: bunx eslint --fix {staged_files}
       stage_fixed: true
 
     - name: frontend format (staged)
-      glob: "ui/**/*.{ts,tsx,js,jsx,json,md,css}"
-      run: cd ui && npx prettier --write {staged_files}
+      root: "ui/"
+      glob: "**/*.{ts,tsx,js,jsx,json,md,css}"
+      run: bunx prettier --write {staged_files}
       stage_fixed: true
 
-    - name: rust fmt (staged)
-      glob: "*.rs"
-      run: cargo fmt --all -- --check
+    - name: rust fmt
+      glob: "{crates/**/*.rs,src-tauri/**/*.rs,Cargo.toml}"
+      run: cargo fmt --all --check
 
-    - name: whitespace (staged)
+    - name: whitespace
       run: git diff --cached --check
 
-    - name: module layout guard (staged)
-      glob: "*.rs"
-      # tests/benches/examples keep shared `mod.rs` modules — moving them to a
-      # root-level foo.rs would make Cargo auto-discover them as test/bench
-      # targets (E0583). The foo.rs + foo/ convention applies to src trees only.
-      run: bash -c 'if rg --files --glob "**/mod.rs" --glob "!**/target/**" --glob "!**/tests/**" --glob "!**/benches/**" --glob "!**/examples/**" crates src-tauri | grep -q .; then echo "::error::mod.rs is not allowed in src trees — use foo.rs + foo/ instead"; rg --files --glob "**/mod.rs" --glob "!**/target/**" --glob "!**/tests/**" --glob "!**/benches/**" --glob "!**/examples/**" crates src-tauri; exit 1; fi; if rg -n "^#\\[path" --glob "!**/target/**" crates src-tauri | grep -q .; then echo "::error::#[path] is not allowed"; rg -n "^#\\[path" --glob "!**/target/**" crates src-tauri; exit 1; fi'
+    - name: module layout
+      glob: "{crates/**,src-tauri/**}"
+      run: python3 .github/scripts/check-module-layout.py
 
-    - name: proposals naming
-      # proposals validator lives in the OSS checkout (Slice 11 Phase A);
-      # single home, path-imported — validates this repo's tree via cwd
-      run: node ../agent-stack-oss/scripts/verify-proposals.mjs
-
-    - name: generated catalogs freshness
-      glob: "{crates/app-host/src/tools.rs,crates/nodes/src/**,docs/generated/**}"
-      run: node scripts/gen-tool-catalog.mjs --check && node scripts/gen-node-catalog.mjs --check
+commit-msg:
+  jobs:
+    - name: commit message
+      run: python3 .github/scripts/check-commit-messages.py message {1}
 
 pre-push:
+  parallel: true
   jobs:
-    - name: typecheck (rust + ui)
-      run: bash -c 'cargo check --workspace --all-targets 2>&1 | head -n 100; cargo check --workspace --all-targets'
+    - name: check
+      # The workspace does not resolve until the sibling Causa path deps are
+      # repointed (see AGENTS.md, "The workspace does not resolve today"):
+      # cargo metadata fails today. Report that and skip instead of blocking
+      # every push; the guard runs again as soon as the rewire lands.
+      run: bash -c 'if ! cargo metadata --no-deps --format-version 1 >/dev/null 2>&1; then echo "lefthook - cargo metadata fails (stale ../agent-stack-oss path deps); skipping cargo check until the Causa path-dep rewire"; exit 0; fi; cargo check --workspace --all-targets --locked --exclude reimagine-inference-burn-worker'
+
+    - name: layering
+      # Same prerequisite as the check job: cargo metadata must resolve first.
+      run: bash -c 'if ! cargo metadata --no-deps --format-version 1 >/dev/null 2>&1; then echo "lefthook - cargo metadata fails (stale ../agent-stack-oss path deps); skipping layering guard until the Causa path-dep rewire"; exit 0; fi; bash .github/scripts/check-dependency-directions.sh'

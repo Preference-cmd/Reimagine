@@ -30,9 +30,6 @@
 #   must be present; the signer reads it from the checkout.
 # - The `ci-workers.yml` workflow must have run successfully on the tagged
 #   commit, producing the seven attested `worker-*` artifacts.
-#
-# See `.scratch/multi-backend/issues/07-wgpu-flex-release-pipeline.md` for
-# the operator runbook.
 
 name: ci-workers-release
 
