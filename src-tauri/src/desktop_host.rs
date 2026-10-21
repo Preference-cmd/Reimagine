@@ -1,7 +1,6 @@
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, RwLock};
 
-use reimagine_agent_harness::AgentEventSink;
 use reimagine_app_host::WorkspaceScope;
 use reimagine_app_host::dto::{
     ArtifactMetadataDto, BoardCommandResultDto, BoardSnapshotDto, ComputeProfileDto,
@@ -70,16 +69,11 @@ impl DesktopHostState {
         AppPaths::new(&workspace_base_path).ensure_all().await?;
         let event_hub = Arc::new(TauriRunEventHub::new());
         let event_sink: BoxedRunEventSink = event_hub.clone();
-        // The workspace still requires an agent event sink until the agent
-        // integration is removed from app-host; nothing emits into it.
-        let agent_event_sink: Arc<dyn AgentEventSink> =
-            Arc::new(reimagine_agent_harness::VecAgentEventSink::new());
-        let workspace = WorkspaceHost::try_with_app_data_root_and_event_sinks(
+        let workspace = WorkspaceHost::try_with_app_data_root_and_event_sink(
             WorkspaceScope::new(WORKSPACE_SCOPE),
             &workspace_base_path,
             &app_data_root,
             event_sink,
-            agent_event_sink,
         )
         .await?;
 

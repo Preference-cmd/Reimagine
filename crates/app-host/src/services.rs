@@ -9,11 +9,11 @@ use crate::project_memory::ProjectMemoryService;
 use crate::workspace_scope::WorkspaceScope;
 use crate::{ModelService, WorkflowService};
 
-/// Service container captured by app-host agent tools.
+/// Service container for one workspace.
 ///
-/// Keeps `Arc` handles to all workspace-scoped services so tools can
-/// hold a single `Arc<WorkspaceServices>` rather than individual
-/// service arcs.
+/// Keeps `Arc` handles to all workspace-scoped services so an operator
+/// adapter (HTTP routes today) can hold a single `Arc<WorkspaceServices>`
+/// rather than individual service arcs.
 #[derive(Debug, Clone)]
 pub struct WorkspaceServices {
     workspace_scope: WorkspaceScope,

@@ -15,8 +15,6 @@ candle = ["dep:reimagine-inference-candle"]
 [dependencies]
 arc-swap = { workspace = true }
 async-trait = { workspace = true }
-reimagine-agent-harness = { path = "../agent-stack/agent-harness" }
-reimagine-agent-legacy-stack = { path = "../agent-stack/agent-legacy-stack" }
 reimagine-backend-worker-host = { path = "../backend-worker-host" }
 reimagine-backend-worker-protocol = { path = "../backend-worker-protocol" }
 reimagine-backend-worker-transfer = { path = "../backend-worker-transfer" }

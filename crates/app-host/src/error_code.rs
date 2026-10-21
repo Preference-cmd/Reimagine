@@ -13,7 +13,9 @@ pub enum AppHostErrorCode {
     BootstrapFailed,
     /// Generic command failure (no more specific classification applies).
     CommandFailed,
-    /// The named agent provider is not registered.
+    /// The named provider is not registered. Nothing produces it while no
+    /// agent integration is wired in; kept so the code set the frontend
+    /// matches on stays stable.
     UnknownProvider,
     /// A model or model manifest is missing or unreadable.
     ModelNotFound,
@@ -151,13 +153,14 @@ mod tests {
     }
 
     #[test]
-    fn agent_provider_classifies_as_unknown_provider() {
+    fn unknown_provider_keeps_its_wire_name() {
         assert_eq!(
-            AppHostError::UnknownAgentProvider {
-                provider: reimagine_agent_harness::ProviderName::new("openai")
-            }
-            .code(),
-            AppHostErrorCode::UnknownProvider
+            AppHostErrorCode::UnknownProvider.as_str(),
+            "unknown_provider"
+        );
+        assert_eq!(
+            serde_json::to_value(AppHostErrorCode::UnknownProvider).expect("serialize"),
+            "unknown_provider"
         );
     }
 

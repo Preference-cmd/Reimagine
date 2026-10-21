@@ -6,12 +6,9 @@
 
 #![deny(unsafe_code)]
 
-mod agent_provider;
-mod agent_service;
 mod app_host;
 pub mod artifact_access;
 mod board_service;
-mod canvas_context;
 mod document_events;
 pub mod dto;
 mod error;
@@ -26,27 +23,20 @@ mod policy;
 mod project_memory;
 mod project_service;
 mod proposal;
-mod protocol;
-mod provider_config;
-mod provider_service;
 mod readiness;
 mod run_observation;
 mod run_workflow;
 mod services;
-mod tools;
 mod worker_management;
 mod workflow_service;
 mod workspace;
 mod workspace_scope;
 
-pub use agent_provider::{AgentProviderCatalog, build_provider, register_providers_from_document};
-pub use agent_service::{AgentService, AgentServiceTurnRequest};
 pub use app_host::AppHost;
 pub use artifact_access::{
     ArtifactAccess, ArtifactAccessError, media_type_for_reference, resolve_artifact_path,
 };
 pub use board_service::BoardService;
-pub use canvas_context::{CanvasContext, CanvasFocus, CanvasSelection, ProjectContextAssembler};
 pub use document_events::{DocumentChangedEvent, DocumentEventBus};
 pub use error::{AppHostError, AppHostResult};
 pub use error_code::{AppHostErrorCode, worker_switch_error_code, worker_switch_error_details};
@@ -76,18 +66,11 @@ pub use node_catalog::{NodeCatalogAlignment, NodeCatalogService};
 pub use policy::WorkflowCommandPolicy;
 pub use project_service::ProjectService;
 pub use proposal::{ProposalReceipt, ProposalStatus, WorkflowProposal};
-pub use protocol::{TurnRunParams, TurnRunResult, TurnRunStatus};
-pub use provider_config::{
-    AgentProviderConfigDocument, AnthropicMessagesConfig, OpenAiChatCompletionsConfig,
-    OpenAiResponsesConfig, Protocol, ProviderConfig,
-};
-pub use provider_service::{ProviderMutationResult, ProviderService, ProviderSummary};
 pub use readiness::SnapshotExternalReadinessProvider;
 pub use reimagine_backend_worker_transport_grpc::{GrpcAuth, GrpcTls};
 pub use reimagine_inference::{BackendInstance, WorkspaceComputeProfile};
 pub use run_workflow::{RunWorkflowRequest, RunWorkflowResult, run_id_of};
 pub use services::WorkspaceServices;
-pub use tools::register_app_tools;
 pub use worker_management::{
     WorkerCatalogItemDto, WorkerInstallationDto, WorkerManagementError, WorkerManagementService,
 };

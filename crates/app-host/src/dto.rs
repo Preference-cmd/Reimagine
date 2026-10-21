@@ -17,7 +17,6 @@
 //!    re-serializing the underlying structs: any future host-side
 //!    transformation belongs here, with a test.
 
-mod agent;
 mod artifacts;
 mod boards;
 mod compute_profile;
@@ -29,10 +28,6 @@ mod projects;
 mod runs;
 mod workflows;
 
-pub use agent::{
-    AgentEventPayload, AgentMessageDto, AgentSessionInfo, AgentToolCallDto, AgentTurnResponse,
-    AgentUsageDto,
-};
 pub use artifacts::{ArtifactDto, ArtifactMetadataDto};
 pub use boards::{BoardCommandResultDto, BoardSnapshotDto};
 pub use compute_profile::{

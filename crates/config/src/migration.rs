@@ -31,18 +31,6 @@ pub async fn migrate_to_project_layout(app_paths: &AppPaths) -> ConfigResult<()>
             ),
         })?;
 
-    // Create agent_threads directory for default project
-    let default_agent_threads_dir = app_paths.default_project_agent_threads_dir();
-    fs::create_dir_all(&default_agent_threads_dir)
-        .await
-        .map_err(|error| ConfigError::WriteFailed {
-            path: default_agent_threads_dir.clone(),
-            message: format!(
-                "Failed to create default project agent_threads directory: {}",
-                error
-            ),
-        })?;
-
     // Check if the old workflows directory exists and has files to migrate
     let old_workflows_dir = app_paths.workflows_dir();
     if !old_workflows_dir.exists() {
@@ -132,7 +120,6 @@ mod tests {
         // Check that default project directories were created
         assert!(app_paths.default_project_dir().exists());
         assert!(app_paths.default_project_workflows_dir().exists());
-        assert!(app_paths.default_project_agent_threads_dir().exists());
 
         // Check that files were copied to new location
         let dest1 = app_paths
@@ -238,7 +225,6 @@ mod tests {
         // Check that default project directories were still created
         assert!(app_paths.default_project_dir().exists());
         assert!(app_paths.default_project_workflows_dir().exists());
-        assert!(app_paths.default_project_agent_threads_dir().exists());
     }
 
     #[tokio::test]

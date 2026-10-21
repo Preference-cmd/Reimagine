@@ -16,6 +16,13 @@ both check it.
   `list_agent_providers`, and their frontend wrappers. The legacy native-agent
   integration is being removed; human editing, saving, running and proposal
   approval (`approve_proposal`) are unaffected.
+- The legacy agent integration in `reimagine-app-host`: the agent service and
+  sessions, the agent tools, provider configuration (`agent-providers.json` is
+  no longer read) and the agent error variants. Workflow proposals stay in the
+  workflow service and record their proposer as a `CommandActor`.
+- The experimental `reimagine-agent-daemon` sidecar crate.
+- New projects no longer get an `agent_threads` directory; existing ones are
+  left untouched.
 
 ### Security
 

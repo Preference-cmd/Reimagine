@@ -1,4 +1,3 @@
-use reimagine_agent_harness::{AgentMode, AgentSessionId, ProviderName};
 use reimagine_app_host::WorkspaceScope;
 use reimagine_app_host::{AppHost, ModelService, WorkflowService, WorkspaceHost};
 use reimagine_config::AppPaths;
@@ -418,31 +417,6 @@ async fn model_service_rejects_burn_package_report_outside_models_dir() {
 }
 
 #[test]
-fn agent_service_creates_workspace_scoped_sessions() {
-    let workspace =
-        WorkspaceHost::with_defaults(WorkspaceScope::new("ws-agent"), temp_dir("agent"));
-    let service = workspace.agent_service();
-    let session = service.create_session(
-        AgentSessionId::new("session-1"),
-        AgentMode::Build,
-        ProviderName::new("anthropic"),
-        "2026-06-10T00:00:00Z",
-    );
-
-    assert_eq!(session.workspace_scope().as_str(), "ws-agent");
-    assert_eq!(session.mode(), AgentMode::Build);
-    assert_eq!(service.list_sessions().len(), 1);
-    assert_eq!(
-        service
-            .get_session(&AgentSessionId::new("session-1"))
-            .unwrap()
-            .provider()
-            .as_str(),
-        "anthropic"
-    );
-}
-
-#[test]
 fn workspace_host_exposes_v1_builtin_catalog_via_host_neutral_helpers() {
     let workspace =
         WorkspaceHost::with_defaults(WorkspaceScope::new("ws-catalog"), temp_dir("catalog"));
@@ -490,7 +464,7 @@ fn host_neutral_catalog_drives_workflow_validation() {
     // Locks in that the host-neutral `NodeCatalogService` exposed by
     // `WorkspaceHost` is the same catalog the readiness/validation
     // path consumes. This prevents accidental drift between the
-    // surface UI/Tauri/Axum/Agent read from and the surface the
+    // surface UI/Tauri/Axum read from and the surface the
     // workflow validation reads from.
     let workspace = WorkspaceHost::with_defaults(
         WorkspaceScope::new("ws-host-catalog"),

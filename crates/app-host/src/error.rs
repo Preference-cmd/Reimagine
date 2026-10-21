@@ -32,21 +32,6 @@ pub enum AppHostError {
         proposal_base_version: WorkflowVersion,
         current_version: WorkflowVersion,
     },
-    UnknownAgentSession {
-        session_id: reimagine_agent_harness::AgentSessionId,
-    },
-    AgentTurnInProgress {
-        session_id: reimagine_agent_harness::AgentSessionId,
-    },
-    NoActiveAgentTurn {
-        session_id: reimagine_agent_harness::AgentSessionId,
-    },
-    UnknownAgentProvider {
-        provider: reimagine_agent_harness::ProviderName,
-    },
-    UnknownAgentMode {
-        mode: String,
-    },
     UnknownRun {
         run_id: RunId,
     },
@@ -124,27 +109,6 @@ impl std::fmt::Display for AppHostError {
                 f,
                 "proposal for workflow `{workflow_id}` is stale: proposal was based on version {proposal_base_version}, but the workflow is now at version {current_version}"
             ),
-            Self::UnknownAgentSession { session_id } => {
-                write!(f, "unknown agent session `{session_id}`")
-            }
-            Self::AgentTurnInProgress { session_id } => {
-                write!(
-                    f,
-                    "agent session `{session_id}` already has a turn in progress"
-                )
-            }
-            Self::NoActiveAgentTurn { session_id } => {
-                write!(
-                    f,
-                    "agent session `{session_id}` has no active turn to cancel"
-                )
-            }
-            Self::UnknownAgentProvider { provider } => {
-                write!(f, "unknown agent provider `{provider}`")
-            }
-            Self::UnknownAgentMode { mode } => {
-                write!(f, "unknown agent mode `{mode}`")
-            }
             Self::UnknownRun { run_id } => {
                 write!(f, "unknown run `{run_id}`")
             }
@@ -210,11 +174,6 @@ impl AppHostError {
             Self::UnknownWorkflow { .. } => AppHostErrorCode::NotFound,
             Self::NoPendingProposal { .. } => AppHostErrorCode::NotFound,
             Self::ProposalStale { .. } => AppHostErrorCode::Conflict,
-            Self::UnknownAgentSession { .. } => AppHostErrorCode::NotFound,
-            Self::AgentTurnInProgress { .. } => AppHostErrorCode::Conflict,
-            Self::NoActiveAgentTurn { .. } => AppHostErrorCode::NotFound,
-            Self::UnknownAgentProvider { .. } => AppHostErrorCode::UnknownProvider,
-            Self::UnknownAgentMode { .. } => AppHostErrorCode::CommandFailed,
             Self::UnknownRun { .. } => AppHostErrorCode::NotFound,
             Self::WorkflowIdPathUnsafe { .. } => AppHostErrorCode::PermissionDenied,
             Self::WorkflowVersionConflict { .. } => AppHostErrorCode::Conflict,
@@ -273,11 +232,6 @@ impl AppHostError {
                 "proposal_base_version": proposal_base_version.to_string(),
                 "current_version": current_version.to_string(),
             })),
-            Self::UnknownAgentSession { session_id }
-            | Self::AgentTurnInProgress { session_id }
-            | Self::NoActiveAgentTurn { session_id } => {
-                Some(serde_json::json!({ "session_id": session_id.to_string() }))
-            }
             Self::UnknownRun { run_id } => {
                 Some(serde_json::json!({ "run_id": run_id.to_string() }))
             }

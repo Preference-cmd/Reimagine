@@ -7,7 +7,6 @@ use std::sync::{Arc, RwLock};
 pub use builder::WorkspaceHostBuilder;
 
 use crate::WorkspaceScope;
-use reimagine_agent_harness::{AgentEventSink, AgentToolRegistry};
 use reimagine_backend_worker_host::WorkerStorePaths;
 use reimagine_config::{AppConfig, AppPaths, ConfigDocument, InferenceBackendConfig};
 use reimagine_core::model::{NodeDef, ProjectId};
@@ -25,12 +24,10 @@ use crate::inference::selection::resolved_candle_device_label;
 use crate::model_acquisition_service::ModelAcquisitionService;
 use crate::node_catalog::{NodeCatalogAlignment, NodeCatalogService};
 use crate::project_memory::ProjectMemoryService;
-use crate::provider_config::AgentProviderConfigDocument;
 use crate::services::WorkspaceServices;
-use crate::tools::register_app_tools;
 use crate::{
-    AgentService, AppHostError, BackendSelection, BoardService, DocumentEventBus, ModelService,
-    ProjectService, WorkflowService,
+    AppHostError, BackendSelection, BoardService, DocumentEventBus, ModelService, ProjectService,
+    WorkflowService,
 };
 use crate::{InstalledWorkerInventoryProvider, WorkerInventoryProvider};
 
@@ -96,7 +93,6 @@ pub struct WorkspaceHost {
     pub(crate) document_events: Arc<DocumentEventBus>,
     pub(crate) model_service: Arc<ModelService>,
     pub(crate) runtime_service: Arc<RuntimeService>,
-    pub(crate) agent_service: Arc<AgentService>,
     pub(crate) node_catalog: Arc<NodeCatalogService>,
     pub(crate) builtin_catalog: Arc<BuiltinNodeCatalog>,
     pub(crate) services: Arc<WorkspaceServices>,
@@ -108,7 +104,6 @@ pub struct WorkspaceHost {
         Option<Arc<tokio::sync::Mutex<crate::inference::topology::ConnectionTopologyManager>>>,
     pub(crate) discovery: Option<Arc<crate::inference::discovery::DiscoveryOrchestrator>>,
     pub(crate) event_sink: BoxedRunEventSink,
-    pub(crate) agent_event_sink: Arc<dyn AgentEventSink>,
 }
 
 impl std::fmt::Debug for WorkspaceHost {
@@ -200,14 +195,6 @@ impl WorkspaceHost {
             Arc::clone(&node_catalog),
             Arc::clone(&project_memory_service),
         ));
-        let mut registry = AgentToolRegistry::new();
-        register_app_tools(&mut registry, Arc::clone(&services));
-        let registry = Arc::new(registry);
-        let agent_service = Arc::new(AgentService::with_registry_and_session_dir(
-            reimagine_agent_harness::WorkspaceScope::new(workspace_scope.as_str()),
-            Arc::clone(&registry),
-            config.paths().base_path().join("agent-sessions"),
-        ));
         Self {
             workspace_scope,
             config,
@@ -219,7 +206,6 @@ impl WorkspaceHost {
             document_events,
             model_service,
             runtime_service,
-            agent_service,
             node_catalog,
             builtin_catalog,
             services,
@@ -230,8 +216,6 @@ impl WorkspaceHost {
             topology: None,
             discovery: None,
             event_sink: Arc::new(VecRunEventSink::new()),
-            agent_event_sink: Arc::new(reimagine_agent_harness::VecAgentEventSink::new())
-                as Arc<dyn AgentEventSink>,
         }
     }
 
@@ -259,29 +243,6 @@ impl WorkspaceHost {
         .await
     }
 
-    /// Same as [`try_with_defaults_and_event_sink`] but also injects an
-    /// `AgentEventSink` into the agent service.
-    pub async fn try_with_defaults_and_event_sinks(
-        workspace_scope: WorkspaceScope,
-        base_path: impl Into<std::path::PathBuf>,
-        event_sink: BoxedRunEventSink,
-        agent_event_sink: Arc<dyn AgentEventSink>,
-    ) -> Result<Self, AppHostError> {
-        let base_path = base_path.into();
-        let config = AppConfig::new(AppPaths::new(&base_path));
-        let backend_config = load_backend_config_result(&config).await?;
-        Self::with_backend_config_and_worker_inventory_inner(
-            workspace_scope,
-            config,
-            backend_config,
-            event_sink,
-            agent_event_sink,
-            Arc::new(InstalledWorkerInventoryProvider::for_base_path(&base_path)),
-            None,
-        )
-        .await
-    }
-
     /// Bootstrap with the desktop host's `{workspace}.app-data` worker store
     /// convention, loading the backend config from disk.
     ///
@@ -289,12 +250,11 @@ impl WorkspaceHost {
     /// [`crate::WorkerManagementService::offline`] uses), so a production
     /// desktop host that passes its real app-data directory sees installed
     /// workers.
-    pub async fn try_with_app_data_root_and_event_sinks(
+    pub async fn try_with_app_data_root_and_event_sink(
         workspace_scope: WorkspaceScope,
         base_path: impl Into<std::path::PathBuf>,
         app_data_root: impl Into<std::path::PathBuf>,
         event_sink: BoxedRunEventSink,
-        agent_event_sink: Arc<dyn AgentEventSink>,
     ) -> Result<Self, AppHostError> {
         let base_path = base_path.into();
         let config = AppConfig::new(AppPaths::new(&base_path));
@@ -305,7 +265,6 @@ impl WorkspaceHost {
             app_data_root,
             backend_config,
             event_sink,
-            agent_event_sink,
         )
         .await
     }
@@ -318,7 +277,6 @@ impl WorkspaceHost {
         app_data_root: impl Into<std::path::PathBuf>,
         backend_config: InferenceBackendConfig,
         event_sink: BoxedRunEventSink,
-        agent_event_sink: Arc<dyn AgentEventSink>,
     ) -> Result<Self, AppHostError> {
         let config = AppConfig::new(AppPaths::new(base_path));
         Self::with_backend_config_and_worker_inventory_inner(
@@ -326,7 +284,6 @@ impl WorkspaceHost {
             config,
             backend_config,
             event_sink,
-            agent_event_sink,
             Arc::new(InstalledWorkerInventoryProvider::new(
                 WorkerStorePaths::new(app_data_root),
             )),
@@ -348,25 +305,29 @@ impl WorkspaceHost {
             config,
             backend_config,
             event_sink,
-            Arc::new(reimagine_agent_harness::VecAgentEventSink::new()),
             worker_inventory,
             None,
         )
         .await
     }
 
-    /// Bootstrap asynchronously with a run event sink but the default
-    /// [`VecAgentEventSink`] for agent events.
+    /// Bootstrap asynchronously with a run event sink, loading the backend
+    /// config from disk and the worker inventory from the workspace.
     pub async fn try_with_defaults_and_event_sink(
         workspace_scope: WorkspaceScope,
         base_path: impl Into<std::path::PathBuf>,
         event_sink: BoxedRunEventSink,
     ) -> Result<Self, AppHostError> {
-        Self::try_with_defaults_and_event_sinks(
+        let base_path = base_path.into();
+        let config = AppConfig::new(AppPaths::new(&base_path));
+        let backend_config = load_backend_config_result(&config).await?;
+        Self::with_backend_config_and_worker_inventory_inner(
             workspace_scope,
-            base_path,
+            config,
+            backend_config,
             event_sink,
-            Arc::new(reimagine_agent_harness::VecAgentEventSink::new()),
+            Arc::new(InstalledWorkerInventoryProvider::for_base_path(&base_path)),
+            None,
         )
         .await
     }
@@ -392,13 +353,7 @@ impl WorkspaceHost {
     ) -> Self {
         let config = AppConfig::new(AppPaths::new(base_path));
         let backend_config = load_backend_config(&config);
-        Self::with_backend_config_inner(
-            workspace_scope,
-            config,
-            backend_config,
-            event_sink,
-            Arc::new(reimagine_agent_harness::VecAgentEventSink::new()) as Arc<dyn AgentEventSink>,
-        )
+        Self::with_backend_config_inner(workspace_scope, config, backend_config, event_sink)
     }
 
     pub fn with_backend_config(
@@ -408,13 +363,7 @@ impl WorkspaceHost {
         event_sink: BoxedRunEventSink,
     ) -> Self {
         let config = AppConfig::new(AppPaths::new(base_path));
-        Self::with_backend_config_inner(
-            workspace_scope,
-            config,
-            backend_config,
-            event_sink,
-            Arc::new(reimagine_agent_harness::VecAgentEventSink::new()) as Arc<dyn AgentEventSink>,
-        )
+        Self::with_backend_config_inner(workspace_scope, config, backend_config, event_sink)
     }
 
     fn with_backend_config_inner(
@@ -422,7 +371,6 @@ impl WorkspaceHost {
         config: AppConfig,
         backend_config: InferenceBackendConfig,
         event_sink: BoxedRunEventSink,
-        agent_event_sink: Arc<dyn AgentEventSink>,
     ) -> Self {
         let acquisition_service = Arc::new(ModelAcquisitionService::new(
             config.paths().clone(),
@@ -469,7 +417,6 @@ impl WorkspaceHost {
             worker_switch.set_run_cancellation(cancellation);
         }
         let builtin_catalog = Arc::new(BuiltinNodeCatalog::v1());
-        let agent_session_dir = config.paths().base_path().join("agent-sessions");
         let mut host = Self::new(
             workspace_scope,
             config,
@@ -480,16 +427,6 @@ impl WorkspaceHost {
             bootstrapped.runtime.selected_instance,
         );
         host.worker_switch = worker_switch;
-        // Replace the default AgentService with one that uses the injected event sink
-        let registry = host.agent_service.registry().clone();
-        let providers = host.agent_service.providers().clone();
-        host.agent_service = Arc::new(AgentService::with_registry_providers_sink_and_session_dir(
-            reimagine_agent_harness::WorkspaceScope::new(host.workspace_scope.as_str()),
-            registry,
-            providers,
-            agent_event_sink,
-            agent_session_dir,
-        ));
         host
     }
 
@@ -498,7 +435,6 @@ impl WorkspaceHost {
         config: AppConfig,
         backend_config: InferenceBackendConfig,
         event_sink: BoxedRunEventSink,
-        agent_event_sink: Arc<dyn AgentEventSink>,
         worker_inventory: Arc<dyn WorkerInventoryProvider>,
         document_events_override: Option<Arc<DocumentEventBus>>,
     ) -> Result<Self, AppHostError> {
@@ -510,19 +446,6 @@ impl WorkspaceHost {
             config.paths().clone(),
             acquisition_service.clone(),
         ));
-
-        // AR-37: load the app-host-owned provider config document before
-        // bootstrapping inference, so no additional await sits between the
-        // discovery poll loop spawn and the host construction (the topology
-        // integration tests assert the first reconcile pass registers the
-        // config endpoints). A missing file yields an empty document (no
-        // providers registered).
-        let provider_document = {
-            let handle = config.config::<AgentProviderConfigDocument>()?;
-            let (document, _report) = handle.load().await?;
-            document
-        };
-        let provider_base_path = config.paths().base_path().to_path_buf();
 
         // AR-08: establish the project workflow layout (default project +
         // legacy migration) BEFORE bootstrapping inference, so no await
@@ -559,7 +482,6 @@ impl WorkspaceHost {
             worker_switch.set_run_cancellation(cancellation);
         }
         let builtin_catalog = Arc::new(BuiltinNodeCatalog::v1());
-        let agent_session_dir = config.paths().base_path().join("agent-sessions");
         let document_events =
             document_events_override.unwrap_or_else(|| Arc::new(DocumentEventBus::new()));
         let mut host = Self::new_with_document_events(
@@ -577,36 +499,6 @@ impl WorkspaceHost {
         host.topology = bootstrapped.topology;
         host.discovery = bootstrapped.discovery;
         host.event_sink = Arc::clone(&event_sink);
-        host.agent_event_sink = agent_event_sink;
-        let registry = host.agent_service.registry().clone();
-        let providers = host.agent_service.providers().clone();
-        // AR-37: register concrete providers from the loaded document so
-        // the production desktop bootstrap path (not just
-        // WorkspaceHostBuilder) sees configured providers. App-host is
-        // the owner of provider file/secrets loading; Tauri never
-        // touches API keys directly.
-        let (registered, errors) = crate::register_providers_from_document(
-            &providers,
-            &provider_document,
-            Some(&provider_base_path),
-        );
-        if !registered.is_empty() {
-            tracing::info!(
-                providers = ?registered.iter().map(|p| p.as_str()).collect::<Vec<_>>(),
-                "registered agent providers (production bootstrap)"
-            );
-        }
-        for error in &errors {
-            tracing::warn!(%error, "skipping provider");
-        }
-
-        host.agent_service = Arc::new(AgentService::with_registry_providers_sink_and_session_dir(
-            reimagine_agent_harness::WorkspaceScope::new(host.workspace_scope.as_str()),
-            registry,
-            providers,
-            host.agent_event_sink.clone(),
-            agent_session_dir,
-        ));
         Ok(host)
     }
 
@@ -621,24 +513,6 @@ impl WorkspaceHost {
     /// `board.json` documents.
     pub async fn migrate_to_project_layout(&self) -> Result<(), AppHostError> {
         migrate_project_layout(&self.config).await
-    }
-
-    pub fn with_agent_event_sink(self, event_sink: Arc<dyn AgentEventSink>) -> Self {
-        let registry = self.agent_service.registry().clone();
-        let providers = self.agent_service.providers().clone();
-        let session_dir = self.agent_service.session_dir().to_path_buf();
-        let agent_service = Arc::new(AgentService::with_registry_providers_sink_and_session_dir(
-            reimagine_agent_harness::WorkspaceScope::new(self.workspace_scope.as_str()),
-            registry,
-            providers,
-            Arc::clone(&event_sink),
-            session_dir,
-        ));
-        Self {
-            agent_service,
-            agent_event_sink: event_sink,
-            ..self
-        }
     }
 
     pub fn workspace_scope(&self) -> &WorkspaceScope {
@@ -680,7 +554,6 @@ impl WorkspaceHost {
     }
 
     /// Delete a project and clear its in-memory workflow session registry.
-    /// AgentThread ownership remains with the later lifecycle ticket.
     pub async fn delete_project(&self, project_id: &ProjectId) -> Result<(), AppHostError> {
         self.project_service.delete_project(project_id).await?;
         if project_id.as_str() == "default" {
@@ -790,7 +663,6 @@ impl WorkspaceHost {
             (*current.config).clone(),
             backend_config,
             current.event_sink.clone(),
-            current.agent_event_sink.clone(),
             Arc::clone(&current.worker_inventory),
             Some(Arc::clone(&current.document_events)),
         )
@@ -840,9 +712,6 @@ impl WorkspaceHost {
             .map_err(|error| AppHostError::RebootFailed {
                 message: format!("failed to persist backend selection: {error}"),
             })
-    }
-    pub fn agent_service(&self) -> &Arc<AgentService> {
-        &self.agent_service
     }
     pub fn node_catalog(&self) -> &Arc<NodeCatalogService> {
         &self.node_catalog
@@ -1501,7 +1370,6 @@ mod tests {
             &app_data_root,
             backend_config,
             Arc::new(VecRunEventSink::new()),
-            Arc::new(reimagine_agent_harness::VecAgentEventSink::new()),
         )
         .await
         .expect("bootstrap with explicit app-data root");
@@ -1621,126 +1489,6 @@ mod tests {
         let _ = fs::remove_dir_all(&base);
     }
 
-    // ---- AR-37: production provider bootstrap ----
-
-    fn seed_valid_provider_config(base: &std::path::Path) {
-        use crate::provider_config::{AgentProviderConfigDocument, ProviderConfig};
-        use reimagine_agent_legacy_stack::OpenAiChatCompletionsConfig;
-        let openai = OpenAiChatCompletionsConfig::new(
-            "https://api.example.com/v1",
-            "sk-test",
-            "gpt-4o-mini",
-        );
-        let provider = ProviderConfig::with_openai_chat_completions("openai", openai);
-        let doc = AgentProviderConfigDocument::new(vec![provider]);
-        let config_dir = base.join("config");
-        fs::create_dir_all(&config_dir).unwrap();
-        let json = serde_json::to_string_pretty(&doc).unwrap();
-        fs::write(config_dir.join("agent-providers.json"), json).unwrap();
-    }
-
-    fn seed_provider_with_missing_inner_config(base: &std::path::Path) {
-        use crate::provider_config::{AgentProviderConfigDocument, ProviderConfig};
-        use reimagine_agent_legacy_stack::OpenAiChatCompletionsConfig;
-        let openai = OpenAiChatCompletionsConfig::new(
-            "https://api.example.com/v1",
-            "sk-test",
-            "gpt-4o-mini",
-        );
-        let broken = ProviderConfig::with_openai_chat_completions("broken", openai.clone());
-        let good = ProviderConfig::with_openai_chat_completions("openai", openai);
-        let doc = AgentProviderConfigDocument::new(vec![broken, good]);
-        let config_dir = base.join("config");
-        fs::create_dir_all(&config_dir).unwrap();
-        // Null out the first provider inner typed config to simulate
-        // a missing-inner entry; build_provider must skip it.
-        let mut value = serde_json::to_value(&doc).unwrap();
-        value["providers"][0]["openai_chat_completions"] = serde_json::Value::Null;
-        let json = serde_json::to_string_pretty(&value).unwrap();
-        fs::write(config_dir.join("agent-providers.json"), json).unwrap();
-    }
-
-    #[tokio::test]
-    async fn production_bootstrap_registers_configured_providers() {
-        let base = temp_dir("ar37-valid");
-        let app_data_root = base.join("app-data");
-        seed_valid_provider_config(&base);
-        let backend_config = InferenceBackendConfig {
-            backend: InferenceBackendKind::Candle,
-            candle_device: "cpu".to_string(),
-            selected_instance: Some("candle:cpu".to_string()),
-            ..InferenceBackendConfig::default()
-        };
-        let workspace = WorkspaceHost::try_with_app_data_root_and_backend_config(
-            WorkspaceScope::new("ar37-valid"),
-            &base,
-            &app_data_root,
-            backend_config,
-            Arc::new(VecRunEventSink::new()),
-            Arc::new(reimagine_agent_harness::VecAgentEventSink::new()),
-        )
-        .await
-        .expect("production bootstrap with valid provider config");
-        let providers = workspace.agent_service.providers();
-        assert_eq!(
-            providers.provider_names(),
-            vec![reimagine_agent_harness::ProviderName::new("openai")],
-            "configured provider must be registered by the production path"
-        );
-        let _ = fs::remove_dir_all(&base);
-    }
-
-    #[tokio::test]
-    async fn production_bootstrap_missing_config_registers_none_without_panic() {
-        let base = temp_dir("ar37-missing");
-        let app_data_root = base.join("app-data");
-        let backend_config = InferenceBackendConfig {
-            backend: InferenceBackendKind::Candle,
-            candle_device: "cpu".to_string(),
-            selected_instance: Some("candle:cpu".to_string()),
-            ..InferenceBackendConfig::default()
-        };
-        let workspace = WorkspaceHost::try_with_app_data_root_and_backend_config(
-            WorkspaceScope::new("ar37-missing"),
-            &base,
-            &app_data_root,
-            backend_config,
-            Arc::new(VecRunEventSink::new()),
-            Arc::new(reimagine_agent_harness::VecAgentEventSink::new()),
-        )
-        .await
-        .expect("bootstrap succeeds with no provider config file");
-        assert!(workspace.agent_service.providers().is_empty());
-        let _ = fs::remove_dir_all(&base);
-    }
-
-    #[tokio::test]
-    async fn production_bootstrap_missing_inner_config_skips_that_provider_only() {
-        let base = temp_dir("ar37-broken");
-        let app_data_root = base.join("app-data");
-        seed_provider_with_missing_inner_config(&base);
-        let backend_config = InferenceBackendConfig {
-            backend: InferenceBackendKind::Candle,
-            candle_device: "cpu".to_string(),
-            selected_instance: Some("candle:cpu".to_string()),
-            ..InferenceBackendConfig::default()
-        };
-        let workspace = WorkspaceHost::try_with_app_data_root_and_backend_config(
-            WorkspaceScope::new("ar37-broken"),
-            &base,
-            &app_data_root,
-            backend_config,
-            Arc::new(VecRunEventSink::new()),
-            Arc::new(reimagine_agent_harness::VecAgentEventSink::new()),
-        )
-        .await
-        .expect("bootstrap with one broken provider entry");
-        let providers = workspace.agent_service.providers();
-        assert!(!providers.contains(&reimagine_agent_harness::ProviderName::new("broken")));
-        assert!(providers.contains(&reimagine_agent_harness::ProviderName::new("openai")));
-        let _ = fs::remove_dir_all(&base);
-    }
-
     #[tokio::test]
     async fn production_bootstrap_creates_discoverable_default_project() {
         let base = temp_dir("ar08-default-project");
@@ -1757,7 +1505,6 @@ mod tests {
             &app_data_root,
             backend_config.clone(),
             Arc::new(VecRunEventSink::new()),
-            Arc::new(reimagine_agent_harness::VecAgentEventSink::new()),
         )
         .await
         .expect("production bootstrap establishes the project layout");
@@ -1782,7 +1529,6 @@ mod tests {
             &app_data_root,
             backend_config.clone(),
             Arc::new(VecRunEventSink::new()),
-            Arc::new(reimagine_agent_harness::VecAgentEventSink::new()),
         )
         .await
         .expect("second production bootstrap stays idempotent");
@@ -1838,7 +1584,6 @@ mod tests {
             &app_data_root,
             backend_config,
             Arc::new(VecRunEventSink::new()),
-            Arc::new(reimagine_agent_harness::VecAgentEventSink::new()),
         )
         .await
         .expect("bootstrap with legacy workflows");

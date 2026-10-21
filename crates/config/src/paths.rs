@@ -86,11 +86,6 @@ impl AppPaths {
         self.project_dir(project_id).join("workflows")
     }
 
-    /// Get the agent threads directory for a specific project.
-    pub fn project_agent_threads_dir(&self, project_id: &str) -> PathBuf {
-        self.project_dir(project_id).join("agent_threads")
-    }
-
     /// Get the default project directory.
     pub fn default_project_dir(&self) -> PathBuf {
         self.project_dir("default")
@@ -99,11 +94,6 @@ impl AppPaths {
     /// Get the default project workflows directory.
     pub fn default_project_workflows_dir(&self) -> PathBuf {
         self.project_workflows_dir("default")
-    }
-
-    /// Get the default project agent threads directory.
-    pub fn default_project_agent_threads_dir(&self) -> PathBuf {
-        self.project_agent_threads_dir("default")
     }
 }
 
@@ -132,12 +122,6 @@ mod tests {
             temp_dir.path().join("projects/my-project/workflows")
         );
 
-        // Test project_agent_threads_dir
-        assert_eq!(
-            app_paths.project_agent_threads_dir("my-project"),
-            temp_dir.path().join("projects/my-project/agent_threads")
-        );
-
         // Test default project methods
         assert_eq!(
             app_paths.default_project_dir(),
@@ -146,10 +130,6 @@ mod tests {
         assert_eq!(
             app_paths.default_project_workflows_dir(),
             temp_dir.path().join("projects/default/workflows")
-        );
-        assert_eq!(
-            app_paths.default_project_agent_threads_dir(),
-            temp_dir.path().join("projects/default/agent_threads")
         );
     }
 

@@ -6802,7 +6802,6 @@ version = "0.1.0"
 dependencies = [
  "chrono",
  "opener",
- "reimagine-agent-harness",
  "reimagine-app-host",
  "reimagine-backend-worker-host",
  "reimagine-backend-worker-protocol",
@@ -6817,23 +6816,6 @@ dependencies = [
  "tauri-plugin-opener",
  "tempfile",
  "tokio",
-]
-
-[[package]]
-name = "reimagine-agent-daemon"
-version = "0.1.0"
-dependencies = [
- "async-trait",
- "clap",
- "reimagine-agent-harness",
- "reimagine-app-host",
- "reimagine-runtime",
- "serde",
- "serde_json",
- "tokio",
- "tokio-util",
- "tracing",
- "tracing-subscriber",
 ]
 
 [[package]]
@@ -6921,8 +6903,6 @@ dependencies = [
  "async-trait",
  "chrono",
  "hf-hub",
- "reimagine-agent-harness",
- "reimagine-agent-legacy-stack",
  "reimagine-backend-worker-host",
  "reimagine-backend-worker-protocol",
  "reimagine-backend-worker-transfer",

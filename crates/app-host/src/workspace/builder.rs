@@ -2,8 +2,6 @@ use std::collections::BTreeMap;
 use std::path::PathBuf;
 use std::sync::{Arc, RwLock};
 
-use reimagine_agent_harness::AgentEventSink;
-
 use crate::WorkspaceScope;
 use reimagine_backend_worker_host::WorkerStorePaths;
 use reimagine_config::{AppConfig, AppPaths, InferenceBackendConfig};
@@ -14,12 +12,10 @@ use crate::InstalledWorkerInventoryProvider;
 use crate::inference::compose::bootstrap_inference_with_worker_inventory;
 use crate::model_acquisition_service::ModelAcquisitionService;
 use crate::project_memory::ProjectMemoryService;
-use crate::provider_config::AgentProviderConfigDocument;
 use crate::services::WorkspaceServices;
-use crate::tools::register_app_tools;
 use crate::{
-    AgentService, AppHostError, BackendSelection, BoardService, DocumentEventBus, ModelService,
-    ProjectService, WorkerInventoryProvider, WorkflowService,
+    AppHostError, BackendSelection, BoardService, DocumentEventBus, ModelService, ProjectService,
+    WorkerInventoryProvider, WorkflowService,
 };
 
 use super::{WorkspaceHost, load_backend_config_result};
@@ -50,9 +46,7 @@ pub struct WorkspaceHostBuilder {
     app_data_root: Option<PathBuf>,
     backend_config: Option<InferenceBackendConfig>,
     event_sink: Option<BoxedRunEventSink>,
-    agent_event_sink: Option<Arc<dyn AgentEventSink>>,
     worker_inventory: Option<Arc<dyn WorkerInventoryProvider>>,
-    provider_config: Option<AgentProviderConfigDocument>,
 }
 
 impl WorkspaceHostBuilder {
@@ -67,9 +61,7 @@ impl WorkspaceHostBuilder {
             app_data_root: None,
             backend_config: None,
             event_sink: None,
-            agent_event_sink: None,
             worker_inventory: None,
-            provider_config: None,
         }
     }
 
@@ -102,31 +94,12 @@ impl WorkspaceHostBuilder {
         self
     }
 
-    /// Set the agent event sink for agent loop events.
-    ///
-    /// When not set, uses a default sink that discards events.
-    pub fn agent_event_sink(mut self, sink: Arc<dyn AgentEventSink>) -> Self {
-        self.agent_event_sink = Some(sink);
-        self
-    }
-
     /// Set a custom worker inventory provider.
     ///
     /// When not set, uses [`InstalledWorkerInventoryProvider`] with either
     /// the explicit `app_data_root` or the derived path.
     pub fn worker_inventory(mut self, provider: Arc<dyn WorkerInventoryProvider>) -> Self {
         self.worker_inventory = Some(provider);
-        self
-    }
-
-    /// Set the provider config document used to construct and register
-    /// concrete `AgentProvider` adapters.
-    ///
-    /// When not set, the builder loads `{config_dir}/agent-providers.json`
-    /// through the config store (a missing file yields an empty document,
-    /// so no providers are registered).
-    pub fn provider_config(mut self, document: AgentProviderConfigDocument) -> Self {
-        self.provider_config = Some(document);
         self
     }
 
@@ -147,13 +120,10 @@ impl WorkspaceHostBuilder {
             None => load_backend_config_result(&config).await?,
         };
 
-        // Resolve event sinks
+        // Resolve the run event sink
         let event_sink = self
             .event_sink
             .unwrap_or_else(|| Arc::new(VecRunEventSink::new()));
-        let agent_event_sink = self
-            .agent_event_sink
-            .unwrap_or_else(|| Arc::new(reimagine_agent_harness::VecAgentEventSink::new()));
 
         // Resolve worker inventory
         let worker_inventory = match self.worker_inventory {
@@ -244,51 +214,6 @@ impl WorkspaceHostBuilder {
             Arc::clone(&project_memory_service),
         ));
 
-        // Create agent service: first create a temporary one to get default registry/providers,
-        // then recreate with the injected event sink
-        let mut registry = reimagine_agent_harness::AgentToolRegistry::new();
-        register_app_tools(&mut registry, Arc::clone(&services));
-        let registry = Arc::new(registry);
-        let temp_agent_service = Arc::new(AgentService::with_registry(
-            reimagine_agent_harness::WorkspaceScope::new(self.workspace_scope.as_str()),
-            Arc::clone(&registry),
-        ));
-        let providers = temp_agent_service.providers().clone();
-
-        // Register concrete providers from the config document. When no
-        // explicit document was injected, load it from the config store;
-        // a missing file yields an empty document (no providers).
-        let provider_document = match self.provider_config {
-            Some(document) => document,
-            None => {
-                let handle = config.config::<AgentProviderConfigDocument>()?;
-                let (document, _report) = handle.load().await?;
-                document
-            }
-        };
-        let (registered, errors) = crate::register_providers_from_document(
-            &providers,
-            &provider_document,
-            Some(&self.base_path),
-        );
-        if !registered.is_empty() {
-            tracing::info!(
-                providers = ?registered.iter().map(|p| p.as_str()).collect::<Vec<_>>(),
-                "registered agent providers"
-            );
-        }
-        for error in &errors {
-            tracing::warn!("{error}");
-        }
-
-        let agent_service = Arc::new(AgentService::with_registry_providers_sink_and_session_dir(
-            reimagine_agent_harness::WorkspaceScope::new(self.workspace_scope.as_str()),
-            registry,
-            providers,
-            agent_event_sink.clone(),
-            self.base_path.join("agent-sessions"),
-        ));
-
         // Assemble workspace
         Ok(WorkspaceHost {
             workspace_scope: self.workspace_scope,
@@ -301,7 +226,6 @@ impl WorkspaceHostBuilder {
             document_events,
             model_service,
             runtime_service,
-            agent_service,
             node_catalog,
             builtin_catalog,
             services,
@@ -312,7 +236,6 @@ impl WorkspaceHostBuilder {
             topology: bootstrapped.topology,
             discovery: bootstrapped.discovery,
             event_sink,
-            agent_event_sink,
         })
     }
 }
@@ -386,18 +309,15 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn builder_with_event_sinks() {
+    async fn builder_with_event_sink() {
         let base = temp_dir("sinks");
         let event_sink: BoxedRunEventSink = Arc::new(VecRunEventSink::new());
-        let agent_sink: Arc<dyn AgentEventSink> =
-            Arc::new(reimagine_agent_harness::VecAgentEventSink::new());
 
         let host = WorkspaceHostBuilder::new(WorkspaceScope::new("test"), &base)
             .event_sink(event_sink)
-            .agent_event_sink(agent_sink)
             .build()
             .await
-            .expect("builder with event sinks");
+            .expect("builder with event sink");
 
         assert_eq!(host.base_path(), base);
         let _ = fs::remove_dir_all(&base);

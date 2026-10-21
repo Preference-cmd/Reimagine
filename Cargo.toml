@@ -13,7 +13,6 @@ members = [
     "crates/agent-stack/agent-macros",
     "crates/agent-stack/agent-legacy-stack",
     "crates/app-host",
-    "crates/agent-daemon",
     "crates/axum-host",
     "crates/inference",
     "crates/inference-backends/candle",

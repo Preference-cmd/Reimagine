@@ -2,8 +2,8 @@ use serde::{Deserialize, Serialize};
 
 /// Progress event payload streamed during model download.
 ///
-/// Mirrors the `RunEventPayload` / `AgentEventPayload` naming convention for
-/// Tauri Channel streaming.
+/// Mirrors the `RunEventPayload` naming convention for Tauri Channel
+/// streaming.
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct DownloadEventPayload {
@@ -25,7 +25,7 @@ pub struct DownloadEventPayload {
     pub estimated_size: Option<u64>,
 }
 
-/// Input to the `model.download` agent tool.
+/// Input to a model download request.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ModelDownloadInput {

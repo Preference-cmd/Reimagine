@@ -41,17 +41,6 @@ impl TauriCommandError {
             details: None,
         }
     }
-
-    fn unknown_provider(provider: impl Into<String>) -> Self {
-        Self {
-            code: AppHostErrorCode::UnknownProvider,
-            message: format!(
-                "Provider '{}' is not configured. Add a provider in Settings.",
-                provider.into()
-            ),
-            details: None,
-        }
-    }
 }
 
 impl std::fmt::Display for TauriCommandError {
@@ -63,9 +52,6 @@ impl std::fmt::Display for TauriCommandError {
 impl std::error::Error for TauriCommandError {}
 
 fn app_host_command_error(error: AppHostError) -> TauriCommandError {
-    if let AppHostError::UnknownAgentProvider { provider } = &error {
-        return TauriCommandError::unknown_provider(provider.to_string());
-    }
     TauriCommandError {
         code: error.code(),
         message: error.to_string(),
@@ -1021,18 +1007,6 @@ mod tests {
             message: "bad json".to_owned(),
         });
         assert_eq!(mapped.code, AppHostErrorCode::WorkflowInvalid);
-    }
-
-    #[test]
-    fn unknown_agent_provider_keeps_friendly_message_and_code() {
-        use reimagine_app_host::AppHostError;
-        use reimagine_app_host::AppHostErrorCode;
-
-        let mapped = app_host_command_error(AppHostError::UnknownAgentProvider {
-            provider: reimagine_agent_harness::ProviderName::new("openai"),
-        });
-        assert_eq!(mapped.code, AppHostErrorCode::UnknownProvider);
-        assert!(mapped.message.contains("Settings"));
     }
 
     #[test]
