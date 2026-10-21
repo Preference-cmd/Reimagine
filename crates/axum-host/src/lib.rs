@@ -8,8 +8,7 @@
 //! Agent semantics; those live in the lower-level crates.
 //!
 //! See `docs/architecture/modules/axum-host.md` for the architecture
-//! source of truth and `.scratch/axum-host/issues/01-...` for the V1
-//! scope.
+//! source of truth.
 
 #![deny(unsafe_code)]
 

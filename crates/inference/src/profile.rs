@@ -1,10 +1,8 @@
 //! Host-neutral compute, backend, and device profile vocabulary.
 //!
-//! This module is the V1 contract surface for the workspace capability
-//! discovery slice described in
-//! `docs/architecture/real-inference-roadmap.md` ("Workspace
-//! Capability Discovery") and `docs/architecture/modules/inference.md`
-//! ("Compute And Device Profiles").
+//! This module is the V1 contract surface for workspace capability
+//! discovery and the compute/device profile contract: one observation-only
+//! vocabulary shared by hosts, the router and the backend adapters.
 //!
 //! The vocabulary here is observation/configuration only. These DTOs
 //! must not carry backend-native device handles, tensors, loaded model

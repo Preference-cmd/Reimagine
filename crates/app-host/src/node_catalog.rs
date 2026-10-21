@@ -20,8 +20,7 @@
 //! - The runtime executor registry remains execution behavior only. The
 //!   registry is *not* a node metadata source.
 //!
-//! See `.scratch/app-host/issues/05-node-catalog-service-and-executor-alignment.md`
-//! and `docs/architecture/modules/app-host.md` for the spec.
+//! See `docs/architecture/modules/app-host.md` for the spec.
 
 use std::sync::Arc;
 
