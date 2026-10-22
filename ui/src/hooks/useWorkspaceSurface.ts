@@ -28,7 +28,9 @@ export function useWorkspaceSurface(): void {
       void loadWorkflow(project, workflow.id).then((json) => {
         if (useProjectStore.getState().activeProjectId !== project) return;
         const graph = workflowFromJson(json);
-        useWorkflowStore.getState().hydrate(graph.nodes, graph.edges, workflow.id, graph.name, project, graph.version);
+        useWorkflowStore
+          .getState()
+          .hydrate(graph.nodes, graph.edges, workflow.id, graph.name, project, graph.version);
         useWorkflowStore.temporal.getState().clear();
       });
     });

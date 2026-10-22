@@ -68,7 +68,9 @@ export function useWorkflowPersistence() {
         const json = await loadWorkflow(activeProjectId, mostRecent.id);
         if (cancelled) return;
         const { nodes, edges, name, version } = workflowFromJson(json);
-        useWorkflowStore.getState().hydrate(nodes, edges, mostRecent.id, name, activeProjectId, version);
+        useWorkflowStore
+          .getState()
+          .hydrate(nodes, edges, mostRecent.id, name, activeProjectId, version);
         useRecentWorkflowsStore.getState().addRecent(activeProjectId, mostRecent.id, name);
         // The pre-load demo graph must not be reachable via undo.
         useWorkflowStore.temporal.getState().clear();

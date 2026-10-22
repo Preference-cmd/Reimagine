@@ -40,7 +40,14 @@ type WorkflowState = {
   /** Edit the legacy free-text `data.prompt` field (F2-4). */
   updateNodePrompt: (nodeId: string, prompt: string) => void;
   /** Replace the whole graph (used by workflow persistence on load). */
-  hydrate: (nodes: Node[], edges: FlowEdge[], workflowId: string, name: string, projectId?: string, version?: number) => void;
+  hydrate: (
+    nodes: Node[],
+    edges: FlowEdge[],
+    workflowId: string,
+    name: string,
+    projectId?: string,
+    version?: number,
+  ) => void;
   // ── graph mutations (F2-2/F2-3/F3-1) ───────────────────────────────
   addNode: (node: Node) => void;
   removeNodes: (ids: string[]) => void;

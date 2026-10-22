@@ -90,7 +90,6 @@ export const WorkflowFileSummarySchema = z.object({
 });
 export type WorkflowFileSummary = z.infer<typeof WorkflowFileSummarySchema>;
 
-
 /* ───── Project / Board surface (AR-39) ─────────────────────── */
 
 export const ProjectSchema = z.object({

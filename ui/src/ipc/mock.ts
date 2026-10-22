@@ -186,7 +186,10 @@ export async function mockSaveWorkflow(input: {
   return `mock:/projects/${input.projectId}/workflows/${input.workflowId}.json`;
 }
 
-export async function mockLoadWorkflow(input: { projectId: string; workflowId: string }): Promise<unknown> {
+export async function mockLoadWorkflow(input: {
+  projectId: string;
+  workflowId: string;
+}): Promise<unknown> {
   await delay(50);
   const key = `${input.projectId}/${input.workflowId}`;
   const raw = mockReadAll()[key];
@@ -196,7 +199,9 @@ export async function mockLoadWorkflow(input: { projectId: string; workflowId: s
   return JSON.parse(raw);
 }
 
-export async function mockListWorkflows(input: { projectId: string }): Promise<WorkflowFileSummary[]> {
+export async function mockListWorkflows(input: {
+  projectId: string;
+}): Promise<WorkflowFileSummary[]> {
   await delay(30);
   const prefix = `${input.projectId}/`;
   const entries = Object.entries(mockReadAll()).filter(([key]) => key.startsWith(prefix));
@@ -217,10 +222,19 @@ export async function mockListProjects(): Promise<Project[]> {
   return Object.values(mockReadProjects());
 }
 
-export async function mockCreateProject(input: { projectId: string; metadata: ProjectMetadataInput }): Promise<Project> {
+export async function mockCreateProject(input: {
+  projectId: string;
+  metadata: ProjectMetadataInput;
+}): Promise<Project> {
   const projects = mockReadProjects();
   const now = new Date().toISOString();
-  const project: Project = { id: input.projectId, name: input.metadata.name, description: input.metadata.description, createdAt: input.metadata.createdAt ?? now, updatedAt: input.metadata.updatedAt ?? now };
+  const project: Project = {
+    id: input.projectId,
+    name: input.metadata.name,
+    description: input.metadata.description,
+    createdAt: input.metadata.createdAt ?? now,
+    updatedAt: input.metadata.updatedAt ?? now,
+  };
   projects[input.projectId] = project;
   mockWriteProjects(projects);
   return project;
@@ -232,9 +246,17 @@ export async function mockLoadProject(input: { projectId: string }): Promise<Pro
   return project;
 }
 
-export async function mockUpdateProject(input: { projectId: string; metadata: ProjectMetadataInput }): Promise<Project> {
+export async function mockUpdateProject(input: {
+  projectId: string;
+  metadata: ProjectMetadataInput;
+}): Promise<Project> {
   const current = await mockLoadProject({ projectId: input.projectId });
-  const project = { ...current, name: input.metadata.name, description: input.metadata.description, updatedAt: input.metadata.updatedAt ?? new Date().toISOString() };
+  const project = {
+    ...current,
+    name: input.metadata.name,
+    description: input.metadata.description,
+    updatedAt: input.metadata.updatedAt ?? new Date().toISOString(),
+  };
   const projects = mockReadProjects();
   projects[input.projectId] = project;
   mockWriteProjects(projects);
@@ -247,25 +269,53 @@ export async function mockDeleteProject(input: { projectId: string }): Promise<v
   mockWriteProjects(projects);
 }
 
-export async function mockSetActiveProject(input: { projectId: string }): Promise<Project> { return mockLoadProject(input); }
+export async function mockSetActiveProject(input: { projectId: string }): Promise<Project> {
+  return mockLoadProject(input);
+}
 
 export async function mockGetBoardSnapshot(input: { projectId: string }): Promise<BoardSnapshot> {
   return { id: "board-" + input.projectId, projectId: input.projectId, version: 0, items: [] };
 }
 
-const noOpBoardResult = (version = 0): BoardCommandResult => ({ status: "no_op", boardVersion: version, changes: [], diagnostics: [], historyEntryId: null });
+const noOpBoardResult = (version = 0): BoardCommandResult => ({
+  status: "no_op",
+  boardVersion: version,
+  changes: [],
+  diagnostics: [],
+  historyEntryId: null,
+});
 
-export async function mockPreviewBoardCommands(_input: { projectId: string; commandBatch: unknown }): Promise<BoardCommandResult> { return noOpBoardResult(); }
+export async function mockPreviewBoardCommands(_input: {
+  projectId: string;
+  commandBatch: unknown;
+}): Promise<BoardCommandResult> {
+  return noOpBoardResult();
+}
 
-export async function mockApplyBoardCommands(input: { projectId: string; commandBatch: unknown }): Promise<BoardCommandResult> {
+export async function mockApplyBoardCommands(input: {
+  projectId: string;
+  commandBatch: unknown;
+}): Promise<BoardCommandResult> {
   const result = { ...noOpBoardResult(1), status: "applied" as const, boardVersion: 1 };
-  emitDocumentEvent({ kind: "board.changed", projectId: input.projectId, documentId: "board-" + input.projectId, version: 1 });
+  emitDocumentEvent({
+    kind: "board.changed",
+    projectId: input.projectId,
+    documentId: "board-" + input.projectId,
+    version: 1,
+  });
   return result;
 }
 
-
-export async function mockUndoBoard(_input: { projectId: string }): Promise<BoardCommandResult | null> { return null; }
-export async function mockRedoBoard(_input: { projectId: string }): Promise<BoardCommandResult | null> { return null; }
+export async function mockUndoBoard(_input: {
+  projectId: string;
+}): Promise<BoardCommandResult | null> {
+  return null;
+}
+export async function mockRedoBoard(_input: {
+  projectId: string;
+}): Promise<BoardCommandResult | null> {
+  return null;
+}
 
 export async function mockListModels(): Promise<ModelInfo[]> {
   await delay(150);

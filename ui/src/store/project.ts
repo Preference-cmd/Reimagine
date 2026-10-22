@@ -17,11 +17,20 @@ export const useProjectStore = create<ProjectState>((set, get) => ({
   loading: false,
   hydrate: (projects) => {
     const active = get().activeProjectId;
-    set({ projects, activeProjectId: projects.some((p) => p.id === active) ? active : (projects[0]?.id ?? "default") });
+    set({
+      projects,
+      activeProjectId: projects.some((p) => p.id === active)
+        ? active
+        : (projects[0]?.id ?? "default"),
+    });
   },
   load: async () => {
     set({ loading: true });
-    try { set({ projects: await listProjects() }); } finally { set({ loading: false }); }
+    try {
+      set({ projects: await listProjects() });
+    } finally {
+      set({ loading: false });
+    }
   },
   switchProject: async (projectId) => {
     const project = await setActiveProject(projectId);

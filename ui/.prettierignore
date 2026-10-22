@@ -1,4 +1,5 @@
 node_modules
 dist
 src/paraglide
+src/routeTree.gen.ts
 target

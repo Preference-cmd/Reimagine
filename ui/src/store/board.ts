@@ -1,5 +1,11 @@
 import { create } from "zustand";
-import { applyBoardCommands, getBoardSnapshot, previewBoardCommands, redoBoard, undoBoard } from "@/ipc";
+import {
+  applyBoardCommands,
+  getBoardSnapshot,
+  previewBoardCommands,
+  redoBoard,
+  undoBoard,
+} from "@/ipc";
 import type { BoardCommandResult, BoardSnapshot } from "@/ipc/schemas";
 
 type BoardState = BoardSnapshot & {
@@ -17,7 +23,9 @@ const empty = (): BoardSnapshot => ({ id: "", projectId: "default", version: 0, 
 export const useBoardStore = create<BoardState>((set, get) => ({
   ...empty(),
   hydrate: (snapshot) => set(snapshot),
-  load: async (projectId) => { set(await getBoardSnapshot(projectId)); },
+  load: async (projectId) => {
+    set(await getBoardSnapshot(projectId));
+  },
   acceptVersion: (projectId, version) => {
     const state = get();
     if (state.projectId !== projectId || version < state.version) return false;
@@ -32,12 +40,14 @@ export const useBoardStore = create<BoardState>((set, get) => ({
   },
   undo: async (projectId) => {
     const result = await undoBoard(projectId);
-    if (result && result.boardVersion >= get().version) set({ projectId, version: result.boardVersion });
+    if (result && result.boardVersion >= get().version)
+      set({ projectId, version: result.boardVersion });
     return result;
   },
   redo: async (projectId) => {
     const result = await redoBoard(projectId);
-    if (result && result.boardVersion >= get().version) set({ projectId, version: result.boardVersion });
+    if (result && result.boardVersion >= get().version)
+      set({ projectId, version: result.boardVersion });
     return result;
   },
 }));

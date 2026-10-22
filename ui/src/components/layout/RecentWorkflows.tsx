@@ -35,7 +35,10 @@ export function RecentWorkflows({ collapsed }: RecentWorkflowsProps) {
     // Remove entries for deleted workflows
     if (validEntries.length !== projectEntries.length) {
       useRecentWorkflowsStore.setState((state) => ({
-        entries: [...state.entries.filter((entry) => entry.projectId !== activeProjectId), ...validEntries],
+        entries: [
+          ...state.entries.filter((entry) => entry.projectId !== activeProjectId),
+          ...validEntries,
+        ],
       }));
     }
 
