@@ -110,7 +110,7 @@ impl MemoryBudget {
     pub fn release(&self, estimated: usize) {
         let _ = self
             .current_usage
-            .fetch_update(Ordering::Relaxed, Ordering::Relaxed, |current| {
+            .try_update(Ordering::Relaxed, Ordering::Relaxed, |current| {
                 Some(current.saturating_sub(estimated))
             });
     }
