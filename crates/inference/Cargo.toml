@@ -15,7 +15,6 @@ reimagine-core = { path = "../core" }
 reimagine-plugin = { path = "../plugin" }
 serde = { workspace = true }
 tokio = { workspace = true, features = ["rt", "time"] }
-tracing = "0.1"
 
 [features]
 default = []

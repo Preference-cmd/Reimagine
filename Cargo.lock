@@ -6818,7 +6818,6 @@ dependencies = [
  "tempfile",
  "tokio",
  "tokio-stream",
- "tokio-util",
  "tonic",
  "tracing",
 ]
@@ -6899,7 +6898,6 @@ dependencies = [
  "quinn",
  "reimagine-backend-worker-protocol",
  "reimagine-backend-worker-transport-quic",
- "serde",
  "serde_json",
  "sha2 0.10.9",
  "tempfile",
@@ -6976,7 +6974,6 @@ dependencies = [
  "serde",
  "serde_json",
  "tokio",
- "tracing",
 ]
 
 [[package]]
@@ -7027,7 +7024,6 @@ dependencies = [
  "reimagine-model-manager",
  "reimagine-runtime",
  "safetensors 0.7.0",
- "serde",
  "serde_json",
  "tempfile",
  "tokio",
@@ -7050,7 +7046,6 @@ dependencies = [
  "safetensors 0.7.0",
  "serde",
  "serde_json",
- "sha2 0.10.9",
  "tempfile",
  "tokenizers 0.21.4",
  "tokio",
@@ -7061,7 +7056,6 @@ dependencies = [
 name = "reimagine-model-acquisition"
 version = "0.1.0"
 dependencies = [
- "async-trait",
  "hf-hub",
  "reimagine-config",
  "reimagine-core",
@@ -7070,7 +7064,6 @@ dependencies = [
  "serde_json",
  "tempfile",
  "tokio",
- "tracing",
 ]
 
 [[package]]
