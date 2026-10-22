@@ -44,9 +44,13 @@ cargo test --workspace --locked --exclude reimagine --exclude reimagine-inferenc
 cargo test -p reimagine-inference-burn --lib --locked --no-default-features --features flex   # Linux: Flex CPU
 cargo test -p reimagine-inference-burn --lib --locked                                         # macOS: WGPU Metal
 
-# Frontend - "quality" job (lint/format/test are hook-only today)
+# Frontend - "quality" (install/build) and "ui-static" (lint/format/test) jobs;
+# lint and format also run from the git hooks on staged files
 cd ui && bun install --frozen-lockfile
 cd ui && bun run build
+cd ui && bun run lint
+cd ui && bun run format:check
+cd ui && bun run test:run
 
 # Guards - "guards" job
 python3 .github/scripts/check-module-layout.py

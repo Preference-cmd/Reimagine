@@ -158,6 +158,43 @@ jobs:
           -p reimagine-inference-burn
           --lib --locked
 
+  ui-static:
+    name: ui-static
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v5
+
+      - name: Setup Bun
+        uses: oven-sh/setup-bun@v2.2.0
+        with:
+          bun-version: latest
+
+      - name: Cache Bun global store
+        uses: actions/cache@v6
+        with:
+          path: ~/.bun/install/cache
+          key: bun-${{ runner.os }}-${{ hashFiles('ui/bun.lock') }}
+          restore-keys: bun-${{ runner.os }}-
+
+      - name: Install frontend dependencies
+        working-directory: ui
+        run: bun install --frozen-lockfile
+
+      - name: Lint frontend
+        working-directory: ui
+        run: bun run lint
+
+      - name: Check frontend formatting
+        working-directory: ui
+        run: bun run format:check
+
+      - name: Frontend tests
+        working-directory: ui
+        run: bun run test:run
+
   compile:
     name: tauri-compile (${{ matrix.platform }})
     needs: quality
