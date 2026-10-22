@@ -3,19 +3,21 @@
 > The agent entry point. `CLAUDE.md` is a symlink - edit here only.
 > Machine-local workflow rules: `AGENTS.local.md`. Process records: `.agents/`.
 
-**Reimagine** is a Tauri + Burn + React desktop app with a native AI agent that
-shares the project canvas and its workflow DSL with the user. GPL-3.0-or-later;
-a desktop application, not a published library.
+**Reimagine** is a Tauri + Burn + React desktop app built so that humans and an
+AI agent drive the same project canvas and workflow DSL through one operation
+pipeline. The legacy agent integration has been removed; a Causa-based one is
+pending, and the human path is complete without it. GPL-3.0-or-later; a desktop
+application, not a published library.
 
 ## Layout
 
-24 Cargo workspace members: 23 crates under `crates/` plus `src-tauri/`.
+19 Cargo workspace members: 18 crates under `crates/` plus `src-tauri/`.
 `Cargo.toml` `[workspace]` is the authority; one line per crate is in
 [`README.md`](README.md#workspace-layout).
 
 ```text
 src-tauri/      Tauri 2 shell and IPC; the only crate that uses Tauri
-crates/         23 workspace crates (members: Cargo.toml; one line each: README)
+crates/         18 workspace crates (members: Cargo.toml; one line each: README)
 ui/             React 19 + Vite 7 frontend (Bun)
 assets/         static placeholders
 examples/       sample workflow JSON (axum-host E2E input)
@@ -24,9 +26,9 @@ docs/           machine-local architecture notes, design and generated catalogs 
 ```
 
 The sibling `../agent-stack-oss` is **Causa**, the open-source publish set
-(`causa` + `causa-{kernel,protocol,runtime,provider,extension}`). Root
-`Cargo.toml` pins two legacy kernel crates to a Causa commit until the legacy
-agent stack is removed.
+(`causa` + `causa-{kernel,protocol,runtime,provider,extension}`). Nothing in
+this workspace depends on it today; a future agent integration will, from an
+operator adapter crate above `app-host`.
 
 ## Commands
 
@@ -48,12 +50,11 @@ cd ui && bun run build
 
 # Guards - "guards" job
 python3 .github/scripts/check-module-layout.py
-bash .github/scripts/check-dependency-directions.sh   # skips while cargo metadata fails
-cargo deny check                                      # deny.toml; skips while cargo metadata fails
+bash .github/scripts/check-dependency-directions.sh
+cargo deny check                                      # deny.toml
 python3 .github/scripts/check-commit-messages.py range origin/main HEAD
 
 # Machine-local, not CI: docs/ is untracked, so the generated catalogs are not gated
-node scripts/gen-tool-catalog.mjs
 node scripts/gen-node-catalog.mjs
 
 # Machine-local proposal tree, not CI
@@ -64,8 +65,6 @@ node .agents/scripts/new-proposal.mjs <class> <slug>   # scaffold proposal + rev
 cd src-tauri && cargo tauri dev
 cd src-tauri && cargo tauri build
 cd src-tauri && cargo tauri build --no-bundle   # what "compile" proves on macOS, Linux, Windows
-cargo build -p reimagine-agent-daemon
-cargo test  -p reimagine-agent-daemon
 ```
 
 Git hooks: `lefthook install` once per clone (`lefthook.yml`); pre-commit runs
@@ -73,10 +72,6 @@ fmt, the layout guard and the whitespace check, commit-msg runs the message guar
 pre-push runs the check and the layering guard. The proposal verifier is
 machine-local, so it runs from the gitignored `lefthook-local.yml` rather than
 from a tracked job. Hooks report early; the list above, run by CI, is the gate.
-
-The workspace resolves through a temporary git pin of the two legacy kernel
-crates to a Causa commit. This allows the workspace and CI to resolve without
-the sibling checkout. The pin is removed together with the legacy agent stack.
 
 Toolchain: MSRV **1.96**, edition 2024. Do not raise `rust-version` or add a
 dependency without a reason stated in the commit. Tests run offline; the
@@ -104,8 +99,13 @@ workflows.
 - Dependency versions are centralized in root `Cargo.toml` `[workspace.dependencies]`.
 - Burn is the primary inference backend; Candle is deprecated (V1 fallback only).
   Backend code lives in `crates/inference-backends/`.
-- Prefer existing crate/module boundaries; keep `src-tauri` thin. Agent tools
-  live in `crates/app-host/src/tools.rs`, not `agent-daemon`.
+- Prefer existing crate/module boundaries; keep `src-tauri` thin.
+- Humans and agents are operators of one pipeline in `app-host`, which records
+  who acted as a `CommandActor`. No workspace crate depends on an agent stack
+  (`reimagine-agent-*`, `causa*`; the layering guard enforces it). An agent
+  integration is an adapter crate above `app-host`, beside `src-tauri` and
+  `axum-host`; its tools call the public `app-host` services, and its change
+  grants that crate the guard's only exception.
 - When a crate, gate or workflow changes, update the copies together: Layout
   and Commands here, `README.md`, and the owning guard.
 - Do not commit build outputs, local runtime data, model weights, secrets or

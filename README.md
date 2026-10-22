@@ -37,6 +37,10 @@ peer operator that shares the same domain model and operation paths as the
 user. Every modification, whether from a human click or an agent tool call,
 flows through the same `WorkflowCommand` path with full undo/redo support.
 
+Today that path is driven by humans only: the legacy agent integration has
+been removed, and a new one built on Causa is in progress separately. Editing,
+saving, running and undo/redo work fully without it.
+
 Starting from image generation, the agent's domain understanding extends
 across video, animation, and audio — composing cross-domain pipelines from
 a single natural-language intent.
@@ -98,7 +102,7 @@ Sample workflows live under `examples/workflows/`.
 
 ## Workspace layout
 
-All 24 Cargo workspace members are listed here; `Cargo.toml` `[workspace]` is the
+All 19 Cargo workspace members are listed here; `Cargo.toml` `[workspace]` is the
 authority.
 
 ```text
@@ -112,10 +116,8 @@ crates/runtime/                  reimagine-runtime - RuntimeService, scheduler, 
 crates/inference/                reimagine-inference - backend contract, router, execution values, executors
 crates/inference-backends/       candle/ burn/ burn-worker/ - concrete backends (Burn primary, Candle deprecated)
 crates/plugin/                   reimagine-plugin - plugin package and extension metadata contract
-crates/app-host/                 reimagine-app-host - WorkspaceHost, Project/Board/Workflow/Agent services, agent tools
+crates/app-host/                 reimagine-app-host - WorkspaceHost, Project/Board/Workflow/Run/Model services, proposals
 crates/axum-host/                reimagine-axum-host - HTTP E2E test harness
-crates/agent-daemon/             reimagine-agent-daemon - frozen experimental sidecar
-crates/agent-stack/              agent-harness/ agent-legacy-stack/ agent-extension/ agent-macros/
 crates/backend-worker-protocol/  reimagine-backend-worker-protocol - worker wire protocol
 crates/backend-worker-host/      reimagine-backend-worker-host - out-of-process worker management
 crates/backend-worker-transport-quic/   reimagine-backend-worker-transport-quic - QUIC transport
@@ -129,11 +131,12 @@ examples/                        sample workflow JSON
 `src-tauri/` and `crates/axum-host/` are thin host adapters that share the
 `reimagine-app-host` facade; all domain logic lives under `crates/`.
 
-The agent-stack crates are frozen or staging code. The open-source publish set
+No workspace crate depends on an agent stack. The open-source agent kernel
 lives in the sibling repository `../agent-stack-oss` (`Causa`: `causa`,
 `causa-kernel`, `causa-protocol`, `causa-runtime`, `causa-provider`,
-`causa-extension`) and is consumed through path dependencies while the
-extraction is in transition.
+`causa-extension`). A future agent integration will depend on it from an
+operator adapter crate above `reimagine-app-host`, alongside the Tauri and
+Axum hosts; nothing depends on it today.
 
 ## Conventions
 
