@@ -11,10 +11,13 @@
 #              inference, runtime
 #   backends   inference-candle, inference-burn, inference-burn-worker
 #   workers    backend-worker-host, -transport-quic, -transport-grpc, -transfer
-#   agent      agent-harness, agent-legacy-stack, agent-extension,
-#              agent-macros and the agent kernel crates they use
 #   host       app-host
-#   entries    reimagine (src-tauri), axum-host, agent-daemon
+#   entries    reimagine (src-tauri), axum-host
+#
+# No workspace crate depends on an agent stack (reimagine-agent-*, the legacy
+# agent kernel crates, causa*). The operation pipeline in app-host serves
+# humans and agents alike; an agent integration is an operator adapter above
+# it, and the change that adds one grants that crate the only exception.
 #
 # Patterns are extended regexes matched against cargo-tree lines after the
 # "-- " edge marker, so the crate itself (the root line) never matches.
@@ -26,7 +29,7 @@ WORKSPACE='reimagine(-[a-z-]+)? v'
 TAURI='tauri(-[a-z-]+)? v'
 AGENT='(reimagine-agent-[a-z-]+|reimagine-ai-protocol|reimagine-context-kernel|causa(-[a-z]+)?) v'
 APP_HOST='reimagine-app-host v'
-ENTRIES='(reimagine|reimagine-axum-host|reimagine-agent-daemon) v'
+ENTRIES='(reimagine|reimagine-axum-host) v'
 BACKENDS='(reimagine-inference-(burn|burn-worker|candle)|burn-[a-z]+|candle-[a-z]+|cubecl(-[a-z]+)?|wgpu) v'
 HTTP_SERVER='axum v'
 DOMAIN='(reimagine-core|reimagine-config|reimagine-nodes|reimagine-model-manager|reimagine-model-acquisition|reimagine-inference|reimagine-runtime|reimagine-plugin|reimagine-backend-worker-host) v'
@@ -67,34 +70,35 @@ check reimagine-plugin "$WORKSPACE"
 check reimagine-backend-worker-protocol "$WORKSPACE"
 
 # Domain crates and contracts never reach a concrete inference backend,
-# the agent stack, a host or the desktop shell. The runtime additionally
+# a host or the desktop shell. The runtime additionally
 # stays out of model management, and the inference contract stays
 # runtime-neutral.
 for crate in reimagine-config reimagine-nodes reimagine-model-manager reimagine-model-acquisition; do
-  check "$crate" "$BACKENDS" "$AGENT" "$HTTP_SERVER"
+  check "$crate" "$BACKENDS" "$HTTP_SERVER"
 done
-check reimagine-inference "$BACKENDS" "$AGENT" "$HTTP_SERVER" 'reimagine-runtime v'
-check reimagine-runtime "$BACKENDS" "$AGENT" "$HTTP_SERVER" 'reimagine-model-manager v'
+check reimagine-inference "$BACKENDS" "$HTTP_SERVER" 'reimagine-runtime v'
+check reimagine-runtime "$BACKENDS" "$HTTP_SERVER" 'reimagine-model-manager v'
 
 # Backends implement the inference contract and know nothing above it.
 for crate in reimagine-inference-candle reimagine-inference-burn reimagine-inference-burn-worker; do
-  check "$crate" "$AGENT" "$HTTP_SERVER" 'reimagine-runtime v' 'reimagine-model-manager v'
+  check "$crate" "$HTTP_SERVER" 'reimagine-runtime v' 'reimagine-model-manager v'
 done
 
 # The worker host manages out-of-process workers and never links a backend;
 # transports and transfer carry protocol messages and know no domain crate.
-check reimagine-backend-worker-host "$BACKENDS" "$AGENT" "$HTTP_SERVER"
+check reimagine-backend-worker-host "$BACKENDS" "$HTTP_SERVER"
 for crate in reimagine-backend-worker-transport-quic reimagine-backend-worker-transport-grpc reimagine-backend-worker-transfer; do
-  check "$crate" "$DOMAIN" "$BACKENDS" "$AGENT"
+  check "$crate" "$DOMAIN" "$BACKENDS"
 done
 
-# Only the desktop entry point uses Tauri; nothing below the entry points
-# depends on the host facade; nothing depends on an entry point.
+# Every crate stays free of the agent stack. Only the desktop entry point
+# uses Tauri; nothing below the entry points depends on the host facade;
+# nothing depends on an entry point.
 while read -r crate; do
   case "$crate" in
-    reimagine) check "$crate" "$ENTRIES" ;;
-    reimagine-axum-host | reimagine-agent-daemon) check "$crate" "$TAURI" "$ENTRIES" ;;
-    *) check "$crate" "$TAURI" "$APP_HOST" "$ENTRIES" ;;
+    reimagine) check "$crate" "$AGENT" "$ENTRIES" ;;
+    reimagine-axum-host) check "$crate" "$AGENT" "$TAURI" "$ENTRIES" ;;
+    *) check "$crate" "$AGENT" "$TAURI" "$APP_HOST" "$ENTRIES" ;;
   esac
 done <<<"$members"
 

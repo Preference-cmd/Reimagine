@@ -42,12 +42,7 @@ pre-push:
   parallel: true
   jobs:
     - name: check
-      # The workspace does not resolve until the sibling Causa path deps are
-      # repointed (see AGENTS.md, "The workspace does not resolve today"):
-      # cargo metadata fails today. Report that and skip instead of blocking
-      # every push; the guard runs again as soon as the rewire lands.
-      run: bash -c 'if ! cargo metadata --no-deps --format-version 1 >/dev/null 2>&1; then echo "lefthook - cargo metadata fails (stale ../agent-stack-oss path deps); skipping cargo check until the Causa path-dep rewire"; exit 0; fi; cargo check --workspace --all-targets --locked --exclude reimagine-inference-burn-worker'
+      run: cargo check --workspace --all-targets --locked --exclude reimagine-inference-burn-worker
 
     - name: layering
-      # Same prerequisite as the check job: cargo metadata must resolve first.
-      run: bash -c 'if ! cargo metadata --no-deps --format-version 1 >/dev/null 2>&1; then echo "lefthook - cargo metadata fails (stale ../agent-stack-oss path deps); skipping layering guard until the Causa path-dep rewire"; exit 0; fi; bash .github/scripts/check-dependency-directions.sh'
+      run: bash .github/scripts/check-dependency-directions.sh
