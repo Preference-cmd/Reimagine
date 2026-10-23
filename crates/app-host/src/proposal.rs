@@ -12,10 +12,10 @@ pub enum ProposalStatus {
     Conflicted,
 }
 
-/// Receipt returned by `workflow.propose_commands`.
+/// Receipt for a stored workflow proposal.
 ///
-/// Carries enough metadata for the agent loop to reference the proposal
-/// later, and an explicit `effective` flag set to `false` because
+/// Carries enough metadata for the proposing operator to reference the
+/// proposal later, and an explicit `effective` flag set to `false` because
 /// proposals do not mutate the workflow directly.
 #[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize)]
 pub struct ProposalReceipt {

@@ -3,8 +3,8 @@
 //! Layout: `projects/{project_id}/project.json` plus the project-owned
 //! board at `projects/{project_id}/board.json`. Creation writes both
 //! documents atomically; deletion removes the whole project directory
-//! (workflows, agent threads, and the board), which is the V1 cascade
-//! strategy until workflow/thread services own their indices.
+//! (workflows, the board, and project memory), which is the V1 cascade
+//! strategy until the workflow service owns its index.
 
 use std::collections::BTreeMap;
 use std::path::Path;
@@ -222,8 +222,8 @@ impl ProjectService {
     }
 
     /// Delete a project and everything under its directory (board,
-    /// workflows, agent threads, memory). In-memory registries are
-    /// cleared first so a later create with the same id starts fresh.
+    /// workflows, memory). In-memory registries are cleared first so a
+    /// later create with the same id starts fresh.
     pub async fn delete_project(&self, project_id: &ProjectId) -> AppHostResult<()> {
         self.load_project(project_id).await?;
         self.projects

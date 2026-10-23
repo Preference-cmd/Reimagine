@@ -33,8 +33,7 @@ use crate::response::text::TextEncodeResponse;
 /// Backend-neutral inference execution trait.
 ///
 /// V1 uses `async_trait` for a readable async trait-object surface,
-/// matching the pattern already used by `runtime::NodeExecutor` and
-/// `agent::AgentProvider`.
+/// matching the pattern already used by `runtime::NodeExecutor`.
 #[async_trait::async_trait]
 pub trait InferenceBackend: Send + Sync + 'static {
     /// The stable kind identifier for this backend (e.g. `"candle"`,

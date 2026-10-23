@@ -1,7 +1,7 @@
 //! Project domain aggregate root.
 //!
 //! A Project is the top-level container for all creative work in Reimagine.
-//! It owns boards, workflows, assets, runs, and agent threads.
+//! It owns boards, workflows, assets, and runs.
 
 use crate::event::Timestamp;
 use crate::model::ProjectId;
