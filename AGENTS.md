@@ -3,9 +3,9 @@
 > The agent entry point. `CLAUDE.md` is a symlink - edit here only.
 > Machine-local workflow rules: `AGENTS.local.md`. Process records: `.agents/`.
 
-**Reimagine** is a Tauri + Burn + React desktop app built so that humans and an
-AI agent drive the same project canvas and workflow DSL through one operation
-pipeline. The legacy agent integration has been removed; a Causa-based one is
+**Reimagine** is a Tauri + Burn + React desktop app for AIGC projects, built so
+that humans and an AI agent drive the same project canvas and workflow DSL
+through one operation pipeline. The legacy agent integration has been removed; a Causa-based one is
 pending, and the human path is complete without it. GPL-3.0-or-later; a desktop
 application, not a published library.
 

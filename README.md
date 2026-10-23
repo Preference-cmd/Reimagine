@@ -2,8 +2,8 @@
 
 # Reimagine
 
-**The AI agent that understands your AIGC workflows**
-**Node-based editing + native agent, in a single Rust + React workspace.**
+**An agent-native project canvas for AIGC**
+**Materials, notes, workflows and runs on one canvas, in a single Rust + React workspace.**
 
 [![License: GPL-3.0-or-later](https://img.shields.io/badge/License-GPL--3.0--or--later-blue?style=flat-square)](LICENSE)
 [![Rust](https://img.shields.io/badge/Rust-1.96%2B-orange?style=flat-square&logo=rust)](https://www.rust-lang.org)
@@ -12,44 +12,49 @@
 
 </div>
 
-AIGC workflows are usually hand-wired: compose nodes, wire slots, run,
-inspect, tweak — then repeat. The bottleneck is the editing loop itself.
-External agents (Comfy MCP) can help, but they don't understand node graph
-semantics and can't operate as true collaborators.
+Creative AIGC projects sprawl: reference material in one place, node graphs in
+another, outputs in a folder, decisions in a chat log. Node editors such as
+ComfyUI cover one part of the job - wiring and running a graph - and external
+agents that drive them over MCP see tool calls, not the project around them.
 
-Reimagine puts an AI agent at the center. The agent reads, authors, and
-executes workflows on the same runtime behind the desktop and HTTP hosts,
-exposing a typed tool surface over the graph, validation pipeline, and
-scheduler. It is not a chatbot bolted onto a node editor — it is a peer
-operator that shares the same domain model and operation paths as the user.
-Describe what you want; the agent composes, validates, runs, observes, and
-iterates alongside you.
+Reimagine keeps the whole project in one place. Each project is an infinite
+canvas holding source materials, notes, workflow frames, runs and generated
+artifacts. Workflows are a first-class DSL on that canvas, not the whole
+product. An AI agent is meant to be the main way to work: you describe what you
+want, and it gathers and organizes material, builds and previews workflows,
+runs them and iterates with you - starting with image generation and extending
+to video, animation and audio.
 
 
 
 ## Architecture
 
-### Agent-first design
+### One operation pipeline for humans and the agent
 
-Reimagine is built around a native AI agent that deeply understands AIGC
-workflows. The agent is not an external tool talking through MCP — it is a
-peer operator that shares the same domain model and operation paths as the
-user. Every modification, whether from a human click or an agent tool call,
-flows through the same `WorkflowCommand` path with full undo/redo support.
+Humans and the agent operate the same pipeline in `reimagine-app-host`. Canvas
+edits go through `BoardCommand` and workflow edits through `WorkflowCommand`;
+both can be previewed, undone and redone, and every change records who made it
+(`CommandActor`). The agent is a peer operator that shares the user's domain
+model and operation paths - not a chatbot bolted onto an editor, and not an
+external tool that only sees an API.
 
-Today that path is driven by humans only: the legacy agent integration has
-been removed, and a new one built on Causa is in progress separately. Editing,
-saving, running and undo/redo work fully without it.
+Today the pipeline is driven by humans only: the legacy agent integration has
+been removed, and a new one built on Causa is pending. Editing, saving and
+undo/redo work fully without it.
 
-Starting from image generation, the agent's domain understanding extends
-across video, animation, and audio — composing cross-domain pipelines from
-a single natural-language intent.
+### Project, Board and Workflow
+
+A **Project** is the top-level container. Its **Board** is the persisted canvas
+document; board items reference workflows, assets and runs, or hold notes. A
+**Workflow** is a node graph stored as a single JSON document; on the canvas it
+appears as a workflow frame. Runs and generated files stay outside the workflow
+document, under the workspace base path.
 
 ### Desktop app + headless server
 
-The workflow engine runs in two modes: a **desktop app** with a visual
-node editor, and a **headless server** for automation and scripting.
-Workflows built in the GUI run on the server without changes.
+The engine runs in two modes: a **desktop app** with the canvas editor, and a
+**headless server** for automation and scripting. Workflows built in the GUI run
+on the server without changes.
 
 ### Cross-platform inference
 
@@ -155,11 +160,15 @@ See [AGENTS.md](AGENTS.md) for the full workspace map and agent conventions.
 
 ## Status
 
-Reimagine is currently in active development. There will be breaking
-changes to internal APIs, node contracts, and the workflow document schema
-while the agent–runtime–backend integration stabilizes. The runtime
-semantics for built-in nodes are intended to be stable; expect schema
-revisions for new capabilities.
+Reimagine is in active development; internal APIs, node contracts and the
+workflow document schema will still change. Where it stands today:
+
+- The Project, Board and Workflow model, its command pipeline and undo/redo are
+  implemented in Rust. The desktop UI edits one workflow graph at a time; it
+  does not yet draw the Board's materials, notes and runs.
+- Image generation (SDXL base on Burn) is the only domain implemented; video,
+  animation and audio are planned.
+- The agent is not wired in; see the architecture section above.
 
 ## License
 
