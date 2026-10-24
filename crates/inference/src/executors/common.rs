@@ -225,7 +225,8 @@ mod tests {
     use super::{required_clip_input, required_u32_param, run_output};
     use crate::executor::{NodeExecutionContext, NodeExecutorError};
     use crate::node_context::{NodeInputs, NodeParams};
-    use crate::testing::{NoopArtifactPublisher, NoopNodeCancellation};
+    use crate::testing::NoopArtifactPublisher;
+    use reimagine_core::task::{CancelToken, NoopProgressSink};
 
     fn test_context(inputs: NodeInputs, params: NodeParams) -> NodeExecutionContext {
         NodeExecutionContext::new(
@@ -238,8 +239,8 @@ mod tests {
             inputs,
             params,
             Arc::new(NoopArtifactPublisher::new()),
-            Arc::new(NoopNodeCancellation::new()),
-            Arc::new(crate::NoopInferenceProgressSink),
+            CancelToken::new(),
+            Arc::new(NoopProgressSink),
             Timestamp::new("2026-06-21T00:00:00Z"),
         )
     }

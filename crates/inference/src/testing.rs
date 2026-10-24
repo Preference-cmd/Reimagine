@@ -16,8 +16,7 @@
 
 use std::sync::Arc;
 use std::sync::Mutex;
-use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
-use std::time::Duration;
+use std::sync::atomic::{AtomicU64, Ordering};
 
 use crate::{
     Backend, CreateEmptyLatentRequest, CreateEmptyLatentResponse, DiffusionSampleRequest,
@@ -31,7 +30,6 @@ use async_trait::async_trait;
 use reimagine_core::model::{ArtifactId, ArtifactRef, SlotId};
 
 use crate::artifact_publisher::{ArtifactEventKind, ArtifactPublisher};
-use crate::cancellation::NodeCancellation;
 
 /// A canned response factory for a single capability.
 pub struct CannedCapabilityResponse<Req, Resp> {
@@ -700,47 +698,5 @@ impl ArtifactPublisher for RecordingArtifactPublisher {
             });
         let index = self.counter.fetch_add(1, Ordering::Relaxed);
         Some(ArtifactId::new(format!("rec-{index}")))
-    }
-}
-
-/// No-op [`NodeCancellation`] for tests.
-///
-/// Polls the cancelled flag with a short `tokio::time::sleep` so
-/// executors that `await cancellation().cancelled()` yield back to the
-/// runtime. Tests that need a more responsive signal can call
-/// [`cancel`](Self::cancel) before the await.
-#[derive(Debug, Clone)]
-pub struct NoopNodeCancellation {
-    cancelled: Arc<AtomicBool>,
-}
-
-impl Default for NoopNodeCancellation {
-    fn default() -> Self {
-        Self::new()
-    }
-}
-
-impl NoopNodeCancellation {
-    pub fn new() -> Self {
-        Self {
-            cancelled: Arc::new(AtomicBool::new(false)),
-        }
-    }
-
-    pub fn cancel(&self) {
-        self.cancelled.store(true, Ordering::SeqCst);
-    }
-}
-
-#[async_trait]
-impl NodeCancellation for NoopNodeCancellation {
-    fn is_cancelled(&self) -> bool {
-        self.cancelled.load(Ordering::SeqCst)
-    }
-
-    async fn cancelled(&self) {
-        while !self.is_cancelled() {
-            tokio::time::sleep(Duration::from_millis(1)).await;
-        }
     }
 }

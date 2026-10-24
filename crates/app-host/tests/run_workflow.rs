@@ -37,7 +37,7 @@ use reimagine_model_manager::{
 use reimagine_nodes::{BUILTIN_CHECKPOINT_LOADER, BuiltinNodeCatalog};
 use reimagine_runtime::{
     BoxedNodeExecutor, ExecutionOutput, NodeExecutionContext, NodeExecutor, NodeExecutorRegistry,
-    RunInputs, RunState, RuntimeOptions, RuntimeService, VecRunEventSink,
+    RunInputs, RuntimeOptions, RuntimeService, TaskState, VecRunEventSink,
 };
 
 fn empty_compute_profile() -> Arc<WorkspaceComputeProfile> {
@@ -353,13 +353,13 @@ async fn run_workflow_handoff_completes_when_readiness_passes() {
     };
 
     assert_eq!(handle.workflow_id().as_str(), WORKFLOW_ID);
-    assert_eq!(initial_snapshot.state, RunState::Queued);
+    assert_eq!(initial_snapshot.state, TaskState::Queued);
 
     run_to_completion(&runtime, &handle).await;
     let summary = runtime
         .summary(handle.run_id())
         .expect("summary should exist after completion");
-    assert_eq!(summary.state, RunState::Completed);
+    assert_eq!(summary.state, TaskState::Completed);
 }
 
 #[tokio::test]

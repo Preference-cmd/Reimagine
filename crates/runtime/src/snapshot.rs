@@ -6,8 +6,8 @@ use reimagine_core::diagnostic::Diagnostic;
 use reimagine_core::event::Timestamp;
 use reimagine_core::model::{ArtifactId, ArtifactRef, NodeId, RunId, WorkflowId, WorkflowVersion};
 
-use crate::handle::RunState;
 use crate::scheduler::NodeState;
+use reimagine_core::task::TaskState;
 
 /// Incremental update to a [`RunSnapshot`], produced by [`crate::store::RunStore`]
 /// on every store mutation.
@@ -79,7 +79,7 @@ pub struct RunSnapshot {
     pub run_id: RunId,
     pub workflow_id: WorkflowId,
     pub workflow_version: WorkflowVersion,
-    pub state: RunState,
+    pub state: TaskState,
     pub node_states: HashMap<NodeId, NodeState>,
     pub diagnostics: Vec<Diagnostic>,
     pub artifacts: Vec<RunArtifactRef>,
@@ -93,7 +93,7 @@ impl RunSnapshot {
         run_id: RunId,
         workflow_id: WorkflowId,
         workflow_version: WorkflowVersion,
-        state: RunState,
+        state: TaskState,
         node_states: HashMap<NodeId, NodeState>,
         diagnostics: Vec<Diagnostic>,
         artifacts: Vec<RunArtifactRef>,
@@ -120,7 +120,7 @@ pub struct RunSummary {
     pub run_id: RunId,
     pub workflow_id: WorkflowId,
     pub workflow_version: WorkflowVersion,
-    pub state: RunState,
+    pub state: TaskState,
     pub diagnostics: Vec<Diagnostic>,
     pub artifacts: Vec<RunArtifactRef>,
     pub started_at: Timestamp,
@@ -133,7 +133,7 @@ impl RunSummary {
         run_id: RunId,
         workflow_id: WorkflowId,
         workflow_version: WorkflowVersion,
-        state: RunState,
+        state: TaskState,
         diagnostics: Vec<Diagnostic>,
         artifacts: Vec<RunArtifactRef>,
         started_at: Timestamp,

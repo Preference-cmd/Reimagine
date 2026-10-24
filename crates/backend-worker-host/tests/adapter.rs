@@ -7,18 +7,16 @@ use reimagine_backend_worker_host::{
 };
 use reimagine_backend_worker_protocol::{BackendInstanceId, ProtocolRange, WorkerInstallationId};
 use reimagine_core::model::{NodeId, RunId, WorkflowId, WorkflowVersion};
+use reimagine_inference::{CancelToken, InferenceError, InferenceInvocation, NoopProgressSink};
 use reimagine_inference::{CreateEmptyLatentRequest, InferenceBackend, InferenceCapability};
-use reimagine_inference::{
-    InferenceError, InferenceInvocation, NoopInferenceProgressSink, NoopNodeCancellation,
-};
-use reimagine_inference::{InferenceProgress, InferenceProgressSink};
+use reimagine_inference::{Progress, ProgressSink};
 use reimagine_inference::{ResourceHintSink, ResourceHints, VramBudget};
 
 #[derive(Default)]
-struct RecordingProgressSink(Mutex<Vec<InferenceProgress>>);
+struct RecordingProgressSink(Mutex<Vec<Progress>>);
 
-impl InferenceProgressSink for RecordingProgressSink {
-    fn report(&self, progress: InferenceProgress) {
+impl ProgressSink for RecordingProgressSink {
+    fn report(&self, progress: Progress) {
         self.0
             .lock()
             .expect("progress sink poisoned")
@@ -120,13 +118,13 @@ async fn invocation_cancellation_reaches_worker_and_wins_once() {
         .push(("FAKE_LATENT_DELAY_MS".to_owned(), "250".to_owned()));
     let worker = Arc::new(WorkerSupervisor::new(spec).start().await.unwrap());
     let backend = Arc::new(ProcessInferenceBackend::new(worker));
-    let cancellation = Arc::new(NoopNodeCancellation::new());
+    let cancellation = CancelToken::new();
     let invocation = InferenceInvocation::new(
         RunId::new("run-cancel"),
         NodeId::new("node-cancel"),
         None,
         cancellation.clone(),
-        Arc::new(NoopInferenceProgressSink),
+        Arc::new(NoopProgressSink),
     );
 
     let request_task = {
@@ -169,13 +167,13 @@ async fn backend_error_terminal_wins_over_late_cancel_ack_once() {
     ));
     let worker = Arc::new(WorkerSupervisor::new(spec).start().await.unwrap());
     let backend = Arc::new(ProcessInferenceBackend::new(worker));
-    let cancellation = Arc::new(NoopNodeCancellation::new());
+    let cancellation = CancelToken::new();
     let invocation = InferenceInvocation::new(
         RunId::new("run-backend-error-race"),
         NodeId::new("node-backend-error-race"),
         None,
         cancellation.clone(),
-        Arc::new(NoopInferenceProgressSink),
+        Arc::new(NoopProgressSink),
     );
     let request_task = {
         let backend = backend.clone();
@@ -217,13 +215,13 @@ async fn success_terminal_wins_over_late_cancel_ack_once() {
         .push(("FAKE_LATENT_TERMINAL".to_owned(), "success".to_owned()));
     let worker = Arc::new(WorkerSupervisor::new(spec).start().await.unwrap());
     let backend = Arc::new(ProcessInferenceBackend::new(worker));
-    let cancellation = Arc::new(NoopNodeCancellation::new());
+    let cancellation = CancelToken::new();
     let invocation = InferenceInvocation::new(
         RunId::new("run-success-race"),
         NodeId::new("node-success-race"),
         None,
         cancellation.clone(),
-        Arc::new(NoopInferenceProgressSink),
+        Arc::new(NoopProgressSink),
     );
     let request_task = {
         let backend = backend.clone();
@@ -261,13 +259,13 @@ async fn worker_crash_after_cancel_request_is_transport_lost_not_cancelled() {
         .push(("FAKE_LATENT_TERMINAL".to_owned(), "crash".to_owned()));
     let worker = Arc::new(WorkerSupervisor::new(spec).start().await.unwrap());
     let backend = Arc::new(ProcessInferenceBackend::new(worker));
-    let cancellation = Arc::new(NoopNodeCancellation::new());
+    let cancellation = CancelToken::new();
     let invocation = InferenceInvocation::new(
         RunId::new("run-crash-race"),
         NodeId::new("node-crash-race"),
         None,
         cancellation.clone(),
-        Arc::new(NoopInferenceProgressSink),
+        Arc::new(NoopProgressSink),
     );
     let request_task = {
         let backend = backend.clone();
@@ -381,7 +379,7 @@ async fn invocation_progress_is_forwarded_before_worker_terminal() {
         RunId::new("run-progress"),
         NodeId::new("node-progress"),
         None,
-        Arc::new(NoopNodeCancellation::new()),
+        CancelToken::new(),
         progress.clone(),
     );
     let request_task = {

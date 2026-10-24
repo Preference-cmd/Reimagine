@@ -3,10 +3,7 @@
 //! The context shape is owned by `reimagine-inference` (this crate)
 //! so that built-in inference executors can read it without depending
 //! on `reimagine-runtime`. The runtime builds each context from its
-//! `RunSession`, `RunInputs`, artifact store, and cancellation token,
-//! wrapping the latter two in trait objects
-//! ([`ArtifactPublisher`](crate::artifact_publisher::ArtifactPublisher)
-//! and [`NodeCancellation`](crate::cancellation::NodeCancellation)).
+//! `RunSession`, `RunInputs`, artifact store, and cancellation token.
 
 use std::collections::HashMap;
 use std::sync::Arc;
@@ -17,10 +14,10 @@ use reimagine_core::event::Timestamp;
 use reimagine_core::model::{
     NodeId, NodeTypeId, ParamValue, RunId, SlotId, WorkflowId, WorkflowVersion,
 };
+use reimagine_core::task::{CancelToken, ProgressSink};
 
+use crate::InferenceInvocation;
 use crate::artifact_publisher::ArtifactPublisher;
-use crate::cancellation::NodeCancellation;
-use crate::{InferenceInvocation, InferenceProgressSink};
 
 /// Resolved input values for a single node, keyed by input `SlotId`.
 #[derive(Debug, Clone, Default)]
@@ -101,8 +98,8 @@ pub struct NodeExecutionContext {
     inputs: NodeInputs,
     params: NodeParams,
     artifacts: Arc<dyn ArtifactPublisher>,
-    cancellation: Arc<dyn NodeCancellation>,
-    progress: Arc<dyn InferenceProgressSink>,
+    cancellation: CancelToken,
+    progress: Arc<dyn ProgressSink>,
     started_at: Timestamp,
 }
 
@@ -118,8 +115,8 @@ impl NodeExecutionContext {
         inputs: NodeInputs,
         params: NodeParams,
         artifacts: Arc<dyn ArtifactPublisher>,
-        cancellation: Arc<dyn NodeCancellation>,
-        progress: Arc<dyn InferenceProgressSink>,
+        cancellation: CancelToken,
+        progress: Arc<dyn ProgressSink>,
         started_at: Timestamp,
     ) -> Self {
         Self {
@@ -174,7 +171,7 @@ impl NodeExecutionContext {
         &self.artifacts
     }
 
-    pub fn cancellation(&self) -> &Arc<dyn NodeCancellation> {
+    pub fn cancellation(&self) -> &CancelToken {
         &self.cancellation
     }
 
@@ -183,7 +180,7 @@ impl NodeExecutionContext {
             self.run_id.clone(),
             self.node_id.clone(),
             self.correlation_id.clone(),
-            Arc::clone(&self.cancellation),
+            self.cancellation.clone(),
             Arc::clone(&self.progress),
         )
     }
@@ -196,13 +193,13 @@ impl NodeExecutionContext {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::NoopInferenceProgressSink;
-    use crate::testing::{NoopArtifactPublisher, NoopNodeCancellation};
+    use crate::testing::NoopArtifactPublisher;
+    use reimagine_core::task::NoopProgressSink;
 
     #[test]
     fn inference_invocation_preserves_node_identity_and_cancellation() {
-        let cancellation: Arc<dyn NodeCancellation> = Arc::new(NoopNodeCancellation::new());
-        let progress = Arc::new(NoopInferenceProgressSink);
+        let cancellation = CancelToken::new();
+        let progress = Arc::new(NoopProgressSink);
         let context = NodeExecutionContext::new(
             RunId::new("run-invocation"),
             WorkflowId::new("workflow"),
@@ -213,7 +210,7 @@ mod tests {
             NodeInputs::new(),
             NodeParams::new(),
             Arc::new(NoopArtifactPublisher::new()),
-            Arc::clone(&cancellation),
+            cancellation.clone(),
             progress,
             Timestamp::new("2026-07-14T00:00:00Z"),
         );
@@ -226,6 +223,8 @@ mod tests {
             invocation.correlation_id().map(CorrelationId::as_str),
             Some("correlation")
         );
-        assert!(Arc::ptr_eq(invocation.cancellation(), &cancellation));
+        assert!(!invocation.cancellation().is_cancelled());
+        cancellation.cancel();
+        assert!(invocation.cancellation().is_cancelled());
     }
 }

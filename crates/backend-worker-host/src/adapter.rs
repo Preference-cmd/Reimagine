@@ -10,10 +10,9 @@ use reimagine_inference::{
     ExecutionConditioning, ImageImportRequest, ImageImportResponse, ImagePreviewRequest,
     ImagePreviewResponse, ImageSaveRequest, ImageSaveResponse, InferenceBackend,
     InferenceBackendCapabilities, InferenceCapability, InferenceCapabilitySupport, InferenceError,
-    InferenceInvocation, InferenceProgress, LatentContent, LatentDecodeRequest,
-    LatentDecodeResponse, LatentEncodeRequest, LatentEncodeResponse, LoadBundleRequest,
-    LoadBundleResponse, ResourceHintSink, ResourceHints, RuntimeLatent, TextEncodeRequest,
-    TextEncodeResponse,
+    InferenceInvocation, LatentContent, LatentDecodeRequest, LatentDecodeResponse,
+    LatentEncodeRequest, LatentEncodeResponse, LoadBundleRequest, LoadBundleResponse, Progress,
+    ResourceHintSink, ResourceHints, RuntimeLatent, TextEncodeRequest, TextEncodeResponse,
 };
 
 use crate::StartedWorker;
@@ -150,7 +149,7 @@ impl ProcessInferenceBackend {
             })?;
         let canceller = handle.canceller();
         let finish = handle.finish_with_progress(|frame| {
-            invocation.progress().report(InferenceProgress {
+            invocation.progress().report(Progress {
                 sequence: frame.sequence,
                 completed: frame.completed,
                 total: frame.total,

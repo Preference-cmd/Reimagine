@@ -1,9 +1,9 @@
 use std::sync::{Arc, Mutex};
 
 use reimagine_core::diagnostic::CorrelationId;
-use reimagine_core::event::{NodeProgress, RunEvent, RunEventId, RunEventKind};
+use reimagine_core::event::{RunEvent, RunEventId, RunEventKind};
 use reimagine_core::model::{NodeId, RunId, WorkflowId, WorkflowVersion};
-use reimagine_inference::{InferenceProgress, InferenceProgressSink};
+use reimagine_core::task::{Progress, ProgressSink};
 
 use crate::clock::Clock;
 use crate::events::RunEventSink;
@@ -47,8 +47,8 @@ impl RuntimeInferenceProgressSink {
     }
 }
 
-impl InferenceProgressSink for RuntimeInferenceProgressSink {
-    fn report(&self, progress: InferenceProgress) {
+impl ProgressSink for RuntimeInferenceProgressSink {
+    fn report(&self, progress: Progress) {
         let mut last = self.last_sequence.lock().expect("progress sink poisoned");
         if last.is_some_and(|sequence| progress.sequence <= sequence) {
             return;
@@ -68,12 +68,7 @@ impl InferenceProgressSink for RuntimeInferenceProgressSink {
             self.clock.now(),
         )
         .with_node_id(self.node_id.clone())
-        .with_progress(NodeProgress::new(
-            progress.sequence,
-            progress.completed,
-            progress.total,
-            progress.message,
-        ));
+        .with_progress(progress.clone());
         if let Some(correlation_id) = &self.correlation_id {
             event = event.with_correlation_id(correlation_id.clone());
         }
@@ -93,7 +88,7 @@ mod tests {
 
     use reimagine_core::event::RunEvent;
     use reimagine_core::model::{NodeId, RunId, WorkflowId, WorkflowVersion};
-    use reimagine_inference::{InferenceProgress, InferenceProgressSink};
+    use reimagine_core::task::{Progress, ProgressSink};
 
     use crate::{RunEventSink, RuntimeError, SystemClock, VecRunEventSink};
 
@@ -113,7 +108,7 @@ mod tests {
         );
 
         for sequence in [1, 1, 0, 2] {
-            sink.report(InferenceProgress {
+            sink.report(Progress {
                 sequence,
                 completed: sequence,
                 total: Some(2),
@@ -159,7 +154,7 @@ mod tests {
             events.clone(),
             Arc::new(SystemClock),
         );
-        let progress = InferenceProgress {
+        let progress = Progress {
             sequence: 1,
             completed: 1,
             total: Some(1),

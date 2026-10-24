@@ -9,7 +9,8 @@ pub(crate) mod scheduler;
 pub mod unet;
 
 use burn_tensor::{Tensor, TensorData};
-use reimagine_inference::{ConditioningMetadata, InferenceProgress, InferenceProgressSink};
+use reimagine_core::task::{Progress, ProgressSink};
+use reimagine_inference::ConditioningMetadata;
 
 use crate::active_backend::ActiveBurnBackend;
 use crate::backend::BurnBackend;
@@ -35,7 +36,7 @@ pub fn sample_sdxl(
     cfg: f32,
     seed: u64,
     backend: &BurnBackend,
-    progress: Option<&dyn InferenceProgressSink>,
+    progress: Option<&dyn ProgressSink>,
 ) -> Result<Tensor<ActiveBurnBackend, 4>, BurnBackendError> {
     let sdxl = match bundle {
         BurnLoadedModelBundle::StableDiffusionSdxl(bundle) => bundle.as_ref(),
@@ -71,7 +72,7 @@ pub fn sample_sdxl(
                 // Each step produces two events (negative + positive CFG branches).
                 // Report progress per step using the negative branch as the canonical trigger.
                 if event.branch() == sampler::SdxlCfgBranch::Negative {
-                    sink.report(InferenceProgress {
+                    sink.report(Progress {
                         sequence: event.step_index() as u64 * 2,
                         completed: event.step_index() as u64,
                         total: Some(steps as u64),

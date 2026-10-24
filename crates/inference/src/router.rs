@@ -506,8 +506,8 @@ mod tests {
             RunId::new("test-run"),
             NodeId::new("test-node"),
             None,
-            Arc::new(crate::testing::NoopNodeCancellation::new()),
-            Arc::new(crate::NoopInferenceProgressSink),
+            reimagine_core::task::CancelToken::new(),
+            Arc::new(reimagine_core::task::NoopProgressSink),
         )
     }
 
@@ -743,8 +743,8 @@ mod tests {
             RunId::new("invocation-run"),
             NodeId::new("invocation-node"),
             None,
-            Arc::new(crate::testing::NoopNodeCancellation::new()),
-            Arc::new(crate::NoopInferenceProgressSink),
+            reimagine_core::task::CancelToken::new(),
+            Arc::new(reimagine_core::task::NoopProgressSink),
         );
 
         let response = router

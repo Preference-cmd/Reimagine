@@ -1,31 +1,10 @@
 //! Host-visible run control handle.
 
-use reimagine_core::model::{RunId, WorkflowId, WorkflowVersion};
+use std::collections::HashMap;
+use std::sync::{Arc, Mutex};
 
-use crate::cancellation::CancellationToken;
-
-/// High-level state of a run, observable to the host.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
-pub enum RunState {
-    /// Run has been registered in the store and the background task spawned,
-    /// but the runner has not yet started processing stages.
-    Queued,
-    /// Runner is actively processing stages.
-    Running,
-    /// Run finished successfully.
-    Completed,
-    /// Run failed; a `RunFailed` event carries the diagnostic.
-    Failed,
-    /// Run was cancelled by a host request.
-    Cancelled,
-}
-
-impl RunState {
-    /// Returns `true` once the run has reached a terminal state.
-    pub fn is_terminal(self) -> bool {
-        matches!(self, Self::Completed | Self::Failed | Self::Cancelled)
-    }
-}
+use reimagine_core::model::{NodeId, RunId, WorkflowId, WorkflowVersion};
+use reimagine_core::task::CancelToken;
 
 /// Host-visible run control handle.
 ///
@@ -37,7 +16,8 @@ pub struct RunHandle {
     run_id: RunId,
     workflow_id: WorkflowId,
     workflow_version: WorkflowVersion,
-    cancellation: CancellationToken,
+    cancellation: CancelToken,
+    node_cancellations: Arc<Mutex<HashMap<NodeId, CancelToken>>>,
 }
 
 impl RunHandle {
@@ -45,13 +25,15 @@ impl RunHandle {
         run_id: RunId,
         workflow_id: WorkflowId,
         workflow_version: WorkflowVersion,
-        cancellation: CancellationToken,
+        cancellation: CancelToken,
+        node_cancellations: Arc<Mutex<HashMap<NodeId, CancelToken>>>,
     ) -> Self {
         Self {
             run_id,
             workflow_id,
             workflow_version,
             cancellation,
+            node_cancellations,
         }
     }
 
@@ -67,14 +49,49 @@ impl RunHandle {
         self.workflow_version
     }
 
-    /// Get a clonable cancellation token. Calling `cancel` on this token
+    /// Get a cloneable cancellation token. Calling `cancel` on this token
     /// stops downstream scheduling in the runner task.
-    pub fn cancellation(&self) -> CancellationToken {
+    pub fn cancellation(&self) -> CancelToken {
         self.cancellation.clone()
     }
 
     /// Convenience that returns `true` if the run has been asked to stop.
     pub fn is_cancelled(&self) -> bool {
         self.cancellation.is_cancelled()
+    }
+
+    /// Request cancellation of the entire run.
+    pub fn cancel(&self) {
+        self.cancellation.cancel();
+    }
+
+    /// Request cancellation of a single node.
+    pub fn cancel_node(&self, node_id: &NodeId) {
+        self.node_cancellation(node_id).cancel();
+    }
+
+    /// Get-or-create the node-scoped cancellation token for `node_id`.
+    pub fn node_cancellation(&self, node_id: &NodeId) -> CancelToken {
+        let mut tokens = self
+            .node_cancellations
+            .lock()
+            .expect("node token map poisoned");
+        tokens
+            .entry(node_id.clone())
+            .or_insert_with(|| self.cancellation.child())
+            .clone()
+    }
+
+    /// Returns `true` if the node is cancelled — either because the run
+    /// was cancelled or because this specific node was cancelled.
+    pub fn is_node_cancelled(&self, node_id: &NodeId) -> bool {
+        if self.cancellation.is_cancelled() {
+            return true;
+        }
+        self.node_cancellations
+            .lock()
+            .expect("node token map poisoned")
+            .get(node_id)
+            .is_some_and(CancelToken::is_cancelled)
     }
 }

@@ -16,11 +16,11 @@ use tokio::task::JoinSet;
 use super::diagnostics::make_run_diagnostic;
 use super::service::RuntimeOptions;
 use crate::artifacts::ArtifactStore;
-use crate::cancellation::CancellationToken;
 use crate::clock::Clock;
 use crate::consumer_index::PlanConsumerIndex;
 use crate::events::RunEventSink;
-use crate::handle::RunState;
+use reimagine_core::task::{CancelToken, TaskState};
+
 use crate::run_inputs::RunInputs;
 use crate::run_session::{NodeOutcome, RunSession};
 use crate::scheduler::{ReadySetScheduler, StageExecutionPolicy};
@@ -57,7 +57,11 @@ pub(super) struct Runner {
     pub(super) plan: Arc<ExecutionPlan>,
     pub(super) run_inputs: RunInputs,
     pub(super) options: RuntimeOptions,
-    pub(super) cancellation: CancellationToken,
+    pub(super) cancellation: CancelToken,
+    pub(super) node_cancellations: Arc<
+        std::sync::Mutex<std::collections::HashMap<reimagine_core::model::NodeId, CancelToken>>,
+    >,
+    pub(super) deadlines: super::deadlines::NodeDeadlines,
     pub(super) store: RunStore,
     pub(super) registry: Arc<NodeExecutorRegistry>,
     pub(super) backend: Arc<dyn BackendInstanceRuntimeHooks>,
@@ -70,6 +74,28 @@ pub(super) struct Runner {
 }
 
 impl Runner {
+    pub(super) fn is_node_cancelled(&self, node_id: &reimagine_core::model::NodeId) -> bool {
+        if self.cancellation.is_cancelled() {
+            return true;
+        }
+        self.node_cancellations
+            .lock()
+            .expect("node cancellations poisoned")
+            .get(node_id)
+            .is_some_and(CancelToken::is_cancelled)
+    }
+
+    pub(super) fn cancel_node(&self, node_id: &reimagine_core::model::NodeId) {
+        let mut tokens = self
+            .node_cancellations
+            .lock()
+            .expect("node cancellations poisoned");
+        let token = tokens
+            .entry(node_id.clone())
+            .or_insert_with(|| self.cancellation.child());
+        token.cancel();
+    }
+
     pub(super) async fn run(self) {
         let runner = Arc::new(self);
         let session = Arc::new(Mutex::new(RunSession::new(
@@ -189,9 +215,9 @@ impl Runner {
         let (state, lifecycle_kind, diagnostics) =
             if let Some(message) = policy.lock().await.failed_message() {
                 let diag = make_run_diagnostic(&self.run_id, message);
-                (RunState::Failed, RunEventKind::RunFailed, vec![diag])
+                (TaskState::Failed, RunEventKind::RunFailed, vec![diag])
             } else {
-                (RunState::Completed, RunEventKind::RunCompleted, Vec::new())
+                (TaskState::Completed, RunEventKind::RunCompleted, Vec::new())
             };
         self.emit_lifecycle_event(lifecycle_kind, None, &diagnostics);
         let session_guard = session.lock().await;
@@ -569,9 +595,9 @@ impl Runner {
         let (state, lifecycle_kind, diagnostics) =
             if let Some(message) = policy.lock().await.failed_message() {
                 let diag = make_run_diagnostic(&self.run_id, message);
-                (RunState::Failed, RunEventKind::RunFailed, vec![diag])
+                (TaskState::Failed, RunEventKind::RunFailed, vec![diag])
             } else {
-                (RunState::Completed, RunEventKind::RunCompleted, Vec::new())
+                (TaskState::Completed, RunEventKind::RunCompleted, Vec::new())
             };
         self.emit_lifecycle_event(lifecycle_kind, None, &diagnostics);
         let session_guard = session.lock().await;

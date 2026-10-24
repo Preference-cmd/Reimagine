@@ -7,7 +7,7 @@
 //!
 //! The executor contract (`NodeExecutor`, `NodeExecutionContext`,
 //! `NodeInputs`/`NodeParams`, `NodeExecutorRegistry`, `ArtifactPublisher`,
-//! `NodeCancellation`, `ArtifactEventKind`, `NodeExecutorError`) is
+//! `ArtifactEventKind`, `NodeExecutorError`) is
 //! owned by [`reimagine_inference`] and re-exported here for backward
 //! compatibility. New runtime-side code should prefer importing the
 //! types from `reimagine_inference` directly.
@@ -18,7 +18,6 @@
 #![cfg_attr(not(test), deny(clippy::unwrap_used))]
 
 mod artifacts;
-mod cancellation;
 mod clock;
 mod consumer_index;
 mod error;
@@ -36,16 +35,16 @@ mod store;
 mod value_store;
 
 pub use artifacts::{ArtifactRecord, ArtifactStore, RuntimeNodeArtifactCapability};
-pub use cancellation::CancellationToken;
 pub use clock::{Clock, SystemClock};
 pub use consumer_index::{ConsumerBinding, PlanConsumerIndex};
 pub use error::RuntimeError;
 pub use events::{BoxedRunEventSink, RunEventSink, VecRunEventSink};
-pub use handle::{RunHandle, RunState};
+pub use handle::RunHandle;
+pub use reimagine_core::task::{CancelToken, TaskState};
 pub use resources::NoopBackendInstanceRuntimeHooks;
 pub use run_inputs::RunInputs;
 pub use run_session::RunSession;
-pub use runner::{RuntimeOptions, RuntimeService, RuntimeServiceError};
+pub use runner::{NodeDeadlines, RuntimeOptions, RuntimeService, RuntimeServiceError};
 pub use scheduler::{
     AdmissionDecision, DEFAULT_NODE_ESTIMATED_VRAM_BYTES, MemoryBudget, NodeState,
     ReadySetScheduler,
@@ -66,9 +65,9 @@ pub use value::{
 // call sites that previously imported these from `reimagine_runtime`
 // continue to compile unchanged.
 pub use reimagine_inference::{
-    ArtifactEventKind, ArtifactPublisher, BoxedNodeExecutor, NodeCancellation,
-    NodeExecutionContext, NodeExecutionOutputs, NodeExecutor, NodeExecutorError,
-    NodeExecutorRegistry, NodeExecutorRegistryError, NodeInputs, NodeParams,
+    ArtifactEventKind, ArtifactPublisher, BoxedNodeExecutor, NodeExecutionContext,
+    NodeExecutionOutputs, NodeExecutor, NodeExecutorError, NodeExecutorRegistry,
+    NodeExecutorRegistryError, NodeInputs, NodeParams,
 };
 
 pub mod value;

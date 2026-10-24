@@ -7,7 +7,7 @@
 //! backend-instance runtime hooks), canonical execution values, the **node executor
 //! contract** (`NodeExecutor` trait, `NodeExecutionContext`,
 //! `NodeInputs`/`NodeParams`, `NodeExecutorRegistry`,
-//! `ArtifactPublisher`, `NodeCancellation`, `ArtifactEventKind`,
+//! `ArtifactPublisher`, `CancelToken`, `ArtifactEventKind`,
 //! `NodeExecutorError`), built-in V1 executors, and the executor
 //! registration helper.
 //!
@@ -38,7 +38,6 @@ mod backend;
 mod backend_registry;
 mod backend_selection;
 mod bridge;
-mod cancellation;
 mod capability;
 mod diagnostic;
 mod error;
@@ -107,15 +106,14 @@ pub use diagnostic::{
     backend_not_registered, incompatible_handle_affinity,
 };
 pub use inference_error::InferenceError;
-pub use invocation::{
-    InferenceInvocation, InferenceProgress, InferenceProgressSink, NoopInferenceProgressSink,
-};
+pub use invocation::InferenceInvocation;
 pub use profile::{
     BackendInstanceProfile, BackendInstanceStatus, BackendProfile, BackendProfileProvider,
     DTypeProfile, DeviceKind, MemoryProfile, OperationOptionsProfile, OperationOptionsProfileKind,
     SamplerOptionProfile, SamplerSchedulerPairProfile, SchedulerOptionProfile,
     WorkspaceComputeProfile, diagnostics, kind_from_label,
 };
+pub use reimagine_core::task::{CancelToken, NoopProgressSink, Progress, ProgressSink};
 pub use request::diffusion::{
     DiffusionDenoiseError, DiffusionDenoiseMode, DiffusionSampleRequest, SamplerName, SchedulerName,
 };
@@ -150,7 +148,6 @@ pub use router::{InferenceRouter, RouterRef};
 pub use scheduler::{DenoisingCallback, DiffusionSampler, DiffusionScheduler};
 
 pub use artifact_publisher::{ArtifactEventKind, ArtifactPublisher};
-pub use cancellation::NodeCancellation;
 pub use error::{IntoNodeExecutorError, into_executor_error};
 pub use executor::{
     BoxedNodeExecutor, NodeExecutionOutputs, NodeExecutor, NodeExecutorError, NodeExecutorRegistry,
@@ -163,6 +160,6 @@ pub use registry::register_builtin_inference_executors;
 pub use scripted_backend::{ScriptExhaustion, ScriptedBackend, ScriptedHold};
 #[doc(hidden)]
 pub use testing::{
-    CannedCapabilityResponse, FakeBackend, NoopArtifactPublisher, NoopNodeCancellation,
-    RecordedArtifact, RecordingArtifactPublisher,
+    CannedCapabilityResponse, FakeBackend, NoopArtifactPublisher, RecordedArtifact,
+    RecordingArtifactPublisher,
 };

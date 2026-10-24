@@ -20,17 +20,17 @@ use reimagine_inference::{
     RuntimeImage, RuntimeModelHandle, RuntimeVaeHandle,
 };
 use reimagine_inference::{
+    CancelToken, ImageSourceResolver, LatentContent, LatentDecodeResponse, NodeExecutionContext,
+    NodeExecutionOutputs, NodeExecutor, NodeExecutorError, NodeExecutorRegistry, NodeInputs,
+    NodeParams, NoopProgressSink, RecordingArtifactPublisher,
+};
+use reimagine_inference::{
     CannedCapabilityResponse, CreateEmptyLatentRequest, CreateEmptyLatentResponse, FakeBackend,
     ImageSaveResponse, InferenceBackend, InferenceBackendCapabilities, InferenceBackendRegistry,
     InferenceCapabilitySupport, InferenceError, IntoNodeExecutorError, LoadBundleResponse,
     ModelFormat, ModelResolver, RejectAllBridgePolicy, ResolvedImageSource, ResolvedInferenceModel,
     RouterRef, RuntimeLatent, TextEncodeRequest, TextEncodeResponse,
     register_builtin_inference_executors,
-};
-use reimagine_inference::{
-    ImageSourceResolver, LatentContent, LatentDecodeResponse, NodeExecutionContext,
-    NodeExecutionOutputs, NodeExecutor, NodeExecutorError, NodeExecutorRegistry, NodeInputs,
-    NodeParams, NoopInferenceProgressSink, NoopNodeCancellation, RecordingArtifactPublisher,
 };
 
 // ── Fake model resolver ────────────────────────────────────────────
@@ -180,8 +180,7 @@ fn make_context(
 ) -> NodeExecutionContext {
     let publisher: Arc<dyn reimagine_inference::ArtifactPublisher> =
         Arc::new(RecordingArtifactPublisher::new());
-    let cancellation: Arc<dyn reimagine_inference::NodeCancellation> =
-        Arc::new(NoopNodeCancellation::new());
+    let cancellation = CancelToken::new();
     NodeExecutionContext::new(
         reimagine_core::model::RunId::new("run-test"),
         reimagine_core::model::WorkflowId::new("wf-test"),
@@ -193,7 +192,7 @@ fn make_context(
         params,
         publisher,
         cancellation,
-        Arc::new(NoopInferenceProgressSink),
+        Arc::new(NoopProgressSink),
         reimagine_core::event::Timestamp::new("2026-06-13T00:00:00Z"),
     )
 }
@@ -206,8 +205,7 @@ fn make_context_with_recording(
 ) -> (NodeExecutionContext, Arc<RecordingArtifactPublisher>) {
     let recorder = Arc::new(RecordingArtifactPublisher::new());
     let publisher: Arc<dyn reimagine_inference::ArtifactPublisher> = recorder.clone();
-    let cancellation: Arc<dyn reimagine_inference::NodeCancellation> =
-        Arc::new(NoopNodeCancellation::new());
+    let cancellation = CancelToken::new();
     let ctx = NodeExecutionContext::new(
         reimagine_core::model::RunId::new("run-test"),
         reimagine_core::model::WorkflowId::new("wf-test"),
@@ -219,7 +217,7 @@ fn make_context_with_recording(
         params,
         publisher,
         cancellation,
-        Arc::new(NoopInferenceProgressSink),
+        Arc::new(NoopProgressSink),
         reimagine_core::event::Timestamp::new("2026-06-13T00:00:00Z"),
     );
     (ctx, recorder)

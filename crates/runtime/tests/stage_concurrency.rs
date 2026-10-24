@@ -386,7 +386,7 @@ fn stage_runs_independent_nodes_concurrently() {
         }
         assert_eq!(
             service.summary(handle.run_id()).unwrap().state,
-            reimagine_runtime::RunState::Completed
+            reimagine_runtime::TaskState::Completed
         );
     });
 }
@@ -644,7 +644,7 @@ fn value_store_concurrent_producers_and_shared_readers_stay_consistent() {
 
         assert_eq!(
             service.summary(handle.run_id()).unwrap().state,
-            reimagine_runtime::RunState::Completed
+            reimagine_runtime::TaskState::Completed
         );
         assert!(
             failures.lock().expect("failures poisoned").is_empty(),
@@ -787,7 +787,7 @@ fn cancel_during_concurrent_execution_cancels_in_flight_without_hang() {
         run_to_completion(&service, &handle);
 
         let summary = service.summary(handle.run_id()).unwrap();
-        assert_eq!(summary.state, reimagine_runtime::RunState::Cancelled);
+        assert_eq!(summary.state, reimagine_runtime::TaskState::Cancelled);
         let snapshot = service.snapshot(handle.run_id()).unwrap();
         assert_eq!(
             snapshot.node_states.get(&NodeId::new("hold_a")),
@@ -902,7 +902,7 @@ fn deadline_expiry_under_concurrency_fails_only_the_slow_node() {
 
         assert!(started.load(Ordering::SeqCst) >= 1);
         let summary = service.summary(handle.run_id()).unwrap();
-        assert_eq!(summary.state, reimagine_runtime::RunState::Completed);
+        assert_eq!(summary.state, reimagine_runtime::TaskState::Completed);
         let snapshot = service.snapshot(handle.run_id()).unwrap();
         assert_eq!(
             snapshot.node_states.get(&NodeId::new("a")),
@@ -1003,7 +1003,7 @@ fn sibling_failure_under_concurrency_cancels_in_flight_nodes() {
         run_to_completion(&service, &handle);
 
         let summary = service.summary(handle.run_id()).unwrap();
-        assert_eq!(summary.state, reimagine_runtime::RunState::Failed);
+        assert_eq!(summary.state, reimagine_runtime::TaskState::Failed);
         let snapshot = service.snapshot(handle.run_id()).unwrap();
         assert_eq!(
             snapshot.node_states.get(&NodeId::new("a")),

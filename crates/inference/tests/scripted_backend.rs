@@ -17,12 +17,11 @@ use reimagine_core::model::{
 };
 use reimagine_inference::operation::InferenceCapability;
 use reimagine_inference::{
-    Backend, BackendPayloadKey, BackendTensorHandle, ConditioningMetadata, ExecutionConditioning,
-    ExecutionValue, InferenceBackend, InferenceError, InferenceInvocation, LoadBundleResponse,
-    NodeExecutionContext, NodeExecutorError, NodeExecutorRegistry, NodeInputs, NodeParams,
-    NoopInferenceProgressSink, NoopNodeCancellation, RuntimeClipHandle, RuntimeModelHandle,
-    RuntimeVaeHandle, ScriptedBackend, TextEncodeRequest, TextEncodeResponse,
-    register_builtin_inference_executors,
+    Backend, BackendPayloadKey, BackendTensorHandle, CancelToken, ConditioningMetadata,
+    ExecutionConditioning, ExecutionValue, InferenceBackend, InferenceError, InferenceInvocation,
+    LoadBundleResponse, NodeExecutionContext, NodeExecutorError, NodeExecutorRegistry, NodeInputs,
+    NodeParams, NoopProgressSink, RuntimeClipHandle, RuntimeModelHandle, RuntimeVaeHandle,
+    ScriptedBackend, TextEncodeRequest, TextEncodeResponse, register_builtin_inference_executors,
 };
 use reimagine_inference::{
     ImageSourceResolver, ModelFormat, ModelResolver, RejectAllBridgePolicy, ResolvedImageSource,
@@ -120,8 +119,7 @@ fn make_context(
 ) -> NodeExecutionContext {
     let publisher: Arc<dyn reimagine_inference::ArtifactPublisher> =
         Arc::new(reimagine_inference::RecordingArtifactPublisher::new());
-    let cancellation: Arc<dyn reimagine_inference::NodeCancellation> =
-        Arc::new(NoopNodeCancellation::new());
+    let cancellation = CancelToken::new();
     NodeExecutionContext::new(
         reimagine_core::model::RunId::new("run-scripted"),
         WorkflowId::new("wf-scripted"),
@@ -133,7 +131,7 @@ fn make_context(
         params,
         publisher,
         cancellation,
-        Arc::new(NoopInferenceProgressSink),
+        Arc::new(NoopProgressSink),
         reimagine_core::event::Timestamp::new("2026-07-15T00:00:00Z"),
     )
 }
@@ -211,8 +209,8 @@ async fn error_at_step_two_of_three_propagates_with_the_right_variant() {
         reimagine_core::model::RunId::new("run-scripted"),
         NodeId::new("node-1"),
         None,
-        Arc::new(NoopNodeCancellation::new()),
-        Arc::new(NoopInferenceProgressSink),
+        CancelToken::new(),
+        Arc::new(NoopProgressSink),
     );
 
     let first = backend
@@ -252,13 +250,13 @@ async fn held_step_returns_cancelled_when_the_invocation_is_cancelled() {
     let (backend, hold) = ScriptedBackend::new("scripted")
         .text_encode(vec![Ok(TextEncodeResponse::new(conditioning("held")))])
         .with_hold();
-    let cancellation = Arc::new(NoopNodeCancellation::new());
+    let cancellation = CancelToken::new();
     let invocation = InferenceInvocation::new(
         reimagine_core::model::RunId::new("run-scripted"),
         NodeId::new("node-1"),
         None,
         cancellation.clone(),
-        Arc::new(NoopInferenceProgressSink),
+        Arc::new(NoopProgressSink),
     );
 
     let task = tokio::spawn(async move {
@@ -283,13 +281,13 @@ async fn delayed_step_is_interrupted_by_cancellation() {
     let backend = ScriptedBackend::new("scripted")
         .text_encode(vec![Ok(TextEncodeResponse::new(conditioning("slow")))])
         .with_step_delay(Duration::from_secs(60));
-    let cancellation = Arc::new(NoopNodeCancellation::new());
+    let cancellation = CancelToken::new();
     let invocation = InferenceInvocation::new(
         reimagine_core::model::RunId::new("run-scripted"),
         NodeId::new("node-1"),
         None,
         cancellation.clone(),
-        Arc::new(NoopInferenceProgressSink),
+        Arc::new(NoopProgressSink),
     );
 
     let task = tokio::spawn(async move {
@@ -480,8 +478,8 @@ async fn scripted_backend_reports_call_counts() {
         reimagine_core::model::RunId::new("run-scripted"),
         NodeId::new("node-1"),
         None,
-        Arc::new(NoopNodeCancellation::new()),
-        Arc::new(NoopInferenceProgressSink),
+        CancelToken::new(),
+        Arc::new(NoopProgressSink),
     );
     backend
         .text_encode_with_invocation(&invocation, text_request("node-1"))

@@ -12,9 +12,9 @@ use reimagine_core::model::{
 };
 use reimagine_inference::{ArtifactEventKind, ArtifactPublisher};
 
-use crate::cancellation::CancellationToken;
 use crate::clock::Clock;
 use crate::events::RunEventSink;
+use reimagine_core::task::CancelToken;
 
 /// One artifact recorded during a run.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -93,7 +93,7 @@ pub struct RuntimeNodeArtifactCapability {
     run_id: RunId,
     workflow_id: WorkflowId,
     workflow_version: WorkflowVersion,
-    cancellation: CancellationToken,
+    cancellation: CancelToken,
     clock: Arc<dyn Clock>,
 }
 
@@ -107,7 +107,7 @@ impl RuntimeNodeArtifactCapability {
         store: Arc<tokio::sync::Mutex<ArtifactStore>>,
         sink: Arc<dyn RunEventSink>,
         clock: Arc<dyn Clock>,
-        cancellation: CancellationToken,
+        cancellation: CancelToken,
     ) -> Self {
         Self {
             node_id,

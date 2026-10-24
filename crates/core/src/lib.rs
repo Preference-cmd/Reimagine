@@ -24,5 +24,6 @@ pub mod model;
 pub mod project;
 pub mod readiness;
 pub mod session;
+pub mod task;
 pub mod validation;
 pub mod workflow;

@@ -68,8 +68,8 @@ fi
 
 # Leaves: the domain vocabulary, the plugin descriptors and the worker wire
 # protocol depend on no other workspace crate. The domain root also stays
-# free of async runtimes, HTTP and the desktop shell.
-check reimagine-core "$WORKSPACE" 'tokio v' 'reqwest v' "$HTTP_SERVER" "$TAURI"
+# free of HTTP and the desktop shell (tokio sync-only is used for CancelToken).
+check reimagine-core "$WORKSPACE" 'reqwest v' "$HTTP_SERVER" "$TAURI"
 check reimagine-plugin "$WORKSPACE"
 check reimagine-backend-worker-protocol "$WORKSPACE"
 

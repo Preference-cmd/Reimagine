@@ -6,8 +6,8 @@ use std::collections::HashMap;
 use reimagine_core::diagnostic::CorrelationId;
 use reimagine_core::model::{NodeId, RunId, WorkflowId, WorkflowVersion};
 
-use crate::cancellation::CancellationToken;
 use crate::value_store::RunValueStore;
+use reimagine_core::task::CancelToken;
 
 /// Internal runner-task session. Tracks the intermediate value store, the
 /// cancellation token, and the per-node outcome map.
@@ -22,7 +22,7 @@ pub struct RunSession {
     workflow_version: WorkflowVersion,
     correlation_id: Option<CorrelationId>,
     values: RunValueStore,
-    cancellation: CancellationToken,
+    cancellation: CancelToken,
     node_outcomes: HashMap<NodeId, NodeOutcome>,
 }
 
@@ -32,7 +32,7 @@ impl RunSession {
         workflow_id: WorkflowId,
         workflow_version: WorkflowVersion,
         correlation_id: Option<CorrelationId>,
-        cancellation: CancellationToken,
+        cancellation: CancelToken,
     ) -> Self {
         Self {
             run_id,
@@ -69,7 +69,7 @@ impl RunSession {
         &mut self.values
     }
 
-    pub fn cancellation(&self) -> &CancellationToken {
+    pub fn cancellation(&self) -> &CancelToken {
         &self.cancellation
     }
 

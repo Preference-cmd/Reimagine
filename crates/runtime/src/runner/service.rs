@@ -12,16 +12,16 @@ use reimagine_inference::{
 };
 
 use super::orchestrator::Runner;
-use crate::cancellation::CancellationToken;
 use crate::clock::{Clock, SystemClock};
 use crate::error::RuntimeError;
 use crate::events::RunEventSink;
-use crate::handle::{RunHandle, RunState};
+use crate::handle::RunHandle;
 use crate::resources::NoopBackendInstanceRuntimeHooks;
 use crate::run_inputs::RunInputs;
 use crate::scheduler::MemoryBudget;
 use crate::snapshot::{RunArtifactRef, RunSnapshot, RunSummary};
 use crate::store::RunStore;
+use reimagine_core::task::{CancelToken, TaskState};
 
 /// Options passed to [`RuntimeService::run`].
 #[derive(Debug, Clone)]
@@ -295,12 +295,16 @@ impl RuntimeService {
 
         let run_seq = self.next_run_seq.fetch_add(1, Ordering::Relaxed);
         let run_id = RunId::new(format!("run-{run_seq}"));
-        let cancellation = CancellationToken::new();
+        let cancellation = CancelToken::new();
+        let node_cancellations =
+            std::sync::Arc::new(std::sync::Mutex::new(std::collections::HashMap::new()));
+        let deadlines = super::deadlines::NodeDeadlines::new();
         let handle = RunHandle::new(
             run_id.clone(),
             plan.workflow_id().clone(),
             plan.workflow_version(),
             cancellation.clone(),
+            node_cancellations.clone(),
         );
 
         let started_at = self.clock.now();
@@ -308,7 +312,7 @@ impl RuntimeService {
             run_id.clone(),
             plan.workflow_id().clone(),
             plan.workflow_version(),
-            RunState::Queued,
+            TaskState::Queued,
             Default::default(),
             Vec::new(),
             Vec::new(),
@@ -343,6 +347,8 @@ impl RuntimeService {
             run_inputs,
             options,
             cancellation,
+            node_cancellations,
+            deadlines,
             store: self.store.clone(),
             registry: self.registry.clone_for_runner(),
             backend: self.backend.clone(),

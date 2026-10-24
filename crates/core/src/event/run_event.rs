@@ -1,5 +1,6 @@
 use crate::diagnostic::{CorrelationId, Diagnostic};
 use crate::model::{ArtifactId, NodeId, RunId, WorkflowId, WorkflowVersion};
+use crate::task::Progress;
 
 use super::Timestamp;
 
@@ -48,41 +49,6 @@ pub enum RunEventKind {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
-pub struct NodeProgress {
-    sequence: u64,
-    completed: u64,
-    total: Option<u64>,
-    message: Option<String>,
-}
-
-impl NodeProgress {
-    pub fn new(sequence: u64, completed: u64, total: Option<u64>, message: Option<String>) -> Self {
-        Self {
-            sequence,
-            completed,
-            total,
-            message,
-        }
-    }
-
-    pub fn sequence(&self) -> u64 {
-        self.sequence
-    }
-
-    pub fn completed(&self) -> u64 {
-        self.completed
-    }
-
-    pub fn total(&self) -> Option<u64> {
-        self.total
-    }
-
-    pub fn message(&self) -> Option<&str> {
-        self.message.as_deref()
-    }
-}
-
-#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub struct RunEvent {
     id: RunEventId,
     run_id: RunId,
@@ -92,7 +58,7 @@ pub struct RunEvent {
     node_id: Option<NodeId>,
     artifact: Option<ArtifactId>,
     diagnostics: Vec<Diagnostic>,
-    progress: Option<NodeProgress>,
+    progress: Option<Progress>,
     created_at: Timestamp,
     correlation_id: Option<CorrelationId>,
 }
@@ -136,7 +102,7 @@ impl RunEvent {
         self
     }
 
-    pub fn with_progress(mut self, progress: NodeProgress) -> Self {
+    pub fn with_progress(mut self, progress: Progress) -> Self {
         self.progress = Some(progress);
         self
     }
@@ -178,7 +144,7 @@ impl RunEvent {
         &self.diagnostics
     }
 
-    pub fn progress(&self) -> Option<&NodeProgress> {
+    pub fn progress(&self) -> Option<&Progress> {
         self.progress.as_ref()
     }
 
@@ -206,12 +172,7 @@ mod progress_tests {
             Timestamp::new("2026-07-14T00:00:00Z"),
         )
         .with_node_id(NodeId::new("node"))
-        .with_progress(NodeProgress::new(
-            7,
-            3,
-            Some(10),
-            Some("sampling".to_owned()),
-        ));
+        .with_progress(Progress::new(7, 3, Some(10), Some("sampling".to_owned())));
 
         let json = serde_json::to_value(&event).expect("serialize progress event");
         assert_eq!(json["progress"]["sequence"], 7);
@@ -221,5 +182,26 @@ mod progress_tests {
             event.progress().expect("progress").message(),
             Some("sampling")
         );
+
+        // Byte-identical wire format assertion
+        let expected = serde_json::json!({
+            "id": "progress-1",
+            "run_id": "run",
+            "workflow_id": "workflow",
+            "workflow_version": 1,
+            "kind": "NodeProgress",
+            "node_id": "node",
+            "artifact": null,
+            "diagnostics": [],
+            "progress": {
+                "sequence": 7,
+                "completed": 3,
+                "total": 10,
+                "message": "sampling"
+            },
+            "created_at": "2026-07-14T00:00:00Z",
+            "correlation_id": null
+        });
+        assert_eq!(json, expected);
     }
 }

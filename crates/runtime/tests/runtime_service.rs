@@ -24,10 +24,10 @@ use reimagine_core::readiness::{
     ExecutionStage, RunTarget, RunTargetSelection,
 };
 use reimagine_runtime::{
-    CancellationToken, Clock, DEFAULT_NODE_ESTIMATED_VRAM_BYTES, ExecutionValue,
-    ExecutionValueRetention, MemoryBudget, NodeExecutionContext, NodeExecutor, NodeExecutorError,
-    NodeExecutorRegistry, NoopBackendInstanceRuntimeHooks, RunEventSink, RunHandle, RunInputs,
-    RuntimeError, RuntimeOptions, RuntimeService, RuntimeServiceError, StageId, VecRunEventSink,
+    CancelToken, Clock, DEFAULT_NODE_ESTIMATED_VRAM_BYTES, ExecutionValue, ExecutionValueRetention,
+    MemoryBudget, NodeExecutionContext, NodeExecutor, NodeExecutorError, NodeExecutorRegistry,
+    NoopBackendInstanceRuntimeHooks, RunEventSink, RunHandle, RunInputs, RuntimeError,
+    RuntimeOptions, RuntimeService, RuntimeServiceError, StageId, VecRunEventSink,
 };
 
 /// A clock that always returns the same string timestamp.
@@ -861,13 +861,13 @@ fn runtime_run_starts_and_completes_a_mock_plan() {
         let initial = service
             .snapshot(handle.run_id())
             .expect("snapshot available");
-        assert_eq!(initial.state, reimagine_runtime::RunState::Queued);
+        assert_eq!(initial.state, reimagine_runtime::TaskState::Queued);
 
         run_to_completion(&service, &handle);
         assert_eq!(counter.load(Ordering::SeqCst), 1);
 
         let summary = service.summary(handle.run_id()).expect("summary");
-        assert_eq!(summary.state, reimagine_runtime::RunState::Completed);
+        assert_eq!(summary.state, reimagine_runtime::TaskState::Completed);
         assert_eq!(summary.diagnostics.len(), 0);
 
         // The sink must observe Queued + Started + NodeQueued + NodeStarted
@@ -975,7 +975,7 @@ fn runtime_preserves_backend_lifecycle_report_diagnostics() {
         run_to_completion(&service, &handle);
 
         let summary = service.summary(handle.run_id()).expect("summary");
-        assert_eq!(summary.state, reimagine_runtime::RunState::Completed);
+        assert_eq!(summary.state, reimagine_runtime::TaskState::Completed);
         assert_eq!(
             summary
                 .diagnostics
@@ -986,7 +986,7 @@ fn runtime_preserves_backend_lifecycle_report_diagnostics() {
         );
 
         let snapshot = service.snapshot(handle.run_id()).expect("snapshot");
-        assert_eq!(snapshot.state, reimagine_runtime::RunState::Completed);
+        assert_eq!(snapshot.state, reimagine_runtime::TaskState::Completed);
         assert_eq!(
             snapshot
                 .diagnostics
@@ -1332,7 +1332,7 @@ fn executor_failure_marks_run_failed_and_skips_downstream() {
         run_to_completion(&service, &handle);
 
         let summary = service.summary(handle.run_id()).unwrap();
-        assert_eq!(summary.state, reimagine_runtime::RunState::Failed);
+        assert_eq!(summary.state, reimagine_runtime::TaskState::Failed);
         assert_eq!(summary.diagnostics.len(), 1);
         assert_eq!(
             summary.diagnostics[0].code(),
@@ -1444,7 +1444,7 @@ fn cancellation_stops_downstream_and_emits_cancelled_events() {
         run_to_completion(&service, &handle);
 
         let summary = service.summary(handle.run_id()).unwrap();
-        assert_eq!(summary.state, reimagine_runtime::RunState::Cancelled);
+        assert_eq!(summary.state, reimagine_runtime::TaskState::Cancelled);
         // Downstream `b` must NOT have run.
         assert_eq!(downstream_count.load(Ordering::SeqCst), 0);
         let kinds: Vec<RunEventKind> = sink.events().iter().map(|e| e.kind()).collect();
@@ -1486,7 +1486,7 @@ fn executor_cancelled_on_last_node_marks_run_cancelled_not_failed() {
 
         assert_eq!(count.load(Ordering::SeqCst), 1);
         let summary = service.summary(handle.run_id()).unwrap();
-        assert_eq!(summary.state, reimagine_runtime::RunState::Cancelled);
+        assert_eq!(summary.state, reimagine_runtime::TaskState::Cancelled);
         let kinds: Vec<RunEventKind> = sink.events().iter().map(|e| e.kind()).collect();
         assert!(kinds.contains(&RunEventKind::NodeCancelled));
         assert!(kinds.contains(&RunEventKind::RunCancelled));
@@ -1531,13 +1531,13 @@ fn cancel_node_mid_run_cancels_only_that_node_and_run_continues() {
         wait_for_condition(Duration::from_secs(2), || {
             slow_count.load(Ordering::SeqCst) > 0
         });
-        handle.cancellation().cancel_node(&NodeId::new("a"));
-        handle.cancellation().cancel_node(&NodeId::new("b"));
+        handle.cancel_node(&NodeId::new("a"));
+        handle.cancel_node(&NodeId::new("b"));
 
         run_to_completion(&service, &handle);
 
         let summary = service.summary(handle.run_id()).unwrap();
-        assert_eq!(summary.state, reimagine_runtime::RunState::Completed);
+        assert_eq!(summary.state, reimagine_runtime::TaskState::Completed);
         let snapshot = service.snapshot(handle.run_id()).unwrap();
         assert_eq!(
             snapshot.node_states.get(&NodeId::new("a")),
@@ -1631,7 +1631,7 @@ fn node_deadline_expiry_fails_node_with_diagnostic_and_run_continues() {
 
         assert!(started.load(Ordering::SeqCst) >= 1);
         let summary = service.summary(handle.run_id()).unwrap();
-        assert_eq!(summary.state, reimagine_runtime::RunState::Completed);
+        assert_eq!(summary.state, reimagine_runtime::TaskState::Completed);
         let snapshot = service.snapshot(handle.run_id()).unwrap();
         assert_eq!(
             snapshot.node_states.get(&NodeId::new("a")),
@@ -1735,7 +1735,7 @@ fn stuck_executor_is_aborted_after_deadline_and_stage_continues() {
         // The stuck node must have been started and then failed by deadline.
         assert_eq!(started.load(Ordering::SeqCst), 1);
         let summary = service.summary(handle.run_id()).unwrap();
-        assert_eq!(summary.state, reimagine_runtime::RunState::Completed);
+        assert_eq!(summary.state, reimagine_runtime::TaskState::Completed);
         let snapshot = service.snapshot(handle.run_id()).unwrap();
         assert_eq!(
             snapshot.node_states.get(&NodeId::new("b")),
@@ -1841,12 +1841,12 @@ fn ready_set_path_respects_node_cancellation() {
         wait_for_condition(Duration::from_secs(2), || {
             slow_count.load(Ordering::SeqCst) > 0
         });
-        handle.cancellation().cancel_node(&NodeId::new("a"));
+        handle.cancel_node(&NodeId::new("a"));
 
         run_to_completion(&service, &handle);
 
         let summary = service.summary(handle.run_id()).unwrap();
-        assert_eq!(summary.state, reimagine_runtime::RunState::Completed);
+        assert_eq!(summary.state, reimagine_runtime::TaskState::Completed);
         let snapshot = service.snapshot(handle.run_id()).unwrap();
         assert_eq!(
             snapshot.node_states.get(&NodeId::new("a")),
@@ -1928,7 +1928,7 @@ fn workflow_input_bindings_read_from_workflow_input_run_inputs() {
             .unwrap();
         run_to_completion(&service, &handle);
         let summary = service.summary(handle.run_id()).unwrap();
-        assert_eq!(summary.state, reimagine_runtime::RunState::Completed);
+        assert_eq!(summary.state, reimagine_runtime::TaskState::Completed);
     });
 }
 
@@ -1986,7 +1986,7 @@ fn static_param_bindings_read_from_node_param_run_inputs() {
             .unwrap();
         run_to_completion(&service, &handle);
         let summary = service.summary(handle.run_id()).unwrap();
-        assert_eq!(summary.state, reimagine_runtime::RunState::Completed);
+        assert_eq!(summary.state, reimagine_runtime::TaskState::Completed);
     });
 }
 
@@ -2023,7 +2023,7 @@ fn sink_failure_does_not_fail_the_run() {
             .unwrap();
         run_to_completion(&service, &handle);
         let summary = service.summary(handle.run_id()).unwrap();
-        assert_eq!(summary.state, reimagine_runtime::RunState::Completed);
+        assert_eq!(summary.state, reimagine_runtime::TaskState::Completed);
         assert!(sink.failures.load(Ordering::SeqCst) > 0);
     });
 }
@@ -2083,7 +2083,7 @@ fn sink_panic_is_logged_and_does_not_fail_the_run() {
         run_to_completion(&service, &handle);
         // Run must still reach Completed despite every emit() panicking.
         let summary = service.summary(handle.run_id()).unwrap();
-        assert_eq!(summary.state, reimagine_runtime::RunState::Completed);
+        assert_eq!(summary.state, reimagine_runtime::TaskState::Completed);
     });
 }
 
@@ -2169,7 +2169,7 @@ fn snapshot_records_terminal_node_states_and_summary_records_terminal_state() {
         let snapshot = service
             .snapshot(handle.run_id())
             .expect("snapshot is published");
-        assert_eq!(snapshot.state, reimagine_runtime::RunState::Completed);
+        assert_eq!(snapshot.state, reimagine_runtime::TaskState::Completed);
         assert_eq!(
             snapshot
                 .node_states
@@ -2186,7 +2186,7 @@ fn snapshot_records_terminal_node_states_and_summary_records_terminal_state() {
         let summary = service
             .summary(handle.run_id())
             .expect("summary is published");
-        assert_eq!(summary.state, reimagine_runtime::RunState::Completed);
+        assert_eq!(summary.state, reimagine_runtime::TaskState::Completed);
         let json = format!("{summary:?}");
         assert!(!json.contains("RunValueStore"));
         assert!(!json.contains("BackendTensorHandle"));
@@ -2220,7 +2220,7 @@ fn run_handle_does_not_expose_value_store() {
         // The handle only exposes run id, workflow id, and cancellation.
         let _ = handle.run_id();
         let _ = handle.workflow_id();
-        let _: CancellationToken = handle.cancellation();
+        let _: CancelToken = handle.cancellation();
         let json = format!("{handle:?}");
         assert!(!json.contains("RunValueStore"));
     });
@@ -2620,7 +2620,10 @@ fn artifact_visible_in_snapshot_before_run_completes() {
         assert_eq!(mid_run_snapshot.artifacts[0].node_id, NodeId::new("save"));
 
         // The run must still be Running (slow node still going).
-        assert_eq!(mid_run_snapshot.state, reimagine_runtime::RunState::Running);
+        assert_eq!(
+            mid_run_snapshot.state,
+            reimagine_runtime::TaskState::Running
+        );
 
         // The ArtifactCreated event must have been emitted.
         let kinds: Vec<RunEventKind> = sink.events().iter().map(|e| e.kind()).collect();
@@ -2733,7 +2736,7 @@ fn terminal_summary_includes_all_artifacts_from_multiple_nodes() {
         run_to_completion(&service, &handle);
 
         let summary = service.summary(handle.run_id()).expect("summary");
-        assert_eq!(summary.state, reimagine_runtime::RunState::Completed);
+        assert_eq!(summary.state, reimagine_runtime::TaskState::Completed);
         assert_eq!(summary.artifacts.len(), 2);
 
         let refs: Vec<&str> = summary
@@ -2835,7 +2838,7 @@ fn failed_run_preserves_previously_recorded_artifacts() {
         run_to_completion(&service, &handle);
 
         let summary = service.summary(handle.run_id()).expect("summary");
-        assert_eq!(summary.state, reimagine_runtime::RunState::Failed);
+        assert_eq!(summary.state, reimagine_runtime::TaskState::Failed);
         // The artifact from the save node must still be present.
         assert_eq!(summary.artifacts.len(), 1);
         assert_eq!(
@@ -2937,7 +2940,7 @@ fn cancelled_run_preserves_previously_recorded_artifacts() {
         run_to_completion(&service, &handle);
 
         let summary = service.summary(handle.run_id()).expect("summary");
-        assert_eq!(summary.state, reimagine_runtime::RunState::Cancelled);
+        assert_eq!(summary.state, reimagine_runtime::TaskState::Cancelled);
         assert_eq!(summary.artifacts.len(), 1);
         assert_eq!(
             summary.artifacts[0].reference.as_str(),
@@ -2946,7 +2949,7 @@ fn cancelled_run_preserves_previously_recorded_artifacts() {
         assert_eq!(summary.artifacts[0].node_id, NodeId::new("save"));
 
         let snapshot = service.snapshot(handle.run_id()).expect("snapshot");
-        assert_eq!(snapshot.state, reimagine_runtime::RunState::Cancelled);
+        assert_eq!(snapshot.state, reimagine_runtime::TaskState::Cancelled);
         assert_eq!(snapshot.artifacts.len(), 1);
         assert_eq!(
             snapshot.artifacts[0].reference.as_str(),
@@ -3343,7 +3346,7 @@ fn single_use_value_with_fan_out_one_is_dropped_after_unique_consumer() {
         run_to_completion(&service, &handle);
 
         let summary = service.summary(handle.run_id()).unwrap();
-        assert_eq!(summary.state, reimagine_runtime::RunState::Completed);
+        assert_eq!(summary.state, reimagine_runtime::TaskState::Completed);
         assert_eq!(producer_count.load(Ordering::SeqCst), 1);
         assert_eq!(consumer_count.load(Ordering::SeqCst), 1);
 
@@ -3455,7 +3458,7 @@ fn single_use_value_is_dropped_before_later_stage_after_unique_consumer() {
         run_to_completion(&service, &handle);
 
         let summary = service.summary(handle.run_id()).unwrap();
-        assert_eq!(summary.state, reimagine_runtime::RunState::Completed);
+        assert_eq!(summary.state, reimagine_runtime::TaskState::Completed);
         assert_eq!(producer_count.load(Ordering::SeqCst), 1);
         assert_eq!(consumer_count.load(Ordering::SeqCst), 1);
         assert_eq!(
@@ -3527,7 +3530,7 @@ fn single_use_value_with_fan_out_zero_is_kept_until_terminal_cleanup() {
         run_to_completion(&service, &handle);
 
         let summary = service.summary(handle.run_id()).unwrap();
-        assert_eq!(summary.state, reimagine_runtime::RunState::Completed);
+        assert_eq!(summary.state, reimagine_runtime::TaskState::Completed);
         assert_eq!(producer_count.load(Ordering::SeqCst), 1);
         // The value is kept until terminal cleanup; the only
         // backend hook is the coarse `cleanup_run`.
@@ -3639,7 +3642,7 @@ fn single_use_value_is_dropped_after_consumer_is_cancelled() {
         run_to_completion(&service, &handle);
 
         let summary = service.summary(handle.run_id()).unwrap();
-        assert_eq!(summary.state, reimagine_runtime::RunState::Cancelled);
+        assert_eq!(summary.state, reimagine_runtime::TaskState::Cancelled);
         assert_eq!(producer_count.load(Ordering::SeqCst), 1);
         // Backend sees only coarse run lifecycle calls.
         assert_eq!(backend.begin_runs.load(Ordering::SeqCst), 1);
@@ -3767,7 +3770,7 @@ fn single_use_value_with_fan_out_greater_than_one_fails_the_run() {
         run_to_completion(&service, &handle);
 
         let summary = service.summary(handle.run_id()).unwrap();
-        assert_eq!(summary.state, reimagine_runtime::RunState::Failed);
+        assert_eq!(summary.state, reimagine_runtime::TaskState::Failed);
         // The downstream consumers must not have run because the
         // producer's fan-out check failed the run first.
         assert_eq!(down_a.load(Ordering::SeqCst), 0);
@@ -3874,7 +3877,7 @@ fn run_scoped_value_is_retained_until_terminal_cleanup() {
         run_to_completion(&service, &handle);
 
         let summary = service.summary(handle.run_id()).unwrap();
-        assert_eq!(summary.state, reimagine_runtime::RunState::Completed);
+        assert_eq!(summary.state, reimagine_runtime::TaskState::Completed);
         assert_eq!(backend.begin_runs.load(Ordering::SeqCst), 1);
         assert_eq!(backend.cleanup_runs.load(Ordering::SeqCst), 1);
         // cleanup_run is the only coarse backend hook used for
@@ -4001,7 +4004,7 @@ fn workspace_scoped_value_does_not_trigger_single_use_lifecycle() {
         run_to_completion(&service, &handle);
 
         let summary = service.summary(handle.run_id()).unwrap();
-        assert_eq!(summary.state, reimagine_runtime::RunState::Completed);
+        assert_eq!(summary.state, reimagine_runtime::TaskState::Completed);
         assert_eq!(consumer_count.load(Ordering::SeqCst), 2);
     });
 }
@@ -4110,7 +4113,7 @@ fn explicit_target_run_uses_active_plan_fan_out_not_workflow_fan_out() {
         run_to_completion(&service, &handle);
 
         let summary = service.summary(handle.run_id()).unwrap();
-        assert_eq!(summary.state, reimagine_runtime::RunState::Completed);
+        assert_eq!(summary.state, reimagine_runtime::TaskState::Completed);
         assert_eq!(consumer_count.load(Ordering::SeqCst), 1);
         // The unselected branch was never scheduled.
         assert_eq!(other_branch_count.load(Ordering::SeqCst), 0);
@@ -4407,7 +4410,7 @@ fn stage_scoped_value_is_dropped_when_its_stage_completes() {
         run_to_completion(&service, &handle);
 
         let summary = service.summary(handle.run_id()).unwrap();
-        assert_eq!(summary.state, reimagine_runtime::RunState::Completed);
+        assert_eq!(summary.state, reimagine_runtime::TaskState::Completed);
 
         // c1 (stage 1) saw p1's StageScoped(1) value still alive.
         let c1_probe = probe_p1.lock().unwrap().first().copied().expect("c1 probe");
@@ -4482,7 +4485,7 @@ fn memory_budget_reject_fails_node_with_out_of_memory_diagnostic() {
         run_to_completion(&service, &handle);
 
         let summary = service.summary(handle.run_id()).unwrap();
-        assert_eq!(summary.state, reimagine_runtime::RunState::Failed);
+        assert_eq!(summary.state, reimagine_runtime::TaskState::Failed);
         let snapshot = service.snapshot(handle.run_id()).unwrap();
         assert_eq!(
             snapshot.node_states.get(&NodeId::new("node_a")).copied(),
@@ -4564,7 +4567,7 @@ fn memory_budget_backpressure_waits_for_an_inflight_node() {
             "the two nodes must never overlap under a one-node budget"
         );
         let summary = service.summary(handle.run_id()).unwrap();
-        assert_eq!(summary.state, reimagine_runtime::RunState::Completed);
+        assert_eq!(summary.state, reimagine_runtime::TaskState::Completed);
         assert_eq!(entered.load(Ordering::SeqCst), 0, "both nodes must finish");
     });
 }
@@ -4840,7 +4843,7 @@ fn independent_stages_run_concurrently_with_stage_group_parallelism() {
         }
         assert_eq!(
             service.summary(handle.run_id()).unwrap().state,
-            reimagine_runtime::RunState::Completed
+            reimagine_runtime::TaskState::Completed
         );
     });
 }
@@ -4907,7 +4910,7 @@ fn stage_group_parallelism_is_off_by_default() {
         assert_eq!(max_seen.load(Ordering::SeqCst), 1);
         assert_eq!(
             service.summary(handle.run_id()).unwrap().state,
-            reimagine_runtime::RunState::Completed
+            reimagine_runtime::TaskState::Completed
         );
     });
 }

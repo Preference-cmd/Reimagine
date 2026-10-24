@@ -437,8 +437,8 @@ async fn inference_runtime_routes_atomically_to_the_committed_worker() {
         RunId::new("route-run"),
         NodeId::new("route-node"),
         None,
-        Arc::new(reimagine_inference::NoopNodeCancellation::new()),
-        Arc::new(reimagine_inference::NoopInferenceProgressSink),
+        reimagine_core::task::CancelToken::new(),
+        Arc::new(reimagine_core::task::NoopProgressSink),
     );
     let request = || {
         CreateEmptyLatentRequest::new(

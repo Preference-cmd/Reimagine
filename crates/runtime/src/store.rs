@@ -253,7 +253,7 @@ impl RunStore {
     pub(crate) fn active_cancellation(
         &self,
         run_id: &RunId,
-    ) -> Option<crate::cancellation::CancellationToken> {
+    ) -> Option<reimagine_core::task::CancelToken> {
         let guard = self.inner.read().expect("run store poisoned");
         guard.active.get(run_id).map(|h| h.cancellation())
     }

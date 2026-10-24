@@ -11,8 +11,8 @@
 use reimagine_core::model::{NodeId, RunId, TensorShape};
 use reimagine_inference::{
     Backend, BackendPayloadKey, BackendTensorHandle, DiffusionSampleRequest,
-    DiffusionSampleResponse, ExecutionConditioning, InferenceBackend, InferenceProgressSink,
-    LatentContent, LatentSpaceMetadata, RuntimeLatent,
+    DiffusionSampleResponse, ExecutionConditioning, InferenceBackend, LatentContent,
+    LatentSpaceMetadata, ProgressSink, RuntimeLatent,
 };
 
 use crate::backend::BurnBackend;
@@ -37,7 +37,7 @@ fn sampled_latent_key(run_id: &RunId, node_id: &NodeId) -> BackendPayloadKey {
 pub fn execute_diffusion_sample(
     backend: &BurnBackend,
     request: DiffusionSampleRequest,
-    progress: Option<&dyn InferenceProgressSink>,
+    progress: Option<&dyn ProgressSink>,
 ) -> Result<DiffusionSampleResponse, BurnBackendError> {
     crate::cancellation::ensure_not_cancelled(backend)?;
 

@@ -2,35 +2,15 @@ use std::sync::Arc;
 
 use reimagine_core::diagnostic::CorrelationId;
 use reimagine_core::model::{NodeId, RunId};
-
-use crate::NodeCancellation;
-
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct InferenceProgress {
-    pub sequence: u64,
-    pub completed: u64,
-    pub total: Option<u64>,
-    pub message: Option<String>,
-}
-
-pub trait InferenceProgressSink: Send + Sync + 'static {
-    fn report(&self, progress: InferenceProgress);
-}
-
-#[derive(Debug, Default)]
-pub struct NoopInferenceProgressSink;
-
-impl InferenceProgressSink for NoopInferenceProgressSink {
-    fn report(&self, _progress: InferenceProgress) {}
-}
+use reimagine_core::task::{CancelToken, ProgressSink};
 
 #[derive(Clone)]
 pub struct InferenceInvocation {
     run_id: RunId,
     node_id: NodeId,
     correlation_id: Option<CorrelationId>,
-    cancellation: Arc<dyn NodeCancellation>,
-    progress: Arc<dyn InferenceProgressSink>,
+    cancellation: CancelToken,
+    progress: Arc<dyn ProgressSink>,
 }
 
 impl InferenceInvocation {
@@ -38,8 +18,8 @@ impl InferenceInvocation {
         run_id: RunId,
         node_id: NodeId,
         correlation_id: Option<CorrelationId>,
-        cancellation: Arc<dyn NodeCancellation>,
-        progress: Arc<dyn InferenceProgressSink>,
+        cancellation: CancelToken,
+        progress: Arc<dyn ProgressSink>,
     ) -> Self {
         Self {
             run_id,
@@ -62,11 +42,11 @@ impl InferenceInvocation {
         self.correlation_id.as_ref()
     }
 
-    pub fn cancellation(&self) -> &Arc<dyn NodeCancellation> {
+    pub fn cancellation(&self) -> &CancelToken {
         &self.cancellation
     }
 
-    pub fn progress(&self) -> &Arc<dyn InferenceProgressSink> {
+    pub fn progress(&self) -> &Arc<dyn ProgressSink> {
         &self.progress
     }
 }

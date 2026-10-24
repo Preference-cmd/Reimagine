@@ -128,7 +128,7 @@ impl Runner {
                 // the whole run. A node-scoped cancellation — the host asked
                 // only this node to stop — lets the run continue.
                 let run_cancelled = self.cancellation.is_cancelled();
-                let node_cancelled = self.cancellation.is_node_cancelled(node.node_id());
+                let node_cancelled = self.is_node_cancelled(node.node_id());
                 !already_failing && (run_cancelled || !node_cancelled)
             }
         }

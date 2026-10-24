@@ -4,7 +4,8 @@ use std::collections::HashMap;
 
 use reimagine_core::event::RunEvent;
 use reimagine_core::model::{ArtifactId, NodeId, RunId, WorkflowId, WorkflowVersion};
-use reimagine_runtime::{NodeState, RunState};
+use reimagine_core::task::TaskState;
+use reimagine_runtime::NodeState;
 use reimagine_runtime::{RunSnapshot, RunSummary};
 use serde::{Deserialize, Serialize};
 
@@ -27,7 +28,7 @@ pub struct RunSnapshotDto {
     pub run_id: RunId,
     pub workflow_id: WorkflowId,
     pub workflow_version: WorkflowVersion,
-    pub state: RunState,
+    pub state: TaskState,
     pub node_states: HashMap<NodeId, NodeStateDto>,
     pub diagnostics: Vec<DiagnosticDto>,
     pub artifacts: Vec<ArtifactDto>,
@@ -85,7 +86,7 @@ pub struct RunSummaryDto {
     pub run_id: RunId,
     pub workflow_id: WorkflowId,
     pub workflow_version: WorkflowVersion,
-    pub state: RunState,
+    pub state: TaskState,
     pub diagnostics: Vec<DiagnosticDto>,
     pub artifacts: Vec<ArtifactDto>,
     pub started_at: String,

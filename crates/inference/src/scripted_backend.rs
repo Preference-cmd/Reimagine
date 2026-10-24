@@ -50,7 +50,6 @@ use std::time::Duration;
 
 use async_trait::async_trait;
 
-use crate::cancellation::NodeCancellation;
 use crate::{
     Backend, CreateEmptyLatentRequest, CreateEmptyLatentResponse, DiffusionSampleRequest,
     DiffusionSampleResponse, ImageImportRequest, ImageImportResponse, ImagePreviewRequest,
@@ -60,6 +59,7 @@ use crate::{
     LatentEncodeResponse, LoadBundleRequest, LoadBundleResponse, TextEncodeRequest,
     TextEncodeResponse,
 };
+use reimagine_core::task::CancelToken;
 
 /// How a [`ScriptedBackend`] behaves when a capability's script is
 /// exhausted.
@@ -284,7 +284,7 @@ pub struct ScriptedBackend {
     /// Behavior when a script is exhausted.
     exhaustion: ScriptExhaustion,
     /// Cancellation captured from the most recent `admit_invocation`.
-    latest_cancellation: Mutex<Option<Arc<dyn NodeCancellation>>>,
+    latest_cancellation: Mutex<Option<CancelToken>>,
     /// Total capability calls observed (admitted steps), for assertions.
     total_calls: AtomicU64,
 }
@@ -682,7 +682,6 @@ impl std::fmt::Debug for ScriptedBackend {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::testing::NoopNodeCancellation;
     use crate::{
         BackendPayloadKey, BackendTensorHandle, ConditioningMetadata, ExecutionConditioning,
         ExecutionValue, RuntimeClipHandle,
@@ -690,6 +689,7 @@ mod tests {
     use reimagine_core::model::{
         ModelId, NodeId, ParamValue, RunId, TensorDType, TensorShape, WorkflowId, WorkflowVersion,
     };
+    use reimagine_core::task::NoopProgressSink;
 
     fn conditioning(label: &str) -> ExecutionConditioning {
         ExecutionConditioning::new(
@@ -830,13 +830,13 @@ mod tests {
         let (backend, hold) = ScriptedBackend::new("fake")
             .text_encode(vec![Ok(TextEncodeResponse::new(conditioning("held")))])
             .with_hold();
-        let cancellation: Arc<dyn NodeCancellation> = Arc::new(NoopNodeCancellation::new());
+        let cancellation = CancelToken::new();
         let invocation = InferenceInvocation::new(
             RunId::new("run-1"),
             NodeId::new("node-1"),
             None,
             cancellation,
-            Arc::new(crate::NoopInferenceProgressSink),
+            Arc::new(NoopProgressSink),
         );
 
         let task = tokio::spawn(async move {
@@ -858,13 +858,13 @@ mod tests {
         let (backend, hold) = ScriptedBackend::new("fake")
             .text_encode(vec![Ok(TextEncodeResponse::new(conditioning("held")))])
             .with_hold();
-        let cancellation = Arc::new(NoopNodeCancellation::new());
+        let cancellation = CancelToken::new();
         let invocation = InferenceInvocation::new(
             RunId::new("run-1"),
             NodeId::new("node-1"),
             None,
             cancellation.clone(),
-            Arc::new(crate::NoopInferenceProgressSink),
+            Arc::new(NoopProgressSink),
         );
 
         let task = tokio::spawn(async move {
@@ -884,13 +884,13 @@ mod tests {
         let backend = ScriptedBackend::new("fake")
             .text_encode(vec![Ok(TextEncodeResponse::new(conditioning("slow")))])
             .with_step_delay(Duration::from_secs(60));
-        let cancellation = Arc::new(NoopNodeCancellation::new());
+        let cancellation = CancelToken::new();
         let invocation = InferenceInvocation::new(
             RunId::new("run-1"),
             NodeId::new("node-1"),
             None,
             cancellation.clone(),
-            Arc::new(crate::NoopInferenceProgressSink),
+            Arc::new(NoopProgressSink),
         );
 
         let task = tokio::spawn(async move {

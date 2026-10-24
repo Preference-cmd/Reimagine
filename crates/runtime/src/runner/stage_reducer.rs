@@ -11,7 +11,6 @@ use tokio::task::JoinSet;
 
 use super::orchestrator::Runner;
 use crate::artifacts::ArtifactStore;
-use crate::cancellation::CancellationToken;
 use crate::consumer_index::PlanConsumerIndex;
 use crate::run_session::{NodeOutcome, RunSession};
 use crate::scheduler::{
@@ -24,6 +23,7 @@ use crate::stage_runner::{
     missing_workflow_input_message,
 };
 use crate::value_store::OutputKey;
+use reimagine_core::task::CancelToken;
 
 /// How long the reducer waits for a timed-out task to observe cancellation
 /// and return before aborting the stage. Cooperative executors return within
@@ -139,7 +139,7 @@ impl Runner {
         let max_concurrency = self.options.max_stage_concurrency.unwrap_or(1).max(1);
         let mut joins = JoinSet::new();
         let mut next_index = 0usize;
-        let failure_cancellation = CancellationToken::new();
+        let failure_cancellation = CancelToken::new();
         // node_id -> deadline, for in-flight nodes with an armed deadline.
         let mut in_flight_deadlines: HashMap<NodeId, Instant> = HashMap::new();
         // In-flight nodes whose deadline already expired (reduced as timed
@@ -190,7 +190,7 @@ impl Runner {
                     // Node-level cancellation at admission: this node (or the
                     // run) was cancelled before it started. Only this node is
                     // affected; the stage continues.
-                    if self.cancellation.is_node_cancelled(node_id) {
+                    if self.is_node_cancelled(node_id) {
                         next_index += 1;
                         self.reduce_node_cancelled(&node, session, started_at, artifact_store)
                             .await;
@@ -200,7 +200,7 @@ impl Runner {
                     // Deadline at admission: the node's deadline was armed
                     // before admission (e.g. by the host) and has already
                     // passed. Fail it without failing the run.
-                    if self.cancellation.is_node_expired(node_id) {
+                    if self.deadlines.is_node_expired(node_id) {
                         next_index += 1;
                         let message =
                             node_timeout_message(node_id, self.options.default_node_timeout);
@@ -306,7 +306,7 @@ impl Runner {
                         .default_node_timeout
                         .map(|timeout| Instant::now() + timeout);
                     if let Some(deadline) = deadline {
-                        self.cancellation.set_deadline_at(node_id, deadline);
+                        self.deadlines.set_deadline_at(node_id, deadline);
                         in_flight_deadlines.insert(node_id.clone(), deadline);
                     }
 
@@ -319,6 +319,7 @@ impl Runner {
                         clock: self.clock.clone(),
                         registry: self.registry.clone(),
                         cancellation: self.cancellation.clone(),
+                        node_cancellations: self.node_cancellations.clone(),
                     };
                     joins.spawn(execute_stage_node(
                         execution,
@@ -403,6 +404,7 @@ impl Runner {
                 StageNodeResult::Cancelled { node } => node.node_id(),
             };
             in_flight_deadlines.remove(node_id);
+            self.deadlines.clear_deadline(node_id);
             expired_in_flight.remove(node_id);
             self.release_claimed_budget(node_id, &mut claimed_usage);
 
@@ -522,7 +524,7 @@ impl Runner {
             };
             // Cooperative: the node token lets the still-running executor
             // abort at its next check point.
-            self.cancellation.cancel_node(&node_id);
+            self.cancel_node(&node_id);
             let message = node_timeout_message(&node_id, self.options.default_node_timeout);
             self.reduce_node_timed_out(
                 &node,

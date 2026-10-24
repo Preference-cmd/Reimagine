@@ -16,12 +16,12 @@ use reimagine_core::model::{
     ArtifactId, ArtifactRef, DiagnosticId, NodeId, RunId, WorkflowId, WorkflowVersion,
 };
 use reimagine_runtime::{
-    NodeState, RunArtifactRef, RunSnapshot, RunSnapshotUpdate, RunState, RunStore,
+    NodeState, RunArtifactRef, RunSnapshot, RunSnapshotUpdate, RunStore, TaskState,
 };
 
 fn snapshot(
     run_id: &RunId,
-    state: RunState,
+    state: TaskState,
     nodes: &[(&str, NodeState)],
     artifacts: &[(&str, &str, &str)],
     ts: &str,
@@ -91,7 +91,7 @@ async fn watch_subscriber_observes_every_put_without_polling() {
 
     store.put_snapshot(snapshot(
         &run,
-        RunState::Queued,
+        TaskState::Queued,
         &[("n1", NodeState::Queued)],
         &[],
         "t0",
@@ -100,27 +100,27 @@ async fn watch_subscriber_observes_every_put_without_polling() {
     let mut rx = store
         .subscribe(&run)
         .expect("subscribe after first snapshot");
-    assert_eq!(rx.borrow().state, RunState::Queued);
+    assert_eq!(rx.borrow().state, TaskState::Queued);
 
     store.put_snapshot(snapshot(
         &run,
-        RunState::Running,
+        TaskState::Running,
         &[("n1", NodeState::Running)],
         &[],
         "t1",
     ));
     assert!(rx.changed().await.is_ok());
-    assert_eq!(rx.borrow().state, RunState::Running);
+    assert_eq!(rx.borrow().state, TaskState::Running);
 
     store.put_snapshot(snapshot(
         &run,
-        RunState::Completed,
+        TaskState::Completed,
         &[("n1", NodeState::Completed)],
         &[],
         "t2",
     ));
     assert!(rx.changed().await.is_ok());
-    assert_eq!(rx.borrow().state, RunState::Completed);
+    assert_eq!(rx.borrow().state, TaskState::Completed);
 }
 
 #[tokio::test]
@@ -133,13 +133,13 @@ async fn snapshot_returns_latest_value_and_keeps_backward_compat_semantics() {
 
     store.put_snapshot(snapshot(
         &run,
-        RunState::Running,
+        TaskState::Running,
         &[("n1", NodeState::Running)],
         &[],
         "t1",
     ));
     let snap = store.snapshot(&run).expect("snapshot present after put");
-    assert_eq!(snap.state, RunState::Running);
+    assert_eq!(snap.state, TaskState::Running);
     assert_eq!(
         snap.node_states.get(&NodeId::new("n1")),
         Some(&NodeState::Running)
@@ -147,12 +147,12 @@ async fn snapshot_returns_latest_value_and_keeps_backward_compat_semantics() {
 
     store.put_snapshot(snapshot(
         &run,
-        RunState::Completed,
+        TaskState::Completed,
         &[("n1", NodeState::Completed)],
         &[],
         "t2",
     ));
-    assert_eq!(store.snapshot(&run).unwrap().state, RunState::Completed);
+    assert_eq!(store.snapshot(&run).unwrap().state, TaskState::Completed);
 }
 
 #[tokio::test]
@@ -169,14 +169,14 @@ async fn delta_stream_emits_full_baseline_then_incremental_deltas() {
 
     store.put_snapshot(snapshot(
         &run,
-        RunState::Running,
+        TaskState::Running,
         &[("n1", NodeState::Running), ("n2", NodeState::Queued)],
         &[("a1", "n1", "samples/a1.png")],
         "t0",
     ));
     store.put_snapshot(snapshot(
         &run,
-        RunState::Running,
+        TaskState::Running,
         &[("n1", NodeState::Completed), ("n2", NodeState::Queued)],
         &[("a1", "n1", "samples/a1.png")],
         "t1",
@@ -201,7 +201,7 @@ async fn delta_stream_emits_full_baseline_then_incremental_deltas() {
     // Next put yields a delta carrying only the changed node.
     store.put_snapshot(snapshot(
         &run,
-        RunState::Running,
+        TaskState::Running,
         &[("n1", NodeState::Completed), ("n2", NodeState::Running)],
         &[("a1", "n1", "samples/a1.png")],
         "t2",
@@ -235,7 +235,7 @@ async fn delta_artifacts_are_incremental_across_puts() {
 
     store.put_snapshot(snapshot(
         &run,
-        RunState::Running,
+        TaskState::Running,
         &[("n1", NodeState::Running)],
         &[("a1", "n1", "samples/a1.png")],
         "t0",
@@ -248,7 +248,7 @@ async fn delta_artifacts_are_incremental_across_puts() {
 
     store.put_snapshot(snapshot(
         &run,
-        RunState::Running,
+        TaskState::Running,
         &[("n1", NodeState::Completed)],
         &[
             ("a1", "n1", "samples/a1.png"),
@@ -272,7 +272,7 @@ async fn unchanged_snapshot_publishes_to_watch_but_emits_no_delta() {
 
     store.put_snapshot(snapshot(
         &run,
-        RunState::Running,
+        TaskState::Running,
         &[("n1", NodeState::Running)],
         &[],
         "t0",
@@ -286,7 +286,7 @@ async fn unchanged_snapshot_publishes_to_watch_but_emits_no_delta() {
     // Identical node states/artifacts, only the updated_at timestamp changes.
     store.put_snapshot(snapshot(
         &run,
-        RunState::Running,
+        TaskState::Running,
         &[("n1", NodeState::Running)],
         &[],
         "t1",
@@ -304,7 +304,7 @@ async fn runs_are_isolated_per_run_id() {
 
     store.put_snapshot(snapshot(
         &run_a,
-        RunState::Running,
+        TaskState::Running,
         &[("n1", NodeState::Running)],
         &[],
         "t0",
@@ -316,7 +316,7 @@ async fn runs_are_isolated_per_run_id() {
 
     store.put_snapshot(snapshot(
         &run_b,
-        RunState::Queued,
+        TaskState::Queued,
         &[("n1", NodeState::Queued)],
         &[],
         "t1",
@@ -335,7 +335,7 @@ async fn runs_are_isolated_per_run_id() {
     // Update run_a only; run_b's stream stays silent.
     store.put_snapshot(snapshot(
         &run_a,
-        RunState::Running,
+        TaskState::Running,
         &[("n1", NodeState::Completed)],
         &[],
         "t2",
@@ -354,7 +354,7 @@ async fn watch_reflects_appended_diagnostics_without_emitting_deltas() {
 
     store.put_snapshot(snapshot(
         &run,
-        RunState::Completed,
+        TaskState::Completed,
         &[("n1", NodeState::Completed)],
         &[],
         "t0",
@@ -384,7 +384,7 @@ async fn multiple_delta_subscribers_each_receive_the_same_updates() {
 
     store.put_snapshot(snapshot(
         &run,
-        RunState::Running,
+        TaskState::Running,
         &[("n1", NodeState::Running)],
         &[],
         "t0",
@@ -402,7 +402,7 @@ async fn multiple_delta_subscribers_each_receive_the_same_updates() {
 
     store.put_snapshot(snapshot(
         &run,
-        RunState::Running,
+        TaskState::Running,
         &[("n1", NodeState::Completed)],
         &[],
         "t1",
@@ -424,7 +424,7 @@ async fn delta_baseline_is_never_overtaken_by_subsequent_deltas() {
 
     store.put_snapshot(snapshot(
         &run,
-        RunState::Running,
+        TaskState::Running,
         &[("n1", NodeState::Running)],
         &[],
         "t0",
@@ -436,7 +436,7 @@ async fn delta_baseline_is_never_overtaken_by_subsequent_deltas() {
     for (node, ts) in [("n1", "t1"), ("n2", "t2"), ("n3", "t3")] {
         store.put_snapshot(snapshot(
             &run,
-            RunState::Running,
+            TaskState::Running,
             &[("n1", NodeState::Running), (node, NodeState::Completed)],
             &[],
             ts,
@@ -465,7 +465,7 @@ async fn delta_carries_only_the_nodes_that_changed_across_many() {
         .iter()
         .map(|id| (id.as_str(), NodeState::Queued))
         .collect();
-    store.put_snapshot(snapshot(&run, RunState::Running, &all_queued, &[], "t0"));
+    store.put_snapshot(snapshot(&run, TaskState::Running, &all_queued, &[], "t0"));
     let mut rx = store.delta_stream(&run).unwrap();
     assert!(matches!(
         next_update(&mut rx).await,
@@ -475,7 +475,7 @@ async fn delta_carries_only_the_nodes_that_changed_across_many() {
     // Flip exactly one of the 100 nodes.
     let mut one_changed = all_queued.clone();
     one_changed[0].1 = NodeState::Running;
-    store.put_snapshot(snapshot(&run, RunState::Running, &one_changed, &[], "t1"));
+    store.put_snapshot(snapshot(&run, TaskState::Running, &one_changed, &[], "t1"));
     match next_update(&mut rx).await {
         RunSnapshotUpdate::Delta { changed_nodes, .. } => {
             assert_eq!(changed_nodes.len(), 1, "delta carries 1 of 100 nodes");
@@ -495,7 +495,7 @@ async fn watch_borrow_returns_the_shared_arc_without_copying() {
 
     store.put_snapshot(snapshot(
         &run,
-        RunState::Running,
+        TaskState::Running,
         &[("n1", NodeState::Running)],
         &[],
         "t0",

@@ -206,7 +206,7 @@ fn scripted_error_at_second_node_fails_the_run_with_mapped_message() {
         run_to_completion(&service, &handle);
 
         let summary = service.summary(handle.run_id()).unwrap();
-        assert_eq!(summary.state, reimagine_runtime::RunState::Failed);
+        assert_eq!(summary.state, reimagine_runtime::TaskState::Failed);
         let snapshot = service.snapshot(handle.run_id()).unwrap();
         assert_eq!(
             snapshot.node_states.get(&NodeId::new("a")),
@@ -281,7 +281,7 @@ fn held_scripted_step_cancelled_mid_flight_marks_run_cancelled() {
         let summary = service.summary(handle.run_id()).unwrap();
         assert_eq!(
             summary.state,
-            reimagine_runtime::RunState::Cancelled,
+            reimagine_runtime::TaskState::Cancelled,
             "cancelling the run while the scripted step is held must cancel it"
         );
         let snapshot = service.snapshot(handle.run_id()).unwrap();

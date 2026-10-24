@@ -5,17 +5,18 @@ use std::sync::Arc;
 use reimagine_core::diagnostic::CorrelationId;
 use reimagine_core::model::{RunId, WorkflowId, WorkflowVersion};
 use reimagine_core::readiness::ExecutionNode;
+use reimagine_core::task::{CancelToken, ProgressSink};
 use reimagine_inference::{
-    ArtifactPublisher, ExecutionOutput, InferenceProgressSink, NodeCancellation,
-    NodeExecutionContext, NodeExecutorError, NodeExecutorRegistry, NodeInputs, NodeParams,
+    ArtifactPublisher, ExecutionOutput, NodeExecutionContext, NodeExecutorError,
+    NodeExecutorRegistry, NodeInputs, NodeParams,
 };
 use tokio::sync::Mutex;
 
 use crate::artifacts::{ArtifactStore, RuntimeNodeArtifactCapability};
-use crate::cancellation::{CancellationToken, CombinedCancellation};
 use crate::clock::Clock;
 use crate::events::RunEventSink;
 use crate::progress::RuntimeInferenceProgressSink;
+use std::collections::HashMap;
 
 #[derive(Debug, Clone)]
 pub struct PreparedNodeBindings {
@@ -78,14 +79,29 @@ pub struct StageExecutionContext {
     pub sink: Arc<dyn RunEventSink>,
     pub clock: Arc<dyn Clock>,
     pub registry: Arc<NodeExecutorRegistry>,
-    pub cancellation: CancellationToken,
+    pub cancellation: CancelToken,
+    pub node_cancellations:
+        Arc<std::sync::Mutex<HashMap<reimagine_core::model::NodeId, CancelToken>>>,
+}
+
+impl StageExecutionContext {
+    pub fn node_cancellation(&self, node_id: &reimagine_core::model::NodeId) -> CancelToken {
+        let mut tokens = self
+            .node_cancellations
+            .lock()
+            .expect("node token map poisoned");
+        tokens
+            .entry(node_id.clone())
+            .or_insert_with(|| self.cancellation.child())
+            .clone()
+    }
 }
 
 pub async fn execute_stage_node(
     context: StageExecutionContext,
     work: StageNodeWork,
     artifact_store: Arc<Mutex<ArtifactStore>>,
-    failure_cancellation: CancellationToken,
+    failure_cancellation: CancelToken,
 ) -> StageNodeResult {
     let node = work.node;
     let (inputs, params) = work.bindings.into_parts();
@@ -99,12 +115,12 @@ pub async fn execute_stage_node(
         context.clock.clone(),
         context.cancellation.clone(),
     ));
-    let cancellation: Arc<dyn NodeCancellation> = Arc::new(CombinedCancellation::triple(
+    let cancellation = CancelToken::any(&[
         context.cancellation.clone(),
-        context.cancellation.node_cancellation(node.node_id()),
+        context.node_cancellation(node.node_id()),
         failure_cancellation,
-    ));
-    let progress: Arc<dyn InferenceProgressSink> = Arc::new(RuntimeInferenceProgressSink::new(
+    ]);
+    let progress: Arc<dyn ProgressSink> = Arc::new(RuntimeInferenceProgressSink::new(
         context.run_id.clone(),
         context.workflow_id.clone(),
         context.workflow_version,

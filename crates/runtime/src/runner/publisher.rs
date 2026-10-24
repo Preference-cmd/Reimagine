@@ -11,10 +11,10 @@ use tokio::sync::Mutex;
 use super::diagnostics::make_diagnostic;
 use super::orchestrator::Runner;
 use crate::artifacts::ArtifactStore;
-use crate::handle::RunState;
 use crate::run_session::{NodeOutcome, RunSession};
 use crate::scheduler::NodeState;
 use crate::snapshot::{RunArtifactRef, RunSnapshot, RunSummary};
+use reimagine_core::task::TaskState;
 
 impl Runner {
     pub(super) async fn handle_cancellation(
@@ -46,14 +46,14 @@ impl Runner {
         self.emit_lifecycle_event(RunEventKind::RunCancelled, None, &[]);
         self.publish_summary(
             session,
-            RunState::Cancelled,
+            TaskState::Cancelled,
             started_at.clone(),
             self.clock.now(),
             artifact_store,
             &[],
         )
         .await;
-        self.publish_snapshot_with_state(session, RunState::Cancelled, started_at, artifact_store)
+        self.publish_snapshot_with_state(session, TaskState::Cancelled, started_at, artifact_store)
             .await;
         self.store.finalize(&self.run_id);
     }
@@ -64,14 +64,14 @@ impl Runner {
         started_at: &Timestamp,
         artifact_store: &Arc<Mutex<ArtifactStore>>,
     ) {
-        self.publish_snapshot_with_state(session, RunState::Running, started_at, artifact_store)
+        self.publish_snapshot_with_state(session, TaskState::Running, started_at, artifact_store)
             .await;
     }
 
     pub(super) async fn publish_snapshot_with_state(
         &self,
         session: &RunSession,
-        state: RunState,
+        state: TaskState,
         started_at: &Timestamp,
         artifact_store: &Arc<Mutex<ArtifactStore>>,
     ) {
@@ -87,7 +87,7 @@ impl Runner {
     async fn publish_snapshot_for_outcomes(
         &self,
         node_outcomes: &HashMap<NodeId, NodeOutcome>,
-        state: RunState,
+        state: TaskState,
         started_at: &Timestamp,
         artifact_store: &Arc<Mutex<ArtifactStore>>,
     ) {
@@ -138,7 +138,7 @@ impl Runner {
     pub(super) async fn publish_summary(
         &self,
         _session: &RunSession,
-        state: RunState,
+        state: TaskState,
         started_at: Timestamp,
         finished_at: Timestamp,
         artifact_store: &Arc<Mutex<ArtifactStore>>,
