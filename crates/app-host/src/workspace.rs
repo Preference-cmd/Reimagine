@@ -1,9 +1,12 @@
+pub(crate) mod aigc_parts;
 pub mod builder;
 
 use std::collections::BTreeMap;
 use std::path::Path;
 use std::sync::{Arc, RwLock};
 
+pub(crate) use aigc_parts::AigcParts;
+pub use aigc_parts::AigcStatus;
 pub use builder::WorkspaceHostBuilder;
 
 use crate::WorkspaceScope;
@@ -25,10 +28,7 @@ use crate::{InstalledWorkerInventoryProvider, WorkerInventoryProvider};
 use aigc::ModelAcquisitionService;
 #[cfg(test)]
 use aigc::inference::compose::compose_inference_runtime;
-use aigc::inference::compose::{
-    BootstrapInference, ComposedInferenceRuntime, bootstrap_inference,
-    bootstrap_inference_with_worker_inventory,
-};
+use aigc::inference::compose::{BootstrapInference, ComposedInferenceRuntime, bootstrap_inference};
 use aigc::inference::selection::resolved_candle_device_label;
 
 /// How long a re-bootstrap waits for in-flight runs to drain before giving
@@ -49,7 +49,7 @@ const REBOOTSTRAP_DRAIN_DEADLINE: std::time::Duration = std::time::Duration::fro
 /// project directory tree already exists after the config-level
 /// migration, so `create_project`'s ProjectAlreadyExists guard would
 /// reject a re-run on a partially-migrated workspace.
-async fn migrate_project_layout(config: &AppConfig) -> Result<(), AppHostError> {
+pub(crate) async fn migrate_project_layout(config: &AppConfig) -> Result<(), AppHostError> {
     use crate::board_service::ensure_board_file;
     use reimagine_core::event::Timestamp;
     use reimagine_core::model::ProjectId;
@@ -91,18 +91,11 @@ pub struct WorkspaceHost {
     pub(crate) workflow_service: Arc<WorkflowService>,
     pub(crate) workflow_services: RwLock<BTreeMap<ProjectId, Arc<WorkflowService>>>,
     pub(crate) document_events: Arc<DocumentEventBus>,
-    pub(crate) model_service: Arc<ModelService>,
     pub(crate) runtime_service: Arc<RuntimeService>,
     pub(crate) node_catalog: Arc<NodeCatalogService>,
     pub(crate) builtin_catalog: Arc<BuiltinNodeCatalog>,
     pub(crate) services: Arc<WorkspaceServices>,
-    pub(crate) compute_profile: Arc<WorkspaceComputeProfile>,
-    pub(crate) resolved_backend_instance: reimagine_inference::BackendInstance,
-    pub(crate) worker_switch: Option<Arc<crate::WorkerSwitchService>>,
-    pub(crate) worker_inventory: Arc<dyn WorkerInventoryProvider>,
-    pub(crate) topology:
-        Option<Arc<tokio::sync::Mutex<aigc::inference::topology::ConnectionTopologyManager>>>,
-    pub(crate) discovery: Option<Arc<aigc::inference::discovery::DiscoveryOrchestrator>>,
+    pub(crate) aigc: AigcParts,
     pub(crate) event_sink: BoxedRunEventSink,
 }
 
@@ -114,9 +107,7 @@ impl std::fmt::Debug for WorkspaceHost {
             .field("backend_config", &self.backend_config)
             .field("runtime_service", &self.runtime_service)
             .field("node_catalog", &self.node_catalog)
-            .field("compute_profile", &self.compute_profile)
-            .field("resolved_backend_instance", &self.resolved_backend_instance)
-            .field("worker_switch", &self.worker_switch)
+            .field("aigc", &self.aigc)
             .finish_non_exhaustive()
     }
 }
@@ -195,6 +186,16 @@ impl WorkspaceHost {
             Arc::clone(&node_catalog),
             Arc::clone(&project_memory_service),
         ));
+        let aigc = AigcParts {
+            status: AigcStatus::Available,
+            model_service,
+            compute_profile,
+            resolved_backend_instance,
+            worker_switch: None,
+            worker_inventory: Arc::new(crate::EmptyWorkerInventoryProvider),
+            topology: None,
+            discovery: None,
+        };
         Self {
             workspace_scope,
             config,
@@ -204,17 +205,11 @@ impl WorkspaceHost {
             workflow_service,
             workflow_services: RwLock::new(workflow_services),
             document_events,
-            model_service,
             runtime_service,
             node_catalog,
             builtin_catalog,
             services,
-            compute_profile,
-            resolved_backend_instance,
-            worker_switch: None,
-            worker_inventory: Arc::new(crate::EmptyWorkerInventoryProvider),
-            topology: None,
-            discovery: None,
+            aigc,
             event_sink: Arc::new(VecRunEventSink::new()),
         }
     }
@@ -381,21 +376,25 @@ impl WorkspaceHost {
             acquisition_service.clone(),
         ));
 
-        let bootstrapped =
+        let (status, bootstrapped) =
             match bootstrap_inference(&config, &backend_config, model_service.clone()) {
-                Ok(bootstrapped) => bootstrapped,
+                Ok(bootstrapped) => (AigcStatus::Available, bootstrapped),
                 Err(error) => {
+                    let reason = error.to_string();
                     tracing::error!(
                         %error,
                         "inference bootstrap failed on the synchronous construction path; \
                          continuing with an empty executor registry"
                     );
-                    BootstrapInference {
-                        runtime: ComposedInferenceRuntime::degraded(),
-                        compute_profile: WorkspaceComputeProfile::new(),
-                        topology: None,
-                        discovery: None,
-                    }
+                    (
+                        AigcStatus::Unavailable { reason },
+                        BootstrapInference {
+                            runtime: ComposedInferenceRuntime::degraded(),
+                            compute_profile: WorkspaceComputeProfile::new(),
+                            topology: None,
+                            discovery: None,
+                        },
+                    )
                 }
             };
         let worker_switch = bootstrapped.runtime.worker_switch.clone();
@@ -426,7 +425,8 @@ impl WorkspaceHost {
             Arc::new(bootstrapped.compute_profile),
             bootstrapped.runtime.selected_instance,
         );
-        host.worker_switch = worker_switch;
+        host.aigc.status = status;
+        host.aigc.worker_switch = worker_switch;
         host
     }
 
@@ -438,68 +438,15 @@ impl WorkspaceHost {
         worker_inventory: Arc<dyn WorkerInventoryProvider>,
         document_events_override: Option<Arc<DocumentEventBus>>,
     ) -> Result<Self, AppHostError> {
-        let acquisition_service = Arc::new(ModelAcquisitionService::new(
-            config.paths().clone(),
-            &config,
-        ));
-        let model_service = Arc::new(ModelService::new(
-            config.paths().clone(),
-            acquisition_service.clone(),
-        ));
-
-        // AR-08: establish the project workflow layout (default project +
-        // legacy migration) BEFORE bootstrapping inference, so no await
-        // sits between the discovery poll loop spawn and host
-        // construction (AR-37 constraint).
-        migrate_project_layout(&config).await?;
-
-        let bootstrapped = bootstrap_inference_with_worker_inventory(
-            &config,
-            &backend_config,
-            model_service,
-            Arc::clone(&worker_inventory),
-        )
-        .await
-        .map_err(|error| AppHostError::InferenceBootstrap {
-            message: error.to_string(),
-        })?;
-        let worker_switch = bootstrapped.runtime.worker_switch.clone();
-        let runtime_service = Arc::new(
-            RuntimeService::new(
-                bootstrapped.runtime.executor_registry,
-                bootstrapped.runtime.runtime_hooks.clone(),
-                Arc::clone(&event_sink),
-                Arc::new(reimagine_runtime::SystemClock),
-            )
-            .with_resource_hint_sink(
-                worker_switch
-                    .as_ref()
-                    .and_then(|worker_switch| worker_switch.active_hint_sink()),
-            ),
-        );
-        if let Some(worker_switch) = &worker_switch {
-            let cancellation: Arc<dyn crate::RunCancellation> = runtime_service.clone();
-            worker_switch.set_run_cancellation(cancellation);
+        let base_path = config.paths().base_path().to_path_buf();
+        let mut builder = WorkspaceHostBuilder::new(workspace_scope, base_path)
+            .backend_config(backend_config)
+            .event_sink(event_sink)
+            .worker_inventory(worker_inventory);
+        if let Some(events) = document_events_override {
+            builder = builder.document_events(events);
         }
-        let builtin_catalog = Arc::new(BuiltinNodeCatalog::v1());
-        let document_events =
-            document_events_override.unwrap_or_else(|| Arc::new(DocumentEventBus::new()));
-        let mut host = Self::new_with_document_events(
-            workspace_scope,
-            config,
-            backend_config,
-            runtime_service,
-            builtin_catalog,
-            Arc::new(bootstrapped.compute_profile),
-            bootstrapped.runtime.selected_instance,
-            document_events,
-        );
-        host.worker_switch = worker_switch;
-        host.worker_inventory = Arc::clone(&worker_inventory);
-        host.topology = bootstrapped.topology;
-        host.discovery = bootstrapped.discovery;
-        host.event_sink = Arc::clone(&event_sink);
-        Ok(host)
+        builder.build().await
     }
 
     /// Establish the AR-08 project workflow layout (idempotent).
@@ -580,15 +527,30 @@ impl WorkspaceHost {
         &self.board_service
     }
     pub fn model_service(&self) -> &Arc<ModelService> {
-        &self.model_service
+        &self.aigc.model_service
     }
     pub fn runtime_service(&self) -> &Arc<RuntimeService> {
         &self.runtime_service
     }
-    pub async fn selected_worker(
-        &self,
-    ) -> Result<crate::WorkerSelectionHandle, crate::WorkerSwitchError> {
+
+    /// Operating status of the workspace AIGC subsystem.
+    pub fn aigc_status(&self) -> &AigcStatus {
+        &self.aigc.status
+    }
+
+    /// Reason why AIGC is unavailable, if any.
+    pub(crate) fn aigc_unavailable_reason(&self) -> Option<&str> {
+        self.aigc.status.unavailable_reason()
+    }
+
+    pub async fn selected_worker(&self) -> Result<crate::WorkerSelectionHandle, AppHostError> {
+        if let Some(reason) = self.aigc_unavailable_reason() {
+            return Err(AppHostError::AigcUnavailable {
+                reason: reason.to_string(),
+            });
+        }
         let workers = self
+            .aigc
             .worker_switch
             .as_ref()
             .ok_or(crate::WorkerSwitchError::NoActiveWorker)?;
@@ -599,24 +561,42 @@ impl WorkspaceHost {
         &self,
         target: crate::WorkerBackendCandidate,
         deadline: std::time::Duration,
-    ) -> Result<crate::WorkerSelectionHandle, crate::WorkerSwitchError> {
+    ) -> Result<crate::WorkerSelectionHandle, AppHostError> {
+        if let Some(reason) = self.aigc_unavailable_reason() {
+            return Err(AppHostError::AigcUnavailable {
+                reason: reason.to_string(),
+            });
+        }
         let workers = self
+            .aigc
             .worker_switch
             .as_ref()
             .ok_or(crate::WorkerSwitchError::NoActiveWorker)?;
-        workers.drain_and_switch(Arc::new(target), deadline).await
+        workers
+            .drain_and_switch(Arc::new(target), deadline)
+            .await
+            .map_err(AppHostError::from)
     }
 
     pub async fn cancel_and_switch_worker(
         &self,
         target: crate::WorkerBackendCandidate,
         deadline: std::time::Duration,
-    ) -> Result<crate::WorkerSelectionHandle, crate::WorkerSwitchError> {
+    ) -> Result<crate::WorkerSelectionHandle, AppHostError> {
+        if let Some(reason) = self.aigc_unavailable_reason() {
+            return Err(AppHostError::AigcUnavailable {
+                reason: reason.to_string(),
+            });
+        }
         let workers = self
+            .aigc
             .worker_switch
             .as_ref()
             .ok_or(crate::WorkerSwitchError::NoActiveWorker)?;
-        workers.cancel_and_switch(Arc::new(target), deadline).await
+        workers
+            .cancel_and_switch(Arc::new(target), deadline)
+            .await
+            .map_err(AppHostError::from)
     }
 
     /// Wait for in-flight runs on the active worker to complete (up to
@@ -630,7 +610,7 @@ impl WorkspaceHost {
         &self,
         deadline: std::time::Duration,
     ) -> Result<(), crate::WorkerSwitchError> {
-        let Some(worker_switch) = &self.worker_switch else {
+        let Some(worker_switch) = &self.aigc.worker_switch else {
             return Ok(());
         };
         let handle = worker_switch.selected().await;
@@ -663,10 +643,16 @@ impl WorkspaceHost {
             (*current.config).clone(),
             backend_config,
             current.event_sink.clone(),
-            Arc::clone(&current.worker_inventory),
+            Arc::clone(&current.aigc.worker_inventory),
             Some(Arc::clone(&current.document_events)),
         )
         .await?;
+        if let AigcStatus::Unavailable { reason } = rebuilt.aigc_status() {
+            rebuilt.shutdown().await;
+            return Err(AppHostError::InferenceBootstrap {
+                message: reason.clone(),
+            });
+        }
         if let Err(error) = current
             .drain_active_worker(REBOOTSTRAP_DRAIN_DEADLINE)
             .await
@@ -763,7 +749,7 @@ impl WorkspaceHost {
     /// re-probe the host; the snapshot is computed once during
     /// [`WorkspaceHost`] bootstrap.
     pub fn compute_profile(&self) -> WorkspaceComputeProfile {
-        (*self.compute_profile).clone()
+        (*self.aigc.compute_profile).clone()
     }
 
     /// The connection topology manager (T13), when remote workers are
@@ -772,13 +758,13 @@ impl WorkspaceHost {
         &self,
     ) -> Option<&Arc<tokio::sync::Mutex<aigc::inference::topology::ConnectionTopologyManager>>>
     {
-        self.topology.as_ref()
+        self.aigc.topology.as_ref()
     }
 
     /// The discovery orchestrator (T12/T13), when a topology manager
     /// exists.
     pub fn discovery(&self) -> Option<&Arc<aigc::inference::discovery::DiscoveryOrchestrator>> {
-        self.discovery.as_ref()
+        self.aigc.discovery.as_ref()
     }
 
     /// Return the host-neutral
@@ -791,8 +777,8 @@ impl WorkspaceHost {
     /// backend-native handles. The returned DTO is the V1 wire contract
     /// for `GET /compute-profile` and the equivalent Tauri command.
     pub fn compute_profile_dto(&self) -> crate::dto::ComputeProfileDto {
-        let mut dto: crate::dto::ComputeProfileDto = self.compute_profile().clone().into();
-        if let Some(topology) = &self.topology {
+        let mut dto: crate::dto::ComputeProfileDto = self.compute_profile().into();
+        if let Some(topology) = &self.aigc.topology {
             // try_lock: the discovery poll loop may hold the lock; a
             // busy lock just means this snapshot omits topology workers.
             if let Ok(guard) = topology.try_lock() {
@@ -809,13 +795,13 @@ impl WorkspaceHost {
     /// know which [`reimagine_inference::BackendInstance`] the
     /// workspace is actually running.
     pub fn resolved_candle_device_label(&self) -> String {
-        resolved_candle_device_label(&self.resolved_backend_instance)
+        resolved_candle_device_label(&self.aigc.resolved_backend_instance)
     }
 
     /// Return the resolved [`reimagine_inference::BackendInstance`]
     /// the workspace bootstrap selected.
     pub fn resolved_backend_instance(&self) -> &reimagine_inference::BackendInstance {
-        &self.resolved_backend_instance
+        &self.aigc.resolved_backend_instance
     }
 
     /// Shut down the active inference worker, if any.
@@ -824,7 +810,7 @@ impl WorkspaceHost {
     /// is exiting so that child worker processes are cleaned up instead of
     /// becoming orphans.
     pub async fn shutdown(&self) {
-        let Some(worker_switch) = &self.worker_switch else {
+        let Some(worker_switch) = &self.aigc.worker_switch else {
             return;
         };
         let deadline = std::time::Duration::from_secs(5);
@@ -1493,6 +1479,47 @@ mod tests {
                 .is_some()
         );
         let _ = fs::remove_dir_all(&base);
+    }
+
+    #[tokio::test]
+    async fn rebuild_workspace_preserves_current_when_rebuild_fails() {
+        let base = temp_dir("rebuild-fail-preserve");
+        let mut original =
+            WorkspaceHost::try_with_defaults(WorkspaceScope::new("rebuild-fail"), &base)
+                .await
+                .expect("initial bootstrap must succeed");
+        assert!(original.aigc_status().is_available());
+
+        // Configure an invalid worker transport in backend_config so rebuilding fails inference bootstrap.
+        original.backend_config = InferenceBackendConfig {
+            workers: vec![reimagine_config::WorkerEndpointConfig {
+                id: "invalid-worker".to_owned(),
+                transport: "carrier-pigeon".to_owned(),
+                address: "quic://127.0.0.1:9999".to_owned(),
+                capabilities: Vec::new(),
+                device_label: String::new(),
+                fingerprint: None,
+            }],
+            ..InferenceBackendConfig::default()
+        };
+
+        let err = original
+            .rebootstrap(BackendSelection::Burn)
+            .await
+            .expect_err("rebootstrap must fail when new inference bootstrap is unavailable");
+        assert!(matches!(err, AppHostError::InferenceBootstrap { .. }));
+
+        // Current workspace host remains untouched and available.
+        assert!(original.aigc_status().is_available());
+        let default_project = reimagine_core::model::ProjectId::new("default");
+        assert_eq!(
+            original
+                .workflow_service_for_project(&default_project)
+                .project_id(),
+            &default_project
+        );
+
+        let _ = tokio::fs::remove_dir_all(&base).await;
     }
 
     #[tokio::test]

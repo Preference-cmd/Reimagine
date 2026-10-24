@@ -6,7 +6,7 @@ mod event_hub;
 use desktop_host::{DesktopHostState, WorkerSwitchResultDto, default_workspace_path};
 use event_hub::RunEventPayload;
 use reimagine_app_host::{
-    AppHostError, AppHostErrorCode, BackendSelection, WorkerInstallationDto, WorkerSwitchError,
+    AppHostError, AppHostErrorCode, BackendSelection, WorkerInstallationDto,
     dto::{
         ArtifactMetadataDto, ComputeProfileDto, DownloadEventPayload, HealthResponse, ModelCardDto,
         ModelCatalogEntryDto, ModelDownloadOutput, ModelFilters, ModelInfoDto, NodeDefDto,
@@ -56,14 +56,6 @@ fn app_host_command_error(error: AppHostError) -> TauriCommandError {
         code: error.code(),
         message: error.to_string(),
         details: error.details(),
-    }
-}
-
-fn worker_switch_command_error(error: WorkerSwitchError) -> TauriCommandError {
-    TauriCommandError {
-        code: reimagine_app_host::worker_switch_error_code(&error),
-        message: error.to_string(),
-        details: reimagine_app_host::worker_switch_error_details(&error),
     }
 }
 
@@ -240,7 +232,7 @@ async fn drain_and_switch_worker(
     state
         .drain_and_switch_worker(&target, deadline)
         .await
-        .map_err(worker_switch_command_error)
+        .map_err(app_host_command_error)
 }
 
 /// Cancel in-flight runs, then switch the active worker to the installed
@@ -255,7 +247,7 @@ async fn cancel_and_switch_worker(
     state
         .cancel_and_switch_worker(&target, deadline)
         .await
-        .map_err(worker_switch_command_error)
+        .map_err(app_host_command_error)
 }
 
 /// List installed workers usable as switch targets.
@@ -596,7 +588,7 @@ pub fn run() {
 #[cfg(test)]
 mod tests {
     use super::desktop_host::{DesktopHostState, default_workspace_path};
-    use super::{TauriCommandError, app_host_command_error, worker_switch_command_error};
+    use super::{TauriCommandError, app_host_command_error};
 
     fn temp_dir(prefix: &str) -> std::path::PathBuf {
         let nonce = std::time::SystemTime::now()
@@ -1011,11 +1003,16 @@ mod tests {
 
     #[test]
     fn worker_switch_errors_map_to_worker_unavailable() {
-        use reimagine_app_host::AppHostErrorCode;
-        use reimagine_app_host::WorkerSwitchError;
+        use reimagine_app_host::{AppHostError, AppHostErrorCode, WorkerSwitchError};
 
-        let mapped = worker_switch_command_error(WorkerSwitchError::NoActiveWorker);
+        let mapped = app_host_command_error(AppHostError::WorkerSwitch(
+            WorkerSwitchError::NoActiveWorker,
+        ));
         assert_eq!(mapped.code, AppHostErrorCode::WorkerUnavailable);
+        assert_eq!(
+            mapped.message,
+            WorkerSwitchError::NoActiveWorker.to_string()
+        );
         let value = serde_json::to_value(&mapped).expect("serialize");
         assert_eq!(value["code"], "worker_unavailable");
     }

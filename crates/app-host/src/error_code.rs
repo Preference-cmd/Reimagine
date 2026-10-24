@@ -35,6 +35,8 @@ pub enum AppHostErrorCode {
     Conflict,
     /// A filesystem operation failed.
     Io,
+    /// AIGC subsystem is unavailable (e.g. inference bootstrap failed).
+    AigcUnavailable,
 }
 
 impl AppHostErrorCode {
@@ -52,6 +54,7 @@ impl AppHostErrorCode {
             Self::NotFound => "not_found",
             Self::Conflict => "conflict",
             Self::Io => "io_error",
+            Self::AigcUnavailable => "aigc_unavailable",
         }
     }
 }
@@ -172,6 +175,25 @@ mod tests {
             }
             .code(),
             AppHostErrorCode::BootstrapFailed
+        );
+    }
+
+    #[test]
+    fn aigc_unavailable_keeps_its_wire_name() {
+        assert_eq!(
+            AppHostErrorCode::AigcUnavailable.as_str(),
+            "aigc_unavailable"
+        );
+        assert_eq!(
+            serde_json::to_value(AppHostErrorCode::AigcUnavailable).expect("serialize"),
+            "aigc_unavailable"
+        );
+        assert_eq!(
+            AppHostError::AigcUnavailable {
+                reason: "inference bootstrap failed".to_owned()
+            }
+            .code(),
+            AppHostErrorCode::AigcUnavailable
         );
     }
 

@@ -118,6 +118,15 @@ impl WorkspaceHost {
     ) -> AppHostResult<RunWorkflowResult> {
         let workflow_service = self.workflow_service_for_project(&request.project_id);
         let workflow = workflow_service.snapshot(&request.workflow_id)?;
+
+        if let Some(reason) = self.aigc_unavailable_reason()
+            && !workflow.nodes().is_empty()
+        {
+            return Err(crate::AppHostError::AigcUnavailable {
+                reason: reason.to_string(),
+            });
+        }
+
         let RunWorkflowRequest {
             project_id: _,
             workflow_id: _,

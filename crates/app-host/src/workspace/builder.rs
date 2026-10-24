@@ -16,9 +16,14 @@ use crate::{
     WorkerInventoryProvider, WorkflowService,
 };
 use aigc::ModelAcquisitionService;
-use aigc::inference::compose::bootstrap_inference_with_worker_inventory;
+use aigc::inference::compose::{
+    BootstrapInference, ComposedInferenceRuntime, bootstrap_inference_with_worker_inventory,
+};
+use reimagine_inference::WorkspaceComputeProfile;
 
-use super::{WorkspaceHost, load_backend_config_result};
+use super::{
+    AigcParts, AigcStatus, WorkspaceHost, load_backend_config_result, migrate_project_layout,
+};
 
 /// Builder for constructing a [`WorkspaceHost`].
 ///
@@ -47,6 +52,7 @@ pub struct WorkspaceHostBuilder {
     backend_config: Option<InferenceBackendConfig>,
     event_sink: Option<BoxedRunEventSink>,
     worker_inventory: Option<Arc<dyn WorkerInventoryProvider>>,
+    document_events: Option<Arc<DocumentEventBus>>,
 }
 
 impl WorkspaceHostBuilder {
@@ -62,7 +68,14 @@ impl WorkspaceHostBuilder {
             backend_config: None,
             event_sink: None,
             worker_inventory: None,
+            document_events: None,
         }
+    }
+
+    /// Set an existing document event bus.
+    pub fn document_events(mut self, bus: Arc<DocumentEventBus>) -> Self {
+        self.document_events = Some(bus);
+        self
     }
 
     /// Set the application data root for worker inventory.
@@ -114,6 +127,11 @@ impl WorkspaceHostBuilder {
     pub async fn build(self) -> Result<WorkspaceHost, AppHostError> {
         let config = AppConfig::new(AppPaths::new(&self.base_path));
 
+        // Establish the project workflow layout (default project and
+        // legacy migration) before bootstrapping inference, so no await
+        // sits between the discovery poll loop spawn and host construction.
+        migrate_project_layout(&config).await?;
+
         // Load backend config: explicit or from file
         let backend_config = match self.backend_config {
             Some(config) => config,
@@ -148,17 +166,33 @@ impl WorkspaceHostBuilder {
             Arc::clone(&acquisition_service),
         ));
 
-        // Bootstrap inference runtime
-        let bootstrapped = bootstrap_inference_with_worker_inventory(
+        // Bootstrap inference runtime (non-fatal on workspace build)
+        let (bootstrapped, aigc_status) = match bootstrap_inference_with_worker_inventory(
             &config,
             &backend_config,
             Arc::clone(&model_service),
             Arc::clone(&worker_inventory),
         )
         .await
-        .map_err(|error| AppHostError::InferenceBootstrap {
-            message: error.to_string(),
-        })?;
+        {
+            Ok(bootstrapped) => (bootstrapped, AigcStatus::Available),
+            Err(error) => {
+                let reason = error.to_string();
+                tracing::error!(
+                    %error,
+                    "inference bootstrap failed on workspace build; continuing with degraded runtime"
+                );
+                (
+                    BootstrapInference {
+                        runtime: ComposedInferenceRuntime::degraded(),
+                        compute_profile: WorkspaceComputeProfile::new(),
+                        topology: None,
+                        discovery: None,
+                    },
+                    AigcStatus::Unavailable { reason },
+                )
+            }
+        };
 
         // Wire runtime service
         let worker_switch = bootstrapped.runtime.worker_switch.clone();
@@ -185,7 +219,9 @@ impl WorkspaceHostBuilder {
             Arc::clone(&builtin_catalog),
             backend,
         ));
-        let document_events = Arc::new(DocumentEventBus::new());
+        let document_events = self
+            .document_events
+            .unwrap_or_else(|| Arc::new(DocumentEventBus::new()));
         let default_project_id = reimagine_core::model::ProjectId::new("default");
         let workflow_service = Arc::new(WorkflowService::for_project_with_events(
             config.paths().clone(),
@@ -214,6 +250,17 @@ impl WorkspaceHostBuilder {
             Arc::clone(&project_memory_service),
         ));
 
+        let aigc = AigcParts {
+            status: aigc_status,
+            model_service,
+            compute_profile: Arc::new(bootstrapped.compute_profile),
+            resolved_backend_instance: bootstrapped.runtime.selected_instance,
+            worker_switch,
+            worker_inventory,
+            topology: bootstrapped.topology,
+            discovery: bootstrapped.discovery,
+        };
+
         // Assemble workspace
         Ok(WorkspaceHost {
             workspace_scope: self.workspace_scope,
@@ -224,17 +271,11 @@ impl WorkspaceHostBuilder {
             workflow_service,
             workflow_services: RwLock::new(workflow_services),
             document_events,
-            model_service,
             runtime_service,
             node_catalog,
             builtin_catalog,
             services,
-            compute_profile: Arc::new(bootstrapped.compute_profile),
-            resolved_backend_instance: bootstrapped.runtime.selected_instance,
-            worker_switch,
-            worker_inventory,
-            topology: bootstrapped.topology,
-            discovery: bootstrapped.discovery,
+            aigc,
             event_sink,
         })
     }

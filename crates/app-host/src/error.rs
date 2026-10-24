@@ -75,6 +75,10 @@ pub enum AppHostError {
     },
     ArtifactAccess(ArtifactAccessError),
     WorkerManagement(aigc::WorkerManagementError),
+    AigcUnavailable {
+        reason: String,
+    },
+    WorkerSwitch(aigc::WorkerSwitchError),
 }
 
 impl std::fmt::Display for AppHostError {
@@ -159,6 +163,10 @@ impl std::fmt::Display for AppHostError {
             }
             Self::ArtifactAccess(error) => write!(f, "artifact access error: {error}"),
             Self::WorkerManagement(error) => write!(f, "worker management error: {error}"),
+            Self::AigcUnavailable { reason } => {
+                write!(f, "AIGC subsystem is unavailable: {reason}")
+            }
+            Self::WorkerSwitch(error) => write!(f, "{error}"),
         }
     }
 }
@@ -203,6 +211,8 @@ impl AppHostError {
                 ArtifactAccessError::UnsupportedMedia => AppHostErrorCode::CommandFailed,
             },
             Self::WorkerManagement(_) => AppHostErrorCode::WorkerUnavailable,
+            Self::AigcUnavailable { .. } => AppHostErrorCode::AigcUnavailable,
+            Self::WorkerSwitch(error) => crate::error_code::worker_switch_error_code(error),
         }
     }
 
@@ -257,6 +267,8 @@ impl AppHostError {
                     Some(serde_json::json!({ "path": path.display().to_string() }))
                 }
             }
+            Self::AigcUnavailable { reason } => Some(serde_json::json!({ "reason": reason })),
+            Self::WorkerSwitch(error) => crate::error_code::worker_switch_error_details(error),
             _ => None,
         }
     }
@@ -322,5 +334,11 @@ impl From<aigc::AigcError> for AppHostError {
             }
             aigc::AigcError::WorkerManagement(e) => Self::WorkerManagement(e),
         }
+    }
+}
+
+impl From<aigc::WorkerSwitchError> for AppHostError {
+    fn from(error: aigc::WorkerSwitchError) -> Self {
+        Self::WorkerSwitch(error)
     }
 }

@@ -887,7 +887,7 @@ impl DesktopHostState {
         &self,
         target_instance: &str,
         deadline: std::time::Duration,
-    ) -> Result<WorkerSwitchResultDto, WorkerSwitchError> {
+    ) -> Result<WorkerSwitchResultDto, AppHostError> {
         let candidate = self.resolve_switch_candidate(target_instance)?;
         let workspace = {
             let app_host = self.app_host.read().expect(APP_HOST_LOCK);
@@ -905,7 +905,7 @@ impl DesktopHostState {
         &self,
         target_instance: &str,
         deadline: std::time::Duration,
-    ) -> Result<WorkerSwitchResultDto, WorkerSwitchError> {
+    ) -> Result<WorkerSwitchResultDto, AppHostError> {
         let candidate = self.resolve_switch_candidate(target_instance)?;
         let workspace = {
             let app_host = self.app_host.read().expect(APP_HOST_LOCK);

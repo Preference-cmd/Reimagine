@@ -3,6 +3,7 @@
 use crate::model::DiagnosticId;
 
 mod code;
+mod dto;
 mod fix;
 mod projection;
 mod related;
@@ -10,6 +11,7 @@ mod severity;
 mod target;
 
 pub use code::DiagnosticCode;
+pub use dto::DiagnosticDto;
 pub use fix::DiagnosticFixHint;
 pub use projection::project_diagnostic;
 pub use related::DiagnosticRelated;

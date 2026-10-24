@@ -107,7 +107,7 @@ impl From<RunSummary> for RunSummaryDto {
     }
 }
 
-pub use aigc::dto::DiagnosticDto;
+pub use reimagine_core::diagnostic::DiagnosticDto;
 
 /// `GET /runs/:id/events` response. V1 returns the full event list
 /// for the run. SSE/WebSocket streaming is a later refinement.
