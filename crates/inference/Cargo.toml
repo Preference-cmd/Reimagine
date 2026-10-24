@@ -14,7 +14,7 @@ async-trait = { workspace = true }
 reimagine-core = { path = "../core" }
 reimagine-plugin = { path = "../plugin" }
 serde = { workspace = true }
-tokio = { workspace = true, features = ["rt", "time"] }
+tokio = { workspace = true, features = ["macros", "rt", "time"] }
 
 [features]
 default = []
