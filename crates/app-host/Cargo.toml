@@ -10,36 +10,26 @@ publish.workspace = true
 
 [features]
 default = ["candle"]
-candle = ["dep:reimagine-inference-candle"]
+candle = ["aigc/candle"]
 
 [dependencies]
-arc-swap = { workspace = true }
+aigc = { path = "../aigc", default-features = false }
 async-trait = { workspace = true }
 reimagine-backend-worker-host = { path = "../backend-worker-host" }
 reimagine-backend-worker-protocol = { path = "../backend-worker-protocol" }
-reimagine-backend-worker-transfer = { path = "../backend-worker-transfer" }
-reimagine-backend-worker-transport-grpc = { path = "../backend-worker-transport-grpc" }
-reimagine-backend-worker-transport-quic = { path = "../backend-worker-transport-quic" }
 reimagine-config = { path = "../config" }
 reimagine-core = { path = "../core" }
 reimagine-inference = { path = "../inference" }
-reimagine-inference-candle = { path = "../inference-backends/candle", optional = true }
 reimagine-model-acquisition = { path = "../model-acquisition" }
 reimagine-model-manager = { path = "../model-manager" }
 reimagine-nodes = { path = "../nodes" }
-reimagine-plugin = { path = "../plugin" }
 reimagine-runtime = { path = "../runtime" }
 serde = { workspace = true }
 serde_json = { workspace = true }
-sha2 = { workspace = true }
 tokio = { workspace = true, features = ["fs", "io-util", "sync", "time"] }
-hf-hub = { workspace = true }
 tracing = { workspace = true }
 
 [dev-dependencies]
 chrono = { workspace = true }
 tempfile = { workspace = true }
 tokio = { workspace = true, features = ["macros", "net", "rt", "rt-multi-thread"] }
-tokio-stream = "0.1"
-tonic = { version = "0.14", features = ["transport", "tls-ring"] }
-

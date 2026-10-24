@@ -22,8 +22,9 @@ use reimagine_inference_candle::{
 };
 use reimagine_plugin::{Extension, Plugin};
 
+/// Error during backend candidate resolution and bootstrap.
 #[derive(Debug)]
-pub(crate) enum BackendCandidateError {
+pub enum BackendCandidateError {
     #[cfg(feature = "candle")]
     Candle(reimagine_inference_candle::CandleBackendError),
     BurnWorker(WorkerHostError),

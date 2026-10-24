@@ -81,6 +81,12 @@ impl From<AppHostError> for AxumHostError {
     }
 }
 
+impl From<reimagine_app_host::AigcError> for AxumHostError {
+    fn from(value: reimagine_app_host::AigcError) -> Self {
+        Self::AppHost(AppHostError::from(value))
+    }
+}
+
 impl From<&str> for AxumHostError {
     fn from(model_id: &str) -> Self {
         Self::UnknownModel {

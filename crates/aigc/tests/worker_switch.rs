@@ -2,10 +2,10 @@ use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
-use async_trait::async_trait;
-use reimagine_app_host::{
+use aigc::{
     RunCancellation, SwitchableWorker, WorkerSwitchError, WorkerSwitchService, WorkerSwitchTarget,
 };
+use async_trait::async_trait;
 use reimagine_backend_worker_host::{WorkerProcessState, WorkerRunLeases};
 use reimagine_backend_worker_protocol::WorkerIncarnationId;
 use reimagine_core::model::RunId;

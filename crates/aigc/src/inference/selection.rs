@@ -106,7 +106,8 @@ impl<'a> BackendProfilesByInstance<'a> {
     }
 }
 
-pub(crate) fn resolved_candle_device_label(instance: &BackendInstance) -> String {
+/// Resolved candle device label for backend instance diagnostics.
+pub fn resolved_candle_device_label(instance: &BackendInstance) -> String {
     instance_label(instance).to_string()
 }
 

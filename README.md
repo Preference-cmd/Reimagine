@@ -107,7 +107,7 @@ Sample workflows live under `examples/workflows/`.
 
 ## Workspace layout
 
-All 19 Cargo workspace members are listed here; `Cargo.toml` `[workspace]` is the
+All 20 Cargo workspace members are listed here; `Cargo.toml` `[workspace]` is the
 authority.
 
 ```text
@@ -121,7 +121,8 @@ crates/runtime/                  reimagine-runtime - RuntimeService, scheduler, 
 crates/inference/                reimagine-inference - backend contract, router, execution values, executors
 crates/inference-backends/       candle/ burn/ burn-worker/ - concrete backends (Burn primary, Candle deprecated)
 crates/plugin/                   reimagine-plugin - plugin package and extension metadata contract
-crates/app-host/                 reimagine-app-host - WorkspaceHost, Project/Board/Workflow/Run/Model services, proposals
+crates/aigc/                     aigc - AIGC module: inference composition, worker management, model services
+crates/app-host/                 reimagine-app-host - WorkspaceHost, Project/Board/Workflow/Run services, proposals
 crates/axum-host/                reimagine-axum-host - HTTP E2E test harness
 crates/backend-worker-protocol/  reimagine-backend-worker-protocol - worker wire protocol
 crates/backend-worker-host/      reimagine-backend-worker-host - out-of-process worker management

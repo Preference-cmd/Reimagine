@@ -8,6 +8,7 @@ members = [
     "crates/model-acquisition",
     "crates/nodes",
     "crates/runtime",
+    "crates/aigc",
     "crates/app-host",
     "crates/axum-host",
     "crates/inference",

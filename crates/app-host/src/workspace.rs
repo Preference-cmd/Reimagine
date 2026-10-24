@@ -14,14 +14,6 @@ use reimagine_inference::WorkspaceComputeProfile;
 use reimagine_nodes::BuiltinNodeCatalog;
 use reimagine_runtime::{BoxedRunEventSink, RuntimeService, VecRunEventSink};
 
-#[cfg(test)]
-use crate::inference::compose::compose_inference_runtime;
-use crate::inference::compose::{
-    BootstrapInference, ComposedInferenceRuntime, bootstrap_inference,
-    bootstrap_inference_with_worker_inventory,
-};
-use crate::inference::selection::resolved_candle_device_label;
-use crate::model_acquisition_service::ModelAcquisitionService;
 use crate::node_catalog::{NodeCatalogAlignment, NodeCatalogService};
 use crate::project_memory::ProjectMemoryService;
 use crate::services::WorkspaceServices;
@@ -30,6 +22,14 @@ use crate::{
     WorkflowService,
 };
 use crate::{InstalledWorkerInventoryProvider, WorkerInventoryProvider};
+use aigc::ModelAcquisitionService;
+#[cfg(test)]
+use aigc::inference::compose::compose_inference_runtime;
+use aigc::inference::compose::{
+    BootstrapInference, ComposedInferenceRuntime, bootstrap_inference,
+    bootstrap_inference_with_worker_inventory,
+};
+use aigc::inference::selection::resolved_candle_device_label;
 
 /// How long a re-bootstrap waits for in-flight runs to drain before giving
 /// up and keeping the current backend in place.
@@ -101,8 +101,8 @@ pub struct WorkspaceHost {
     pub(crate) worker_switch: Option<Arc<crate::WorkerSwitchService>>,
     pub(crate) worker_inventory: Arc<dyn WorkerInventoryProvider>,
     pub(crate) topology:
-        Option<Arc<tokio::sync::Mutex<crate::inference::topology::ConnectionTopologyManager>>>,
-    pub(crate) discovery: Option<Arc<crate::inference::discovery::DiscoveryOrchestrator>>,
+        Option<Arc<tokio::sync::Mutex<aigc::inference::topology::ConnectionTopologyManager>>>,
+    pub(crate) discovery: Option<Arc<aigc::inference::discovery::DiscoveryOrchestrator>>,
     pub(crate) event_sink: BoxedRunEventSink,
 }
 
@@ -770,14 +770,14 @@ impl WorkspaceHost {
     /// configured. `None` in single-worker mode.
     pub fn topology(
         &self,
-    ) -> Option<&Arc<tokio::sync::Mutex<crate::inference::topology::ConnectionTopologyManager>>>
+    ) -> Option<&Arc<tokio::sync::Mutex<aigc::inference::topology::ConnectionTopologyManager>>>
     {
         self.topology.as_ref()
     }
 
     /// The discovery orchestrator (T12/T13), when a topology manager
     /// exists.
-    pub fn discovery(&self) -> Option<&Arc<crate::inference::discovery::DiscoveryOrchestrator>> {
+    pub fn discovery(&self) -> Option<&Arc<aigc::inference::discovery::DiscoveryOrchestrator>> {
         self.discovery.as_ref()
     }
 
@@ -1133,10 +1133,16 @@ mod tests {
         );
     }
 
+    #[cfg(feature = "candle")]
     fn metal_is_available_on_this_host() -> bool {
-        reimagine_inference_candle::CandleDevice::new("metal")
+        aigc::reimagine_inference_candle::CandleDevice::new("metal")
             .try_build_device()
             .is_ok()
+    }
+
+    #[cfg(not(feature = "candle"))]
+    fn metal_is_available_on_this_host() -> bool {
+        false
     }
 
     #[test]

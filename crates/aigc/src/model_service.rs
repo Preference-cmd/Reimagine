@@ -20,7 +20,7 @@ use reimagine_model_manager::{
 };
 use sha2::{Digest, Sha256};
 
-use crate::AppHostResult;
+use crate::AigcResult;
 use crate::model_acquisition_service::ModelAcquisitionService;
 use crate::{BurnCheckpointConverter, BurnConversionReport};
 
@@ -61,7 +61,7 @@ impl ModelService {
         self.app_paths.models_dir()
     }
 
-    pub async fn load_manifest(&self) -> AppHostResult<(ModelManifest, ManifestValidationReport)> {
+    pub async fn load_manifest(&self) -> AigcResult<(ModelManifest, ManifestValidationReport)> {
         let (manifest, report) = self.store.load().await?;
         self.replace_cached_manifest(manifest.clone(), report.clone());
         Ok((manifest, report))
@@ -70,13 +70,13 @@ impl ModelService {
     pub async fn save_manifest(
         &self,
         manifest: &ModelManifest,
-    ) -> AppHostResult<ManifestValidationReport> {
+    ) -> AigcResult<ManifestValidationReport> {
         let report = self.store.save(manifest).await?;
         self.replace_cached_manifest(manifest.clone(), report.clone());
         Ok(report)
     }
 
-    pub async fn list_models(&self) -> AppHostResult<Vec<ModelDescriptor>> {
+    pub async fn list_models(&self) -> AigcResult<Vec<ModelDescriptor>> {
         let (manifest, _) = self.load_manifest().await?;
         Ok(manifest.models().to_vec())
     }
@@ -84,7 +84,7 @@ impl ModelService {
     pub async fn remove_model(
         &self,
         model_id: &ModelId,
-    ) -> AppHostResult<(ModelManifest, ManifestValidationReport)> {
+    ) -> AigcResult<(ModelManifest, ManifestValidationReport)> {
         let (manifest, report) = self.store.remove_model(model_id).await?;
         self.replace_cached_manifest(manifest.clone(), report.clone());
         Ok((manifest, report))
@@ -94,7 +94,7 @@ impl ModelService {
     pub async fn import_sdxl_checkpoint_to_candle_split(
         &self,
         model_id: &ModelId,
-    ) -> AppHostResult<(
+    ) -> AigcResult<(
         ModelManifest,
         ManifestValidationReport,
         SdxlCheckpointImportResult,
@@ -105,20 +105,20 @@ impl ModelService {
             .iter()
             .find(|descriptor| descriptor.id() == model_id)
             .cloned()
-            .ok_or_else(|| crate::AppHostError::Io {
+            .ok_or_else(|| crate::AigcError::Io {
                 path: self.store.path().to_path_buf(),
                 message: format!("model `{model_id}` is not declared in manifest"),
             })?;
 
         let source_path =
             resolve_source_path(&manifest, descriptor.source(), self.app_paths.models_dir())
-                .ok_or_else(|| crate::AppHostError::Io {
+                .ok_or_else(|| crate::AigcError::Io {
                     path: self.store.path().to_path_buf(),
                     message: format!("model `{model_id}` source path cannot be resolved"),
                 })?;
         let fingerprint = descriptor
             .fingerprint()
-            .ok_or_else(|| crate::AppHostError::Io {
+            .ok_or_else(|| crate::AigcError::Io {
                 path: source_path.clone(),
                 message: format!(
                     "model `{model_id}` must have a fingerprint before checkpoint import"
@@ -146,7 +146,7 @@ impl ModelService {
     pub async fn import_burn_converted_package(
         &self,
         report_path: impl AsRef<std::path::Path>,
-    ) -> AppHostResult<(ModelManifest, ManifestValidationReport, ModelDescriptor)> {
+    ) -> AigcResult<(ModelManifest, ManifestValidationReport, ModelDescriptor)> {
         let report_path = self.normalize_burn_package_report_path(report_path.as_ref())?;
         let (mut manifest, _) = self.load_manifest().await?;
         let descriptor = upsert_burn_package_descriptor(
@@ -168,7 +168,7 @@ impl ModelService {
         &self,
         model_id: &str,
         converter: &dyn BurnCheckpointConverter,
-    ) -> AppHostResult<BurnConversionReport> {
+    ) -> AigcResult<BurnConversionReport> {
         let (manifest, _) = self.load_manifest().await?;
         let model_id_core = reimagine_core::model::ModelId::new(model_id);
         let descriptor = manifest
@@ -176,14 +176,14 @@ impl ModelService {
             .iter()
             .find(|d| d.id() == &model_id_core)
             .cloned()
-            .ok_or_else(|| crate::AppHostError::Io {
+            .ok_or_else(|| crate::AigcError::Io {
                 path: self.store.path().to_path_buf(),
                 message: format!("model `{model_id}` not found in manifest"),
             })?;
 
         let source_path =
             resolve_source_path(&manifest, descriptor.source(), self.app_paths.models_dir())
-                .ok_or_else(|| crate::AppHostError::Io {
+                .ok_or_else(|| crate::AigcError::Io {
                     path: self.store.path().to_path_buf(),
                     message: format!("model `{model_id}` source path cannot be resolved"),
                 })?;
@@ -201,7 +201,7 @@ impl ModelService {
         source_path: &std::path::Path,
         model_id: &str,
         converter: &dyn BurnCheckpointConverter,
-    ) -> Result<BurnConversionReport, crate::AppHostError> {
+    ) -> Result<BurnConversionReport, crate::AigcError> {
         let model_root = self.app_paths.models_dir();
         let report = self.convert_with_burn_port(source_path, model_id, model_root, converter)?;
         Ok(report)
@@ -213,16 +213,16 @@ impl ModelService {
         model_id: &str,
         model_root: &std::path::Path,
         converter: &dyn BurnCheckpointConverter,
-    ) -> AppHostResult<BurnConversionReport> {
+    ) -> AigcResult<BurnConversionReport> {
         converter
             .convert(source_path, model_id, model_root)
-            .map_err(|message| crate::AppHostError::BurnCheckpointImport { message })
+            .map_err(|message| crate::AigcError::BurnCheckpointImport { message })
     }
 
     pub async fn resolve_readiness(
         &self,
         model_ref: &ModelRef,
-    ) -> AppHostResult<ModelResolution<ResolvedModelInfo>> {
+    ) -> AigcResult<ModelResolution<ResolvedModelInfo>> {
         let (manifest, _) = self.load_manifest().await?;
         let resolver = ManifestModelResolver::new(&manifest, self.app_paths.models_dir());
         Ok(resolver.resolve_readiness(model_ref).await)
@@ -231,7 +231,7 @@ impl ModelService {
     pub async fn resolve_descriptor(
         &self,
         model_ref: &ModelRef,
-    ) -> AppHostResult<ModelResolution<ModelDescriptor>> {
+    ) -> AigcResult<ModelResolution<ModelDescriptor>> {
         let (manifest, _) = self.load_manifest().await?;
         let resolver = ManifestModelResolver::new(&manifest, self.app_paths.models_dir());
         Ok(resolver.resolve_descriptor(model_ref).await)
@@ -240,7 +240,7 @@ impl ModelService {
     pub async fn resolve_descriptor_with_components(
         &self,
         model_ref: &ModelRef,
-    ) -> AppHostResult<ModelResolution<ResolvedDescriptorView>> {
+    ) -> AigcResult<ModelResolution<ResolvedDescriptorView>> {
         let (manifest, _) = self.load_manifest().await?;
         let resolver = ManifestModelResolver::new(&manifest, self.app_paths.models_dir());
         Ok(resolver.resolve_descriptor_with_components(model_ref).await)
@@ -249,7 +249,7 @@ impl ModelService {
     pub async fn build_readiness_snapshot(
         &self,
         workflow: &reimagine_core::workflow::Workflow,
-    ) -> AppHostResult<crate::readiness::SnapshotExternalReadinessProvider> {
+    ) -> AigcResult<crate::readiness::SnapshotExternalReadinessProvider> {
         use reimagine_core::readiness::ExternalReadinessSubject;
         let (manifest, _) = self.load_manifest().await?;
         let models_dir = self.app_paths.models_dir().to_path_buf();
@@ -285,13 +285,13 @@ impl ModelService {
     }
 
     /// Build a `ModelCatalog` from the HuggingFace acquisition config.
-    async fn build_catalog(&self) -> AppHostResult<ModelCatalog> {
+    async fn build_catalog(&self) -> AigcResult<ModelCatalog> {
         let cfg = self.acquisition_service.load_config().await?;
         let mut client = hf_hub::HFClientBuilder::new().endpoint(cfg.huggingface.endpoint.clone());
         if let Some(ref token) = cfg.huggingface.token {
             client = client.token(token.clone());
         }
-        let hf_client = client.build().map_err(|e| crate::AppHostError::Io {
+        let hf_client = client.build().map_err(|e| crate::AigcError::Io {
             path: std::path::PathBuf::new(),
             message: format!("failed to build HF client: {e}"),
         })?;
@@ -306,21 +306,18 @@ impl ModelService {
     pub async fn search(
         &self,
         query: &ModelSearchQuery,
-    ) -> AppHostResult<Vec<reimagine_model_acquisition::ModelCatalogEntry>> {
+    ) -> AigcResult<Vec<reimagine_model_acquisition::ModelCatalogEntry>> {
         let catalog = self.build_catalog().await?;
-        catalog
-            .search(query)
-            .await
-            .map_err(crate::AppHostError::from)
+        catalog.search(query).await.map_err(crate::AigcError::from)
     }
 
     /// Fetch the full model card for a repository.
-    pub async fn model_card(&self, repo_id: &str) -> AppHostResult<ModelCard> {
+    pub async fn model_card(&self, repo_id: &str) -> AigcResult<ModelCard> {
         let catalog = self.build_catalog().await?;
         catalog
             .model_card(repo_id)
             .await
-            .map_err(crate::AppHostError::from)
+            .map_err(crate::AigcError::from)
     }
 
     fn replace_cached_manifest(&self, manifest: ModelManifest, report: ManifestValidationReport) {
@@ -337,11 +334,11 @@ impl ModelService {
     fn normalize_burn_package_report_path(
         &self,
         report_path: &std::path::Path,
-    ) -> AppHostResult<std::path::PathBuf> {
+    ) -> AigcResult<std::path::PathBuf> {
         let canonical_report =
             report_path
                 .canonicalize()
-                .map_err(|error| crate::AppHostError::Io {
+                .map_err(|error| crate::AigcError::Io {
                     path: report_path.to_path_buf(),
                     message: format!("Burn package report path cannot be resolved: {error}"),
                 })?;
@@ -349,13 +346,13 @@ impl ModelService {
             .app_paths
             .models_dir()
             .canonicalize()
-            .map_err(|error| crate::AppHostError::Io {
+            .map_err(|error| crate::AigcError::Io {
                 path: self.app_paths.models_dir().to_path_buf(),
                 message: format!("models directory cannot be resolved: {error}"),
             })?;
 
         if !canonical_report.starts_with(&canonical_models_dir) {
-            return Err(crate::AppHostError::Io {
+            return Err(crate::AigcError::Io {
                 path: canonical_report,
                 message: "Burn package report path must stay under models directory".to_owned(),
             });
@@ -374,7 +371,7 @@ impl ModelService {
         &self,
         request: AcquireAndConvertRequest<'_>,
         acquisition_service: &ModelAcquisitionService,
-    ) -> AppHostResult<AcquireAndConvertReport> {
+    ) -> AigcResult<AcquireAndConvertReport> {
         let AcquireAndConvertRequest {
             repo_id,
             model_id,
@@ -386,12 +383,12 @@ impl ModelService {
         // ---- Step 1: download ----
         let target_relative_dir =
             TargetRelativeDir::new(std::path::PathBuf::from(format!("checkpoints/{model_id}")))
-                .map_err(|msg| crate::AppHostError::Io {
+                .map_err(|msg| crate::AigcError::Io {
                     path: self.app_paths.models_dir().to_path_buf(),
                     message: format!("invalid target dir: {msg}"),
                 })?;
 
-        let repo = RepoId::new(repo_id).ok_or_else(|| crate::AppHostError::Io {
+        let repo = RepoId::new(repo_id).ok_or_else(|| crate::AigcError::Io {
             path: self.app_paths.models_dir().to_path_buf(),
             message: format!("invalid repo_id `{repo_id}`"),
         })?;
@@ -417,7 +414,7 @@ impl ModelService {
             .join("checkpoints")
             .join(model_id);
         let source_path =
-            find_first_safetensors(&checkpoint_dir).ok_or_else(|| crate::AppHostError::Io {
+            find_first_safetensors(&checkpoint_dir).ok_or_else(|| crate::AigcError::Io {
                 path: checkpoint_dir,
                 message: format!("no .safetensors file found in checkpoints/{model_id}"),
             })?;
@@ -492,7 +489,7 @@ impl ModelService {
                     } else {
                         // Single-file or CompVis format: convert via Burn port.
                         let converter = burn_converter.ok_or_else(|| {
-                            crate::AppHostError::BurnCheckpointImport {
+                            crate::AigcError::BurnCheckpointImport {
                                 message: "no Burn checkpoint converter is configured for this host"
                                     .to_owned(),
                             }
@@ -549,7 +546,7 @@ impl ModelService {
         _acquisition_report: Option<&reimagine_model_acquisition::AcquisitionReport>,
         source_path: &std::path::Path,
         model_id: &str,
-    ) -> AppHostResult<ModelDescriptor> {
+    ) -> AigcResult<ModelDescriptor> {
         let fingerprint = compute_file_sha256(source_path)?;
 
         let source =
@@ -628,16 +625,16 @@ impl Drop for CleanupGuard {
 }
 
 /// Compute the SHA-256 hex digest of a file.
-fn compute_file_sha256(path: &std::path::Path) -> AppHostResult<String> {
+fn compute_file_sha256(path: &std::path::Path) -> AigcResult<String> {
     use std::io::Read;
-    let mut file = std::fs::File::open(path).map_err(|e| crate::AppHostError::Io {
+    let mut file = std::fs::File::open(path).map_err(|e| crate::AigcError::Io {
         path: path.to_path_buf(),
         message: format!("cannot open for fingerprint: {e}"),
     })?;
     let mut hasher = Sha256::new();
     let mut buf = [0u8; 65536];
     loop {
-        let n = file.read(&mut buf).map_err(|e| crate::AppHostError::Io {
+        let n = file.read(&mut buf).map_err(|e| crate::AigcError::Io {
             path: path.to_path_buf(),
             message: format!("fingerprint read error: {e}"),
         })?;

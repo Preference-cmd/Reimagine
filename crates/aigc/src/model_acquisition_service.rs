@@ -9,7 +9,7 @@ use reimagine_model_acquisition::{
     AcquisitionReport, ModelAcquisitionConfig, ModelAcquisitionRequest,
 };
 
-use crate::AppHostResult;
+use crate::AigcResult;
 
 /// Orchestrates model downloads from HuggingFace Hub.
 #[derive(Debug, Clone)]
@@ -29,21 +29,21 @@ impl ModelAcquisitionService {
         }
     }
 
-    pub async fn load_config(&self) -> AppHostResult<ModelAcquisitionConfig> {
+    pub async fn load_config(&self) -> AigcResult<ModelAcquisitionConfig> {
         let (cfg, _report) = self
             .config_handle
             .load()
             .await
-            .map_err(crate::AppHostError::BootstrapConfig)?;
+            .map_err(crate::AigcError::BootstrapConfig)?;
         Ok(cfg)
     }
 
-    pub async fn save_config(&self, cfg: &ModelAcquisitionConfig) -> AppHostResult<ConfigReport> {
+    pub async fn save_config(&self, cfg: &ModelAcquisitionConfig) -> AigcResult<ConfigReport> {
         let report = self
             .config_handle
             .save(cfg)
             .await
-            .map_err(crate::AppHostError::BootstrapConfig)?;
+            .map_err(crate::AigcError::BootstrapConfig)?;
         Ok(report)
     }
 
@@ -59,7 +59,7 @@ impl ModelAcquisitionService {
         self: Arc<Self>,
         request: ModelAcquisitionRequest,
         progress_sink: Option<Arc<dyn AcquisitionProgressSink>>,
-    ) -> Pin<Box<dyn Future<Output = AppHostResult<AcquisitionReport>> + Send>> {
+    ) -> Pin<Box<dyn Future<Output = AigcResult<AcquisitionReport>> + Send>> {
         let models_dir = self.models_dir.clone();
         let cfg = match load_config_sync(&self.config_handle) {
             Ok(c) => c,
@@ -80,7 +80,7 @@ impl ModelAcquisitionService {
                     &request.allow_patterns,
                 )
                 .await
-                .map_err(crate::AppHostError::from)?;
+                .map_err(crate::AigcError::from)?;
                 let format_name = Some(format!("{:?}", resolved.format));
                 let mut req = request;
                 req.allow_patterns = resolved.patterns;
@@ -199,30 +199,30 @@ impl ModelAcquisitionService {
                 Ok::<_, reimagine_model_acquisition::ModelAcquisitionError>(report)
             })
             .await
-            .map_err(|join| crate::AppHostError::Io {
+            .map_err(|join| crate::AigcError::Io {
                 path: models_dir2,
                 message: format!("model download task panicked: {join}"),
             })?;
-            report.map_err(crate::AppHostError::from)
+            report.map_err(crate::AigcError::from)
         })
     }
 }
 
 fn load_config_sync(
     handle: &ConfigHandle<ModelAcquisitionConfig>,
-) -> AppHostResult<ModelAcquisitionConfig> {
+) -> AigcResult<ModelAcquisitionConfig> {
     use std::io::Read;
     let path = handle.path();
     match std::fs::File::open(path) {
         Ok(mut file) => {
             let mut contents = String::new();
             file.read_to_string(&mut contents)
-                .map_err(|e| crate::AppHostError::Io {
+                .map_err(|e| crate::AigcError::Io {
                     path: path.to_path_buf(),
                     message: e.to_string(),
                 })?;
             serde_json::from_str(&contents).map_err(|e| {
-                crate::AppHostError::BootstrapConfig(reimagine_config::ConfigError::JsonInvalid {
+                crate::AigcError::BootstrapConfig(reimagine_config::ConfigError::JsonInvalid {
                     key: Some(ModelAcquisitionConfig::KEY.to_owned()),
                     path: path.to_path_buf(),
                     message: e.to_string(),
@@ -230,7 +230,7 @@ fn load_config_sync(
             })
         }
         Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(ModelAcquisitionConfig::default()),
-        Err(e) => Err(crate::AppHostError::Io {
+        Err(e) => Err(crate::AigcError::Io {
             path: path.to_path_buf(),
             message: e.to_string(),
         }),

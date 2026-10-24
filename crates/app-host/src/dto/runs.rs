@@ -107,34 +107,7 @@ impl From<RunSummary> for RunSummaryDto {
     }
 }
 
-/// Diagnostic JSON projection. We pass the host-neutral diagnostic
-/// through `serde` as a tagged shape; the underlying diagnostic type
-/// already implements `Serialize`/`Deserialize`, but we wrap it here
-/// so future fields can be added at the HTTP layer without changing
-/// the core schema.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-pub struct DiagnosticDto {
-    pub id: String,
-    pub code: String,
-    pub severity: String,
-    pub source: String,
-    pub message: String,
-    pub target: String,
-}
-
-impl From<reimagine_core::diagnostic::Diagnostic> for DiagnosticDto {
-    fn from(value: reimagine_core::diagnostic::Diagnostic) -> Self {
-        let target = value.primary();
-        Self {
-            id: value.id().as_str().to_string(),
-            code: value.code().as_str().to_string(),
-            severity: value.severity().to_string(),
-            source: value.source().to_string(),
-            message: value.message().to_string(),
-            target: format!("{}:{}", target.domain(), target.path().unwrap_or("")),
-        }
-    }
-}
+pub use aigc::dto::DiagnosticDto;
 
 /// `GET /runs/:id/events` response. V1 returns the full event list
 /// for the run. SSE/WebSocket streaming is a later refinement.

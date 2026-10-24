@@ -9,6 +9,7 @@
 #   leaves     core, plugin, backend-worker-protocol    no workspace crate
 #   domain     config, nodes, model-manager, model-acquisition,
 #              inference, runtime
+#   modules    aigc (inference composition, workers, model services)
 #   backends   inference-candle, inference-burn, inference-burn-worker
 #   workers    backend-worker-host, -transport-quic, -transport-grpc, -transfer
 #   host       app-host
@@ -25,14 +26,14 @@
 # "reimagine-inference v" does not match "reimagine-inference-burn v".
 set -euo pipefail
 
-WORKSPACE='reimagine(-[a-z-]+)? v'
+WORKSPACE='(reimagine(-[a-z-]+)?|aigc) v'
 TAURI='tauri(-[a-z-]+)? v'
 AGENT='(reimagine-agent-[a-z-]+|reimagine-ai-protocol|reimagine-context-kernel|causa(-[a-z]+)?) v'
 APP_HOST='reimagine-app-host v'
 ENTRIES='(reimagine|reimagine-axum-host) v'
 BACKENDS='(reimagine-inference-(burn|burn-worker|candle)|burn-[a-z]+|candle-[a-z]+|cubecl(-[a-z]+)?|wgpu) v'
 HTTP_SERVER='axum v'
-DOMAIN='(reimagine-core|reimagine-config|reimagine-nodes|reimagine-model-manager|reimagine-model-acquisition|reimagine-inference|reimagine-runtime|reimagine-plugin|reimagine-backend-worker-host) v'
+DOMAIN='(reimagine-core|reimagine-config|reimagine-nodes|reimagine-model-manager|reimagine-model-acquisition|reimagine-inference|reimagine-runtime|reimagine-plugin|reimagine-backend-worker-host|aigc) v'
 
 tree_of() {
   cargo tree -p "$1" --edges normal --all-features --target all --locked --charset ascii

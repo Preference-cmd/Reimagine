@@ -13,25 +13,42 @@ mod document_events;
 pub mod dto;
 mod error;
 mod error_code;
-mod inference;
-mod inference_backend;
-mod model_acquisition_service;
-mod model_conversion;
-mod model_service;
 mod node_catalog;
 mod policy;
 mod project_memory;
 mod project_service;
 mod proposal;
-mod readiness;
 mod run_observation;
 mod run_workflow;
 mod services;
-mod worker_management;
 mod workflow_service;
 mod workspace;
 mod workspace_scope;
 
+pub use aigc::BackendSelection;
+pub use aigc::ModelAcquisitionService;
+pub use aigc::SnapshotExternalReadinessProvider;
+pub use aigc::inference::grpc_worker::{
+    GrpcSwitchableWorker, GrpcWorkerCandidate, GrpcWorkerCandidateConfig,
+};
+pub use aigc::inference::quic_worker::{
+    QuicSwitchableWorker, QuicWorkerCandidate, QuicWorkerCandidateConfig,
+};
+pub use aigc::inference::switch::{
+    ProcessSwitchableWorker, RunCancellation, SwitchableWorker, WorkerSelectionHandle,
+    WorkerSwitchError, WorkerSwitchService, WorkerSwitchTarget,
+};
+pub use aigc::inference::worker::{
+    EmptyWorkerInventoryProvider, InstalledWorkerInventoryProvider, StaticWorkerInventoryProvider,
+    WorkerActivationError, WorkerBackendCandidate, WorkerInventoryProvider,
+    WorkerInventorySnapshot,
+};
+pub use aigc::{
+    AcquireAndConvertReport, AcquireAndConvertRequest, AigcError, AigcResult,
+    BurnCheckpointConverter, BurnConversionComponent, BurnConversionComponentRole,
+    BurnConversionReport, GrpcAuth, GrpcTls, ModelService, WorkerCatalogItemDto,
+    WorkerInstallationDto, WorkerManagementError, WorkerManagementService,
+};
 pub use app_host::AppHost;
 pub use artifact_access::{
     ArtifactAccess, ArtifactAccessError, media_type_for_reference, resolve_artifact_path,
@@ -40,40 +57,13 @@ pub use board_service::BoardService;
 pub use document_events::{DocumentChangedEvent, DocumentEventBus};
 pub use error::{AppHostError, AppHostResult};
 pub use error_code::{AppHostErrorCode, worker_switch_error_code, worker_switch_error_details};
-pub use inference::grpc_worker::{
-    GrpcSwitchableWorker, GrpcWorkerCandidate, GrpcWorkerCandidateConfig,
-};
-pub use inference::quic_worker::{
-    QuicSwitchableWorker, QuicWorkerCandidate, QuicWorkerCandidateConfig,
-};
-pub use inference::switch::{
-    ProcessSwitchableWorker, RunCancellation, SwitchableWorker, WorkerSelectionHandle,
-    WorkerSwitchError, WorkerSwitchService, WorkerSwitchTarget,
-};
-pub use inference::worker::{
-    EmptyWorkerInventoryProvider, InstalledWorkerInventoryProvider, StaticWorkerInventoryProvider,
-    WorkerActivationError, WorkerBackendCandidate, WorkerInventoryProvider,
-    WorkerInventorySnapshot,
-};
-pub use inference_backend::BackendSelection;
-pub use model_acquisition_service::ModelAcquisitionService;
-pub use model_conversion::{
-    BurnCheckpointConverter, BurnConversionComponent, BurnConversionComponentRole,
-    BurnConversionReport,
-};
-pub use model_service::{AcquireAndConvertReport, AcquireAndConvertRequest, ModelService};
 pub use node_catalog::{NodeCatalogAlignment, NodeCatalogService};
 pub use policy::WorkflowCommandPolicy;
 pub use project_service::ProjectService;
 pub use proposal::{ProposalReceipt, ProposalStatus, WorkflowProposal};
-pub use readiness::SnapshotExternalReadinessProvider;
-pub use reimagine_backend_worker_transport_grpc::{GrpcAuth, GrpcTls};
 pub use reimagine_inference::{BackendInstance, WorkspaceComputeProfile};
 pub use run_workflow::{RunWorkflowRequest, RunWorkflowResult, run_id_of};
 pub use services::WorkspaceServices;
-pub use worker_management::{
-    WorkerCatalogItemDto, WorkerInstallationDto, WorkerManagementError, WorkerManagementService,
-};
 pub use workflow_service::WorkflowService;
 pub use workspace::WorkspaceHost;
 pub use workspace::WorkspaceHostBuilder;

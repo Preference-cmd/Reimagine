@@ -8,7 +8,7 @@
 use std::sync::Arc;
 use std::time::Duration;
 
-use reimagine_app_host::{
+use aigc::{
     GrpcAuth, GrpcSwitchableWorker, GrpcTls, GrpcWorkerCandidate, GrpcWorkerCandidateConfig,
     RunCancellation, SwitchableWorker, WorkerSwitchError, WorkerSwitchService, WorkerSwitchTarget,
 };

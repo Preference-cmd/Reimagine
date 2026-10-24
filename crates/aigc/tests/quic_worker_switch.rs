@@ -3,7 +3,7 @@ use std::net::SocketAddr;
 use std::sync::Arc;
 use std::time::Duration;
 
-use reimagine_app_host::{
+use aigc::{
     QuicWorkerCandidate, QuicWorkerCandidateConfig, SwitchableWorker, WorkerSwitchError,
     WorkerSwitchService, WorkerSwitchTarget,
 };
@@ -59,7 +59,7 @@ impl SwitchableWorker for FakeWorker {
 /// A no-op run cancellation implementation for testing.
 struct NoopRunCancellation;
 
-impl reimagine_app_host::RunCancellation for NoopRunCancellation {
+impl aigc::RunCancellation for NoopRunCancellation {
     fn cancel(&self, _run_id: &RunId) -> Result<(), WorkerSwitchError> {
         Ok(())
     }

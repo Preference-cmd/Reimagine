@@ -19,32 +19,29 @@
 
 mod artifacts;
 mod boards;
-mod compute_profile;
 mod health;
-pub mod model_acquisition;
-mod models;
 mod nodes;
 mod projects;
 mod runs;
 mod workflows;
 
+pub use aigc::dto::compute_profile;
+pub use aigc::dto::model_acquisition;
+pub use aigc::dto::models;
+
+pub use aigc::dto::{
+    BackendInstanceProfileDto, BackendProfileDto, ComputeProfileDto, DTypeProfileDto,
+    DeviceProfileDto, DownloadEventPayload, FileEntryDto, MemoryProfileDto,
+    ModelAcquireConversionReport, ModelAcquireDownloadReport, ModelAcquireInput,
+    ModelAcquireOutput, ModelCardDto, ModelCatalogEntryDto, ModelComponentDto,
+    ModelConvertConversionReport, ModelConvertInput, ModelConvertOutput, ModelDetailDto,
+    ModelDownloadInput, ModelDownloadOutput, ModelFilters, ModelInfoDto, ModelListEntry,
+    ModelListOutput, ModelRemoveOutput, TopologyWorkerDto, format_status,
+    topology_workers_from_pool,
+};
 pub use artifacts::{ArtifactDto, ArtifactMetadataDto};
 pub use boards::{BoardCommandResultDto, BoardSnapshotDto};
-pub use compute_profile::{
-    BackendInstanceProfileDto, BackendProfileDto, ComputeProfileDto, DTypeProfileDto,
-    DeviceProfileDto, MemoryProfileDto, TopologyWorkerDto, topology_workers_from_pool,
-};
 pub use health::HealthResponse;
-pub use model_acquisition::{
-    DownloadEventPayload, FileEntryDto, ModelAcquireConversionReport, ModelAcquireDownloadReport,
-    ModelAcquireInput, ModelAcquireOutput, ModelCardDto, ModelCatalogEntryDto, ModelDownloadInput,
-    ModelDownloadOutput, ModelFilters,
-};
-pub use models::{
-    ModelComponentDto, ModelConvertConversionReport, ModelConvertInput, ModelConvertOutput,
-    ModelDetailDto, ModelInfoDto, ModelListEntry, ModelListOutput, ModelRemoveOutput,
-    format_status,
-};
 pub use nodes::{NodeCatalogResponse, NodeDefDto, ParamSpecDto, SocketSpecDto};
 pub use projects::{ProjectDto, ProjectMetadataInputDto};
 pub use reimagine_core::command::{CommandResult, CommandResultStatus};

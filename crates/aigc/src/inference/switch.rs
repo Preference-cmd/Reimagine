@@ -438,7 +438,8 @@ impl WorkerSwitchService {
         }
     }
 
-    pub(crate) fn set_run_cancellation(&self, run_cancellation: Arc<dyn RunCancellation>) {
+    /// Sets the run cancellation handler for in-flight run draining during switches.
+    pub fn set_run_cancellation(&self, run_cancellation: Arc<dyn RunCancellation>) {
         *self
             .run_cancellation
             .write()

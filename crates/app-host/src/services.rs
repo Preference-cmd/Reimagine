@@ -3,11 +3,11 @@ use std::sync::Arc;
 use reimagine_config::AppConfig;
 use reimagine_runtime::RuntimeService;
 
-use crate::model_acquisition_service::ModelAcquisitionService;
 use crate::node_catalog::NodeCatalogService;
 use crate::project_memory::ProjectMemoryService;
 use crate::workspace_scope::WorkspaceScope;
 use crate::{ModelService, WorkflowService};
+use aigc::ModelAcquisitionService;
 
 /// Service container for one workspace.
 ///

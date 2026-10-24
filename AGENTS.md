@@ -11,13 +11,13 @@ application, not a published library.
 
 ## Layout
 
-19 Cargo workspace members: 18 crates under `crates/` plus `src-tauri/`.
+20 Cargo workspace members: 19 crates under `crates/` plus `src-tauri/`.
 `Cargo.toml` `[workspace]` is the authority; one line per crate is in
 [`README.md`](README.md#workspace-layout).
 
 ```text
 src-tauri/      Tauri 2 shell and IPC; the only crate that uses Tauri
-crates/         18 workspace crates (members: Cargo.toml; one line each: README)
+crates/         19 workspace crates (members: Cargo.toml; one line each: README)
 ui/             React 19 + Vite 7 frontend (Bun)
 assets/         static placeholders
 examples/       sample workflow JSON (axum-host E2E input)

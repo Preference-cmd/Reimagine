@@ -31,11 +31,16 @@ pub(crate) struct ComposedBackends {
     disabled_instances: Vec<BackendInstance>,
 }
 
-pub(crate) struct ComposedInferenceRuntime {
-    pub(crate) executor_registry: NodeExecutorRegistry,
-    pub(crate) runtime_hooks: Arc<dyn BackendInstanceRuntimeHooks>,
-    pub(crate) selected_instance: BackendInstance,
-    pub(crate) worker_switch: Option<Arc<super::switch::WorkerSwitchService>>,
+/// Runtime components composed for inference execution.
+pub struct ComposedInferenceRuntime {
+    /// Node executor registry for the composed runtime.
+    pub executor_registry: NodeExecutorRegistry,
+    /// Runtime hooks for the selected backend instance.
+    pub runtime_hooks: Arc<dyn BackendInstanceRuntimeHooks>,
+    /// Selected backend instance handle.
+    pub selected_instance: BackendInstance,
+    /// Worker switch service for switching active workers.
+    pub worker_switch: Option<Arc<super::switch::WorkerSwitchService>>,
 }
 
 impl ComposedInferenceRuntime {
@@ -43,7 +48,7 @@ impl ComposedInferenceRuntime {
     /// backend bootstrap fails on the legacy synchronous construction
     /// path. Runs fail with explicit "no executor" errors instead of
     /// panicking the host.
-    pub(crate) fn degraded() -> Self {
+    pub fn degraded() -> Self {
         Self {
             executor_registry: NodeExecutorRegistry::default(),
             runtime_hooks: Arc::new(CompositeBackendInstanceRuntimeHooks::new(Vec::new())),
@@ -53,15 +58,18 @@ impl ComposedInferenceRuntime {
     }
 }
 
-pub(crate) struct BootstrapInference {
-    pub(crate) runtime: ComposedInferenceRuntime,
-    pub(crate) compute_profile: WorkspaceComputeProfile,
+/// Assembled components resulting from inference bootstrap.
+pub struct BootstrapInference {
+    /// Composed inference runtime.
+    pub runtime: ComposedInferenceRuntime,
+    /// Workspace compute profile discovered during bootstrap.
+    pub compute_profile: WorkspaceComputeProfile,
     /// Connection topology manager (T13). `None` when no remote
     /// workers are configured — single-worker mode is unchanged.
-    pub(crate) topology: Option<TopologyHandle>,
+    pub topology: Option<TopologyHandle>,
     /// Discovery orchestrator driving the topology pool (T12/T13).
     /// `None` when no topology manager is configured.
-    pub(crate) discovery: Option<Arc<super::discovery::DiscoveryOrchestrator>>,
+    pub discovery: Option<Arc<super::discovery::DiscoveryOrchestrator>>,
 }
 
 struct WorkerCompositionSelection {
@@ -70,7 +78,8 @@ struct WorkerCompositionSelection {
     disabled_instances: Vec<BackendInstance>,
 }
 
-pub(crate) fn bootstrap_inference(
+/// Bootstrap inference synchronously using built-in candidates.
+pub fn bootstrap_inference(
     config: &AppConfig,
     backend_config: &InferenceBackendConfig,
     model_service: Arc<ModelService>,
@@ -83,7 +92,8 @@ pub(crate) fn bootstrap_inference(
     )
 }
 
-pub(crate) async fn bootstrap_inference_with_worker_inventory(
+/// Bootstrap inference asynchronously with a worker inventory provider.
+pub async fn bootstrap_inference_with_worker_inventory(
     config: &AppConfig,
     backend_config: &InferenceBackendConfig,
     model_service: Arc<ModelService>,
@@ -122,8 +132,7 @@ pub(crate) async fn bootstrap_inference_with_worker_inventory(
 
 /// Shared handle to the connection topology manager (T13): the
 /// discovery orchestrator and the workspace host both hold this.
-pub(crate) type TopologyHandle =
-    Arc<tokio::sync::Mutex<super::topology::ConnectionTopologyManager>>;
+pub type TopologyHandle = Arc<tokio::sync::Mutex<super::topology::ConnectionTopologyManager>>;
 
 /// Construct the connection topology manager + discovery orchestrator
 /// (T13).
@@ -236,8 +245,8 @@ fn bootstrap_inference_with_candidates(
 /// builders, and runtime hooks. Tests inject an additional stub candidate through
 /// `bootstrap_inference_with_candidates` to prove this path is no longer
 /// Candle-shaped.
-#[cfg(test)]
-pub(crate) fn compose_inference_runtime(
+/// Compose inference runtime for test configurations.
+pub fn compose_inference_runtime(
     config: &AppConfig,
     selected_instance: BackendInstance,
     model_service: Arc<ModelService>,

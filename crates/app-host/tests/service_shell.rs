@@ -1,3 +1,6 @@
+use aigc::reimagine_inference_candle::{
+    SdxlCheckpointConversionManifest, SdxlCheckpointImportRequest, SdxlConvertedComponent,
+};
 use reimagine_app_host::WorkspaceScope;
 use reimagine_app_host::{AppHost, ModelService, WorkflowService, WorkspaceHost};
 use reimagine_config::AppPaths;
@@ -11,9 +14,6 @@ use reimagine_core::model::{
     NodeTypeId, ParamValue, ProjectId, SlotId, WorkflowVersion,
 };
 use reimagine_core::workflow::Workflow;
-use reimagine_inference_candle::{
-    SdxlCheckpointConversionManifest, SdxlCheckpointImportRequest, SdxlConvertedComponent,
-};
 use reimagine_model_manager::{
     Fingerprint, ModelDescriptor, ModelFormat, ModelManifest, ModelRoot, ModelSource,
     ModelSourceStatus,

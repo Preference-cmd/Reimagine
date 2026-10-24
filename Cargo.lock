@@ -47,6 +47,38 @@ dependencies = [
 ]
 
 [[package]]
+name = "aigc"
+version = "0.1.0"
+dependencies = [
+ "arc-swap",
+ "async-trait",
+ "chrono",
+ "hf-hub",
+ "reimagine-backend-worker-host",
+ "reimagine-backend-worker-protocol",
+ "reimagine-backend-worker-transfer",
+ "reimagine-backend-worker-transport-grpc",
+ "reimagine-backend-worker-transport-quic",
+ "reimagine-config",
+ "reimagine-core",
+ "reimagine-inference",
+ "reimagine-inference-candle",
+ "reimagine-model-acquisition",
+ "reimagine-model-manager",
+ "reimagine-plugin",
+ "reimagine-runtime",
+ "serde",
+ "serde_json",
+ "sha2 0.10.9",
+ "tempfile",
+ "thiserror 2.0.19",
+ "tokio",
+ "tokio-stream",
+ "tonic",
+ "tracing",
+]
+
+[[package]]
 name = "aligned"
 version = "0.4.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -6794,31 +6826,22 @@ dependencies = [
 name = "reimagine-app-host"
 version = "0.1.0"
 dependencies = [
- "arc-swap",
+ "aigc",
  "async-trait",
  "chrono",
- "hf-hub",
  "reimagine-backend-worker-host",
  "reimagine-backend-worker-protocol",
- "reimagine-backend-worker-transfer",
- "reimagine-backend-worker-transport-grpc",
- "reimagine-backend-worker-transport-quic",
  "reimagine-config",
  "reimagine-core",
  "reimagine-inference",
- "reimagine-inference-candle",
  "reimagine-model-acquisition",
  "reimagine-model-manager",
  "reimagine-nodes",
- "reimagine-plugin",
  "reimagine-runtime",
  "serde",
  "serde_json",
- "sha2 0.10.9",
  "tempfile",
  "tokio",
- "tokio-stream",
- "tonic",
  "tracing",
 ]
 

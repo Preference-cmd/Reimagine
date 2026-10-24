@@ -9,14 +9,14 @@ use reimagine_runtime::BoxedRunEventSink;
 use reimagine_runtime::VecRunEventSink;
 
 use crate::InstalledWorkerInventoryProvider;
-use crate::inference::compose::bootstrap_inference_with_worker_inventory;
-use crate::model_acquisition_service::ModelAcquisitionService;
 use crate::project_memory::ProjectMemoryService;
 use crate::services::WorkspaceServices;
 use crate::{
     AppHostError, BackendSelection, BoardService, DocumentEventBus, ModelService, ProjectService,
     WorkerInventoryProvider, WorkflowService,
 };
+use aigc::ModelAcquisitionService;
+use aigc::inference::compose::bootstrap_inference_with_worker_inventory;
 
 use super::{WorkspaceHost, load_backend_config_result};
 
