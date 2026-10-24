@@ -14,7 +14,6 @@ pub mod dto;
 mod error;
 mod error_code;
 mod node_catalog;
-mod policy;
 mod project_memory;
 mod project_service;
 mod proposal;
@@ -70,7 +69,6 @@ pub use error_code::{worker_switch_error_code, worker_switch_error_details};
 #[cfg(feature = "aigc")]
 pub use node_catalog::NodeCatalogAlignment;
 pub use node_catalog::NodeCatalogService;
-pub use policy::WorkflowCommandPolicy;
 pub use project_service::ProjectService;
 pub use proposal::{ProposalReceipt, ProposalStatus, WorkflowProposal};
 pub use reimagine_inference::{BackendInstance, WorkspaceComputeProfile};

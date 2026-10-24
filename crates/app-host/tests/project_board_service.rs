@@ -7,6 +7,7 @@ use reimagine_app_host::{AppHostError, WorkspaceHost};
 use reimagine_core::board::{BoardCommand, BoardItemKind, BoardItemPosition, BoardItemSize};
 use reimagine_core::command::{
     CommandActor, CommandActorKind, CommandBatch, CommandProvenance, CommandStatus,
+    OperationContext,
 };
 use reimagine_core::event::Timestamp;
 use reimagine_core::model::{BoardItemId, CommandBatchId, DocumentVersion, ProjectId, WorkflowId};
@@ -32,9 +33,11 @@ fn add_item_batch(
 ) -> CommandBatch<BoardCommand> {
     CommandBatch::new(
         CommandBatchId::new(format!("batch-{label}")),
-        CommandActor::new(CommandActorKind::Human),
+        OperationContext::new(
+            CommandActor::new(CommandActorKind::Human),
+            CommandProvenance::Direct,
+        ),
         base_version,
-        CommandProvenance::Direct,
         Timestamp::new("2026-06-12T00:00:00Z"),
         vec![BoardCommand::AddItem {
             item_id: BoardItemId::new(item_id),
@@ -284,9 +287,11 @@ async fn workflow_noop_does_not_emit_changed_event() {
     let mut events = host.document_events().subscribe();
     let batch = reimagine_core::command::CommandBatch::new(
         CommandBatchId::new("workflow-event-batch"),
-        CommandActor::new(CommandActorKind::Human),
+        reimagine_core::command::OperationContext::new(
+            CommandActor::new(CommandActorKind::Human),
+            CommandProvenance::Direct,
+        ),
         reimagine_core::model::DocumentVersion::new(0),
-        CommandProvenance::Direct,
         Timestamp::new("2026-06-12T00:00:00Z"),
         Vec::new(),
     );

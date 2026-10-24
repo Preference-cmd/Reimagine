@@ -2,7 +2,9 @@
 
 use reimagine_app_host::{RunWorkflowRequest, WorkspaceHostBuilder, WorkspaceScope};
 use reimagine_core::board::{BoardCommand, BoardItemKind, BoardItemPosition, BoardItemSize};
-use reimagine_core::command::{CommandActor, CommandActorKind, CommandBatch, CommandProvenance};
+use reimagine_core::command::{
+    CommandActor, CommandActorKind, CommandBatch, CommandProvenance, OperationContext,
+};
 use reimagine_core::event::Timestamp;
 use reimagine_core::health::Health;
 use reimagine_core::model::{
@@ -55,9 +57,11 @@ async fn kernel_only_workspace_reports_not_installed_and_rejects_workflow_run() 
     // 3. Create board item
     let batch = CommandBatch::new(
         CommandBatchId::new("batch-1"),
-        CommandActor::new(CommandActorKind::Human),
+        OperationContext::new(
+            CommandActor::new(CommandActorKind::Human),
+            CommandProvenance::Direct,
+        ),
         DocumentVersion::new(0),
-        CommandProvenance::Direct,
         Timestamp::new("2026-06-12T00:00:00Z"),
         vec![BoardCommand::AddItem {
             item_id: BoardItemId::new("item-1"),

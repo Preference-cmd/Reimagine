@@ -5,7 +5,8 @@ use std::time::UNIX_EPOCH;
 
 use reimagine_config::{AppPaths, atomic_write};
 use reimagine_core::command::{
-    CommandBatch, CommandProvenance, CommandResult, CommandStatus, WorkflowChange, WorkflowCommand,
+    CommandBatch, CommandProvenance, CommandResult, CommandStatus, OperationContext,
+    WorkflowChange, WorkflowCommand,
 };
 use reimagine_core::diagnostic::{
     Diagnostic, DiagnosticCode, DiagnosticSeverity, DiagnosticSourceName, DiagnosticTarget,
@@ -425,20 +426,23 @@ impl WorkflowService {
             }
         }
 
-        let mut batch = CommandBatch::new(
-            proposal.command_batch().id().clone(),
+        let mut context = OperationContext::new(
             proposal.proposed_by().clone(),
-            proposal.base_version(),
             CommandProvenance::AgentProposal {
                 proposal_id: proposal.proposal_id().clone(),
                 approved_by,
             },
+        );
+        if let Some(cid) = proposal.command_batch().context().correlation_id() {
+            context = context.with_correlation_id(cid.clone());
+        }
+        let batch = CommandBatch::new(
+            proposal.command_batch().id().clone(),
+            context,
+            proposal.base_version(),
             proposal.command_batch().created_at().clone(),
             proposal.command_batch().commands().to_vec(),
         );
-        if let Some(cid) = proposal.command_batch().correlation_id() {
-            batch = batch.with_correlation_id(cid.clone());
-        }
 
         let result = self.apply_batch(workflow_id, node_catalog, batch)?;
         if result.status() != CommandStatus::Rejected {
@@ -486,20 +490,23 @@ impl WorkflowService {
                 None,
             ));
         }
-        let mut batch = CommandBatch::new(
-            proposal.command_batch().id().clone(),
+        let mut context = OperationContext::new(
             proposal.proposed_by().clone(),
-            proposal.base_version(),
             CommandProvenance::AgentProposal {
                 proposal_id: proposal.proposal_id().clone(),
                 approved_by,
             },
+        );
+        if let Some(cid) = proposal.command_batch().context().correlation_id() {
+            context = context.with_correlation_id(cid.clone());
+        }
+        let batch = CommandBatch::new(
+            proposal.command_batch().id().clone(),
+            context,
+            proposal.base_version(),
             proposal.command_batch().created_at().clone(),
             proposal.command_batch().commands().to_vec(),
         );
-        if let Some(cid) = proposal.command_batch().correlation_id() {
-            batch = batch.with_correlation_id(cid.clone());
-        }
         let result = self
             .apply_commands(workflow_id, node_catalog, batch)
             .await?;

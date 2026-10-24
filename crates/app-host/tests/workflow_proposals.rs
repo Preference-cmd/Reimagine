@@ -1,20 +1,19 @@
-//! Workflow proposals through `WorkflowService` directly: storage, approval
-//! (the path behind the `approve_proposal` IPC command) and the auto-apply
-//! policy. These do not depend on any agent integration; the proposer is
-//! recorded as a plain `CommandActor`.
+//! Workflow proposals through `WorkflowService` directly: storage and approval
+//! (the path behind the `approve_proposal` IPC command). These do not depend
+//! on any agent integration; the proposer is recorded as a plain `CommandActor`.
 
 use reimagine_app_host::{
-    AppHostError, ProposalStatus, WorkflowCommandPolicy, WorkflowProposal, WorkspaceHost,
-    WorkspaceScope,
+    AppHostError, ProposalStatus, WorkflowProposal, WorkspaceHost, WorkspaceScope,
 };
 use reimagine_core::command::{
-    CommandActor, CommandActorKind, CommandBatch, CommandProvenance, CommandStatus, WorkflowCommand,
+    CommandActor, CommandActorKind, CommandBatch, CommandProvenance, CommandStatus,
+    OperationContext, WorkflowCommand,
 };
 use reimagine_core::event::Timestamp;
 use reimagine_core::model::{
     CommandBatchId, DocumentVersion, NodeId, NodeTypeId, ParamValue, ProposalId, SlotId, WorkflowId,
 };
-use reimagine_core::workflow::{Position, Workflow, WorkflowMetadata};
+use reimagine_core::workflow::Workflow;
 use reimagine_nodes::BUILTIN_STRING;
 
 fn temp_dir(prefix: &str) -> std::path::PathBuf {
@@ -36,9 +35,8 @@ fn proposer() -> CommandActor {
 fn add_node_batch(base_version: DocumentVersion, node: &str) -> CommandBatch<WorkflowCommand> {
     CommandBatch::new(
         CommandBatchId::new(format!("batch-{node}")),
-        proposer(),
+        OperationContext::new(proposer(), CommandProvenance::Direct),
         base_version,
-        CommandProvenance::Direct,
         Timestamp::new("2026-06-10T00:00:00Z"),
         vec![WorkflowCommand::AddNode {
             node_id: NodeId::new(node),
@@ -191,35 +189,4 @@ async fn approval_without_a_pending_proposal_fails() {
         .await
         .expect_err("no pending proposal");
     assert!(matches!(error, AppHostError::NoPendingProposal { .. }));
-}
-
-#[test]
-fn policy_auto_applies_only_editor_commands() {
-    let policy = WorkflowCommandPolicy::new();
-    assert!(policy.allows_auto_apply(&[
-        WorkflowCommand::MoveNode {
-            node_id: NodeId::new("n1"),
-            position: Position::new(10.0, 20.0),
-        },
-        WorkflowCommand::SetWorkflowMetadata {
-            metadata: WorkflowMetadata::new().with_name("metadata"),
-        },
-    ]));
-    assert!(policy.allows_auto_apply(&[]));
-    assert!(!policy.allows_auto_apply(&[WorkflowCommand::AddNode {
-        node_id: NodeId::new("n1"),
-        type_id: NodeTypeId::new("t1"),
-        label: None,
-        params: Default::default(),
-        position: None,
-    }]));
-}
-
-#[test]
-fn policy_auto_applies_only_for_agent_actors() {
-    let policy = WorkflowCommandPolicy::new();
-    assert!(policy.allowed_actor_kind(CommandActorKind::Agent));
-    assert!(!policy.allowed_actor_kind(CommandActorKind::Human));
-    assert!(!policy.allowed_actor_kind(CommandActorKind::System));
-    assert!(!policy.allowed_actor_kind(CommandActorKind::Importer));
 }

@@ -1,8 +1,8 @@
 use std::collections::{BTreeMap, HashMap};
 
 use reimagine_core::command::{
-    CommandActor, CommandActorKind, CommandBatch, CommandProvenance, CommandStatus, WorkflowChange,
-    WorkflowCommand,
+    CommandActor, CommandActorKind, CommandBatch, CommandProvenance, CommandStatus,
+    OperationContext, WorkflowChange, WorkflowCommand,
 };
 use reimagine_core::diagnostic::CorrelationId;
 use reimagine_core::document::DocumentSession;
@@ -22,11 +22,14 @@ fn preview_batch_returns_changes_without_mutating_session_or_history() {
     let workflow = empty_workflow("workflow_preview", 7);
     let batch = CommandBatch::new(
         CommandBatchId::new("batch-preview"),
-        CommandActor::new(CommandActorKind::Human)
-            .with_id("user-1")
-            .with_label("Alice"),
+        OperationContext::new(
+            CommandActor::new(CommandActorKind::Human)
+                .with_id("user-1")
+                .with_label("Alice"),
+            CommandProvenance::Direct,
+        )
+        .with_correlation_id(CorrelationId::new("corr-preview")),
         DocumentVersion::new(7),
-        CommandProvenance::Direct,
         Timestamp::new("2026-06-09T10:00:00Z"),
         vec![
             WorkflowCommand::AddNode {
@@ -49,8 +52,7 @@ fn preview_batch_returns_changes_without_mutating_session_or_history() {
                 to: Endpoint::node_slot(NodeId::new("node_consumer"), SlotId::new("dynamic_value")),
             },
         ],
-    )
-    .with_correlation_id(CorrelationId::new("corr-preview"));
+    );
 
     let session = DocumentSession::new(workflow.clone());
 
@@ -117,16 +119,18 @@ fn apply_batch_commits_changes_advances_version_and_records_history() {
 
     let batch = CommandBatch::new(
         CommandBatchId::new("batch-apply"),
-        CommandActor::new(CommandActorKind::Agent).with_label("planner"),
+        OperationContext::new(
+            CommandActor::new(CommandActorKind::Agent).with_label("planner"),
+            CommandProvenance::AgentProposal {
+                proposal_id: reimagine_core::model::ProposalId::new("proposal-1"),
+                approved_by: Some(
+                    CommandActor::new(CommandActorKind::Human)
+                        .with_id("user-2")
+                        .with_label("Reviewer"),
+                ),
+            },
+        ),
         DocumentVersion::new(2),
-        CommandProvenance::AgentProposal {
-            proposal_id: reimagine_core::model::ProposalId::new("proposal-1"),
-            approved_by: Some(
-                CommandActor::new(CommandActorKind::Human)
-                    .with_id("user-2")
-                    .with_label("Reviewer"),
-            ),
-        },
         Timestamp::new("2026-06-09T11:00:00Z"),
         vec![
             WorkflowCommand::SetParam {
@@ -232,9 +236,11 @@ fn apply_batch_is_atomic_when_any_command_is_invalid() {
         &catalog,
         CommandBatch::new(
             CommandBatchId::new("batch-invalid"),
-            CommandActor::new(CommandActorKind::Human),
+            OperationContext::new(
+                CommandActor::new(CommandActorKind::Human),
+                CommandProvenance::Direct,
+            ),
             DocumentVersion::new(2),
-            CommandProvenance::Direct,
             Timestamp::new("2026-06-09T12:00:00Z"),
             vec![
                 WorkflowCommand::SetParam {
@@ -276,9 +282,11 @@ fn add_node_duplicate_then_remove_node_self_heal_rejects_without_mutation() {
         &catalog,
         CommandBatch::new(
             CommandBatchId::new("batch-dup-node"),
-            CommandActor::new(CommandActorKind::Human),
+            OperationContext::new(
+                CommandActor::new(CommandActorKind::Human),
+                CommandProvenance::Direct,
+            ),
             DocumentVersion::new(2),
-            CommandProvenance::Direct,
             Timestamp::new("2026-06-09T12:15:00Z"),
             vec![
                 WorkflowCommand::AddNode {
@@ -318,9 +326,11 @@ fn connect_duplicate_then_disconnect_self_heal_rejects_without_mutation() {
         &catalog,
         CommandBatch::new(
             CommandBatchId::new("batch-dup-edge"),
-            CommandActor::new(CommandActorKind::Human),
+            OperationContext::new(
+                CommandActor::new(CommandActorKind::Human),
+                CommandProvenance::Direct,
+            ),
             DocumentVersion::new(6),
-            CommandProvenance::Direct,
             Timestamp::new("2026-06-09T12:20:00Z"),
             vec![
                 WorkflowCommand::Connect {
@@ -358,9 +368,11 @@ fn apply_batch_rejects_version_conflicts_without_mutation() {
         &catalog,
         CommandBatch::new(
             CommandBatchId::new("batch-conflict"),
-            CommandActor::new(CommandActorKind::Human),
+            OperationContext::new(
+                CommandActor::new(CommandActorKind::Human),
+                CommandProvenance::Direct,
+            ),
             DocumentVersion::new(1),
-            CommandProvenance::Direct,
             Timestamp::new("2026-06-09T13:00:00Z"),
             vec![WorkflowCommand::SetNodeLabel {
                 node_id: NodeId::new("node_consumer"),
@@ -391,11 +403,13 @@ fn apply_batch_returns_noop_without_history_when_nothing_changes() {
         &catalog,
         CommandBatch::new(
             CommandBatchId::new("batch-noop"),
-            CommandActor::new(CommandActorKind::System),
+            OperationContext::new(
+                CommandActor::new(CommandActorKind::System),
+                CommandProvenance::Migration {
+                    from_schema_version: "reimagine.workflow.v1".to_owned(),
+                },
+            ),
             DocumentVersion::new(2),
-            CommandProvenance::Migration {
-                from_schema_version: "reimagine.workflow.v1".to_owned(),
-            },
             Timestamp::new("2026-06-09T14:00:00Z"),
             vec![
                 WorkflowCommand::MoveNode {
@@ -428,9 +442,11 @@ fn move_node_can_add_a_missing_layout_entry() {
         &catalog,
         CommandBatch::new(
             CommandBatchId::new("batch-move-without-layout"),
-            CommandActor::new(CommandActorKind::Human),
+            OperationContext::new(
+                CommandActor::new(CommandActorKind::Human),
+                CommandProvenance::Direct,
+            ),
             DocumentVersion::new(2),
-            CommandProvenance::Direct,
             Timestamp::new("2026-06-09T14:30:00Z"),
             vec![WorkflowCommand::MoveNode {
                 node_id: NodeId::new("node_consumer"),
@@ -467,9 +483,11 @@ fn set_param_updates_static_slot_fallback_even_when_an_edge_currently_overrides_
         &catalog,
         CommandBatch::new(
             CommandBatchId::new("batch-static-fallback"),
-            CommandActor::new(CommandActorKind::Agent),
+            OperationContext::new(
+                CommandActor::new(CommandActorKind::Agent),
+                CommandProvenance::Direct,
+            ),
             DocumentVersion::new(6),
-            CommandProvenance::Direct,
             Timestamp::new("2026-06-09T14:45:00Z"),
             vec![WorkflowCommand::SetParam {
                 node_id: NodeId::new("node_consumer"),
@@ -516,12 +534,14 @@ fn apply_batch_supports_remove_disconnect_apply_layout_and_remove_param() {
         &catalog,
         CommandBatch::new(
             CommandBatchId::new("batch-layout"),
-            CommandActor::new(CommandActorKind::Importer).with_label("loader"),
+            OperationContext::new(
+                CommandActor::new(CommandActorKind::Importer).with_label("loader"),
+                CommandProvenance::Import {
+                    format: "json".to_owned(),
+                    source: Some("fixtures/connected.json".to_owned()),
+                },
+            ),
             DocumentVersion::new(4),
-            CommandProvenance::Import {
-                format: "json".to_owned(),
-                source: Some("fixtures/connected.json".to_owned()),
-            },
             Timestamp::new("2026-06-09T15:00:00Z"),
             vec![
                 WorkflowCommand::Disconnect {
@@ -592,9 +612,11 @@ fn undo_and_redo_restore_snapshots_and_advance_version() {
         &catalog,
         CommandBatch::new(
             CommandBatchId::new("batch-undo"),
-            CommandActor::new(CommandActorKind::Human),
+            OperationContext::new(
+                CommandActor::new(CommandActorKind::Human),
+                CommandProvenance::Direct,
+            ),
             DocumentVersion::new(2),
-            CommandProvenance::Direct,
             Timestamp::new("2026-06-09T16:00:00Z"),
             vec![
                 WorkflowCommand::SetParam {
@@ -680,9 +702,11 @@ fn add_workflow_input_and_output_updates_interface() {
         &catalog,
         CommandBatch::new(
             CommandBatchId::new("batch-interface-add"),
-            CommandActor::new(CommandActorKind::Importer),
+            OperationContext::new(
+                CommandActor::new(CommandActorKind::Importer),
+                CommandProvenance::Direct,
+            ),
             DocumentVersion::new(1),
-            CommandProvenance::Direct,
             Timestamp::new("2026-06-09T17:00:00Z"),
             vec![
                 WorkflowCommand::AddWorkflowInput {
@@ -751,9 +775,11 @@ fn remove_workflow_input_removes_referencing_edges_and_undo_restores() {
         &catalog,
         CommandBatch::new(
             CommandBatchId::new("batch-interface-remove"),
-            CommandActor::new(CommandActorKind::Human),
+            OperationContext::new(
+                CommandActor::new(CommandActorKind::Human),
+                CommandProvenance::Direct,
+            ),
             DocumentVersion::new(1),
-            CommandProvenance::Direct,
             Timestamp::new("2026-06-09T17:15:00Z"),
             vec![WorkflowCommand::RemoveWorkflowInput {
                 input_id: WorkflowInputId::new("in-prompt"),
@@ -815,9 +841,11 @@ fn remove_workflow_output_removes_referencing_edges() {
         &catalog,
         CommandBatch::new(
             CommandBatchId::new("batch-interface-output-remove"),
-            CommandActor::new(CommandActorKind::Human),
+            OperationContext::new(
+                CommandActor::new(CommandActorKind::Human),
+                CommandProvenance::Direct,
+            ),
             DocumentVersion::new(1),
-            CommandProvenance::Direct,
             Timestamp::new("2026-06-09T17:30:00Z"),
             vec![WorkflowCommand::RemoveWorkflowOutput {
                 output_id: WorkflowOutputId::new("out-image"),
@@ -861,9 +889,11 @@ fn add_workflow_input_rejects_duplicate_id_and_taken_slot() {
         &catalog,
         CommandBatch::new(
             CommandBatchId::new("batch-interface-dup"),
-            CommandActor::new(CommandActorKind::Human),
+            OperationContext::new(
+                CommandActor::new(CommandActorKind::Human),
+                CommandProvenance::Direct,
+            ),
             DocumentVersion::new(1),
-            CommandProvenance::Direct,
             Timestamp::new("2026-06-09T17:45:00Z"),
             vec![
                 WorkflowCommand::AddWorkflowInput {
@@ -908,9 +938,11 @@ fn remove_missing_workflow_input_and_output_rejects() {
         &catalog,
         CommandBatch::new(
             CommandBatchId::new("batch-interface-missing"),
-            CommandActor::new(CommandActorKind::Human),
+            OperationContext::new(
+                CommandActor::new(CommandActorKind::Human),
+                CommandProvenance::Direct,
+            ),
             DocumentVersion::new(1),
-            CommandProvenance::Direct,
             Timestamp::new("2026-06-09T18:00:00Z"),
             vec![
                 WorkflowCommand::RemoveWorkflowInput {

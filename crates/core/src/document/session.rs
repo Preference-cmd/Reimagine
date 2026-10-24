@@ -190,7 +190,7 @@ impl<D: Document> DocumentSession<D> {
                 diagnostics: vec![self.document.version_conflict_diagnostic(
                     current_version,
                     batch.base_version(),
-                    batch.correlation_id(),
+                    batch.context().correlation_id(),
                 )],
             };
         }
@@ -201,7 +201,7 @@ impl<D: Document> DocumentSession<D> {
         let mut diagnostics = Vec::new();
 
         for command in batch.commands() {
-            match working.apply_command(command, context, batch.correlation_id()) {
+            match working.apply_command(command, context, batch.context().correlation_id()) {
                 Ok(app) => {
                     forward_changes.extend(app.forward);
                     if !app.inverse.is_empty() {

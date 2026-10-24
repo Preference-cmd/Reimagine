@@ -4,7 +4,8 @@ use reimagine_app_host::WorkspaceScope;
 use reimagine_app_host::{AppHost, ModelService, WorkflowService, WorkspaceHost};
 use reimagine_config::AppPaths;
 use reimagine_core::command::{
-    CommandActor, CommandActorKind, CommandBatch, CommandProvenance, CommandStatus, WorkflowCommand,
+    CommandActor, CommandActorKind, CommandBatch, CommandProvenance, CommandStatus,
+    OperationContext, WorkflowCommand,
 };
 use reimagine_core::event::Timestamp;
 use reimagine_core::model::{
@@ -316,9 +317,11 @@ fn add_string_node_batch(
 ) -> CommandBatch<WorkflowCommand> {
     CommandBatch::new(
         CommandBatchId::new(format!("batch-{base_version}")),
-        CommandActor::new(CommandActorKind::Human),
+        OperationContext::new(
+            CommandActor::new(CommandActorKind::Human),
+            CommandProvenance::Direct,
+        ),
         base_version,
-        CommandProvenance::Direct,
         Timestamp::new("2026-06-10T00:00:00Z"),
         vec![WorkflowCommand::AddNode {
             node_id: NodeId::new("string-1"),

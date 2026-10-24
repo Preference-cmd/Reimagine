@@ -3,6 +3,7 @@ use reimagine_core::board::{
 };
 use reimagine_core::command::{
     CommandActor, CommandActorKind, CommandBatch, CommandProvenance, CommandStatus,
+    OperationContext,
 };
 use reimagine_core::document::DocumentSession;
 use reimagine_core::event::Timestamp;
@@ -24,9 +25,11 @@ fn test_batch(
 ) -> CommandBatch<BoardCommand> {
     CommandBatch::new(
         CommandBatchId::new("batch-1"),
-        CommandActor::new(CommandActorKind::Human),
+        OperationContext::new(
+            CommandActor::new(CommandActorKind::Human),
+            CommandProvenance::Direct,
+        ),
         board_version,
-        CommandProvenance::Direct,
         Timestamp::new("2026-01-01T00:00:00Z"),
         commands,
     )
@@ -351,9 +354,11 @@ fn unified_document_session_works_for_both_board_and_workflow() {
     let mut wf_session = DocumentSession::new(workflow);
     let wf_batch = CommandBatch::new(
         CommandBatchId::new("wf-batch-1"),
-        CommandActor::new(CommandActorKind::Human),
+        OperationContext::new(
+            CommandActor::new(CommandActorKind::Human),
+            CommandProvenance::Direct,
+        ),
         DocumentVersion::new(0),
-        CommandProvenance::Direct,
         Timestamp::new("2026-01-01T00:00:00Z"),
         vec![WorkflowCommand::AddNode {
             node_id: NodeId::new("node-1"),

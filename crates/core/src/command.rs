@@ -76,6 +76,41 @@ pub enum CommandProvenance {
     },
 }
 
+/// Who performed an operation, how it originated, and which request it belongs to.
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+pub struct OperationContext {
+    actor: CommandActor,
+    provenance: CommandProvenance,
+    correlation_id: Option<CorrelationId>,
+}
+
+impl OperationContext {
+    pub fn new(actor: CommandActor, provenance: CommandProvenance) -> Self {
+        Self {
+            actor,
+            provenance,
+            correlation_id: None,
+        }
+    }
+
+    pub fn with_correlation_id(mut self, id: CorrelationId) -> Self {
+        self.correlation_id = Some(id);
+        self
+    }
+
+    pub fn actor(&self) -> &CommandActor {
+        &self.actor
+    }
+
+    pub fn provenance(&self) -> &CommandProvenance {
+        &self.provenance
+    }
+
+    pub fn correlation_id(&self) -> Option<&CorrelationId> {
+        self.correlation_id.as_ref()
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize)]
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum WorkflowCommand {
@@ -141,61 +176,44 @@ pub enum WorkflowCommand {
 #[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize)]
 pub struct CommandBatch<C> {
     id: CommandBatchId,
-    actor: CommandActor,
+    #[serde(flatten)]
+    context: OperationContext,
     base_version: DocumentVersion,
-    provenance: CommandProvenance,
     created_at: Timestamp,
-    correlation_id: Option<CorrelationId>,
     commands: Vec<C>,
 }
 
 impl<C> CommandBatch<C> {
     pub fn new(
         id: CommandBatchId,
-        actor: CommandActor,
+        context: OperationContext,
         base_version: DocumentVersion,
-        provenance: CommandProvenance,
         created_at: Timestamp,
         commands: Vec<C>,
     ) -> Self {
         Self {
             id,
-            actor,
+            context,
             base_version,
-            provenance,
             created_at,
-            correlation_id: None,
             commands,
         }
-    }
-
-    pub fn with_correlation_id(mut self, correlation_id: CorrelationId) -> Self {
-        self.correlation_id = Some(correlation_id);
-        self
     }
 
     pub fn id(&self) -> &CommandBatchId {
         &self.id
     }
 
-    pub fn actor(&self) -> &CommandActor {
-        &self.actor
+    pub fn context(&self) -> &OperationContext {
+        &self.context
     }
 
     pub fn base_version(&self) -> DocumentVersion {
         self.base_version
     }
 
-    pub fn provenance(&self) -> &CommandProvenance {
-        &self.provenance
-    }
-
     pub fn created_at(&self) -> &Timestamp {
         &self.created_at
-    }
-
-    pub fn correlation_id(&self) -> Option<&CorrelationId> {
-        self.correlation_id.as_ref()
     }
 
     pub fn commands(&self) -> &[C] {
