@@ -7,7 +7,6 @@ use reimagine_runtime::RuntimeService;
 use crate::ModelService;
 use crate::WorkflowService;
 use crate::node_catalog::NodeCatalogService;
-use crate::project_memory::ProjectMemoryService;
 use crate::workspace_scope::WorkspaceScope;
 #[cfg(feature = "aigc")]
 use aigc::ModelAcquisitionService;
@@ -28,8 +27,6 @@ pub struct WorkspaceServices {
     model_acquisition_service: Arc<ModelAcquisitionService>,
     runtime_service: Arc<RuntimeService>,
     node_catalog: Arc<NodeCatalogService>,
-    #[allow(dead_code)]
-    project_memory_service: Arc<ProjectMemoryService>,
 }
 
 impl WorkspaceServices {
@@ -42,7 +39,6 @@ impl WorkspaceServices {
         #[cfg(feature = "aigc")] model_acquisition_service: Arc<ModelAcquisitionService>,
         runtime_service: Arc<RuntimeService>,
         node_catalog: Arc<NodeCatalogService>,
-        project_memory_service: Arc<ProjectMemoryService>,
     ) -> Self {
         Self {
             workspace_scope,
@@ -54,7 +50,6 @@ impl WorkspaceServices {
             model_acquisition_service,
             runtime_service,
             node_catalog,
-            project_memory_service,
         }
     }
 

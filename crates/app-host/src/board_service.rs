@@ -7,10 +7,9 @@
 //! the shared workspace document event bus.
 
 use std::collections::BTreeMap;
-use std::path::Path;
 use std::sync::{Arc, RwLock};
 
-use reimagine_config::{AppPaths, atomic_write};
+use reimagine_config::AppPaths;
 use reimagine_core::board::{BoardChange, BoardCommand, BoardDocument};
 use reimagine_core::command::{CommandBatch, CommandResult, CommandStatus};
 use reimagine_core::document::DocumentSession;
@@ -18,6 +17,7 @@ use reimagine_core::model::{BoardId, DocumentVersion, ProjectId};
 use tokio::sync::Mutex as AsyncMutex;
 
 use crate::document_events::{DocumentChangedEvent, DocumentEventBus};
+use crate::document_store::{read_document, write_document};
 use crate::{AppHostError, AppHostResult};
 
 pub struct BoardService {
@@ -75,7 +75,13 @@ impl BoardService {
             return Ok(session.lock().await.document().clone());
         }
 
-        let board = self.read_board_from_disk(project_id).await?;
+        let path = self.board_path(project_id);
+        let board: BoardDocument =
+            read_document(&path, "board")
+                .await?
+                .ok_or_else(|| AppHostError::UnknownBoard {
+                    project_id: project_id.clone(),
+                })?;
         let session = Arc::new(AsyncMutex::new(DocumentSession::new(board)));
 
         // Double-check: another task may have created the session while
@@ -96,25 +102,6 @@ impl BoardService {
         match winner {
             Some(existing) => Ok(existing.lock().await.document().clone()),
             None => Ok(session.lock().await.document().clone()),
-        }
-    }
-
-    async fn read_board_from_disk(&self, project_id: &ProjectId) -> AppHostResult<BoardDocument> {
-        let path = self.board_path(project_id);
-        match tokio::fs::read(&path).await {
-            Ok(bytes) => serde_json::from_slice(&bytes).map_err(|error| AppHostError::Io {
-                path: path.clone(),
-                message: format!("invalid board document: {error}"),
-            }),
-            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
-                Err(AppHostError::UnknownBoard {
-                    project_id: project_id.clone(),
-                })
-            }
-            Err(error) => Err(AppHostError::Io {
-                path,
-                message: error.to_string(),
-            }),
         }
     }
 
@@ -221,26 +208,7 @@ impl BoardService {
         session: &DocumentSession<BoardDocument>,
     ) -> AppHostResult<()> {
         let path = self.board_path(project_id);
-        if let Some(parent) = path.parent() {
-            tokio::fs::create_dir_all(parent)
-                .await
-                .map_err(|error| AppHostError::Io {
-                    path: parent.to_path_buf(),
-                    message: error.to_string(),
-                })?;
-        }
-        let bytes =
-            serde_json::to_vec_pretty(session.document()).map_err(|error| AppHostError::Io {
-                path: path.clone(),
-                message: format!("failed to serialize board: {error}"),
-            })?;
-        atomic_write(&path, bytes)
-            .await
-            .map_err(|error| AppHostError::Io {
-                path: path.clone(),
-                message: error.to_string(),
-            })?;
-        Ok(())
+        write_document(&path, session.document(), "board").await
     }
 }
 
@@ -263,26 +231,5 @@ pub(crate) async fn ensure_board_file(
     if path.exists() {
         return Ok(());
     }
-    write_board_atomic(&path, &default_board(project_id)).await
-}
-
-async fn write_board_atomic(path: &Path, board: &BoardDocument) -> AppHostResult<()> {
-    let bytes = serde_json::to_vec_pretty(board).map_err(|error| AppHostError::Io {
-        path: path.to_path_buf(),
-        message: format!("failed to serialize board: {error}"),
-    })?;
-    if let Some(parent) = path.parent() {
-        tokio::fs::create_dir_all(parent)
-            .await
-            .map_err(|error| AppHostError::Io {
-                path: parent.to_path_buf(),
-                message: error.to_string(),
-            })?;
-    }
-    atomic_write(path, bytes)
-        .await
-        .map_err(|error| AppHostError::Io {
-            path: path.to_path_buf(),
-            message: error.to_string(),
-        })
+    write_document(&path, &default_board(project_id), "board").await
 }

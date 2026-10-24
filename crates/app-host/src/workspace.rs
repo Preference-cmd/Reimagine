@@ -23,7 +23,6 @@ use reimagine_runtime::{BoxedRunEventSink, RuntimeService, VecRunEventSink};
 #[cfg(feature = "aigc")]
 use crate::node_catalog::NodeCatalogAlignment;
 use crate::node_catalog::NodeCatalogService;
-use crate::project_memory::ProjectMemoryService;
 use crate::services::WorkspaceServices;
 use crate::{AppHostError, BoardService, DocumentEventBus, ProjectService, WorkflowService};
 #[cfg(feature = "aigc")]
@@ -83,7 +82,7 @@ pub(crate) async fn migrate_project_layout(config: &AppConfig) -> Result<(), App
             Timestamp::new("2026-08-18T00:00:00Z"),
         );
         let project = Project::new(default_project_id.clone(), metadata);
-        crate::project_service::write_project_atomic(&project_file, &project).await?;
+        crate::document_store::write_document(&project_file, &project, "project").await?;
     }
     ensure_board_file(paths, &default_project_id).await?;
     Ok(())
@@ -166,7 +165,6 @@ impl WorkspaceHost {
         ));
         #[cfg(not(feature = "aigc"))]
         let node_catalog = Arc::new(NodeCatalogService::new(Arc::clone(&builtin_catalog)));
-        let project_memory_service = Arc::new(ProjectMemoryService::new(config.paths().clone()));
         let services = Arc::new(WorkspaceServices::new(
             workspace_scope.clone(),
             Arc::clone(&config),
@@ -177,7 +175,6 @@ impl WorkspaceHost {
             components.acquisition_service,
             Arc::clone(&components.runtime_service),
             Arc::clone(&node_catalog),
-            Arc::clone(&project_memory_service),
         ));
 
         Self {

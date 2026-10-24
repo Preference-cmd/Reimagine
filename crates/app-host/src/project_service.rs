@@ -7,14 +7,14 @@
 //! strategy until the workflow service owns its index.
 
 use std::collections::BTreeMap;
-use std::path::Path;
 use std::sync::{Arc, RwLock};
 
-use reimagine_config::{AppPaths, atomic_write};
+use reimagine_config::AppPaths;
 use reimagine_core::model::ProjectId;
 use reimagine_core::project::{Project, ProjectMetadata};
 
 use crate::board_service::{BoardService, ensure_board_file};
+use crate::document_store::{read_document, write_document};
 use crate::{AppHostError, AppHostResult};
 
 pub struct ProjectService {
@@ -109,7 +109,7 @@ impl ProjectService {
             })?;
 
         let project = Project::new(project_id.clone(), metadata);
-        write_project_atomic(&self.project_file(&project_id), &project).await?;
+        write_document(&self.project_file(&project_id), &project, "project").await?;
         ensure_board_file(&self.paths, &project_id).await?;
 
         self.projects
@@ -131,7 +131,11 @@ impl ProjectService {
             return Ok(project);
         }
 
-        let project = read_project_atomic_source(&self.project_file(project_id)).await?;
+        let project: Project = read_document(&self.project_file(project_id), "project")
+            .await?
+            .ok_or_else(|| AppHostError::UnknownProject {
+                project_id: project_id.clone(),
+            })?;
         self.projects
             .write()
             .expect("project registry poisoned")
@@ -185,10 +189,11 @@ impl ProjectService {
                 loaded.insert(project_id, project);
                 continue;
             }
-            match read_project_atomic_source(&project_file).await {
-                Ok(project) => {
+            match read_document::<Project>(&project_file, "project").await {
+                Ok(Some(project)) => {
                     loaded.insert(project_id, project);
                 }
+                Ok(None) => {}
                 Err(error) => {
                     tracing::warn!(
                         path = %project_file.display(),
@@ -213,7 +218,7 @@ impl ProjectService {
     ) -> AppHostResult<Project> {
         let mut project = self.load_project(project_id).await?;
         *project.metadata_mut() = metadata;
-        write_project_atomic(&self.project_file(project_id), &project).await?;
+        write_document(&self.project_file(project_id), &project, "project").await?;
         self.projects
             .write()
             .expect("project registry poisoned")
@@ -238,48 +243,4 @@ impl ProjectService {
                 message: error.to_string(),
             })
     }
-}
-
-async fn read_project_atomic_source(path: &Path) -> AppHostResult<Project> {
-    match tokio::fs::read(path).await {
-        Ok(bytes) => serde_json::from_slice(&bytes).map_err(|error| AppHostError::Io {
-            path: path.to_path_buf(),
-            message: format!("invalid project document: {error}"),
-        }),
-        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
-            let project_id = path
-                .parent()
-                .and_then(|parent| parent.file_name())
-                .and_then(|name| name.to_str())
-                .map(|name| ProjectId::new(name.to_owned()))
-                .unwrap_or_else(|| ProjectId::new("unknown-project"));
-            Err(AppHostError::UnknownProject { project_id })
-        }
-        Err(error) => Err(AppHostError::Io {
-            path: path.to_path_buf(),
-            message: error.to_string(),
-        }),
-    }
-}
-
-pub(crate) async fn write_project_atomic(path: &Path, project: &Project) -> AppHostResult<()> {
-    if let Some(parent) = path.parent() {
-        tokio::fs::create_dir_all(parent)
-            .await
-            .map_err(|error| AppHostError::Io {
-                path: parent.to_path_buf(),
-                message: error.to_string(),
-            })?;
-    }
-    let bytes = serde_json::to_vec_pretty(project).map_err(|error| AppHostError::Io {
-        path: path.to_path_buf(),
-        message: format!("failed to serialize project: {error}"),
-    })?;
-    atomic_write(path, bytes)
-        .await
-        .map_err(|error| AppHostError::Io {
-            path: path.to_path_buf(),
-            message: error.to_string(),
-        })?;
-    Ok(())
 }

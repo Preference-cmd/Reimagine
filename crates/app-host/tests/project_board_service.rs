@@ -343,6 +343,141 @@ async fn host_project_delete_clears_workflow_registry_for_recreate() {
     let _ = std::fs::remove_dir_all(host.base_path());
 }
 
+#[tokio::test]
+async fn regression_project_document_format_unchanged() {
+    let host = build_host("project-regression");
+    let project_id = ProjectId::new("proj-regression");
+    let project_file = host.project_service().project_file(&project_id);
+
+    // Exact JSON shape written by ProjectService today.
+    let fixture_raw = serde_json::json!({
+        "id": "proj-regression",
+        "metadata": {
+            "name": "Regression Project",
+            "description": "persisted project document fixture",
+            "created_at": "2026-06-12T00:00:00Z",
+            "updated_at": "2026-06-12T00:01:00Z"
+        }
+    });
+
+    let parent = project_file.parent().expect("parent dir");
+    tokio::fs::create_dir_all(parent).await.expect("create dir");
+    tokio::fs::write(
+        &project_file,
+        serde_json::to_vec_pretty(&fixture_raw).expect("serialize"),
+    )
+    .await
+    .expect("write fixture");
+
+    // Load through the service.
+    let loaded = host
+        .project_service()
+        .load_project(&project_id)
+        .await
+        .expect("loads project");
+    assert_eq!(loaded.id(), &project_id);
+    assert_eq!(loaded.metadata().name(), "Regression Project");
+
+    // Save it back through the service.
+    host.project_service()
+        .update_project(&project_id, loaded.metadata().clone())
+        .await
+        .expect("update saves project");
+
+    // Read the re-saved file and assert JSON value equality.
+    let resaved_bytes = tokio::fs::read(&project_file).await.expect("read resaved");
+    let resaved_val: serde_json::Value =
+        serde_json::from_slice(&resaved_bytes).expect("parse resaved json");
+    assert_eq!(fixture_raw, resaved_val);
+
+    let _ = std::fs::remove_dir_all(host.base_path());
+}
+
+#[tokio::test]
+async fn regression_board_document_format_unchanged() {
+    let host = build_host("board-regression");
+    let project_id = ProjectId::new("proj-board-reg");
+    let board_path = host.board_service().board_path(&project_id);
+
+    // Exact JSON shape written by BoardService today.
+    let fixture_raw = serde_json::json!({
+        "schema_version": "reimagine.board.v1",
+        "id": "board-proj-board-reg",
+        "project_id": "proj-board-reg",
+        "version": 0,
+        "items": {
+            "item-1": {
+                "id": "item-1",
+                "kind": {
+                    "type": "workflow_ref",
+                    "workflow_id": "wf-reg-1"
+                },
+                "position": {
+                    "x": 100,
+                    "y": 200
+                },
+                "size": {
+                    "width": 300,
+                    "height": 150
+                },
+                "z": 0,
+                "locked": false
+            }
+        }
+    });
+
+    let parent = board_path.parent().expect("parent dir");
+    tokio::fs::create_dir_all(parent).await.expect("create dir");
+    tokio::fs::write(
+        &board_path,
+        serde_json::to_vec_pretty(&fixture_raw).expect("serialize"),
+    )
+    .await
+    .expect("write fixture");
+
+    // Load through the service.
+    let loaded = host
+        .board_service()
+        .load_or_create(&project_id)
+        .await
+        .expect("load board");
+    assert_eq!(loaded.project_id(), &project_id);
+    assert_eq!(loaded.id().as_str(), "board-proj-board-reg");
+    assert_eq!(loaded.items().len(), 1);
+
+    // Save it back through the service by applying one move.
+    let move_batch = CommandBatch::new(
+        CommandBatchId::new("batch-move-reg"),
+        OperationContext::new(
+            CommandActor::new(CommandActorKind::Human),
+            CommandProvenance::Direct,
+        ),
+        DocumentVersion::new(0),
+        Timestamp::new("2026-06-12T00:00:00Z"),
+        vec![BoardCommand::MoveItem {
+            item_id: BoardItemId::new("item-1"),
+            position: BoardItemPosition::new(110, 200),
+        }],
+    );
+    let result = host
+        .board_service()
+        .apply_batch(&project_id, move_batch)
+        .await
+        .expect("apply move");
+    assert_eq!(result.status(), CommandStatus::Applied);
+
+    // The re-saved file differs from the fixture only in what the move changed.
+    let mut expected = fixture_raw;
+    expected["version"] = serde_json::json!(1);
+    expected["items"]["item-1"]["position"]["x"] = serde_json::json!(110);
+    let resaved_bytes = tokio::fs::read(&board_path).await.expect("read resaved");
+    let resaved_val: serde_json::Value =
+        serde_json::from_slice(&resaved_bytes).expect("parse resaved json");
+    assert_eq!(expected, resaved_val);
+
+    let _ = std::fs::remove_dir_all(host.base_path());
+}
+
 fn temp_dir(prefix: &str) -> std::path::PathBuf {
     let nonce = std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
