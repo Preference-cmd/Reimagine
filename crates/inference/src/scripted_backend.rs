@@ -11,7 +11,7 @@
 //!
 //! - [`ScriptedBackend::with_step_delay`] pauses every scripted step for a
 //!   fixed [`Duration`] before it returns. The pause is cancellation-aware:
-//!   when the invocation's [`NodeCancellation`] trips while a step is
+//!   when the invocation's [`CancelToken`] is cancelled while a step is
 //!   waiting (or held), the backend returns [`InferenceError::Cancelled`]
 //!   immediately instead of finishing the step.
 //! - [`ScriptedBackend::with_hold`] installs a [`ScriptedHold`] gate. The
