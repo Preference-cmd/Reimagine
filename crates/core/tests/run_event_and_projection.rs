@@ -3,7 +3,7 @@ use reimagine_core::diagnostic::{
     DiagnosticTarget, DiagnosticTargetDomain, project_diagnostic,
 };
 use reimagine_core::event::{RunEvent, RunEventKind, Timestamp};
-use reimagine_core::model::{ArtifactId, DiagnosticId, RunId, WorkflowId, WorkflowVersion};
+use reimagine_core::model::{ArtifactId, DiagnosticId, DocumentVersion, RunId, WorkflowId};
 
 #[test]
 fn projected_diagnostic_retargets_workflow_context_and_preserves_external_cause() {
@@ -55,7 +55,7 @@ fn run_event_builder_supports_v1_payload_shape() {
         "run-event-1",
         RunId::new("run-1"),
         WorkflowId::new("workflow-1"),
-        WorkflowVersion::new(7),
+        DocumentVersion::new(7),
         RunEventKind::ArtifactCreated,
         Timestamp::new("2026-06-09T18:00:00Z"),
     )

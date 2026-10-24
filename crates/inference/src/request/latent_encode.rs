@@ -10,7 +10,7 @@ use crate::BackendSelectionOverlay;
 use crate::RuntimeImage;
 use crate::RuntimeVaeHandle;
 use reimagine_core::diagnostic::CorrelationId;
-use reimagine_core::model::{NodeId, RunId, WorkflowId, WorkflowVersion};
+use reimagine_core::model::{DocumentVersion, NodeId, RunId, WorkflowId};
 
 /// `latent.encode` request.
 #[derive(Debug, Clone)]
@@ -19,7 +19,7 @@ pub struct LatentEncodeRequest {
     image: RuntimeImage,
     run_id: RunId,
     workflow_id: WorkflowId,
-    workflow_version: WorkflowVersion,
+    workflow_version: DocumentVersion,
     correlation_id: Option<CorrelationId>,
     node_id: NodeId,
     backend_selection: BackendSelectionOverlay,
@@ -31,7 +31,7 @@ impl LatentEncodeRequest {
         image: RuntimeImage,
         run_id: RunId,
         workflow_id: WorkflowId,
-        workflow_version: WorkflowVersion,
+        workflow_version: DocumentVersion,
         node_id: NodeId,
     ) -> Self {
         Self {
@@ -67,7 +67,7 @@ impl LatentEncodeRequest {
         &self.workflow_id
     }
 
-    pub fn workflow_version(&self) -> WorkflowVersion {
+    pub fn workflow_version(&self) -> DocumentVersion {
         self.workflow_version
     }
 
@@ -135,7 +135,7 @@ mod tests {
             image_handle(),
             RunId::new("run-1"),
             WorkflowId::new("wf-1"),
-            WorkflowVersion::new(1),
+            DocumentVersion::new(1),
             NodeId::new("node-1"),
         );
         assert_eq!(req.vae().backend().as_str(), "fake");
@@ -164,7 +164,7 @@ mod tests {
             image,
             RunId::new("run-1"),
             WorkflowId::new("wf-1"),
-            WorkflowVersion::new(1),
+            DocumentVersion::new(1),
             NodeId::new("node-1"),
         );
         assert_eq!(req.backend_affinities().len(), 2);

@@ -23,8 +23,8 @@ use reimagine_config::{AppConfig, AppPaths};
 use reimagine_core::diagnostic::DiagnosticSeverity;
 use reimagine_core::event::OperationReport;
 use reimagine_core::model::{
-    ModelId, ModelRef, ModelRole, ModelSeries, ModelVariant, NodeId, ParamValue, RunId, SlotId,
-    WorkflowId, WorkflowVersion,
+    DocumentVersion, ModelId, ModelRef, ModelRole, ModelSeries, ModelVariant, NodeId, ParamValue,
+    RunId, SlotId, WorkflowId,
 };
 use reimagine_core::readiness::{
     ExternalReadinessContext, ExternalReadinessProvider, ExternalReadinessSubject, RunTarget,
@@ -91,7 +91,7 @@ fn model_ref_for(model_id: &ModelId) -> ModelRef {
 }
 
 fn build_workflow(model_id: &ModelId) -> Workflow {
-    Workflow::new(WORKFLOW_ID, WorkflowVersion::new(1)).with_node(
+    Workflow::new(WORKFLOW_ID, DocumentVersion::new(1)).with_node(
         WorkflowNode::new("loader", BUILTIN_CHECKPOINT_LOADER)
             .with_param("checkpoint", ParamValue::ModelRef(model_ref_for(model_id))),
     )
@@ -448,7 +448,7 @@ fn snapshot_provider_diagnostics_for_is_synchronous() {
     provider.record_ok(subject.clone());
     let ctx = ExternalReadinessContext::new(
         WorkflowId::new("wf"),
-        WorkflowVersion::new(1),
+        DocumentVersion::new(1),
         "nodes.loader.params.checkpoint",
     );
     let ok = provider

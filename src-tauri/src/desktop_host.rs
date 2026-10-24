@@ -19,8 +19,8 @@ use reimagine_backend_worker_host::{WorkerLaunchSpec, WorkerLimits};
 #[cfg(feature = "aigc")]
 use reimagine_backend_worker_protocol::ProtocolRange;
 use reimagine_config::AppPaths;
-use reimagine_core::board::BoardCommandBatch;
-use reimagine_core::command::CommandResult;
+use reimagine_core::board::BoardCommand;
+use reimagine_core::command::{CommandBatch, CommandResult, WorkflowChange, WorkflowCommand};
 use reimagine_core::model::ProjectId;
 use reimagine_core::workflow::Workflow;
 use reimagine_runtime::BoxedRunEventSink;
@@ -262,7 +262,7 @@ impl DesktopHostState {
         batch: serde_json::Value,
     ) -> Result<BoardCommandResultDto, AppHostError> {
         let project_id = self.require_project(project_id).await?;
-        let batch: BoardCommandBatch =
+        let batch: CommandBatch<BoardCommand> =
             serde_json::from_value(batch).map_err(|error| AppHostError::WorkflowJson {
                 path: PathBuf::new(),
                 message: format!("invalid board command batch: {error}"),
@@ -281,7 +281,7 @@ impl DesktopHostState {
         batch: serde_json::Value,
     ) -> Result<BoardCommandResultDto, AppHostError> {
         let project_id = self.require_project(project_id).await?;
-        let batch: BoardCommandBatch =
+        let batch: CommandBatch<BoardCommand> =
             serde_json::from_value(batch).map_err(|error| AppHostError::WorkflowJson {
                 path: PathBuf::new(),
                 message: format!("invalid board command batch: {error}"),
@@ -524,10 +524,8 @@ impl DesktopHostState {
         project_id: String,
         workflow_id: String,
         command_batch: serde_json::Value,
-    ) -> Result<CommandResult, AppHostError> {
-        use reimagine_core::command::CommandBatch;
-
-        let batch: CommandBatch =
+    ) -> Result<CommandResult<WorkflowChange>, AppHostError> {
+        let batch: CommandBatch<WorkflowCommand> =
             serde_json::from_value(command_batch).map_err(|e| AppHostError::WorkflowJson {
                 path: std::path::PathBuf::new(),
                 message: format!("invalid command batch: {e}"),
@@ -559,10 +557,8 @@ impl DesktopHostState {
         workflow_id: String,
         command_batch: serde_json::Value,
         _approved_by: Option<serde_json::Value>,
-    ) -> Result<CommandResult, AppHostError> {
-        use reimagine_core::command::CommandBatch;
-
-        let batch: CommandBatch =
+    ) -> Result<CommandResult<WorkflowChange>, AppHostError> {
+        let batch: CommandBatch<WorkflowCommand> =
             serde_json::from_value(command_batch).map_err(|e| AppHostError::WorkflowJson {
                 path: std::path::PathBuf::new(),
                 message: format!("invalid command batch: {e}"),
@@ -596,7 +592,7 @@ impl DesktopHostState {
         &self,
         project_id: String,
         workflow_id: String,
-    ) -> Result<CommandResult, AppHostError> {
+    ) -> Result<CommandResult<WorkflowChange>, AppHostError> {
         let project_id = self.require_project(&project_id).await?;
         let (node_catalog, workflow_service) = {
             let app_host = self.app_host.read().expect(APP_HOST_LOCK);

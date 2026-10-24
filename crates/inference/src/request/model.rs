@@ -1,7 +1,7 @@
 //! `model.load_bundle` request DTO.
 
 use reimagine_core::diagnostic::CorrelationId;
-use reimagine_core::model::{NodeId, RunId, WorkflowId, WorkflowVersion};
+use reimagine_core::model::{DocumentVersion, NodeId, RunId, WorkflowId};
 
 use crate::BackendSelectionOverlay;
 use crate::resolver::ResolvedInferenceModel;
@@ -15,7 +15,7 @@ pub struct LoadBundleRequest {
     resolved_model: ResolvedInferenceModel,
     run_id: RunId,
     workflow_id: WorkflowId,
-    workflow_version: WorkflowVersion,
+    workflow_version: DocumentVersion,
     correlation_id: Option<CorrelationId>,
     node_id: NodeId,
     backend_selection: BackendSelectionOverlay,
@@ -26,7 +26,7 @@ impl LoadBundleRequest {
         resolved_model: ResolvedInferenceModel,
         run_id: RunId,
         workflow_id: WorkflowId,
-        workflow_version: WorkflowVersion,
+        workflow_version: DocumentVersion,
         node_id: NodeId,
     ) -> Self {
         Self {
@@ -57,7 +57,7 @@ impl LoadBundleRequest {
         &self.workflow_id
     }
 
-    pub fn workflow_version(&self) -> WorkflowVersion {
+    pub fn workflow_version(&self) -> DocumentVersion {
         self.workflow_version
     }
 

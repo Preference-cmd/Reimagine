@@ -4,7 +4,7 @@ use std::sync::atomic::AtomicU64;
 
 use reimagine_core::diagnostic::CorrelationId;
 use reimagine_core::event::{RunEventKind, Timestamp};
-use reimagine_core::model::{NodeId, RunId, WorkflowVersion};
+use reimagine_core::model::{DocumentVersion, NodeId, RunId};
 use reimagine_core::readiness::{ExecutionPlan, ExecutionStage};
 use reimagine_inference::{
     BackendInstanceRuntimeHooks, BackendRunLifecycleRequest, NodeExecutorRegistry,
@@ -388,7 +388,7 @@ impl Runner {
         cancelled
     }
 
-    pub(super) fn workflow_version(&self) -> WorkflowVersion {
+    pub(super) fn workflow_version(&self) -> DocumentVersion {
         self.plan.workflow_version()
     }
 

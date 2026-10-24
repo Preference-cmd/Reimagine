@@ -6,7 +6,7 @@ use crate::LatentContent;
 use crate::RuntimeLatent;
 use crate::RuntimeModelHandle;
 use reimagine_core::diagnostic::CorrelationId;
-use reimagine_core::model::{NodeId, RunId, WorkflowId, WorkflowVersion};
+use reimagine_core::model::{DocumentVersion, NodeId, RunId, WorkflowId};
 use serde::{Deserialize, Deserializer, Serialize, Serializer};
 
 /// Sampling algorithm selection.
@@ -330,7 +330,7 @@ pub struct DiffusionSampleRequest {
     denoise: f32,
     run_id: RunId,
     workflow_id: WorkflowId,
-    workflow_version: WorkflowVersion,
+    workflow_version: DocumentVersion,
     correlation_id: Option<CorrelationId>,
     node_id: NodeId,
     backend_selection: BackendSelectionOverlay,
@@ -351,7 +351,7 @@ impl DiffusionSampleRequest {
         denoise: f32,
         run_id: RunId,
         workflow_id: WorkflowId,
-        workflow_version: WorkflowVersion,
+        workflow_version: DocumentVersion,
         node_id: NodeId,
     ) -> Self {
         Self {
@@ -460,7 +460,7 @@ impl DiffusionSampleRequest {
         &self.workflow_id
     }
 
-    pub fn workflow_version(&self) -> WorkflowVersion {
+    pub fn workflow_version(&self) -> DocumentVersion {
         self.workflow_version
     }
 

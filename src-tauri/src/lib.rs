@@ -20,7 +20,7 @@ use reimagine_app_host::{
         ModelDownloadOutput, ModelFilters, ModelInfoDto,
     },
 };
-use reimagine_core::command::CommandResult;
+use reimagine_core::command::{CommandResult, WorkflowChange};
 use serde::Serialize;
 use tauri::{Manager, ipc::Channel};
 
@@ -434,7 +434,7 @@ fn preview_workflow_commands(
     project_id: String,
     workflow_id: String,
     command_batch: serde_json::Value,
-) -> Result<CommandResult, TauriCommandError> {
+) -> Result<CommandResult<WorkflowChange>, TauriCommandError> {
     state
         .preview_workflow_commands(project_id, workflow_id, command_batch)
         .map_err(app_host_command_error)
@@ -448,7 +448,7 @@ async fn apply_workflow_commands(
     workflow_id: String,
     command_batch: serde_json::Value,
     _approved_by: Option<serde_json::Value>,
-) -> Result<CommandResult, TauriCommandError> {
+) -> Result<CommandResult<WorkflowChange>, TauriCommandError> {
     state
         .apply_workflow_commands(project_id, workflow_id, command_batch, _approved_by)
         .await
@@ -461,7 +461,7 @@ async fn approve_proposal(
     state: tauri::State<'_, DesktopHostState>,
     project_id: String,
     workflow_id: String,
-) -> Result<CommandResult, TauriCommandError> {
+) -> Result<CommandResult<WorkflowChange>, TauriCommandError> {
     state
         .approve_proposal(project_id, workflow_id)
         .await

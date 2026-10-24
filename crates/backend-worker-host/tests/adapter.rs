@@ -6,7 +6,7 @@ use reimagine_backend_worker_host::{
     WorkerSupervisor, WorkerTransportConfig,
 };
 use reimagine_backend_worker_protocol::{BackendInstanceId, ProtocolRange, WorkerInstallationId};
-use reimagine_core::model::{NodeId, RunId, WorkflowId, WorkflowVersion};
+use reimagine_core::model::{DocumentVersion, NodeId, RunId, WorkflowId};
 use reimagine_inference::{CancelToken, InferenceError, InferenceInvocation, NoopProgressSink};
 use reimagine_inference::{CreateEmptyLatentRequest, InferenceBackend, InferenceCapability};
 use reimagine_inference::{Progress, ProgressSink};
@@ -63,7 +63,7 @@ async fn adapter_advertises_and_maps_only_create_empty_latent() {
             1,
             RunId::new("run-1"),
             WorkflowId::new("workflow-1"),
-            WorkflowVersion::new(1),
+            DocumentVersion::new(1),
             NodeId::new("node-1"),
         ))
         .await
@@ -100,7 +100,7 @@ async fn adapter_does_not_advertise_or_invoke_undeclared_operation() {
                 1,
                 RunId::new("run-2"),
                 WorkflowId::new("workflow-2"),
-                WorkflowVersion::new(1),
+                DocumentVersion::new(1),
                 NodeId::new("node-2"),
             ))
             .await,
@@ -139,7 +139,7 @@ async fn invocation_cancellation_reaches_worker_and_wins_once() {
                         1,
                         RunId::new("run-cancel"),
                         WorkflowId::new("workflow-cancel"),
-                        WorkflowVersion::new(1),
+                        DocumentVersion::new(1),
                         NodeId::new("node-cancel"),
                     ),
                 )
@@ -187,7 +187,7 @@ async fn backend_error_terminal_wins_over_late_cancel_ack_once() {
                         1,
                         RunId::new("run-backend-error-race"),
                         WorkflowId::new("workflow-race"),
-                        WorkflowVersion::new(1),
+                        DocumentVersion::new(1),
                         NodeId::new("node-backend-error-race"),
                     ),
                 )
@@ -235,7 +235,7 @@ async fn success_terminal_wins_over_late_cancel_ack_once() {
                         1,
                         RunId::new("run-success-race"),
                         WorkflowId::new("workflow-race"),
-                        WorkflowVersion::new(1),
+                        DocumentVersion::new(1),
                         NodeId::new("node-success-race"),
                     ),
                 )
@@ -279,7 +279,7 @@ async fn worker_crash_after_cancel_request_is_transport_lost_not_cancelled() {
                         1,
                         RunId::new("run-crash-race"),
                         WorkflowId::new("workflow-race"),
-                        WorkflowVersion::new(1),
+                        DocumentVersion::new(1),
                         NodeId::new("node-crash-race"),
                     ),
                 )
@@ -394,7 +394,7 @@ async fn invocation_progress_is_forwarded_before_worker_terminal() {
                         1,
                         RunId::new("run-progress"),
                         WorkflowId::new("workflow-progress"),
-                        WorkflowVersion::new(1),
+                        DocumentVersion::new(1),
                         NodeId::new("node-progress"),
                     ),
                 )

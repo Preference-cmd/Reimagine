@@ -13,7 +13,7 @@ use reimagine_core::diagnostic::{
 };
 use reimagine_core::event::Timestamp;
 use reimagine_core::model::{
-    ArtifactId, ArtifactRef, DiagnosticId, NodeId, RunId, WorkflowId, WorkflowVersion,
+    ArtifactId, ArtifactRef, DiagnosticId, DocumentVersion, NodeId, RunId, WorkflowId,
 };
 use reimagine_runtime::{
     NodeState, RunArtifactRef, RunSnapshot, RunSnapshotUpdate, RunStore, TaskState,
@@ -29,7 +29,7 @@ fn snapshot(
     RunSnapshot::new(
         run_id.clone(),
         WorkflowId::new("wf"),
-        WorkflowVersion::new(1),
+        DocumentVersion::new(1),
         state,
         nodes
             .iter()

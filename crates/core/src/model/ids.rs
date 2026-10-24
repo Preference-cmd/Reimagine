@@ -86,9 +86,9 @@ id_type!(BoardItemId);
 #[derive(
     Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, serde::Serialize, serde::Deserialize,
 )]
-pub struct WorkflowVersion(u64);
+pub struct DocumentVersion(u64);
 
-impl WorkflowVersion {
+impl DocumentVersion {
     pub fn new(version: u64) -> Self {
         Self(version)
     }
@@ -98,40 +98,13 @@ impl WorkflowVersion {
     }
 }
 
-impl std::fmt::Display for WorkflowVersion {
+impl std::fmt::Display for DocumentVersion {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         write!(f, "{}", self.0)
     }
 }
 
-impl From<u64> for WorkflowVersion {
-    fn from(version: u64) -> Self {
-        Self(version)
-    }
-}
-
-#[derive(
-    Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, serde::Serialize, serde::Deserialize,
-)]
-pub struct BoardVersion(u64);
-
-impl BoardVersion {
-    pub fn new(version: u64) -> Self {
-        Self(version)
-    }
-
-    pub fn get(self) -> u64 {
-        self.0
-    }
-}
-
-impl std::fmt::Display for BoardVersion {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(f, "{}", self.0)
-    }
-}
-
-impl From<u64> for BoardVersion {
+impl From<u64> for DocumentVersion {
     fn from(version: u64) -> Self {
         Self(version)
     }

@@ -3,7 +3,7 @@
 use std::collections::HashMap;
 
 use reimagine_core::event::RunEvent;
-use reimagine_core::model::{ArtifactId, NodeId, RunId, WorkflowId, WorkflowVersion};
+use reimagine_core::model::{ArtifactId, DocumentVersion, NodeId, RunId, WorkflowId};
 use reimagine_core::task::TaskState;
 use reimagine_runtime::NodeState;
 use reimagine_runtime::{RunSnapshot, RunSummary};
@@ -27,7 +27,7 @@ pub enum RunDto {
 pub struct RunSnapshotDto {
     pub run_id: RunId,
     pub workflow_id: WorkflowId,
-    pub workflow_version: WorkflowVersion,
+    pub workflow_version: DocumentVersion,
     pub state: TaskState,
     pub node_states: HashMap<NodeId, NodeStateDto>,
     pub diagnostics: Vec<DiagnosticDto>,
@@ -85,7 +85,7 @@ impl From<NodeState> for NodeStateDto {
 pub struct RunSummaryDto {
     pub run_id: RunId,
     pub workflow_id: WorkflowId,
-    pub workflow_version: WorkflowVersion,
+    pub workflow_version: DocumentVersion,
     pub state: TaskState,
     pub diagnostics: Vec<DiagnosticDto>,
     pub artifacts: Vec<ArtifactDto>,
@@ -123,7 +123,7 @@ pub struct RunEventDto {
     pub id: String,
     pub run_id: RunId,
     pub workflow_id: WorkflowId,
-    pub workflow_version: WorkflowVersion,
+    pub workflow_version: DocumentVersion,
     pub kind: String,
     pub node_id: Option<NodeId>,
     pub artifact: Option<ArtifactId>,

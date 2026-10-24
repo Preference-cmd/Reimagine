@@ -1,5 +1,5 @@
 use crate::diagnostic::{CorrelationId, Diagnostic};
-use crate::model::{ArtifactId, NodeId, RunId, WorkflowId, WorkflowVersion};
+use crate::model::{ArtifactId, DocumentVersion, NodeId, RunId, WorkflowId};
 use crate::task::Progress;
 
 use super::Timestamp;
@@ -53,7 +53,7 @@ pub struct RunEvent {
     id: RunEventId,
     run_id: RunId,
     workflow_id: WorkflowId,
-    workflow_version: WorkflowVersion,
+    workflow_version: DocumentVersion,
     kind: RunEventKind,
     node_id: Option<NodeId>,
     artifact: Option<ArtifactId>,
@@ -68,7 +68,7 @@ impl RunEvent {
         id: impl Into<RunEventId>,
         run_id: RunId,
         workflow_id: WorkflowId,
-        workflow_version: WorkflowVersion,
+        workflow_version: DocumentVersion,
         kind: RunEventKind,
         created_at: Timestamp,
     ) -> Self {
@@ -124,7 +124,7 @@ impl RunEvent {
         &self.workflow_id
     }
 
-    pub fn workflow_version(&self) -> WorkflowVersion {
+    pub fn workflow_version(&self) -> DocumentVersion {
         self.workflow_version
     }
 
@@ -167,7 +167,7 @@ mod progress_tests {
             "progress-1",
             RunId::new("run"),
             WorkflowId::new("workflow"),
-            WorkflowVersion::new(1),
+            DocumentVersion::new(1),
             RunEventKind::NodeProgress,
             Timestamp::new("2026-07-14T00:00:00Z"),
         )

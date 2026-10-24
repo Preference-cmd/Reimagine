@@ -1,10 +1,10 @@
 use crate::diagnostic::{Diagnostic, project_diagnostic};
-use crate::model::{ModelRef, NodeId, SlotId, WorkflowId, WorkflowVersion};
+use crate::model::{DocumentVersion, ModelRef, NodeId, SlotId, WorkflowId};
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ExternalReadinessContext {
     workflow_id: WorkflowId,
-    workflow_version: WorkflowVersion,
+    workflow_version: DocumentVersion,
     node_id: Option<NodeId>,
     slot_id: Option<SlotId>,
     workflow_input_id: Option<String>,
@@ -14,7 +14,7 @@ pub struct ExternalReadinessContext {
 impl ExternalReadinessContext {
     pub fn new(
         workflow_id: WorkflowId,
-        workflow_version: WorkflowVersion,
+        workflow_version: DocumentVersion,
         path: impl Into<String>,
     ) -> Self {
         Self {
@@ -41,7 +41,7 @@ impl ExternalReadinessContext {
         &self.workflow_id
     }
 
-    pub fn workflow_version(&self) -> WorkflowVersion {
+    pub fn workflow_version(&self) -> DocumentVersion {
         self.workflow_version
     }
 

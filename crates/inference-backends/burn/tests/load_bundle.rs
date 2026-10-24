@@ -3,7 +3,7 @@ use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 
 use reimagine_core::model::{
-    ModelId, ModelRole, ModelSeries, ModelVariant, NodeId, RunId, WorkflowId, WorkflowVersion,
+    DocumentVersion, ModelId, ModelRole, ModelSeries, ModelVariant, NodeId, RunId, WorkflowId,
 };
 use reimagine_inference::{
     BackendInstanceObservation, CreateEmptyLatentRequest, InferenceBackend, InferenceCapability,
@@ -247,7 +247,7 @@ fn load_request(root: &Path) -> LoadBundleRequest {
         resolved_model(root),
         RunId::new("run-burn-load"),
         WorkflowId::new("workflow-burn-load"),
-        WorkflowVersion::new(1),
+        DocumentVersion::new(1),
         NodeId::new("checkpoint-loader"),
     )
 }
@@ -257,7 +257,7 @@ fn request_from_model(model: ResolvedInferenceModel) -> LoadBundleRequest {
         model,
         RunId::new("run-burn-load"),
         WorkflowId::new("workflow-burn-load"),
-        WorkflowVersion::new(1),
+        DocumentVersion::new(1),
         NodeId::new("checkpoint-loader"),
     )
 }
@@ -548,7 +548,7 @@ async fn downstream_capabilities_remain_not_implemented_except_create_empty_late
         1,
         RunId::new("run-burn-downstream"),
         WorkflowId::new("workflow-burn-downstream"),
-        WorkflowVersion::new(1),
+        DocumentVersion::new(1),
         NodeId::new("latent"),
     );
 

@@ -4,7 +4,7 @@ use std::collections::HashMap;
 
 use reimagine_core::diagnostic::Diagnostic;
 use reimagine_core::event::Timestamp;
-use reimagine_core::model::{ArtifactId, ArtifactRef, NodeId, RunId, WorkflowId, WorkflowVersion};
+use reimagine_core::model::{ArtifactId, ArtifactRef, DocumentVersion, NodeId, RunId, WorkflowId};
 
 use crate::scheduler::NodeState;
 use reimagine_core::task::TaskState;
@@ -78,7 +78,7 @@ impl RunArtifactRef {
 pub struct RunSnapshot {
     pub run_id: RunId,
     pub workflow_id: WorkflowId,
-    pub workflow_version: WorkflowVersion,
+    pub workflow_version: DocumentVersion,
     pub state: TaskState,
     pub node_states: HashMap<NodeId, NodeState>,
     pub diagnostics: Vec<Diagnostic>,
@@ -92,7 +92,7 @@ impl RunSnapshot {
     pub fn new(
         run_id: RunId,
         workflow_id: WorkflowId,
-        workflow_version: WorkflowVersion,
+        workflow_version: DocumentVersion,
         state: TaskState,
         node_states: HashMap<NodeId, NodeState>,
         diagnostics: Vec<Diagnostic>,
@@ -119,7 +119,7 @@ impl RunSnapshot {
 pub struct RunSummary {
     pub run_id: RunId,
     pub workflow_id: WorkflowId,
-    pub workflow_version: WorkflowVersion,
+    pub workflow_version: DocumentVersion,
     pub state: TaskState,
     pub diagnostics: Vec<Diagnostic>,
     pub artifacts: Vec<RunArtifactRef>,
@@ -132,7 +132,7 @@ impl RunSummary {
     pub fn new(
         run_id: RunId,
         workflow_id: WorkflowId,
-        workflow_version: WorkflowVersion,
+        workflow_version: DocumentVersion,
         state: TaskState,
         diagnostics: Vec<Diagnostic>,
         artifacts: Vec<RunArtifactRef>,

@@ -12,8 +12,8 @@ use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
 
 use reimagine_core::model::{
-    ModelId, ModelRole, NodeId, ParamValue, RunId, TensorDType, TensorShape, WorkflowId,
-    WorkflowVersion,
+    DocumentVersion, ModelId, ModelRole, NodeId, ParamValue, RunId, TensorDType, TensorShape,
+    WorkflowId,
 };
 use reimagine_inference::{
     Backend, BackendInstance, BackendPayloadKey, BackendTensorHandle, ExecutionValue,
@@ -189,7 +189,7 @@ fn load_request(root: &Path) -> LoadBundleRequest {
         resolved_model(root),
         RunId::new("run-burn-text"),
         WorkflowId::new("wf-burn-text"),
-        WorkflowVersion::new(1),
+        DocumentVersion::new(1),
         NodeId::new("checkpoint-loader"),
     )
 }
@@ -264,7 +264,7 @@ fn build_text_request(clip: RuntimeClipHandle, text: ExecutionValue) -> TextEnco
         std::sync::Arc::new(text),
         RunId::new("run-text-it"),
         WorkflowId::new("wf-text-it"),
-        WorkflowVersion::new(1),
+        DocumentVersion::new(1),
         NodeId::new("node-text"),
     )
 }

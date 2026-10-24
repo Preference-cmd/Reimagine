@@ -3,7 +3,7 @@
 use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
 
-use reimagine_core::model::{NodeId, RunId, WorkflowId, WorkflowVersion};
+use reimagine_core::model::{DocumentVersion, NodeId, RunId, WorkflowId};
 use reimagine_core::task::CancelToken;
 
 /// Host-visible run control handle.
@@ -15,7 +15,7 @@ use reimagine_core::task::CancelToken;
 pub struct RunHandle {
     run_id: RunId,
     workflow_id: WorkflowId,
-    workflow_version: WorkflowVersion,
+    workflow_version: DocumentVersion,
     cancellation: CancelToken,
     node_cancellations: Arc<Mutex<HashMap<NodeId, CancelToken>>>,
 }
@@ -24,7 +24,7 @@ impl RunHandle {
     pub fn new(
         run_id: RunId,
         workflow_id: WorkflowId,
-        workflow_version: WorkflowVersion,
+        workflow_version: DocumentVersion,
         cancellation: CancelToken,
         node_cancellations: Arc<Mutex<HashMap<NodeId, CancelToken>>>,
     ) -> Self {
@@ -45,7 +45,7 @@ impl RunHandle {
         &self.workflow_id
     }
 
-    pub fn workflow_version(&self) -> WorkflowVersion {
+    pub fn workflow_version(&self) -> DocumentVersion {
         self.workflow_version
     }
 

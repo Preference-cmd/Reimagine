@@ -687,7 +687,7 @@ mod tests {
         ExecutionValue, RuntimeClipHandle,
     };
     use reimagine_core::model::{
-        ModelId, NodeId, ParamValue, RunId, TensorDType, TensorShape, WorkflowId, WorkflowVersion,
+        DocumentVersion, ModelId, NodeId, ParamValue, RunId, TensorDType, TensorShape, WorkflowId,
     };
     use reimagine_core::task::NoopProgressSink;
 
@@ -716,7 +716,7 @@ mod tests {
             ))),
             RunId::new("run-1"),
             WorkflowId::new("wf-1"),
-            WorkflowVersion::new(1),
+            DocumentVersion::new(1),
             NodeId::new("node-1"),
         )
     }

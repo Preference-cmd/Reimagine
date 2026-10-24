@@ -1,5 +1,5 @@
 //! Board service: load/save the persisted project canvas document and
-//! run board commands through `BoardSession`.
+//! run board commands through `DocumentSession`.
 //!
 //! Every board is 1:1 with a project and lives at
 //! `projects/{project_id}/board.json`. Successful command application
@@ -11,10 +11,10 @@ use std::path::Path;
 use std::sync::{Arc, RwLock};
 
 use reimagine_config::{AppPaths, atomic_write};
-use reimagine_core::board::{
-    BoardCommandBatch, BoardCommandResult, BoardCommandResultStatus, BoardDocument, BoardSession,
-};
-use reimagine_core::model::{BoardId, BoardVersion, ProjectId};
+use reimagine_core::board::{BoardChange, BoardCommand, BoardDocument};
+use reimagine_core::command::{CommandBatch, CommandResult, CommandStatus};
+use reimagine_core::document::DocumentSession;
+use reimagine_core::model::{BoardId, DocumentVersion, ProjectId};
 use tokio::sync::Mutex as AsyncMutex;
 
 use crate::document_events::{DocumentChangedEvent, DocumentEventBus};
@@ -22,7 +22,7 @@ use crate::{AppHostError, AppHostResult};
 
 pub struct BoardService {
     paths: AppPaths,
-    sessions: RwLock<BTreeMap<ProjectId, Arc<AsyncMutex<BoardSession>>>>,
+    sessions: RwLock<BTreeMap<ProjectId, Arc<AsyncMutex<DocumentSession<BoardDocument>>>>>,
     document_events: Arc<DocumentEventBus>,
 }
 
@@ -72,11 +72,11 @@ impl BoardService {
             .get(project_id)
             .cloned();
         if let Some(session) = cached {
-            return Ok(session.lock().await.board().clone());
+            return Ok(session.lock().await.document().clone());
         }
 
         let board = self.read_board_from_disk(project_id).await?;
-        let session = Arc::new(AsyncMutex::new(BoardSession::new(board)));
+        let session = Arc::new(AsyncMutex::new(DocumentSession::new(board)));
 
         // Double-check: another task may have created the session while
         // we read from disk. No registry guard is held across the
@@ -94,8 +94,8 @@ impl BoardService {
             }
         };
         match winner {
-            Some(existing) => Ok(existing.lock().await.board().clone()),
-            None => Ok(session.lock().await.board().clone()),
+            Some(existing) => Ok(existing.lock().await.document().clone()),
+            None => Ok(session.lock().await.document().clone()),
         }
     }
 
@@ -129,10 +129,10 @@ impl BoardService {
     pub async fn preview_batch(
         &self,
         project_id: &ProjectId,
-        batch: BoardCommandBatch,
-    ) -> AppHostResult<BoardCommandResult> {
+        batch: CommandBatch<BoardCommand>,
+    ) -> AppHostResult<CommandResult<BoardChange>> {
         let session = self.session_for(project_id).await?;
-        Ok(session.lock().await.preview_batch(batch))
+        Ok(session.lock().await.preview_batch(&(), batch))
     }
 
     /// Apply a command batch, persist the board, and emit
@@ -140,12 +140,12 @@ impl BoardService {
     pub async fn apply_batch(
         &self,
         project_id: &ProjectId,
-        batch: BoardCommandBatch,
-    ) -> AppHostResult<BoardCommandResult> {
+        batch: CommandBatch<BoardCommand>,
+    ) -> AppHostResult<CommandResult<BoardChange>> {
         let session = self.session_for(project_id).await?;
         let mut guard = session.lock().await;
-        let result = guard.apply_batch(batch);
-        if result.status() == BoardCommandResultStatus::Applied {
+        let result = guard.apply_batch(&(), batch);
+        if result.status() == CommandStatus::Applied {
             self.save_locked(project_id, &guard).await?;
             self.emit_changed(&guard);
         }
@@ -153,7 +153,10 @@ impl BoardService {
     }
 
     /// Undo the last applied batch, persisting the restored document.
-    pub async fn undo(&self, project_id: &ProjectId) -> AppHostResult<Option<BoardCommandResult>> {
+    pub async fn undo(
+        &self,
+        project_id: &ProjectId,
+    ) -> AppHostResult<Option<CommandResult<BoardChange>>> {
         let session = self.session_for(project_id).await?;
         let mut guard = session.lock().await;
         let Some(result) = guard.undo() else {
@@ -165,7 +168,10 @@ impl BoardService {
     }
 
     /// Redo the last undone batch, persisting the restored document.
-    pub async fn redo(&self, project_id: &ProjectId) -> AppHostResult<Option<BoardCommandResult>> {
+    pub async fn redo(
+        &self,
+        project_id: &ProjectId,
+    ) -> AppHostResult<Option<CommandResult<BoardChange>>> {
         let session = self.session_for(project_id).await?;
         let mut guard = session.lock().await;
         let Some(result) = guard.redo() else {
@@ -187,7 +193,7 @@ impl BoardService {
     async fn session_for(
         &self,
         project_id: &ProjectId,
-    ) -> AppHostResult<Arc<AsyncMutex<BoardSession>>> {
+    ) -> AppHostResult<Arc<AsyncMutex<DocumentSession<BoardDocument>>>> {
         self.load_or_create(project_id).await?;
         self.sessions
             .read()
@@ -199,8 +205,8 @@ impl BoardService {
             })
     }
 
-    fn emit_changed(&self, session: &BoardSession) {
-        let board = session.board();
+    fn emit_changed(&self, session: &DocumentSession<BoardDocument>) {
+        let board = session.document();
         self.document_events.publish(DocumentChangedEvent {
             kind: "board.changed".to_owned(),
             project_id: board.project_id().to_string(),
@@ -212,7 +218,7 @@ impl BoardService {
     async fn save_locked(
         &self,
         project_id: &ProjectId,
-        session: &BoardSession,
+        session: &DocumentSession<BoardDocument>,
     ) -> AppHostResult<()> {
         let path = self.board_path(project_id);
         if let Some(parent) = path.parent() {
@@ -224,7 +230,7 @@ impl BoardService {
                 })?;
         }
         let bytes =
-            serde_json::to_vec_pretty(session.board()).map_err(|error| AppHostError::Io {
+            serde_json::to_vec_pretty(session.document()).map_err(|error| AppHostError::Io {
                 path: path.clone(),
                 message: format!("failed to serialize board: {error}"),
             })?;
@@ -242,7 +248,7 @@ fn default_board(project_id: &ProjectId) -> BoardDocument {
     BoardDocument::new(
         BoardId::new(format!("board-{project_id}")),
         project_id.clone(),
-        BoardVersion::new(0),
+        DocumentVersion::new(0),
     )
 }
 
@@ -260,7 +266,11 @@ pub(crate) async fn ensure_board_file(
     write_board_atomic(&path, &default_board(project_id)).await
 }
 
-pub(crate) async fn write_board_atomic(path: &Path, board: &BoardDocument) -> AppHostResult<()> {
+async fn write_board_atomic(path: &Path, board: &BoardDocument) -> AppHostResult<()> {
+    let bytes = serde_json::to_vec_pretty(board).map_err(|error| AppHostError::Io {
+        path: path.to_path_buf(),
+        message: format!("failed to serialize board: {error}"),
+    })?;
     if let Some(parent) = path.parent() {
         tokio::fs::create_dir_all(parent)
             .await
@@ -269,15 +279,10 @@ pub(crate) async fn write_board_atomic(path: &Path, board: &BoardDocument) -> Ap
                 message: error.to_string(),
             })?;
     }
-    let bytes = serde_json::to_vec_pretty(board).map_err(|error| AppHostError::Io {
-        path: path.to_path_buf(),
-        message: format!("failed to serialize board: {error}"),
-    })?;
     atomic_write(path, bytes)
         .await
         .map_err(|error| AppHostError::Io {
             path: path.to_path_buf(),
             message: error.to_string(),
-        })?;
-    Ok(())
+        })
 }

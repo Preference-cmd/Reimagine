@@ -1,14 +1,11 @@
 #![cfg(not(feature = "aigc"))]
 
 use reimagine_app_host::{AigcStatus, RunWorkflowRequest, WorkspaceHostBuilder, WorkspaceScope};
-use reimagine_core::board::{
-    BoardCommand, BoardCommandBatch, BoardItemKind, BoardItemPosition, BoardItemSize,
-};
-use reimagine_core::command::{CommandActor, CommandActorKind, CommandProvenance};
+use reimagine_core::board::{BoardCommand, BoardItemKind, BoardItemPosition, BoardItemSize};
+use reimagine_core::command::{CommandActor, CommandActorKind, CommandBatch, CommandProvenance};
 use reimagine_core::event::Timestamp;
 use reimagine_core::model::{
-    BoardItemId, BoardVersion, CommandBatchId, NodeId, NodeTypeId, ProjectId, WorkflowId,
-    WorkflowVersion,
+    BoardItemId, CommandBatchId, DocumentVersion, NodeId, NodeTypeId, ProjectId, WorkflowId,
 };
 use reimagine_core::project::ProjectMetadata;
 use reimagine_core::readiness::RunTargetSelection;
@@ -52,10 +49,10 @@ async fn kernel_only_workspace_reports_not_installed_and_rejects_workflow_run() 
         .expect("create project");
 
     // 3. Create board item
-    let batch = BoardCommandBatch::new(
+    let batch = CommandBatch::new(
         CommandBatchId::new("batch-1"),
         CommandActor::new(CommandActorKind::Human),
-        BoardVersion::new(0),
+        DocumentVersion::new(0),
         CommandProvenance::Direct,
         Timestamp::new("2026-06-12T00:00:00Z"),
         vec![BoardCommand::AddItem {
@@ -74,7 +71,7 @@ async fn kernel_only_workspace_reports_not_installed_and_rejects_workflow_run() 
 
     // 4. Create workflow with at least one node (non-empty)
     let workflow_id = WorkflowId::new("wf-kernel");
-    let workflow = Workflow::new(workflow_id.clone(), WorkflowVersion::new(1)).with_node(
+    let workflow = Workflow::new(workflow_id.clone(), DocumentVersion::new(1)).with_node(
         WorkflowNode::new(NodeId::new("node-1"), NodeTypeId::new("test.node")),
     );
     let wf_service = host.workflow_service_for_project(&project_id);

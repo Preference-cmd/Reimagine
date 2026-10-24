@@ -453,7 +453,7 @@ mod tests {
         LatentContent, LatentEncodeRequest, LatentEncodeResponse, RuntimeImage,
     };
     use reimagine_core::model::{
-        ModelId, NodeId, RunId, TensorDType, TensorShape, WorkflowId, WorkflowVersion,
+        DocumentVersion, ModelId, NodeId, RunId, TensorDType, TensorShape, WorkflowId,
     };
 
     fn fake_image() -> RuntimeImage {
@@ -516,7 +516,7 @@ mod tests {
             source,
             RunId::new("run-1"),
             WorkflowId::new("wf-1"),
-            WorkflowVersion::new(1),
+            DocumentVersion::new(1),
             NodeId::new("node-1"),
         );
         let future = InferenceBackend::image_import(&backend, request);
@@ -556,7 +556,7 @@ mod tests {
             fake_image(),
             RunId::new("run-1"),
             WorkflowId::new("wf-1"),
-            WorkflowVersion::new(1),
+            DocumentVersion::new(1),
             NodeId::new("node-1"),
         );
         let future = InferenceBackend::latent_encode(&backend, request);
@@ -579,7 +579,7 @@ mod tests {
             source,
             RunId::new("run-1"),
             WorkflowId::new("wf-1"),
-            WorkflowVersion::new(1),
+            DocumentVersion::new(1),
             NodeId::new("node-1"),
         );
         let future = InferenceBackend::image_import(&backend, request);
@@ -608,7 +608,7 @@ mod tests {
             fake_image(),
             RunId::new("run-1"),
             WorkflowId::new("wf-1"),
-            WorkflowVersion::new(1),
+            DocumentVersion::new(1),
             NodeId::new("node-1"),
         );
         let future = InferenceBackend::latent_encode(&backend, request);

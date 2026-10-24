@@ -1,277 +1,93 @@
-use crate::command::{
-    CommandBatch, CommandResult, CommandResultStatus, WorkflowChange, WorkflowCommand,
-};
+//! Document trait implementation for Workflow.
+
+use crate::command::{WorkflowChange, WorkflowCommand};
 use crate::diagnostic::{
     CorrelationId, Diagnostic, DiagnosticCode, DiagnosticSeverity, DiagnosticSourceName,
     DiagnosticTarget, DiagnosticTargetDomain,
 };
-use crate::history::{HistoryEntry, WorkflowHistory};
+use crate::document::{CommandApplication, Document};
 use crate::model::{
-    DiagnosticId, EdgeId, HistoryEntryId, NodeCatalog, NodeId, WorkflowInputId, WorkflowOutputId,
-    WorkflowVersion,
+    DiagnosticId, DocumentVersion, EdgeId, NodeCatalog, NodeId, WorkflowInputId, WorkflowOutputId,
 };
 use crate::validation::validate_structure;
 use crate::workflow::{
     Endpoint, Workflow, WorkflowEdge, WorkflowInputDef, WorkflowNode, WorkflowOutputDef,
 };
 
-pub struct WorkflowSession {
-    workflow: Workflow,
-    history: WorkflowHistory,
-}
+impl Document for Workflow {
+    type Command = WorkflowCommand;
+    type Change = WorkflowChange;
+    type Context = dyn NodeCatalog;
 
-impl WorkflowSession {
-    pub fn new(workflow: Workflow) -> Self {
-        Self {
-            workflow,
-            history: WorkflowHistory::new(),
-        }
+    fn version(&self) -> DocumentVersion {
+        self.version()
     }
 
-    pub fn workflow(&self) -> &Workflow {
-        &self.workflow
+    fn set_version(&mut self, version: DocumentVersion) {
+        self.set_version(version);
     }
 
-    pub fn version(&self) -> WorkflowVersion {
-        self.workflow.version()
-    }
-
-    pub fn history(&self) -> &WorkflowHistory {
-        &self.history
-    }
-
-    pub fn preview_batch(
-        &self,
-        node_catalog: &impl NodeCatalog,
-        batch: CommandBatch,
-    ) -> CommandResult {
-        match self.evaluate_batch(node_catalog, &batch) {
-            BatchEvaluation::Rejected { diagnostics } => CommandResult::new(
-                CommandResultStatus::Rejected,
-                self.version(),
-                Vec::new(),
-                diagnostics,
-                None,
-            ),
-            BatchEvaluation::NoOp => CommandResult::new(
-                CommandResultStatus::NoOp,
-                self.version(),
-                Vec::new(),
-                Vec::new(),
-                None,
-            ),
-            BatchEvaluation::Applied {
-                projected_version,
-                forward_changes,
-                ..
-            } => CommandResult::new(
-                CommandResultStatus::Applied,
-                projected_version,
-                forward_changes,
-                Vec::new(),
-                None,
-            ),
-        }
-    }
-
-    pub fn apply_batch(
+    fn apply_command(
         &mut self,
-        node_catalog: &impl NodeCatalog,
-        batch: CommandBatch,
-    ) -> CommandResult {
-        match self.evaluate_batch(node_catalog, &batch) {
-            BatchEvaluation::Rejected { diagnostics } => CommandResult::new(
-                CommandResultStatus::Rejected,
-                self.version(),
-                Vec::new(),
-                diagnostics,
-                None,
-            ),
-            BatchEvaluation::NoOp => CommandResult::new(
-                CommandResultStatus::NoOp,
-                self.version(),
-                Vec::new(),
-                Vec::new(),
-                None,
-            ),
-            BatchEvaluation::Applied {
-                workflow,
-                projected_version,
-                forward_changes,
-                inverse_changes,
-            } => {
-                let mut workflow = *workflow;
-                let before = self.workflow.clone();
-                workflow.set_version(projected_version);
-                let history_entry_id = history_entry_id(batch.id().as_str());
-                let history_entry = HistoryEntry::new(
-                    history_entry_id.clone(),
-                    batch.clone(),
-                    before,
-                    workflow.clone(),
-                    forward_changes.clone(),
-                    inverse_changes,
-                    batch.created_at().clone(),
-                );
-
-                self.workflow = workflow;
-                self.history.truncate_to_cursor();
-                self.history.push(history_entry);
-
-                CommandResult::new(
-                    CommandResultStatus::Applied,
-                    projected_version,
-                    forward_changes,
-                    Vec::new(),
-                    Some(history_entry_id),
-                )
-            }
-        }
-    }
-
-    /// Roll the session back to `workflow` (a
-    /// pre-apply snapshot) when on-disk persistence fails.
-    ///
-    /// AR-08: an applied change that cannot be persisted must not leave
-    /// memory and disk at divergent accepted versions. The just-applied
-    /// history entry is dropped and the workflow is restored so the
-    /// caller can surface a clearly-failed result instead of a
-    /// phantom success.
-    pub fn restore(&mut self, workflow: Workflow) {
-        if self.history.cursor() > 0 {
-            self.history.move_cursor_back();
-            self.history.truncate_to_cursor();
-        }
-        self.workflow = workflow;
-    }
-
-    pub fn undo(&mut self) -> Option<CommandResult> {
-        let entry = self.history.entry_to_undo()?.clone();
-        let current_version = self.version();
-        let next_version = increment_version(current_version);
-        let mut restored = entry.before().clone();
-        restored.set_version(next_version);
-
-        self.workflow = restored;
-        self.history.move_cursor_back();
-
-        let mut changes = entry.inverse_changes().to_vec();
-        changes.push(WorkflowChange::VersionAdvanced {
-            before: current_version,
-            after: next_version,
-        });
-
-        Some(CommandResult::new(
-            CommandResultStatus::Applied,
-            next_version,
-            changes,
-            Vec::new(),
-            None,
-        ))
-    }
-
-    pub fn redo(&mut self) -> Option<CommandResult> {
-        let entry = self.history.entry_to_redo()?.clone();
-        let current_version = self.version();
-        let next_version = increment_version(current_version);
-        let mut restored = entry.after().clone();
-        restored.set_version(next_version);
-
-        self.workflow = restored;
-        self.history.move_cursor_forward();
-
-        let mut changes = without_version_change(entry.forward_changes());
-        changes.push(WorkflowChange::VersionAdvanced {
-            before: current_version,
-            after: next_version,
-        });
-
-        Some(CommandResult::new(
-            CommandResultStatus::Applied,
-            next_version,
-            changes,
-            Vec::new(),
-            None,
-        ))
-    }
-
-    fn evaluate_batch(
-        &self,
-        node_catalog: &impl NodeCatalog,
-        batch: &CommandBatch,
-    ) -> BatchEvaluation {
-        let current_version = self.version();
-        if batch.base_version() != current_version {
-            return BatchEvaluation::Rejected {
-                diagnostics: vec![version_conflict_diagnostic(
-                    self.workflow.id().as_str(),
-                    current_version,
-                    batch.base_version(),
-                    batch.correlation_id(),
-                )],
-            };
-        }
-
-        let mut working = self.workflow.clone();
+        command: &Self::Command,
+        _context: &Self::Context,
+        correlation_id: Option<&CorrelationId>,
+    ) -> Result<CommandApplication<Self::Change>, Vec<Diagnostic>> {
         let mut forward_changes = Vec::new();
-        let mut inverse_steps = Vec::<Vec<WorkflowChange>>::new();
+        let mut inverse_steps = Vec::new();
         let mut diagnostics = Vec::new();
 
-        for command in batch.commands() {
-            apply_command(
-                &mut working,
-                command,
-                &mut forward_changes,
-                &mut inverse_steps,
-                &mut diagnostics,
-                batch.correlation_id(),
-            );
-        }
-
-        if diagnostics.is_empty() {
-            let report = validate_structure(&working, node_catalog);
-            diagnostics.extend(report.diagnostics().iter().cloned());
-        }
+        apply_workflow_command(
+            self,
+            command,
+            &mut forward_changes,
+            &mut inverse_steps,
+            &mut diagnostics,
+            correlation_id,
+        );
 
         if !diagnostics.is_empty() {
-            return BatchEvaluation::Rejected { diagnostics };
+            Err(diagnostics)
+        } else {
+            let inverse = inverse_steps.into_iter().flatten().collect();
+            Ok(CommandApplication::new(forward_changes, inverse))
         }
+    }
 
-        if forward_changes.is_empty() {
-            return BatchEvaluation::NoOp;
+    fn validate(&self, context: &Self::Context) -> Vec<Diagnostic> {
+        validate_structure(self, context).diagnostics().to_vec()
+    }
+
+    fn version_conflict_diagnostic(
+        &self,
+        current_version: DocumentVersion,
+        base_version: DocumentVersion,
+        correlation_id: Option<&CorrelationId>,
+    ) -> Diagnostic {
+        let mut diagnostic = Diagnostic::new(
+            DiagnosticId::new(format!(
+                "workflow-version-conflict-{}-{}",
+                self.id().as_str(),
+                base_version.get()
+            )),
+            DiagnosticCode::new("CORE/WORKFLOW_VERSION_CONFLICT"),
+            DiagnosticSeverity::Error,
+            DiagnosticSourceName::new("core"),
+            format!(
+                "workflow version conflict: expected {}, got {}",
+                current_version, base_version
+            ),
+            DiagnosticTarget::new(DiagnosticTargetDomain::new("workflow"))
+                .with_id(self.id().as_str()),
+        );
+        if let Some(correlation_id) = correlation_id.cloned() {
+            diagnostic = diagnostic.with_correlation_id(correlation_id);
         }
-
-        let projected_version = increment_version(current_version);
-        forward_changes.push(WorkflowChange::VersionAdvanced {
-            before: current_version,
-            after: projected_version,
-        });
-
-        let inverse_changes = inverse_steps.into_iter().rev().flatten().collect();
-
-        BatchEvaluation::Applied {
-            workflow: Box::new(working),
-            projected_version,
-            forward_changes,
-            inverse_changes,
-        }
+        diagnostic
     }
 }
 
-enum BatchEvaluation {
-    Rejected {
-        diagnostics: Vec<Diagnostic>,
-    },
-    NoOp,
-    Applied {
-        workflow: Box<Workflow>,
-        projected_version: WorkflowVersion,
-        forward_changes: Vec<WorkflowChange>,
-        inverse_changes: Vec<WorkflowChange>,
-    },
-}
-
-fn apply_command(
+fn apply_workflow_command(
     workflow: &mut Workflow,
     command: &WorkflowCommand,
     forward_changes: &mut Vec<WorkflowChange>,
@@ -668,14 +484,6 @@ fn apply_command(
     }
 }
 
-fn without_version_change(changes: &[WorkflowChange]) -> Vec<WorkflowChange> {
-    changes
-        .iter()
-        .filter(|change| !matches!(change, WorkflowChange::VersionAdvanced { .. }))
-        .cloned()
-        .collect()
-}
-
 fn find_node_index(workflow: &Workflow, node_id: &NodeId) -> Option<usize> {
     workflow
         .nodes()
@@ -763,41 +571,6 @@ fn remove_edges_for_workflow_output(
 
 fn endpoint_references_node(endpoint: &Endpoint, node_id: &NodeId) -> bool {
     matches!(endpoint, Endpoint::NodeSlot { node, .. } if node == node_id)
-}
-
-fn increment_version(version: WorkflowVersion) -> WorkflowVersion {
-    WorkflowVersion::new(version.get() + 1)
-}
-
-fn history_entry_id(batch_id: &str) -> HistoryEntryId {
-    HistoryEntryId::new(format!("history:{batch_id}"))
-}
-
-fn version_conflict_diagnostic(
-    workflow_id: &str,
-    current_version: WorkflowVersion,
-    batch_version: WorkflowVersion,
-    correlation_id: Option<&CorrelationId>,
-) -> Diagnostic {
-    let mut diagnostic = Diagnostic::new(
-        DiagnosticId::new(format!(
-            "workflow-version-conflict-{}-{}",
-            workflow_id,
-            batch_version.get()
-        )),
-        DiagnosticCode::new("CORE/WORKFLOW_VERSION_CONFLICT"),
-        DiagnosticSeverity::Error,
-        DiagnosticSourceName::new("core"),
-        format!(
-            "workflow version conflict: expected {}, got {}",
-            current_version, batch_version
-        ),
-        DiagnosticTarget::new(DiagnosticTargetDomain::new("workflow")).with_id(workflow_id),
-    );
-    if let Some(correlation_id) = correlation_id.cloned() {
-        diagnostic = diagnostic.with_correlation_id(correlation_id);
-    }
-    diagnostic
 }
 
 fn node_missing_diagnostic(

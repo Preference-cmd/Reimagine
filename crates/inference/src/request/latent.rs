@@ -7,7 +7,7 @@ use crate::latent_space::{
     LatentSpaceError, LatentSpaceMetadata, validate_pixel_dimensions_against,
 };
 use reimagine_core::diagnostic::CorrelationId;
-use reimagine_core::model::{NodeId, RunId, WorkflowId, WorkflowVersion};
+use reimagine_core::model::{DocumentVersion, NodeId, RunId, WorkflowId};
 
 /// `latent.create_empty` request.
 #[derive(Debug, Clone)]
@@ -18,7 +18,7 @@ pub struct CreateEmptyLatentRequest {
     latent_space: LatentSpaceMetadata,
     run_id: RunId,
     workflow_id: WorkflowId,
-    workflow_version: WorkflowVersion,
+    workflow_version: DocumentVersion,
     correlation_id: Option<CorrelationId>,
     node_id: NodeId,
     backend_selection: BackendSelectionOverlay,
@@ -31,7 +31,7 @@ impl CreateEmptyLatentRequest {
         batch_size: u32,
         run_id: RunId,
         workflow_id: WorkflowId,
-        workflow_version: WorkflowVersion,
+        workflow_version: DocumentVersion,
         node_id: NodeId,
     ) -> Self {
         Self {
@@ -87,7 +87,7 @@ impl CreateEmptyLatentRequest {
         &self.workflow_id
     }
 
-    pub fn workflow_version(&self) -> WorkflowVersion {
+    pub fn workflow_version(&self) -> DocumentVersion {
         self.workflow_version
     }
 
@@ -171,7 +171,7 @@ pub struct LatentDecodeRequest {
     latent: RuntimeLatent,
     run_id: RunId,
     workflow_id: WorkflowId,
-    workflow_version: WorkflowVersion,
+    workflow_version: DocumentVersion,
     correlation_id: Option<CorrelationId>,
     node_id: NodeId,
     backend_selection: BackendSelectionOverlay,
@@ -183,7 +183,7 @@ impl LatentDecodeRequest {
         latent: RuntimeLatent,
         run_id: RunId,
         workflow_id: WorkflowId,
-        workflow_version: WorkflowVersion,
+        workflow_version: DocumentVersion,
         node_id: NodeId,
     ) -> Self {
         Self {
@@ -241,7 +241,7 @@ impl LatentDecodeRequest {
         &self.workflow_id
     }
 
-    pub fn workflow_version(&self) -> WorkflowVersion {
+    pub fn workflow_version(&self) -> DocumentVersion {
         self.workflow_version
     }
 
@@ -283,7 +283,7 @@ mod tests {
     use super::*;
     use crate::TensorLayout;
     use crate::latent_space::LatentSpaceMetadata;
-    use reimagine_core::model::{NodeId, RunId, TensorDType, WorkflowId, WorkflowVersion};
+    use reimagine_core::model::{DocumentVersion, NodeId, RunId, TensorDType, WorkflowId};
 
     fn request() -> CreateEmptyLatentRequest {
         CreateEmptyLatentRequest::new(
@@ -292,7 +292,7 @@ mod tests {
             1,
             RunId::new("run-1"),
             WorkflowId::new("wf-1"),
-            WorkflowVersion::new(1),
+            DocumentVersion::new(1),
             NodeId::new("node-1"),
         )
     }
@@ -342,7 +342,7 @@ mod tests {
             2,
             RunId::new("run-1"),
             WorkflowId::new("wf-1"),
-            WorkflowVersion::new(1),
+            DocumentVersion::new(1),
             NodeId::new("node-1"),
         )
         .with_latent_space(custom);
@@ -363,7 +363,7 @@ mod tests {
             1,
             RunId::new("run-1"),
             WorkflowId::new("wf-1"),
-            WorkflowVersion::new(1),
+            DocumentVersion::new(1),
             NodeId::new("node-1"),
         );
 
@@ -439,7 +439,7 @@ mod tests {
             sampled,
             RunId::new("run-1"),
             WorkflowId::new("wf-1"),
-            WorkflowVersion::new(1),
+            DocumentVersion::new(1),
             NodeId::new("node-1"),
         );
         assert!(req.validate().is_ok());
@@ -462,7 +462,7 @@ mod tests {
             empty,
             RunId::new("run-1"),
             WorkflowId::new("wf-1"),
-            WorkflowVersion::new(1),
+            DocumentVersion::new(1),
             NodeId::new("node-1"),
         );
         let err = req.validate().unwrap_err();

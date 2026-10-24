@@ -4,13 +4,12 @@
 
 use reimagine_app_host::WorkspaceScope;
 use reimagine_app_host::{AppHostError, WorkspaceHost};
-use reimagine_core::board::{
-    BoardCommand, BoardCommandBatch, BoardCommandResultStatus, BoardItemKind, BoardItemPosition,
-    BoardItemSize,
+use reimagine_core::board::{BoardCommand, BoardItemKind, BoardItemPosition, BoardItemSize};
+use reimagine_core::command::{
+    CommandActor, CommandActorKind, CommandBatch, CommandProvenance, CommandStatus,
 };
-use reimagine_core::command::{CommandActor, CommandActorKind, CommandProvenance};
 use reimagine_core::event::Timestamp;
-use reimagine_core::model::{BoardItemId, BoardVersion, CommandBatchId, ProjectId, WorkflowId};
+use reimagine_core::model::{BoardItemId, CommandBatchId, DocumentVersion, ProjectId, WorkflowId};
 use reimagine_core::project::ProjectMetadata;
 
 fn build_host(scope: &str) -> WorkspaceHost {
@@ -26,8 +25,12 @@ fn metadata(name: &str, updated_at: &str) -> ProjectMetadata {
     )
 }
 
-fn add_item_batch(base_version: BoardVersion, item_id: &str, label: &str) -> BoardCommandBatch {
-    BoardCommandBatch::new(
+fn add_item_batch(
+    base_version: DocumentVersion,
+    item_id: &str,
+    label: &str,
+) -> CommandBatch<BoardCommand> {
+    CommandBatch::new(
         CommandBatchId::new(format!("batch-{label}")),
         CommandActor::new(CommandActorKind::Human),
         base_version,
@@ -67,7 +70,7 @@ async fn project_creation_persists_project_and_creates_board() {
         .await
         .expect("board loads");
     assert_eq!(board.project_id(), &project_id);
-    assert_eq!(board.version(), BoardVersion::new(0));
+    assert_eq!(board.version(), DocumentVersion::new(0));
     assert!(board.items().is_empty());
 
     let duplicate = host
@@ -155,12 +158,12 @@ async fn board_apply_persists_emits_changed_and_rejects_stale_versions() {
         .board_service()
         .apply_batch(
             &project_id,
-            add_item_batch(BoardVersion::new(0), "item-1", "a"),
+            add_item_batch(DocumentVersion::new(0), "item-1", "a"),
         )
         .await
         .expect("apply succeeds");
-    assert_eq!(result.status(), BoardCommandResultStatus::Applied);
-    assert_eq!(result.board_version(), BoardVersion::new(1));
+    assert_eq!(result.status(), CommandStatus::Applied);
+    assert_eq!(result.version(), DocumentVersion::new(1));
 
     let event = tokio::time::timeout(std::time::Duration::from_secs(5), events.recv())
         .await
@@ -191,11 +194,11 @@ async fn board_apply_persists_emits_changed_and_rejects_stale_versions() {
         .board_service()
         .apply_batch(
             &project_id,
-            add_item_batch(BoardVersion::new(0), "item-2", "b"),
+            add_item_batch(DocumentVersion::new(0), "item-2", "b"),
         )
         .await
         .expect("apply returns a result");
-    assert_eq!(stale.status(), BoardCommandResultStatus::Rejected);
+    assert_eq!(stale.status(), CommandStatus::Rejected);
 
     // Undo restores the empty board, persists it, and re-emits the event.
     let undo = host
@@ -204,7 +207,7 @@ async fn board_apply_persists_emits_changed_and_rejects_stale_versions() {
         .await
         .expect("undo succeeds")
         .expect("history entry exists");
-    assert_eq!(undo.status(), BoardCommandResultStatus::Applied);
+    assert_eq!(undo.status(), CommandStatus::Applied);
     assert!(
         host.board_service()
             .snapshot(&project_id)
@@ -235,7 +238,7 @@ async fn board_apply_persists_emits_changed_and_rejects_stale_versions() {
         .await
         .expect("redo succeeds")
         .expect("history entry exists");
-    assert_eq!(redo.status(), BoardCommandResultStatus::Applied);
+    assert_eq!(redo.status(), CommandStatus::Applied);
     let redo_event = tokio::time::timeout(std::time::Duration::from_secs(5), events.recv())
         .await
         .expect("redo event arrives")
@@ -276,13 +279,13 @@ async fn workflow_noop_does_not_emit_changed_event() {
     let workflow_service = host.workflow_service_for_project(&project_id);
     let workflow_id = workflow_service.register_workflow(reimagine_core::workflow::Workflow::new(
         "workflow-event",
-        reimagine_core::model::WorkflowVersion::new(0),
+        reimagine_core::model::DocumentVersion::new(0),
     ));
     let mut events = host.document_events().subscribe();
     let batch = reimagine_core::command::CommandBatch::new(
         CommandBatchId::new("workflow-event-batch"),
         CommandActor::new(CommandActorKind::Human),
-        reimagine_core::model::WorkflowVersion::new(0),
+        reimagine_core::model::DocumentVersion::new(0),
         CommandProvenance::Direct,
         Timestamp::new("2026-06-12T00:00:00Z"),
         Vec::new(),
@@ -293,7 +296,7 @@ async fn workflow_noop_does_not_emit_changed_event() {
         .expect("workflow apply returns");
     assert_eq!(
         result.status(),
-        reimagine_core::command::CommandResultStatus::NoOp
+        reimagine_core::command::CommandStatus::NoOp
     );
     assert!(
         tokio::time::timeout(std::time::Duration::from_millis(50), events.recv())
@@ -317,7 +320,7 @@ async fn host_project_delete_clears_workflow_registry_for_recreate() {
     let first = host.workflow_service_for_project(&project_id);
     let workflow_id = first.register_workflow(reimagine_core::workflow::Workflow::new(
         "wf-deleted",
-        reimagine_core::model::WorkflowVersion::new(0),
+        reimagine_core::model::DocumentVersion::new(0),
     ));
     assert!(first.contains(&workflow_id));
     host.delete_project(&project_id)

@@ -12,8 +12,8 @@ use std::time::Duration;
 
 use reimagine_core::diagnostic::CorrelationId;
 use reimagine_core::model::{
-    ModelId, ModelRef, ModelRole, ModelSeries, ModelVariant, NodeId, ParamValue, SlotId,
-    TensorDType, TensorShape, WorkflowId, WorkflowVersion,
+    DocumentVersion, ModelId, ModelRef, ModelRole, ModelSeries, ModelVariant, NodeId, ParamValue,
+    SlotId, TensorDType, TensorShape, WorkflowId,
 };
 use reimagine_inference::operation::InferenceCapability;
 use reimagine_inference::{
@@ -123,7 +123,7 @@ fn make_context(
     NodeExecutionContext::new(
         reimagine_core::model::RunId::new("run-scripted"),
         WorkflowId::new("wf-scripted"),
-        WorkflowVersion::new(1),
+        DocumentVersion::new(1),
         Some(CorrelationId::new("corr-scripted")),
         NodeId::new(node_id),
         reimagine_core::model::NodeTypeId::new(type_id),
@@ -188,7 +188,7 @@ fn text_request(node_id: &str) -> TextEncodeRequest {
         ))),
         reimagine_core::model::RunId::new("run-scripted"),
         WorkflowId::new("wf-scripted"),
-        WorkflowVersion::new(1),
+        DocumentVersion::new(1),
         NodeId::new(node_id),
     )
 }

@@ -9,7 +9,7 @@ use std::path::PathBuf;
 
 use crate::BackendSelectionOverlay;
 use reimagine_core::diagnostic::CorrelationId;
-use reimagine_core::model::{NodeId, RunId, WorkflowId, WorkflowVersion};
+use reimagine_core::model::{DocumentVersion, NodeId, RunId, WorkflowId};
 
 /// A workspace-safe image source description.
 ///
@@ -55,7 +55,7 @@ pub struct ImageImportRequest {
     source: ResolvedImageSource,
     run_id: RunId,
     workflow_id: WorkflowId,
-    workflow_version: WorkflowVersion,
+    workflow_version: DocumentVersion,
     correlation_id: Option<CorrelationId>,
     node_id: NodeId,
     backend_selection: BackendSelectionOverlay,
@@ -66,7 +66,7 @@ impl ImageImportRequest {
         source: ResolvedImageSource,
         run_id: RunId,
         workflow_id: WorkflowId,
-        workflow_version: WorkflowVersion,
+        workflow_version: DocumentVersion,
         node_id: NodeId,
     ) -> Self {
         Self {
@@ -97,7 +97,7 @@ impl ImageImportRequest {
         &self.workflow_id
     }
 
-    pub fn workflow_version(&self) -> WorkflowVersion {
+    pub fn workflow_version(&self) -> DocumentVersion {
         self.workflow_version
     }
 
@@ -151,7 +151,7 @@ mod tests {
             src,
             RunId::new("run-1"),
             WorkflowId::new("wf-1"),
-            WorkflowVersion::new(1),
+            DocumentVersion::new(1),
             NodeId::new("node-1"),
         );
         assert_eq!(

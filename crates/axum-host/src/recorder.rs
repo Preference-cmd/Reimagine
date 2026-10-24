@@ -74,14 +74,14 @@ impl RunEventSink for RunEventRecorder {
 mod tests {
     use super::*;
     use reimagine_core::event::RunEventKind;
-    use reimagine_core::model::{WorkflowId, WorkflowVersion};
+    use reimagine_core::model::{DocumentVersion, WorkflowId};
 
     fn sample_event(run_id: &RunId, kind: RunEventKind) -> RunEvent {
         RunEvent::new(
             format!("evt-{}", kind_label(kind)),
             run_id.clone(),
             WorkflowId::new("wf"),
-            WorkflowVersion::new(1),
+            DocumentVersion::new(1),
             kind,
             reimagine_core::event::Timestamp::new("2026-06-13T00:00:00Z"),
         )

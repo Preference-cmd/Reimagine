@@ -10,6 +10,12 @@ both check it.
 
 ## [Unreleased]
 
+### Changed
+
+- Board command results (`preview_board_commands`, `apply_board_commands`,
+  `undo_board`, `redo_board`) no longer end their `changes` list with a
+  `version_advanced` entry; the new version is in `boardVersion`.
+
 ### Removed
 
 - The deprecated in-process Candle backend: the `reimagine-inference-candle`

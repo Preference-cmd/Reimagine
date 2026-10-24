@@ -447,7 +447,7 @@ mod tests {
 
     #[test]
     fn image_import_decodes_png_into_stored_rgb_payload() {
-        use reimagine_core::model::{NodeId, RunId, WorkflowId, WorkflowVersion};
+        use reimagine_core::model::{DocumentVersion, NodeId, RunId, WorkflowId};
         use reimagine_inference::ResolvedImageSource;
 
         let backend = BurnBackend::new(crate::config::BurnBackendConfig::new("/models", "/output"))
@@ -467,7 +467,7 @@ mod tests {
             ResolvedImageSource::new(png_path, "image/png", Some("input.png".to_owned())),
             RunId::new("run-import"),
             WorkflowId::new("wf-import"),
-            WorkflowVersion::new(1),
+            DocumentVersion::new(1),
             NodeId::new("node-import"),
         );
 
@@ -504,7 +504,7 @@ mod tests {
 
     #[test]
     fn image_import_rejects_non_image_media_type() {
-        use reimagine_core::model::{NodeId, RunId, WorkflowId, WorkflowVersion};
+        use reimagine_core::model::{DocumentVersion, NodeId, RunId, WorkflowId};
         use reimagine_inference::ResolvedImageSource;
 
         let backend = BurnBackend::new(crate::config::BurnBackendConfig::new("/models", "/output"))
@@ -514,7 +514,7 @@ mod tests {
             ResolvedImageSource::new("/tmp/whatever.txt", "text/plain", None),
             RunId::new("run-import"),
             WorkflowId::new("wf-import"),
-            WorkflowVersion::new(1),
+            DocumentVersion::new(1),
             NodeId::new("node-import"),
         );
 

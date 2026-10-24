@@ -219,7 +219,7 @@ mod tests {
     };
     use reimagine_core::event::Timestamp;
     use reimagine_core::model::{
-        ModelId, ParamValue, RunId, SlotId, TensorDType, TensorShape, WorkflowId, WorkflowVersion,
+        DocumentVersion, ModelId, ParamValue, RunId, SlotId, TensorDType, TensorShape, WorkflowId,
     };
 
     use super::{required_clip_input, required_u32_param, run_output};
@@ -232,7 +232,7 @@ mod tests {
         NodeExecutionContext::new(
             RunId::new("run"),
             WorkflowId::new("workflow"),
-            WorkflowVersion::from(1_u64),
+            DocumentVersion::from(1_u64),
             None,
             "node-1".into(),
             "builtin.test".into(),

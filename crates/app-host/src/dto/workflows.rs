@@ -1,7 +1,7 @@
 //! Workflow request/response DTOs.
 
 use reimagine_core::model::RunId;
-use reimagine_core::model::{NodeId, WorkflowId, WorkflowVersion};
+use reimagine_core::model::{DocumentVersion, NodeId, WorkflowId};
 use reimagine_core::readiness::{RunTarget, RunTargetSelection};
 use serde::{Deserialize, Serialize};
 
@@ -142,7 +142,7 @@ pub enum RunWorkflowResponse {
     Started {
         run_id: RunId,
         workflow_id: WorkflowId,
-        workflow_version: WorkflowVersion,
+        workflow_version: DocumentVersion,
         initial_snapshot: Box<RunSnapshotDto>,
         diagnostics: Vec<DiagnosticDto>,
     },

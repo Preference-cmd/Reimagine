@@ -5,14 +5,14 @@ use std::time::UNIX_EPOCH;
 
 use reimagine_config::{AppPaths, atomic_write};
 use reimagine_core::command::{
-    CommandBatch, CommandProvenance, CommandResult, CommandResultStatus,
+    CommandBatch, CommandProvenance, CommandResult, CommandStatus, WorkflowChange, WorkflowCommand,
 };
 use reimagine_core::diagnostic::{
     Diagnostic, DiagnosticCode, DiagnosticSeverity, DiagnosticSourceName, DiagnosticTarget,
     DiagnosticTargetDomain,
 };
-use reimagine_core::model::{DiagnosticId, NodeCatalog, ProjectId, WorkflowId, WorkflowVersion};
-use reimagine_core::session::WorkflowSession;
+use reimagine_core::document::DocumentSession;
+use reimagine_core::model::{DiagnosticId, DocumentVersion, NodeCatalog, ProjectId, WorkflowId};
 use reimagine_core::workflow::Workflow;
 
 use crate::document_events::{DocumentChangedEvent, DocumentEventBus};
@@ -36,7 +36,7 @@ pub struct WorkflowService {
     /// explicit project. All persisted workflow paths resolve under
     /// `projects/{project_id}/workflows/` (AR-08).
     project_id: ProjectId,
-    sessions: RwLock<BTreeMap<WorkflowId, Arc<Mutex<WorkflowSession>>>>,
+    sessions: RwLock<BTreeMap<WorkflowId, Arc<Mutex<DocumentSession<Workflow>>>>>,
     proposals: RwLock<BTreeMap<WorkflowId, WorkflowProposal>>,
     document_events: Arc<DocumentEventBus>,
 }
@@ -111,7 +111,7 @@ impl WorkflowService {
 
     pub fn register_workflow(&self, workflow: Workflow) -> WorkflowId {
         let workflow_id = workflow.id().clone();
-        let session = Arc::new(Mutex::new(WorkflowSession::new(workflow)));
+        let session = Arc::new(Mutex::new(DocumentSession::new(workflow)));
         self.sessions
             .write()
             .expect("workflow registry poisoned")
@@ -138,15 +138,15 @@ impl WorkflowService {
     pub fn snapshot(&self, workflow_id: &WorkflowId) -> AppHostResult<Workflow> {
         let session = self.session(workflow_id)?;
         let guard = session.lock().expect("workflow session poisoned");
-        Ok(guard.workflow().clone())
+        Ok(guard.document().clone())
     }
 
     pub fn preview_batch(
         &self,
         workflow_id: &WorkflowId,
-        node_catalog: &impl NodeCatalog,
-        batch: CommandBatch,
-    ) -> AppHostResult<CommandResult> {
+        node_catalog: &(impl NodeCatalog + 'static),
+        batch: CommandBatch<WorkflowCommand>,
+    ) -> AppHostResult<CommandResult<WorkflowChange>> {
         let session = self.session(workflow_id)?;
         let guard = session.lock().expect("workflow session poisoned");
         Ok(guard.preview_batch(node_catalog, batch))
@@ -155,9 +155,9 @@ impl WorkflowService {
     pub fn apply_batch(
         &self,
         workflow_id: &WorkflowId,
-        node_catalog: &impl NodeCatalog,
-        batch: CommandBatch,
-    ) -> AppHostResult<CommandResult> {
+        node_catalog: &(impl NodeCatalog + 'static),
+        batch: CommandBatch<WorkflowCommand>,
+    ) -> AppHostResult<CommandResult<WorkflowChange>> {
         let session = self.session(workflow_id)?;
         let mut guard = session.lock().expect("workflow session poisoned");
         Ok(guard.apply_batch(node_catalog, batch))
@@ -175,17 +175,17 @@ impl WorkflowService {
     pub async fn apply_commands(
         &self,
         workflow_id: &WorkflowId,
-        node_catalog: &impl NodeCatalog,
-        batch: CommandBatch,
-    ) -> AppHostResult<CommandResult> {
+        node_catalog: &(impl NodeCatalog + 'static),
+        batch: CommandBatch<WorkflowCommand>,
+    ) -> AppHostResult<CommandResult<WorkflowChange>> {
         let session = self.session(workflow_id)?;
         let (pre_apply, result) = {
             let mut guard = session.lock().expect("workflow session poisoned");
-            let pre_apply = guard.workflow().clone();
+            let pre_apply = guard.document().clone();
             let result = guard.apply_batch(node_catalog, batch);
             (pre_apply, result)
         };
-        if result.status() != CommandResultStatus::Applied {
+        if result.status() != CommandStatus::Applied {
             return Ok(result);
         }
         let accepted = self.snapshot(workflow_id)?;
@@ -265,7 +265,7 @@ impl WorkflowService {
         {
             return Err(AppHostError::WorkflowVersionConflict {
                 workflow_id,
-                expected: WorkflowVersion::new(current.version().get() + 1),
+                expected: DocumentVersion::new(current.version().get() + 1),
                 actual: workflow.version(),
             });
         }
@@ -383,9 +383,9 @@ impl WorkflowService {
     pub fn apply_pending_proposal(
         &self,
         workflow_id: &WorkflowId,
-        node_catalog: &impl NodeCatalog,
+        node_catalog: &(impl NodeCatalog + 'static),
         approved_by: Option<reimagine_core::command::CommandActor>,
-    ) -> AppHostResult<CommandResult> {
+    ) -> AppHostResult<CommandResult<WorkflowChange>> {
         let proposal = self.get_pending_proposal(workflow_id).ok_or_else(|| {
             AppHostError::NoPendingProposal {
                 workflow_id: workflow_id.clone(),
@@ -416,7 +416,7 @@ impl WorkflowService {
                         .with_id(workflow_id.as_str()),
                 );
                 return Ok(CommandResult::new(
-                    CommandResultStatus::Rejected,
+                    CommandStatus::Rejected,
                     current_version,
                     Vec::new(),
                     vec![diagnostic],
@@ -441,7 +441,7 @@ impl WorkflowService {
         }
 
         let result = self.apply_batch(workflow_id, node_catalog, batch)?;
-        if result.status() != CommandResultStatus::Rejected {
+        if result.status() != CommandStatus::Rejected {
             self.remove_proposal(workflow_id);
         }
         Ok(result)
@@ -452,9 +452,9 @@ impl WorkflowService {
     pub async fn apply_pending_proposal_persisted(
         &self,
         workflow_id: &WorkflowId,
-        node_catalog: &impl NodeCatalog,
+        node_catalog: &(impl NodeCatalog + 'static),
         approved_by: Option<reimagine_core::command::CommandActor>,
-    ) -> AppHostResult<CommandResult> {
+    ) -> AppHostResult<CommandResult<WorkflowChange>> {
         let proposal = self.get_pending_proposal(workflow_id).ok_or_else(|| {
             AppHostError::NoPendingProposal {
                 workflow_id: workflow_id.clone(),
@@ -479,7 +479,7 @@ impl WorkflowService {
                     .with_id(workflow_id.as_str()),
             );
             return Ok(CommandResult::new(
-                CommandResultStatus::Rejected,
+                CommandStatus::Rejected,
                 current_version,
                 Vec::new(),
                 vec![diagnostic],
@@ -503,7 +503,7 @@ impl WorkflowService {
         let result = self
             .apply_commands(workflow_id, node_catalog, batch)
             .await?;
-        if result.status() != CommandResultStatus::Rejected {
+        if result.status() != CommandStatus::Rejected {
             self.remove_proposal(workflow_id);
         }
         Ok(result)
@@ -533,7 +533,10 @@ impl WorkflowService {
             .remove(workflow_id)
     }
 
-    fn session(&self, workflow_id: &WorkflowId) -> AppHostResult<Arc<Mutex<WorkflowSession>>> {
+    fn session(
+        &self,
+        workflow_id: &WorkflowId,
+    ) -> AppHostResult<Arc<Mutex<DocumentSession<Workflow>>>> {
         self.sessions
             .read()
             .expect("workflow registry poisoned")

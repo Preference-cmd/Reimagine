@@ -1,5 +1,5 @@
 use reimagine_config::ConfigError;
-use reimagine_core::model::{ProjectId, RunId, WorkflowId, WorkflowVersion};
+use reimagine_core::model::{DocumentVersion, ProjectId, RunId, WorkflowId};
 use reimagine_runtime::RuntimeServiceError;
 
 use crate::artifact_access::ArtifactAccessError;
@@ -29,8 +29,8 @@ pub enum AppHostError {
     },
     ProposalStale {
         workflow_id: WorkflowId,
-        proposal_base_version: WorkflowVersion,
-        current_version: WorkflowVersion,
+        proposal_base_version: DocumentVersion,
+        current_version: DocumentVersion,
     },
     UnknownRun {
         run_id: RunId,
@@ -40,8 +40,8 @@ pub enum AppHostError {
     },
     WorkflowVersionConflict {
         workflow_id: WorkflowId,
-        expected: WorkflowVersion,
-        actual: WorkflowVersion,
+        expected: DocumentVersion,
+        actual: DocumentVersion,
     },
     /// The workflow commands applied in memory but their atomic
     /// persistence to `projects/{project_id}/workflows/` failed (AR-08).

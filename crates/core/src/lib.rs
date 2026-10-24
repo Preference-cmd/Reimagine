@@ -17,13 +17,12 @@
 pub mod board;
 pub mod command;
 pub mod diagnostic;
+pub mod document;
 pub mod event;
 pub mod execution_plan;
-pub mod history;
 pub mod model;
 pub mod project;
 pub mod readiness;
-pub mod session;
 pub mod task;
 pub mod validation;
 pub mod workflow;

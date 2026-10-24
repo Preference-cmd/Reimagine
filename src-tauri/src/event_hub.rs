@@ -139,14 +139,14 @@ impl From<&RunEvent> for RunEventPayload {
 mod tests {
     use super::*;
     use reimagine_core::event::{RunEventKind, Timestamp};
-    use reimagine_core::model::{RunId, WorkflowId, WorkflowVersion};
+    use reimagine_core::model::{DocumentVersion, RunId, WorkflowId};
 
     fn make_event(run_id: &RunId, kind: RunEventKind) -> RunEvent {
         RunEvent::new(
             format!("evt-{}-{:?}", run_id, kind),
             run_id.clone(),
             WorkflowId::new("wf-test"),
-            WorkflowVersion::new(1),
+            DocumentVersion::new(1),
             kind,
             Timestamp::new("2026-07-04T00:00:00Z"),
         )

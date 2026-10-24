@@ -110,7 +110,7 @@ mod tests {
                 "evt-1",
                 reimagine_core::model::RunId::new("run-warmup"),
                 reimagine_core::model::WorkflowId::new("wf-warmup"),
-                reimagine_core::model::WorkflowVersion::new(1),
+                reimagine_core::model::DocumentVersion::new(1),
                 reimagine_core::event::RunEventKind::RunQueued,
                 reimagine_core::event::Timestamp::new("2026-06-13T00:00:00Z"),
             ),

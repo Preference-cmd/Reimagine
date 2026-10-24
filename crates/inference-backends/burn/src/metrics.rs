@@ -109,7 +109,7 @@ impl BurnBackend {
 mod tests {
     use super::{BurnPerformanceScenario, burn_performance_scenarios};
 
-    use reimagine_core::model::{NodeId, RunId, WorkflowId, WorkflowVersion};
+    use reimagine_core::model::{DocumentVersion, NodeId, RunId, WorkflowId};
     use reimagine_inference::{CreateEmptyLatentRequest, InferenceBackend};
 
     use crate::{BurnBackend, BurnBackendConfig};
@@ -210,7 +210,7 @@ mod tests {
                 1,
                 RunId::new("run-metrics"),
                 WorkflowId::new("workflow-metrics"),
-                WorkflowVersion::new(1),
+                DocumentVersion::new(1),
                 NodeId::new("latent-metrics"),
             ))
             .await

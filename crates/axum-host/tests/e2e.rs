@@ -22,8 +22,8 @@ use reimagine_app_host::{BackendInstance, BackendSelection, ModelService, Worksp
 use reimagine_config::{AppConfig, AppPaths};
 use reimagine_core::model::{ArtifactRef, SlotId};
 use reimagine_core::model::{
-    ModelId, ModelRef, ModelRole, ModelSeries, ModelVariant, NodeId, NodeTypeId, ParamValue,
-    WorkflowId, WorkflowVersion,
+    DocumentVersion, ModelId, ModelRef, ModelRole, ModelSeries, ModelVariant, NodeId, NodeTypeId,
+    ParamValue, WorkflowId,
 };
 use reimagine_core::readiness::{
     ExecutionNode, ExecutionPlan, ExecutionStage, RunTarget, RunTargetSelection,
@@ -115,7 +115,7 @@ fn model_ref_for(model_id: &ModelId) -> ModelRef {
 }
 
 fn build_workflow(model_id: &ModelId) -> Workflow {
-    Workflow::new(WORKFLOW_ID, WorkflowVersion::new(1)).with_node(
+    Workflow::new(WORKFLOW_ID, DocumentVersion::new(1)).with_node(
         WorkflowNode::new("loader", BUILTIN_CHECKPOINT_LOADER)
             .with_param("checkpoint", ParamValue::ModelRef(model_ref_for(model_id))),
     )
@@ -124,7 +124,7 @@ fn build_workflow(model_id: &ModelId) -> Workflow {
 fn one_node_plan(type_id: &str, node_id: &str) -> ExecutionPlan {
     ExecutionPlan::new(
         WorkflowId::new("workflow-artifact-test"),
-        WorkflowVersion::new(1),
+        DocumentVersion::new(1),
         RunTargetSelection::AllDefaultTargets,
         vec![RunTarget::Node {
             node_id: NodeId::new(node_id),

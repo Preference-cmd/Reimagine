@@ -1,5 +1,6 @@
 //! Canonical workflow schema.
 
+mod document;
 mod endpoint;
 mod layout;
 mod metadata;

@@ -18,8 +18,8 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use reimagine_backend_worker_protocol::BackendExecutionError;
 use reimagine_backend_worker_protocol::request_operation;
 use reimagine_core::model::{
-    ModelId, ModelRole, ModelSeries, ModelVariant, NodeId, ParamValue, RunId, WorkflowId,
-    WorkflowVersion,
+    DocumentVersion, ModelId, ModelRole, ModelSeries, ModelVariant, NodeId, ParamValue, RunId,
+    WorkflowId,
 };
 use reimagine_inference::{
     CreateEmptyLatentRequest, DiffusionSampleRequest, ExecutionConditioning, ImageImportRequest,
@@ -178,7 +178,7 @@ fn extract_u32(value: &serde_json::Value, field: &str) -> Result<u32, String> {
 fn request_context(
     payload: &serde_json::Value,
     fallback: u64,
-) -> (RunId, WorkflowId, WorkflowVersion, NodeId) {
+) -> (RunId, WorkflowId, DocumentVersion, NodeId) {
     let run_id = payload
         .get("run_id")
         .and_then(serde_json::Value::as_str)
@@ -198,7 +198,7 @@ fn request_context(
     (
         RunId::new(run_id),
         WorkflowId::new(workflow_id),
-        WorkflowVersion::new(workflow_version),
+        DocumentVersion::new(workflow_version),
         NodeId::new(node_id),
     )
 }

@@ -1,5 +1,7 @@
-use reimagine_core::command::{CommandActor, CommandBatch, CommandResult};
-use reimagine_core::model::{ProposalId, WorkflowId, WorkflowVersion};
+use reimagine_core::command::{
+    CommandActor, CommandBatch, CommandResult, WorkflowChange, WorkflowCommand,
+};
+use reimagine_core::model::{DocumentVersion, ProposalId, WorkflowId};
 
 /// Status of a workflow proposal.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
@@ -21,8 +23,8 @@ pub enum ProposalStatus {
 pub struct ProposalReceipt {
     proposal_id: ProposalId,
     workflow_id: WorkflowId,
-    base_version: WorkflowVersion,
-    preview_result: CommandResult,
+    base_version: DocumentVersion,
+    preview_result: CommandResult<WorkflowChange>,
     status: ProposalStatus,
     effective: bool,
 }
@@ -31,8 +33,8 @@ impl ProposalReceipt {
     pub fn new(
         proposal_id: ProposalId,
         workflow_id: WorkflowId,
-        base_version: WorkflowVersion,
-        preview_result: CommandResult,
+        base_version: DocumentVersion,
+        preview_result: CommandResult<WorkflowChange>,
     ) -> Self {
         Self {
             proposal_id,
@@ -52,11 +54,11 @@ impl ProposalReceipt {
         &self.workflow_id
     }
 
-    pub fn base_version(&self) -> WorkflowVersion {
+    pub fn base_version(&self) -> DocumentVersion {
         self.base_version
     }
 
-    pub fn preview_result(&self) -> &CommandResult {
+    pub fn preview_result(&self) -> &CommandResult<WorkflowChange> {
         &self.preview_result
     }
 
@@ -79,10 +81,10 @@ impl ProposalReceipt {
 pub struct WorkflowProposal {
     proposal_id: ProposalId,
     workflow_id: WorkflowId,
-    base_version: WorkflowVersion,
+    base_version: DocumentVersion,
     proposed_by: CommandActor,
-    command_batch: CommandBatch,
-    preview_result: CommandResult,
+    command_batch: CommandBatch<WorkflowCommand>,
+    preview_result: CommandResult<WorkflowChange>,
     created_at: String,
     status: ProposalStatus,
 }
@@ -91,10 +93,10 @@ impl WorkflowProposal {
     pub fn new(
         proposal_id: ProposalId,
         workflow_id: WorkflowId,
-        base_version: WorkflowVersion,
+        base_version: DocumentVersion,
         proposed_by: CommandActor,
-        command_batch: CommandBatch,
-        preview_result: CommandResult,
+        command_batch: CommandBatch<WorkflowCommand>,
+        preview_result: CommandResult<WorkflowChange>,
         created_at: impl Into<String>,
     ) -> Self {
         Self {
@@ -117,7 +119,7 @@ impl WorkflowProposal {
         &self.workflow_id
     }
 
-    pub fn base_version(&self) -> WorkflowVersion {
+    pub fn base_version(&self) -> DocumentVersion {
         self.base_version
     }
 
@@ -127,11 +129,11 @@ impl WorkflowProposal {
         &self.proposed_by
     }
 
-    pub fn command_batch(&self) -> &CommandBatch {
+    pub fn command_batch(&self) -> &CommandBatch<WorkflowCommand> {
         &self.command_batch
     }
 
-    pub fn preview_result(&self) -> &CommandResult {
+    pub fn preview_result(&self) -> &CommandResult<WorkflowChange> {
         &self.preview_result
     }
 

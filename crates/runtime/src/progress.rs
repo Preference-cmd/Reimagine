@@ -2,7 +2,7 @@ use std::sync::{Arc, Mutex};
 
 use reimagine_core::diagnostic::CorrelationId;
 use reimagine_core::event::{RunEvent, RunEventId, RunEventKind};
-use reimagine_core::model::{NodeId, RunId, WorkflowId, WorkflowVersion};
+use reimagine_core::model::{DocumentVersion, NodeId, RunId, WorkflowId};
 use reimagine_core::task::{Progress, ProgressSink};
 
 use crate::clock::Clock;
@@ -11,7 +11,7 @@ use crate::events::RunEventSink;
 pub(crate) struct RuntimeInferenceProgressSink {
     run_id: RunId,
     workflow_id: WorkflowId,
-    workflow_version: WorkflowVersion,
+    workflow_version: DocumentVersion,
     node_id: NodeId,
     correlation_id: Option<CorrelationId>,
     sink: Arc<dyn RunEventSink>,
@@ -28,7 +28,7 @@ impl RuntimeInferenceProgressSink {
     pub(crate) fn new(
         run_id: RunId,
         workflow_id: WorkflowId,
-        workflow_version: WorkflowVersion,
+        workflow_version: DocumentVersion,
         node_id: NodeId,
         correlation_id: Option<CorrelationId>,
         sink: Arc<dyn RunEventSink>,
@@ -87,7 +87,7 @@ mod tests {
     use std::sync::{Arc, Mutex};
 
     use reimagine_core::event::RunEvent;
-    use reimagine_core::model::{NodeId, RunId, WorkflowId, WorkflowVersion};
+    use reimagine_core::model::{DocumentVersion, NodeId, RunId, WorkflowId};
     use reimagine_core::task::{Progress, ProgressSink};
 
     use crate::{RunEventSink, RuntimeError, SystemClock, VecRunEventSink};
@@ -100,7 +100,7 @@ mod tests {
         let sink = RuntimeInferenceProgressSink::new(
             RunId::new("run-progress"),
             WorkflowId::new("workflow-progress"),
-            WorkflowVersion::new(1),
+            DocumentVersion::new(1),
             NodeId::new("node-progress"),
             None,
             events.clone(),
@@ -148,7 +148,7 @@ mod tests {
         let sink = RuntimeInferenceProgressSink::new(
             RunId::new("run-progress-retry"),
             WorkflowId::new("workflow-progress-retry"),
-            WorkflowVersion::new(1),
+            DocumentVersion::new(1),
             NodeId::new("node-progress-retry"),
             None,
             events.clone(),

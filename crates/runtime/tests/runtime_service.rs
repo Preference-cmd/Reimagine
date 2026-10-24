@@ -16,8 +16,8 @@ use reimagine_core::diagnostic::{
 };
 use reimagine_core::event::{RunEvent, RunEventKind, Timestamp};
 use reimagine_core::model::{
-    ArtifactRef, DiagnosticId, NodeId, NodeTypeId, ParamValue, SlotId, WorkflowId, WorkflowInputId,
-    WorkflowVersion,
+    ArtifactRef, DiagnosticId, DocumentVersion, NodeId, NodeTypeId, ParamValue, SlotId, WorkflowId,
+    WorkflowInputId,
 };
 use reimagine_core::readiness::{
     ExecutionEdge, ExecutionInputBinding, ExecutionInputSource, ExecutionNode, ExecutionPlan,
@@ -44,7 +44,7 @@ impl Clock for FixedClock {
 fn one_node_plan(type_id: &str, node_id: &str) -> ExecutionPlan {
     ExecutionPlan::new(
         WorkflowId::new("workflow-1"),
-        WorkflowVersion::new(1),
+        DocumentVersion::new(1),
         RunTargetSelection::AllDefaultTargets,
         vec![RunTarget::Node {
             node_id: NodeId::new(node_id),
@@ -366,7 +366,7 @@ fn backend_lifecycle_diagnostic(label: &str) -> Diagnostic {
 fn two_node_same_stage_plan(type_id: &str, left: &str, right: &str) -> ExecutionPlan {
     ExecutionPlan::new(
         WorkflowId::new("workflow-concurrency"),
-        WorkflowVersion::new(1),
+        DocumentVersion::new(1),
         RunTargetSelection::AllDefaultTargets,
         vec![
             RunTarget::Node {
@@ -544,7 +544,7 @@ fn next_stage_waits_for_all_inflight_same_stage_nodes() {
 
         let plan = ExecutionPlan::new(
             WorkflowId::new("workflow-stage-barrier"),
-            WorkflowVersion::new(1),
+            DocumentVersion::new(1),
             RunTargetSelection::AllDefaultTargets,
             vec![RunTarget::Node {
                 node_id: NodeId::new("next"),
@@ -635,7 +635,7 @@ fn stage_failure_stops_further_same_stage_admission() {
 
         let plan = ExecutionPlan::new(
             WorkflowId::new("workflow-fail-fast"),
-            WorkflowVersion::new(1),
+            DocumentVersion::new(1),
             RunTargetSelection::AllDefaultTargets,
             vec![
                 RunTarget::Node {
@@ -746,7 +746,7 @@ fn late_success_output_is_discarded_after_sibling_failure() {
 
         let plan = ExecutionPlan::new(
             WorkflowId::new("workflow-late-success"),
-            WorkflowVersion::new(1),
+            DocumentVersion::new(1),
             RunTargetSelection::AllDefaultTargets,
             vec![RunTarget::Node {
                 node_id: NodeId::new("consumer"),
@@ -1021,7 +1021,7 @@ fn runtime_stages_execute_in_order() {
         // Three stages with one node each; stage 1 must finish before stage 2.
         let plan = ExecutionPlan::new(
             WorkflowId::new("wf"),
-            WorkflowVersion::new(1),
+            DocumentVersion::new(1),
             RunTargetSelection::AllDefaultTargets,
             vec![RunTarget::Node {
                 node_id: NodeId::new("c"),
@@ -1171,7 +1171,7 @@ fn shared_upstream_node_runs_only_once() {
         );
         let plan = ExecutionPlan::new(
             WorkflowId::new("wf"),
-            WorkflowVersion::new(1),
+            DocumentVersion::new(1),
             RunTargetSelection::AllDefaultTargets,
             vec![
                 RunTarget::Node {
@@ -1260,7 +1260,7 @@ fn executor_failure_marks_run_failed_and_skips_downstream() {
         );
         let plan = ExecutionPlan::new(
             WorkflowId::new("wf"),
-            WorkflowVersion::new(1),
+            DocumentVersion::new(1),
             RunTargetSelection::AllDefaultTargets,
             vec![RunTarget::Node {
                 node_id: NodeId::new("c"),
@@ -1386,7 +1386,7 @@ fn cancellation_stops_downstream_and_emits_cancelled_events() {
         );
         let plan = ExecutionPlan::new(
             WorkflowId::new("wf"),
-            WorkflowVersion::new(1),
+            DocumentVersion::new(1),
             RunTargetSelection::AllDefaultTargets,
             vec![RunTarget::Node {
                 node_id: NodeId::new("b"),
@@ -1593,7 +1593,7 @@ fn node_deadline_expiry_fails_node_with_diagnostic_and_run_continues() {
         // instantly. `a` times out; `b` still runs to completion.
         let plan = ExecutionPlan::new(
             WorkflowId::new("workflow-deadline"),
-            WorkflowVersion::new(1),
+            DocumentVersion::new(1),
             RunTargetSelection::AllDefaultTargets,
             vec![
                 RunTarget::Node {
@@ -1694,7 +1694,7 @@ fn stuck_executor_is_aborted_after_deadline_and_stage_continues() {
         // Stage 0 holds the stuck node; stage 1 holds an independent node.
         let plan = ExecutionPlan::new(
             WorkflowId::new("workflow-stuck-timeout"),
-            WorkflowVersion::new(1),
+            DocumentVersion::new(1),
             RunTargetSelection::AllDefaultTargets,
             vec![
                 RunTarget::Node {
@@ -1803,7 +1803,7 @@ fn ready_set_path_respects_node_cancellation() {
         // completes instantly.
         let plan = ExecutionPlan::new(
             WorkflowId::new("workflow-ready-set-cancel"),
-            WorkflowVersion::new(1),
+            DocumentVersion::new(1),
             RunTargetSelection::AllDefaultTargets,
             vec![
                 RunTarget::Node {
@@ -1894,7 +1894,7 @@ fn workflow_input_bindings_read_from_workflow_input_run_inputs() {
         );
         let plan = ExecutionPlan::new(
             WorkflowId::new("wf"),
-            WorkflowVersion::new(1),
+            DocumentVersion::new(1),
             RunTargetSelection::AllDefaultTargets,
             vec![RunTarget::Node {
                 node_id: NodeId::new("encode"),
@@ -1954,7 +1954,7 @@ fn static_param_bindings_read_from_node_param_run_inputs() {
         );
         let plan = ExecutionPlan::new(
             WorkflowId::new("wf"),
-            WorkflowVersion::new(1),
+            DocumentVersion::new(1),
             RunTargetSelection::AllDefaultTargets,
             vec![RunTarget::Node {
                 node_id: NodeId::new("sampler"),
@@ -2253,7 +2253,7 @@ fn empty_plan_is_rejected() {
     let service = RuntimeService::with_defaults(registry, Arc::new(VecRunEventSink::new()));
     let plan = ExecutionPlan::new(
         WorkflowId::new("wf"),
-        WorkflowVersion::new(1),
+        DocumentVersion::new(1),
         RunTargetSelection::AllDefaultTargets,
         Vec::new(),
         Vec::new(),
@@ -2348,7 +2348,7 @@ fn same_stage_siblings_are_skipped_after_a_sibling_fails() {
         );
         let plan = ExecutionPlan::new(
             WorkflowId::new("wf"),
-            WorkflowVersion::new(1),
+            DocumentVersion::new(1),
             RunTargetSelection::AllDefaultTargets,
             vec![RunTarget::Node {
                 node_id: NodeId::new("c"),
@@ -2435,7 +2435,7 @@ fn cancellation_emits_cancelled_for_unvisited_future_stage_nodes() {
         );
         let plan = ExecutionPlan::new(
             WorkflowId::new("wf"),
-            WorkflowVersion::new(1),
+            DocumentVersion::new(1),
             RunTargetSelection::AllDefaultTargets,
             vec![RunTarget::Node {
                 node_id: NodeId::new("c"),
@@ -2568,7 +2568,7 @@ fn artifact_visible_in_snapshot_before_run_completes() {
 
         let plan = ExecutionPlan::new(
             WorkflowId::new("wf-progressive"),
-            WorkflowVersion::new(1),
+            DocumentVersion::new(1),
             RunTargetSelection::AllDefaultTargets,
             vec![RunTarget::Node {
                 node_id: NodeId::new("slow"),
@@ -2693,7 +2693,7 @@ fn terminal_summary_includes_all_artifacts_from_multiple_nodes() {
 
         let plan = ExecutionPlan::new(
             WorkflowId::new("wf-multi-artifact"),
-            WorkflowVersion::new(1),
+            DocumentVersion::new(1),
             RunTargetSelection::AllDefaultTargets,
             vec![RunTarget::Node {
                 node_id: NodeId::new("echo"),
@@ -2801,7 +2801,7 @@ fn failed_run_preserves_previously_recorded_artifacts() {
 
         let plan = ExecutionPlan::new(
             WorkflowId::new("wf-artifact-fail"),
-            WorkflowVersion::new(1),
+            DocumentVersion::new(1),
             RunTargetSelection::AllDefaultTargets,
             vec![RunTarget::Node {
                 node_id: NodeId::new("fail"),
@@ -2895,7 +2895,7 @@ fn cancelled_run_preserves_previously_recorded_artifacts() {
 
         let plan = ExecutionPlan::new(
             WorkflowId::new("wf-artifact-cancel"),
-            WorkflowVersion::new(1),
+            DocumentVersion::new(1),
             RunTargetSelection::AllDefaultTargets,
             vec![RunTarget::Node {
                 node_id: NodeId::new("slow"),
@@ -3212,7 +3212,7 @@ fn runtime_sends_resource_hints_before_each_stage() {
 
         let plan = ExecutionPlan::new(
             WorkflowId::new("workflow-hints"),
-            WorkflowVersion::new(1),
+            DocumentVersion::new(1),
             RunTargetSelection::AllDefaultTargets,
             vec![RunTarget::Node {
                 node_id: NodeId::new("node_a"),
@@ -3317,7 +3317,7 @@ fn single_use_value_with_fan_out_one_is_dropped_after_unique_consumer() {
         );
         let plan = ExecutionPlan::new(
             WorkflowId::new("wf"),
-            WorkflowVersion::new(1),
+            DocumentVersion::new(1),
             RunTargetSelection::AllDefaultTargets,
             vec![RunTarget::Node {
                 node_id: NodeId::new("consumer"),
@@ -3428,7 +3428,7 @@ fn single_use_value_is_dropped_before_later_stage_after_unique_consumer() {
         );
         let plan = ExecutionPlan::new(
             WorkflowId::new("wf"),
-            WorkflowVersion::new(1),
+            DocumentVersion::new(1),
             RunTargetSelection::AllDefaultTargets,
             vec![RunTarget::Node {
                 node_id: NodeId::new("probe"),
@@ -3510,7 +3510,7 @@ fn single_use_value_with_fan_out_zero_is_kept_until_terminal_cleanup() {
         );
         let plan = ExecutionPlan::new(
             WorkflowId::new("wf"),
-            WorkflowVersion::new(1),
+            DocumentVersion::new(1),
             RunTargetSelection::AllDefaultTargets,
             vec![RunTarget::Node {
                 node_id: NodeId::new("producer"),
@@ -3605,7 +3605,7 @@ fn single_use_value_is_dropped_after_consumer_is_cancelled() {
         );
         let plan = ExecutionPlan::new(
             WorkflowId::new("wf"),
-            WorkflowVersion::new(1),
+            DocumentVersion::new(1),
             RunTargetSelection::AllDefaultTargets,
             vec![RunTarget::Node {
                 node_id: NodeId::new("consumer"),
@@ -3732,7 +3732,7 @@ fn single_use_value_with_fan_out_greater_than_one_fails_the_run() {
         );
         let plan = ExecutionPlan::new(
             WorkflowId::new("wf"),
-            WorkflowVersion::new(1),
+            DocumentVersion::new(1),
             RunTargetSelection::AllDefaultTargets,
             vec![RunTarget::Node {
                 node_id: NodeId::new("down_a"),
@@ -3848,7 +3848,7 @@ fn run_scoped_value_is_retained_until_terminal_cleanup() {
         );
         let plan = ExecutionPlan::new(
             WorkflowId::new("wf"),
-            WorkflowVersion::new(1),
+            DocumentVersion::new(1),
             RunTargetSelection::AllDefaultTargets,
             vec![RunTarget::Node {
                 node_id: NodeId::new("consumer"),
@@ -3966,7 +3966,7 @@ fn workspace_scoped_value_does_not_trigger_single_use_lifecycle() {
         );
         let plan = ExecutionPlan::new(
             WorkflowId::new("wf"),
-            WorkflowVersion::new(1),
+            DocumentVersion::new(1),
             RunTargetSelection::AllDefaultTargets,
             vec![RunTarget::Node {
                 node_id: NodeId::new("down_a"),
@@ -4082,7 +4082,7 @@ fn explicit_target_run_uses_active_plan_fan_out_not_workflow_fan_out() {
         );
         let plan = ExecutionPlan::new(
             WorkflowId::new("wf"),
-            WorkflowVersion::new(1),
+            DocumentVersion::new(1),
             RunTargetSelection::ExplicitTargets(vec![RunTarget::Node {
                 node_id: NodeId::new("consumer"),
             }]),
@@ -4312,7 +4312,7 @@ fn stage_scoped_value_is_dropped_when_its_stage_completes() {
 
         let plan = ExecutionPlan::new(
             WorkflowId::new("workflow-stage-scoped"),
-            WorkflowVersion::new(1),
+            DocumentVersion::new(1),
             RunTargetSelection::AllDefaultTargets,
             vec![RunTarget::Node {
                 node_id: NodeId::new("c4"),
@@ -4693,7 +4693,7 @@ fn runtime_rejects_invalid_memory_budget_and_stage_group_concurrency() {
 fn independent_branch_stage_plan(branch_type: &str, fast_type: &str) -> ExecutionPlan {
     ExecutionPlan::new(
         WorkflowId::new("workflow-stage-groups"),
-        WorkflowVersion::new(1),
+        DocumentVersion::new(1),
         RunTargetSelection::AllDefaultTargets,
         vec![
             RunTarget::Node {

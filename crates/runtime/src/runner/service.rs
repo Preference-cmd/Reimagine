@@ -4,7 +4,7 @@ use std::time::Duration;
 
 use reimagine_core::diagnostic::{CorrelationId, Diagnostic};
 use reimagine_core::event::{RunEvent, RunEventId, RunEventKind};
-use reimagine_core::model::{ArtifactId, NodeId, RunId, WorkflowId, WorkflowVersion};
+use reimagine_core::model::{ArtifactId, DocumentVersion, NodeId, RunId, WorkflowId};
 use reimagine_core::readiness::ExecutionPlan;
 use reimagine_inference::{
     BackendInstanceObservation, BackendInstanceRuntimeHooks, BackendInstanceSnapshot,
@@ -195,7 +195,7 @@ pub struct RuntimeService {
 struct LifecycleEvent<'a> {
     run_id: &'a RunId,
     workflow_id: &'a WorkflowId,
-    workflow_version: WorkflowVersion,
+    workflow_version: DocumentVersion,
     kind: RunEventKind,
     node_id: Option<NodeId>,
     diagnostics: &'a [Diagnostic],

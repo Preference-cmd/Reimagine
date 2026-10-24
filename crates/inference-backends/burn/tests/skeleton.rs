@@ -1,6 +1,6 @@
 use std::path::PathBuf;
 
-use reimagine_core::model::{NodeId, RunId, WorkflowId, WorkflowVersion};
+use reimagine_core::model::{DocumentVersion, NodeId, RunId, WorkflowId};
 use reimagine_inference::{
     BackendInstance, BackendInstanceObservation, BackendInstanceStatus, BackendProfileProvider,
     BackendRunLifecycle, BackendRunLifecycleRequest, CreateEmptyLatentRequest, DeviceKind,
@@ -150,7 +150,7 @@ async fn create_empty_latent_succeeds_with_burn_affine_handle() {
         1,
         RunId::new("run-burn"),
         WorkflowId::new("workflow-burn"),
-        WorkflowVersion::new(1),
+        DocumentVersion::new(1),
         NodeId::new("latent-burn"),
     );
 

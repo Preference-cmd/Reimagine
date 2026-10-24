@@ -13,7 +13,7 @@ use std::borrow::Cow;
 use std::path::{Path, PathBuf};
 
 use reimagine_core::model::{
-    ModelId, ModelRole, ModelSeries, ModelVariant, NodeId, RunId, WorkflowId, WorkflowVersion,
+    DocumentVersion, ModelId, ModelRole, ModelSeries, ModelVariant, NodeId, RunId, WorkflowId,
 };
 use reimagine_inference::{
     InferenceBackend, InferenceError, LoadBundleRequest, ModelFormat, ModelSourceKind,
@@ -83,8 +83,8 @@ fn workflow_id() -> WorkflowId {
     WorkflowId::new("wf-diffusers-direct-load")
 }
 
-fn workflow_version() -> WorkflowVersion {
-    WorkflowVersion::new(1)
+fn workflow_version() -> DocumentVersion {
+    DocumentVersion::new(1)
 }
 
 // ---------------------------------------------------------------------------

@@ -48,7 +48,7 @@ pub use boards::{BoardCommandResultDto, BoardSnapshotDto};
 pub use health::HealthResponse;
 pub use nodes::{NodeCatalogResponse, NodeDefDto, ParamSpecDto, SocketSpecDto};
 pub use projects::{ProjectDto, ProjectMetadataInputDto};
-pub use reimagine_core::command::{CommandResult, CommandResultStatus};
+pub use reimagine_core::command::{CommandBatch, CommandResult, CommandStatus};
 pub use runs::{
     DiagnosticDto, NodeStateDto, RunDto, RunEventDto, RunEventsResponse, RunSnapshotDto,
     RunSummaryDto,

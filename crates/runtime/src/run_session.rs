@@ -4,7 +4,7 @@
 use std::collections::HashMap;
 
 use reimagine_core::diagnostic::CorrelationId;
-use reimagine_core::model::{NodeId, RunId, WorkflowId, WorkflowVersion};
+use reimagine_core::model::{DocumentVersion, NodeId, RunId, WorkflowId};
 
 use crate::value_store::RunValueStore;
 use reimagine_core::task::CancelToken;
@@ -19,7 +19,7 @@ use reimagine_core::task::CancelToken;
 pub struct RunSession {
     run_id: RunId,
     workflow_id: WorkflowId,
-    workflow_version: WorkflowVersion,
+    workflow_version: DocumentVersion,
     correlation_id: Option<CorrelationId>,
     values: RunValueStore,
     cancellation: CancelToken,
@@ -30,7 +30,7 @@ impl RunSession {
     pub fn new(
         run_id: RunId,
         workflow_id: WorkflowId,
-        workflow_version: WorkflowVersion,
+        workflow_version: DocumentVersion,
         correlation_id: Option<CorrelationId>,
         cancellation: CancelToken,
     ) -> Self {
@@ -53,7 +53,7 @@ impl RunSession {
         &self.workflow_id
     }
 
-    pub fn workflow_version(&self) -> WorkflowVersion {
+    pub fn workflow_version(&self) -> DocumentVersion {
         self.workflow_version
     }
 

@@ -184,7 +184,7 @@ fn make_context(
     NodeExecutionContext::new(
         reimagine_core::model::RunId::new("run-test"),
         reimagine_core::model::WorkflowId::new("wf-test"),
-        reimagine_core::model::WorkflowVersion::new(1),
+        reimagine_core::model::DocumentVersion::new(1),
         Some(CorrelationId::new("corr-test")),
         reimagine_core::model::NodeId::new(node_id),
         reimagine_core::model::NodeTypeId::new(type_id),
@@ -209,7 +209,7 @@ fn make_context_with_recording(
     let ctx = NodeExecutionContext::new(
         reimagine_core::model::RunId::new("run-test"),
         reimagine_core::model::WorkflowId::new("wf-test"),
-        reimagine_core::model::WorkflowVersion::new(1),
+        reimagine_core::model::DocumentVersion::new(1),
         Some(CorrelationId::new("corr-test")),
         reimagine_core::model::NodeId::new(node_id),
         reimagine_core::model::NodeTypeId::new(type_id),

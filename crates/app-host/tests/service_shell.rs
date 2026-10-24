@@ -4,13 +4,12 @@ use reimagine_app_host::WorkspaceScope;
 use reimagine_app_host::{AppHost, ModelService, WorkflowService, WorkspaceHost};
 use reimagine_config::AppPaths;
 use reimagine_core::command::{
-    CommandActor, CommandActorKind, CommandBatch, CommandProvenance, CommandResultStatus,
-    WorkflowCommand,
+    CommandActor, CommandActorKind, CommandBatch, CommandProvenance, CommandStatus, WorkflowCommand,
 };
 use reimagine_core::event::Timestamp;
 use reimagine_core::model::{
-    CommandBatchId, ModelId, ModelRef, ModelRole, ModelSeries, ModelVariant, NodeCatalog, NodeId,
-    NodeTypeId, ParamValue, ProjectId, SlotId, WorkflowVersion,
+    CommandBatchId, DocumentVersion, ModelId, ModelRef, ModelRole, ModelSeries, ModelVariant,
+    NodeCatalog, NodeId, NodeTypeId, ParamValue, ProjectId, SlotId,
 };
 use reimagine_core::workflow::Workflow;
 use reimagine_model_manager::{
@@ -46,27 +45,27 @@ async fn workflow_service_previews_applies_saves_and_loads_workflow_json() {
     let paths = AppPaths::new(temp_dir("workflow"));
     let service = WorkflowService::new(paths.clone());
     let catalog = BuiltinNodeCatalog::v1();
-    let workflow = Workflow::new("wf-1", WorkflowVersion::new(0));
+    let workflow = Workflow::new("wf-1", DocumentVersion::new(0));
     let workflow_id = service.register_workflow(workflow);
 
-    let batch = add_string_node_batch(WorkflowVersion::new(0), "hello");
+    let batch = add_string_node_batch(DocumentVersion::new(0), "hello");
     let preview = service
         .preview_batch(&workflow_id, &catalog, batch.clone())
         .expect("preview should succeed");
-    assert_eq!(preview.status(), CommandResultStatus::Applied);
-    assert_eq!(preview.workflow_version(), WorkflowVersion::new(1));
+    assert_eq!(preview.status(), CommandStatus::Applied);
+    assert_eq!(preview.version(), DocumentVersion::new(1));
     assert_eq!(
         service.snapshot(&workflow_id).unwrap().version(),
-        WorkflowVersion::new(0)
+        DocumentVersion::new(0)
     );
 
     let apply = service
         .apply_batch(&workflow_id, &catalog, batch)
         .expect("apply should succeed");
-    assert_eq!(apply.status(), CommandResultStatus::Applied);
+    assert_eq!(apply.status(), CommandStatus::Applied);
     assert_eq!(
         service.snapshot(&workflow_id).unwrap().version(),
-        WorkflowVersion::new(1)
+        DocumentVersion::new(1)
     );
 
     let saved_path = service
@@ -87,7 +86,7 @@ async fn workflow_service_previews_applies_saves_and_loads_workflow_json() {
     assert_eq!(loaded_id, workflow_id);
     let loaded = reloaded.snapshot(&workflow_id).unwrap();
     assert_eq!(loaded.nodes().len(), 1);
-    assert_eq!(loaded.version(), WorkflowVersion::new(1));
+    assert_eq!(loaded.version(), DocumentVersion::new(1));
 }
 
 #[tokio::test]
@@ -287,13 +286,13 @@ fn host_neutral_catalog_drives_workflow_validation() {
     );
     let service = workspace.workflow_service().clone();
     let workflow_id =
-        service.register_workflow(Workflow::new("wf-host-catalog", WorkflowVersion::new(0)));
+        service.register_workflow(Workflow::new("wf-host-catalog", DocumentVersion::new(0)));
 
-    let batch = add_string_node_batch(WorkflowVersion::new(0), "hello");
+    let batch = add_string_node_batch(DocumentVersion::new(0), "hello");
     let preview = service
         .preview_batch(&workflow_id, workspace.node_catalog().as_ref(), batch)
         .expect("preview should succeed through host-neutral catalog");
-    assert_eq!(preview.status(), CommandResultStatus::Applied);
+    assert_eq!(preview.status(), CommandStatus::Applied);
 
     // `find_node_def` and `node_catalog().get(...)` must agree: both
     // go through the same catalog.
@@ -311,7 +310,10 @@ fn host_neutral_catalog_drives_workflow_validation() {
     );
 }
 
-fn add_string_node_batch(base_version: WorkflowVersion, value: &str) -> CommandBatch {
+fn add_string_node_batch(
+    base_version: DocumentVersion,
+    value: &str,
+) -> CommandBatch<WorkflowCommand> {
     CommandBatch::new(
         CommandBatchId::new(format!("batch-{base_version}")),
         CommandActor::new(CommandActorKind::Human),
@@ -481,17 +483,17 @@ async fn project_workflow_apply_persists_and_emits_changed_event() {
         .await
         .expect("project creates");
     let service = host.workflow_service_for_project(&project_id);
-    let workflow_id = service.register_workflow(Workflow::new("wf-event", WorkflowVersion::new(0)));
+    let workflow_id = service.register_workflow(Workflow::new("wf-event", DocumentVersion::new(0)));
     let mut events = host.document_events().subscribe();
     let result = service
         .apply_commands(
             &workflow_id,
             host.node_catalog().as_ref(),
-            add_string_node_batch(WorkflowVersion::new(0), "event"),
+            add_string_node_batch(DocumentVersion::new(0), "event"),
         )
         .await
         .expect("workflow apply");
-    assert_eq!(result.status(), CommandResultStatus::Applied);
+    assert_eq!(result.status(), CommandStatus::Applied);
     let event = tokio::time::timeout(std::time::Duration::from_secs(2), events.recv())
         .await
         .expect("workflow event arrives")
@@ -512,11 +514,11 @@ async fn external_workflow_save_rejects_non_monotonic_version() {
     let paths = AppPaths::new(temp_dir("workflow-version-guard"));
     let service = WorkflowService::for_project(paths, ProjectId::new("version-project"));
     service
-        .save_external_workflow(Workflow::new("wf-version", WorkflowVersion::new(1)))
+        .save_external_workflow(Workflow::new("wf-version", DocumentVersion::new(1)))
         .await
         .expect("first external save");
     let result = service
-        .save_external_workflow(Workflow::new("wf-version", WorkflowVersion::new(1)))
+        .save_external_workflow(Workflow::new("wf-version", DocumentVersion::new(1)))
         .await;
     assert!(matches!(
         result,
@@ -528,15 +530,15 @@ async fn apply_commands_persists_accepted_workflow_and_survives_restart() {
     let paths = AppPaths::new(temp_dir("ar08-apply"));
     let service = WorkflowService::new(paths.clone());
     let catalog = BuiltinNodeCatalog::v1();
-    let workflow = Workflow::new("wf-persist", WorkflowVersion::new(0));
+    let workflow = Workflow::new("wf-persist", DocumentVersion::new(0));
     let workflow_id = service.register_workflow(workflow);
 
-    let batch = add_string_node_batch(WorkflowVersion::new(0), "persisted");
+    let batch = add_string_node_batch(DocumentVersion::new(0), "persisted");
     let result = service
         .apply_commands(&workflow_id, &catalog, batch)
         .await
         .expect("apply_commands should succeed");
-    assert_eq!(result.status(), CommandResultStatus::Applied);
+    assert_eq!(result.status(), CommandStatus::Applied);
 
     // The accepted snapshot is on disk under the default project.
     let persisted = paths
@@ -553,7 +555,7 @@ async fn apply_commands_persists_accepted_workflow_and_survives_restart() {
     assert_eq!(loaded, workflow_id);
     let snapshot = reloaded.snapshot(&workflow_id).unwrap();
     assert_eq!(snapshot.nodes().len(), 1);
-    assert_eq!(snapshot.version(), WorkflowVersion::new(1));
+    assert_eq!(snapshot.version(), DocumentVersion::new(1));
 }
 
 #[tokio::test]
@@ -562,7 +564,7 @@ async fn for_project_isolates_cross_project_workflow_paths() {
     let service_a = WorkflowService::for_project(paths.clone(), ProjectId::new("alpha"));
     let service_b = WorkflowService::for_project(paths.clone(), ProjectId::new("beta"));
 
-    let workflow = Workflow::new("wf-cross", WorkflowVersion::new(0));
+    let workflow = Workflow::new("wf-cross", DocumentVersion::new(0));
     let id = service_a.register_workflow(workflow);
     let a_path = service_a.path_for_workflow_id(&id).unwrap();
     let b_path = service_b.path_for_workflow_id(&id).unwrap();

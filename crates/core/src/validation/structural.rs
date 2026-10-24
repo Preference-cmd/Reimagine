@@ -10,19 +10,22 @@ mod kinds;
 use diagnostics::{edge_diagnostic, node_diagnostic, workflow_diagnostic};
 use kinds::param_value_matches_slot;
 
-pub fn validate_structure(workflow: &Workflow, node_catalog: &impl NodeCatalog) -> OperationReport {
+pub fn validate_structure(
+    workflow: &Workflow,
+    node_catalog: &(impl NodeCatalog + ?Sized),
+) -> OperationReport {
     let mut validator = StructuralValidator::new(workflow, node_catalog);
     validator.validate();
     validator.report
 }
 
-struct StructuralValidator<'a, C> {
+struct StructuralValidator<'a, C: ?Sized> {
     workflow: &'a Workflow,
     node_catalog: &'a C,
     report: OperationReport,
 }
 
-impl<'a, C: NodeCatalog> StructuralValidator<'a, C> {
+impl<'a, C: NodeCatalog + ?Sized> StructuralValidator<'a, C> {
     fn new(workflow: &'a Workflow, node_catalog: &'a C) -> Self {
         Self {
             workflow,

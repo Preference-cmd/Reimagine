@@ -8,12 +8,11 @@ use reimagine_app_host::{
     WorkspaceScope,
 };
 use reimagine_core::command::{
-    CommandActor, CommandActorKind, CommandBatch, CommandProvenance, CommandResultStatus,
-    WorkflowCommand,
+    CommandActor, CommandActorKind, CommandBatch, CommandProvenance, CommandStatus, WorkflowCommand,
 };
 use reimagine_core::event::Timestamp;
 use reimagine_core::model::{
-    CommandBatchId, NodeId, NodeTypeId, ParamValue, ProposalId, SlotId, WorkflowId, WorkflowVersion,
+    CommandBatchId, DocumentVersion, NodeId, NodeTypeId, ParamValue, ProposalId, SlotId, WorkflowId,
 };
 use reimagine_core::workflow::{Position, Workflow, WorkflowMetadata};
 use reimagine_nodes::BUILTIN_STRING;
@@ -34,7 +33,7 @@ fn proposer() -> CommandActor {
     CommandActor::new(CommandActorKind::Agent).with_id("session-1")
 }
 
-fn add_node_batch(base_version: WorkflowVersion, node: &str) -> CommandBatch {
+fn add_node_batch(base_version: DocumentVersion, node: &str) -> CommandBatch<WorkflowCommand> {
     CommandBatch::new(
         CommandBatchId::new(format!("batch-{node}")),
         proposer(),
@@ -54,7 +53,7 @@ fn add_node_batch(base_version: WorkflowVersion, node: &str) -> CommandBatch {
 /// Register an empty workflow and store a pending proposal that adds `node`.
 fn propose(host: &WorkspaceHost, workflow: &str, proposal: &str, node: &str) -> WorkflowId {
     let service = host.workflow_service();
-    let workflow_id = service.register_workflow(Workflow::new(workflow, WorkflowVersion::new(0)));
+    let workflow_id = service.register_workflow(Workflow::new(workflow, DocumentVersion::new(0)));
     store(host, &workflow_id, proposal, node);
     workflow_id
 }
@@ -66,7 +65,7 @@ fn store(host: &WorkspaceHost, workflow_id: &WorkflowId, proposal: &str, node: &
     let preview = service
         .preview_batch(workflow_id, host.node_catalog().as_ref(), batch.clone())
         .expect("preview");
-    assert_eq!(preview.status(), CommandResultStatus::Applied);
+    assert_eq!(preview.status(), CommandStatus::Applied);
     service
         .store_proposal(WorkflowProposal::new(
             ProposalId::new(proposal),
@@ -96,7 +95,7 @@ fn stored_proposal_is_pending_listed_and_removable_without_mutation() {
 
     // Storing a proposal never touches the workflow.
     let snapshot = service.snapshot(&workflow_id).expect("snapshot");
-    assert_eq!(snapshot.version(), WorkflowVersion::new(0));
+    assert_eq!(snapshot.version(), DocumentVersion::new(0));
     assert!(snapshot.nodes().is_empty());
 
     let removed = service.remove_proposal(&workflow_id).expect("removed");
@@ -131,11 +130,11 @@ async fn approval_applies_persists_and_clears_the_proposal() {
         )
         .await
         .expect("approve");
-    assert_eq!(result.status(), CommandResultStatus::Applied);
+    assert_eq!(result.status(), CommandStatus::Applied);
     assert!(service.get_pending_proposal(&workflow_id).is_none());
 
     let snapshot = service.snapshot(&workflow_id).expect("snapshot");
-    assert_eq!(snapshot.version(), WorkflowVersion::new(1));
+    assert_eq!(snapshot.version(), DocumentVersion::new(1));
     assert_eq!(snapshot.nodes().len(), 1);
 
     // The accepted workflow is on disk: a fresh load sees the new node.
@@ -144,7 +143,7 @@ async fn approval_applies_persists_and_clears_the_proposal() {
     service.clear();
     service.load_workflow(&workflow_id).await.expect("reload");
     let reloaded = service.snapshot(&workflow_id).expect("reloaded snapshot");
-    assert_eq!(reloaded.version(), WorkflowVersion::new(1));
+    assert_eq!(reloaded.version(), DocumentVersion::new(1));
     assert_eq!(reloaded.nodes().len(), 1);
 }
 
@@ -159,16 +158,16 @@ async fn stale_approval_is_rejected_and_keeps_the_proposal() {
         .apply_batch(
             &workflow_id,
             host.node_catalog().as_ref(),
-            add_node_batch(WorkflowVersion::new(0), "node-direct"),
+            add_node_batch(DocumentVersion::new(0), "node-direct"),
         )
         .expect("direct apply");
-    assert_eq!(direct.status(), CommandResultStatus::Applied);
+    assert_eq!(direct.status(), CommandStatus::Applied);
 
     let result = service
         .apply_pending_proposal_persisted(&workflow_id, host.node_catalog().as_ref(), None)
         .await
         .expect("stale approval returns a result");
-    assert_eq!(result.status(), CommandResultStatus::Rejected);
+    assert_eq!(result.status(), CommandStatus::Rejected);
     assert!(service.get_pending_proposal(&workflow_id).is_some());
     assert_eq!(
         service
@@ -185,7 +184,7 @@ async fn stale_approval_is_rejected_and_keeps_the_proposal() {
 async fn approval_without_a_pending_proposal_fails() {
     let host = build_host("ws-none");
     let service = host.workflow_service();
-    let workflow_id = service.register_workflow(Workflow::new("wf-none", WorkflowVersion::new(0)));
+    let workflow_id = service.register_workflow(Workflow::new("wf-none", DocumentVersion::new(0)));
 
     let error = service
         .apply_pending_proposal_persisted(&workflow_id, host.node_catalog().as_ref(), None)

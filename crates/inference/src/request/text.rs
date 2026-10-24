@@ -6,7 +6,7 @@ use crate::BackendSelectionOverlay;
 use crate::ExecutionValue;
 use crate::RuntimeClipHandle;
 use reimagine_core::diagnostic::CorrelationId;
-use reimagine_core::model::{NodeId, ParamValue, RunId, WorkflowId, WorkflowVersion};
+use reimagine_core::model::{DocumentVersion, NodeId, ParamValue, RunId, WorkflowId};
 
 /// `text.encode` request.
 ///
@@ -21,7 +21,7 @@ pub struct TextEncodeRequest {
     text: Arc<ExecutionValue>,
     run_id: RunId,
     workflow_id: WorkflowId,
-    workflow_version: WorkflowVersion,
+    workflow_version: DocumentVersion,
     correlation_id: Option<CorrelationId>,
     node_id: NodeId,
     backend_selection: BackendSelectionOverlay,
@@ -33,7 +33,7 @@ impl TextEncodeRequest {
         text: Arc<ExecutionValue>,
         run_id: RunId,
         workflow_id: WorkflowId,
-        workflow_version: WorkflowVersion,
+        workflow_version: DocumentVersion,
         node_id: NodeId,
     ) -> Self {
         Self {
@@ -79,7 +79,7 @@ impl TextEncodeRequest {
         &self.workflow_id
     }
 
-    pub fn workflow_version(&self) -> WorkflowVersion {
+    pub fn workflow_version(&self) -> DocumentVersion {
         self.workflow_version
     }
 

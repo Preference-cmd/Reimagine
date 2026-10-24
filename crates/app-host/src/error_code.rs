@@ -97,7 +97,7 @@ pub fn worker_switch_error_details(error: &WorkerSwitchError) -> Option<serde_js
 mod tests {
     use super::*;
     use crate::AppHostError;
-    use reimagine_core::model::{RunId, WorkflowId, WorkflowVersion};
+    use reimagine_core::model::{DocumentVersion, RunId, WorkflowId};
 
     fn workflow_error() -> AppHostError {
         AppHostError::UnknownWorkflow {
@@ -129,8 +129,8 @@ mod tests {
         assert_eq!(
             AppHostError::ProposalStale {
                 workflow_id: WorkflowId::new("wf-1"),
-                proposal_base_version: WorkflowVersion::new(1),
-                current_version: WorkflowVersion::new(2),
+                proposal_base_version: DocumentVersion::new(1),
+                current_version: DocumentVersion::new(2),
             }
             .code(),
             AppHostErrorCode::Conflict
@@ -138,8 +138,8 @@ mod tests {
         assert_eq!(
             AppHostError::WorkflowVersionConflict {
                 workflow_id: WorkflowId::new("wf-1"),
-                expected: WorkflowVersion::new(1),
-                actual: WorkflowVersion::new(2),
+                expected: DocumentVersion::new(1),
+                actual: DocumentVersion::new(2),
             }
             .code(),
             AppHostErrorCode::Conflict

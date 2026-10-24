@@ -348,7 +348,7 @@ fn tokenize_and_capture_metadata(
 mod tests {
     use super::*;
     use crate::config::BurnBackendConfig;
-    use reimagine_core::model::{ModelId, NodeId, RunId, WorkflowId, WorkflowVersion};
+    use reimagine_core::model::{DocumentVersion, ModelId, NodeId, RunId, WorkflowId};
     use reimagine_inference::{Backend, BackendInstance, BackendPayloadKey, RuntimeClipHandle};
     use std::sync::Arc;
 
@@ -366,7 +366,7 @@ mod tests {
             Arc::new(text),
             RunId::new("run-text"),
             WorkflowId::new("wf-text"),
-            WorkflowVersion::new(1),
+            DocumentVersion::new(1),
             NodeId::new("node-text"),
         )
     }

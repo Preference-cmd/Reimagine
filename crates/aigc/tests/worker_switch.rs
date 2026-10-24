@@ -9,7 +9,7 @@ use async_trait::async_trait;
 use reimagine_backend_worker_host::{WorkerProcessState, WorkerRunLeases};
 use reimagine_backend_worker_protocol::WorkerIncarnationId;
 use reimagine_core::model::RunId;
-use reimagine_core::model::{NodeId, TensorDType, TensorShape, WorkflowId, WorkflowVersion};
+use reimagine_core::model::{DocumentVersion, NodeId, TensorDType, TensorShape, WorkflowId};
 use reimagine_inference::{
     Backend, BackendInstance, BackendInstanceDescriptor, BackendPayloadKey, BackendTensorHandle,
     CannedCapabilityResponse, CreateEmptyLatentRequest, CreateEmptyLatentResponse, FakeBackend,
@@ -447,7 +447,7 @@ async fn inference_runtime_routes_atomically_to_the_committed_worker() {
             1,
             RunId::new("route-run"),
             WorkflowId::new("route-workflow"),
-            WorkflowVersion::new(1),
+            DocumentVersion::new(1),
             NodeId::new("route-node"),
         )
     };

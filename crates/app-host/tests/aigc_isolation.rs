@@ -23,7 +23,7 @@ use reimagine_backend_worker_protocol::{
     BackendInstanceId, ProtocolRange, WorkerInstallationId, WorkerInstanceProfile,
 };
 use reimagine_config::{InferenceBackendConfig, WorkerEndpointConfig};
-use reimagine_core::model::{NodeId, ProjectId, SlotId, WorkflowId, WorkflowVersion};
+use reimagine_core::model::{DocumentVersion, NodeId, ProjectId, SlotId, WorkflowId};
 use reimagine_core::readiness::{RunTarget, RunTargetSelection};
 use reimagine_core::workflow::{Workflow, WorkflowNode};
 use reimagine_nodes::BUILTIN_CHECKPOINT_LOADER;
@@ -145,7 +145,7 @@ async fn workspace_builds_and_functions_normally_when_aigc_bootstrap_fails() {
     assert_eq!(board.project_id().as_str(), "default");
 
     let wf_id = WorkflowId::new("test-wf");
-    let initial_wf = Workflow::new(wf_id.as_str(), WorkflowVersion::new(1));
+    let initial_wf = Workflow::new(wf_id.as_str(), DocumentVersion::new(1));
     workspace
         .workflow_service()
         .save_workflow_snapshot(&initial_wf)
@@ -192,7 +192,7 @@ async fn workspace_builds_and_functions_normally_when_aigc_bootstrap_fails() {
 
     // 5. Workflow execution that needs an inference executor is gated
     let wf_with_node_id = WorkflowId::new("wf-with-node");
-    let wf_with_node = Workflow::new(wf_with_node_id.as_str(), WorkflowVersion::new(1))
+    let wf_with_node = Workflow::new(wf_with_node_id.as_str(), DocumentVersion::new(1))
         .with_node(WorkflowNode::new("loader", BUILTIN_CHECKPOINT_LOADER));
     workspace
         .workflow_service()

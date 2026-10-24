@@ -2,8 +2,8 @@ use std::path::PathBuf;
 use std::sync::Arc;
 
 use reimagine_core::model::{
-    ModelId, ModelRole, ModelSeries, ModelVariant, NodeId, ParamValue, RunId, WorkflowId,
-    WorkflowVersion,
+    DocumentVersion, ModelId, ModelRole, ModelSeries, ModelVariant, NodeId, ParamValue, RunId,
+    WorkflowId,
 };
 use reimagine_inference::{
     CreateEmptyLatentRequest, DiffusionSampleRequest, ExecutionValue, ImagePreviewRequest,
@@ -756,8 +756,8 @@ fn workflow_id() -> WorkflowId {
     WorkflowId::new(WORKFLOW_ID)
 }
 
-fn workflow_version() -> WorkflowVersion {
-    WorkflowVersion::new(1)
+fn workflow_version() -> DocumentVersion {
+    DocumentVersion::new(1)
 }
 
 fn split_component_source(

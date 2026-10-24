@@ -123,7 +123,7 @@ impl BackendInstanceObservation for BurnBackendInstanceRuntimeHooks {
 mod tests {
     use crate::config::BurnBackendConfig;
     use crate::profile::{EXTENSION_LABEL, PLUGIN_LABEL};
-    use reimagine_core::model::{NodeId, RunId, WorkflowId, WorkflowVersion};
+    use reimagine_core::model::{DocumentVersion, NodeId, RunId, WorkflowId};
     use reimagine_inference::{
         BackendInstanceObservation, BackendRunLifecycle, BackendRunLifecycleRequest,
         CreateEmptyLatentRequest, InferenceBackend,
@@ -141,7 +141,7 @@ mod tests {
             1,
             RunId::new("run-hooks"),
             WorkflowId::new("wf-hooks"),
-            WorkflowVersion::new(1),
+            DocumentVersion::new(1),
             NodeId::new("node-hooks"),
         )
     }

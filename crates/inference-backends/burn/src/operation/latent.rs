@@ -426,7 +426,7 @@ pub fn execute_latent_encode(
 mod tests {
     use super::*;
     use crate::models::stable_diffusion::sdxl::{BurnLoadedModelBundle, BurnLoadedSdxlBundle};
-    use reimagine_core::model::{NodeId, RunId, WorkflowId, WorkflowVersion};
+    use reimagine_core::model::{DocumentVersion, NodeId, RunId, WorkflowId};
     use reimagine_inference::{
         Backend, BackendPayloadKey, LatentSpaceId, RuntimeVaeHandle, TensorLayout,
     };
@@ -446,7 +446,7 @@ mod tests {
             batch_size,
             RunId::new("run-test"),
             WorkflowId::new("wf-test"),
-            WorkflowVersion::new(1),
+            DocumentVersion::new(1),
             NodeId::new("node-test"),
         )
     }
@@ -581,7 +581,7 @@ mod tests {
             1,
             RunId::new("run-test"),
             WorkflowId::new("wf-test"),
-            WorkflowVersion::new(1),
+            DocumentVersion::new(1),
             NodeId::new("node-test"),
         );
 
@@ -630,7 +630,7 @@ mod tests {
             1,
             RunId::new("run-other"),
             WorkflowId::new("wf-test"),
-            WorkflowVersion::new(1),
+            DocumentVersion::new(1),
             NodeId::new("node-test"),
         );
         execute_latent_create_empty(&backend, second).expect("second");
@@ -671,7 +671,7 @@ mod tests {
             latent,
             RunId::new("run-test"),
             WorkflowId::new("wf-test"),
-            WorkflowVersion::new(1),
+            DocumentVersion::new(1),
             NodeId::new("node-decode"),
         );
 
@@ -723,7 +723,7 @@ mod tests {
             image,
             RunId::new("run-test"),
             WorkflowId::new("wf-test"),
-            WorkflowVersion::new(1),
+            DocumentVersion::new(1),
             NodeId::new("node-encode"),
         )
     }

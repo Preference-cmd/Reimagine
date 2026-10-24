@@ -305,7 +305,7 @@ mod tests {
     use crate::profile::BACKEND_LABEL;
     use crate::store::{BurnConditioningMetadata, BurnConditioningPayload, ClipOutputs};
     use burn_tensor::Tensor;
-    use reimagine_core::model::{ModelId, NodeId, RunId, WorkflowId, WorkflowVersion};
+    use reimagine_core::model::{DocumentVersion, ModelId, NodeId, RunId, WorkflowId};
     use reimagine_inference::{
         Backend, BackendInstance, BackendPayloadKey, ExecutionConditioning, RuntimeClipHandle,
         RuntimeLatent,
@@ -346,7 +346,7 @@ mod tests {
             )),
             RunId::new("run-test"),
             WorkflowId::new("wf-test"),
-            WorkflowVersion::new(1),
+            DocumentVersion::new(1),
             NodeId::new("node-encode"),
         );
         let response =
@@ -361,7 +361,7 @@ mod tests {
             1,
             RunId::new("run-test"),
             WorkflowId::new("wf-test"),
-            WorkflowVersion::new(1),
+            DocumentVersion::new(1),
             NodeId::new("node-latent"),
         );
         crate::operation::latent::execute_latent_create_empty(backend, request)
@@ -394,7 +394,7 @@ mod tests {
             1.0,
             RunId::new("run-test"),
             WorkflowId::new("wf-test"),
-            WorkflowVersion::new(1),
+            DocumentVersion::new(1),
             NodeId::new("node-sample"),
         )
     }
@@ -474,7 +474,7 @@ mod tests {
             1.0,
             RunId::new("run-test"),
             WorkflowId::new("wf-test"),
-            WorkflowVersion::new(1),
+            DocumentVersion::new(1),
             NodeId::new("node-sample"),
         );
 
@@ -530,7 +530,7 @@ mod tests {
             1.0,
             RunId::new("run-test"),
             WorkflowId::new("wf-test"),
-            WorkflowVersion::new(1),
+            DocumentVersion::new(1),
             NodeId::new("node-sample"),
         );
 
@@ -568,7 +568,7 @@ mod tests {
             0.8,
             RunId::new("run-test"),
             WorkflowId::new("wf-test"),
-            WorkflowVersion::new(1),
+            DocumentVersion::new(1),
             NodeId::new("node-sample"),
         );
 
@@ -606,7 +606,7 @@ mod tests {
             1.0,
             RunId::new("run-test"),
             WorkflowId::new("wf-test"),
-            WorkflowVersion::new(1),
+            DocumentVersion::new(1),
             NodeId::new("node-sample"),
         );
 
@@ -738,7 +738,7 @@ mod tests {
             1.0,
             RunId::new("run-test"),
             WorkflowId::new("wf-test"),
-            WorkflowVersion::new(1),
+            DocumentVersion::new(1),
             NodeId::new("node-sample"),
         );
         let resp1 = execute_diffusion_sample(&backend, req1, None).expect("sample 1");
@@ -763,7 +763,7 @@ mod tests {
             1.0,
             RunId::new("run-test-2"),
             WorkflowId::new("wf-test"),
-            WorkflowVersion::new(1),
+            DocumentVersion::new(1),
             NodeId::new("node-sample-2"),
         );
         let resp2 = execute_diffusion_sample(&backend, req2, None).expect("sample 2");

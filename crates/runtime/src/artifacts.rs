@@ -8,7 +8,7 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use async_trait::async_trait;
 use reimagine_core::event::{RunEvent, RunEventId, RunEventKind};
 use reimagine_core::model::{
-    ArtifactId, ArtifactRef, NodeId, RunId, SlotId, WorkflowId, WorkflowVersion,
+    ArtifactId, ArtifactRef, DocumentVersion, NodeId, RunId, SlotId, WorkflowId,
 };
 use reimagine_inference::{ArtifactEventKind, ArtifactPublisher};
 
@@ -92,7 +92,7 @@ pub struct RuntimeNodeArtifactCapability {
     next_event_id: Arc<AtomicU64>,
     run_id: RunId,
     workflow_id: WorkflowId,
-    workflow_version: WorkflowVersion,
+    workflow_version: DocumentVersion,
     cancellation: CancelToken,
     clock: Arc<dyn Clock>,
 }
@@ -102,7 +102,7 @@ impl RuntimeNodeArtifactCapability {
     pub fn new(
         run_id: RunId,
         workflow_id: WorkflowId,
-        workflow_version: WorkflowVersion,
+        workflow_version: DocumentVersion,
         node_id: NodeId,
         store: Arc<tokio::sync::Mutex<ArtifactStore>>,
         sink: Arc<dyn RunEventSink>,

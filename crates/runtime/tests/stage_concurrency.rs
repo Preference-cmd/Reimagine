@@ -24,7 +24,7 @@ use std::time::Duration;
 use async_trait::async_trait;
 use reimagine_core::event::{RunEventKind, Timestamp};
 use reimagine_core::model::{
-    EdgeId, NodeId, NodeTypeId, ParamValue, SlotId, WorkflowId, WorkflowVersion,
+    DocumentVersion, EdgeId, NodeId, NodeTypeId, ParamValue, SlotId, WorkflowId,
 };
 use reimagine_core::readiness::{
     ExecutionEdge, ExecutionInputBinding, ExecutionInputSource, ExecutionNode, ExecutionPlan,
@@ -51,7 +51,7 @@ impl Clock for FixedClock {
 fn independent_nodes_plan(node_ids: &[&str], type_id: &str) -> ExecutionPlan {
     ExecutionPlan::new(
         WorkflowId::new("workflow-concurrency"),
-        WorkflowVersion::new(1),
+        DocumentVersion::new(1),
         RunTargetSelection::AllDefaultTargets,
         node_ids
             .iter()
@@ -419,7 +419,7 @@ fn value_store_concurrent_producers_and_shared_readers_stay_consistent() {
         // consumers, each reading all four producer outputs concurrently.
         let plan = ExecutionPlan::new(
             WorkflowId::new("workflow-store"),
-            WorkflowVersion::new(1),
+            DocumentVersion::new(1),
             RunTargetSelection::AllDefaultTargets,
             vec![
                 RunTarget::Node {
@@ -696,7 +696,7 @@ fn cancel_during_concurrent_execution_cancels_in_flight_without_hang() {
         // `fast_d` wait for the gate then complete.
         let plan = ExecutionPlan::new(
             WorkflowId::new("workflow-cancel"),
-            WorkflowVersion::new(1),
+            DocumentVersion::new(1),
             RunTargetSelection::AllDefaultTargets,
             vec![
                 RunTarget::Node {
@@ -841,7 +841,7 @@ fn deadline_expiry_under_concurrency_fails_only_the_slow_node() {
         // `a` uses the blocking executor; b/c/d use the fast one.
         let plan = ExecutionPlan::new(
             WorkflowId::new("workflow-deadline"),
-            WorkflowVersion::new(1),
+            DocumentVersion::new(1),
             RunTargetSelection::AllDefaultTargets,
             vec![
                 RunTarget::Node {
@@ -955,7 +955,7 @@ fn sibling_failure_under_concurrency_cancels_in_flight_nodes() {
         // failure cancels them mid-flight (not merely skips them).
         let plan = ExecutionPlan::new(
             WorkflowId::new("workflow-fail"),
-            WorkflowVersion::new(1),
+            DocumentVersion::new(1),
             RunTargetSelection::AllDefaultTargets,
             vec![
                 RunTarget::Node {

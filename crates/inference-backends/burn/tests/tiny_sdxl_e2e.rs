@@ -12,8 +12,8 @@ use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
 use reimagine_core::model::{
-    ModelId, ModelRole, ModelSeries, ModelVariant, NodeId, ParamValue, RunId, WorkflowId,
-    WorkflowVersion,
+    DocumentVersion, ModelId, ModelRole, ModelSeries, ModelVariant, NodeId, ParamValue, RunId,
+    WorkflowId,
 };
 use reimagine_inference::{
     CreateEmptyLatentRequest, DiffusionSampleRequest, ExecutionValue, ImageImportRequest,
@@ -691,8 +691,8 @@ pub(crate) fn workflow_id() -> WorkflowId {
     WorkflowId::new(WORKFLOW_ID)
 }
 
-pub(crate) fn workflow_version() -> WorkflowVersion {
-    WorkflowVersion::new(1)
+pub(crate) fn workflow_version() -> DocumentVersion {
+    DocumentVersion::new(1)
 }
 
 pub(crate) fn assert_png_artifact(output_dir: &Path, artifact: &str) {

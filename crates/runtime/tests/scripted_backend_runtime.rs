@@ -21,7 +21,7 @@ use std::time::Duration;
 use async_trait::async_trait;
 use reimagine_core::event::Timestamp;
 use reimagine_core::model::{
-    ModelId, NodeId, NodeTypeId, ParamValue, SlotId, WorkflowId, WorkflowVersion,
+    DocumentVersion, ModelId, NodeId, NodeTypeId, ParamValue, SlotId, WorkflowId,
 };
 use reimagine_core::readiness::{
     ExecutionNode, ExecutionPlan, ExecutionStage, RunTarget, RunTargetSelection,
@@ -89,7 +89,7 @@ impl NodeExecutor for ScriptedTextNode {
 fn n_node_plan(node_ids: &[&str]) -> ExecutionPlan {
     ExecutionPlan::new(
         WorkflowId::new("workflow-scripted"),
-        WorkflowVersion::new(1),
+        DocumentVersion::new(1),
         RunTargetSelection::AllDefaultTargets,
         node_ids
             .iter()

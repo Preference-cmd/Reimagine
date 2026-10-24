@@ -88,7 +88,7 @@ impl PlanConsumerIndex {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use reimagine_core::model::{EdgeId, NodeId, SlotId, WorkflowId, WorkflowVersion};
+    use reimagine_core::model::{DocumentVersion, EdgeId, NodeId, SlotId, WorkflowId};
     use reimagine_core::readiness::{
         ExecutionEdge, ExecutionNode, ExecutionPlan, ExecutionStage, RunTarget, RunTargetSelection,
     };
@@ -115,7 +115,7 @@ mod tests {
     fn plan(nodes: Vec<ExecutionNode>, edges: Vec<ExecutionEdge>) -> ExecutionPlan {
         ExecutionPlan::new(
             WorkflowId::new("wf"),
-            WorkflowVersion::new(1),
+            DocumentVersion::new(1),
             RunTargetSelection::AllDefaultTargets,
             vec![RunTarget::Node {
                 node_id: nodes

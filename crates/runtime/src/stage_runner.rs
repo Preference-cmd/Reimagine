@@ -3,7 +3,7 @@
 use std::sync::Arc;
 
 use reimagine_core::diagnostic::CorrelationId;
-use reimagine_core::model::{RunId, WorkflowId, WorkflowVersion};
+use reimagine_core::model::{DocumentVersion, RunId, WorkflowId};
 use reimagine_core::readiness::ExecutionNode;
 use reimagine_core::task::{CancelToken, ProgressSink};
 use reimagine_inference::{
@@ -74,7 +74,7 @@ pub enum StageNodeResult {
 pub struct StageExecutionContext {
     pub run_id: RunId,
     pub workflow_id: WorkflowId,
-    pub workflow_version: WorkflowVersion,
+    pub workflow_version: DocumentVersion,
     pub correlation_id: Option<CorrelationId>,
     pub sink: Arc<dyn RunEventSink>,
     pub clock: Arc<dyn Clock>,

@@ -1,6 +1,6 @@
 use reimagine_core::model::{
-    ModelId, ModelRef, ModelRole, ModelSeries, ModelVariant, NodeId, NodeTypeId, ParamValue,
-    SlotId, WorkflowId, WorkflowInputId, WorkflowOutputId, WorkflowVersion,
+    DocumentVersion, ModelId, ModelRef, ModelRole, ModelSeries, ModelVariant, NodeId, NodeTypeId,
+    ParamValue, SlotId, WorkflowId, WorkflowInputId, WorkflowOutputId,
 };
 use reimagine_core::workflow::{Endpoint, Workflow};
 
@@ -15,7 +15,7 @@ fn sdxl_base_workflow_example_roundtrips_through_core_schema() {
     assert_eq!(workflow, reparsed);
     assert_eq!(workflow.schema_version().as_str(), "reimagine.workflow.v1");
     assert_eq!(workflow.id(), &WorkflowId::new("workflow_sdxl_base_demo"));
-    assert_eq!(workflow.version(), WorkflowVersion::new(1));
+    assert_eq!(workflow.version(), DocumentVersion::new(1));
     assert_eq!(workflow.nodes().len(), 9);
     assert_eq!(workflow.edges().len(), 11);
 

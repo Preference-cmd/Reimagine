@@ -1,6 +1,5 @@
-use reimagine_core::board::{
-    BoardChange, BoardCommandResult, BoardCommandResultStatus, BoardDocument, BoardItem,
-};
+use reimagine_core::board::{BoardChange, BoardDocument, BoardItem};
+use reimagine_core::command::{CommandResult, CommandStatus};
 use serde::{Deserialize, Serialize};
 
 use super::runs::DiagnosticDto;
@@ -37,16 +36,16 @@ pub struct BoardCommandResultDto {
     pub history_entry_id: Option<String>,
 }
 
-impl From<BoardCommandResult> for BoardCommandResultDto {
-    fn from(result: BoardCommandResult) -> Self {
+impl From<CommandResult<BoardChange>> for BoardCommandResultDto {
+    fn from(result: CommandResult<BoardChange>) -> Self {
         Self {
             status: match result.status() {
-                BoardCommandResultStatus::Applied => "applied",
-                BoardCommandResultStatus::Rejected => "rejected",
-                BoardCommandResultStatus::NoOp => "no_op",
+                CommandStatus::Applied => "applied",
+                CommandStatus::Rejected => "rejected",
+                CommandStatus::NoOp => "no_op",
             }
             .to_owned(),
-            board_version: result.board_version().get(),
+            board_version: result.version().get(),
             changes: result.changes().to_vec(),
             diagnostics: result
                 .diagnostics()

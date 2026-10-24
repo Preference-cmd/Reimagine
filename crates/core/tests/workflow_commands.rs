@@ -1,16 +1,16 @@
 use std::collections::{BTreeMap, HashMap};
 
 use reimagine_core::command::{
-    CommandActor, CommandActorKind, CommandBatch, CommandProvenance, CommandResultStatus,
-    WorkflowChange, WorkflowCommand,
+    CommandActor, CommandActorKind, CommandBatch, CommandProvenance, CommandStatus, WorkflowChange,
+    WorkflowCommand,
 };
 use reimagine_core::diagnostic::CorrelationId;
+use reimagine_core::document::DocumentSession;
 use reimagine_core::event::Timestamp;
 use reimagine_core::model::{
-    CommandBatchId, EdgeId, NodeCatalog, NodeDef, NodeId, NodeTypeId, ParamValue, SlotId, SlotKind,
-    WorkflowInputId, WorkflowOutputId, WorkflowVersion,
+    CommandBatchId, DocumentVersion, EdgeId, NodeCatalog, NodeDef, NodeId, NodeTypeId, ParamValue,
+    SlotId, SlotKind, WorkflowInputId, WorkflowOutputId,
 };
-use reimagine_core::session::WorkflowSession;
 use reimagine_core::workflow::{
     Endpoint, Position, Workflow, WorkflowEdge, WorkflowInputDef, WorkflowInterface,
     WorkflowLayout, WorkflowMetadata, WorkflowNode, WorkflowOutputDef,
@@ -25,7 +25,7 @@ fn preview_batch_returns_changes_without_mutating_session_or_history() {
         CommandActor::new(CommandActorKind::Human)
             .with_id("user-1")
             .with_label("Alice"),
-        WorkflowVersion::new(7),
+        DocumentVersion::new(7),
         CommandProvenance::Direct,
         Timestamp::new("2026-06-09T10:00:00Z"),
         vec![
@@ -52,16 +52,16 @@ fn preview_batch_returns_changes_without_mutating_session_or_history() {
     )
     .with_correlation_id(CorrelationId::new("corr-preview"));
 
-    let session = WorkflowSession::new(workflow.clone());
+    let session = DocumentSession::new(workflow.clone());
 
     let result = session.preview_batch(&catalog, batch);
 
-    assert_eq!(result.status(), CommandResultStatus::Applied);
-    assert_eq!(result.workflow_version(), WorkflowVersion::new(8));
+    assert_eq!(result.status(), CommandStatus::Applied);
+    assert_eq!(result.version(), DocumentVersion::new(8));
     assert_eq!(result.history_entry_id(), None);
     assert!(result.diagnostics().is_empty());
-    assert_eq!(session.workflow(), &workflow);
-    assert_eq!(session.version(), WorkflowVersion::new(7));
+    assert_eq!(session.document(), &workflow);
+    assert_eq!(session.version(), DocumentVersion::new(7));
     assert!(session.history().entries().is_empty());
     assert_eq!(session.history().cursor(), 0);
 
@@ -99,10 +99,6 @@ fn preview_batch_returns_changes_without_mutating_session_or_history() {
                     Endpoint::node_slot(NodeId::new("node_consumer"), SlotId::new("dynamic_value")),
                 ),
             },
-            WorkflowChange::VersionAdvanced {
-                before: WorkflowVersion::new(7),
-                after: WorkflowVersion::new(8),
-            },
         ]
     );
 }
@@ -112,7 +108,7 @@ fn apply_batch_commits_changes_advances_version_and_records_history() {
     let catalog = test_catalog();
     let workflow = workflow_with_nodes();
     let original_layout = workflow.layout().clone();
-    let mut session = WorkflowSession::new(workflow);
+    let mut session = DocumentSession::new(workflow);
 
     let metadata = WorkflowMetadata::new()
         .with_name("Prompt Flow")
@@ -122,7 +118,7 @@ fn apply_batch_commits_changes_advances_version_and_records_history() {
     let batch = CommandBatch::new(
         CommandBatchId::new("batch-apply"),
         CommandActor::new(CommandActorKind::Agent).with_label("planner"),
-        WorkflowVersion::new(2),
+        DocumentVersion::new(2),
         CommandProvenance::AgentProposal {
             proposal_id: reimagine_core::model::ProposalId::new("proposal-1"),
             approved_by: Some(
@@ -154,9 +150,9 @@ fn apply_batch_commits_changes_advances_version_and_records_history() {
 
     let result = session.apply_batch(&catalog, batch.clone());
 
-    assert_eq!(result.status(), CommandResultStatus::Applied);
-    assert_eq!(result.workflow_version(), WorkflowVersion::new(3));
-    assert_eq!(session.version(), WorkflowVersion::new(3));
+    assert_eq!(result.status(), CommandStatus::Applied);
+    assert_eq!(result.version(), DocumentVersion::new(3));
+    assert_eq!(session.version(), DocumentVersion::new(3));
     assert!(result.diagnostics().is_empty());
     assert_eq!(
         result.history_entry_id(),
@@ -168,7 +164,7 @@ fn apply_batch_commits_changes_advances_version_and_records_history() {
     assert_eq!(session.history().cursor(), 1);
 
     let node = session
-        .workflow()
+        .document()
         .nodes()
         .iter()
         .find(|node| node.id() == &NodeId::new("node_consumer"))
@@ -178,10 +174,10 @@ fn apply_batch_commits_changes_advances_version_and_records_history() {
         node.params().get(&SlotId::new("count")),
         Some(&ParamValue::Integer(9))
     );
-    assert_eq!(session.workflow().metadata(), &metadata);
+    assert_eq!(session.document().metadata(), &metadata);
     assert_eq!(
         session
-            .workflow()
+            .document()
             .layout()
             .nodes()
             .get(&NodeId::new("node_consumer")),
@@ -211,19 +207,18 @@ fn apply_batch_commits_changes_advances_version_and_records_history() {
                 before: WorkflowMetadata::new(),
                 after: metadata.clone(),
             },
-            WorkflowChange::VersionAdvanced {
-                before: WorkflowVersion::new(2),
-                after: WorkflowVersion::new(3),
-            },
         ]
     );
 
     let entry = &session.history().entries()[0];
     assert_eq!(entry.command_batch(), &batch);
     assert_eq!(entry.before().layout(), &original_layout);
-    assert_eq!(entry.after(), session.workflow());
+    assert_eq!(entry.after(), session.document());
     assert_eq!(entry.forward_changes(), result.changes());
-    assert_eq!(entry.created_at(), &Timestamp::new("2026-06-09T11:00:00Z"));
+    assert_eq!(
+        entry.command_batch().created_at(),
+        &Timestamp::new("2026-06-09T11:00:00Z")
+    );
 }
 
 #[test]
@@ -231,14 +226,14 @@ fn apply_batch_is_atomic_when_any_command_is_invalid() {
     let catalog = test_catalog();
     let workflow = workflow_with_nodes();
     let snapshot = workflow.clone();
-    let mut session = WorkflowSession::new(workflow);
+    let mut session = DocumentSession::new(workflow);
 
     let result = session.apply_batch(
         &catalog,
         CommandBatch::new(
             CommandBatchId::new("batch-invalid"),
             CommandActor::new(CommandActorKind::Human),
-            WorkflowVersion::new(2),
+            DocumentVersion::new(2),
             CommandProvenance::Direct,
             Timestamp::new("2026-06-09T12:00:00Z"),
             vec![
@@ -256,11 +251,11 @@ fn apply_batch_is_atomic_when_any_command_is_invalid() {
         ),
     );
 
-    assert_eq!(result.status(), CommandResultStatus::Rejected);
+    assert_eq!(result.status(), CommandStatus::Rejected);
     assert!(result.changes().is_empty());
     assert!(result.history_entry_id().is_none());
-    assert_eq!(session.workflow(), &snapshot);
-    assert_eq!(session.version(), WorkflowVersion::new(2));
+    assert_eq!(session.document(), &snapshot);
+    assert_eq!(session.version(), DocumentVersion::new(2));
     assert!(session.history().entries().is_empty());
     assert!(
         result
@@ -275,14 +270,14 @@ fn add_node_duplicate_then_remove_node_self_heal_rejects_without_mutation() {
     let catalog = test_catalog();
     let workflow = workflow_with_nodes();
     let snapshot = workflow.clone();
-    let mut session = WorkflowSession::new(workflow);
+    let mut session = DocumentSession::new(workflow);
 
     let result = session.apply_batch(
         &catalog,
         CommandBatch::new(
             CommandBatchId::new("batch-dup-node"),
             CommandActor::new(CommandActorKind::Human),
-            WorkflowVersion::new(2),
+            DocumentVersion::new(2),
             CommandProvenance::Direct,
             Timestamp::new("2026-06-09T12:15:00Z"),
             vec![
@@ -300,9 +295,9 @@ fn add_node_duplicate_then_remove_node_self_heal_rejects_without_mutation() {
         ),
     );
 
-    assert_eq!(result.status(), CommandResultStatus::Rejected);
+    assert_eq!(result.status(), CommandStatus::Rejected);
     assert!(result.changes().is_empty());
-    assert_eq!(session.workflow(), &snapshot);
+    assert_eq!(session.document(), &snapshot);
     assert!(session.history().entries().is_empty());
     assert!(
         result
@@ -317,14 +312,14 @@ fn connect_duplicate_then_disconnect_self_heal_rejects_without_mutation() {
     let catalog = test_catalog();
     let workflow = workflow_with_static_edge_override();
     let snapshot = workflow.clone();
-    let mut session = WorkflowSession::new(workflow);
+    let mut session = DocumentSession::new(workflow);
 
     let result = session.apply_batch(
         &catalog,
         CommandBatch::new(
             CommandBatchId::new("batch-dup-edge"),
             CommandActor::new(CommandActorKind::Human),
-            WorkflowVersion::new(6),
+            DocumentVersion::new(6),
             CommandProvenance::Direct,
             Timestamp::new("2026-06-09T12:20:00Z"),
             vec![
@@ -340,9 +335,9 @@ fn connect_duplicate_then_disconnect_self_heal_rejects_without_mutation() {
         ),
     );
 
-    assert_eq!(result.status(), CommandResultStatus::Rejected);
+    assert_eq!(result.status(), CommandStatus::Rejected);
     assert!(result.changes().is_empty());
-    assert_eq!(session.workflow(), &snapshot);
+    assert_eq!(session.document(), &snapshot);
     assert!(session.history().entries().is_empty());
     assert!(
         result
@@ -357,14 +352,14 @@ fn apply_batch_rejects_version_conflicts_without_mutation() {
     let catalog = test_catalog();
     let workflow = workflow_with_nodes();
     let snapshot = workflow.clone();
-    let mut session = WorkflowSession::new(workflow);
+    let mut session = DocumentSession::new(workflow);
 
     let result = session.apply_batch(
         &catalog,
         CommandBatch::new(
             CommandBatchId::new("batch-conflict"),
             CommandActor::new(CommandActorKind::Human),
-            WorkflowVersion::new(1),
+            DocumentVersion::new(1),
             CommandProvenance::Direct,
             Timestamp::new("2026-06-09T13:00:00Z"),
             vec![WorkflowCommand::SetNodeLabel {
@@ -374,10 +369,10 @@ fn apply_batch_rejects_version_conflicts_without_mutation() {
         ),
     );
 
-    assert_eq!(result.status(), CommandResultStatus::Rejected);
+    assert_eq!(result.status(), CommandStatus::Rejected);
     assert!(result.changes().is_empty());
-    assert_eq!(session.workflow(), &snapshot);
-    assert_eq!(session.version(), WorkflowVersion::new(2));
+    assert_eq!(session.document(), &snapshot);
+    assert_eq!(session.version(), DocumentVersion::new(2));
     assert!(session.history().entries().is_empty());
     assert!(
         result
@@ -390,14 +385,14 @@ fn apply_batch_rejects_version_conflicts_without_mutation() {
 #[test]
 fn apply_batch_returns_noop_without_history_when_nothing_changes() {
     let catalog = test_catalog();
-    let mut session = WorkflowSession::new(workflow_with_nodes());
+    let mut session = DocumentSession::new(workflow_with_nodes());
 
     let result = session.apply_batch(
         &catalog,
         CommandBatch::new(
             CommandBatchId::new("batch-noop"),
             CommandActor::new(CommandActorKind::System),
-            WorkflowVersion::new(2),
+            DocumentVersion::new(2),
             CommandProvenance::Migration {
                 from_schema_version: "reimagine.workflow.v1".to_owned(),
             },
@@ -415,26 +410,26 @@ fn apply_batch_returns_noop_without_history_when_nothing_changes() {
         ),
     );
 
-    assert_eq!(result.status(), CommandResultStatus::NoOp);
+    assert_eq!(result.status(), CommandStatus::NoOp);
     assert!(result.changes().is_empty());
     assert!(result.diagnostics().is_empty());
-    assert_eq!(result.workflow_version(), WorkflowVersion::new(2));
+    assert_eq!(result.version(), DocumentVersion::new(2));
     assert!(result.history_entry_id().is_none());
     assert!(session.history().entries().is_empty());
-    assert_eq!(session.version(), WorkflowVersion::new(2));
+    assert_eq!(session.version(), DocumentVersion::new(2));
 }
 
 #[test]
 fn move_node_can_add_a_missing_layout_entry() {
     let catalog = test_catalog();
-    let mut session = WorkflowSession::new(workflow_without_consumer_layout());
+    let mut session = DocumentSession::new(workflow_without_consumer_layout());
 
     let result = session.apply_batch(
         &catalog,
         CommandBatch::new(
             CommandBatchId::new("batch-move-without-layout"),
             CommandActor::new(CommandActorKind::Human),
-            WorkflowVersion::new(2),
+            DocumentVersion::new(2),
             CommandProvenance::Direct,
             Timestamp::new("2026-06-09T14:30:00Z"),
             vec![WorkflowCommand::MoveNode {
@@ -444,10 +439,10 @@ fn move_node_can_add_a_missing_layout_entry() {
         ),
     );
 
-    assert_eq!(result.status(), CommandResultStatus::Applied);
+    assert_eq!(result.status(), CommandStatus::Applied);
     assert_eq!(
         session
-            .workflow()
+            .document()
             .layout()
             .nodes()
             .get(&NodeId::new("node_consumer")),
@@ -455,31 +450,25 @@ fn move_node_can_add_a_missing_layout_entry() {
     );
     assert_eq!(
         result.changes(),
-        &[
-            WorkflowChange::NodeMoved {
-                node_id: NodeId::new("node_consumer"),
-                before: None,
-                after: Some(Position::new(222.0, 88.0)),
-            },
-            WorkflowChange::VersionAdvanced {
-                before: WorkflowVersion::new(2),
-                after: WorkflowVersion::new(3),
-            },
-        ]
+        &[WorkflowChange::NodeMoved {
+            node_id: NodeId::new("node_consumer"),
+            before: None,
+            after: Some(Position::new(222.0, 88.0)),
+        },]
     );
 }
 
 #[test]
 fn set_param_updates_static_slot_fallback_even_when_an_edge_currently_overrides_it() {
     let catalog = test_catalog();
-    let mut session = WorkflowSession::new(workflow_with_static_edge_override());
+    let mut session = DocumentSession::new(workflow_with_static_edge_override());
 
     let result = session.apply_batch(
         &catalog,
         CommandBatch::new(
             CommandBatchId::new("batch-static-fallback"),
             CommandActor::new(CommandActorKind::Agent),
-            WorkflowVersion::new(6),
+            DocumentVersion::new(6),
             CommandProvenance::Direct,
             Timestamp::new("2026-06-09T14:45:00Z"),
             vec![WorkflowCommand::SetParam {
@@ -490,12 +479,12 @@ fn set_param_updates_static_slot_fallback_even_when_an_edge_currently_overrides_
         ),
     );
 
-    assert_eq!(result.status(), CommandResultStatus::Applied);
+    assert_eq!(result.status(), CommandStatus::Applied);
     assert_eq!(result.diagnostics(), &[]);
-    assert_eq!(session.workflow().edges().len(), 1);
+    assert_eq!(session.document().edges().len(), 1);
     assert_eq!(
         session
-            .workflow()
+            .document()
             .nodes()
             .iter()
             .find(|node| node.id() == &NodeId::new("node_consumer"))
@@ -504,18 +493,12 @@ fn set_param_updates_static_slot_fallback_even_when_an_edge_currently_overrides_
     );
     assert_eq!(
         result.changes(),
-        &[
-            WorkflowChange::ParamSet {
-                node_id: NodeId::new("node_consumer"),
-                slot_id: SlotId::new("count"),
-                before: Some(ParamValue::Integer(4)),
-                after: ParamValue::Integer(12),
-            },
-            WorkflowChange::VersionAdvanced {
-                before: WorkflowVersion::new(6),
-                after: WorkflowVersion::new(7),
-            },
-        ]
+        &[WorkflowChange::ParamSet {
+            node_id: NodeId::new("node_consumer"),
+            slot_id: SlotId::new("count"),
+            before: Some(ParamValue::Integer(4)),
+            after: ParamValue::Integer(12),
+        },]
     );
 }
 
@@ -523,7 +506,7 @@ fn set_param_updates_static_slot_fallback_even_when_an_edge_currently_overrides_
 fn apply_batch_supports_remove_disconnect_apply_layout_and_remove_param() {
     let catalog = test_catalog();
     let workflow = workflow_with_connected_fallback();
-    let mut session = WorkflowSession::new(workflow);
+    let mut session = DocumentSession::new(workflow);
 
     let new_layout = WorkflowLayout::new()
         .with_node(NodeId::new("node_source"), Position::new(8.0, 9.0))
@@ -534,7 +517,7 @@ fn apply_batch_supports_remove_disconnect_apply_layout_and_remove_param() {
         CommandBatch::new(
             CommandBatchId::new("batch-layout"),
             CommandActor::new(CommandActorKind::Importer).with_label("loader"),
-            WorkflowVersion::new(4),
+            DocumentVersion::new(4),
             CommandProvenance::Import {
                 format: "json".to_owned(),
                 source: Some("fixtures/connected.json".to_owned()),
@@ -558,12 +541,12 @@ fn apply_batch_supports_remove_disconnect_apply_layout_and_remove_param() {
         ),
     );
 
-    assert_eq!(result.status(), CommandResultStatus::Applied);
-    assert_eq!(result.workflow_version(), WorkflowVersion::new(5));
-    assert_eq!(session.workflow().nodes().len(), 1);
-    assert_eq!(session.workflow().edges().len(), 0);
+    assert_eq!(result.status(), CommandStatus::Applied);
+    assert_eq!(result.version(), DocumentVersion::new(5));
+    assert_eq!(session.document().nodes().len(), 1);
+    assert_eq!(session.document().edges().len(), 0);
     assert_eq!(
-        session.workflow().layout(),
+        session.document().layout(),
         &WorkflowLayout::new().with_node(NodeId::new("node_consumer"), Position::new(20.0, 30.0))
     );
     assert_eq!(
@@ -596,10 +579,6 @@ fn apply_batch_supports_remove_disconnect_apply_layout_and_remove_param() {
                 removed_edges: vec![],
                 removed_layout: Some(Position::new(8.0, 9.0)),
             },
-            WorkflowChange::VersionAdvanced {
-                before: WorkflowVersion::new(4),
-                after: WorkflowVersion::new(5),
-            },
         ]
     );
 }
@@ -607,14 +586,14 @@ fn apply_batch_supports_remove_disconnect_apply_layout_and_remove_param() {
 #[test]
 fn undo_and_redo_restore_snapshots_and_advance_version() {
     let catalog = test_catalog();
-    let mut session = WorkflowSession::new(workflow_with_nodes());
+    let mut session = DocumentSession::new(workflow_with_nodes());
 
     let applied = session.apply_batch(
         &catalog,
         CommandBatch::new(
             CommandBatchId::new("batch-undo"),
             CommandActor::new(CommandActorKind::Human),
-            WorkflowVersion::new(2),
+            DocumentVersion::new(2),
             CommandProvenance::Direct,
             Timestamp::new("2026-06-09T16:00:00Z"),
             vec![
@@ -630,17 +609,17 @@ fn undo_and_redo_restore_snapshots_and_advance_version() {
             ],
         ),
     );
-    assert_eq!(applied.status(), CommandResultStatus::Applied);
-    let after_apply = session.workflow().clone();
+    assert_eq!(applied.status(), CommandStatus::Applied);
+    let after_apply = session.document().clone();
 
     let undo = session.undo().expect("undo result");
-    assert_eq!(undo.status(), CommandResultStatus::Applied);
-    assert_eq!(undo.workflow_version(), WorkflowVersion::new(4));
-    assert_eq!(session.version(), WorkflowVersion::new(4));
+    assert_eq!(undo.status(), CommandStatus::Applied);
+    assert_eq!(undo.version(), DocumentVersion::new(4));
+    assert_eq!(session.version(), DocumentVersion::new(4));
     assert_eq!(session.history().cursor(), 0);
     assert_eq!(
         session
-            .workflow()
+            .document()
             .nodes()
             .iter()
             .find(|node| node.id() == &NodeId::new("node_consumer"))
@@ -661,23 +640,19 @@ fn undo_and_redo_restore_snapshots_and_advance_version() {
                 before: Some(ParamValue::Integer(10)),
                 after: ParamValue::Integer(5),
             },
-            WorkflowChange::VersionAdvanced {
-                before: WorkflowVersion::new(3),
-                after: WorkflowVersion::new(4),
-            },
         ]
     );
 
     let redo = session.redo().expect("redo result");
-    assert_eq!(redo.status(), CommandResultStatus::Applied);
-    assert_eq!(redo.workflow_version(), WorkflowVersion::new(5));
-    assert_eq!(session.version(), WorkflowVersion::new(5));
+    assert_eq!(redo.status(), CommandStatus::Applied);
+    assert_eq!(redo.version(), DocumentVersion::new(5));
+    assert_eq!(session.version(), DocumentVersion::new(5));
     assert_eq!(session.history().cursor(), 1);
-    assert_eq!(session.workflow().id(), after_apply.id());
-    assert_eq!(session.workflow().metadata(), after_apply.metadata());
-    assert_eq!(session.workflow().nodes(), after_apply.nodes());
-    assert_eq!(session.workflow().edges(), after_apply.edges());
-    assert_eq!(session.workflow().layout(), after_apply.layout());
+    assert_eq!(session.document().id(), after_apply.id());
+    assert_eq!(session.document().metadata(), after_apply.metadata());
+    assert_eq!(session.document().nodes(), after_apply.nodes());
+    assert_eq!(session.document().edges(), after_apply.edges());
+    assert_eq!(session.document().layout(), after_apply.layout());
     assert_eq!(
         redo.changes(),
         &[
@@ -692,10 +667,6 @@ fn undo_and_redo_restore_snapshots_and_advance_version() {
                 before: Some(Position::new(180.0, 40.0)),
                 after: Some(Position::new(250.0, 90.0)),
             },
-            WorkflowChange::VersionAdvanced {
-                before: WorkflowVersion::new(4),
-                after: WorkflowVersion::new(5),
-            },
         ]
     );
 }
@@ -703,14 +674,14 @@ fn undo_and_redo_restore_snapshots_and_advance_version() {
 #[test]
 fn add_workflow_input_and_output_updates_interface() {
     let catalog = test_catalog();
-    let mut session = WorkflowSession::new(empty_workflow("workflow-interface", 1));
+    let mut session = DocumentSession::new(empty_workflow("workflow-interface", 1));
 
     let result = session.apply_batch(
         &catalog,
         CommandBatch::new(
             CommandBatchId::new("batch-interface-add"),
             CommandActor::new(CommandActorKind::Importer),
-            WorkflowVersion::new(1),
+            DocumentVersion::new(1),
             CommandProvenance::Direct,
             Timestamp::new("2026-06-09T17:00:00Z"),
             vec![
@@ -728,10 +699,10 @@ fn add_workflow_input_and_output_updates_interface() {
         ),
     );
 
-    assert_eq!(result.status(), CommandResultStatus::Applied);
-    assert_eq!(result.workflow_version(), WorkflowVersion::new(2));
+    assert_eq!(result.status(), CommandStatus::Applied);
+    assert_eq!(result.version(), DocumentVersion::new(2));
     assert!(result.diagnostics().is_empty());
-    let interface = session.workflow().interface();
+    let interface = session.document().interface();
     assert_eq!(interface.inputs().len(), 1);
     assert_eq!(interface.outputs().len(), 1);
     assert_eq!(
@@ -767,10 +738,6 @@ fn add_workflow_input_and_output_updates_interface() {
                     SlotKind::Image,
                 ),
             },
-            WorkflowChange::VersionAdvanced {
-                before: WorkflowVersion::new(1),
-                after: WorkflowVersion::new(2),
-            },
         ]
     );
 }
@@ -778,14 +745,14 @@ fn add_workflow_input_and_output_updates_interface() {
 #[test]
 fn remove_workflow_input_removes_referencing_edges_and_undo_restores() {
     let catalog = test_catalog();
-    let mut session = WorkflowSession::new(workflow_with_interface_input());
+    let mut session = DocumentSession::new(workflow_with_interface_input());
 
     let result = session.apply_batch(
         &catalog,
         CommandBatch::new(
             CommandBatchId::new("batch-interface-remove"),
             CommandActor::new(CommandActorKind::Human),
-            WorkflowVersion::new(1),
+            DocumentVersion::new(1),
             CommandProvenance::Direct,
             Timestamp::new("2026-06-09T17:15:00Z"),
             vec![WorkflowCommand::RemoveWorkflowInput {
@@ -794,46 +761,40 @@ fn remove_workflow_input_removes_referencing_edges_and_undo_restores() {
         ),
     );
 
-    assert_eq!(result.status(), CommandResultStatus::Applied);
+    assert_eq!(result.status(), CommandStatus::Applied);
     assert!(result.diagnostics().is_empty());
-    assert!(session.workflow().interface().inputs().is_empty());
-    assert_eq!(session.workflow().interface().outputs().len(), 0);
+    assert!(session.document().interface().inputs().is_empty());
+    assert_eq!(session.document().interface().outputs().len(), 0);
     assert!(
         session
-            .workflow()
+            .document()
             .edges()
             .iter()
             .all(|edge| !matches!(edge.from(), Endpoint::WorkflowInput { .. }))
     );
     assert_eq!(
         result.changes(),
-        &[
-            WorkflowChange::WorkflowInputRemoved {
-                input: WorkflowInputDef::new(
-                    WorkflowInputId::new("in-prompt"),
-                    SlotId::new("prompt"),
-                    SlotKind::String,
-                ),
-                removed_edges: vec![WorkflowEdge::new(
-                    EdgeId::new("edge-in"),
-                    Endpoint::workflow_input(WorkflowInputId::new("in-prompt")),
-                    Endpoint::node_slot(NodeId::new("node_consumer"), SlotId::new("dynamic_value")),
-                )],
-            },
-            WorkflowChange::VersionAdvanced {
-                before: WorkflowVersion::new(1),
-                after: WorkflowVersion::new(2),
-            },
-        ]
+        &[WorkflowChange::WorkflowInputRemoved {
+            input: WorkflowInputDef::new(
+                WorkflowInputId::new("in-prompt"),
+                SlotId::new("prompt"),
+                SlotKind::String,
+            ),
+            removed_edges: vec![WorkflowEdge::new(
+                EdgeId::new("edge-in"),
+                Endpoint::workflow_input(WorkflowInputId::new("in-prompt")),
+                Endpoint::node_slot(NodeId::new("node_consumer"), SlotId::new("dynamic_value")),
+            )],
+        },]
     );
 
     let undo = session.undo().expect("undo result");
-    assert_eq!(undo.status(), CommandResultStatus::Applied);
-    assert_eq!(undo.workflow_version(), WorkflowVersion::new(3));
-    assert_eq!(session.version(), WorkflowVersion::new(3));
+    assert_eq!(undo.status(), CommandStatus::Applied);
+    assert_eq!(undo.version(), DocumentVersion::new(3));
+    assert_eq!(session.version(), DocumentVersion::new(3));
     assert_eq!(
         session
-            .workflow()
+            .document()
             .interface()
             .input(&WorkflowInputId::new("in-prompt")),
         Some(&WorkflowInputDef::new(
@@ -842,20 +803,20 @@ fn remove_workflow_input_removes_referencing_edges_and_undo_restores() {
             SlotKind::String,
         ))
     );
-    assert_eq!(session.workflow().edges().len(), 1);
+    assert_eq!(session.document().edges().len(), 1);
 }
 
 #[test]
 fn remove_workflow_output_removes_referencing_edges() {
     let catalog = test_catalog();
-    let mut session = WorkflowSession::new(workflow_with_interface_output());
+    let mut session = DocumentSession::new(workflow_with_interface_output());
 
     let result = session.apply_batch(
         &catalog,
         CommandBatch::new(
             CommandBatchId::new("batch-interface-output-remove"),
             CommandActor::new(CommandActorKind::Human),
-            WorkflowVersion::new(1),
+            DocumentVersion::new(1),
             CommandProvenance::Direct,
             Timestamp::new("2026-06-09T17:30:00Z"),
             vec![WorkflowCommand::RemoveWorkflowOutput {
@@ -864,50 +825,44 @@ fn remove_workflow_output_removes_referencing_edges() {
         ),
     );
 
-    assert_eq!(result.status(), CommandResultStatus::Applied);
-    assert!(session.workflow().interface().outputs().is_empty());
+    assert_eq!(result.status(), CommandStatus::Applied);
+    assert!(session.document().interface().outputs().is_empty());
     assert!(
         session
-            .workflow()
+            .document()
             .edges()
             .iter()
             .all(|edge| !matches!(edge.to(), Endpoint::WorkflowOutput { .. }))
     );
     assert_eq!(
         result.changes(),
-        &[
-            WorkflowChange::WorkflowOutputRemoved {
-                output: WorkflowOutputDef::new(
-                    WorkflowOutputId::new("out-image"),
-                    SlotId::new("image"),
-                    SlotKind::Image,
-                ),
-                removed_edges: vec![WorkflowEdge::new(
-                    EdgeId::new("edge-out"),
-                    Endpoint::node_slot(NodeId::new("node_source"), SlotId::new("value")),
-                    Endpoint::workflow_output(WorkflowOutputId::new("out-image")),
-                )],
-            },
-            WorkflowChange::VersionAdvanced {
-                before: WorkflowVersion::new(1),
-                after: WorkflowVersion::new(2),
-            },
-        ]
+        &[WorkflowChange::WorkflowOutputRemoved {
+            output: WorkflowOutputDef::new(
+                WorkflowOutputId::new("out-image"),
+                SlotId::new("image"),
+                SlotKind::Image,
+            ),
+            removed_edges: vec![WorkflowEdge::new(
+                EdgeId::new("edge-out"),
+                Endpoint::node_slot(NodeId::new("node_source"), SlotId::new("value")),
+                Endpoint::workflow_output(WorkflowOutputId::new("out-image")),
+            )],
+        },]
     );
 }
 
 #[test]
 fn add_workflow_input_rejects_duplicate_id_and_taken_slot() {
     let catalog = test_catalog();
-    let mut session = WorkflowSession::new(workflow_with_interface_input());
-    let snapshot = session.workflow().clone();
+    let mut session = DocumentSession::new(workflow_with_interface_input());
+    let snapshot = session.document().clone();
 
     let result = session.apply_batch(
         &catalog,
         CommandBatch::new(
             CommandBatchId::new("batch-interface-dup"),
             CommandActor::new(CommandActorKind::Human),
-            WorkflowVersion::new(1),
+            DocumentVersion::new(1),
             CommandProvenance::Direct,
             Timestamp::new("2026-06-09T17:45:00Z"),
             vec![
@@ -925,9 +880,9 @@ fn add_workflow_input_rejects_duplicate_id_and_taken_slot() {
         ),
     );
 
-    assert_eq!(result.status(), CommandResultStatus::Rejected);
+    assert_eq!(result.status(), CommandStatus::Rejected);
     assert!(result.changes().is_empty());
-    assert_eq!(session.workflow(), &snapshot);
+    assert_eq!(session.document(), &snapshot);
     assert!(session.history().entries().is_empty());
     assert!(
         result
@@ -946,15 +901,15 @@ fn add_workflow_input_rejects_duplicate_id_and_taken_slot() {
 #[test]
 fn remove_missing_workflow_input_and_output_rejects() {
     let catalog = test_catalog();
-    let mut session = WorkflowSession::new(empty_workflow("workflow-interface", 1));
-    let snapshot = session.workflow().clone();
+    let mut session = DocumentSession::new(empty_workflow("workflow-interface", 1));
+    let snapshot = session.document().clone();
 
     let result = session.apply_batch(
         &catalog,
         CommandBatch::new(
             CommandBatchId::new("batch-interface-missing"),
             CommandActor::new(CommandActorKind::Human),
-            WorkflowVersion::new(1),
+            DocumentVersion::new(1),
             CommandProvenance::Direct,
             Timestamp::new("2026-06-09T18:00:00Z"),
             vec![
@@ -968,9 +923,9 @@ fn remove_missing_workflow_input_and_output_rejects() {
         ),
     );
 
-    assert_eq!(result.status(), CommandResultStatus::Rejected);
+    assert_eq!(result.status(), CommandStatus::Rejected);
     assert!(result.changes().is_empty());
-    assert_eq!(session.workflow(), &snapshot);
+    assert_eq!(session.document(), &snapshot);
     assert!(
         result
             .diagnostics()
@@ -1030,11 +985,11 @@ fn test_catalog() -> TestCatalog {
 }
 
 fn empty_workflow(id: &str, version: u64) -> Workflow {
-    Workflow::new(id, WorkflowVersion::new(version))
+    Workflow::new(id, DocumentVersion::new(version))
 }
 
 fn workflow_with_nodes() -> Workflow {
-    Workflow::new("workflow-main", WorkflowVersion::new(2))
+    Workflow::new("workflow-main", DocumentVersion::new(2))
         .with_node(
             WorkflowNode::new(
                 NodeId::new("node_source"),
@@ -1058,7 +1013,7 @@ fn workflow_with_nodes() -> Workflow {
 }
 
 fn workflow_without_consumer_layout() -> Workflow {
-    Workflow::new("workflow-no-layout", WorkflowVersion::new(2))
+    Workflow::new("workflow-no-layout", DocumentVersion::new(2))
         .with_node(
             WorkflowNode::new(
                 NodeId::new("node_source"),
@@ -1080,7 +1035,7 @@ fn workflow_without_consumer_layout() -> Workflow {
 }
 
 fn workflow_with_connected_fallback() -> Workflow {
-    Workflow::new("workflow-connected", WorkflowVersion::new(4))
+    Workflow::new("workflow-connected", DocumentVersion::new(4))
         .with_node(
             WorkflowNode::new(
                 NodeId::new("node_source"),
@@ -1109,7 +1064,7 @@ fn workflow_with_connected_fallback() -> Workflow {
 }
 
 fn workflow_with_static_edge_override() -> Workflow {
-    Workflow::new("workflow-static-edge", WorkflowVersion::new(6))
+    Workflow::new("workflow-static-edge", DocumentVersion::new(6))
         .with_node(
             WorkflowNode::new(
                 NodeId::new("node_int_source"),
@@ -1138,7 +1093,7 @@ fn workflow_with_static_edge_override() -> Workflow {
 }
 
 fn workflow_with_interface_input() -> Workflow {
-    Workflow::new("workflow-interface-input", WorkflowVersion::new(1))
+    Workflow::new("workflow-interface-input", DocumentVersion::new(1))
         .with_interface(WorkflowInterface::new().with_input(WorkflowInputDef::new(
             WorkflowInputId::new("in-prompt"),
             SlotId::new("prompt"),
@@ -1159,7 +1114,7 @@ fn workflow_with_interface_input() -> Workflow {
 }
 
 fn workflow_with_interface_output() -> Workflow {
-    Workflow::new("workflow-interface-output", WorkflowVersion::new(1))
+    Workflow::new("workflow-interface-output", DocumentVersion::new(1))
         .with_interface(WorkflowInterface::new().with_output(WorkflowOutputDef::new(
             WorkflowOutputId::new("out-image"),
             SlotId::new("image"),

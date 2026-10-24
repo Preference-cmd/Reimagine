@@ -12,7 +12,7 @@ use crate::ExecutionValue;
 use reimagine_core::diagnostic::CorrelationId;
 use reimagine_core::event::Timestamp;
 use reimagine_core::model::{
-    NodeId, NodeTypeId, ParamValue, RunId, SlotId, WorkflowId, WorkflowVersion,
+    DocumentVersion, NodeId, NodeTypeId, ParamValue, RunId, SlotId, WorkflowId,
 };
 use reimagine_core::task::{CancelToken, ProgressSink};
 
@@ -91,7 +91,7 @@ impl NodeParams {
 pub struct NodeExecutionContext {
     run_id: RunId,
     workflow_id: WorkflowId,
-    workflow_version: WorkflowVersion,
+    workflow_version: DocumentVersion,
     correlation_id: Option<CorrelationId>,
     node_id: NodeId,
     type_id: NodeTypeId,
@@ -108,7 +108,7 @@ impl NodeExecutionContext {
     pub fn new(
         run_id: RunId,
         workflow_id: WorkflowId,
-        workflow_version: WorkflowVersion,
+        workflow_version: DocumentVersion,
         correlation_id: Option<CorrelationId>,
         node_id: NodeId,
         type_id: NodeTypeId,
@@ -143,7 +143,7 @@ impl NodeExecutionContext {
         &self.workflow_id
     }
 
-    pub fn workflow_version(&self) -> WorkflowVersion {
+    pub fn workflow_version(&self) -> DocumentVersion {
         self.workflow_version
     }
 
@@ -203,7 +203,7 @@ mod tests {
         let context = NodeExecutionContext::new(
             RunId::new("run-invocation"),
             WorkflowId::new("workflow"),
-            WorkflowVersion::new(1),
+            DocumentVersion::new(1),
             Some(CorrelationId::new("correlation")),
             NodeId::new("node-invocation"),
             NodeTypeId::new("builtin.test"),

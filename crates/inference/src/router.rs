@@ -307,7 +307,7 @@ mod tests {
     use crate::request::latent::CreateEmptyLatentRequest;
     use crate::request::latent_encode::LatentEncodeRequest;
     use crate::response::latent::CreateEmptyLatentResponse;
-    use reimagine_core::model::{NodeId, RunId, WorkflowId, WorkflowVersion};
+    use reimagine_core::model::{DocumentVersion, NodeId, RunId, WorkflowId};
 
     struct EchoBackend {
         kind: Backend,
@@ -472,7 +472,7 @@ mod tests {
             1,
             RunId::new("r"),
             WorkflowId::new("w"),
-            WorkflowVersion::new(1),
+            DocumentVersion::new(1),
             NodeId::new("n"),
         )
     }
@@ -563,7 +563,7 @@ mod tests {
             text,
             RunId::new("r"),
             WorkflowId::new("w"),
-            WorkflowVersion::new(1),
+            DocumentVersion::new(1),
             NodeId::new("n"),
         );
         let invocation = noop_invocation();
@@ -659,7 +659,7 @@ mod tests {
             text,
             RunId::new("r"),
             WorkflowId::new("w"),
-            WorkflowVersion::new(1),
+            DocumentVersion::new(1),
             NodeId::new("n"),
         );
         let invocation = noop_invocation();
@@ -702,7 +702,7 @@ mod tests {
             text,
             RunId::new("r"),
             WorkflowId::new("w"),
-            WorkflowVersion::new(1),
+            DocumentVersion::new(1),
             NodeId::new("n"),
         );
         let invocation = noop_invocation();
@@ -794,7 +794,7 @@ mod tests {
             image,
             RunId::new("r"),
             WorkflowId::new("w"),
-            WorkflowVersion::new(1),
+            DocumentVersion::new(1),
             NodeId::new("n"),
         )
     }

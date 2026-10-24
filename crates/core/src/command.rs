@@ -3,8 +3,8 @@ use std::collections::BTreeMap;
 use crate::diagnostic::{CorrelationId, Diagnostic};
 use crate::event::Timestamp;
 use crate::model::{
-    CommandBatchId, EdgeId, HistoryEntryId, NodeId, NodeTypeId, ParamValue, ProposalId, SlotId,
-    SlotKind, WorkflowInputId, WorkflowOutputId, WorkflowVersion,
+    CommandBatchId, DocumentVersion, EdgeId, HistoryEntryId, NodeId, NodeTypeId, ParamValue,
+    ProposalId, SlotId, SlotKind, WorkflowInputId, WorkflowOutputId,
 };
 use crate::workflow::{
     Endpoint, Position, WorkflowEdge, WorkflowInputDef, WorkflowLayout, WorkflowMetadata,
@@ -139,24 +139,24 @@ pub enum WorkflowCommand {
 }
 
 #[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize)]
-pub struct CommandBatch {
+pub struct CommandBatch<C> {
     id: CommandBatchId,
     actor: CommandActor,
-    base_version: WorkflowVersion,
+    base_version: DocumentVersion,
     provenance: CommandProvenance,
     created_at: Timestamp,
     correlation_id: Option<CorrelationId>,
-    commands: Vec<WorkflowCommand>,
+    commands: Vec<C>,
 }
 
-impl CommandBatch {
+impl<C> CommandBatch<C> {
     pub fn new(
         id: CommandBatchId,
         actor: CommandActor,
-        base_version: WorkflowVersion,
+        base_version: DocumentVersion,
         provenance: CommandProvenance,
         created_at: Timestamp,
-        commands: Vec<WorkflowCommand>,
+        commands: Vec<C>,
     ) -> Self {
         Self {
             id,
@@ -182,7 +182,7 @@ impl CommandBatch {
         &self.actor
     }
 
-    pub fn base_version(&self) -> WorkflowVersion {
+    pub fn base_version(&self) -> DocumentVersion {
         self.base_version
     }
 
@@ -198,14 +198,14 @@ impl CommandBatch {
         self.correlation_id.as_ref()
     }
 
-    pub fn commands(&self) -> &[WorkflowCommand] {
+    pub fn commands(&self) -> &[C] {
         &self.commands
     }
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 #[serde(rename_all = "PascalCase")]
-pub enum CommandResultStatus {
+pub enum CommandStatus {
     Applied,
     Rejected,
     NoOp,
@@ -270,47 +270,43 @@ pub enum WorkflowChange {
         output: WorkflowOutputDef,
         removed_edges: Vec<WorkflowEdge>,
     },
-    VersionAdvanced {
-        before: WorkflowVersion,
-        after: WorkflowVersion,
-    },
 }
 
 #[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize)]
-pub struct CommandResult {
-    status: CommandResultStatus,
-    workflow_version: WorkflowVersion,
-    changes: Vec<WorkflowChange>,
+pub struct CommandResult<Ch> {
+    status: CommandStatus,
+    version: DocumentVersion,
+    changes: Vec<Ch>,
     diagnostics: Vec<Diagnostic>,
     history_entry_id: Option<HistoryEntryId>,
 }
 
-impl CommandResult {
+impl<Ch> CommandResult<Ch> {
     pub fn new(
-        status: CommandResultStatus,
-        workflow_version: WorkflowVersion,
-        changes: Vec<WorkflowChange>,
+        status: CommandStatus,
+        version: DocumentVersion,
+        changes: Vec<Ch>,
         diagnostics: Vec<Diagnostic>,
         history_entry_id: Option<HistoryEntryId>,
     ) -> Self {
         Self {
             status,
-            workflow_version,
+            version,
             changes,
             diagnostics,
             history_entry_id,
         }
     }
 
-    pub fn status(&self) -> CommandResultStatus {
-        self.status.clone()
+    pub fn status(&self) -> CommandStatus {
+        self.status
     }
 
-    pub fn workflow_version(&self) -> WorkflowVersion {
-        self.workflow_version
+    pub fn version(&self) -> DocumentVersion {
+        self.version
     }
 
-    pub fn changes(&self) -> &[WorkflowChange] {
+    pub fn changes(&self) -> &[Ch] {
         &self.changes
     }
 

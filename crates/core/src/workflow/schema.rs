@@ -1,6 +1,6 @@
 use std::collections::BTreeMap;
 
-use crate::model::{EdgeId, NodeId, NodeTypeId, ParamValue, SlotId, WorkflowId, WorkflowVersion};
+use crate::model::{DocumentVersion, EdgeId, NodeId, NodeTypeId, ParamValue, SlotId, WorkflowId};
 
 use super::{Endpoint, WorkflowInterface, WorkflowLayout, WorkflowMetadata};
 
@@ -29,7 +29,7 @@ impl Default for WorkflowSchemaVersion {
 pub struct Workflow {
     schema_version: WorkflowSchemaVersion,
     id: WorkflowId,
-    version: WorkflowVersion,
+    version: DocumentVersion,
     metadata: WorkflowMetadata,
     interface: WorkflowInterface,
     nodes: Vec<WorkflowNode>,
@@ -38,7 +38,7 @@ pub struct Workflow {
 }
 
 impl Workflow {
-    pub fn new(id: impl Into<WorkflowId>, version: WorkflowVersion) -> Self {
+    pub fn new(id: impl Into<WorkflowId>, version: DocumentVersion) -> Self {
         Self {
             schema_version: WorkflowSchemaVersion::default(),
             id: id.into(),
@@ -84,7 +84,7 @@ impl Workflow {
         &self.id
     }
 
-    pub fn version(&self) -> WorkflowVersion {
+    pub fn version(&self) -> DocumentVersion {
         self.version
     }
 
@@ -112,7 +112,7 @@ impl Workflow {
         &self.layout
     }
 
-    pub(crate) fn set_version(&mut self, version: WorkflowVersion) {
+    pub fn set_version(&mut self, version: DocumentVersion) {
         self.version = version;
     }
 
@@ -179,12 +179,12 @@ impl WorkflowNode {
         self.label.as_deref()
     }
 
-    pub fn params(&self) -> &BTreeMap<SlotId, ParamValue> {
-        &self.params
-    }
-
     pub(crate) fn set_label(&mut self, label: Option<String>) {
         self.label = label;
+    }
+
+    pub fn params(&self) -> &BTreeMap<SlotId, ParamValue> {
+        &self.params
     }
 
     pub(crate) fn params_mut(&mut self) -> &mut BTreeMap<SlotId, ParamValue> {
@@ -192,7 +192,7 @@ impl WorkflowNode {
     }
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash, serde::Serialize, serde::Deserialize)]
 pub struct WorkflowEdge {
     id: EdgeId,
     from: Endpoint,

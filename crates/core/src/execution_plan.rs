@@ -1,7 +1,7 @@
 use crate::event::OperationReport;
 use crate::model::{
-    EdgeId, NodeId, NodeTypeId, SlotId, WorkflowId, WorkflowInputId, WorkflowOutputId,
-    WorkflowVersion,
+    DocumentVersion, EdgeId, NodeId, NodeTypeId, SlotId, WorkflowId, WorkflowInputId,
+    WorkflowOutputId,
 };
 
 #[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
@@ -27,7 +27,7 @@ impl ExecutionPlanResult {
 #[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub struct ExecutionPlan {
     workflow_id: WorkflowId,
-    workflow_version: WorkflowVersion,
+    workflow_version: DocumentVersion,
     target_selection: RunTargetSelection,
     targets: Vec<RunTarget>,
     nodes: Vec<ExecutionNode>,
@@ -43,7 +43,7 @@ impl ExecutionPlan {
     )]
     pub fn new(
         workflow_id: WorkflowId,
-        workflow_version: WorkflowVersion,
+        workflow_version: DocumentVersion,
         target_selection: RunTargetSelection,
         targets: Vec<RunTarget>,
         nodes: Vec<ExecutionNode>,
@@ -67,7 +67,7 @@ impl ExecutionPlan {
         &self.workflow_id
     }
 
-    pub fn workflow_version(&self) -> WorkflowVersion {
+    pub fn workflow_version(&self) -> DocumentVersion {
         self.workflow_version
     }
 

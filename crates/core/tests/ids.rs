@@ -69,11 +69,11 @@ fn id_serde_roundtrip() {
 }
 
 #[test]
-fn workflow_version_is_numeric() {
-    let version = WorkflowVersion::new(7);
+fn document_version_is_numeric() {
+    let version = DocumentVersion::new(7);
     let json = serde_json::to_string(&version).expect("serialize");
     assert_eq!(json, "7");
-    let back: WorkflowVersion = serde_json::from_str(&json).expect("deserialize");
+    let back: DocumentVersion = serde_json::from_str(&json).expect("deserialize");
     assert_eq!(back, version);
     assert_eq!(back.get(), 7);
 }
