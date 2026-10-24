@@ -1,6 +1,6 @@
 import {
   type ArtifactMetadata,
-  type BoardCommandResult,
+  type BoardCommandResultDto,
   type BoardSnapshot,
   type ComputeProfile,
   type DocumentChangedEvent,
@@ -277,9 +277,9 @@ export async function mockGetBoardSnapshot(input: { projectId: string }): Promis
   return { id: "board-" + input.projectId, projectId: input.projectId, version: 0, items: [] };
 }
 
-const noOpBoardResult = (version = 0): BoardCommandResult => ({
+const noOpBoardResult = (version = 0): BoardCommandResultDto => ({
   status: "no_op",
-  boardVersion: version,
+  version,
   changes: [],
   diagnostics: [],
   historyEntryId: null,
@@ -288,15 +288,15 @@ const noOpBoardResult = (version = 0): BoardCommandResult => ({
 export async function mockPreviewBoardCommands(_input: {
   projectId: string;
   commandBatch: unknown;
-}): Promise<BoardCommandResult> {
+}): Promise<BoardCommandResultDto> {
   return noOpBoardResult();
 }
 
 export async function mockApplyBoardCommands(input: {
   projectId: string;
   commandBatch: unknown;
-}): Promise<BoardCommandResult> {
-  const result = { ...noOpBoardResult(1), status: "applied" as const, boardVersion: 1 };
+}): Promise<BoardCommandResultDto> {
+  const result = { ...noOpBoardResult(1), status: "applied" as const, version: 1 };
   emitDocumentEvent({
     kind: "board.changed",
     projectId: input.projectId,
@@ -308,12 +308,12 @@ export async function mockApplyBoardCommands(input: {
 
 export async function mockUndoBoard(_input: {
   projectId: string;
-}): Promise<BoardCommandResult | null> {
+}): Promise<BoardCommandResultDto | null> {
   return null;
 }
 export async function mockRedoBoard(_input: {
   projectId: string;
-}): Promise<BoardCommandResult | null> {
+}): Promise<BoardCommandResultDto | null> {
   return null;
 }
 

@@ -13,8 +13,10 @@ both check it.
 ### Changed
 
 - Board command results (`preview_board_commands`, `apply_board_commands`,
+  `undo_board`, `redo_board`) return `version` instead of `boardVersion`.
+- Board command results (`preview_board_commands`, `apply_board_commands`,
   `undo_board`, `redo_board`) no longer end their `changes` list with a
-  `version_advanced` entry; the new version is in `boardVersion`.
+  `version_advanced` entry; the new version is the result's version field.
 - `GET /health` and the `health` IPC command no longer return `status: "ok"`;
   they return `kernel` and `aigc` health objects (`state`, plus a `diagnostic`
   when unavailable).

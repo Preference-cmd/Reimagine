@@ -129,12 +129,12 @@ export type BoardSnapshot = z.infer<typeof BoardSnapshotSchema>;
 
 export const BoardCommandResultSchema = z.object({
   status: z.enum(["applied", "rejected", "no_op"]),
-  boardVersion: z.number(),
+  version: z.number(),
   changes: z.array(z.unknown()),
   diagnostics: z.array(z.unknown()),
   historyEntryId: z.string().nullable().optional(),
 });
-export type BoardCommandResult = z.infer<typeof BoardCommandResultSchema>;
+export type BoardCommandResultDto = z.infer<typeof BoardCommandResultSchema>;
 
 export const DocumentChangedEventSchema = z.object({
   kind: z.enum(["board.changed", "workflow.changed"]),

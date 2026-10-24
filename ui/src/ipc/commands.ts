@@ -1,6 +1,6 @@
 import {
   type ArtifactMetadata,
-  type BoardCommandResult,
+  type BoardCommandResultDto,
   type BoardSnapshot,
   type CommandError,
   type ComputeProfile,
@@ -273,7 +273,7 @@ export function getBoardSnapshot(projectId: string): Promise<BoardSnapshot> {
 export function previewBoardCommands(
   projectId: string,
   commandBatch: unknown,
-): Promise<BoardCommandResult> {
+): Promise<BoardCommandResultDto> {
   return dispatch(
     "preview_board_commands",
     null,
@@ -285,7 +285,7 @@ export function previewBoardCommands(
 export function applyBoardCommands(
   projectId: string,
   commandBatch: unknown,
-): Promise<BoardCommandResult> {
+): Promise<BoardCommandResultDto> {
   return dispatch(
     "apply_board_commands",
     null,
@@ -294,11 +294,11 @@ export function applyBoardCommands(
   );
 }
 
-export function undoBoard(projectId: string): Promise<BoardCommandResult | null> {
+export function undoBoard(projectId: string): Promise<BoardCommandResultDto | null> {
   return dispatch("undo_board", null, { projectId }, mockUndoBoard);
 }
 
-export function redoBoard(projectId: string): Promise<BoardCommandResult | null> {
+export function redoBoard(projectId: string): Promise<BoardCommandResultDto | null> {
   return dispatch("redo_board", null, { projectId }, mockRedoBoard);
 }
 

@@ -30,7 +30,7 @@ impl From<BoardDocument> for BoardSnapshotDto {
 #[serde(rename_all = "camelCase")]
 pub struct BoardCommandResultDto {
     pub status: String,
-    pub board_version: u64,
+    pub version: u64,
     pub changes: Vec<BoardChange>,
     pub diagnostics: Vec<DiagnosticDto>,
     pub history_entry_id: Option<String>,
@@ -45,7 +45,7 @@ impl From<CommandResult<BoardChange>> for BoardCommandResultDto {
                 CommandStatus::NoOp => "no_op",
             }
             .to_owned(),
-            board_version: result.version().get(),
+            version: result.version().get(),
             changes: result.changes().to_vec(),
             diagnostics: result
                 .diagnostics()
