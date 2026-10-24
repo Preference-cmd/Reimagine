@@ -45,7 +45,7 @@ pub use aigc::dto::{
 };
 pub use artifacts::{ArtifactDto, ArtifactMetadataDto};
 pub use boards::{BoardCommandResultDto, BoardSnapshotDto};
-pub use health::HealthResponse;
+pub use health::{HealthDto, HealthResponse};
 pub use nodes::{NodeCatalogResponse, NodeDefDto, ParamSpecDto, SocketSpecDto};
 pub use projects::{ProjectDto, ProjectMetadataInputDto};
 pub use reimagine_core::command::{CommandBatch, CommandResult, CommandStatus};

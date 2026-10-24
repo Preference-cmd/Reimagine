@@ -7,8 +7,8 @@ use std::sync::{Arc, RwLock};
 
 #[cfg(feature = "aigc")]
 pub(crate) use aigc_parts::AigcParts;
-pub use aigc_parts::AigcStatus;
 pub use builder::WorkspaceHostBuilder;
+use reimagine_core::health::Health;
 
 use crate::WorkspaceScope;
 #[cfg(feature = "aigc")]
@@ -243,7 +243,7 @@ impl WorkspaceHost {
             acquisition_service.clone(),
         ));
         let aigc = AigcParts {
-            status: AigcStatus::Available,
+            status: Health::Available,
             model_service: Arc::clone(&model_service),
             compute_profile,
             resolved_backend_instance,
@@ -450,7 +450,7 @@ impl WorkspaceHost {
 
         let (status, bootstrapped) =
             match bootstrap_inference(config, backend_config, model_service.clone()) {
-                Ok(bootstrapped) => (AigcStatus::Available, bootstrapped),
+                Ok(bootstrapped) => (Health::Available, bootstrapped),
                 Err(error) => {
                     let reason = error.to_string();
                     tracing::error!(
@@ -459,7 +459,7 @@ impl WorkspaceHost {
                              continuing with an empty executor registry"
                     );
                     (
-                        AigcStatus::Unavailable { reason },
+                        Health::Unavailable(aigc_parts::aigc_bootstrap_failed_diagnostic(reason)),
                         BootstrapInference {
                             runtime: ComposedInferenceRuntime::degraded(),
                             compute_profile: WorkspaceComputeProfile::new(),
@@ -628,21 +628,21 @@ impl WorkspaceHost {
         &self.runtime_service
     }
 
-    /// Operating status of the workspace AIGC subsystem.
-    pub fn aigc_status(&self) -> &AigcStatus {
+    /// Operating health of the workspace AIGC subsystem.
+    pub fn aigc_health(&self) -> &Health {
         #[cfg(feature = "aigc")]
         {
             &self.aigc.status
         }
         #[cfg(not(feature = "aigc"))]
         {
-            &AigcStatus::NotInstalled
+            &aigc_parts::AIGC_NOT_INSTALLED_HEALTH
         }
     }
 
     /// Reason why AIGC is unavailable, if any.
     pub(crate) fn aigc_unavailable_reason(&self) -> Option<&str> {
-        self.aigc_status().unavailable_reason()
+        self.aigc_health().diagnostic().map(|diag| diag.message())
     }
 
     #[cfg(feature = "aigc")]
@@ -754,10 +754,10 @@ impl WorkspaceHost {
             Some(Arc::clone(&current.document_events)),
         )
         .await?;
-        if let AigcStatus::Unavailable { reason } = rebuilt.aigc_status() {
+        if let Some(reason) = rebuilt.aigc_unavailable_reason() {
             rebuilt.shutdown().await;
             return Err(AppHostError::InferenceBootstrap {
-                message: reason.clone(),
+                message: reason.to_string(),
             });
         }
         if let Err(error) = current
@@ -1441,7 +1441,7 @@ mod tests {
             WorkspaceHost::try_with_defaults(WorkspaceScope::new("rebuild-fail"), &base)
                 .await
                 .expect("initial bootstrap must succeed");
-        assert!(original.aigc_status().is_available());
+        assert!(original.aigc_health().is_available());
 
         // Configure an invalid worker transport in backend_config so rebuilding fails inference bootstrap.
         original.backend_config = InferenceBackendConfig {
@@ -1463,7 +1463,7 @@ mod tests {
         assert!(matches!(err, AppHostError::InferenceBootstrap { .. }));
 
         // Current workspace host remains untouched and available.
-        assert!(original.aigc_status().is_available());
+        assert!(original.aigc_health().is_available());
         let default_project = reimagine_core::model::ProjectId::new("default");
         assert_eq!(
             original

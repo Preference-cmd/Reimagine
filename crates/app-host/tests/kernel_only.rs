@@ -1,9 +1,10 @@
 #![cfg(not(feature = "aigc"))]
 
-use reimagine_app_host::{AigcStatus, RunWorkflowRequest, WorkspaceHostBuilder, WorkspaceScope};
+use reimagine_app_host::{RunWorkflowRequest, WorkspaceHostBuilder, WorkspaceScope};
 use reimagine_core::board::{BoardCommand, BoardItemKind, BoardItemPosition, BoardItemSize};
 use reimagine_core::command::{CommandActor, CommandActorKind, CommandBatch, CommandProvenance};
 use reimagine_core::event::Timestamp;
+use reimagine_core::health::Health;
 use reimagine_core::model::{
     BoardItemId, CommandBatchId, DocumentVersion, NodeId, NodeTypeId, ProjectId, WorkflowId,
 };
@@ -28,12 +29,15 @@ async fn kernel_only_workspace_reports_not_installed_and_rejects_workflow_run() 
         .await
         .expect("build kernel workspace host");
 
-    // 1. Verify AigcStatus is NotInstalled
-    assert_eq!(host.aigc_status(), &AigcStatus::NotInstalled);
-    assert_eq!(
-        host.aigc_status().unavailable_reason(),
-        Some("AIGC is not installed")
-    );
+    // 1. Verify Health is Unavailable with AIGC/NOT_INSTALLED
+    assert!(!host.aigc_health().is_available());
+    let diagnostic = match host.aigc_health() {
+        Health::Unavailable(diag) => diag,
+        Health::Available => panic!("expected aigc to be unavailable in kernel-only build"),
+    };
+    assert_eq!(diagnostic.code().as_str(), "AIGC/NOT_INSTALLED");
+    assert_eq!(diagnostic.message(), "AIGC is not installed");
+    assert!(!diagnostic.message().is_empty());
 
     // 2. Create project
     let project_id = ProjectId::new("proj-kernel");

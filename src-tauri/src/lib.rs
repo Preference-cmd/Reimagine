@@ -616,6 +616,7 @@ pub fn run() {
 mod tests {
     use super::desktop_host::{DesktopHostState, default_workspace_path};
     use super::{TauriCommandError, app_host_command_error};
+    use reimagine_app_host::dto::HealthDto;
 
     fn temp_dir(prefix: &str) -> std::path::PathBuf {
         let nonce = std::time::SystemTime::now()
@@ -761,8 +762,12 @@ mod tests {
         assert!(base_path.join("config").is_dir());
 
         let health = state.health();
-        assert_eq!(health.status, "ok");
         assert_eq!(health.workspace, "reimagine-tauri-host");
+        assert_eq!(health.kernel, HealthDto::Available);
+        #[cfg(feature = "aigc")]
+        assert_eq!(health.aigc, HealthDto::Available);
+        #[cfg(not(feature = "aigc"))]
+        assert!(matches!(health.aigc, HealthDto::Unavailable { .. }));
 
         let _ = std::fs::remove_dir_all(&base_path);
     }
@@ -822,7 +827,8 @@ mod tests {
             "rebootstrap must return the rebuilt compute profile"
         );
         assert_eq!(state.workspace_base_path(), base_path);
-        assert_eq!(state.health().status, "ok");
+        assert_eq!(state.health().kernel, HealthDto::Available);
+        assert_eq!(state.health().aigc, HealthDto::Available);
 
         let _ = std::fs::remove_dir_all(&base_path);
     }

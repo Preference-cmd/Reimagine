@@ -9,46 +9,52 @@ use tokio::sync::Mutex;
 use aigc::inference::discovery::DiscoveryOrchestrator;
 #[cfg(feature = "aigc")]
 use aigc::inference::topology::ConnectionTopologyManager;
+use reimagine_core::diagnostic::{
+    Diagnostic, DiagnosticCode, DiagnosticSeverity, DiagnosticSourceName, DiagnosticTarget,
+    DiagnosticTargetDomain,
+};
+use reimagine_core::health::Health;
+use reimagine_core::model::DiagnosticId;
 #[cfg(feature = "aigc")]
 use reimagine_inference::{BackendInstance, WorkspaceComputeProfile};
 
 #[cfg(feature = "aigc")]
 use crate::{ModelService, WorkerInventoryProvider, WorkerSwitchService};
 
-/// Operating status of the workspace AIGC subsystem.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub enum AigcStatus {
-    /// AIGC inference runtime bootstrapped successfully.
-    Available,
-    /// AIGC inference runtime bootstrap failed.
-    Unavailable {
-        /// Reason for bootstrap failure.
-        reason: String,
-    },
-    /// AIGC module is not installed in this build.
-    NotInstalled,
+/// Diagnostic for when AIGC inference runtime bootstrap fails.
+#[cfg(feature = "aigc")]
+pub(crate) fn aigc_bootstrap_failed_diagnostic(message: impl Into<String>) -> Diagnostic {
+    Diagnostic::new(
+        DiagnosticId::new("app-host:aigc:bootstrap_failed"),
+        DiagnosticCode::new("AIGC/BOOTSTRAP_FAILED"),
+        DiagnosticSeverity::Error,
+        DiagnosticSourceName::new("app-host"),
+        message,
+        DiagnosticTarget::new(DiagnosticTargetDomain::new("app-host.aigc")),
+    )
 }
 
-impl AigcStatus {
-    /// Whether AIGC is currently available.
-    pub fn is_available(&self) -> bool {
-        matches!(self, Self::Available)
-    }
-
-    /// The failure reason if unavailable.
-    pub fn unavailable_reason(&self) -> Option<&str> {
-        match self {
-            Self::Available => None,
-            Self::Unavailable { reason } => Some(reason),
-            Self::NotInstalled => Some("AIGC is not installed"),
-        }
-    }
+/// Diagnostic for when AIGC is not installed in the current build.
+#[cfg(not(feature = "aigc"))]
+pub(crate) fn aigc_not_installed_diagnostic() -> Diagnostic {
+    Diagnostic::new(
+        DiagnosticId::new("app-host:aigc:not_installed"),
+        DiagnosticCode::new("AIGC/NOT_INSTALLED"),
+        DiagnosticSeverity::Error,
+        DiagnosticSourceName::new("app-host"),
+        "AIGC is not installed",
+        DiagnosticTarget::new(DiagnosticTargetDomain::new("app-host.aigc")),
+    )
 }
+
+#[cfg(not(feature = "aigc"))]
+pub(crate) static AIGC_NOT_INSTALLED_HEALTH: std::sync::LazyLock<Health> =
+    std::sync::LazyLock::new(|| Health::Unavailable(aigc_not_installed_diagnostic()));
 
 /// Subsystems and runtime state belonging to the AIGC subsystem.
 #[cfg(feature = "aigc")]
 pub(crate) struct AigcParts {
-    pub(crate) status: AigcStatus,
+    pub(crate) status: Health,
     pub(crate) model_service: Arc<ModelService>,
     pub(crate) compute_profile: Arc<WorkspaceComputeProfile>,
     pub(crate) resolved_backend_instance: BackendInstance,

@@ -77,5 +77,5 @@ pub use reimagine_inference::{BackendInstance, WorkspaceComputeProfile};
 pub use run_workflow::{RunWorkflowRequest, RunWorkflowResult, run_id_of};
 pub use services::WorkspaceServices;
 pub use workflow_service::WorkflowService;
-pub use workspace::{AigcStatus, WorkspaceHost, WorkspaceHostBuilder};
+pub use workspace::{WorkspaceHost, WorkspaceHostBuilder};
 pub use workspace_scope::WorkspaceScope;

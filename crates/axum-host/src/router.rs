@@ -79,6 +79,8 @@ mod tests {
 
     #[tokio::test]
     async fn health_route_is_mounted() {
+        use axum::body::to_bytes;
+
         let app = build_router().with_state(test_state());
         let response = app
             .oneshot(
@@ -91,6 +93,15 @@ mod tests {
             .await
             .unwrap();
         assert_eq!(response.status(), StatusCode::OK);
+        let bytes = to_bytes(response.into_body(), usize::MAX).await.unwrap();
+        let json: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
+        assert_eq!(json["workspace"], "ws-router");
+        assert_eq!(json["kernel"]["state"], "available");
+        #[cfg(feature = "aigc")]
+        assert_eq!(json["aigc"]["state"], "available");
+        #[cfg(not(feature = "aigc"))]
+        assert_eq!(json["aigc"]["state"], "unavailable");
+        assert!(json.get("status").is_none());
     }
 
     #[cfg(feature = "aigc")]

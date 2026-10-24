@@ -5,7 +5,7 @@
 //! Verifies that:
 //! 1. A failed inference bootstrap does not abort `WorkspaceHostBuilder::build`.
 //! 2. Core workspace features (projects, boards, workflows, documents, model management) continue working.
-//! 3. `WorkspaceHost::aigc_status()` reports unavailable with the real bootstrap failure reason.
+//! 3. `WorkspaceHost::aigc_health()` reports unavailable with the real bootstrap failure reason.
 //! 4. Gated operations depending on inference runtime (worker switch, workflow execution with nodes)
 //!    return `AppHostError::AigcUnavailable` with error code `"aigc_unavailable"`.
 //! 5. `AppHostErrorCode::AigcUnavailable` wire string is `"aigc_unavailable"`.
@@ -15,7 +15,7 @@ use std::time::Duration;
 
 use reimagine_app_host::WorkspaceScope;
 use reimagine_app_host::{
-    AigcStatus, AppHostError, AppHostErrorCode, EmptyWorkerInventoryProvider, RunWorkflowRequest,
+    AppHostError, AppHostErrorCode, EmptyWorkerInventoryProvider, RunWorkflowRequest,
     WorkerBackendCandidate, WorkspaceHostBuilder,
 };
 use reimagine_backend_worker_host::{ExpectedWorkerIdentity, WorkerLaunchSpec, WorkerLimits};
@@ -23,6 +23,7 @@ use reimagine_backend_worker_protocol::{
     BackendInstanceId, ProtocolRange, WorkerInstallationId, WorkerInstanceProfile,
 };
 use reimagine_config::{InferenceBackendConfig, WorkerEndpointConfig};
+use reimagine_core::health::Health;
 use reimagine_core::model::{DocumentVersion, NodeId, ProjectId, SlotId, WorkflowId};
 use reimagine_core::readiness::{RunTarget, RunTargetSelection};
 use reimagine_core::workflow::{Workflow, WorkflowNode};
@@ -111,16 +112,15 @@ async fn workspace_builds_and_functions_normally_when_aigc_bootstrap_fails() {
         .await
         .expect("workspace must build successfully even when inference bootstrap fails");
 
-    // 1. Verify AigcStatus
-    assert!(!workspace.aigc_status().is_available());
-    assert!(matches!(
-        workspace.aigc_status(),
-        AigcStatus::Unavailable { .. }
-    ));
-    let reason = workspace
-        .aigc_status()
-        .unavailable_reason()
-        .expect("reason must be present");
+    // 1. Verify Health
+    assert!(!workspace.aigc_health().is_available());
+    let diagnostic = match workspace.aigc_health() {
+        Health::Unavailable(diag) => diag,
+        Health::Available => panic!("expected aigc to be unavailable"),
+    };
+    assert_eq!(diagnostic.code().as_str(), "AIGC/BOOTSTRAP_FAILED");
+    let reason = diagnostic.message();
+    assert!(!reason.is_empty(), "reason must not be empty");
     assert!(
         reason.contains("carrier-pigeon") || reason.contains("unknown transport"),
         "failure reason should describe the bootstrap failure, got: {reason}"

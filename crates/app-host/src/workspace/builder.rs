@@ -23,8 +23,12 @@ use aigc::inference::compose::{
 use reimagine_inference::WorkspaceComputeProfile;
 
 #[cfg(feature = "aigc")]
-use super::{AigcParts, AigcStatus};
+use super::AigcParts;
+#[cfg(feature = "aigc")]
+use super::aigc_parts::aigc_bootstrap_failed_diagnostic;
 use super::{WorkspaceHost, load_backend_config_result, migrate_project_layout};
+#[cfg(feature = "aigc")]
+use reimagine_core::health::Health;
 
 /// Builder for constructing a [`WorkspaceHost`].
 ///
@@ -196,7 +200,7 @@ impl WorkspaceHostBuilder {
         ));
 
         // Bootstrap inference runtime (non-fatal on workspace build)
-        let (bootstrapped, aigc_status) = match bootstrap_inference_with_worker_inventory(
+        let (bootstrapped, aigc_health) = match bootstrap_inference_with_worker_inventory(
             config,
             backend_config,
             Arc::clone(&model_service),
@@ -204,7 +208,7 @@ impl WorkspaceHostBuilder {
         )
         .await
         {
-            Ok(bootstrapped) => (bootstrapped, AigcStatus::Available),
+            Ok(bootstrapped) => (bootstrapped, Health::Available),
             Err(error) => {
                 let reason = error.to_string();
                 tracing::error!(
@@ -218,7 +222,7 @@ impl WorkspaceHostBuilder {
                         topology: None,
                         discovery: None,
                     },
-                    AigcStatus::Unavailable { reason },
+                    Health::Unavailable(aigc_bootstrap_failed_diagnostic(reason)),
                 )
             }
         };
@@ -242,7 +246,7 @@ impl WorkspaceHostBuilder {
         }
 
         let aigc = AigcParts {
-            status: aigc_status,
+            status: aigc_health,
             model_service: Arc::clone(&model_service),
             compute_profile: Arc::new(bootstrapped.compute_profile),
             resolved_backend_instance: bootstrapped.runtime.selected_instance,

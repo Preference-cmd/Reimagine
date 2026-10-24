@@ -369,8 +369,10 @@ async fn health_returns_workspace_scope() {
     assert_eq!(response.status(), StatusCode::OK);
     let bytes = body_bytes(response.into_body()).await;
     let json: Value = serde_json::from_slice(&bytes).unwrap();
-    assert_eq!(json["status"], "ok");
+    assert_eq!(json["kernel"]["state"], "available");
+    assert_eq!(json["aigc"]["state"], "available");
     assert!(json["workspace"].as_str().unwrap().starts_with("ws-"));
+    assert!(json.get("status").is_none());
 }
 
 #[tokio::test]

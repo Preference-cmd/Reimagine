@@ -123,7 +123,14 @@ mod tests {
         let url = format!("http://{}/health", handle.local_addr());
         let response = reqwest_get(&url).await;
         assert_eq!(response.status, 200);
-        assert!(response.body.contains("\"status\":\"ok\""));
+        let json: serde_json::Value = serde_json::from_str(&response.body).unwrap();
+        assert_eq!(json["workspace"], "ws-server");
+        assert_eq!(json["kernel"]["state"], "available");
+        #[cfg(feature = "aigc")]
+        assert_eq!(json["aigc"]["state"], "available");
+        #[cfg(not(feature = "aigc"))]
+        assert_eq!(json["aigc"]["state"], "unavailable");
+        assert!(json.get("status").is_none());
 
         handle.shutdown().await.expect("server should stop");
     }

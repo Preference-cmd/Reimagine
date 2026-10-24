@@ -14,8 +14,8 @@ pub struct DiagnosticDto {
     pub target: String,
 }
 
-impl From<Diagnostic> for DiagnosticDto {
-    fn from(value: Diagnostic) -> Self {
+impl From<&Diagnostic> for DiagnosticDto {
+    fn from(value: &Diagnostic) -> Self {
         let target = value.primary();
         Self {
             id: value.id().as_str().to_string(),
@@ -25,5 +25,11 @@ impl From<Diagnostic> for DiagnosticDto {
             message: value.message().to_string(),
             target: format!("{}:{}", target.domain(), target.path().unwrap_or("")),
         }
+    }
+}
+
+impl From<Diagnostic> for DiagnosticDto {
+    fn from(value: Diagnostic) -> Self {
+        Self::from(&value)
     }
 }

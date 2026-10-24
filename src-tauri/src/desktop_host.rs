@@ -344,14 +344,7 @@ impl DesktopHostState {
     }
 
     pub fn health(&self) -> HealthResponse {
-        HealthResponse::ok(
-            self.app_host
-                .read()
-                .expect(APP_HOST_LOCK)
-                .workspace()
-                .workspace_scope()
-                .as_str(),
-        )
+        HealthResponse::from_workspace(self.app_host.read().expect(APP_HOST_LOCK).workspace())
     }
 
     #[cfg(feature = "aigc")]
