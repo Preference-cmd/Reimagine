@@ -239,8 +239,7 @@ pub async fn remove_model(
 /// `POST /models/convert`.
 ///
 /// Converts an already-downloaded checkpoint to the specified backend.
-/// Routes to Burn (`execute_real_burn_sdxl_checkpoint_import`) or
-/// Candle (`import_sdxl_checkpoint_to_candle_split`).
+/// Routes to Burn (`execute_real_burn_sdxl_checkpoint_import`).
 pub async fn convert_checkpoint(
     State(state): State<AxumHostState>,
     Json(body): Json<ModelConvertInput>,
@@ -272,27 +271,8 @@ pub async fn convert_checkpoint(
                 report: conversion,
             }))
         }
-        "candle" => {
-            let core_id = ModelId::new(&body.model_id);
-            let (_manifest, _report, _import_result) = model_service
-                .import_sdxl_checkpoint_to_candle_split(&core_id)
-                .await?;
-
-            let conversion = ModelConvertConversionReport {
-                mapped_tensor_count: 0,
-                component_count: 4,
-                source_layout: "candle_example_split".to_string(),
-            };
-
-            Ok(Json(ModelConvertOutput {
-                outcome: "converted".to_string(),
-                model_id: body.model_id.clone(),
-                backend: "candle".to_string(),
-                report: conversion,
-            }))
-        }
         other => Err(AxumHostError::BadRequest {
-            message: format!("unsupported target_backend `{other}`; expected `burn` or `candle`"),
+            message: format!("unsupported target_backend `{other}`; expected `burn`"),
         }),
     }
 }
@@ -672,5 +652,37 @@ mod tests {
             .unwrap();
 
         assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+    }
+
+    #[tokio::test]
+    async fn convert_checkpoint_rejects_unsupported_candle_backend() {
+        let app = build_router().with_state(seeded_state_with_models().await);
+        let body = json!({
+            "modelId": "test-model-01",
+            "targetBackend": "candle",
+        });
+        let response = app
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri("/models/convert")
+                    .header("content-type", "application/json")
+                    .body(Body::from(body.to_string()))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+        let body = axum::body::to_bytes(response.into_body(), usize::MAX)
+            .await
+            .unwrap();
+        let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
+        assert!(
+            json["error"]["message"]
+                .as_str()
+                .unwrap()
+                .contains("candle")
+        );
     }
 }

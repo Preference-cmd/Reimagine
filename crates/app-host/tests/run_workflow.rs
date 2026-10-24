@@ -186,7 +186,7 @@ async fn build_host(manifest: ModelManifest, base: &str) -> WorkspaceHost {
         build_runtime(),
         builtin_catalog(),
         empty_compute_profile(),
-        BackendInstance::new("candle:cpu"),
+        BackendInstance::new("stub:cpu"),
     )
 }
 
@@ -319,7 +319,7 @@ async fn run_workflow_handoff_completes_when_readiness_passes() {
         runtime.clone(),
         builtin_catalog(),
         empty_compute_profile(),
-        BackendInstance::new("candle:cpu"),
+        BackendInstance::new("stub:cpu"),
     );
     let _ = model_service;
 
@@ -400,7 +400,7 @@ async fn run_workflow_propagates_correlation_id_to_runtime_options() {
         runtime.clone(),
         builtin_catalog(),
         empty_compute_profile(),
-        BackendInstance::new("candle:cpu"),
+        BackendInstance::new("stub:cpu"),
     );
     let _ = model_service;
 

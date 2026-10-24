@@ -69,7 +69,6 @@
   "settings.default-backend": "默认后端",
   "settings.default-backend-desc": "推理执行的后端类型",
   "settings.burn": "Burn",
-  "settings.candle": "Candle（已弃用）",
   "settings.device-selection": "设备选择",
   "settings.device-selection-desc": "用于推理的 GPU/CPU 设备",
   "settings.auto-detect": "自动检测",

@@ -16,17 +16,12 @@ use reimagine_inference::{
     BackendInstanceRuntimeHooks, BackendInstanceStatus, BackendProfile, DeviceProfile,
     InferenceBackend, InferenceCapability,
 };
-#[cfg(feature = "candle")]
-use reimagine_inference_candle::{
-    CandleBackend, CandleBackendConfig, CandleDevice, CandleProfileProvider,
-};
+
 use reimagine_plugin::{Extension, Plugin};
 
 /// Error during backend candidate resolution and bootstrap.
 #[derive(Debug)]
 pub enum BackendCandidateError {
-    #[cfg(feature = "candle")]
-    Candle(reimagine_inference_candle::CandleBackendError),
     BurnWorker(WorkerHostError),
     ExecutorRegistration(reimagine_inference::NodeExecutorRegistryError),
     /// Topology/discovery bootstrap failure (T13).
@@ -36,8 +31,6 @@ pub enum BackendCandidateError {
 impl std::fmt::Display for BackendCandidateError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
-            #[cfg(feature = "candle")]
-            Self::Candle(error) => write!(f, "{error}"),
             Self::BurnWorker(error) => write!(f, "Burn worker error: {error}"),
             Self::ExecutorRegistration(error) => write!(f, "executor registration failed: {error}"),
             Self::Topology(message) => write!(f, "topology bootstrap failed: {message}"),
@@ -46,13 +39,6 @@ impl std::fmt::Display for BackendCandidateError {
 }
 
 impl std::error::Error for BackendCandidateError {}
-
-#[cfg(feature = "candle")]
-impl From<reimagine_inference_candle::CandleBackendError> for BackendCandidateError {
-    fn from(value: reimagine_inference_candle::CandleBackendError) -> Self {
-        Self::Candle(value)
-    }
-}
 
 impl From<WorkerHostError> for BackendCandidateError {
     fn from(value: WorkerHostError) -> Self {
@@ -77,64 +63,6 @@ pub(crate) trait BackendCandidate: Send + Sync {
         instance: &BackendInstance,
         device: Option<DeviceProfile>,
     ) -> Result<BuiltBackendInstance, BackendCandidateError>;
-}
-
-#[cfg(feature = "candle")]
-#[derive(Debug, Clone, Copy)]
-pub(crate) struct CandleBackendCandidate;
-
-#[cfg(feature = "candle")]
-impl CandleBackendCandidate {
-    pub(crate) const fn new() -> Self {
-        Self
-    }
-}
-
-#[cfg(feature = "candle")]
-impl BackendCandidate for CandleBackendCandidate {
-    fn backend(&self) -> Backend {
-        Backend::new("candle")
-    }
-
-    fn profile(&self) -> BackendProfile {
-        CandleProfileProvider::new().probe()
-    }
-
-    fn build(
-        &self,
-        config: &AppConfig,
-        instance: &BackendInstance,
-        device: Option<DeviceProfile>,
-    ) -> Result<BuiltBackendInstance, BackendCandidateError> {
-        let device_label = instance
-            .as_str()
-            .split_once(':')
-            .map(|(_, label)| label)
-            .unwrap_or("cpu");
-        let candle_config = CandleBackendConfig::new(
-            config.paths().models_dir().to_path_buf(),
-            config.paths().output_dir().to_path_buf(),
-        )
-        .with_device(CandleDevice::new(device_label));
-        let backend = Arc::new(CandleBackend::new(candle_config)?);
-        let plugin = Plugin::try_from("builtin.candle").expect("valid built-in plugin id");
-        let extension = Extension::try_from("backend.candle").expect("valid built-in extension id");
-        let descriptor =
-            BackendInstanceDescriptor::new(instance.clone(), backend.backend_kind().clone())
-                .with_plugin(plugin.clone(), extension.clone());
-        let descriptor = if let Some(device) = device.clone() {
-            descriptor.with_device(device)
-        } else {
-            descriptor
-        };
-        let runtime_hooks = backend.runtime_hooks(Some(plugin), Some(extension), device);
-        let backend: Arc<dyn InferenceBackend> = backend;
-        Ok(BuiltBackendInstance {
-            descriptor,
-            backend,
-            runtime_hooks: Arc::new(runtime_hooks),
-        })
-    }
 }
 
 /// Backend candidate for Burn inference workers.
@@ -352,13 +280,8 @@ fn no_worker_diagnostic() -> Diagnostic {
     )
 }
 
-#[allow(clippy::vec_init_then_push)]
 pub(crate) fn builtin_backend_candidates() -> Vec<Arc<dyn BackendCandidate>> {
-    let mut candidates: Vec<Arc<dyn BackendCandidate>> = Vec::new();
-    candidates.push(Arc::new(BurnBackendCandidate::new()));
-    #[cfg(feature = "candle")]
-    candidates.push(Arc::new(CandleBackendCandidate::new()));
-    candidates
+    vec![Arc::new(BurnBackendCandidate::new())]
 }
 
 #[cfg(test)]
@@ -402,13 +325,6 @@ mod tests {
             "burn",
             "burn should be the first candidate"
         );
-    }
-
-    #[test]
-    fn builtin_candidates_include_candle_when_feature_enabled() {
-        let candidates = builtin_backend_candidates();
-        #[cfg(feature = "candle")]
-        assert!(candidates.iter().any(|c| c.backend().as_str() == "candle"));
     }
 
     #[test]

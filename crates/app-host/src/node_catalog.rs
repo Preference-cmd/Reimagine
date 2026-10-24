@@ -277,7 +277,7 @@ mod tests {
     #[test]
     fn empty_registry_marks_all_catalog_entries_as_missing() {
         let catalog = test_catalog();
-        let service = NodeCatalogService::new(catalog.clone(), BackendSelection::Candle);
+        let service = NodeCatalogService::new(catalog.clone(), BackendSelection::Burn);
         let registry = NodeExecutorRegistry::default();
 
         let report = service.check_alignment(&registry);
@@ -302,7 +302,7 @@ mod tests {
     #[test]
     fn fully_aligned_catalog_and_registry_report_no_diagnostics() {
         let catalog = test_catalog();
-        let service = NodeCatalogService::new(catalog.clone(), BackendSelection::Candle);
+        let service = NodeCatalogService::new(catalog.clone(), BackendSelection::Burn);
 
         // Build a registry that mirrors every entry in the catalog.
         let mut registry = NodeExecutorRegistry::default();
@@ -323,7 +323,7 @@ mod tests {
     fn orphan_executors_are_reported_as_warnings() {
         // A catalog that only exposes `builtin.string`.
         let catalog = Arc::new(BuiltinNodeCatalog::new(vec![builtin_string()]));
-        let service = NodeCatalogService::new(catalog.clone(), BackendSelection::Candle);
+        let service = NodeCatalogService::new(catalog.clone(), BackendSelection::Burn);
 
         let mut registry = NodeExecutorRegistry::default();
         registry
@@ -359,7 +359,7 @@ mod tests {
             builtin_string(),
             builtin_checkpoint(),
         ]));
-        let service = NodeCatalogService::new(catalog, BackendSelection::Candle);
+        let service = NodeCatalogService::new(catalog, BackendSelection::Burn);
 
         let mut registry = NodeExecutorRegistry::default();
         registry
@@ -385,7 +385,7 @@ mod tests {
     #[test]
     fn list_node_defs_and_find_node_def_return_clones() {
         let catalog = test_catalog();
-        let service = NodeCatalogService::new(catalog.clone(), BackendSelection::Candle);
+        let service = NodeCatalogService::new(catalog.clone(), BackendSelection::Burn);
 
         let defs = service.list_node_defs();
         assert_eq!(defs.len(), catalog.len());

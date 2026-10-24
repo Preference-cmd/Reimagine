@@ -32,7 +32,7 @@ export const useRuntimeStore = create<RuntimeState>()((set, get) => ({
   phase: "idle",
   runId: null,
   workflowName: "",
-  backend: "Candle",
+  backend: "Burn",
   device: "CPU",
   currentNode: null,
   progress: 0,

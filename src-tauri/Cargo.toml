@@ -40,6 +40,5 @@ opener = "0.7"
 tempfile = { workspace = true }
 
 [features]
-default = ["aigc", "candle"]
+default = ["aigc"]
 aigc = ["reimagine-app-host/aigc"]
-candle = ["aigc", "reimagine-app-host/candle"]

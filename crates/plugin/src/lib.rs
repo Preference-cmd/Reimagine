@@ -5,8 +5,7 @@
 //! metadata surface only; it does not own dynamic plugin loading, factory
 //! traits, or any host-specific construction logic.
 //!
-//! V1 registration is static: built-in packages such as the Candle inference
-//! backend are described as plugins at compile time. Runtime loading of
+//! V1 registration is static: built-in packages are described as plugins at compile time. Runtime loading of
 //! third-party plugins is deferred.
 //!
 //! Packages implement [`PluginPackage`] to declare a [`PluginDescriptor`] and

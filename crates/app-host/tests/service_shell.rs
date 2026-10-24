@@ -1,8 +1,5 @@
 #![cfg(feature = "aigc")]
 
-use aigc::reimagine_inference_candle::{
-    SdxlCheckpointConversionManifest, SdxlCheckpointImportRequest, SdxlConvertedComponent,
-};
 use reimagine_app_host::WorkspaceScope;
 use reimagine_app_host::{AppHost, ModelService, WorkflowService, WorkspaceHost};
 use reimagine_config::AppPaths;
@@ -17,8 +14,7 @@ use reimagine_core::model::{
 };
 use reimagine_core::workflow::Workflow;
 use reimagine_model_manager::{
-    Fingerprint, ModelDescriptor, ModelFormat, ModelManifest, ModelRoot, ModelSource,
-    ModelSourceStatus,
+    ModelDescriptor, ModelFormat, ModelManifest, ModelRoot, ModelSource, ModelSourceStatus,
 };
 use reimagine_nodes::{BUILTIN_CHECKPOINT_LOADER, BUILTIN_STRING, BuiltinNodeCatalog};
 
@@ -144,189 +140,6 @@ async fn model_service_wraps_manifest_store_and_resolver() {
         .expect("resolution should run");
     assert!(resolution.is_resolved());
     assert_eq!(resolution.value().unwrap().id(), &model_id);
-}
-
-#[tokio::test]
-async fn model_service_import_reuses_existing_candle_split_conversion_and_updates_manifest() {
-    let paths = AppPaths::new(temp_dir("model-import-existing"));
-    let checkpoint_path = paths.models_dir().join("checkpoints/sdxl-base.safetensors");
-    tokio::fs::create_dir_all(checkpoint_path.parent().unwrap())
-        .await
-        .unwrap();
-    tokio::fs::write(&checkpoint_path, b"checkpoint")
-        .await
-        .unwrap();
-
-    let model_id = ModelId::new("sdxl-base-1.0");
-    let fingerprint = Fingerprint::sha256("abc123");
-    let request = SdxlCheckpointImportRequest::new(
-        model_id.as_str(),
-        &checkpoint_path,
-        "sha256-abc123",
-        "safetensors",
-        paths.models_dir().join("converted"),
-    )
-    .with_created_at("2026-06-26T00:00:00Z");
-    let conversion_dir = request.conversion_dir();
-    let conversion_manifest = SdxlCheckpointConversionManifest::for_request(&request);
-    for component in SdxlConvertedComponent::all() {
-        let path = conversion_dir.join(conversion_manifest.component_path(component));
-        tokio::fs::create_dir_all(path.parent().unwrap())
-            .await
-            .unwrap();
-        tokio::fs::write(path, b"component").await.unwrap();
-    }
-    tokio::fs::write(
-        conversion_dir.join("conversion.json"),
-        serde_json::to_vec_pretty(&conversion_manifest).unwrap(),
-    )
-    .await
-    .unwrap();
-
-    let descriptor = ModelDescriptor::new(
-        model_id.clone(),
-        ModelSeries::new("stable_diffusion"),
-        ModelVariant::new("sdxl"),
-        vec![ModelRole::CheckpointBundle],
-        ModelSource::relative(
-            ModelRoot::base_models().id().clone(),
-            "checkpoints/sdxl-base.safetensors",
-        ),
-        ModelFormat::SafeTensors,
-    )
-    .with_source_status(ModelSourceStatus::Available)
-    .with_fingerprint(fingerprint);
-    let service = test_model_service(paths.clone());
-    service
-        .save_manifest(
-            &ModelManifest::new()
-                .with_root(ModelRoot::base_models())
-                .with_model(descriptor),
-        )
-        .await
-        .unwrap();
-
-    let (manifest, report, import_result) = service
-        .import_sdxl_checkpoint_to_candle_split(&model_id)
-        .await
-        .unwrap();
-
-    assert!(report.diagnostics().is_empty());
-    assert!(import_result.reused_existing());
-    let converted = manifest.models().first().expect("converted descriptor");
-    assert_eq!(converted.components().len(), 4);
-    assert!(converted.components().iter().any(|component| {
-        component.metadata().get("component").map(String::as_str) == Some("unet")
-    }));
-
-    let model_ref = ModelRef::new(
-        model_id.clone(),
-        ModelSeries::new("stable_diffusion"),
-        ModelVariant::new("sdxl"),
-        ModelRole::CheckpointBundle,
-    );
-    let resolved = service
-        .resolve_descriptor_with_components(&model_ref)
-        .await
-        .unwrap();
-    assert!(resolved.report().diagnostics().is_empty());
-    assert_eq!(resolved.value().unwrap().components().len(), 4);
-}
-
-#[tokio::test]
-async fn model_service_import_failure_does_not_mutate_manifest() {
-    // Use an unsupported block index that passes projection but fails
-    // at the writer/mapping stage.
-    let paths = AppPaths::new(temp_dir("model-import-failure"));
-    let checkpoint_path = paths.models_dir().join("checkpoints/sdxl-base.safetensors");
-    tokio::fs::create_dir_all(checkpoint_path.parent().unwrap())
-        .await
-        .unwrap();
-    let mut names = complete_original_checkpoint_names();
-    names[0] = "model.diffusion_model.input_blocks.99.0.weight";
-    write_tiny_safetensors(&checkpoint_path, &names);
-
-    let model_id = ModelId::new("sdxl-base-1.0");
-    let descriptor = ModelDescriptor::new(
-        model_id.clone(),
-        ModelSeries::new("stable_diffusion"),
-        ModelVariant::new("sdxl"),
-        vec![ModelRole::CheckpointBundle],
-        ModelSource::relative(
-            ModelRoot::base_models().id().clone(),
-            "checkpoints/sdxl-base.safetensors",
-        ),
-        ModelFormat::SafeTensors,
-    )
-    .with_source_status(ModelSourceStatus::Available)
-    .with_fingerprint(Fingerprint::sha256("abc123"));
-    let service = test_model_service(paths);
-    service
-        .save_manifest(
-            &ModelManifest::new()
-                .with_root(ModelRoot::base_models())
-                .with_model(descriptor),
-        )
-        .await
-        .unwrap();
-
-    let error = service
-        .import_sdxl_checkpoint_to_candle_split(&model_id)
-        .await
-        .unwrap_err();
-
-    assert!(
-        error.to_string().contains("unsupported block index"),
-        "expected unsupported block index error, got: {error}"
-    );
-
-    // Verify that the manifest was not mutated on failure.
-    let models = service.list_models().await.unwrap();
-    assert!(models[0].components().is_empty());
-}
-
-#[tokio::test]
-async fn model_service_import_original_checkpoint_adds_split_components() {
-    // Verify that a complete original checkpoint with valid mapping
-    // succeeds and produces manifest components.
-    let paths = AppPaths::new(temp_dir("model-import-success"));
-    let checkpoint_path = paths.models_dir().join("checkpoints/sdxl-base.safetensors");
-    tokio::fs::create_dir_all(checkpoint_path.parent().unwrap())
-        .await
-        .unwrap();
-    write_tiny_safetensors(&checkpoint_path, &complete_original_checkpoint_names());
-
-    let model_id = ModelId::new("sdxl-base-1.0");
-    let descriptor = ModelDescriptor::new(
-        model_id.clone(),
-        ModelSeries::new("stable_diffusion"),
-        ModelVariant::new("sdxl"),
-        vec![ModelRole::CheckpointBundle],
-        ModelSource::relative(
-            ModelRoot::base_models().id().clone(),
-            "checkpoints/sdxl-base.safetensors",
-        ),
-        ModelFormat::SafeTensors,
-    )
-    .with_source_status(ModelSourceStatus::Available)
-    .with_fingerprint(Fingerprint::sha256("abc123"));
-    let service = test_model_service(paths);
-    service
-        .save_manifest(
-            &ModelManifest::new()
-                .with_root(ModelRoot::base_models())
-                .with_model(descriptor),
-        )
-        .await
-        .unwrap();
-
-    service
-        .import_sdxl_checkpoint_to_candle_split(&model_id)
-        .await
-        .expect("original checkpoint import should now succeed");
-
-    let models = service.list_models().await.unwrap();
-    assert_eq!(models[0].components().len(), 4);
 }
 
 #[tokio::test]
@@ -515,29 +328,6 @@ fn add_string_node_batch(base_version: WorkflowVersion, value: &str) -> CommandB
     )
 }
 
-fn write_tiny_safetensors(path: &std::path::Path, names: &[&str]) {
-    let mut offset = 0usize;
-    let entries = names
-        .iter()
-        .map(|name| {
-            let start = offset;
-            offset += 4;
-            format!(
-                "\"{name}\":{{\"dtype\":\"F32\",\"shape\":[1],\"data_offsets\":[{start},{offset}]}}"
-            )
-        })
-        .collect::<Vec<_>>()
-        .join(",");
-    let header = format!("{{{entries}}}");
-    let mut bytes = Vec::new();
-    bytes.extend_from_slice(&(header.len() as u64).to_le_bytes());
-    bytes.extend_from_slice(header.as_bytes());
-    for idx in 0..names.len() {
-        bytes.extend_from_slice(&(idx as f32).to_le_bytes());
-    }
-    std::fs::write(path, bytes).unwrap();
-}
-
 fn write_burn_package(
     models_dir: &std::path::Path,
     source_model_id: &str,
@@ -645,64 +435,6 @@ fn write_burn_package(
     .unwrap();
 
     report_path
-}
-
-fn complete_original_checkpoint_names() -> Vec<&'static str> {
-    let mut names = vec![
-        "model.diffusion_model.input_blocks.0.0.weight",
-        "model.diffusion_model.time_embed.0.weight",
-        "model.diffusion_model.input_blocks.1.0.in_layers.0.weight",
-        "model.diffusion_model.input_blocks.4.1.proj_in.weight",
-        "model.diffusion_model.input_blocks.3.0.op.weight",
-        "model.diffusion_model.middle_block.0.in_layers.0.weight",
-        "model.diffusion_model.middle_block.1.proj_in.weight",
-        "model.diffusion_model.output_blocks.0.0.skip_connection.weight",
-        "model.diffusion_model.output_blocks.0.1.proj_in.weight",
-        "model.diffusion_model.output_blocks.2.2.conv.weight",
-        "model.diffusion_model.out.0.weight",
-        "model.diffusion_model.out.2.weight",
-        "model.diffusion_model.label_emb.0.0.weight",
-    ];
-    names.extend(required_clip_source_names("conditioner.embedders.0."));
-    names.extend(required_clip_source_names("conditioner.embedders.1.model."));
-    names.extend(required_vae_source_names());
-    names
-}
-
-fn required_clip_source_names(prefix: &'static str) -> Vec<&'static str> {
-    let targets = [
-        "transformer.text_model.embeddings.token_embedding.weight",
-        "transformer.text_model.embeddings.position_embedding.weight",
-        "transformer.text_model.encoder.layers.0.self_attn.q_proj.weight",
-        "transformer.text_model.encoder.layers.0.self_attn.k_proj.weight",
-        "transformer.text_model.encoder.layers.0.self_attn.v_proj.weight",
-        "transformer.text_model.encoder.layers.0.self_attn.out_proj.weight",
-        "transformer.text_model.encoder.layers.0.layer_norm1.weight",
-        "transformer.text_model.final_layer_norm.weight",
-    ];
-    targets
-        .into_iter()
-        .map(|target| Box::leak(format!("{prefix}{target}").into_boxed_str()) as &'static str)
-        .collect()
-}
-
-fn required_vae_source_names() -> Vec<&'static str> {
-    let targets = [
-        "encoder.conv_in.weight",
-        "encoder.conv_out.weight",
-        "encoder.conv_norm_out.weight",
-        "decoder.conv_in.weight",
-        "decoder.conv_out.weight",
-        "decoder.conv_norm_out.weight",
-        "quant_conv.weight",
-        "post_quant_conv.weight",
-    ];
-    targets
-        .into_iter()
-        .map(|target| {
-            Box::leak(format!("first_stage_model.{target}").into_boxed_str()) as &'static str
-        })
-        .collect()
 }
 
 #[tokio::test]

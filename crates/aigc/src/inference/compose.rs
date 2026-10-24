@@ -244,7 +244,7 @@ fn bootstrap_inference_with_candidates(
 /// keyed path: candidates provide profiles, selected instances, backend
 /// builders, and runtime hooks. Tests inject an additional stub candidate through
 /// `bootstrap_inference_with_candidates` to prove this path is no longer
-/// Candle-shaped.
+/// tied to a single backend.
 /// Compose inference runtime for test configurations.
 pub fn compose_inference_runtime(
     config: &AppConfig,
@@ -555,8 +555,7 @@ mod tests {
     use reimagine_plugin::{Extension, Plugin};
     use std::collections::BTreeMap;
 
-    #[cfg(feature = "candle")]
-    use crate::inference::candidate::CandleBackendCandidate;
+    use crate::inference::candidate::BurnBackendCandidate;
     use crate::model_acquisition_service::ModelAcquisitionService;
 
     fn temp_dir(prefix: &str) -> std::path::PathBuf {
@@ -568,17 +567,19 @@ mod tests {
     }
 
     #[test]
-    fn compose_backends_registers_cpu_instance_for_resolved_cpu_instance() {
-        let base = temp_dir("resolved-cpu");
+    fn compose_backends_registers_stub_instance_for_resolved_instance() {
+        let base = temp_dir("resolved-stub");
         let config = AppConfig::new(AppPaths::new(&base));
-        let profile = collect_compute_profile(&builtin_backend_candidates());
+        let candidates: Vec<Arc<dyn BackendCandidate>> =
+            vec![Arc::new(StubBackendCandidate::new())];
+        let profile = collect_compute_profile(&candidates);
 
         let composed = compose_inference_backends(
             &config,
-            &builtin_backend_candidates(),
+            &candidates,
             &profile,
-            BackendInstance::new("candle:cpu"),
-            vec![BackendInstance::new("candle:cpu")],
+            BackendInstance::new("stub:cpu"),
+            vec![BackendInstance::new("stub:cpu")],
             Vec::new(),
         )
         .expect("backends");
@@ -588,26 +589,24 @@ mod tests {
             1,
             "selected backend should register once"
         );
-        assert_eq!(
-            composed.selected_instance,
-            BackendInstance::new("candle:cpu")
-        );
+        assert_eq!(composed.selected_instance, BackendInstance::new("stub:cpu"));
         let _ = std::fs::remove_dir_all(&base);
     }
 
     #[test]
-    fn compose_backends_attaches_builtin_candle_plugin_provenance() {
+    fn compose_backends_attaches_builtin_stub_plugin_provenance() {
         let base = temp_dir("plugin-provenance");
         let config = AppConfig::new(AppPaths::new(&base));
-        let candidates = builtin_backend_candidates();
+        let candidates: Vec<Arc<dyn BackendCandidate>> =
+            vec![Arc::new(StubBackendCandidate::new())];
         let profile = collect_compute_profile(&candidates);
 
         let composed = compose_inference_backends(
             &config,
             &candidates,
             &profile,
-            BackendInstance::new("candle:cpu"),
-            vec![BackendInstance::new("candle:cpu")],
+            BackendInstance::new("stub:cpu"),
+            vec![BackendInstance::new("stub:cpu")],
             Vec::new(),
         )
         .expect("backends");
@@ -617,11 +616,11 @@ mod tests {
         assert_eq!(descriptor.instance, composed.selected_instance);
         assert_eq!(
             descriptor.plugin.as_ref().map(|p| p.as_str()),
-            Some("builtin.candle")
+            Some("builtin.stub")
         );
         assert_eq!(
             descriptor.extension.as_ref().map(|e| e.as_str()),
-            Some("backend.candle")
+            Some("backend.stub")
         );
         assert_eq!(
             descriptor.device.as_ref().map(|d| d.label.as_str()),
@@ -630,47 +629,9 @@ mod tests {
         let _ = std::fs::remove_dir_all(&base);
     }
 
-    #[cfg(feature = "candle")]
-    #[test]
-    fn compose_uses_metal_instance_when_available_or_errors_when_unavailable() {
-        let base = temp_dir("resolved-metal");
-        let config = AppConfig::new(AppPaths::new(&base));
-        let candidates = builtin_backend_candidates();
-        let profile = collect_compute_profile(&candidates);
-
-        let result = compose_inference_backends(
-            &config,
-            &candidates,
-            &profile,
-            BackendInstance::new("candle:metal"),
-            vec![BackendInstance::new("candle:metal")],
-            Vec::new(),
-        );
-        match result {
-            Ok(composed) => {
-                assert_eq!(
-                    composed.selected_instance,
-                    BackendInstance::new("candle:metal")
-                );
-            }
-            Err(BackendCandidateError::Candle(
-                reimagine_inference_candle::CandleBackendError::DeviceUnavailable {
-                    requested, ..
-                },
-            )) => {
-                assert_eq!(
-                    requested, "metal",
-                    "non-Metal hosts may reject direct resolved-metal composition"
-                );
-            }
-            Err(other) => panic!("expected metal composition or DeviceUnavailable, got {other:?}"),
-        }
-        let _ = std::fs::remove_dir_all(&base);
-    }
-
     #[test]
     fn compose_runtime_router_uses_config_projected_backend_policy() {
-        let instance = BackendInstance::new("candle:cpu");
+        let instance = BackendInstance::new("stub:cpu");
         let registry = InferenceBackendRegistry::new();
         let runtime = compose_runtime_router(
             registry,
@@ -698,7 +659,7 @@ mod tests {
         assert!(
             !runtime
                 .selection_policy()
-                .allows_explicit_override(&BackendInstance::new("candle:metal"), &request)
+                .allows_explicit_override(&BackendInstance::new("other:metal"), &request)
         );
     }
 
@@ -716,16 +677,12 @@ mod tests {
         ));
 
         let runtime =
-            compose_inference_runtime(&config, BackendInstance::new("candle:cpu"), model_service)
+            compose_inference_runtime(&config, BackendInstance::new("stub:cpu"), model_service)
                 .expect("runtime");
-        assert_eq!(
-            runtime.selected_instance,
-            BackendInstance::new("candle:cpu")
-        );
+        assert_eq!(runtime.selected_instance, BackendInstance::new("stub:cpu"));
         let _ = std::fs::remove_dir_all(&base);
     }
 
-    #[cfg(feature = "candle")]
     #[tokio::test]
     async fn bootstrap_with_stub_collects_multiple_profiles_and_selects_stub() {
         let base = temp_dir("stub-bootstrap");
@@ -740,7 +697,7 @@ mod tests {
         ));
         let backend_config = InferenceBackendConfig {
             selected_instance: Some("stub:cpu".to_string()),
-            priority_order: vec!["stub:cpu".to_string(), "candle:cpu".to_string()],
+            priority_order: vec!["stub:cpu".to_string(), "burn:cpu".to_string()],
             ..InferenceBackendConfig::default()
         };
 
@@ -749,7 +706,7 @@ mod tests {
             &backend_config,
             model_service,
             vec![
-                Arc::new(CandleBackendCandidate::new()),
+                Arc::new(BurnBackendCandidate::new()),
                 Arc::new(StubBackendCandidate::new()),
             ],
         )
@@ -764,7 +721,7 @@ mod tests {
                 .compute_profile
                 .backend_profiles
                 .iter()
-                .any(|profile| profile.backend == Backend::new("candle"))
+                .any(|profile| profile.backend == Backend::new("burn"))
         );
         assert!(
             bootstrapped

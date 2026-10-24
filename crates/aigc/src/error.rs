@@ -22,9 +22,6 @@ pub enum AigcError {
     ModelManager(#[from] reimagine_model_manager::ModelManagerError),
     #[error("{}", DiagnosticError::user_message(.0))]
     ModelAcquisition(#[from] reimagine_model_acquisition::ModelAcquisitionError),
-    #[cfg(feature = "candle")]
-    #[error("{0}")]
-    CandleCheckpointImport(#[from] reimagine_inference_candle::SdxlCheckpointImportError),
     #[error("Burn checkpoint import error: {message}")]
     BurnCheckpointImport { message: String },
     #[error("worker management error: {0}")]

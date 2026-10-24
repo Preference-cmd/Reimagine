@@ -58,9 +58,8 @@ on the server without changes.
 
 ### Cross-platform inference
 
-Burn is the primary inference backend: it runs on Metal, Vulkan or the CPU
+Burn is the inference backend: it runs on Metal, Vulkan or the CPU
 `flex` backend, so one workflow runs on Apple Silicon, Windows, and Linux.
-Candle, the earlier backend, is deprecated and kept only as a V1 fallback.
 
 ### Local-first models
 
@@ -77,7 +76,7 @@ No accounts, no cloud, no telemetry.
 | Domain / runtime  | Rust 2024 workspace                                 |
 | Desktop host      | Tauri 2                                             |
 | HTTP host         | Axum 0.8                                            |
-| Inference         | Candle 0.10 · Burn 0.21 (`wgpu` default, `flex` CPU) |
+| Inference         | Burn 0.21 (`wgpu` default, `flex` CPU)              |
 | UI                | React 19 + Vite 7 (Bun)                             |
 
 ## Requirements
@@ -119,7 +118,7 @@ crates/model-acquisition/        reimagine-model-acquisition - HF catalog, compo
 crates/nodes/                    reimagine-nodes - V1 builtin SDXL node catalog
 crates/runtime/                  reimagine-runtime - RuntimeService, scheduler, run/value store
 crates/inference/                reimagine-inference - backend contract, router, execution values, executors
-crates/inference-backends/       candle/ burn/ burn-worker/ - concrete backends (Burn primary, Candle deprecated)
+crates/inference-backends/       burn/ burn-worker/ - concrete backend
 crates/plugin/                   reimagine-plugin - plugin package and extension metadata contract
 crates/aigc/                     aigc - optional AIGC module: inference composition, worker management, model services
 crates/app-host/                 reimagine-app-host - WorkspaceHost, Project/Board/Workflow/Run services, proposals

@@ -12,7 +12,6 @@ members = [
     "crates/app-host",
     "crates/axum-host",
     "crates/inference",
-    "crates/inference-backends/candle",
     "crates/inference-backends/burn",
     "crates/inference-backends/burn-worker",
     "crates/plugin",
@@ -53,9 +52,6 @@ tower-http = { version = "0.6", features = ["trace"] }
 clap = { version = "4", features = ["derive"] }
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
-candle-core = { version = "0.10", default-features = false }
-candle-nn = { version = "0.10", default-features = false }
-candle-transformers = { version = "0.10", default-features = false }
 burn-nn = { version = "0.21", default-features = false, features = ["std"] }
 burn-flex = { version = "0.21", default-features = false, features = ["std"] }
 burn-wgpu = { version = "0.21", default-features = false, features = ["std"] }

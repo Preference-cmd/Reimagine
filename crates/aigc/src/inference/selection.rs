@@ -11,7 +11,6 @@ use reimagine_inference::{
 };
 
 pub(crate) const DEFAULT_BACKEND_FALLBACK: &str = "burn:cpu";
-pub(crate) const DEFAULT_BACKEND_FALLBACK_LABEL: &str = "cpu";
 
 #[derive(Debug)]
 pub(crate) struct ResolvedBackendSelection {
@@ -51,9 +50,6 @@ pub(crate) fn resolve_backend_selection(
         }
     } else {
         let (backend_kind, configured_device) = match config.backend {
-            reimagine_config::InferenceBackendKind::Candle => {
-                ("candle", config.candle_device.trim())
-            }
             reimagine_config::InferenceBackendKind::Burn => ("burn", config.burn_device.trim()),
         };
         let (instance, fallback_diagnostics) =
@@ -104,11 +100,6 @@ impl<'a> BackendProfilesByInstance<'a> {
     pub(crate) fn get(&self, instance: &BackendInstance) -> Option<&'a BackendInstanceProfile> {
         self.by_instance.get(instance).copied()
     }
-}
-
-/// Resolved candle device label for backend instance diagnostics.
-pub fn resolved_candle_device_label(instance: &BackendInstance) -> String {
-    instance_label(instance).to_string()
 }
 
 fn resolve_open_selected_instance(
@@ -254,14 +245,6 @@ fn selected_instance_unavailable(instance: &str, reason: &str) -> Diagnostic {
     )
 }
 
-fn instance_label(instance: &BackendInstance) -> &str {
-    instance
-        .as_str()
-        .split_once(':')
-        .map(|(_, label)| label)
-        .unwrap_or(DEFAULT_BACKEND_FALLBACK_LABEL)
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -270,28 +253,7 @@ mod tests {
     };
 
     #[test]
-    fn resolve_selected_instance_wins_over_legacy_candle_device() {
-        let profile = profile_with_stub();
-        let cfg = InferenceBackendConfig {
-            selected_instance: Some("stub:cpu".to_string()),
-            candle_device: "tpu".to_string(),
-            ..InferenceBackendConfig::default()
-        };
-
-        let resolved = resolve_backend_selection(&cfg, &profile);
-
-        assert_eq!(resolved.selected_instance, BackendInstance::new("stub:cpu"));
-        assert!(resolved.diagnostics.is_empty());
-        assert_eq!(resolved.priority_order[0], BackendInstance::new("stub:cpu"));
-        assert_eq!(
-            resolved.priority_order,
-            vec![BackendInstance::new("stub:cpu")],
-            "open selected instance should not append Candle fallback unless config asks for it"
-        );
-    }
-
-    #[test]
-    fn resolve_unknown_explicit_instance_is_preserved_without_candle_fallback() {
+    fn resolve_unknown_explicit_instance_is_preserved_without_fallback() {
         let profile = profile_with_stub();
         let cfg = InferenceBackendConfig {
             selected_instance: Some("ghost:cpu".to_string()),
@@ -327,7 +289,7 @@ mod tests {
         );
         let cfg = InferenceBackendConfig {
             selected_instance: Some("burn:wgpu:default".to_string()),
-            priority_order: vec!["candle:cpu".to_string()],
+            priority_order: vec!["stub:cpu".to_string()],
             ..InferenceBackendConfig::default()
         };
 
@@ -352,7 +314,7 @@ mod tests {
         let profile = profile_with_stub();
         let cfg = InferenceBackendConfig {
             selected_instance: Some("stub:cpu".to_string()),
-            priority_order: vec!["candle:cpu".to_string()],
+            priority_order: vec!["stub:cpu".to_string()],
             ..InferenceBackendConfig::default()
         };
 
@@ -394,33 +356,8 @@ mod tests {
         );
     }
 
-    #[test]
-    fn explicit_candle_backend_resolves_to_candle() {
-        let profile = profile_with_stub();
-        let cfg = InferenceBackendConfig {
-            backend: reimagine_config::InferenceBackendKind::Candle,
-            ..InferenceBackendConfig::default()
-        };
-
-        let resolved = resolve_backend_selection(&cfg, &profile);
-
-        assert_eq!(
-            resolved.selected_instance,
-            BackendInstance::new("candle:cpu"),
-            "explicit candle backend should resolve to candle:cpu"
-        );
-    }
-
     fn profile_with_stub() -> WorkspaceComputeProfile {
         WorkspaceComputeProfile::new()
-            .with_backend_profile(BackendProfile::new(Backend::new("candle")).with_instance(
-                BackendInstanceProfile::new(
-                    BackendInstance::new("candle:cpu"),
-                    Backend::new("candle"),
-                    DeviceProfile::new("cpu").with_kind(DeviceKind::Cpu),
-                    BackendInstanceStatus::Available,
-                ),
-            ))
             .with_backend_profile(BackendProfile::new(Backend::new("burn")).with_instance(
                 BackendInstanceProfile::new(
                     BackendInstance::new("burn:cpu"),

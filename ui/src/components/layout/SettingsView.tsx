@@ -14,7 +14,7 @@ type SettingItem = {
   id: string;
   labelKey: string;
   descriptionKey?: string;
-  type: "toggle" | "select" | "segment";
+  type: "toggle" | "select" | "segment" | "readonly";
   options?: string[];
 };
 
@@ -111,8 +111,7 @@ const SETTINGS_CONTENT: Record<string, SettingsGroup[]> = {
           id: "backend",
           labelKey: "settings.default-backend",
           descriptionKey: "settings.default-backend-desc",
-          type: "select",
-          options: ["settings.burn", "settings.candle"],
+          type: "readonly",
         },
         {
           id: "device",
@@ -356,10 +355,6 @@ function SettingRow({
 
   const selectValue = (() => {
     switch (item.id) {
-      case "backend": {
-        const val = watchedValues.backend;
-        return val === "Burn" ? resolveLabel("settings.burn") : resolveLabel("settings.candle");
-      }
       case "device": {
         const val = watchedValues.device;
         return val === "auto"
@@ -421,9 +416,6 @@ function SettingRow({
 
   const handleSelect = (value: string) => {
     switch (item.id) {
-      case "backend":
-        form.setValue("backend", value.includes("Candle") ? "Candle (deprecated)" : "Burn");
-        break;
       case "device": {
         const v = value.includes("Auto")
           ? "auto"
@@ -492,6 +484,15 @@ function SettingRow({
       </div>
 
       <div className="shrink-0">
+        {item.type === "readonly" && (
+          <div
+            style={{ height: "32px", fontSize: "13px", padding: "0 10px" }}
+            className="inline-flex items-center rounded-md border border-outline bg-surface-container-low text-on-surface font-medium select-none"
+          >
+            {resolveLabel("settings.burn")}
+          </div>
+        )}
+
         {item.type === "toggle" && (
           <button
             type="button"

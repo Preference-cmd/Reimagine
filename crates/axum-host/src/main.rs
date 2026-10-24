@@ -58,7 +58,7 @@ async fn main() -> ExitCode {
         let backend_config = workspace.backend_config();
         tracing::info!(
             backend = ?backend_config.backend,
-            device = %backend_config.candle_device,
+            device = %backend_config.burn_device,
             "inference backend selected",
         );
     }

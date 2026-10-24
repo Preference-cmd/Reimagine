@@ -352,7 +352,7 @@ export function listWorkerSwitchTargets(): Promise<WorkerSwitchTarget[]> {
 }
 
 /** Drain in-flight runs and re-bootstrap the workspace with `selection`
- *  (a backend kind, `"burn"` | `"candle"`). Resolves to the new compute
+ *  (a backend kind, `"burn"`). Resolves to the new compute
  *  profile. The selection is not persisted across app restarts. */
 export function rebootBackend(args: RebootBackendArgs): Promise<ComputeProfile> {
   return dispatch("rebootstrap_backend", RebootBackendArgsSchema, args, mockRebootBackend);

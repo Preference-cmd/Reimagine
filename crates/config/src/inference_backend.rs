@@ -13,7 +13,6 @@ use crate::{ConfigDocument, ConfigValidationContext};
 pub enum InferenceBackendKind {
     #[default]
     Burn,
-    Candle,
 }
 
 /// A manually configured static worker endpoint (T12 `ConfigDiscovery`).
@@ -72,16 +71,13 @@ impl Default for WorkerEndpointConfig {
 }
 
 /// Persisted inference backend configuration.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub struct InferenceBackendConfig {
     #[serde(default = "default_schema_version")]
     pub schema_version: String,
 
     #[serde(default)]
     pub backend: InferenceBackendKind,
-
-    #[serde(default = "default_candle_device")]
-    pub candle_device: String,
 
     #[serde(default = "default_burn_device")]
     pub burn_device: String,
@@ -112,14 +108,99 @@ pub struct InferenceBackendConfig {
     /// pre-shares the T19 cert pin, marking the endpoint trusted.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub workers: Vec<WorkerEndpointConfig>,
+
+    /// Set on load when the file named the removed Candle backend; it
+    /// is read as Burn and reported as a warning. Never persisted.
+    #[serde(skip)]
+    pub legacy_candle_backend: bool,
+
+    /// `candle:*` instance ids dropped on load, each reported as a
+    /// warning. Never persisted.
+    #[serde(skip)]
+    pub dropped_candle_instances: Vec<String>,
+}
+
+#[derive(Deserialize)]
+struct RawInferenceBackendConfig {
+    #[serde(default = "default_schema_version")]
+    schema_version: String,
+    #[serde(default)]
+    backend: Option<String>,
+    #[serde(default = "default_burn_device")]
+    burn_device: String,
+    #[serde(default)]
+    selected_instance: Option<String>,
+    #[serde(default)]
+    priority_order: Vec<String>,
+    #[serde(default)]
+    disabled_instances: Vec<String>,
+    #[serde(default)]
+    workers: Vec<WorkerEndpointConfig>,
+}
+
+impl<'de> Deserialize<'de> for InferenceBackendConfig {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: serde::Deserializer<'de>,
+    {
+        let raw = RawInferenceBackendConfig::deserialize(deserializer)?;
+        let mut legacy_candle_backend = false;
+        let backend = match raw.backend.as_deref() {
+            Some("candle") => {
+                legacy_candle_backend = true;
+                InferenceBackendKind::Burn
+            }
+            Some("burn") | None => InferenceBackendKind::Burn,
+            Some(other) => {
+                return Err(serde::de::Error::custom(format!(
+                    "unknown inference backend `{other}`"
+                )));
+            }
+        };
+
+        let mut dropped_candle_instances = Vec::new();
+        let selected_instance = match raw.selected_instance {
+            Some(inst) if inst.starts_with("candle:") => {
+                dropped_candle_instances.push(inst);
+                None
+            }
+            other => other,
+        };
+
+        let mut priority_order = Vec::with_capacity(raw.priority_order.len());
+        for inst in raw.priority_order {
+            if inst.starts_with("candle:") {
+                dropped_candle_instances.push(inst);
+            } else {
+                priority_order.push(inst);
+            }
+        }
+
+        let mut disabled_instances = Vec::with_capacity(raw.disabled_instances.len());
+        for inst in raw.disabled_instances {
+            if inst.starts_with("candle:") {
+                dropped_candle_instances.push(inst);
+            } else {
+                disabled_instances.push(inst);
+            }
+        }
+
+        Ok(Self {
+            schema_version: raw.schema_version,
+            backend,
+            burn_device: raw.burn_device,
+            selected_instance,
+            priority_order,
+            disabled_instances,
+            workers: raw.workers,
+            legacy_candle_backend,
+            dropped_candle_instances,
+        })
+    }
 }
 
 fn default_schema_version() -> String {
     InferenceBackendConfig::SCHEMA_VERSION.to_string()
-}
-
-fn default_candle_device() -> String {
-    "cpu".to_string()
 }
 
 fn default_burn_device() -> String {
@@ -131,12 +212,13 @@ impl Default for InferenceBackendConfig {
         Self {
             schema_version: default_schema_version(),
             backend: InferenceBackendKind::default(),
-            candle_device: default_candle_device(),
             burn_device: default_burn_device(),
             selected_instance: None,
             priority_order: Vec::new(),
             disabled_instances: Vec::new(),
             workers: Vec::new(),
+            legacy_candle_backend: false,
+            dropped_candle_instances: Vec::new(),
         }
     }
 }
@@ -147,6 +229,31 @@ impl ConfigDocument for InferenceBackendConfig {
 
     fn validate(&self, _context: &ConfigValidationContext) -> Vec<Diagnostic> {
         let mut diagnostics = Vec::new();
+
+        if self.legacy_candle_backend {
+            diagnostics.push(Diagnostic::new(
+                DiagnosticId::new("config:inference_backend:legacy_candle_backend"),
+                DiagnosticCode::new("CONFIG/INFERENCE_BACKEND_CANDLE_REMOVED"),
+                DiagnosticSeverity::Warning,
+                DiagnosticSourceName::new("config"),
+                "Candle backend was removed; using Burn",
+                DiagnosticTarget::new(DiagnosticTargetDomain::new("config")).with_id(Self::KEY),
+            ));
+        }
+
+        for instance in &self.dropped_candle_instances {
+            diagnostics.push(Diagnostic::new(
+                DiagnosticId::new(format!(
+                    "config:inference_backend:dropped_instance:{instance}"
+                )),
+                DiagnosticCode::new("CONFIG/INFERENCE_BACKEND_CANDLE_REMOVED"),
+                DiagnosticSeverity::Warning,
+                DiagnosticSourceName::new("config"),
+                format!("Candle backend was removed; dropped `{instance}` from configuration"),
+                DiagnosticTarget::new(DiagnosticTargetDomain::new("config")).with_id(Self::KEY),
+            ));
+        }
+
         let mut seen = std::collections::HashSet::new();
         for worker in &self.workers {
             if worker.id.trim().is_empty() {
@@ -178,7 +285,7 @@ fn worker_diagnostic(id: &str, message: &str) -> Diagnostic {
         DiagnosticSourceName::new("config"),
         format!("worker `{id}`: {message}"),
         DiagnosticTarget::new(DiagnosticTargetDomain::new("config"))
-            .with_id("inference_backend.json"),
+            .with_id(InferenceBackendConfig::KEY),
     )
 }
 
@@ -191,7 +298,6 @@ mod tests {
     fn default_is_burn() {
         let cfg = InferenceBackendConfig::default();
         assert_eq!(cfg.backend, InferenceBackendKind::Burn);
-        assert_eq!(cfg.candle_device, "cpu");
         assert_eq!(cfg.burn_device, "cpu");
         assert_eq!(cfg.schema_version, "1");
     }
@@ -201,28 +307,54 @@ mod tests {
         let cfg = InferenceBackendConfig::default();
         let json = serde_json::to_value(&cfg).unwrap();
         assert_eq!(json["backend"], "burn");
+        assert!(json.get("candle_device").is_none());
     }
 
     #[test]
     fn missing_backend_defaults_to_burn() {
-        let json = r#"{"candle_device": "cpu"}"#;
+        let json = r#"{"burn_device": "cpu"}"#;
         let cfg: InferenceBackendConfig = serde_json::from_str(json).unwrap();
         assert_eq!(cfg.backend, InferenceBackendKind::Burn);
     }
 
     #[test]
-    fn missing_device_defaults_to_cpu() {
-        let json = r#"{"backend": "candle"}"#;
+    fn old_settings_with_candle_backend_and_device_loads_as_burn_with_diagnostics() {
+        let json = r#"{
+            "backend": "candle",
+            "candle_device": "metal",
+            "burn_device": "wgpu:default",
+            "selected_instance": "candle:cpu",
+            "priority_order": ["candle:cpu", "burn:cpu"],
+            "disabled_instances": ["candle:metal"]
+        }"#;
         let cfg: InferenceBackendConfig = serde_json::from_str(json).unwrap();
-        assert_eq!(cfg.candle_device, "cpu");
-    }
+        assert_eq!(cfg.backend, InferenceBackendKind::Burn);
+        assert_eq!(cfg.burn_device, "wgpu:default");
+        assert_eq!(cfg.selected_instance, None);
+        assert_eq!(cfg.priority_order, vec!["burn:cpu"]);
+        assert!(cfg.disabled_instances.is_empty());
 
-    #[test]
-    fn custom_device_deserializes() {
-        let json = r#"{"backend": "candle", "candle_device": "metal"}"#;
-        let cfg: InferenceBackendConfig = serde_json::from_str(json).unwrap();
-        assert_eq!(cfg.candle_device, "metal");
-        assert_eq!(cfg.backend, InferenceBackendKind::Candle);
+        let context = ConfigValidationContext::new(
+            ConfigKey::new(InferenceBackendConfig::KEY).unwrap(),
+            "test/inference_backend.json",
+        );
+        let diagnostics = cfg.validate(&context);
+        assert_eq!(diagnostics.len(), 4);
+        assert!(
+            diagnostics
+                .iter()
+                .any(|d| d.message() == "Candle backend was removed; using Burn")
+        );
+        assert!(
+            diagnostics
+                .iter()
+                .any(|d| d.message().contains("candle:cpu"))
+        );
+        assert!(
+            diagnostics
+                .iter()
+                .any(|d| d.message().contains("candle:metal"))
+        );
     }
 
     #[test]
@@ -237,7 +369,6 @@ mod tests {
     fn empty_json_defaults() {
         let cfg: InferenceBackendConfig = serde_json::from_str("{}").unwrap();
         assert_eq!(cfg.backend, InferenceBackendKind::Burn);
-        assert_eq!(cfg.candle_device, "cpu");
         assert_eq!(cfg.burn_device, "cpu");
         assert_eq!(cfg.schema_version, "1");
         assert_eq!(cfg.selected_instance, None);
@@ -372,14 +503,13 @@ mod tests {
     fn open_selected_instance_deserializes_without_backend_enum_variant() {
         let json = r#"{
             "selected_instance": "stub:cpu",
-            "priority_order": ["stub:cpu", "candle:cpu"],
-            "disabled_instances": ["candle:metal"]
+            "priority_order": ["stub:cpu", "other:cpu"],
+            "disabled_instances": ["other:gpu"]
         }"#;
         let cfg: InferenceBackendConfig = serde_json::from_str(json).unwrap();
         assert_eq!(cfg.backend, InferenceBackendKind::Burn);
-        assert_eq!(cfg.candle_device, "cpu");
         assert_eq!(cfg.selected_instance.as_deref(), Some("stub:cpu"));
-        assert_eq!(cfg.priority_order, vec!["stub:cpu", "candle:cpu"]);
-        assert_eq!(cfg.disabled_instances, vec!["candle:metal"]);
+        assert_eq!(cfg.priority_order, vec!["stub:cpu", "other:cpu"]);
+        assert_eq!(cfg.disabled_instances, vec!["other:gpu"]);
     }
 }

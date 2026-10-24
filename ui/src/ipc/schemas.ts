@@ -366,7 +366,7 @@ export type WorkerSwitchArgs = z.infer<typeof WorkerSwitchArgsSchema>;
 /* ───── Backend re-bootstrap (BE-38 / B4-8) ───── */
 
 /** Backend kind accepted by `rebootstrap_backend`. */
-export const BackendSelectionSchema = z.enum(["burn", "candle"]);
+export const BackendSelectionSchema = z.enum(["burn"]);
 export type BackendSelection = z.infer<typeof BackendSelectionSchema>;
 
 export const RebootBackendArgsSchema = z.object({

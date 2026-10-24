@@ -1,8 +1,7 @@
 //! App-host inference backend selection.
 //!
-//! Backend selection is owned at the app-host/config boundary. V1 supports
-//! Candle and Burn. Burn selection resolves to `burn:wgpu:default` and does
-//! not install a Candle fallback execution route.
+//! Backend selection is owned at the app-host/config boundary. Inference
+//! runs via the out-of-process Burn backend.
 
 #[derive(
     Debug, Clone, Copy, PartialEq, Eq, Hash, serde::Serialize, serde::Deserialize, Default,
@@ -11,27 +10,40 @@
 pub enum BackendSelection {
     #[default]
     Burn,
-    /// Candle is deprecated. Use Burn for all new development.
-    #[deprecated(since = "0.2.0", note = "Use Burn for all new development")]
-    Candle,
 }
 
-#[allow(deprecated)]
 impl std::fmt::Display for BackendSelection {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
-            Self::Candle => f.write_str("candle"),
             Self::Burn => f.write_str("burn"),
         }
     }
 }
 
-#[allow(deprecated)]
 impl From<reimagine_config::InferenceBackendKind> for BackendSelection {
     fn from(kind: reimagine_config::InferenceBackendKind) -> Self {
         match kind {
-            reimagine_config::InferenceBackendKind::Candle => Self::Candle,
             reimagine_config::InferenceBackendKind::Burn => Self::Burn,
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn rebootstrap_backend_selection_rejects_candle() {
+        let err = serde_json::from_str::<BackendSelection>("\"candle\"").unwrap_err();
+        assert!(
+            err.to_string().contains("unknown variant `candle`"),
+            "{err}"
+        );
+    }
+
+    #[test]
+    fn deserialize_burn_succeeds() {
+        let sel: BackendSelection = serde_json::from_str("\"burn\"").unwrap();
+        assert_eq!(sel, BackendSelection::Burn);
     }
 }

@@ -213,7 +213,7 @@ async fn build_ready_host(
         runtime.clone(),
         builtin_catalog(),
         empty_compute_profile(),
-        BackendInstance::new("candle:cpu"),
+        BackendInstance::new("stub:cpu"),
     ));
     (host, runtime, recorder)
 }
@@ -250,7 +250,7 @@ async fn build_artifact_host(
         runtime.clone(),
         builtin_catalog(),
         empty_compute_profile(),
-        BackendInstance::new("candle:cpu"),
+        BackendInstance::new("stub:cpu"),
     ));
     (host, runtime, recorder)
 }

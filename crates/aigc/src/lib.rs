@@ -48,8 +48,6 @@ pub use model_conversion::{
 pub use model_service::{AcquireAndConvertReport, AcquireAndConvertRequest, ModelService};
 pub use readiness::SnapshotExternalReadinessProvider;
 pub use reimagine_backend_worker_transport_grpc::{GrpcAuth, GrpcTls};
-#[cfg(feature = "candle")]
-pub use reimagine_inference_candle;
 pub use worker_management::{
     WorkerCatalogItemDto, WorkerInstallationDto, WorkerManagementError, WorkerManagementService,
 };

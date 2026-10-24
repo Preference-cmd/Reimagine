@@ -68,8 +68,6 @@ pub enum AppHostError {
     Runtime(RuntimeServiceError),
     ModelManager(reimagine_model_manager::ModelManagerError),
     ModelAcquisition(reimagine_model_acquisition::ModelAcquisitionError),
-    #[cfg(feature = "candle")]
-    CandleCheckpointImport(aigc::reimagine_inference_candle::SdxlCheckpointImportError),
     BurnCheckpointImport {
         message: String,
     },
@@ -158,8 +156,6 @@ impl std::fmt::Display for AppHostError {
                     reimagine_core::diagnostic::DiagnosticError::user_message(error)
                 )
             }
-            #[cfg(feature = "candle")]
-            Self::CandleCheckpointImport(error) => write!(f, "{error}"),
             Self::BurnCheckpointImport { message } => {
                 write!(f, "Burn checkpoint import error: {message}")
             }
@@ -204,8 +200,6 @@ impl AppHostError {
                 }
                 _ => AppHostErrorCode::ModelDownloadFailed,
             },
-            #[cfg(feature = "candle")]
-            Self::CandleCheckpointImport(_) => AppHostErrorCode::CommandFailed,
             Self::BurnCheckpointImport { .. } => AppHostErrorCode::CommandFailed,
             Self::ArtifactAccess(error) => match error {
                 ArtifactAccessError::UnknownArtifact | ArtifactAccessError::FileGone => {
@@ -307,13 +301,6 @@ impl From<RuntimeServiceError> for AppHostError {
     }
 }
 
-#[cfg(feature = "candle")]
-impl From<aigc::reimagine_inference_candle::SdxlCheckpointImportError> for AppHostError {
-    fn from(value: aigc::reimagine_inference_candle::SdxlCheckpointImportError) -> Self {
-        Self::CandleCheckpointImport(value)
-    }
-}
-
 impl From<ArtifactAccessError> for AppHostError {
     fn from(error: ArtifactAccessError) -> Self {
         Self::ArtifactAccess(error)
@@ -336,8 +323,6 @@ impl From<aigc::AigcError> for AppHostError {
             aigc::AigcError::InferenceBootstrap { message } => Self::InferenceBootstrap { message },
             aigc::AigcError::ModelManager(e) => Self::ModelManager(e),
             aigc::AigcError::ModelAcquisition(e) => Self::ModelAcquisition(e),
-            #[cfg(feature = "candle")]
-            aigc::AigcError::CandleCheckpointImport(e) => Self::CandleCheckpointImport(e),
             aigc::AigcError::BurnCheckpointImport { message } => {
                 Self::BurnCheckpointImport { message }
             }

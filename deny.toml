@@ -15,16 +15,7 @@ all-features = true
 # their upstream's to replace.
 unmaintained = "workspace"
 # An accepted advisory goes here with the reason beside it.
-ignore = [
-    # zip 7.2.0 reaches the build only through candle-core, which opens
-    # archives with `ZipArchive::new` to read tensors and never calls
-    # `extract`, the API all three advisories concern. The fix needs zip >= 9,
-    # which candle-core does not accept yet. Candle is the deprecated
-    # fallback backend; removing it removes zip.
-    { id = "RUSTSEC-2026-0367", reason = "zip via candle-core: extract() is never called" },
-    { id = "RUSTSEC-2026-0368", reason = "zip via candle-core: extract() is never called" },
-    { id = "RUSTSEC-2026-0369", reason = "zip via candle-core: extract() is never called" },
-]
+ignore = []
 
 [licenses]
 # Every license must be compatible with GPL-3.0-or-later, because the

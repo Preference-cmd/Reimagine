@@ -91,7 +91,7 @@ async fn inventory_profile_does_not_start_unselected_worker() {
 }
 
 #[tokio::test]
-async fn selected_worker_start_failure_becomes_unavailable_without_candle_fallback() {
+async fn selected_worker_start_failure_becomes_unavailable_without_fallback() {
     let base = temp_dir("activation-failure");
     let selected = "burn:wgpu:default";
     let provider = StaticWorkerInventoryProvider::new(WorkerInventorySnapshot::new(vec![
@@ -102,7 +102,7 @@ async fn selected_worker_start_failure_becomes_unavailable_without_candle_fallba
         &base,
         InferenceBackendConfig {
             selected_instance: Some(selected.to_owned()),
-            priority_order: vec!["candle:cpu".to_owned()],
+            priority_order: vec!["stub:cpu".to_owned()],
             ..InferenceBackendConfig::default()
         },
         Arc::new(VecRunEventSink::new()),
@@ -140,7 +140,7 @@ async fn no_worker_bootstrap_keeps_editing_available_and_explicit_burn_pinned() 
         &base,
         InferenceBackendConfig {
             selected_instance: Some(selected.to_owned()),
-            priority_order: vec!["candle:cpu".to_owned()],
+            priority_order: vec!["stub:cpu".to_owned()],
             ..InferenceBackendConfig::default()
         },
         Arc::new(VecRunEventSink::new()),

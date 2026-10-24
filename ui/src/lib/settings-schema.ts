@@ -14,7 +14,7 @@ export const settingsSchema = z.object({
   cmdPaletteKey: z.enum(["⌘P", "⌘K"]),
 
   // Runtime
-  backend: z.enum(["Burn", "Candle (deprecated)"]),
+  backend: z.enum(["Burn"]),
   device: z.enum(["auto", "cpu", "gpu0", "gpu1"]),
   memoryBudget: z.enum(["2GB", "4GB", "8GB", "16GB"]),
 

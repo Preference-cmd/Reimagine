@@ -69,7 +69,6 @@
   "settings.default-backend": "Default backend",
   "settings.default-backend-desc": "Backend type for inference execution",
   "settings.burn": "Burn",
-  "settings.candle": "Candle (deprecated)",
   "settings.device-selection": "Device selection",
   "settings.device-selection-desc": "GPU/CPU device for inference",
   "settings.auto-detect": "Auto-detect",

@@ -12,6 +12,21 @@ both check it.
 
 ### Removed
 
+- The deprecated in-process Candle backend: the `reimagine-inference-candle`
+  crate and its `import-sdxl` binary, the `candle` cargo feature of
+  `reimagine-app-host`, `aigc`, `reimagine-axum-host` and `reimagine`, and the
+  Candle option in Settings. Inference runs only in the out-of-process Burn
+  worker.
+- A settings file that names `backend: "candle"` now loads as Burn with a
+  warning; `candle:*` entries in `selected_instance`, `priority_order` and
+  `disabled_instances` are dropped with a warning, and `candle_device` is
+  ignored.
+- `rebootstrap_backend` with `"candle"` and the HTTP `POST /models/convert` or
+  `POST /models/acquire` with `target_backend: "candle"` are rejected as
+  unsupported.
+- Models imported in the Candle split layout (`converted_layout` =
+  `candle_example_split`) cannot run on Burn. Their files and manifest entries
+  are kept; import them again with Burn.
 - The desktop IPC commands `create_agent_session`, `agent_turn` and
   `list_agent_providers`, and their frontend wrappers. The legacy native-agent
   integration is being removed; human editing, saving, running and proposal

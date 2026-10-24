@@ -2,23 +2,18 @@ use std::sync::{Arc, RwLock};
 
 use reimagine_config::AppPaths;
 use reimagine_core::model::{ModelId, ModelRef, ModelRole, ModelSeries, ModelVariant};
-#[cfg(feature = "candle")]
-use reimagine_inference_candle::{
-    SdxlCheckpointImportRequest, SdxlCheckpointImportResult, SdxlConvertedComponent,
-    import_sdxl_checkpoint_to_candle_example_split,
-};
+
 use reimagine_model_acquisition::{
     AcquireProvider, AllowPatterns, ComponentRole, ModelAcquisitionRequest, ModelCard,
     ModelCatalog, ModelSearchQuery, OverwritePolicy, RepoId, Revision, TargetRelativeDir,
     resolve_from_model_index,
 };
 use reimagine_model_manager::{
-    Fingerprint, ManifestModelResolver, ManifestValidationReport, ModelComponentSource,
-    ModelDescriptor, ModelDescriptorResolver, ModelFormat, ModelManifest, ModelManifestStore,
+    ManifestModelResolver, ManifestValidationReport, ModelComponentSource, ModelDescriptor,
+    ModelDescriptorResolver, ModelFormat, ModelManifest, ModelManifestStore,
     ModelReadinessResolver, ModelResolution, ModelRootId, ModelSource, ModelSourceStatus,
     ResolvedDescriptorView, ResolvedModelInfo, resolve_source_path, upsert_burn_package_descriptor,
 };
-use sha2::{Digest, Sha256};
 
 use crate::AigcResult;
 use crate::model_acquisition_service::ModelAcquisitionService;
@@ -88,59 +83,6 @@ impl ModelService {
         let (manifest, report) = self.store.remove_model(model_id).await?;
         self.replace_cached_manifest(manifest.clone(), report.clone());
         Ok((manifest, report))
-    }
-
-    #[cfg(feature = "candle")]
-    pub async fn import_sdxl_checkpoint_to_candle_split(
-        &self,
-        model_id: &ModelId,
-    ) -> AigcResult<(
-        ModelManifest,
-        ManifestValidationReport,
-        SdxlCheckpointImportResult,
-    )> {
-        let (mut manifest, _) = self.load_manifest().await?;
-        let descriptor = manifest
-            .models()
-            .iter()
-            .find(|descriptor| descriptor.id() == model_id)
-            .cloned()
-            .ok_or_else(|| crate::AigcError::Io {
-                path: self.store.path().to_path_buf(),
-                message: format!("model `{model_id}` is not declared in manifest"),
-            })?;
-
-        let source_path =
-            resolve_source_path(&manifest, descriptor.source(), self.app_paths.models_dir())
-                .ok_or_else(|| crate::AigcError::Io {
-                    path: self.store.path().to_path_buf(),
-                    message: format!("model `{model_id}` source path cannot be resolved"),
-                })?;
-        let fingerprint = descriptor
-            .fingerprint()
-            .ok_or_else(|| crate::AigcError::Io {
-                path: source_path.clone(),
-                message: format!(
-                    "model `{model_id}` must have a fingerprint before checkpoint import"
-                ),
-            })?;
-        let request = SdxlCheckpointImportRequest::new(
-            model_id.as_str(),
-            source_path,
-            fingerprint_path_segment(fingerprint),
-            format!("{:?}", descriptor.format()).to_ascii_lowercase(),
-            self.app_paths.models_dir().join("converted"),
-        );
-
-        let import_result = import_sdxl_checkpoint_to_candle_example_split(request).await?;
-        let converted_descriptor = descriptor_with_converted_components(
-            descriptor,
-            &import_result,
-            self.app_paths.models_dir(),
-        );
-        manifest.upsert_model(converted_descriptor);
-        let report = self.save_manifest(&manifest).await?;
-        Ok((manifest, report, import_result))
     }
 
     pub async fn import_burn_converted_package(
@@ -380,6 +322,12 @@ impl ModelService {
             overwrite_policy,
             burn_converter,
         } = request;
+        if target_backend != "burn" {
+            return Err(crate::AigcError::BurnCheckpointImport {
+                message: format!("unsupported target_backend `{target_backend}`; expected `burn`"),
+            });
+        }
+
         // ---- Step 1: download ----
         let target_relative_dir =
             TargetRelativeDir::new(std::path::PathBuf::from(format!("checkpoints/{model_id}")))
@@ -423,159 +371,82 @@ impl ModelService {
         // directory if conversion fails before importing.
         let mut cleanup = CleanupGuard::checkpoint(model_id, self.app_paths.models_dir());
 
-        match target_backend {
-            #[cfg(feature = "candle")]
-            "candle" => {
-                // Candle path: register checkpoint in manifest, then call
-                // import pipeline which does conversion + manifest upsert.
-                self.register_checkpoint_descriptor(
-                    Some(&acquisition_report),
+        // Burn path: detect diffusers vs single-file format.
+        let checkpoint_dir = self
+            .app_paths
+            .models_dir()
+            .join("checkpoints")
+            .join(model_id);
+
+        // Check if model_index.json exists — indicates diffusers format
+        // where components are already split into subdirectories.
+        let diffusers_components = resolve_from_model_index(&checkpoint_dir);
+
+        let (imported_model_id, component_count, source_layout, burn_desc) =
+            if let Some(components) = diffusers_components {
+                // Diffusers format: components are already split.
+                // Build the manifest descriptor directly from the
+                // resolved component paths without conversion.
+                let imported_model_id = format!("{model_id}-burn");
+                let desc = build_diffusers_component_descriptor(
+                    &components,
+                    &imported_model_id,
+                    self.app_paths.models_dir(),
+                );
+                let component_count = components.len();
+                (
+                    imported_model_id,
+                    component_count,
+                    "diffusers_split".to_string(),
+                    desc,
+                )
+            } else {
+                // Single-file or CompVis format: convert via Burn port.
+                let converter =
+                    burn_converter.ok_or_else(|| crate::AigcError::BurnCheckpointImport {
+                        message: "no Burn checkpoint converter is configured for this host"
+                            .to_owned(),
+                    })?;
+                let burn_report = self.convert_with_burn_port(
                     &source_path,
                     model_id,
-                )
-                .await?;
+                    self.app_paths.models_dir(),
+                    converter,
+                )?;
 
-                let model_id_core = ModelId::new(model_id);
-                let (manifest, _report, _import_result) = self
-                    .import_sdxl_checkpoint_to_candle_split(&model_id_core)
-                    .await?;
-
-                cleanup.disarm();
-                let desc = manifest.models().iter().find(|d| d.id() == &model_id_core);
-
-                Ok(AcquireAndConvertReport {
-                    outcome: "acquired".to_string(),
-                    model_id: model_id.to_string(),
-                    imported_model_id: desc.map(|d| d.id().to_string()),
-                    backend: "candle".to_string(),
-                    mapped_tensor_count: 0,
-                    component_count: 0,
-                    source_layout: "candle_example_split".to_string(),
-                    acquisition_report: acquisition_report.repo_id.clone(),
-                    acquisition_file_count: acquisition_report.files.len(),
-                    acquisition_total_bytes: acquisition_report.total_bytes,
-                })
-            }
-            _ => {
-                // Burn path: detect diffusers vs single-file format.
-                let checkpoint_dir = self
-                    .app_paths
-                    .models_dir()
-                    .join("checkpoints")
-                    .join(model_id);
-
-                // Check if model_index.json exists — indicates diffusers format
-                // where components are already split into subdirectories.
-                let diffusers_components = resolve_from_model_index(&checkpoint_dir);
-
-                let (imported_model_id, component_count, source_layout, burn_desc) =
-                    if let Some(components) = diffusers_components {
-                        // Diffusers format: components are already split.
-                        // Build the manifest descriptor directly from the
-                        // resolved component paths without conversion.
-                        let imported_model_id = format!("{model_id}-burn");
-                        let desc = build_diffusers_component_descriptor(
-                            &components,
-                            &imported_model_id,
-                            self.app_paths.models_dir(),
-                        );
-                        let component_count = components.len();
-                        (
-                            imported_model_id,
-                            component_count,
-                            "diffusers_split".to_string(),
-                            desc,
-                        )
-                    } else {
-                        // Single-file or CompVis format: convert via Burn port.
-                        let converter = burn_converter.ok_or_else(|| {
-                            crate::AigcError::BurnCheckpointImport {
-                                message: "no Burn checkpoint converter is configured for this host"
-                                    .to_owned(),
-                            }
-                        })?;
-                        let burn_report = self.convert_with_burn_port(
-                            &source_path,
-                            model_id,
-                            self.app_paths.models_dir(),
-                            converter,
-                        )?;
-
-                        let imported_model_id = format!("{model_id}-burn");
-                        let desc = build_burn_component_descriptor(
-                            &burn_report,
-                            &imported_model_id,
-                            self.app_paths.models_dir(),
-                        );
-                        let component_count = burn_report.output_components.len();
-                        (
-                            imported_model_id,
-                            component_count,
-                            burn_report.source_layout,
-                            desc,
-                        )
-                    };
-
-                let (mut manifest, _) = self.load_manifest().await?;
-                manifest.upsert_model(burn_desc);
-                self.save_manifest(&manifest).await?;
-
-                cleanup.disarm();
-
-                Ok(AcquireAndConvertReport {
-                    outcome: "acquired".to_string(),
-                    model_id: model_id.to_string(),
-                    imported_model_id: Some(imported_model_id),
-                    backend: "burn".to_string(),
-                    mapped_tensor_count: 0,
+                let imported_model_id = format!("{model_id}-burn");
+                let desc = build_burn_component_descriptor(
+                    &burn_report,
+                    &imported_model_id,
+                    self.app_paths.models_dir(),
+                );
+                let component_count = burn_report.output_components.len();
+                (
+                    imported_model_id,
                     component_count,
-                    source_layout,
-                    acquisition_report: acquisition_report.repo_id.clone(),
-                    acquisition_file_count: acquisition_report.files.len(),
-                    acquisition_total_bytes: acquisition_report.total_bytes,
-                })
-            }
-        }
-    }
-
-    /// Register a downloaded checkpoint in the manifest as a
-    /// `CheckpointBundle` entry, computing its fingerprint by
-    /// hashing the safetensors file.
-    async fn register_checkpoint_descriptor(
-        &self,
-        _acquisition_report: Option<&reimagine_model_acquisition::AcquisitionReport>,
-        source_path: &std::path::Path,
-        model_id: &str,
-    ) -> AigcResult<ModelDescriptor> {
-        let fingerprint = compute_file_sha256(source_path)?;
-
-        let source =
-            ModelSource::relative(ModelRootId::new("base"), format!("checkpoints/{model_id}"));
-
-        let descriptor = ModelDescriptor::new(
-            ModelId::new(model_id),
-            ModelSeries::new("stable_diffusion"),
-            ModelVariant::new("sdxl"),
-            vec![ModelRole::CheckpointBundle],
-            source,
-            ModelFormat::SafeTensors,
-        )
-        .with_source_status(ModelSourceStatus::Available)
-        .with_fingerprint(Fingerprint::sha256(fingerprint));
+                    burn_report.source_layout,
+                    desc,
+                )
+            };
 
         let (mut manifest, _) = self.load_manifest().await?;
-        // Check if descriptor already exists — if so skip.
-        if let Some(existing) = manifest
-            .models()
-            .iter()
-            .find(|d| d.id() == descriptor.id())
-            .cloned()
-        {
-            return Ok(existing);
-        }
-        manifest.upsert_model(descriptor.clone());
+        manifest.upsert_model(burn_desc);
         self.save_manifest(&manifest).await?;
-        Ok(descriptor)
+
+        cleanup.disarm();
+
+        Ok(AcquireAndConvertReport {
+            outcome: "acquired".to_string(),
+            model_id: model_id.to_string(),
+            imported_model_id: Some(imported_model_id),
+            backend: "burn".to_string(),
+            mapped_tensor_count: 0,
+            component_count,
+            source_layout,
+            acquisition_report: acquisition_report.repo_id.clone(),
+            acquisition_file_count: acquisition_report.files.len(),
+            acquisition_total_bytes: acquisition_report.total_bytes,
+        })
     }
 }
 
@@ -622,28 +493,6 @@ impl Drop for CleanupGuard {
             }
         }
     }
-}
-
-/// Compute the SHA-256 hex digest of a file.
-fn compute_file_sha256(path: &std::path::Path) -> AigcResult<String> {
-    use std::io::Read;
-    let mut file = std::fs::File::open(path).map_err(|e| crate::AigcError::Io {
-        path: path.to_path_buf(),
-        message: format!("cannot open for fingerprint: {e}"),
-    })?;
-    let mut hasher = Sha256::new();
-    let mut buf = [0u8; 65536];
-    loop {
-        let n = file.read(&mut buf).map_err(|e| crate::AigcError::Io {
-            path: path.to_path_buf(),
-            message: format!("fingerprint read error: {e}"),
-        })?;
-        if n == 0 {
-            break;
-        }
-        hasher.update(&buf[..n]);
-    }
-    Ok(format!("{:x}", hasher.finalize()))
 }
 
 /// Walk a directory and return the path to the first `.safetensors` file found.
@@ -814,83 +663,6 @@ pub struct AcquireAndConvertReport {
     pub acquisition_report: String, // serialized repo_id for the downloaded model
     pub acquisition_file_count: usize,
     pub acquisition_total_bytes: u64,
-}
-
-#[cfg(feature = "candle")]
-fn descriptor_with_converted_components(
-    descriptor: ModelDescriptor,
-    import_result: &SdxlCheckpointImportResult,
-    models_dir: &std::path::Path,
-) -> ModelDescriptor {
-    let components = SdxlConvertedComponent::all()
-        .into_iter()
-        .map(|component| component_source(component, import_result, models_dir))
-        .collect();
-
-    descriptor
-        .with_roles(vec![
-            ModelRole::CheckpointBundle,
-            ModelRole::DiffusionModel,
-            ModelRole::TextEncoder,
-            ModelRole::Vae,
-        ])
-        .with_source_status(ModelSourceStatus::Available)
-        .with_metadata("converted_layout", "candle_example_split")
-        .with_metadata(
-            "converter_version",
-            import_result.conversion_manifest().converter_version(),
-        )
-        .with_components(components)
-}
-
-#[cfg(feature = "candle")]
-fn component_source(
-    component: SdxlConvertedComponent,
-    import_result: &SdxlCheckpointImportResult,
-    models_dir: &std::path::Path,
-) -> ModelComponentSource {
-    let role = match component {
-        SdxlConvertedComponent::Unet => ModelRole::DiffusionModel,
-        SdxlConvertedComponent::Vae => ModelRole::Vae,
-        SdxlConvertedComponent::ClipL | SdxlConvertedComponent::ClipG => ModelRole::TextEncoder,
-    };
-    let path = path_relative_to_models_dir(import_result.component_path(component), models_dir);
-
-    ModelComponentSource::new(
-        role,
-        ModelSource::relative(ModelRootId::new("base"), path),
-        ModelFormat::SafeTensors,
-    )
-    .with_metadata("component", component.metadata_component())
-    .with_metadata(
-        "converted_layout",
-        import_result.conversion_manifest().target_layout(),
-    )
-}
-
-fn path_relative_to_models_dir(path: std::path::PathBuf, models_dir: &std::path::Path) -> String {
-    path.strip_prefix(models_dir)
-        .unwrap_or(path.as_path())
-        .to_string_lossy()
-        .replace('\\', "/")
-}
-
-fn fingerprint_path_segment(fingerprint: &Fingerprint) -> String {
-    format!(
-        "{}-{}",
-        sanitize_path_segment(fingerprint.kind()),
-        sanitize_path_segment(fingerprint.value())
-    )
-}
-
-fn sanitize_path_segment(value: &str) -> String {
-    value
-        .chars()
-        .map(|ch| match ch {
-            'a'..='z' | 'A'..='Z' | '0'..='9' | '-' | '_' | '.' => ch,
-            _ => '_',
-        })
-        .collect()
 }
 
 fn collect_model_refs(workflow: &reimagine_core::workflow::Workflow) -> Vec<ModelRef> {

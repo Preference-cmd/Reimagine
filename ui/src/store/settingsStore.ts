@@ -21,7 +21,7 @@ type SettingsState = {
   cmdPaletteKey: "⌘P" | "⌘K";
 
   // Runtime
-  backend: "Burn" | "Candle (deprecated)";
+  backend: "Burn";
   device: "auto" | "cpu" | "gpu0" | "gpu1";
   memoryBudget: "2GB" | "4GB" | "8GB" | "16GB";
 
@@ -40,7 +40,7 @@ type SettingsState = {
   setGridStyle: (v: "dots" | "lines" | "none") => void;
   setMinimap: (v: boolean) => void;
   setCmdPaletteKey: (v: "⌘P" | "⌘K") => void;
-  setBackend: (v: "Burn" | "Candle (deprecated)") => void;
+  setBackend: (v: "Burn") => void;
   setDevice: (v: "auto" | "cpu" | "gpu0" | "gpu1") => void;
   setMemoryBudget: (v: "2GB" | "4GB" | "8GB" | "16GB") => void;
   setProjectDir: (v: string) => void;
@@ -52,7 +52,11 @@ type SettingsState = {
 function loadSettings(): Partial<SettingsState> {
   try {
     const raw = localStorage.getItem(STORAGE_KEY);
-    return raw ? JSON.parse(raw) : {};
+    const parsed = raw ? JSON.parse(raw) : {};
+    if (parsed.backend && parsed.backend !== "Burn") {
+      parsed.backend = "Burn";
+    }
+    return parsed;
   } catch {
     return {};
   }

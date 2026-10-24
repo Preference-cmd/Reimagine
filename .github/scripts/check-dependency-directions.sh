@@ -10,7 +10,7 @@
 #   domain     config, nodes, model-manager, model-acquisition,
 #              inference, runtime
 #   modules    aigc (inference composition, workers, model services)
-#   backends   inference-candle, inference-burn, inference-burn-worker
+#   backends   inference-burn, inference-burn-worker
 #   workers    backend-worker-host, -transport-quic, -transport-grpc, -transfer
 #   host       app-host
 #   entries    reimagine (src-tauri), axum-host
@@ -34,7 +34,7 @@ TAURI='tauri(-[a-z-]+)? v'
 AGENT='(reimagine-agent-[a-z-]+|reimagine-ai-protocol|reimagine-context-kernel|causa(-[a-z]+)?) v'
 APP_HOST='reimagine-app-host v'
 ENTRIES='(reimagine|reimagine-axum-host) v'
-BACKENDS='(reimagine-inference-(burn|burn-worker|candle)|burn-[a-z]+|candle-[a-z]+|cubecl(-[a-z]+)?|wgpu) v'
+BACKENDS='(reimagine-inference-(burn|burn-worker)|burn-[a-z]+|cubecl(-[a-z]+)?|wgpu) v'
 HTTP_SERVER='axum v'
 DOMAIN='(reimagine-core|reimagine-config|reimagine-nodes|reimagine-model-manager|reimagine-model-acquisition|reimagine-inference|reimagine-runtime|reimagine-plugin|reimagine-backend-worker-host|aigc) v'
 
@@ -84,7 +84,7 @@ check reimagine-inference "$BACKENDS" "$HTTP_SERVER" 'reimagine-runtime v'
 check reimagine-runtime "$BACKENDS" "$HTTP_SERVER" 'reimagine-model-manager v'
 
 # Backends implement the inference contract and know nothing above it.
-for crate in reimagine-inference-candle reimagine-inference-burn reimagine-inference-burn-worker; do
+for crate in reimagine-inference-burn reimagine-inference-burn-worker; do
   check "$crate" "$HTTP_SERVER" 'reimagine-runtime v' 'reimagine-model-manager v'
 done
 

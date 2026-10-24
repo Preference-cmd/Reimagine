@@ -278,7 +278,7 @@ fn list_worker_switch_targets(
 }
 
 /// Drain in-flight runs (waiting up to the re-bootstrap deadline) and
-/// re-run the workspace bootstrap with `selection` (`"burn"` | `"candle"`).
+/// re-run the workspace bootstrap with `selection` (`"burn"`).
 ///
 /// Resolves to the compute profile of the rebuilt workspace.
 #[cfg(feature = "aigc")]
@@ -779,19 +779,29 @@ mod tests {
             profile
                 .backend_profiles
                 .iter()
-                .any(|backend| backend.backend == "candle"),
-            "expected compute profile to include the app-host candle profile"
+                .any(|backend| backend.backend == "burn"),
+            "expected compute profile to include the app-host burn profile"
         );
-        assert!(
-            profile
-                .backend_profiles
-                .iter()
-                .flat_map(|backend| backend.instances.iter())
-                .any(|instance| instance.instance == "candle:cpu"),
-            "expected compute profile to include the app-host candle CPU instance"
+        let total_instances = profile
+            .backend_profiles
+            .iter()
+            .map(|bp| bp.instances.len())
+            .sum::<usize>();
+        assert_eq!(
+            total_instances, 0,
+            "profile has no available instances without an installed Burn worker"
         );
 
         let _ = std::fs::remove_dir_all(&base_path);
+    }
+
+    #[cfg(feature = "aigc")]
+    #[test]
+    fn rebootstrap_rejects_unsupported_candle_selection() {
+        let result: Result<reimagine_app_host::BackendSelection, _> =
+            serde_json::from_str("\"candle\"");
+        assert!(result.is_err());
+        assert!(result.unwrap_err().to_string().contains("candle"));
     }
 
     #[cfg(feature = "aigc")]

@@ -95,7 +95,7 @@ mod tests {
 
     #[cfg(feature = "aigc")]
     #[tokio::test]
-    async fn compute_profile_route_returns_candle_without_uninstalled_burn() {
+    async fn compute_profile_route_returns_uninstalled_burn_worker_diagnostics() {
         use axum::body::to_bytes;
 
         let app = build_router().with_state(test_state());
@@ -140,32 +140,13 @@ mod tests {
             "the Burn profile must explain how to restore local execution, got: {json}"
         );
 
-        // V1 must always include a `candle:cpu` instance, regardless
-        // of host hardware. The wire shape mirrors the app-host
-        // DTO projection exactly.
-        let instances = backend_profiles
+        let total_instances = backend_profiles
             .iter()
-            .flat_map(|bp| bp["instances"].as_array().cloned().unwrap_or_default())
-            .collect::<Vec<_>>();
-        assert!(
-            instances.iter().any(|inst| {
-                inst["instance"].as_str() == Some("candle:cpu")
-                    && inst["status"].as_str() == Some("Available")
-            }),
-            "expected a `candle:cpu` instance with status=Available, got: {json}"
-        );
-
-        // Nested shape: device.kind, device.supported_dtypes, etc.
-        let cpu = instances
-            .iter()
-            .find(|inst| inst["instance"].as_str() == Some("candle:cpu"))
-            .expect("candle:cpu present");
-        assert_eq!(cpu["device"]["kind"].as_str(), Some("Cpu"));
-        assert_eq!(cpu["device"]["label"].as_str(), Some("cpu"));
-        assert!(
-            cpu["device"]["supported_dtypes"].is_array(),
-            "supported_dtypes is a list, got: {}",
-            cpu["device"]["supported_dtypes"]
+            .map(|bp| bp["instances"].as_array().map(Vec::len).unwrap_or(0))
+            .sum::<usize>();
+        assert_eq!(
+            total_instances, 0,
+            "profile has no available instances without an installed Burn worker, got: {json}"
         );
     }
 

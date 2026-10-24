@@ -256,7 +256,6 @@ async fn burn_real_sdxl_smoke_workflow_opens_through_axum() {
     let backend_config = InferenceBackendConfig {
         schema_version: "1".to_owned(),
         backend: InferenceBackendKind::Burn,
-        candle_device: "cpu".to_owned(),
         selected_instance: Some(BURN_INSTANCE_LABEL.to_owned()),
         ..InferenceBackendConfig::default()
     };
@@ -409,7 +408,6 @@ async fn burn_real_sdxl_smoke_workflow_runs_through_axum_to_png_artifact() {
     let backend_config = InferenceBackendConfig {
         schema_version: "1".to_owned(),
         backend: InferenceBackendKind::Burn,
-        candle_device: "cpu".to_owned(),
         selected_instance: Some(BURN_INSTANCE_LABEL.to_owned()),
         ..InferenceBackendConfig::default()
     };

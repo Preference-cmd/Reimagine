@@ -36,7 +36,7 @@ impl ModelComponentSource {
     /// Attach a single metadata `key=value` entry. The component map is
     /// rendered into a backend metadata string by the app-host
     /// projection; keys such as `component=unet` are parsed by the
-    /// Candle backend's split-source helpers.
+    /// backend split-source helpers.
     ///
     /// Subsequent calls with the same `key` overwrite the previous
     /// value (the underlying map is a [`BTreeMap`]). The serialised

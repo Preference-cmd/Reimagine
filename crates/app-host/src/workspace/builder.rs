@@ -311,8 +311,8 @@ mod tests {
     async fn builder_with_explicit_config() {
         let base = temp_dir("explicit-config");
         let config = InferenceBackendConfig {
-            backend: reimagine_config::InferenceBackendKind::Candle,
-            candle_device: "cpu".to_string(),
+            backend: reimagine_config::InferenceBackendKind::Burn,
+            burn_device: "cpu".to_string(),
             ..InferenceBackendConfig::default()
         };
 
@@ -324,7 +324,7 @@ mod tests {
 
         assert_eq!(
             host.backend_config().backend,
-            reimagine_config::InferenceBackendKind::Candle
+            reimagine_config::InferenceBackendKind::Burn
         );
         let _ = fs::remove_dir_all(&base);
     }

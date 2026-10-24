@@ -662,7 +662,6 @@ async fn burn_full_pipeline_load_encode_latent_sample_decode_saves_png_via_axum(
     let backend_config = InferenceBackendConfig {
         schema_version: "1".to_owned(),
         backend: InferenceBackendKind::Burn,
-        candle_device: "cpu".to_owned(),
         selected_instance: Some(INSTANCE_LABEL.to_owned()),
         ..InferenceBackendConfig::default()
     };
