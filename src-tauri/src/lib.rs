@@ -1,16 +1,23 @@
 mod desktop_host;
 mod document_event_hub;
+#[cfg(feature = "aigc")]
 mod download_event_hub;
 mod event_hub;
 
-use desktop_host::{DesktopHostState, WorkerSwitchResultDto, default_workspace_path};
+#[cfg(feature = "aigc")]
+use desktop_host::WorkerSwitchResultDto;
+use desktop_host::{DesktopHostState, default_workspace_path};
 use event_hub::RunEventPayload;
 use reimagine_app_host::{
-    AppHostError, AppHostErrorCode, BackendSelection, WorkerInstallationDto,
+    AppHostError, AppHostErrorCode,
+    dto::{ArtifactMetadataDto, HealthResponse, NodeDefDto, RunWorkflowResponse},
+};
+#[cfg(feature = "aigc")]
+use reimagine_app_host::{
+    BackendSelection, WorkerInstallationDto,
     dto::{
-        ArtifactMetadataDto, ComputeProfileDto, DownloadEventPayload, HealthResponse, ModelCardDto,
-        ModelCatalogEntryDto, ModelDownloadOutput, ModelFilters, ModelInfoDto, NodeDefDto,
-        RunWorkflowResponse,
+        ComputeProfileDto, DownloadEventPayload, ModelCardDto, ModelCatalogEntryDto,
+        ModelDownloadOutput, ModelFilters, ModelInfoDto,
     },
 };
 use reimagine_core::command::CommandResult;
@@ -34,6 +41,7 @@ impl TauriCommandError {
         }
     }
 
+    #[allow(dead_code)]
     fn command(message: impl Into<String>) -> Self {
         Self {
             code: AppHostErrorCode::CommandFailed,
@@ -59,6 +67,7 @@ fn app_host_command_error(error: AppHostError) -> TauriCommandError {
     }
 }
 
+#[cfg(feature = "aigc")]
 fn switch_deadline(deadline_secs: Option<f64>) -> Result<std::time::Duration, TauriCommandError> {
     match deadline_secs {
         None => Ok(std::time::Duration::from_secs(30)),
@@ -76,6 +85,7 @@ fn health(state: tauri::State<'_, DesktopHostState>) -> Result<HealthResponse, T
     Ok(state.health())
 }
 
+#[cfg(feature = "aigc")]
 #[tauri::command]
 fn get_compute_profile(
     state: tauri::State<'_, DesktopHostState>,
@@ -91,6 +101,7 @@ fn get_node_defs(
     Ok(response.nodes)
 }
 
+#[cfg(feature = "aigc")]
 #[tauri::command]
 async fn list_models(
     state: tauri::State<'_, DesktopHostState>,
@@ -144,6 +155,7 @@ async fn open_artifact(
 /// Download a HuggingFace model with progress streaming.
 ///
 /// Streams `DownloadEventPayload` events through the provided channel.
+#[cfg(feature = "aigc")]
 #[tauri::command]
 #[allow(clippy::too_many_arguments)]
 async fn download_huggingface_model(
@@ -175,6 +187,7 @@ async fn download_huggingface_model(
 /// Search HuggingFace models via the catalog.
 ///
 /// Returns a list of model catalog entries matching the query and filters.
+#[cfg(feature = "aigc")]
 #[tauri::command]
 async fn search_models(
     state: tauri::State<'_, DesktopHostState>,
@@ -206,6 +219,7 @@ async fn search_models(
 }
 
 /// Fetch the full model card for a HuggingFace repository.
+#[cfg(feature = "aigc")]
 #[tauri::command]
 async fn get_model_card(
     state: tauri::State<'_, DesktopHostState>,
@@ -222,6 +236,7 @@ async fn get_model_card(
 /// Drain in-flight runs (waiting up to `deadline_secs`) and switch the
 /// active worker to the installed worker for `target` (a backend instance
 /// id such as `burn:wgpu:default`).
+#[cfg(feature = "aigc")]
 #[tauri::command]
 async fn drain_and_switch_worker(
     state: tauri::State<'_, DesktopHostState>,
@@ -237,6 +252,7 @@ async fn drain_and_switch_worker(
 
 /// Cancel in-flight runs, then switch the active worker to the installed
 /// worker for `target`.
+#[cfg(feature = "aigc")]
 #[tauri::command]
 async fn cancel_and_switch_worker(
     state: tauri::State<'_, DesktopHostState>,
@@ -251,6 +267,7 @@ async fn cancel_and_switch_worker(
 }
 
 /// List installed workers usable as switch targets.
+#[cfg(feature = "aigc")]
 #[tauri::command]
 fn list_worker_switch_targets(
     state: tauri::State<'_, DesktopHostState>,
@@ -264,6 +281,7 @@ fn list_worker_switch_targets(
 /// re-run the workspace bootstrap with `selection` (`"burn"` | `"candle"`).
 ///
 /// Resolves to the compute profile of the rebuilt workspace.
+#[cfg(feature = "aigc")]
 #[tauri::command]
 async fn rebootstrap_backend(
     state: tauri::State<'_, DesktopHostState>,
@@ -514,8 +532,10 @@ pub fn run() {
         .invoke_handler(tauri::generate_handler![
             // Existing commands
             health,
+            #[cfg(feature = "aigc")]
             get_compute_profile,
             get_node_defs,
+            #[cfg(feature = "aigc")]
             list_models,
             run_workflow,
             cancel_run,
@@ -543,15 +563,22 @@ pub fn run() {
             load_workflow,
             list_workflows,
             // Model download commands
+            #[cfg(feature = "aigc")]
             download_huggingface_model,
             // Catalog commands
+            #[cfg(feature = "aigc")]
             search_models,
+            #[cfg(feature = "aigc")]
             get_model_card,
             // Worker switch commands
+            #[cfg(feature = "aigc")]
             drain_and_switch_worker,
+            #[cfg(feature = "aigc")]
             cancel_and_switch_worker,
+            #[cfg(feature = "aigc")]
             list_worker_switch_targets,
             // Re-bootstrap command
+            #[cfg(feature = "aigc")]
             rebootstrap_backend,
         ])
         .build(tauri::generate_context!())
@@ -719,6 +746,7 @@ mod tests {
             .expect("desktop host state should bootstrap");
 
         assert_eq!(state.workspace_base_path(), base_path);
+        #[cfg(feature = "aigc")]
         assert!(
             state
                 .worker_management()
@@ -739,6 +767,7 @@ mod tests {
         let _ = std::fs::remove_dir_all(&base_path);
     }
 
+    #[cfg(feature = "aigc")]
     #[test]
     fn desktop_host_compute_profile_comes_from_workspace_host() {
         let base_path = temp_dir("compute-profile");
@@ -765,6 +794,7 @@ mod tests {
         let _ = std::fs::remove_dir_all(&base_path);
     }
 
+    #[cfg(feature = "aigc")]
     #[test]
     fn desktop_host_rebootstrap_swaps_backend_and_keeps_workspace() {
         use reimagine_app_host::BackendSelection;
@@ -789,6 +819,7 @@ mod tests {
 
     // ─── Catalog command parameter validation tests ────────────────
 
+    #[cfg(feature = "aigc")]
     #[test]
     fn search_models_query_parsing_default_filters() {
         use reimagine_app_host::dto::ModelFilters;
@@ -819,6 +850,7 @@ mod tests {
         assert_eq!(query.limit, 20);
     }
 
+    #[cfg(feature = "aigc")]
     #[test]
     fn search_models_query_parsing_with_text_search() {
         use reimagine_app_host::dto::ModelFilters;
@@ -858,6 +890,7 @@ mod tests {
         assert_eq!(query.limit, 5);
     }
 
+    #[cfg(feature = "aigc")]
     #[test]
     fn search_models_query_parsing_empty_search_becomes_none() {
         use reimagine_app_host::dto::ModelFilters;
@@ -883,6 +916,7 @@ mod tests {
         assert!(query.search.is_none());
     }
 
+    #[cfg(feature = "aigc")]
     #[test]
     fn model_card_dto_conversion() {
         use reimagine_app_host::dto::ModelCardDto;
@@ -920,6 +954,7 @@ mod tests {
         assert!(dto.components.is_empty());
     }
 
+    #[cfg(feature = "aigc")]
     #[test]
     fn model_catalog_entry_dto_conversion() {
         use reimagine_app_host::dto::ModelCatalogEntryDto;
@@ -945,6 +980,7 @@ mod tests {
         assert!(!dto.private);
     }
 
+    #[cfg(feature = "aigc")]
     #[test]
     fn model_filters_default_values() {
         use reimagine_app_host::dto::ModelFilters;
@@ -1001,6 +1037,7 @@ mod tests {
         assert_eq!(mapped.code, AppHostErrorCode::WorkflowInvalid);
     }
 
+    #[cfg(feature = "aigc")]
     #[test]
     fn worker_switch_errors_map_to_worker_unavailable() {
         use reimagine_app_host::{AppHostError, AppHostErrorCode, WorkerSwitchError};
@@ -1017,6 +1054,7 @@ mod tests {
         assert_eq!(value["code"], "worker_unavailable");
     }
 
+    #[cfg(feature = "aigc")]
     #[test]
     fn switch_deadline_validates_input() {
         assert!(super::switch_deadline(None).is_ok());

@@ -103,6 +103,7 @@ mod tests {
         assert_eq!(path, exe_parent.join("workspace"));
     }
 
+    #[cfg(feature = "aigc")]
     #[tokio::test]
     async fn bootstrap_workspace_returns_error_for_invalid_config() {
         let base = temp_dir("invalid-config");

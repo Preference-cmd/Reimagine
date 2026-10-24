@@ -1,3 +1,5 @@
+#![cfg(feature = "aigc")]
+
 use aigc::reimagine_inference_candle::{
     SdxlCheckpointConversionManifest, SdxlCheckpointImportRequest, SdxlConvertedComponent,
 };

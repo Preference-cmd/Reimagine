@@ -11,6 +11,8 @@
 //! Set `REIMAGINE_SDXL_REAL_DEVICE` to override the default `cpu`
 //! Candle device (e.g., `metal`, `cuda:0`).
 
+#![cfg(feature = "aigc")]
+
 mod sdxl_workflows;
 
 use std::path::PathBuf;

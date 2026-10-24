@@ -3,15 +3,20 @@ use std::sync::{Arc, RwLock};
 
 use reimagine_app_host::WorkspaceScope;
 use reimagine_app_host::dto::{
-    ArtifactMetadataDto, BoardCommandResultDto, BoardSnapshotDto, ComputeProfileDto,
-    HealthResponse, ModelInfoDto, NodeCatalogResponse, ProjectDto, ProjectMetadataInputDto,
-    RunWorkflowResponse,
+    ArtifactMetadataDto, BoardCommandResultDto, BoardSnapshotDto, HealthResponse,
+    NodeCatalogResponse, ProjectDto, ProjectMetadataInputDto, RunWorkflowResponse,
 };
+#[cfg(feature = "aigc")]
+use reimagine_app_host::dto::{ComputeProfileDto, ModelInfoDto};
+use reimagine_app_host::{AppHost, AppHostError, WorkspaceHost};
+#[cfg(feature = "aigc")]
 use reimagine_app_host::{
-    AppHost, AppHostError, BackendSelection, WorkerBackendCandidate, WorkerInstallationDto,
-    WorkerManagementService, WorkerSelectionHandle, WorkerSwitchError, WorkspaceHost,
+    BackendSelection, WorkerBackendCandidate, WorkerInstallationDto, WorkerManagementService,
+    WorkerSelectionHandle, WorkerSwitchError,
 };
+#[cfg(feature = "aigc")]
 use reimagine_backend_worker_host::{WorkerLaunchSpec, WorkerLimits};
+#[cfg(feature = "aigc")]
 use reimagine_backend_worker_protocol::ProtocolRange;
 use reimagine_config::AppPaths;
 use reimagine_core::board::BoardCommandBatch;
@@ -19,10 +24,12 @@ use reimagine_core::command::CommandResult;
 use reimagine_core::model::ProjectId;
 use reimagine_core::workflow::Workflow;
 use reimagine_runtime::BoxedRunEventSink;
+#[cfg(feature = "aigc")]
 use serde::Serialize;
 use tauri::ipc::Channel;
 
 use crate::document_event_hub::TauriDocumentEventHub;
+#[cfg(feature = "aigc")]
 use crate::download_event_hub::TauriDownloadEventHub;
 use crate::event_hub::{RunEventPayload, TauriRunEventHub};
 
@@ -35,7 +42,9 @@ pub struct DesktopHostState {
     event_hub: Arc<TauriRunEventHub>,
     document_event_hub: Arc<TauriDocumentEventHub>,
     active_project: RwLock<ProjectId>,
+    #[cfg(feature = "aigc")]
     download_event_hub: Arc<TauriDownloadEventHub>,
+    #[cfg(feature = "aigc")]
     worker_management: Arc<WorkerManagementService>,
 }
 
@@ -46,7 +55,9 @@ impl Clone for DesktopHostState {
             event_hub: self.event_hub.clone(),
             document_event_hub: self.document_event_hub.clone(),
             active_project: RwLock::new(self.active_project.read().expect(APP_HOST_LOCK).clone()),
+            #[cfg(feature = "aigc")]
             download_event_hub: self.download_event_hub.clone(),
+            #[cfg(feature = "aigc")]
             worker_management: self.worker_management.clone(),
         }
     }
@@ -64,15 +75,25 @@ impl DesktopHostState {
         app_data_root: impl Into<PathBuf>,
         workspace_base_path: impl Into<PathBuf>,
     ) -> Result<Self, AppHostError> {
+        #[cfg_attr(not(feature = "aigc"), allow(unused_variables))]
         let app_data_root = app_data_root.into();
         let workspace_base_path = workspace_base_path.into();
         AppPaths::new(&workspace_base_path).ensure_all().await?;
         let event_hub = Arc::new(TauriRunEventHub::new());
         let event_sink: BoxedRunEventSink = event_hub.clone();
+        #[cfg(feature = "aigc")]
         let workspace = WorkspaceHost::try_with_app_data_root_and_event_sink(
             WorkspaceScope::new(WORKSPACE_SCOPE),
             &workspace_base_path,
             &app_data_root,
+            event_sink,
+        )
+        .await?;
+
+        #[cfg(not(feature = "aigc"))]
+        let workspace = WorkspaceHost::try_with_defaults_and_event_sink(
+            WorkspaceScope::new(WORKSPACE_SCOPE),
+            &workspace_base_path,
             event_sink,
         )
         .await?;
@@ -90,7 +111,9 @@ impl DesktopHostState {
             }
         });
 
+        #[cfg(feature = "aigc")]
         let download_event_hub = Arc::new(TauriDownloadEventHub::new());
+        #[cfg(feature = "aigc")]
         let worker_management = Arc::new(WorkerManagementService::offline(&app_data_root)?);
 
         Ok(Self {
@@ -98,7 +121,9 @@ impl DesktopHostState {
             event_hub,
             document_event_hub,
             active_project: RwLock::new(ProjectId::new("default")),
+            #[cfg(feature = "aigc")]
             download_event_hub,
+            #[cfg(feature = "aigc")]
             worker_management,
         })
     }
@@ -113,6 +138,7 @@ impl DesktopHostState {
             .to_path_buf()
     }
 
+    #[cfg(feature = "aigc")]
     #[allow(dead_code)]
     pub fn worker_management(&self) -> &WorkerManagementService {
         &self.worker_management
@@ -328,6 +354,7 @@ impl DesktopHostState {
         )
     }
 
+    #[cfg(feature = "aigc")]
     pub fn compute_profile(&self) -> ComputeProfileDto {
         self.app_host
             .read()
@@ -351,6 +378,7 @@ impl DesktopHostState {
     }
 
     /// Returns the model list as a host‑neutral DTO.
+    #[cfg(feature = "aigc")]
     pub async fn list_models(&self) -> Result<Vec<ModelInfoDto>, AppHostError> {
         use reimagine_app_host::dto::ModelInfoDto;
         let workspace = {
@@ -704,6 +732,7 @@ impl DesktopHostState {
             .collect()
     }
 
+    #[cfg(feature = "aigc")]
     /// Search HuggingFace models via the catalog.
     pub async fn search_models(
         &self,
@@ -720,6 +749,7 @@ impl DesktopHostState {
             .collect())
     }
 
+    #[cfg(feature = "aigc")]
     /// Fetch the full model card for a repository.
     pub async fn get_model_card(
         &self,
@@ -739,6 +769,7 @@ impl DesktopHostState {
     /// When `from_catalog` is true, uses the smart download strategy from BE-42
     /// which fetches repository metadata, detects the format, and builds
     /// optimal download patterns automatically.
+    #[cfg(feature = "aigc")]
     #[allow(clippy::too_many_arguments)]
     pub async fn download_huggingface_model(
         &self,
@@ -859,6 +890,7 @@ impl DesktopHostState {
 
     // ─── Re-bootstrap (BE-38 / B4-8) ──────────────────────────────
 
+    #[cfg(feature = "aigc")]
     /// Drain in-flight runs and re-bootstrap the workspace with a new
     /// backend selection.
     ///
@@ -881,6 +913,7 @@ impl DesktopHostState {
 
     // ─── Worker switching (BE-32) ────────────────────────────────
 
+    #[cfg(feature = "aigc")]
     /// Drain in-flight runs (waiting up to `deadline`) and switch the active
     /// worker to the installed worker for `target_instance`.
     pub async fn drain_and_switch_worker(
@@ -899,6 +932,7 @@ impl DesktopHostState {
         Ok(WorkerSwitchResultDto::from(handle))
     }
 
+    #[cfg(feature = "aigc")]
     /// Cancel in-flight runs and switch the active worker to the installed
     /// worker for `target_instance`.
     pub async fn cancel_and_switch_worker(
@@ -917,11 +951,13 @@ impl DesktopHostState {
         Ok(WorkerSwitchResultDto::from(handle))
     }
 
+    #[cfg(feature = "aigc")]
     /// List installed workers that can be used as switch targets.
     pub fn list_worker_switch_targets(&self) -> Result<Vec<WorkerInstallationDto>, AppHostError> {
         Ok(self.worker_management.list_installed()?)
     }
 
+    #[cfg(feature = "aigc")]
     fn resolve_switch_candidate(
         &self,
         target_instance: &str,
@@ -970,12 +1006,14 @@ impl DesktopHostState {
 }
 
 /// Result of a worker switch, adapted from [`WorkerSelectionHandle`] for IPC.
+#[cfg(feature = "aigc")]
 #[derive(Debug, Clone, Serialize)]
 pub struct WorkerSwitchResultDto {
     pub instance: String,
     pub incarnation_id: String,
 }
 
+#[cfg(feature = "aigc")]
 impl From<WorkerSelectionHandle> for WorkerSwitchResultDto {
     fn from(handle: WorkerSelectionHandle) -> Self {
         Self {
@@ -989,6 +1027,7 @@ impl From<WorkerSelectionHandle> for WorkerSwitchResultDto {
 ///
 /// Installed packages contain exactly one executable (validated at install
 /// time), so the first executable file found is the worker binary.
+#[cfg(feature = "aigc")]
 fn installed_worker_executable(install_path: &str) -> Option<std::path::PathBuf> {
     fn visit(dir: &std::path::Path, found: &mut Option<std::path::PathBuf>) {
         let Ok(entries) = std::fs::read_dir(dir) else {
@@ -1008,6 +1047,7 @@ fn installed_worker_executable(install_path: &str) -> Option<std::path::PathBuf>
     found
 }
 
+#[cfg(feature = "aigc")]
 fn is_executable(path: &std::path::Path) -> bool {
     #[cfg(unix)]
     {

@@ -1,3 +1,5 @@
+#![cfg(feature = "aigc")]
+
 //! Integration tests for runtime AIGC failure isolation.
 //!
 //! Verifies that:

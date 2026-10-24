@@ -25,10 +25,14 @@ mod projects;
 mod runs;
 mod workflows;
 
+#[cfg(feature = "aigc")]
 pub use aigc::dto::compute_profile;
+#[cfg(feature = "aigc")]
 pub use aigc::dto::model_acquisition;
+#[cfg(feature = "aigc")]
 pub use aigc::dto::models;
 
+#[cfg(feature = "aigc")]
 pub use aigc::dto::{
     BackendInstanceProfileDto, BackendProfileDto, ComputeProfileDto, DTypeProfileDto,
     DeviceProfileDto, DownloadEventPayload, FileEntryDto, MemoryProfileDto,

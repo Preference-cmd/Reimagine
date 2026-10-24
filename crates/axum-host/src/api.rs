@@ -5,8 +5,10 @@
 //! calls. See `dto.rs` for the request/response shapes.
 
 pub mod artifacts;
+#[cfg(feature = "aigc")]
 pub mod compute_profile;
 pub mod health;
+#[cfg(feature = "aigc")]
 pub mod models;
 pub mod nodes;
 pub mod runs;

@@ -6,6 +6,8 @@
 //! `RunEventRecorder` so `GET /runs/:id/events` returns real events
 //! emitted during the run.
 
+#![cfg(feature = "aigc")]
+
 mod sdxl_workflows;
 
 use std::sync::Arc;

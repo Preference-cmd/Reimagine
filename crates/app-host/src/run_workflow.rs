@@ -99,6 +99,25 @@ pub enum RunWorkflowResult {
     },
 }
 
+#[cfg(feature = "aigc")]
+type WorkflowReadinessSnapshot = aigc::SnapshotExternalReadinessProvider;
+#[cfg(not(feature = "aigc"))]
+type WorkflowReadinessSnapshot = NoExternalReadiness;
+
+#[cfg(not(feature = "aigc"))]
+struct NoExternalReadiness;
+
+#[cfg(not(feature = "aigc"))]
+impl reimagine_core::readiness::ExternalReadinessProvider for NoExternalReadiness {
+    fn diagnostics_for(
+        &self,
+        _context: &reimagine_core::readiness::ExternalReadinessContext,
+        _subject: &reimagine_core::readiness::ExternalReadinessSubject,
+    ) -> Option<Vec<reimagine_core::diagnostic::Diagnostic>> {
+        None
+    }
+}
+
 impl WorkspaceHost {
     /// Run a prepared workflow.
     ///
@@ -183,17 +202,46 @@ impl WorkspaceHost {
         workflow: &Workflow,
         target_selection: RunTargetSelection,
     ) -> AppHostResult<ExecutionPlanResult> {
-        let provider = self
-            .model_service()
-            .build_readiness_snapshot(workflow)
-            .await?;
+        let provider = self.workflow_readiness_provider(workflow).await?;
         let result = build_execution_plan(
             workflow,
             self.node_catalog().as_ref(),
             target_selection,
-            Some(&provider),
+            provider
+                .as_ref()
+                .map(|p| p as &dyn reimagine_core::readiness::ExternalReadinessProvider),
         );
 
+        self.apply_node_catalog_alignment(workflow, result)
+    }
+
+    #[cfg(feature = "aigc")]
+    async fn workflow_readiness_provider(
+        &self,
+        workflow: &Workflow,
+    ) -> AppHostResult<Option<WorkflowReadinessSnapshot>> {
+        let snapshot = self
+            .model_service()
+            .build_readiness_snapshot(workflow)
+            .await?;
+        Ok(Some(snapshot))
+    }
+
+    #[cfg(not(feature = "aigc"))]
+    #[allow(clippy::unused_async)]
+    async fn workflow_readiness_provider(
+        &self,
+        _workflow: &Workflow,
+    ) -> AppHostResult<Option<WorkflowReadinessSnapshot>> {
+        Ok(None)
+    }
+
+    #[cfg(feature = "aigc")]
+    fn apply_node_catalog_alignment(
+        &self,
+        workflow: &Workflow,
+        result: ExecutionPlanResult,
+    ) -> AppHostResult<ExecutionPlanResult> {
         // Catalog / executor alignment is a workspace bootstrap invariant
         // and should always be checked, not only for workflows that
         // referenced a specific node type. Orphan executors are surfaced
@@ -222,8 +270,18 @@ impl WorkspaceHost {
         let plan = result.plan().cloned();
         Ok(ExecutionPlanResult::new(plan, report))
     }
+
+    #[cfg(not(feature = "aigc"))]
+    fn apply_node_catalog_alignment(
+        &self,
+        _workflow: &Workflow,
+        result: ExecutionPlanResult,
+    ) -> AppHostResult<ExecutionPlanResult> {
+        Ok(result)
+    }
 }
 
+#[cfg(feature = "aigc")]
 fn workflow_uses_node_type(
     workflow: &Workflow,
     type_id: &reimagine_core::model::NodeTypeId,

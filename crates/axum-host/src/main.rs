@@ -53,12 +53,15 @@ async fn main() -> ExitCode {
         "Reimagine Axum host starting",
     );
 
-    let backend_config = workspace.backend_config();
-    tracing::info!(
-        backend = ?backend_config.backend,
-        device = %backend_config.candle_device,
-        "inference backend selected",
-    );
+    #[cfg(feature = "aigc")]
+    {
+        let backend_config = workspace.backend_config();
+        tracing::info!(
+            backend = ?backend_config.backend,
+            device = %backend_config.candle_device,
+            "inference backend selected",
+        );
+    }
 
     match run_server(AxumHostState::new(workspace, recorder), cli.addr).await {
         Ok(handle) => {

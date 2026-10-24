@@ -15,6 +15,9 @@
 #   host       app-host
 #   entries    reimagine (src-tauri), axum-host
 #
+# In kernel-only builds (--no-default-features), app-host, reimagine and
+# reimagine-axum-host must not reach the optional aigc module.
+#
 # No workspace crate depends on an agent stack (reimagine-agent-*, the legacy
 # agent kernel crates, causa*). The operation pipeline in app-host serves
 # humans and agents alike; an agent integration is an operator adapter above
@@ -102,5 +105,16 @@ while read -r crate; do
     *) check "$crate" "$AGENT" "$TAURI" "$APP_HOST" "$ENTRIES" ;;
   esac
 done <<<"$members"
+
+# Kernel-only assertion: app-host and entry crates compile without the
+# optional aigc module when built with --no-default-features.
+for crate in reimagine-app-host reimagine reimagine-axum-host; do
+  tree=$(cargo tree -p "$crate" --no-default-features --edges normal --target all --locked --charset ascii)
+  if grep -E -- "aigc v" <<<"$tree" >/dev/null; then
+    echo "FAIL: $crate --no-default-features must not depend on aigc" >&2
+    exit 1
+  fi
+  echo "ok: $crate (kernel-only)"
+done
 
 echo "dependency directions OK"

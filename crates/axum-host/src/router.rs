@@ -9,29 +9,35 @@ use axum::Router;
 use axum::routing::{get, post};
 use tower_http::trace::TraceLayer;
 
-use crate::api::{artifacts, compute_profile, health, models, nodes, runs, workflows};
+use crate::api::{artifacts, health, nodes, runs, workflows};
+#[cfg(feature = "aigc")]
+use crate::api::{compute_profile, models};
 use crate::state::AxumHostState;
 
 /// Build the V1 HTTP router. The router is stateless — every
 /// handler takes the [`AxumHostState`] via the standard `State`
 /// extractor.
 pub fn build_router() -> Router<AxumHostState> {
-    Router::new()
+    let router = Router::new()
         .route("/health", get(health::get))
-        .route("/compute-profile", get(compute_profile::get))
         .route("/nodes", get(nodes::list))
         .route("/workflows/open", post(workflows::open))
         .route("/workflows/{id}/run", post(workflows::run))
         .route("/runs/{id}", get(runs::get))
         .route("/runs/{id}/events", get(runs::events))
-        .route("/artifacts/{artifact_id}", get(artifacts::get))
+        .route("/artifacts/{artifact_id}", get(artifacts::get));
+
+    #[cfg(feature = "aigc")]
+    let router = router
+        .route("/compute-profile", get(compute_profile::get))
         .route("/models/download", post(models::download))
         .route("/models/acquire", post(models::acquire))
         .route("/models", get(models::list_models))
         .route("/models/{id}", get(models::get_model))
         .route("/models/{id}", axum::routing::delete(models::remove_model))
-        .route("/models/convert", post(models::convert_checkpoint))
-        .layer(TraceLayer::new_for_http().make_span_with(request_span))
+        .route("/models/convert", post(models::convert_checkpoint));
+
+    router.layer(TraceLayer::new_for_http().make_span_with(request_span))
 }
 
 /// Create a request span that carries route-level identifiers so
@@ -87,6 +93,7 @@ mod tests {
         assert_eq!(response.status(), StatusCode::OK);
     }
 
+    #[cfg(feature = "aigc")]
     #[tokio::test]
     async fn compute_profile_route_returns_candle_without_uninstalled_burn() {
         use axum::body::to_bytes;

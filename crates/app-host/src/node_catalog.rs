@@ -28,14 +28,19 @@
 
 use std::sync::Arc;
 
+#[cfg(feature = "aigc")]
 use reimagine_core::diagnostic::{
     Diagnostic, DiagnosticCode, DiagnosticSeverity, DiagnosticSourceName, DiagnosticTarget,
     DiagnosticTargetDomain,
 };
-use reimagine_core::model::{DiagnosticId, NodeCatalog, NodeDef, NodeTypeId};
+#[cfg(feature = "aigc")]
+use reimagine_core::model::DiagnosticId;
+use reimagine_core::model::{NodeCatalog, NodeDef, NodeTypeId};
+#[cfg(feature = "aigc")]
 use reimagine_inference::NodeExecutorRegistry;
 use reimagine_nodes::BuiltinNodeCatalog;
 
+#[cfg(feature = "aigc")]
 use crate::BackendSelection;
 
 /// Host-facing service for the built-in node catalog.
@@ -50,14 +55,22 @@ use crate::BackendSelection;
 #[derive(Debug, Clone)]
 pub struct NodeCatalogService {
     catalog: Arc<BuiltinNodeCatalog>,
+    #[cfg(feature = "aigc")]
     backend: BackendSelection,
 }
 
 impl NodeCatalogService {
     /// Build a service over the given built-in catalog and selected
     /// backend profile.
+    #[cfg(feature = "aigc")]
     pub fn new(catalog: Arc<BuiltinNodeCatalog>, backend: BackendSelection) -> Self {
         Self { catalog, backend }
+    }
+
+    /// Build a service over the given built-in catalog in kernel-only mode.
+    #[cfg(not(feature = "aigc"))]
+    pub fn new(catalog: Arc<BuiltinNodeCatalog>) -> Self {
+        Self { catalog }
     }
 
     /// List every `NodeDef` exposed by the workspace catalog.
@@ -75,6 +88,7 @@ impl NodeCatalogService {
     }
 
     /// Borrow the selected backend profile used to label diagnostics.
+    #[cfg(feature = "aigc")]
     pub fn backend(&self) -> BackendSelection {
         self.backend
     }
@@ -95,6 +109,7 @@ impl NodeCatalogService {
     ///   entry. Such executors can never be referenced by a valid
     ///   workflow and usually indicate that the catalog and registry
     ///   drifted out of sync.
+    #[cfg(feature = "aigc")]
     pub fn check_alignment(
         &self,
         executor_registry: &NodeExecutorRegistry,
@@ -132,6 +147,7 @@ impl NodeCatalog for NodeCatalogService {
 ///
 /// Construct via [`NodeCatalogService::check_alignment`]. The fields are
 /// sorted to keep diagnostics stable across runs.
+#[cfg(feature = "aigc")]
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct NodeCatalogAlignment {
     backend: BackendSelection,
@@ -139,6 +155,7 @@ pub struct NodeCatalogAlignment {
     orphan_executors: Vec<NodeTypeId>,
 }
 
+#[cfg(feature = "aigc")]
 impl NodeCatalogAlignment {
     /// Returns `true` when every catalog entry has a matching executor
     /// and every executor has a matching catalog entry.
@@ -188,6 +205,7 @@ impl NodeCatalogAlignment {
 
 /// Build a diagnostic for a catalog entry that has no registered
 /// executor for the selected backend profile.
+#[cfg(feature = "aigc")]
 fn missing_executor_diagnostic(type_id: NodeTypeId, backend: &str) -> Diagnostic {
     Diagnostic::new(
         DiagnosticId::new(format!(
@@ -208,6 +226,7 @@ fn missing_executor_diagnostic(type_id: NodeTypeId, backend: &str) -> Diagnostic
 
 /// Build a diagnostic for a registered executor that has no catalog
 /// entry.
+#[cfg(feature = "aigc")]
 fn orphan_executor_diagnostic(type_id: NodeTypeId, backend: &str) -> Diagnostic {
     Diagnostic::new(
         DiagnosticId::new(format!(
@@ -226,12 +245,13 @@ fn orphan_executor_diagnostic(type_id: NodeTypeId, backend: &str) -> Diagnostic 
     )
 }
 
+#[cfg(feature = "aigc")]
 fn target_for_node_type(type_id: &NodeTypeId) -> DiagnosticTarget {
     DiagnosticTarget::new(DiagnosticTargetDomain::new("app-host.node_catalog"))
         .with_id(type_id.as_str().to_owned())
 }
 
-#[cfg(test)]
+#[cfg(all(test, feature = "aigc"))]
 #[allow(deprecated)]
 mod tests {
     use super::*;

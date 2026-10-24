@@ -3,10 +3,13 @@ use std::sync::Arc;
 use reimagine_config::AppConfig;
 use reimagine_runtime::RuntimeService;
 
+#[cfg(feature = "aigc")]
+use crate::ModelService;
+use crate::WorkflowService;
 use crate::node_catalog::NodeCatalogService;
 use crate::project_memory::ProjectMemoryService;
 use crate::workspace_scope::WorkspaceScope;
-use crate::{ModelService, WorkflowService};
+#[cfg(feature = "aigc")]
 use aigc::ModelAcquisitionService;
 
 /// Service container for one workspace.
@@ -19,7 +22,9 @@ pub struct WorkspaceServices {
     workspace_scope: WorkspaceScope,
     config: Arc<AppConfig>,
     workflow_service: Arc<WorkflowService>,
+    #[cfg(feature = "aigc")]
     model_service: Arc<ModelService>,
+    #[cfg(feature = "aigc")]
     model_acquisition_service: Arc<ModelAcquisitionService>,
     runtime_service: Arc<RuntimeService>,
     node_catalog: Arc<NodeCatalogService>,
@@ -33,8 +38,8 @@ impl WorkspaceServices {
         workspace_scope: WorkspaceScope,
         config: Arc<AppConfig>,
         workflow_service: Arc<WorkflowService>,
-        model_service: Arc<ModelService>,
-        model_acquisition_service: Arc<ModelAcquisitionService>,
+        #[cfg(feature = "aigc")] model_service: Arc<ModelService>,
+        #[cfg(feature = "aigc")] model_acquisition_service: Arc<ModelAcquisitionService>,
         runtime_service: Arc<RuntimeService>,
         node_catalog: Arc<NodeCatalogService>,
         project_memory_service: Arc<ProjectMemoryService>,
@@ -43,7 +48,9 @@ impl WorkspaceServices {
             workspace_scope,
             config,
             workflow_service,
+            #[cfg(feature = "aigc")]
             model_service,
+            #[cfg(feature = "aigc")]
             model_acquisition_service,
             runtime_service,
             node_catalog,
@@ -63,10 +70,12 @@ impl WorkspaceServices {
         &self.workflow_service
     }
 
+    #[cfg(feature = "aigc")]
     pub fn model_service(&self) -> &Arc<ModelService> {
         &self.model_service
     }
 
+    #[cfg(feature = "aigc")]
     pub fn model_acquisition_service(&self) -> &Arc<ModelAcquisitionService> {
         &self.model_acquisition_service
     }

@@ -39,6 +39,7 @@ to `ci-tauri.yml`.
 # Rust gates - "quality" job
 cargo fmt --all -- --check
 cargo check --workspace --all-targets --locked --exclude reimagine-inference-burn-worker
+cargo check --locked --no-default-features -p reimagine-app-host -p reimagine-axum-host -p reimagine
 cargo clippy --workspace --all-targets --locked --exclude reimagine-inference-burn-worker -- -D warnings
 cargo test --workspace --locked --exclude reimagine --exclude reimagine-inference-burn --exclude reimagine-inference-burn-worker
 cargo test -p reimagine-inference-burn --lib --locked --no-default-features --features flex   # Linux: Flex CPU

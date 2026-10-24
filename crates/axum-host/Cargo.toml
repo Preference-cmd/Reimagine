@@ -9,17 +9,19 @@ license.workspace = true
 publish.workspace = true
 
 [features]
-default = []
-burn-wgpu = ["dep:reimagine-inference-burn", "reimagine-inference-burn/wgpu"]
-burn-flex = ["dep:reimagine-inference-burn", "reimagine-inference-burn/flex"]
-burn-cuda = ["dep:reimagine-inference-burn", "reimagine-inference-burn/cuda"]
-burn-rocm = ["dep:reimagine-inference-burn", "reimagine-inference-burn/rocm"]
+default = ["aigc", "candle"]
+aigc = ["reimagine-app-host/aigc"]
+candle = ["aigc", "reimagine-app-host/candle"]
+burn-wgpu = ["aigc", "dep:reimagine-inference-burn", "reimagine-inference-burn/wgpu"]
+burn-flex = ["aigc", "dep:reimagine-inference-burn", "reimagine-inference-burn/flex"]
+burn-cuda = ["aigc", "dep:reimagine-inference-burn", "reimagine-inference-burn/cuda"]
+burn-rocm = ["aigc", "dep:reimagine-inference-burn", "reimagine-inference-burn/rocm"]
 
 [dependencies]
 async-trait = { workspace = true }
 axum = { workspace = true }
 clap = { workspace = true }
-reimagine-app-host = { path = "../app-host" }
+reimagine-app-host = { path = "../app-host", default-features = false }
 reimagine-config = { path = "../config" }
 reimagine-inference-burn = { path = "../inference-backends/burn", default-features = false, optional = true }
 reimagine-core = { path = "../core" }

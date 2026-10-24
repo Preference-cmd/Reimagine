@@ -21,7 +21,7 @@ crate-type = ["staticlib", "cdylib", "rlib"]
 tauri-build = { workspace = true }
 
 [dependencies]
-reimagine-app-host = { path = "../crates/app-host" }
+reimagine-app-host = { path = "../crates/app-host", default-features = false }
 reimagine-config = { path = "../crates/config" }
 reimagine-core = { path = "../crates/core" }
 reimagine-model-acquisition = { path = "../crates/model-acquisition" }
@@ -38,3 +38,8 @@ opener = "0.7"
 
 [dev-dependencies]
 tempfile = { workspace = true }
+
+[features]
+default = ["aigc", "candle"]
+aigc = ["reimagine-app-host/aigc"]
+candle = ["aigc", "reimagine-app-host/candle"]

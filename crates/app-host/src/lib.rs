@@ -25,24 +25,32 @@ mod workflow_service;
 mod workspace;
 mod workspace_scope;
 
+#[cfg(feature = "aigc")]
 pub use aigc::BackendSelection;
+#[cfg(feature = "aigc")]
 pub use aigc::ModelAcquisitionService;
+#[cfg(feature = "aigc")]
 pub use aigc::SnapshotExternalReadinessProvider;
+#[cfg(feature = "aigc")]
 pub use aigc::inference::grpc_worker::{
     GrpcSwitchableWorker, GrpcWorkerCandidate, GrpcWorkerCandidateConfig,
 };
+#[cfg(feature = "aigc")]
 pub use aigc::inference::quic_worker::{
     QuicSwitchableWorker, QuicWorkerCandidate, QuicWorkerCandidateConfig,
 };
+#[cfg(feature = "aigc")]
 pub use aigc::inference::switch::{
     ProcessSwitchableWorker, RunCancellation, SwitchableWorker, WorkerSelectionHandle,
     WorkerSwitchError, WorkerSwitchService, WorkerSwitchTarget,
 };
+#[cfg(feature = "aigc")]
 pub use aigc::inference::worker::{
     EmptyWorkerInventoryProvider, InstalledWorkerInventoryProvider, StaticWorkerInventoryProvider,
     WorkerActivationError, WorkerBackendCandidate, WorkerInventoryProvider,
     WorkerInventorySnapshot,
 };
+#[cfg(feature = "aigc")]
 pub use aigc::{
     AcquireAndConvertReport, AcquireAndConvertRequest, AigcError, AigcResult,
     BurnCheckpointConverter, BurnConversionComponent, BurnConversionComponentRole,
@@ -56,8 +64,12 @@ pub use artifact_access::{
 pub use board_service::BoardService;
 pub use document_events::{DocumentChangedEvent, DocumentEventBus};
 pub use error::{AppHostError, AppHostResult};
-pub use error_code::{AppHostErrorCode, worker_switch_error_code, worker_switch_error_details};
-pub use node_catalog::{NodeCatalogAlignment, NodeCatalogService};
+pub use error_code::AppHostErrorCode;
+#[cfg(feature = "aigc")]
+pub use error_code::{worker_switch_error_code, worker_switch_error_details};
+#[cfg(feature = "aigc")]
+pub use node_catalog::NodeCatalogAlignment;
+pub use node_catalog::NodeCatalogService;
 pub use policy::WorkflowCommandPolicy;
 pub use project_service::ProjectService;
 pub use proposal::{ProposalReceipt, ProposalStatus, WorkflowProposal};

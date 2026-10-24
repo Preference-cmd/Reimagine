@@ -1,3 +1,5 @@
+#![cfg(feature = "aigc")]
+
 //! Tests for the app-host readiness bridge and `run_workflow` orchestration.
 //!
 //! These tests cover three concerns from the app-host/01b issue:

@@ -5,32 +5,41 @@ use std::collections::BTreeMap;
 use std::path::Path;
 use std::sync::{Arc, RwLock};
 
+#[cfg(feature = "aigc")]
 pub(crate) use aigc_parts::AigcParts;
 pub use aigc_parts::AigcStatus;
 pub use builder::WorkspaceHostBuilder;
 
 use crate::WorkspaceScope;
+#[cfg(feature = "aigc")]
 use reimagine_backend_worker_host::WorkerStorePaths;
 use reimagine_config::{AppConfig, AppPaths, ConfigDocument, InferenceBackendConfig};
 use reimagine_core::model::{NodeDef, ProjectId};
+#[cfg(feature = "aigc")]
 use reimagine_inference::WorkspaceComputeProfile;
 use reimagine_nodes::BuiltinNodeCatalog;
 use reimagine_runtime::{BoxedRunEventSink, RuntimeService, VecRunEventSink};
 
-use crate::node_catalog::{NodeCatalogAlignment, NodeCatalogService};
+#[cfg(feature = "aigc")]
+use crate::node_catalog::NodeCatalogAlignment;
+use crate::node_catalog::NodeCatalogService;
 use crate::project_memory::ProjectMemoryService;
 use crate::services::WorkspaceServices;
+use crate::{AppHostError, BoardService, DocumentEventBus, ProjectService, WorkflowService};
+#[cfg(feature = "aigc")]
 use crate::{
-    AppHostError, BackendSelection, BoardService, DocumentEventBus, ModelService, ProjectService,
-    WorkflowService,
+    BackendSelection, InstalledWorkerInventoryProvider, ModelService, WorkerInventoryProvider,
 };
-use crate::{InstalledWorkerInventoryProvider, WorkerInventoryProvider};
+#[cfg(feature = "aigc")]
 use aigc::ModelAcquisitionService;
-#[cfg(test)]
+#[cfg(all(test, feature = "aigc"))]
 use aigc::inference::compose::compose_inference_runtime;
+#[cfg(feature = "aigc")]
 use aigc::inference::compose::{BootstrapInference, ComposedInferenceRuntime, bootstrap_inference};
+#[cfg(feature = "aigc")]
 use aigc::inference::selection::resolved_candle_device_label;
 
+#[cfg(feature = "aigc")]
 /// How long a re-bootstrap waits for in-flight runs to drain before giving
 /// up and keeping the current backend in place.
 const REBOOTSTRAP_DRAIN_DEADLINE: std::time::Duration = std::time::Duration::from_secs(30);
@@ -95,24 +104,104 @@ pub struct WorkspaceHost {
     pub(crate) node_catalog: Arc<NodeCatalogService>,
     pub(crate) builtin_catalog: Arc<BuiltinNodeCatalog>,
     pub(crate) services: Arc<WorkspaceServices>,
+    #[cfg(feature = "aigc")]
     pub(crate) aigc: AigcParts,
+    #[cfg_attr(not(feature = "aigc"), allow(dead_code))]
     pub(crate) event_sink: BoxedRunEventSink,
 }
 
 impl std::fmt::Debug for WorkspaceHost {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.debug_struct("WorkspaceHost")
-            .field("workspace_scope", &self.workspace_scope)
+        let mut d = f.debug_struct("WorkspaceHost");
+        d.field("workspace_scope", &self.workspace_scope)
             .field("config", &self.config)
             .field("backend_config", &self.backend_config)
             .field("runtime_service", &self.runtime_service)
-            .field("node_catalog", &self.node_catalog)
-            .field("aigc", &self.aigc)
-            .finish_non_exhaustive()
+            .field("node_catalog", &self.node_catalog);
+        #[cfg(feature = "aigc")]
+        d.field("aigc", &self.aigc);
+        d.finish_non_exhaustive()
     }
 }
 
+pub(crate) struct WorkspaceComponents {
+    pub(crate) runtime_service: Arc<RuntimeService>,
+    #[cfg(feature = "aigc")]
+    pub(crate) model_service: Arc<ModelService>,
+    #[cfg(feature = "aigc")]
+    pub(crate) acquisition_service: Arc<ModelAcquisitionService>,
+    #[cfg(feature = "aigc")]
+    pub(crate) aigc: AigcParts,
+}
+
 impl WorkspaceHost {
+    #[allow(clippy::too_many_arguments)]
+    pub(crate) fn assemble(
+        workspace_scope: WorkspaceScope,
+        config: Arc<AppConfig>,
+        backend_config: InferenceBackendConfig,
+        document_events: Arc<DocumentEventBus>,
+        event_sink: BoxedRunEventSink,
+        builtin_catalog: Arc<BuiltinNodeCatalog>,
+        components: WorkspaceComponents,
+    ) -> Self {
+        let board_service = Arc::new(BoardService::with_document_events(
+            config.paths().clone(),
+            Arc::clone(&document_events),
+        ));
+        let project_service = Arc::new(ProjectService::new(
+            config.paths().clone(),
+            Arc::clone(&board_service),
+        ));
+        let default_project_id = ProjectId::new("default");
+        let workflow_service = Arc::new(WorkflowService::for_project_with_events(
+            config.paths().clone(),
+            default_project_id.clone(),
+            Arc::clone(&document_events),
+        ));
+        let mut workflow_services = BTreeMap::new();
+        workflow_services.insert(default_project_id, Arc::clone(&workflow_service));
+        #[cfg(feature = "aigc")]
+        let node_catalog = Arc::new(NodeCatalogService::new(
+            Arc::clone(&builtin_catalog),
+            BackendSelection::from(backend_config.backend),
+        ));
+        #[cfg(not(feature = "aigc"))]
+        let node_catalog = Arc::new(NodeCatalogService::new(Arc::clone(&builtin_catalog)));
+        let project_memory_service = Arc::new(ProjectMemoryService::new(config.paths().clone()));
+        let services = Arc::new(WorkspaceServices::new(
+            workspace_scope.clone(),
+            Arc::clone(&config),
+            Arc::clone(&workflow_service),
+            #[cfg(feature = "aigc")]
+            Arc::clone(&components.model_service),
+            #[cfg(feature = "aigc")]
+            components.acquisition_service,
+            Arc::clone(&components.runtime_service),
+            Arc::clone(&node_catalog),
+            Arc::clone(&project_memory_service),
+        ));
+
+        Self {
+            workspace_scope,
+            config,
+            backend_config,
+            project_service,
+            board_service,
+            workflow_service,
+            workflow_services: RwLock::new(workflow_services),
+            document_events,
+            runtime_service: components.runtime_service,
+            node_catalog,
+            builtin_catalog,
+            services,
+            #[cfg(feature = "aigc")]
+            aigc: components.aigc,
+            event_sink,
+        }
+    }
+
+    #[cfg(feature = "aigc")]
     pub fn new(
         workspace_scope: WorkspaceScope,
         config: AppConfig,
@@ -134,6 +223,7 @@ impl WorkspaceHost {
         )
     }
 
+    #[cfg(feature = "aigc")]
     #[allow(clippy::too_many_arguments)]
     fn new_with_document_events(
         workspace_scope: WorkspaceScope,
@@ -146,22 +236,6 @@ impl WorkspaceHost {
         document_events: Arc<DocumentEventBus>,
     ) -> Self {
         let config = Arc::new(config);
-        let board_service = Arc::new(BoardService::with_document_events(
-            config.paths().clone(),
-            Arc::clone(&document_events),
-        ));
-        let project_service = Arc::new(ProjectService::new(
-            config.paths().clone(),
-            Arc::clone(&board_service),
-        ));
-        let default_project_id = ProjectId::new("default");
-        let workflow_service = Arc::new(WorkflowService::for_project_with_events(
-            config.paths().clone(),
-            default_project_id.clone(),
-            Arc::clone(&document_events),
-        ));
-        let mut workflow_services = BTreeMap::new();
-        workflow_services.insert(default_project_id, Arc::clone(&workflow_service));
         let acquisition_service = Arc::new(ModelAcquisitionService::new(
             config.paths().clone(),
             &config,
@@ -170,25 +244,9 @@ impl WorkspaceHost {
             config.paths().clone(),
             acquisition_service.clone(),
         ));
-        let backend = BackendSelection::from(backend_config.backend);
-        let node_catalog = Arc::new(NodeCatalogService::new(
-            Arc::clone(&builtin_catalog),
-            backend,
-        ));
-        let project_memory_service = Arc::new(ProjectMemoryService::new(config.paths().clone()));
-        let services = Arc::new(WorkspaceServices::new(
-            workspace_scope.clone(),
-            Arc::clone(&config),
-            Arc::clone(&workflow_service),
-            Arc::clone(&model_service),
-            acquisition_service,
-            Arc::clone(&runtime_service),
-            Arc::clone(&node_catalog),
-            Arc::clone(&project_memory_service),
-        ));
         let aigc = AigcParts {
             status: AigcStatus::Available,
-            model_service,
+            model_service: Arc::clone(&model_service),
             compute_profile,
             resolved_backend_instance,
             worker_switch: None,
@@ -196,32 +254,30 @@ impl WorkspaceHost {
             topology: None,
             discovery: None,
         };
-        Self {
+        let components = WorkspaceComponents {
+            runtime_service,
+            model_service,
+            acquisition_service,
+            aigc,
+        };
+        Self::assemble(
             workspace_scope,
             config,
             backend_config,
-            project_service,
-            board_service,
-            workflow_service,
-            workflow_services: RwLock::new(workflow_services),
             document_events,
-            runtime_service,
-            node_catalog,
+            Arc::new(VecRunEventSink::new()),
             builtin_catalog,
-            services,
-            aigc,
-            event_sink: Arc::new(VecRunEventSink::new()),
-        }
+            components,
+        )
     }
 
     pub fn with_defaults(
         workspace_scope: WorkspaceScope,
         base_path: impl Into<std::path::PathBuf>,
     ) -> Self {
-        Self::with_defaults_and_backend(
+        Self::with_defaults_and_event_sink(
             workspace_scope,
             base_path,
-            BackendSelection::default(),
             Arc::new(VecRunEventSink::new()),
         )
     }
@@ -245,6 +301,7 @@ impl WorkspaceHost {
     /// [`crate::WorkerManagementService::offline`] uses), so a production
     /// desktop host that passes its real app-data directory sees installed
     /// workers.
+    #[cfg(feature = "aigc")]
     pub async fn try_with_app_data_root_and_event_sink(
         workspace_scope: WorkspaceScope,
         base_path: impl Into<std::path::PathBuf>,
@@ -266,6 +323,7 @@ impl WorkspaceHost {
 
     /// Bootstrap with an explicit app-data root and an explicit backend
     /// configuration (used by the re-bootstrap path).
+    #[cfg(feature = "aigc")]
     pub async fn try_with_app_data_root_and_backend_config(
         workspace_scope: WorkspaceScope,
         base_path: impl Into<std::path::PathBuf>,
@@ -287,6 +345,7 @@ impl WorkspaceHost {
         .await
     }
 
+    #[cfg(feature = "aigc")]
     pub async fn try_with_backend_config_and_worker_inventory(
         workspace_scope: WorkspaceScope,
         base_path: impl Into<std::path::PathBuf>,
@@ -321,6 +380,7 @@ impl WorkspaceHost {
             config,
             backend_config,
             event_sink,
+            #[cfg(feature = "aigc")]
             Arc::new(InstalledWorkerInventoryProvider::for_base_path(&base_path)),
             None,
         )
@@ -332,14 +392,12 @@ impl WorkspaceHost {
         base_path: impl Into<std::path::PathBuf>,
         event_sink: BoxedRunEventSink,
     ) -> Self {
-        Self::with_defaults_and_backend(
-            workspace_scope,
-            base_path,
-            BackendSelection::default(),
-            event_sink,
-        )
+        let config = AppConfig::new(AppPaths::new(base_path));
+        let backend_config = load_backend_config(&config);
+        Self::with_backend_config_inner(workspace_scope, config, backend_config, event_sink)
     }
 
+    #[cfg(feature = "aigc")]
     pub fn with_defaults_and_backend(
         workspace_scope: WorkspaceScope,
         base_path: impl Into<std::path::PathBuf>,
@@ -367,24 +425,40 @@ impl WorkspaceHost {
         backend_config: InferenceBackendConfig,
         event_sink: BoxedRunEventSink,
     ) -> Self {
-        let acquisition_service = Arc::new(ModelAcquisitionService::new(
-            config.paths().clone(),
-            &config,
-        ));
+        let components = Self::build_sync_components(&config, &backend_config, &event_sink);
+        Self::assemble(
+            workspace_scope,
+            Arc::new(config),
+            backend_config,
+            Arc::new(DocumentEventBus::new()),
+            event_sink,
+            Arc::new(BuiltinNodeCatalog::v1()),
+            components,
+        )
+    }
+
+    #[cfg(feature = "aigc")]
+    fn build_sync_components(
+        config: &AppConfig,
+        backend_config: &InferenceBackendConfig,
+        event_sink: &BoxedRunEventSink,
+    ) -> WorkspaceComponents {
+        let acquisition_service =
+            Arc::new(ModelAcquisitionService::new(config.paths().clone(), config));
         let model_service = Arc::new(ModelService::new(
             config.paths().clone(),
             acquisition_service.clone(),
         ));
 
         let (status, bootstrapped) =
-            match bootstrap_inference(&config, &backend_config, model_service.clone()) {
+            match bootstrap_inference(config, backend_config, model_service.clone()) {
                 Ok(bootstrapped) => (AigcStatus::Available, bootstrapped),
                 Err(error) => {
                     let reason = error.to_string();
                     tracing::error!(
                         %error,
                         "inference bootstrap failed on the synchronous construction path; \
-                         continuing with an empty executor registry"
+                             continuing with an empty executor registry"
                     );
                     (
                         AigcStatus::Unavailable { reason },
@@ -402,7 +476,7 @@ impl WorkspaceHost {
             RuntimeService::new(
                 bootstrapped.runtime.executor_registry,
                 bootstrapped.runtime.runtime_hooks.clone(),
-                event_sink,
+                event_sink.clone(),
                 Arc::new(reimagine_runtime::SystemClock),
             )
             .with_resource_hint_sink(
@@ -415,19 +489,38 @@ impl WorkspaceHost {
             let cancellation: Arc<dyn crate::RunCancellation> = runtime_service.clone();
             worker_switch.set_run_cancellation(cancellation);
         }
-        let builtin_catalog = Arc::new(BuiltinNodeCatalog::v1());
-        let mut host = Self::new(
-            workspace_scope,
-            config,
-            backend_config,
+        let aigc = AigcParts {
+            status,
+            model_service: Arc::clone(&model_service),
+            compute_profile: Arc::new(bootstrapped.compute_profile),
+            resolved_backend_instance: bootstrapped.runtime.selected_instance,
+            worker_switch,
+            worker_inventory: Arc::new(crate::EmptyWorkerInventoryProvider),
+            topology: bootstrapped.topology,
+            discovery: bootstrapped.discovery,
+        };
+
+        WorkspaceComponents {
             runtime_service,
-            builtin_catalog,
-            Arc::new(bootstrapped.compute_profile),
-            bootstrapped.runtime.selected_instance,
-        );
-        host.aigc.status = status;
-        host.aigc.worker_switch = worker_switch;
-        host
+            model_service,
+            acquisition_service,
+            aigc,
+        }
+    }
+
+    #[cfg(not(feature = "aigc"))]
+    fn build_sync_components(
+        _config: &AppConfig,
+        _backend_config: &InferenceBackendConfig,
+        event_sink: &BoxedRunEventSink,
+    ) -> WorkspaceComponents {
+        let runtime_service = Arc::new(RuntimeService::new(
+            reimagine_inference::NodeExecutorRegistry::default(),
+            Arc::new(reimagine_inference::CompositeBackendInstanceRuntimeHooks::new(Vec::new())),
+            event_sink.clone(),
+            Arc::new(reimagine_runtime::SystemClock),
+        ));
+        WorkspaceComponents { runtime_service }
     }
 
     async fn with_backend_config_and_worker_inventory_inner(
@@ -435,14 +528,17 @@ impl WorkspaceHost {
         config: AppConfig,
         backend_config: InferenceBackendConfig,
         event_sink: BoxedRunEventSink,
-        worker_inventory: Arc<dyn WorkerInventoryProvider>,
+        #[cfg(feature = "aigc")] worker_inventory: Arc<dyn WorkerInventoryProvider>,
         document_events_override: Option<Arc<DocumentEventBus>>,
     ) -> Result<Self, AppHostError> {
         let base_path = config.paths().base_path().to_path_buf();
         let mut builder = WorkspaceHostBuilder::new(workspace_scope, base_path)
             .backend_config(backend_config)
-            .event_sink(event_sink)
-            .worker_inventory(worker_inventory);
+            .event_sink(event_sink);
+        #[cfg(feature = "aigc")]
+        {
+            builder = builder.worker_inventory(worker_inventory);
+        }
         if let Some(events) = document_events_override {
             builder = builder.document_events(events);
         }
@@ -526,6 +622,7 @@ impl WorkspaceHost {
     pub fn board_service(&self) -> &Arc<BoardService> {
         &self.board_service
     }
+    #[cfg(feature = "aigc")]
     pub fn model_service(&self) -> &Arc<ModelService> {
         &self.aigc.model_service
     }
@@ -535,14 +632,22 @@ impl WorkspaceHost {
 
     /// Operating status of the workspace AIGC subsystem.
     pub fn aigc_status(&self) -> &AigcStatus {
-        &self.aigc.status
+        #[cfg(feature = "aigc")]
+        {
+            &self.aigc.status
+        }
+        #[cfg(not(feature = "aigc"))]
+        {
+            &AigcStatus::NotInstalled
+        }
     }
 
     /// Reason why AIGC is unavailable, if any.
     pub(crate) fn aigc_unavailable_reason(&self) -> Option<&str> {
-        self.aigc.status.unavailable_reason()
+        self.aigc_status().unavailable_reason()
     }
 
+    #[cfg(feature = "aigc")]
     pub async fn selected_worker(&self) -> Result<crate::WorkerSelectionHandle, AppHostError> {
         if let Some(reason) = self.aigc_unavailable_reason() {
             return Err(AppHostError::AigcUnavailable {
@@ -557,6 +662,7 @@ impl WorkspaceHost {
         Ok(workers.selected().await)
     }
 
+    #[cfg(feature = "aigc")]
     pub async fn drain_and_switch_worker(
         &self,
         target: crate::WorkerBackendCandidate,
@@ -578,6 +684,7 @@ impl WorkspaceHost {
             .map_err(AppHostError::from)
     }
 
+    #[cfg(feature = "aigc")]
     pub async fn cancel_and_switch_worker(
         &self,
         target: crate::WorkerBackendCandidate,
@@ -606,6 +713,7 @@ impl WorkspaceHost {
     /// run is in flight when the old worker process is retired, without
     /// cancelling anything. Hosts without a process worker (built-in
     /// fallback backends) return immediately.
+    #[cfg(feature = "aigc")]
     pub async fn drain_active_worker(
         &self,
         deadline: std::time::Duration,
@@ -633,6 +741,7 @@ impl WorkspaceHost {
     /// drain does not finish within [`REBOOTSTRAP_DRAIN_DEADLINE`], the
     /// freshly built workspace is shut down and the current one is left
     /// untouched.
+    #[cfg(feature = "aigc")]
     pub async fn rebuild_workspace(
         current: &Self,
         new_selection: BackendSelection,
@@ -673,6 +782,7 @@ impl WorkspaceHost {
     /// restarted app boots with the re-bootstrapped backend. If the
     /// in-memory swap succeeds but the config write fails, the error
     /// reports the persist failure while the workspace is already swapped.
+    #[cfg(feature = "aigc")]
     pub async fn rebootstrap(
         &mut self,
         new_selection: BackendSelection,
@@ -684,6 +794,7 @@ impl WorkspaceHost {
         Ok(())
     }
 
+    #[cfg(feature = "aigc")]
     /// Persist a backend config to `inference_backend.json` through the
     /// workspace's config handle.
     async fn persist_backend_config(
@@ -726,6 +837,7 @@ impl WorkspaceHost {
 
     /// Compute the alignment report between the workspace catalog and
     /// the runtime executor registry.
+    #[cfg(feature = "aigc")]
     pub fn check_node_catalog_alignment(&self) -> NodeCatalogAlignment {
         self.node_catalog
             .check_alignment(self.runtime_service.registry())
@@ -748,12 +860,14 @@ impl WorkspaceHost {
     /// The accessor returns a clone of the cached profile and does not
     /// re-probe the host; the snapshot is computed once during
     /// [`WorkspaceHost`] bootstrap.
+    #[cfg(feature = "aigc")]
     pub fn compute_profile(&self) -> WorkspaceComputeProfile {
         (*self.aigc.compute_profile).clone()
     }
 
     /// The connection topology manager (T13), when remote workers are
     /// configured. `None` in single-worker mode.
+    #[cfg(feature = "aigc")]
     pub fn topology(
         &self,
     ) -> Option<&Arc<tokio::sync::Mutex<aigc::inference::topology::ConnectionTopologyManager>>>
@@ -763,6 +877,7 @@ impl WorkspaceHost {
 
     /// The discovery orchestrator (T12/T13), when a topology manager
     /// exists.
+    #[cfg(feature = "aigc")]
     pub fn discovery(&self) -> Option<&Arc<aigc::inference::discovery::DiscoveryOrchestrator>> {
         self.aigc.discovery.as_ref()
     }
@@ -776,6 +891,7 @@ impl WorkspaceHost {
     /// `BackendInstanceStatus`, `InferenceCapability`, …) or on
     /// backend-native handles. The returned DTO is the V1 wire contract
     /// for `GET /compute-profile` and the equivalent Tauri command.
+    #[cfg(feature = "aigc")]
     pub fn compute_profile_dto(&self) -> crate::dto::ComputeProfileDto {
         let mut dto: crate::dto::ComputeProfileDto = self.compute_profile().into();
         if let Some(topology) = &self.aigc.topology {
@@ -794,12 +910,14 @@ impl WorkspaceHost {
     /// `"metal"`. Useful for tests and host adapters that need to
     /// know which [`reimagine_inference::BackendInstance`] the
     /// workspace is actually running.
+    #[cfg(feature = "aigc")]
     pub fn resolved_candle_device_label(&self) -> String {
         resolved_candle_device_label(&self.aigc.resolved_backend_instance)
     }
 
     /// Return the resolved [`reimagine_inference::BackendInstance`]
     /// the workspace bootstrap selected.
+    #[cfg(feature = "aigc")]
     pub fn resolved_backend_instance(&self) -> &reimagine_inference::BackendInstance {
         &self.aigc.resolved_backend_instance
     }
@@ -810,12 +928,15 @@ impl WorkspaceHost {
     /// is exiting so that child worker processes are cleaned up instead of
     /// becoming orphans.
     pub async fn shutdown(&self) {
-        let Some(worker_switch) = &self.aigc.worker_switch else {
-            return;
-        };
-        let deadline = std::time::Duration::from_secs(5);
-        if let Err(error) = worker_switch.shutdown_active(deadline).await {
-            eprintln!("[app-host] worker shutdown error: {error}");
+        #[cfg(feature = "aigc")]
+        {
+            let Some(worker_switch) = &self.aigc.worker_switch else {
+                return;
+            };
+            let deadline = std::time::Duration::from_secs(5);
+            if let Err(error) = worker_switch.shutdown_active(deadline).await {
+                eprintln!("[app-host] worker shutdown error: {error}");
+            }
         }
     }
 }
@@ -842,6 +963,7 @@ async fn load_backend_config_result(
 /// Project a [`BackendSelection`] onto the persisted backend config,
 /// keeping device preferences but clearing the pinned instance so the
 /// bootstrap policy re-resolves against the live profile.
+#[cfg(feature = "aigc")]
 fn backend_config_for_selection(
     current: &InferenceBackendConfig,
     selection: BackendSelection,
@@ -861,12 +983,16 @@ fn backend_config_for_selection(
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[cfg(feature = "aigc")]
     use reimagine_backend_worker_host::{
         ExpectedWorkerIdentity, InstallationRecord, InventoryStore, WorkerInstallationId,
     };
+    #[cfg(feature = "aigc")]
     use reimagine_backend_worker_protocol::BackendInstanceId;
     use reimagine_config::InferenceBackendKind;
+    #[cfg(feature = "aigc")]
     use reimagine_core::model::NodeTypeId;
+    #[cfg(feature = "aigc")]
     use reimagine_inference::BackendInstance;
     use std::fs;
 
@@ -879,6 +1005,7 @@ mod tests {
         std::env::temp_dir().join(format!("reimagine-app-host-ws-{prefix}-{nonce:?}-{tid:?}"))
     }
 
+    #[cfg(feature = "aigc")]
     /// Seed a durable burn-worker installation record beneath `app_data_root`.
     fn seed_worker_record(app_data_root: &std::path::Path, install_dir: &std::path::Path) {
         let store = InventoryStore::new(WorkerStorePaths::new(app_data_root));
@@ -954,6 +1081,7 @@ mod tests {
         let _ = fs::remove_dir_all(&base);
     }
 
+    #[cfg(feature = "aigc")]
     #[test]
     fn app_host_inference_composition_registers_builtin_executors() {
         let base = temp_dir("compose-runtime");
@@ -1091,6 +1219,7 @@ mod tests {
 
     // ── Compute profile tests (Task 3) ─────────────────────────────
 
+    #[cfg(feature = "aigc")]
     fn assert_cpu_available(profile: &WorkspaceComputeProfile) {
         let cpu = profile
             .backend_profiles
@@ -1105,6 +1234,7 @@ mod tests {
         );
     }
 
+    #[cfg(feature = "aigc")]
     fn assert_metal_present(profile: &WorkspaceComputeProfile) {
         let metal = profile
             .backend_profiles
@@ -1119,18 +1249,19 @@ mod tests {
         );
     }
 
-    #[cfg(feature = "candle")]
+    #[cfg(all(feature = "aigc", feature = "candle"))]
     fn metal_is_available_on_this_host() -> bool {
         aigc::reimagine_inference_candle::CandleDevice::new("metal")
             .try_build_device()
             .is_ok()
     }
 
-    #[cfg(not(feature = "candle"))]
+    #[cfg(all(feature = "aigc", not(feature = "candle")))]
     fn metal_is_available_on_this_host() -> bool {
         false
     }
 
+    #[cfg(feature = "aigc")]
     #[test]
     fn compute_profile_contains_available_cpu_instance() {
         let base = temp_dir("profile-cpu");
@@ -1140,6 +1271,7 @@ mod tests {
         let _ = fs::remove_dir_all(&base);
     }
 
+    #[cfg(feature = "aigc")]
     #[test]
     fn compute_profile_works_without_running_a_workflow() {
         let base = temp_dir("profile-no-run");
@@ -1151,6 +1283,7 @@ mod tests {
         let _ = fs::remove_dir_all(&base);
     }
 
+    #[cfg(feature = "aigc")]
     #[test]
     fn invalid_candle_device_falls_back_to_cpu_with_diagnostic() {
         let base = temp_dir("profile-tpu");
@@ -1198,6 +1331,7 @@ mod tests {
         let _ = fs::remove_dir_all(&base);
     }
 
+    #[cfg(feature = "aigc")]
     #[test]
     fn unknown_open_selected_instance_remains_pinned_with_diagnostic() {
         let base = temp_dir("profile-unknown-selected");
@@ -1234,6 +1368,7 @@ mod tests {
         let _ = fs::remove_dir_all(&base);
     }
 
+    #[cfg(feature = "aigc")]
     #[test]
     fn mps_label_picks_metal_when_available_cpu_otherwise() {
         let base = temp_dir("profile-mps");
@@ -1288,6 +1423,7 @@ mod tests {
         let _ = fs::remove_dir_all(&base);
     }
 
+    #[cfg(feature = "aigc")]
     #[tokio::test]
     async fn compute_profile_works_after_async_try_with_defaults() {
         let base = temp_dir("profile-try-defaults");
@@ -1303,6 +1439,7 @@ mod tests {
         let _ = fs::remove_dir_all(&base);
     }
 
+    #[cfg(feature = "aigc")]
     #[test]
     fn fallback_cpu_keeps_same_registry_wiring() {
         // The fallback path must register `candle:cpu` with the same
@@ -1332,6 +1469,7 @@ mod tests {
 
     // ── App-data root wiring (BE-38) ──────────────────────────────
 
+    #[cfg(feature = "aigc")]
     fn burn_worker_visible(profile: &reimagine_inference::WorkspaceComputeProfile) -> bool {
         profile
             .backend_profiles
@@ -1340,6 +1478,7 @@ mod tests {
             .any(|instance| instance.instance == BackendInstance::new("burn:wgpu:default"))
     }
 
+    #[cfg(feature = "aigc")]
     #[tokio::test]
     async fn try_with_app_data_root_reads_worker_store_beneath_explicit_root() {
         let base = temp_dir("app-data-root");
@@ -1377,6 +1516,7 @@ mod tests {
         let _ = fs::remove_dir_all(&base);
     }
 
+    #[cfg(feature = "aigc")]
     #[tokio::test]
     async fn base_path_derived_bootstrap_does_not_see_explicit_app_data_store() {
         let base = temp_dir("app-data-miss");
@@ -1402,6 +1542,7 @@ mod tests {
 
     // ── Re-bootstrap path (B4-8) ──────────────────────────────────
 
+    #[cfg(feature = "aigc")]
     #[tokio::test]
     async fn rebootstrap_swaps_backend_and_preserves_workspace() {
         let base = temp_dir("rebootstrap");
@@ -1453,6 +1594,7 @@ mod tests {
         let _ = fs::remove_dir_all(&base);
     }
 
+    #[cfg(feature = "aigc")]
     #[tokio::test]
     async fn rebuild_workspace_builds_new_host_without_mutating_current() {
         let base = temp_dir("rebuild");
@@ -1481,6 +1623,7 @@ mod tests {
         let _ = fs::remove_dir_all(&base);
     }
 
+    #[cfg(feature = "aigc")]
     #[tokio::test]
     async fn rebuild_workspace_preserves_current_when_rebuild_fails() {
         let base = temp_dir("rebuild-fail-preserve");
@@ -1522,6 +1665,7 @@ mod tests {
         let _ = tokio::fs::remove_dir_all(&base).await;
     }
 
+    #[cfg(feature = "aigc")]
     #[tokio::test]
     async fn production_bootstrap_creates_discoverable_default_project() {
         let base = temp_dir("ar08-default-project");
@@ -1581,6 +1725,7 @@ mod tests {
         let _ = fs::remove_dir_all(&base);
     }
 
+    #[cfg(feature = "aigc")]
     #[tokio::test]
     async fn migration_copies_legacy_workflows_into_default_project() {
         let base = temp_dir("ar08-legacy-migrate");

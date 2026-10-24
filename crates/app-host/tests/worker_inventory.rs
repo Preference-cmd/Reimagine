@@ -1,3 +1,5 @@
+#![cfg(feature = "aigc")]
+
 use std::sync::Arc;
 
 use reimagine_app_host::WorkspaceScope;

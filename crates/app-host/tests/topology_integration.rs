@@ -1,3 +1,5 @@
+#![cfg(feature = "aigc")]
+
 //! WorkspaceHost topology integration tests (T13).
 //!
 //! Verifies that a workspace configured with remote workers bootstraps

@@ -1,29 +1,30 @@
-use std::collections::BTreeMap;
 use std::path::PathBuf;
-use std::sync::{Arc, RwLock};
+use std::sync::Arc;
 
 use crate::WorkspaceScope;
+#[cfg(feature = "aigc")]
 use reimagine_backend_worker_host::WorkerStorePaths;
 use reimagine_config::{AppConfig, AppPaths, InferenceBackendConfig};
 use reimagine_runtime::BoxedRunEventSink;
 use reimagine_runtime::VecRunEventSink;
 
+#[cfg(feature = "aigc")]
 use crate::InstalledWorkerInventoryProvider;
-use crate::project_memory::ProjectMemoryService;
-use crate::services::WorkspaceServices;
-use crate::{
-    AppHostError, BackendSelection, BoardService, DocumentEventBus, ModelService, ProjectService,
-    WorkerInventoryProvider, WorkflowService,
-};
+use crate::{AppHostError, DocumentEventBus};
+#[cfg(feature = "aigc")]
+use crate::{ModelService, WorkerInventoryProvider};
+#[cfg(feature = "aigc")]
 use aigc::ModelAcquisitionService;
+#[cfg(feature = "aigc")]
 use aigc::inference::compose::{
     BootstrapInference, ComposedInferenceRuntime, bootstrap_inference_with_worker_inventory,
 };
+#[cfg(feature = "aigc")]
 use reimagine_inference::WorkspaceComputeProfile;
 
-use super::{
-    AigcParts, AigcStatus, WorkspaceHost, load_backend_config_result, migrate_project_layout,
-};
+#[cfg(feature = "aigc")]
+use super::{AigcParts, AigcStatus};
+use super::{WorkspaceHost, load_backend_config_result, migrate_project_layout};
 
 /// Builder for constructing a [`WorkspaceHost`].
 ///
@@ -51,6 +52,7 @@ pub struct WorkspaceHostBuilder {
     app_data_root: Option<PathBuf>,
     backend_config: Option<InferenceBackendConfig>,
     event_sink: Option<BoxedRunEventSink>,
+    #[cfg(feature = "aigc")]
     worker_inventory: Option<Arc<dyn WorkerInventoryProvider>>,
     document_events: Option<Arc<DocumentEventBus>>,
 }
@@ -67,6 +69,7 @@ impl WorkspaceHostBuilder {
             app_data_root: None,
             backend_config: None,
             event_sink: None,
+            #[cfg(feature = "aigc")]
             worker_inventory: None,
             document_events: None,
         }
@@ -111,6 +114,7 @@ impl WorkspaceHostBuilder {
     ///
     /// When not set, uses [`InstalledWorkerInventoryProvider`] with either
     /// the explicit `app_data_root` or the derived path.
+    #[cfg(feature = "aigc")]
     pub fn worker_inventory(mut self, provider: Arc<dyn WorkerInventoryProvider>) -> Self {
         self.worker_inventory = Some(provider);
         self
@@ -120,8 +124,8 @@ impl WorkspaceHostBuilder {
     ///
     /// This async phase:
     /// 1. Loads backend configuration (from file or explicit)
-    /// 2. Creates model acquisition and model services
-    /// 3. Bootstraps the inference runtime with worker inventory
+    /// 2. Creates model acquisition and model services (with AIGC)
+    /// 3. Bootstraps the inference runtime with worker inventory (with AIGC)
     /// 4. Wires all services together
     /// 5. Returns the fully initialized workspace
     pub async fn build(self) -> Result<WorkspaceHost, AppHostError> {
@@ -133,19 +137,46 @@ impl WorkspaceHostBuilder {
         migrate_project_layout(&config).await?;
 
         // Load backend config: explicit or from file
-        let backend_config = match self.backend_config {
-            Some(config) => config,
+        let backend_config = match &self.backend_config {
+            Some(config) => config.clone(),
             None => load_backend_config_result(&config).await?,
         };
 
         // Resolve the run event sink
         let event_sink = self
             .event_sink
+            .clone()
             .unwrap_or_else(|| Arc::new(VecRunEventSink::new()));
 
+        let components = self
+            .build_components(&config, &backend_config, &event_sink)
+            .await;
+
+        let document_events = self
+            .document_events
+            .unwrap_or_else(|| Arc::new(DocumentEventBus::new()));
+
+        Ok(WorkspaceHost::assemble(
+            self.workspace_scope,
+            Arc::new(config),
+            backend_config,
+            document_events,
+            event_sink,
+            Arc::new(reimagine_nodes::BuiltinNodeCatalog::v1()),
+            components,
+        ))
+    }
+
+    #[cfg(feature = "aigc")]
+    async fn build_components(
+        &self,
+        config: &AppConfig,
+        backend_config: &InferenceBackendConfig,
+        event_sink: &BoxedRunEventSink,
+    ) -> super::WorkspaceComponents {
         // Resolve worker inventory
         let worker_inventory = match self.worker_inventory {
-            Some(provider) => provider,
+            Some(ref provider) => Arc::clone(provider),
             None => match &self.app_data_root {
                 Some(app_data_root) => Arc::new(InstalledWorkerInventoryProvider::new(
                     WorkerStorePaths::new(app_data_root),
@@ -157,10 +188,8 @@ impl WorkspaceHostBuilder {
         };
 
         // Create services
-        let acquisition_service = Arc::new(ModelAcquisitionService::new(
-            config.paths().clone(),
-            &config,
-        ));
+        let acquisition_service =
+            Arc::new(ModelAcquisitionService::new(config.paths().clone(), config));
         let model_service = Arc::new(ModelService::new(
             config.paths().clone(),
             Arc::clone(&acquisition_service),
@@ -168,8 +197,8 @@ impl WorkspaceHostBuilder {
 
         // Bootstrap inference runtime (non-fatal on workspace build)
         let (bootstrapped, aigc_status) = match bootstrap_inference_with_worker_inventory(
-            &config,
-            &backend_config,
+            config,
+            backend_config,
             Arc::clone(&model_service),
             Arc::clone(&worker_inventory),
         )
@@ -200,7 +229,7 @@ impl WorkspaceHostBuilder {
             reimagine_runtime::RuntimeService::new(
                 bootstrapped.runtime.executor_registry,
                 bootstrapped.runtime.runtime_hooks.clone(),
-                Arc::clone(&event_sink),
+                Arc::clone(event_sink),
                 Arc::new(reimagine_runtime::SystemClock),
             )
             .with_resource_hint_sink(worker_switch.as_ref().and_then(|ws| ws.active_hint_sink())),
@@ -212,47 +241,9 @@ impl WorkspaceHostBuilder {
             worker_switch.set_run_cancellation(cancellation);
         }
 
-        // Create remaining services
-        let builtin_catalog = Arc::new(reimagine_nodes::BuiltinNodeCatalog::v1());
-        let backend = BackendSelection::from(backend_config.backend);
-        let node_catalog = Arc::new(crate::node_catalog::NodeCatalogService::new(
-            Arc::clone(&builtin_catalog),
-            backend,
-        ));
-        let document_events = self
-            .document_events
-            .unwrap_or_else(|| Arc::new(DocumentEventBus::new()));
-        let default_project_id = reimagine_core::model::ProjectId::new("default");
-        let workflow_service = Arc::new(WorkflowService::for_project_with_events(
-            config.paths().clone(),
-            default_project_id.clone(),
-            Arc::clone(&document_events),
-        ));
-        let mut workflow_services = BTreeMap::new();
-        workflow_services.insert(default_project_id, Arc::clone(&workflow_service));
-        let board_service = Arc::new(BoardService::with_document_events(
-            config.paths().clone(),
-            Arc::clone(&document_events),
-        ));
-        let project_service = Arc::new(ProjectService::new(
-            config.paths().clone(),
-            Arc::clone(&board_service),
-        ));
-        let project_memory_service = Arc::new(ProjectMemoryService::new(config.paths().clone()));
-        let services = Arc::new(WorkspaceServices::new(
-            self.workspace_scope.clone(),
-            Arc::new(config.clone()),
-            Arc::clone(&workflow_service),
-            Arc::clone(&model_service),
-            acquisition_service,
-            Arc::clone(&runtime_service),
-            Arc::clone(&node_catalog),
-            Arc::clone(&project_memory_service),
-        ));
-
         let aigc = AigcParts {
             status: aigc_status,
-            model_service,
+            model_service: Arc::clone(&model_service),
             compute_profile: Arc::new(bootstrapped.compute_profile),
             resolved_backend_instance: bootstrapped.runtime.selected_instance,
             worker_switch,
@@ -261,23 +252,28 @@ impl WorkspaceHostBuilder {
             discovery: bootstrapped.discovery,
         };
 
-        // Assemble workspace
-        Ok(WorkspaceHost {
-            workspace_scope: self.workspace_scope,
-            config: Arc::new(config),
-            backend_config,
-            project_service,
-            board_service,
-            workflow_service,
-            workflow_services: RwLock::new(workflow_services),
-            document_events,
+        super::WorkspaceComponents {
             runtime_service,
-            node_catalog,
-            builtin_catalog,
-            services,
+            model_service,
+            acquisition_service,
             aigc,
-            event_sink,
-        })
+        }
+    }
+
+    #[cfg(not(feature = "aigc"))]
+    async fn build_components(
+        &self,
+        _config: &AppConfig,
+        _backend_config: &InferenceBackendConfig,
+        event_sink: &BoxedRunEventSink,
+    ) -> super::WorkspaceComponents {
+        let runtime_service = Arc::new(reimagine_runtime::RuntimeService::new(
+            reimagine_inference::NodeExecutorRegistry::default(),
+            Arc::new(reimagine_inference::CompositeBackendInstanceRuntimeHooks::new(Vec::new())),
+            Arc::clone(event_sink),
+            Arc::new(reimagine_runtime::SystemClock),
+        ));
+        super::WorkspaceComponents { runtime_service }
     }
 }
 

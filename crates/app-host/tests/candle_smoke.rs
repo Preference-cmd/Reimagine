@@ -1,3 +1,4 @@
+#![cfg(feature = "aigc")]
 #![allow(deprecated)]
 
 //! App-host smoke test for the workspace compute path.

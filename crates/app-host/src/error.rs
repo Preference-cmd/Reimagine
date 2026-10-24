@@ -74,10 +74,12 @@ pub enum AppHostError {
         message: String,
     },
     ArtifactAccess(ArtifactAccessError),
+    #[cfg(feature = "aigc")]
     WorkerManagement(aigc::WorkerManagementError),
     AigcUnavailable {
         reason: String,
     },
+    #[cfg(feature = "aigc")]
     WorkerSwitch(aigc::WorkerSwitchError),
 }
 
@@ -162,10 +164,12 @@ impl std::fmt::Display for AppHostError {
                 write!(f, "Burn checkpoint import error: {message}")
             }
             Self::ArtifactAccess(error) => write!(f, "artifact access error: {error}"),
+            #[cfg(feature = "aigc")]
             Self::WorkerManagement(error) => write!(f, "worker management error: {error}"),
             Self::AigcUnavailable { reason } => {
                 write!(f, "AIGC subsystem is unavailable: {reason}")
             }
+            #[cfg(feature = "aigc")]
             Self::WorkerSwitch(error) => write!(f, "{error}"),
         }
     }
@@ -210,8 +214,10 @@ impl AppHostError {
                 ArtifactAccessError::UnsafeReference => AppHostErrorCode::PermissionDenied,
                 ArtifactAccessError::UnsupportedMedia => AppHostErrorCode::CommandFailed,
             },
+            #[cfg(feature = "aigc")]
             Self::WorkerManagement(_) => AppHostErrorCode::WorkerUnavailable,
             Self::AigcUnavailable { .. } => AppHostErrorCode::AigcUnavailable,
+            #[cfg(feature = "aigc")]
             Self::WorkerSwitch(error) => crate::error_code::worker_switch_error_code(error),
         }
     }
@@ -268,6 +274,7 @@ impl AppHostError {
                 }
             }
             Self::AigcUnavailable { reason } => Some(serde_json::json!({ "reason": reason })),
+            #[cfg(feature = "aigc")]
             Self::WorkerSwitch(error) => crate::error_code::worker_switch_error_details(error),
             _ => None,
         }
@@ -313,12 +320,14 @@ impl From<ArtifactAccessError> for AppHostError {
     }
 }
 
+#[cfg(feature = "aigc")]
 impl From<aigc::WorkerManagementError> for AppHostError {
     fn from(error: aigc::WorkerManagementError) -> Self {
         Self::WorkerManagement(error)
     }
 }
 
+#[cfg(feature = "aigc")]
 impl From<aigc::AigcError> for AppHostError {
     fn from(error: aigc::AigcError) -> Self {
         match error {
@@ -337,6 +346,7 @@ impl From<aigc::AigcError> for AppHostError {
     }
 }
 
+#[cfg(feature = "aigc")]
 impl From<aigc::WorkerSwitchError> for AppHostError {
     fn from(error: aigc::WorkerSwitchError) -> Self {
         Self::WorkerSwitch(error)

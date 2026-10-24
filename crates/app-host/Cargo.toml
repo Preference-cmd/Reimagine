@@ -9,11 +9,12 @@ license.workspace = true
 publish.workspace = true
 
 [features]
-default = ["candle"]
-candle = ["aigc/candle"]
+default = ["aigc", "candle"]
+aigc = ["dep:aigc"]
+candle = ["aigc", "aigc/candle"]
 
 [dependencies]
-aigc = { path = "../aigc", default-features = false }
+aigc = { path = "../aigc", default-features = false, optional = true }
 async-trait = { workspace = true }
 reimagine-backend-worker-host = { path = "../backend-worker-host" }
 reimagine-backend-worker-protocol = { path = "../backend-worker-protocol" }

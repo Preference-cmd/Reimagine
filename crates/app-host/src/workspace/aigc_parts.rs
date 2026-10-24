@@ -1,12 +1,18 @@
 //! AIGC subsystem components and operating status.
 
+#[cfg(feature = "aigc")]
 use std::sync::Arc;
+#[cfg(feature = "aigc")]
 use tokio::sync::Mutex;
 
+#[cfg(feature = "aigc")]
 use aigc::inference::discovery::DiscoveryOrchestrator;
+#[cfg(feature = "aigc")]
 use aigc::inference::topology::ConnectionTopologyManager;
+#[cfg(feature = "aigc")]
 use reimagine_inference::{BackendInstance, WorkspaceComputeProfile};
 
+#[cfg(feature = "aigc")]
 use crate::{ModelService, WorkerInventoryProvider, WorkerSwitchService};
 
 /// Operating status of the workspace AIGC subsystem.
@@ -19,6 +25,8 @@ pub enum AigcStatus {
         /// Reason for bootstrap failure.
         reason: String,
     },
+    /// AIGC module is not installed in this build.
+    NotInstalled,
 }
 
 impl AigcStatus {
@@ -32,11 +40,13 @@ impl AigcStatus {
         match self {
             Self::Available => None,
             Self::Unavailable { reason } => Some(reason),
+            Self::NotInstalled => Some("AIGC is not installed"),
         }
     }
 }
 
 /// Subsystems and runtime state belonging to the AIGC subsystem.
+#[cfg(feature = "aigc")]
 pub(crate) struct AigcParts {
     pub(crate) status: AigcStatus,
     pub(crate) model_service: Arc<ModelService>,
@@ -48,6 +58,7 @@ pub(crate) struct AigcParts {
     pub(crate) discovery: Option<Arc<DiscoveryOrchestrator>>,
 }
 
+#[cfg(feature = "aigc")]
 impl std::fmt::Debug for AigcParts {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("AigcParts")

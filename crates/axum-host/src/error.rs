@@ -81,6 +81,7 @@ impl From<AppHostError> for AxumHostError {
     }
 }
 
+#[cfg(feature = "aigc")]
 impl From<reimagine_app_host::AigcError> for AxumHostError {
     fn from(value: reimagine_app_host::AigcError) -> Self {
         Self::AppHost(AppHostError::from(value))

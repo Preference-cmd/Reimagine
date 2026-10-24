@@ -12,6 +12,8 @@
 //! with truthful burn capabilities. Does NOT run inference — that
 //! belongs to e2e-workflow/05b.
 
+#![cfg(feature = "aigc")]
+
 use std::path::PathBuf;
 
 use axum::body::Body;

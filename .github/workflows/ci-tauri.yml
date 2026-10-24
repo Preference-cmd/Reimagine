@@ -123,6 +123,13 @@ jobs:
           --workspace --all-targets --locked
           --exclude reimagine-inference-burn-worker
 
+      - name: Kernel-only check
+        if: matrix.platform == 'linux'
+        run: >
+          cargo check
+          --locked --no-default-features
+          -p reimagine-app-host -p reimagine-axum-host -p reimagine
+
       - name: Rust clippy
         if: matrix.platform == 'linux'
         run: >

@@ -24,6 +24,8 @@
 //! If the binary cannot be resolved the test skips (logs why); it never
 //! requires an existing converted SDXL workspace.
 
+#![cfg(feature = "aigc")]
+
 use std::path::{Path, PathBuf};
 use std::process::Command;
 use std::sync::Arc;

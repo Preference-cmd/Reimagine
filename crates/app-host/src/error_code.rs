@@ -1,5 +1,6 @@
 use serde::Serialize;
 
+#[cfg(feature = "aigc")]
 use crate::WorkerSwitchError;
 
 /// Machine-readable failure classification carried in IPC error payloads.
@@ -62,6 +63,7 @@ impl AppHostErrorCode {
 /// Classification for [`WorkerSwitchError`]. Every switch failure means the
 /// requested worker is not usable, so all variants map to
 /// [`AppHostErrorCode::WorkerUnavailable`].
+#[cfg(feature = "aigc")]
 pub fn worker_switch_error_code(error: &WorkerSwitchError) -> AppHostErrorCode {
     match error {
         WorkerSwitchError::NoActiveWorker
@@ -75,6 +77,7 @@ pub fn worker_switch_error_code(error: &WorkerSwitchError) -> AppHostErrorCode {
 }
 
 /// Optional structured context for a [`WorkerSwitchError`] error payload.
+#[cfg(feature = "aigc")]
 pub fn worker_switch_error_details(error: &WorkerSwitchError) -> Option<serde_json::Value> {
     match error {
         WorkerSwitchError::TargetNotReady { instance }
@@ -209,6 +212,7 @@ mod tests {
         );
     }
 
+    #[cfg(feature = "aigc")]
     #[test]
     fn worker_switch_errors_classify_as_worker_unavailable() {
         for error in [
@@ -227,6 +231,7 @@ mod tests {
         }
     }
 
+    #[cfg(feature = "aigc")]
     #[test]
     fn stale_handle_details_carry_instance() {
         let error = WorkerSwitchError::StaleHandle {

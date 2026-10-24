@@ -121,7 +121,7 @@ crates/runtime/                  reimagine-runtime - RuntimeService, scheduler, 
 crates/inference/                reimagine-inference - backend contract, router, execution values, executors
 crates/inference-backends/       candle/ burn/ burn-worker/ - concrete backends (Burn primary, Candle deprecated)
 crates/plugin/                   reimagine-plugin - plugin package and extension metadata contract
-crates/aigc/                     aigc - AIGC module: inference composition, worker management, model services
+crates/aigc/                     aigc - optional AIGC module: inference composition, worker management, model services
 crates/app-host/                 reimagine-app-host - WorkspaceHost, Project/Board/Workflow/Run services, proposals
 crates/axum-host/                reimagine-axum-host - HTTP E2E test harness
 crates/backend-worker-protocol/  reimagine-backend-worker-protocol - worker wire protocol
