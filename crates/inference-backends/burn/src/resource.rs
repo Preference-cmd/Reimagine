@@ -71,9 +71,8 @@ impl BackendRunLifecycle for BurnBackendInstanceRuntimeHooks {
         // Drop every payload this run pinned into the shared
         // store. Without this call, latent tensors created by
         // `latent.create_empty` would survive past the workflow
-        // that produced them. Candle's analogous hook calls
-        // `store.cleanup_run` for the same reason; burn mirrors
-        // it here.
+        // that produced them. Analogous hooks call `store.cleanup_run`
+        // for the same reason.
         self.store.cleanup_run(&request.run_id);
         Ok(BackendRunLifecycleReport {
             backend_instance: self.backend_instance.clone(),
@@ -98,7 +97,7 @@ impl BackendInstanceObservation for BurnBackendInstanceRuntimeHooks {
             "cached_models".to_owned(),
             self.model_cache.bundle_count().to_string(),
         );
-        // Mirror candle's snapshot shape so monitoring consumers
+        // Mirror standard snapshot shape so monitoring consumers
         // see the same observation keys across backends. The
         // value is approximate because latent tensors report
         // element-count * sizeof(f32) without inspecting any

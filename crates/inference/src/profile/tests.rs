@@ -103,11 +103,11 @@ fn dtype_profile_new_and_from_conversions() {
 
 #[test]
 fn workspace_compute_profile_serde_roundtrip() {
-    let backend_profile = BackendProfile::new(Backend::new("candle"))
+    let backend_profile = BackendProfile::new(Backend::new("fake"))
         .with_instance(
             BackendInstanceProfile::new(
-                BackendInstance::new("candle:cpu"),
-                Backend::new("candle"),
+                BackendInstance::new("fake:cpu"),
+                Backend::new("fake"),
                 DeviceProfile::new("cpu"),
                 BackendInstanceStatus::Available,
             )
@@ -125,13 +125,13 @@ fn workspace_compute_profile_serde_roundtrip() {
 
 #[test]
 fn backend_profile_serde_roundtrip() {
-    let plugin = Plugin::try_from("builtin.candle").unwrap();
-    let extension = Extension::try_from("backend.candle").unwrap();
-    let original = BackendProfile::new(Backend::new("candle"))
+    let plugin = Plugin::try_from("builtin.fake").unwrap();
+    let extension = Extension::try_from("backend.fake").unwrap();
+    let original = BackendProfile::new(Backend::new("fake"))
         .with_plugin(plugin, extension)
         .with_instance(BackendInstanceProfile::new(
-            BackendInstance::new("candle:metal"),
-            Backend::new("candle"),
+            BackendInstance::new("fake:metal"),
+            Backend::new("fake"),
             DeviceProfile::new("metal"),
             BackendInstanceStatus::Unavailable,
         ))
@@ -151,8 +151,8 @@ fn backend_instance_profile_serde_roundtrip() {
         .with_memory(memory)
         .with_supported_dtype("f16");
     let original = BackendInstanceProfile::new(
-        BackendInstance::new("candle:cuda"),
-        Backend::new("candle"),
+        BackendInstance::new("fake:cuda"),
+        Backend::new("fake"),
         device,
         BackendInstanceStatus::Available,
     )
@@ -168,8 +168,8 @@ fn backend_instance_profile_serde_roundtrip() {
 #[test]
 fn backend_instance_profile_carries_diffusion_sample_operation_options() {
     let original = BackendInstanceProfile::new(
-        BackendInstance::new("candle:cpu"),
-        Backend::new("candle"),
+        BackendInstance::new("fake:cpu"),
+        Backend::new("fake"),
         DeviceProfile::new("cpu"),
         BackendInstanceStatus::Available,
     )

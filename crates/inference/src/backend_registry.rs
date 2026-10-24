@@ -339,17 +339,17 @@ mod tests {
     fn descriptors_for_backend_filters_by_label() {
         let mut reg = InferenceBackendRegistry::new();
         let a = BackendInstanceDescriptor::new(
-            BackendInstance::new("candle:metal"),
-            Backend::new("candle"),
+            BackendInstance::new("fake:metal"),
+            Backend::new("fake"),
         );
         let b =
             BackendInstanceDescriptor::new(BackendInstance::new("burn:cuda"), Backend::new("burn"));
         reg.register(a.clone(), Arc::new(EchoBackend::new()));
         reg.register(b.clone(), Arc::new(EchoBackend::new()));
 
-        let candle = reg.descriptors_for_backend(&Backend::new("candle"));
-        assert_eq!(candle.len(), 1);
-        assert_eq!(candle[0].instance, a.instance);
+        let fake = reg.descriptors_for_backend(&Backend::new("fake"));
+        assert_eq!(fake.len(), 1);
+        assert_eq!(fake[0].instance, a.instance);
 
         let burn = reg.descriptors_for_backend(&Backend::new("burn"));
         assert_eq!(burn.len(), 1);

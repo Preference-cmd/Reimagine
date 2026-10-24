@@ -6,7 +6,7 @@
 //! without a manual `format!` per call site.
 //!
 //! Diagnostic ids carry the capability's dot-separated label (e.g.
-//! `inference-core-bridge-required-diffusion.sample-candle-remote`)
+//! `inference-core-bridge-required-diffusion.sample-burn-remote`)
 //! so existing diagnostic consumers see the same ids they did before
 //! the typed-DTO refactor.
 //!
@@ -132,14 +132,14 @@ mod tests {
     #[test]
     fn bridge_required_diagnostic_carries_all_fields() {
         let d = backend_bridge_required(
-            "candle",
+            "fake",
             "remote",
             "latent",
             InferenceCapability::DiffusionSample,
         );
         assert_eq!(d.code().as_str(), "INFERENCE_CORE/BRIDGE_REQUIRED");
         let msg = d.message().to_string();
-        assert!(msg.contains("candle"), "{msg}");
+        assert!(msg.contains("fake"), "{msg}");
         assert!(msg.contains("remote"), "{msg}");
         assert!(msg.contains("latent"), "{msg}");
         assert!(msg.contains("diffusion.sample"), "{msg}");
@@ -148,7 +148,7 @@ mod tests {
     #[test]
     fn bridge_unsupported_diagnostic_carries_reason() {
         let d = backend_bridge_unsupported(
-            "candle",
+            "fake",
             "remote",
             "latent",
             InferenceCapability::DiffusionSample,
@@ -160,32 +160,32 @@ mod tests {
 
     #[test]
     fn backend_not_registered_diagnostic_uses_kind() {
-        let d = backend_not_registered("candle");
+        let d = backend_not_registered("fake");
         assert_eq!(d.code().as_str(), "INFERENCE_CORE/BACKEND_NOT_REGISTERED");
-        assert!(d.message().to_string().contains("candle"));
+        assert!(d.message().to_string().contains("fake"));
     }
 
     #[test]
     fn capability_unsupported_diagnostic_uses_kind_and_capability() {
-        let d = backend_capability_unsupported("candle", InferenceCapability::DiffusionSample);
+        let d = backend_capability_unsupported("fake", InferenceCapability::DiffusionSample);
         assert_eq!(
             d.code().as_str(),
             "INFERENCE_CORE/BACKEND_CAPABILITY_UNSUPPORTED"
         );
         let msg = d.message().to_string();
-        assert!(msg.contains("candle"), "{msg}");
+        assert!(msg.contains("fake"), "{msg}");
         assert!(msg.contains("diffusion.sample"), "{msg}");
     }
 
     #[test]
     fn incompatible_handle_affinity_diagnostic_uses_both_sides() {
-        let d = incompatible_handle_affinity("candle", "remote");
+        let d = incompatible_handle_affinity("fake", "remote");
         assert_eq!(
             d.code().as_str(),
             "INFERENCE_CORE/INCOMPATIBLE_HANDLE_AFFINITY"
         );
         let msg = d.message().to_string();
-        assert!(msg.contains("candle"), "{msg}");
+        assert!(msg.contains("fake"), "{msg}");
         assert!(msg.contains("remote"), "{msg}");
     }
 }

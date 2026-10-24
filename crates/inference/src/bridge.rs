@@ -115,8 +115,8 @@ mod tests {
     fn same_backend_returns_direct() {
         let p = RejectAllBridgePolicy;
         let plan = p.plan_transfer(
-            &Backend::new("candle"),
-            &Backend::new("candle"),
+            &Backend::new("fake"),
+            &Backend::new("fake"),
             InferenceCapability::CreateEmptyLatent,
         );
         assert!(matches!(plan, BridgePlan::Direct));
@@ -126,13 +126,13 @@ mod tests {
     fn cross_backend_returns_unsupported_with_reason() {
         let p = RejectAllBridgePolicy;
         let plan = p.plan_transfer(
-            &Backend::new("candle"),
+            &Backend::new("fake"),
             &Backend::new("remote"),
             InferenceCapability::DiffusionSample,
         );
         match plan {
             BridgePlan::Unsupported { reason } => {
-                assert!(reason.contains("candle"), "{reason}");
+                assert!(reason.contains("fake"), "{reason}");
                 assert!(reason.contains("remote"), "{reason}");
                 assert!(reason.contains("diffusion.sample"), "{reason}");
             }

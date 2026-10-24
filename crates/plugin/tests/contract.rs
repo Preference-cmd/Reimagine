@@ -29,33 +29,33 @@ impl PluginPackage for TestPlugin {
     }
 }
 
-fn candle_descriptor() -> PluginDescriptor {
+fn fake_descriptor() -> PluginDescriptor {
     PluginDescriptor {
-        plugin: Plugin::try_from("builtin.candle").unwrap(),
-        name: "Candle".to_string(),
+        plugin: Plugin::try_from("builtin.fake").unwrap(),
+        name: "Fake".to_string(),
         version: PluginVersion::try_from("0.1.0").unwrap(),
         api_version: PluginApiVersion::try_from("plugin/v1").unwrap(),
         origin: PluginOrigin::Builtin,
     }
 }
 
-fn candle_extension() -> PluginExtension {
+fn fake_extension() -> PluginExtension {
     PluginExtension {
-        extension: Extension::try_from("backend.candle").unwrap(),
+        extension: Extension::try_from("backend.fake").unwrap(),
         extends: HostSurface::InferenceBackend,
-        name: "Candle inference backend".to_string(),
+        name: "Fake inference backend".to_string(),
     }
 }
 
 #[test]
 fn descriptor_round_trips_through_json() {
-    let descriptor = candle_descriptor();
+    let descriptor = fake_descriptor();
 
     let json = serde_json::to_string(&descriptor).expect("serialize");
     let restored: PluginDescriptor = serde_json::from_str(&json).expect("deserialize");
 
     assert_eq!(restored, descriptor);
-    assert_eq!(restored.plugin.as_str(), "builtin.candle");
+    assert_eq!(restored.plugin.as_str(), "builtin.fake");
     assert_eq!(restored.version.as_str(), "0.1.0");
     assert_eq!(restored.api_version.as_str(), "plugin/v1");
     assert_eq!(restored.origin.as_str(), "builtin");
@@ -63,12 +63,12 @@ fn descriptor_round_trips_through_json() {
 
 #[test]
 fn plugin_can_declare_multiple_extensions() {
-    let descriptor = candle_descriptor();
-    let backend_ext = candle_extension();
+    let descriptor = fake_descriptor();
+    let backend_ext = fake_extension();
     let executor_ext = PluginExtension {
-        extension: Extension::try_from("executor.candle.ksampler").unwrap(),
+        extension: Extension::try_from("executor.fake.ksampler").unwrap(),
         extends: HostSurface::NodeExecutor,
-        name: "Candle KSampler executor".to_string(),
+        name: "Fake KSampler executor".to_string(),
     };
 
     let plugin = TestPlugin::new(descriptor, vec![backend_ext.clone(), executor_ext.clone()]);
@@ -122,15 +122,15 @@ fn host_surface_label_is_stable() {
 
 #[test]
 fn plugin_extension_round_trips_through_json() {
-    let extension = candle_extension();
+    let extension = fake_extension();
 
     let json = serde_json::to_string(&extension).expect("serialize");
     let restored: PluginExtension = serde_json::from_str(&json).expect("deserialize");
 
     assert_eq!(restored, extension);
-    assert_eq!(restored.extension.as_str(), "backend.candle");
+    assert_eq!(restored.extension.as_str(), "backend.fake");
     assert_eq!(restored.extends, HostSurface::InferenceBackend);
-    assert_eq!(restored.name, "Candle inference backend");
+    assert_eq!(restored.name, "Fake inference backend");
 }
 
 #[test]

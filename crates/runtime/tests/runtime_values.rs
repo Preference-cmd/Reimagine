@@ -12,7 +12,7 @@ use std::sync::Arc;
 
 #[test]
 fn runtime_values_can_express_the_minimal_sdxl_base_intermediates() {
-    let backend = Backend::new("candle");
+    let backend = Backend::new("fake");
     let device = "metal:0";
     let checkpoint = ModelId::new("sdxl-base");
 
@@ -34,7 +34,7 @@ fn runtime_values_can_express_the_minimal_sdxl_base_intermediates() {
     ));
     assert_eq!(model.model_id(), &checkpoint);
     assert_eq!(model.role(), ModelRole::DiffusionModel);
-    assert_eq!(clip.backend().as_str(), "candle");
+    assert_eq!(clip.backend().as_str(), "fake");
     assert_eq!(vae.device_label(), Some(device));
 
     let text_embedding = BackendTensorHandle::new(
@@ -119,7 +119,7 @@ fn runtime_values_can_express_the_minimal_sdxl_base_intermediates() {
 }
 
 #[test]
-fn runtime_values_do_not_require_candle_types() {
+fn runtime_values_do_not_require_concrete_backend_types() {
     let value = ExecutionValue::Param(ParamValue::String("a cinematic lake".to_owned()));
     assert_eq!(
         value.as_param(),

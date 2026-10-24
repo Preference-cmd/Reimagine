@@ -9,7 +9,7 @@ use crate::ids::validate_non_empty;
 
 /// Stable identity of a plugin extension.
 ///
-/// Examples: `"backend.candle"`, `"tool.propose_node"`.
+/// Examples: `"backend.fake"`, `"tool.propose_node"`.
 #[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize)]
 pub struct Extension(String);
 

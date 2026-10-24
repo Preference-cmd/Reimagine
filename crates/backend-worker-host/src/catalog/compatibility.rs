@@ -221,7 +221,7 @@ mod tests {
     fn wrong_worker_kind_rejected() {
         let filter = make_filter("darwin", "aarch64");
         let custom = TargetCustomMetadata {
-            worker_kind: "candle".to_string(),
+            worker_kind: "other".to_string(),
             ..make_custom()
         };
         assert!(!filter.is_compatible(&custom));

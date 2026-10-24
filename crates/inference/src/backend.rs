@@ -36,7 +36,7 @@ use crate::response::text::TextEncodeResponse;
 /// matching the pattern already used by `runtime::NodeExecutor`.
 #[async_trait::async_trait]
 pub trait InferenceBackend: Send + Sync + 'static {
-    /// The stable kind identifier for this backend (e.g. `"candle"`,
+    /// The stable kind identifier for this backend (e.g. `"burn"`,
     /// `"fake"`, `"remote"`).
     fn backend_kind(&self) -> &Backend;
 

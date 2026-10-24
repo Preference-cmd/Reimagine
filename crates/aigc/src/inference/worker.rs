@@ -534,9 +534,9 @@ mod tests {
     #[test]
     fn installed_provider_skips_non_burn_records() {
         let temp = tempfile::tempdir().unwrap();
-        let install_dir = installed_dir(&temp, "candle-cpu-v1");
-        let mut record = test_record("candle-cpu-v1", &install_dir);
-        record.identity.backend_kind = "candle".to_owned();
+        let install_dir = installed_dir(&temp, "other-cpu-v1");
+        let mut record = test_record("other-cpu-v1", &install_dir);
+        record.identity.backend_kind = "other".to_owned();
         let store = InventoryStore::new(WorkerStorePaths::new(temp.path()));
         store.add(&record).unwrap();
 

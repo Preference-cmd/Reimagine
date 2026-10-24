@@ -158,7 +158,7 @@ impl From<String> for DTypeProfile {
 
 /// Whether a backend instance is currently usable on the host.
 ///
-/// A backend may enumerate a candidate instance (e.g. `candle:metal`)
+/// A backend may enumerate a candidate instance (e.g. `fake:metal`)
 /// and report it as `Unavailable` when the host cannot construct the
 /// device (no Metal runtime on Linux, no CUDA driver, etc.). UI / API
 /// surfaces use the status to decide whether to offer the instance as
@@ -223,7 +223,7 @@ impl WorkspaceComputeProfile {
 /// construct on this host, and any diagnostics emitted during probe.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct BackendProfile {
-    /// Stable backend implementation label (e.g. `"candle"`,
+    /// Stable backend implementation label (e.g. `"burn"`, `"fake"`,
     /// `"remote"`).
     pub backend: Backend,
     /// Optional plugin that contributed this backend.
@@ -275,7 +275,7 @@ impl BackendProfile {
 // ── BackendInstanceProfile ────────────────────────────────────────
 
 /// Profile for a single backend instance candidate (e.g.
-/// `"candle:metal"`, `"candle:cpu"`).
+/// `"fake:metal"`, `"fake:cpu"`).
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct BackendInstanceProfile {
     /// Stable backend instance identity.
@@ -448,7 +448,7 @@ impl SamplerSchedulerPairProfile {
 /// Providers are discovery providers or factories, not necessarily
 /// already-constructed executable backend instances. A provider may
 /// enumerate candidates that app-host has not yet constructed (e.g.
-/// the Candle provider can advertise `candle:metal` even on a Linux
+/// a backend provider can advertise `fake:metal` even on a Linux
 /// host as `Unavailable` with a diagnostic).
 #[async_trait::async_trait]
 pub trait BackendProfileProvider: Send + Sync {
@@ -504,7 +504,7 @@ pub mod diagnostics {
 
     /// Diagnostic emitted when a backend provider recognizes a
     /// device label but cannot construct it on the current host
-    /// (e.g. `candle:metal` requested on Linux).
+    /// (e.g. `fake:metal` requested on Linux).
     pub fn backend_device_unavailable(label: &str, reason: &str) -> Diagnostic {
         let id = format!("inference-profile-device-unavailable-{label}");
         Diagnostic::new(

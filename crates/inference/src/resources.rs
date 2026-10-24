@@ -4,7 +4,7 @@
 //! backends implement [`BackendInstanceRuntimeHooks`] and must do so
 //! without depending on `reimagine-runtime`. The runtime composes a
 //! concrete implementation (e.g.
-//! `candle::CandleBackendInstanceRuntimeHooks`) at startup and calls
+//! `burn::BurnBackendInstanceRuntimeHooks`) at startup and calls
 //! into it during run lifecycle. The hook surface is lifecycle and
 //! observation only, not a resource manager.
 //!

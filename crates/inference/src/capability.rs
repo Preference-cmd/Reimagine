@@ -235,7 +235,7 @@ mod tests {
 
     #[test]
     fn capabilities_advertise_support() {
-        let caps = InferenceBackendCapabilities::new(Backend::new("candle"))
+        let caps = InferenceBackendCapabilities::new(Backend::new("fake"))
             .with_support(InferenceCapabilitySupport::new(
                 InferenceCapability::DiffusionSample,
             ))

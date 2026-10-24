@@ -388,9 +388,9 @@ mod tests {
     fn not_burn_clip(model_id: &str) -> RuntimeClipHandle {
         RuntimeClipHandle::with_instance(
             ModelId::new(model_id),
-            Backend::new("candle"),
-            BackendInstance::new("candle:cpu"),
-            BackendPayloadKey::new(format!("candle:model:{model_id}:clip")),
+            Backend::new("other"),
+            BackendInstance::new("other:cpu"),
+            BackendPayloadKey::new(format!("other:model:{model_id}:clip")),
         )
     }
 
@@ -421,7 +421,7 @@ mod tests {
         let err = execute_text_encode(&backend, request).unwrap_err();
         let msg = err.to_string();
         assert!(msg.contains("burn clip handle"), "msg: {msg}");
-        assert!(msg.contains("candle"), "msg: {msg}");
+        assert!(msg.contains("other"), "msg: {msg}");
     }
 
     #[test]

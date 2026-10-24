@@ -8,9 +8,9 @@
 //!
 //! The vocabulary is:
 //!
-//! - [`Backend`] — open implementation label (e.g. `"candle"`).
+//! - [`Backend`] — open implementation label (e.g. `"fake"`).
 //! - [`BackendInstance`] — configured instance of a backend (e.g.
-//!   `"candle:metal"`). The instance is the unit of selection.
+//!   `"fake:metal"`). The instance is the unit of selection.
 //! - [`DeviceProfile`] — opaque descriptor attached to a backend
 //!   instance for diagnostics and future device-aware scheduling.
 //! - [`BackendInstanceDescriptor`] — registry-side metadata: the
@@ -45,7 +45,7 @@ use crate::profile::{DTypeProfile, DeviceKind, MemoryProfile};
 use reimagine_core::model::NodeId;
 use reimagine_plugin::{Extension, Plugin};
 
-/// Open stable backend implementation label, e.g. `"candle"` or
+/// Open stable backend implementation label, e.g. `"fake"` or
 /// `"remote"`. Distinct from a concrete configured [`BackendInstance`].
 ///
 /// Backend labels are not a closed enum. Built-in and future external
@@ -88,7 +88,7 @@ impl From<&str> for Backend {
     }
 }
 
-/// Configured backend instance identity, e.g. `"candle:metal"`.
+/// Configured backend instance identity, e.g. `"fake:metal"`.
 ///
 /// The instance is the unit of selection. A single [`Backend`]
 /// implementation may register multiple instances with different
@@ -477,29 +477,23 @@ mod tests {
 
     #[test]
     fn backend_new_holds_label() {
-        assert_eq!(Backend::new("candle").as_str(), "candle");
-        assert_eq!(Backend::from("candle").as_str(), "candle");
+        assert_eq!(Backend::new("fake").as_str(), "fake");
+        assert_eq!(Backend::from("fake").as_str(), "fake");
     }
 
     #[test]
     fn backend_instance_new_holds_identity() {
-        assert_eq!(
-            BackendInstance::new("candle:metal").as_str(),
-            "candle:metal"
-        );
-        assert_eq!(
-            BackendInstance::from("candle:metal").as_str(),
-            "candle:metal"
-        );
+        assert_eq!(BackendInstance::new("fake:metal").as_str(), "fake:metal");
+        assert_eq!(BackendInstance::from("fake:metal").as_str(), "fake:metal");
     }
 
     #[test]
     fn descriptor_accepts_optional_provenance() {
-        let plugin = Plugin::try_from("builtin.candle").unwrap();
-        let extension = Extension::try_from("backend.candle").unwrap();
+        let plugin = Plugin::try_from("builtin.fake").unwrap();
+        let extension = Extension::try_from("backend.fake").unwrap();
         let desc = BackendInstanceDescriptor::new(
-            BackendInstance::new("candle:metal"),
-            Backend::new("candle"),
+            BackendInstance::new("fake:metal"),
+            Backend::new("fake"),
         )
         .with_device(DeviceProfile::new("metal"))
         .with_plugin(plugin.clone(), extension.clone());
@@ -514,11 +508,11 @@ mod tests {
         let policy = StaticBackendSelectionPolicy::with_overrides(
             BackendOverrides::new(),
             vec![
-                BackendInstance::new("candle:metal"),
-                BackendInstance::new("candle:cuda"),
+                BackendInstance::new("fake:metal"),
+                BackendInstance::new("fake:cuda"),
             ],
-            Some(vec![BackendInstance::new("candle:metal")]),
-            vec![BackendInstance::new("candle:cuda")],
+            Some(vec![BackendInstance::new("fake:metal")]),
+            vec![BackendInstance::new("fake:cuda")],
         );
 
         let request = BackendSelectionRequest {
@@ -529,9 +523,9 @@ mod tests {
             explicit_override: None,
         };
         let candidates = policy.candidates(&request);
-        // "candle:metal" is allow-listed and not disabled, so it is
-        // returned. "candle:cuda" is disabled and is filtered out.
-        assert_eq!(candidates, vec![BackendInstance::new("candle:metal")]);
+        // "fake:metal" is allow-listed and not disabled, so it is
+        // returned. "fake:cuda" is disabled and is filtered out.
+        assert_eq!(candidates, vec![BackendInstance::new("fake:metal")]);
     }
 
     #[test]
@@ -539,8 +533,8 @@ mod tests {
         let policy = StaticBackendSelectionPolicy::with_overrides(
             BackendOverrides::new(),
             Vec::new(),
-            Some(vec![BackendInstance::new("candle:metal")]),
-            vec![BackendInstance::new("candle:cuda")],
+            Some(vec![BackendInstance::new("fake:metal")]),
+            vec![BackendInstance::new("fake:cuda")],
         );
         let request = BackendSelectionRequest {
             capability: InferenceCapability::CreateEmptyLatent,
@@ -548,12 +542,12 @@ mod tests {
             affinities: Vec::new(),
             registered: vec![
                 BackendInstanceDescriptor::new(
-                    BackendInstance::new("candle:metal"),
-                    Backend::new("candle"),
+                    BackendInstance::new("fake:metal"),
+                    Backend::new("fake"),
                 ),
                 BackendInstanceDescriptor::new(
-                    BackendInstance::new("candle:cuda"),
-                    Backend::new("candle"),
+                    BackendInstance::new("fake:cuda"),
+                    Backend::new("fake"),
                 ),
                 BackendInstanceDescriptor::new(
                     BackendInstance::new("burn:cuda"),
@@ -563,8 +557,8 @@ mod tests {
             explicit_override: None,
         };
 
-        assert!(policy.allows_explicit_override(&BackendInstance::new("candle:metal"), &request));
-        assert!(!policy.allows_explicit_override(&BackendInstance::new("candle:cuda"), &request));
+        assert!(policy.allows_explicit_override(&BackendInstance::new("fake:metal"), &request));
+        assert!(!policy.allows_explicit_override(&BackendInstance::new("fake:cuda"), &request));
         assert!(!policy.allows_explicit_override(&BackendInstance::new("burn:cuda"), &request));
         assert!(!policy.allows_explicit_override(&BackendInstance::new("missing"), &request));
     }
@@ -593,7 +587,7 @@ mod tests {
     fn static_policy_priority_only() {
         let policy = StaticBackendSelectionPolicy::new(vec![
             BackendInstance::new("burn:cuda"),
-            BackendInstance::new("candle:metal"),
+            BackendInstance::new("fake:metal"),
         ]);
         let request = BackendSelectionRequest {
             capability: InferenceCapability::CreateEmptyLatent,
@@ -607,7 +601,7 @@ mod tests {
             candidates,
             vec![
                 BackendInstance::new("burn:cuda"),
-                BackendInstance::new("candle:metal"),
+                BackendInstance::new("fake:metal"),
             ]
         );
     }
@@ -631,10 +625,10 @@ mod tests {
         assert_eq!(overlay.explicit_override, None);
 
         let pinned =
-            BackendSelectionOverlay::with_explicit_override(BackendInstance::new("candle:metal"));
+            BackendSelectionOverlay::with_explicit_override(BackendInstance::new("fake:metal"));
         assert_eq!(
             pinned.explicit_override,
-            Some(BackendInstance::new("candle:metal"))
+            Some(BackendInstance::new("fake:metal"))
         );
     }
 }

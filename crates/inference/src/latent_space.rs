@@ -209,9 +209,8 @@ impl LatentSpaceMetadata {
 
 /// V1 built-in: SDXL base latent space.
 ///
-/// This is the canonical record every V1 workflow uses. Candle V1
-/// only supports this latent space; future spaces (SD3, Flux,
-/// custom) will add new helpers.
+/// This is the canonical record every V1 workflow uses. Future spaces
+/// (SD3, Flux, custom) will add new helpers.
 pub fn stable_diffusion_sdxl_base() -> LatentSpaceMetadata {
     LatentSpaceMetadata::new(
         LatentSpaceId::new("stable_diffusion/sdxl/base"),

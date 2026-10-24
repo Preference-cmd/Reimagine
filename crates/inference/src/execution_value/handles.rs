@@ -343,7 +343,7 @@ impl RuntimeLatent {
         )
     }
 
-    /// Replace the latent-space metadata. Used by the candle
+    /// Replace the latent-space metadata. Used by the inference
     /// backend when materializing a sampled latent so the output
     /// handle carries the bundle's expected latent space even when
     /// the input latent used a different (but compatible) record.

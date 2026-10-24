@@ -416,7 +416,7 @@ mod tests {
 
         let sampled = RuntimeLatent::new(
             BackendTensorHandle::new(
-                Backend::new("candle"),
+                Backend::new("fake"),
                 BackendPayloadKey::new("latent:sampled"),
                 TensorDType::F32,
                 TensorShape::new(vec![1, 4, 8, 8]),
@@ -431,7 +431,7 @@ mod tests {
         );
         let vae = RuntimeVaeHandle::new(
             ModelId::new("sdxl-base-1.0"),
-            Backend::new("candle"),
+            Backend::new("fake"),
             BackendPayloadKey::new("vae-key"),
         );
         let req = LatentDecodeRequest::new(
@@ -454,7 +454,7 @@ mod tests {
         let empty = request().into_latent();
         let vae = RuntimeVaeHandle::new(
             ModelId::new("sdxl-base-1.0"),
-            Backend::new("candle"),
+            Backend::new("fake"),
             BackendPayloadKey::new("vae-key"),
         );
         let req = LatentDecodeRequest::new(

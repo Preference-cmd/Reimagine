@@ -477,31 +477,26 @@ mod tests {
         )
     }
 
-    fn make_registry_with_single_candle() -> Arc<InferenceBackendRegistry> {
+    fn make_registry_with_single_fake() -> Arc<InferenceBackendRegistry> {
         let mut reg = InferenceBackendRegistry::new();
-        let descriptor = BackendInstanceDescriptor::new(
-            BackendInstance::new("candle:cpu"),
-            Backend::new("candle"),
-        );
-        reg.register(descriptor, Arc::new(EchoBackend::new("candle")));
+        let descriptor =
+            BackendInstanceDescriptor::new(BackendInstance::new("fake:cpu"), Backend::new("fake"));
+        reg.register(descriptor, Arc::new(EchoBackend::new("fake")));
         Arc::new(reg)
     }
 
-    fn make_registry_with_two_candle_instances() -> Arc<InferenceBackendRegistry> {
+    fn make_registry_with_two_fake_instances() -> Arc<InferenceBackendRegistry> {
         let mut reg = InferenceBackendRegistry::new();
         reg.register(
-            BackendInstanceDescriptor::new(
-                BackendInstance::new("candle:cpu"),
-                Backend::new("candle"),
-            ),
-            Arc::new(EchoBackend::new("candle")),
+            BackendInstanceDescriptor::new(BackendInstance::new("fake:cpu"), Backend::new("fake")),
+            Arc::new(EchoBackend::new("fake")),
         );
         reg.register(
             BackendInstanceDescriptor::new(
-                BackendInstance::new("candle:metal"),
-                Backend::new("candle"),
+                BackendInstance::new("fake:metal"),
+                Backend::new("fake"),
             ),
-            Arc::new(EchoBackend::new("candle")),
+            Arc::new(EchoBackend::new("fake")),
         );
         Arc::new(reg)
     }
@@ -518,7 +513,7 @@ mod tests {
 
     #[tokio::test]
     async fn routes_through_first_registered_when_no_affinity() {
-        let registry = make_registry_with_single_candle();
+        let registry = make_registry_with_single_fake();
         let router = InferenceRouter::new(registry, Arc::new(RejectAllBridgePolicy));
         let invocation = noop_invocation();
         let response = router
@@ -547,8 +542,8 @@ mod tests {
 
     #[tokio::test]
     async fn returns_capability_unsupported_when_no_candidate_supports_capability() {
-        let registry = make_registry_with_single_candle();
-        let policy = StaticBackendSelectionPolicy::new(vec![BackendInstance::new("candle:cpu")]);
+        let registry = make_registry_with_single_fake();
+        let policy = StaticBackendSelectionPolicy::new(vec![BackendInstance::new("fake:cpu")]);
         let router = InferenceRouter::with_policy(
             registry,
             Arc::new(policy),
@@ -556,8 +551,8 @@ mod tests {
         );
         let clip = crate::RuntimeClipHandle::with_instance(
             reimagine_core::model::ModelId::new("clip"),
-            Backend::new("candle"),
-            BackendInstance::new("candle:cpu"),
+            Backend::new("fake"),
+            BackendInstance::new("fake:cpu"),
             crate::BackendPayloadKey::new("k"),
         );
         let text = std::sync::Arc::new(crate::ExecutionValue::Param(
@@ -584,12 +579,12 @@ mod tests {
 
     #[tokio::test]
     async fn explicit_override_pins_known_instance() {
-        let registry = make_registry_with_single_candle();
+        let registry = make_registry_with_single_fake();
         let router = InferenceRouter::new(registry, Arc::new(RejectAllBridgePolicy));
         let invocation = noop_invocation();
         let mut req = empty_latent_request();
         req.set_backend_selection_overlay(crate::BackendSelectionOverlay::with_explicit_override(
-            BackendInstance::new("candle:cpu"),
+            BackendInstance::new("fake:cpu"),
         ));
         let response = router
             .create_empty_latent_with_invocation(&invocation, req)
@@ -600,7 +595,7 @@ mod tests {
 
     #[tokio::test]
     async fn explicit_override_for_missing_instance_returns_not_registered() {
-        let registry = make_registry_with_single_candle();
+        let registry = make_registry_with_single_fake();
         let router = InferenceRouter::new(registry, Arc::new(RejectAllBridgePolicy));
         let invocation = noop_invocation();
         let mut req = empty_latent_request();
@@ -619,12 +614,12 @@ mod tests {
 
     #[tokio::test]
     async fn explicit_override_for_disabled_instance_is_rejected_by_policy() {
-        let registry = make_registry_with_single_candle();
+        let registry = make_registry_with_single_fake();
         let policy = StaticBackendSelectionPolicy::with_overrides(
             crate::BackendOverrides::new(),
-            vec![BackendInstance::new("candle:cpu")],
+            vec![BackendInstance::new("fake:cpu")],
             None,
-            vec![BackendInstance::new("candle:cpu")],
+            vec![BackendInstance::new("fake:cpu")],
         );
         let router = InferenceRouter::with_policy(
             registry,
@@ -634,7 +629,7 @@ mod tests {
         let invocation = noop_invocation();
         let mut req = empty_latent_request();
         req.set_backend_selection_overlay(crate::BackendSelectionOverlay::with_explicit_override(
-            BackendInstance::new("candle:cpu"),
+            BackendInstance::new("fake:cpu"),
         ));
         let err = router
             .create_empty_latent_with_invocation(&invocation, req)
@@ -648,12 +643,12 @@ mod tests {
 
     #[tokio::test]
     async fn handle_affinity_pins_concrete_backend_instance() {
-        let registry = make_registry_with_two_candle_instances();
+        let registry = make_registry_with_two_fake_instances();
         let router = InferenceRouter::new(registry, Arc::new(RejectAllBridgePolicy));
         let clip = crate::RuntimeClipHandle::with_instance(
             reimagine_core::model::ModelId::new("clip"),
-            Backend::new("candle"),
-            BackendInstance::new("candle:metal"),
+            Backend::new("fake"),
+            BackendInstance::new("fake:metal"),
             crate::BackendPayloadKey::new("k"),
         );
         let text = std::sync::Arc::new(crate::ExecutionValue::Param(
@@ -674,7 +669,7 @@ mod tests {
             .unwrap_err();
         match err {
             InferenceError::CandidateBackendLacksCapability { instance, .. } => {
-                assert_eq!(instance, BackendInstance::new("candle:metal"));
+                assert_eq!(instance, BackendInstance::new("fake:metal"));
             }
             other => panic!("expected CandidateBackendLacksCapability, got {other:?}"),
         }
@@ -742,7 +737,7 @@ mod tests {
 
     #[tokio::test]
     async fn invocation_context_is_separate_from_request_and_routes_with_it() {
-        let registry = make_registry_with_single_candle();
+        let registry = make_registry_with_single_fake();
         let router = InferenceRouter::new(registry, Arc::new(RejectAllBridgePolicy));
         let invocation = crate::InferenceInvocation::new(
             RunId::new("invocation-run"),

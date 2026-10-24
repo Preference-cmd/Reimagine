@@ -423,7 +423,7 @@ impl DiffusionSampleRequest {
     /// content class.
     ///
     /// This is model-neutral request validation. It deliberately
-    /// knows nothing about SDXL, Candle, sampler names, scheduler
+    /// knows nothing about SDXL, sampler names, scheduler
     /// sigmas, tensor stores, or runtime graph scheduling.
     pub fn classify_denoise_for_latent_content(
         denoise: f32,

@@ -202,14 +202,14 @@ mod tests {
     #[test]
     fn backend_bridge_unsupported_converts_to_failed_with_reason() {
         let err = InferenceError::BackendBridgeUnsupported {
-            source: "candle".to_string(),
+            source: "fake".to_string(),
             target: "remote".to_string(),
             capability: InferenceCapability::DiffusionSample,
             reason: "no bridge registered".to_string(),
         };
         let exec_err = into_executor_error(err);
         let msg = exec_err.to_string();
-        assert!(msg.contains("candle"), "{msg}");
+        assert!(msg.contains("fake"), "{msg}");
         assert!(msg.contains("remote"), "{msg}");
         assert!(msg.contains("no bridge registered"), "{msg}");
     }
@@ -217,12 +217,12 @@ mod tests {
     #[test]
     fn backend_capability_unsupported_converts_to_failed() {
         let err = InferenceError::BackendCapabilityUnsupported {
-            kind: "candle".to_string(),
+            kind: "fake".to_string(),
             capability: InferenceCapability::DiffusionSample,
         };
         let exec_err = into_executor_error(err);
         let msg = exec_err.to_string();
-        assert!(msg.contains("candle"), "{msg}");
+        assert!(msg.contains("fake"), "{msg}");
         assert!(msg.contains("diffusion.sample"), "{msg}");
     }
 }

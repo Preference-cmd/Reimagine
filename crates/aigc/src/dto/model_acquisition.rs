@@ -125,7 +125,7 @@ pub struct ModelAcquireInput {
     /// Git revision (defaults to `"main"`).
     #[serde(default)]
     pub revision: Option<String>,
-    /// Target backend: `"burn"` or `"candle"`. Defaults to `"burn"`.
+    /// Target backend: `"burn"`. Defaults to `"burn"`.
     #[serde(default)]
     pub target_backend: Option<String>,
     /// Overwrite policy: `"skip"`, `"overwrite"`, `"fail"`. Defaults to `"skip"`.
@@ -167,7 +167,7 @@ pub struct ModelAcquireOutput {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ModelAcquireConversionReport {
-    /// Target backend (`"burn"` or `"candle"`).
+    /// Target backend (e.g. `"burn"`).
     pub backend: String,
     /// Number of tensors mapped.
     pub mapped_tensor_count: usize,

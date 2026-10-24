@@ -114,12 +114,12 @@ mod tests {
     use reimagine_core::model::{ModelId, TensorDType, TensorShape};
 
     fn vae_handle() -> RuntimeVaeHandle {
-        RuntimeVaeHandle::new(ModelId::new("sdxl"), Backend::new("candle"), "vae-key")
+        RuntimeVaeHandle::new(ModelId::new("sdxl"), Backend::new("fake"), "vae-key")
     }
 
     fn image_handle() -> RuntimeImage {
         let tensor = BackendTensorHandle::new(
-            Backend::new("candle"),
+            Backend::new("fake"),
             BackendPayloadKey::new("image-key"),
             TensorDType::F32,
             TensorShape::new(vec![1, 3, 64, 64]),
@@ -138,13 +138,13 @@ mod tests {
             WorkflowVersion::new(1),
             NodeId::new("node-1"),
         );
-        assert_eq!(req.vae().backend().as_str(), "candle");
+        assert_eq!(req.vae().backend().as_str(), "fake");
         assert_eq!(req.image().width(), 64);
         assert_eq!(req.image().height(), 64);
         assert_eq!(req.backend_affinities().len(), 1);
         assert_eq!(
             req.backend_affinities()[0],
-            crate::BackendInstance::new("candle")
+            crate::BackendInstance::new("fake")
         );
     }
 

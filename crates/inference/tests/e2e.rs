@@ -481,7 +481,7 @@ async fn save_image_records_backend_returned_artifact_reference() {
 #[tokio::test]
 async fn vae_decode_executor_rejects_empty_geometry_latent() {
     // The executor must validate `LatentContent::EmptyGeometry` at
-    // the runtime boundary so a future non-candle backend inherits
+    // the runtime boundary so a future backend inherits
     // the same vocabulary without silently decoding txt2img
     // geometry.
     let backend = Arc::new(FakeBackend::new("fake").latent_decode(

@@ -249,12 +249,12 @@ fn foreign_burn_clip() -> RuntimeClipHandle {
     )
 }
 
-fn candle_clip() -> RuntimeClipHandle {
+fn other_clip() -> RuntimeClipHandle {
     RuntimeClipHandle::with_instance(
         ModelId::new("sdxl-base-burn"),
-        Backend::new("candle"),
-        BackendInstance::new("candle:cpu"),
-        BackendPayloadKey::new("candle:model:sdxl-base-burn:clip"),
+        Backend::new("other"),
+        BackendInstance::new("other:cpu"),
+        BackendPayloadKey::new("other:model:sdxl-base-burn:clip"),
     )
 }
 
@@ -304,7 +304,7 @@ async fn text_encode_is_not_advertised_with_empty_model_cache() {
 #[tokio::test]
 async fn text_encode_validation_failures_surface_as_backend_execution_failed() {
     let backend = backend();
-    let clip = candle_clip();
+    let clip = other_clip();
     let request = build_text_request(clip, string_prompt("hello"));
 
     let err = backend.text_encode(request).await.expect_err("rejected");

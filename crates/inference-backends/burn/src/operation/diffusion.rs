@@ -433,9 +433,9 @@ mod tests {
         let model = reimagine_inference::RuntimeModelHandle::with_instance(
             ModelId::new("sdxl-base"),
             reimagine_core::model::ModelRole::CheckpointBundle,
-            Backend::new("candle"),
-            BackendInstance::new("candle:cpu"),
-            BackendPayloadKey::new("candle:model:sdxl-base:diffusion"),
+            Backend::new("other"),
+            BackendInstance::new("other:cpu"),
+            BackendPayloadKey::new("other:model:sdxl-base:diffusion"),
         );
         let conditioning = ExecutionConditioning::new(
             BackendTensorHandle::new(
@@ -480,7 +480,7 @@ mod tests {
 
         let err = execute_diffusion_sample(&backend, request, None).unwrap_err();
         let msg = err.to_string();
-        assert!(msg.contains("candle"), "msg: {msg}");
+        assert!(msg.contains("other"), "msg: {msg}");
     }
 
     #[test]

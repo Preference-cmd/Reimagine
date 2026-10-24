@@ -3,7 +3,7 @@
 //! Host-neutral projection of
 //! [`reimagine_inference::WorkspaceComputeProfile`] for HTTP and IPC
 //! adapters. The projection drops every backend-native handle
-//! (Candle `Device`, tensors, loaded model structs, etc.) and replaces
+//! (backend `Device`, tensors, loaded model structs, etc.) and replaces
 //! inference-internal enums with stable string forms so wire clients
 //! do not need to know the inference-internal vocabulary.
 
@@ -126,7 +126,7 @@ fn state_label(state: crate::inference::pool::WorkerState) -> &'static str {
 /// [`reimagine_inference::BackendProfileProvider`].
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct BackendProfileDto {
-    /// Stable backend implementation label (e.g. `"candle"`).
+    /// Stable backend implementation label (e.g. `"fake"`).
     pub backend: String,
     /// Optional plugin that contributed this backend.
     pub plugin: Option<String>,
@@ -153,10 +153,10 @@ impl From<BackendProfile> for BackendProfileDto {
 }
 
 /// Profile for a single backend instance candidate
-/// (e.g. `"candle:metal"`, `"candle:cpu"`).
+/// (e.g. `"fake:metal"`, `"fake:cpu"`).
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct BackendInstanceProfileDto {
-    /// Stable backend instance identity (e.g. `"candle:cpu"`).
+    /// Stable backend instance identity (e.g. `"fake:cpu"`).
     pub instance: String,
     /// Open backend implementation label. Mirrors the enclosing
     /// [`BackendProfileDto::backend`] but is included here so each
@@ -396,16 +396,16 @@ mod tests {
             .with_supported_dtypes(vec![DTypeProfile::from("f32"), DTypeProfile::from("f16")]);
 
         let instance = BackendInstanceProfile::new(
-            BackendInstance::new("candle:cpu"),
-            Backend::new("candle"),
+            BackendInstance::new("fake:cpu"),
+            Backend::new("fake"),
             device,
             BackendInstanceStatus::Available,
         );
 
-        let backend = BackendProfile::new(Backend::new("candle"))
+        let backend = BackendProfile::new(Backend::new("fake"))
             .with_plugin(
-                Plugin::try_from("builtin.candle").expect("valid plugin label"),
-                Extension::try_from("backend.candle").expect("valid extension label"),
+                Plugin::try_from("builtin.fake").expect("valid plugin label"),
+                Extension::try_from("backend.fake").expect("valid extension label"),
             )
             .with_instance(instance);
 
@@ -417,14 +417,14 @@ mod tests {
         let dto: ComputeProfileDto = sample_profile().into();
         assert_eq!(dto.backend_profiles.len(), 1);
         let backend = &dto.backend_profiles[0];
-        assert_eq!(backend.backend, "candle");
-        assert_eq!(backend.plugin.as_deref(), Some("builtin.candle"));
-        assert_eq!(backend.extension.as_deref(), Some("backend.candle"));
+        assert_eq!(backend.backend, "fake");
+        assert_eq!(backend.plugin.as_deref(), Some("builtin.fake"));
+        assert_eq!(backend.extension.as_deref(), Some("backend.fake"));
         assert_eq!(backend.instances.len(), 1);
 
         let instance = &backend.instances[0];
-        assert_eq!(instance.instance, "candle:cpu");
-        assert_eq!(instance.backend, "candle");
+        assert_eq!(instance.instance, "fake:cpu");
+        assert_eq!(instance.backend, "fake");
         assert_eq!(instance.status, "Available");
         assert_eq!(instance.capabilities, Vec::<String>::new());
         assert!(instance.diagnostics.is_empty());
@@ -454,8 +454,8 @@ mod tests {
     #[test]
     fn dto_projection_carries_diffusion_operation_options_as_strings() {
         let instance = BackendInstanceProfile::new(
-            BackendInstance::new("candle:cpu"),
-            Backend::new("candle"),
+            BackendInstance::new("fake:cpu"),
+            Backend::new("fake"),
             DeviceProfile::new("cpu"),
             BackendInstanceStatus::Available,
         )
@@ -468,7 +468,7 @@ mod tests {
             )],
         ));
         let profile = WorkspaceComputeProfile::new().with_backend_profile(
-            BackendProfile::new(Backend::new("candle")).with_instance(instance),
+            BackendProfile::new(Backend::new("fake")).with_instance(instance),
         );
 
         let dto: ComputeProfileDto = profile.into();
@@ -492,7 +492,7 @@ mod tests {
         // Verify wire JSON never carries backend-internal types.
         let serialized = serde_json::to_string(&dto).expect("serialize dto to string");
         assert!(
-            !serialized.contains("candle_core"),
+            !serialized.contains("burn_core"),
             "wire form must not leak backend crate names: {serialized}"
         );
         assert!(
@@ -536,15 +536,15 @@ mod tests {
     #[test]
     fn dto_maps_status_strings() {
         let available = BackendInstanceProfileDto::from(BackendInstanceProfile::new(
-            BackendInstance::new("candle:cpu"),
-            Backend::new("candle"),
+            BackendInstance::new("fake:cpu"),
+            Backend::new("fake"),
             DeviceProfile::new("cpu"),
             BackendInstanceStatus::Available,
         ));
         assert_eq!(available.status, "Available");
         let unavailable = BackendInstanceProfileDto::from(BackendInstanceProfile::new(
-            BackendInstance::new("candle:tpu"),
-            Backend::new("candle"),
+            BackendInstance::new("fake:tpu"),
+            Backend::new("fake"),
             DeviceProfile::new("tpu"),
             BackendInstanceStatus::Unavailable,
         ));

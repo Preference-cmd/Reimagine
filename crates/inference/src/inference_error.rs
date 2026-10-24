@@ -278,43 +278,43 @@ mod tests {
     #[test]
     fn backend_not_registered_display() {
         let err = InferenceError::BackendNotRegistered {
-            kind: "candle".to_string(),
+            kind: "fake".to_string(),
         };
         let msg = err.to_string();
-        assert!(msg.contains("candle"), "{msg}");
+        assert!(msg.contains("fake"), "{msg}");
     }
 
     #[test]
     fn backend_capability_unsupported_display() {
         let err = InferenceError::BackendCapabilityUnsupported {
-            kind: "candle".to_string(),
+            kind: "fake".to_string(),
             capability: InferenceCapability::ImageSave,
         };
         let msg = err.to_string();
-        assert!(msg.contains("candle"), "{msg}");
+        assert!(msg.contains("fake"), "{msg}");
         assert!(msg.contains("image.save"), "{msg}");
     }
 
     #[test]
     fn incompatible_handle_affinity_display() {
         let err = InferenceError::IncompatibleHandleAffinity {
-            expected: "candle".to_string(),
+            expected: "fake".to_string(),
             actual: "remote".to_string(),
         };
         let msg = err.to_string();
-        assert!(msg.contains("candle"), "{msg}");
+        assert!(msg.contains("fake"), "{msg}");
         assert!(msg.contains("remote"), "{msg}");
     }
 
     #[test]
     fn backend_bridge_required_display() {
         let err = InferenceError::BackendBridgeRequired {
-            source: "candle".to_string(),
+            source: "fake".to_string(),
             target: "remote".to_string(),
             capability: InferenceCapability::DiffusionSample,
         };
         let msg = err.to_string();
-        assert!(msg.contains("candle"), "{msg}");
+        assert!(msg.contains("fake"), "{msg}");
         assert!(msg.contains("remote"), "{msg}");
         assert!(msg.contains("diffusion.sample"), "{msg}");
     }
@@ -322,13 +322,13 @@ mod tests {
     #[test]
     fn backend_bridge_unsupported_display() {
         let err = InferenceError::BackendBridgeUnsupported {
-            source: "candle".to_string(),
+            source: "fake".to_string(),
             target: "remote".to_string(),
             capability: InferenceCapability::DiffusionSample,
             reason: "no bridge registered".to_string(),
         };
         let msg = err.to_string();
-        assert!(msg.contains("candle"), "{msg}");
+        assert!(msg.contains("fake"), "{msg}");
         assert!(msg.contains("remote"), "{msg}");
         assert!(msg.contains("diffusion.sample"), "{msg}");
         assert!(msg.contains("no bridge registered"), "{msg}");
@@ -338,12 +338,12 @@ mod tests {
     fn backend_selection_no_candidate_display() {
         let err = InferenceError::BackendSelectionNoCandidate {
             capability: InferenceCapability::TextEncode,
-            requested: Some(crate::BackendInstance::new("candle:metal")),
+            requested: Some(crate::BackendInstance::new("fake:metal")),
             registered: 0,
         };
         let msg = err.to_string();
         assert!(msg.contains("text.encode"), "{msg}");
-        assert!(msg.contains("candle:metal"), "{msg}");
+        assert!(msg.contains("fake:metal"), "{msg}");
         assert!(msg.contains("0 registered"), "{msg}");
     }
 
@@ -361,13 +361,13 @@ mod tests {
     #[test]
     fn candidate_backend_lacks_capability_display() {
         let err = InferenceError::CandidateBackendLacksCapability {
-            instance: crate::BackendInstance::new("candle:cpu"),
-            backend: crate::Backend::new("candle"),
+            instance: crate::BackendInstance::new("fake:cpu"),
+            backend: crate::Backend::new("fake"),
             capability: InferenceCapability::TextEncode,
         };
         let msg = err.to_string();
-        assert!(msg.contains("candle:cpu"), "{msg}");
-        assert!(msg.contains("candle"), "{msg}");
+        assert!(msg.contains("fake:cpu"), "{msg}");
+        assert!(msg.contains("fake"), "{msg}");
         assert!(msg.contains("text.encode"), "{msg}");
     }
 }

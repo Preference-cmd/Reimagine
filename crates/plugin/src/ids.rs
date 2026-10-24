@@ -8,7 +8,7 @@ use crate::error::PluginError;
 
 /// Stable identity of a plugin package.
 ///
-/// Examples: `"builtin.candle"`, `"external.foo"`.
+/// Examples: `"builtin.fake"`, `"external.foo"`.
 #[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize)]
 pub struct Plugin(String);
 
