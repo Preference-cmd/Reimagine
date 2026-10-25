@@ -71,16 +71,20 @@ describe("runtime store and the event bus", () => {
   it("holds events that beat runWorkflow, then applies this run's in order", async () => {
     const run = useRuntimeStore.getState().startRun();
     const { handleEvent } = useRuntimeStore.getState();
+    handleEvent(runEvent("run-1", "RunQueued"));
     handleEvent(runEvent("run-1", "RunStarted"));
     handleEvent(runEvent("run-other", "NodeStarted", "node-other"));
     handleEvent(runEvent("run-1", "NodeStarted", "node-x"));
-    handleEvent(runEvent("run-1", "RunCompleted"));
 
     expect(useRuntimeStore.getState().phase).toBe("starting");
     expect(useRuntimeStore.getState().runId).toBeNull();
 
     runWorkflowDeferred.resolve(started("run-1"));
     await run;
+    expect(useRuntimeStore.getState().phase).toBe("running");
+
+    // Events after the response apply directly, including the terminal one.
+    useRuntimeStore.getState().handleEvent(runEvent("run-1", "RunCompleted"));
 
     const state = useRuntimeStore.getState();
     expect(state.runId).toBe("run-1");

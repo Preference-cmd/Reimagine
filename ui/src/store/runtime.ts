@@ -31,8 +31,10 @@ type RuntimeState = {
 };
 
 /** Run events that arrived while `runWorkflow` had not yet returned the run
-    id. The run's first events can beat the response, so they wait here. */
-let pendingEvents: RunEvent[] = [];
+    id; `null` when no start is in flight. The run's first events can beat the
+    response, so they wait here. This is separate from `phase`, which run
+    events themselves change (`RunQueued` maps to "starting"). */
+let pendingEvents: RunEvent[] | null = null;
 
 export const useRuntimeStore = create<RuntimeState>()((set, get) => ({
   phase: "idle",
@@ -46,12 +48,11 @@ export const useRuntimeStore = create<RuntimeState>()((set, get) => ({
   diagnostics: [],
 
   handleEvent: (event: RunEvent) => {
-    const { phase, runId } = get();
-    if (phase === "starting") {
+    if (pendingEvents) {
       pendingEvents.push(event);
       return;
     }
-    if (event.runId !== runId) return;
+    if (event.runId !== get().runId) return;
 
     // F5-4: artifact/run lifecycle events drive the inline preview cache.
     useArtifactStore.getState().handleEvent(event);
@@ -91,8 +92,8 @@ export const useRuntimeStore = create<RuntimeState>()((set, get) => ({
         useProjectStore.getState().activeProjectId,
         workflowJson as any,
       );
-      const early = pendingEvents;
-      pendingEvents = [];
+      const early = pendingEvents ?? [];
+      pendingEvents = null;
 
       if (response.outcome === "started") {
         set({
@@ -122,7 +123,7 @@ export const useRuntimeStore = create<RuntimeState>()((set, get) => ({
         stopProgressTimer();
       }
     } catch (err) {
-      pendingEvents = [];
+      pendingEvents = null;
       set({
         phase: "failed",
         diagnostics: [
