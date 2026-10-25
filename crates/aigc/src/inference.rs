@@ -4,7 +4,6 @@
 //! executor-facing runtime/router wiring that sits between host bootstrap
 //! and the generic runtime service.
 
-pub mod bridge;
 pub mod candidate;
 pub mod compose;
 pub mod discovery;

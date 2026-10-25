@@ -14,7 +14,7 @@ use reimagine_inference::{
     Backend, BackendInstance, BackendInstanceDescriptor, BackendPayloadKey, BackendTensorHandle,
     CannedCapabilityResponse, CreateEmptyLatentRequest, CreateEmptyLatentResponse, FakeBackend,
     InferenceBackend, InferenceBackendRegistry, InferenceRouter, LatentContent,
-    LatentSpaceMetadata, RejectAllBridgePolicy, RouterRef, RuntimeLatent,
+    LatentSpaceMetadata, RouterRef, RuntimeLatent,
 };
 
 #[derive(Default)]
@@ -504,7 +504,7 @@ fn router_for_worker(backend: Arc<dyn InferenceBackend>, instance: &str) -> Infe
         ),
         backend,
     );
-    InferenceRouter::new(Arc::new(registry), Arc::new(RejectAllBridgePolicy))
+    InferenceRouter::new(Arc::new(registry))
 }
 
 #[tokio::test]

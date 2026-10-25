@@ -3,8 +3,7 @@
 //!
 //! This crate owns the backend contract (trait, typed
 //! request/response DTOs, capability report, model resolver,
-//! runtime/router, bridge policy, backend registry,
-//! backend-instance runtime hooks), canonical execution values, the **node executor
+//! runtime/router, backend registry, backend-instance runtime hooks), canonical execution values, the **node executor
 //! contract** (`NodeExecutor` trait, `NodeExecutionContext`,
 //! `NodeInputs`/`NodeParams`, `NodeExecutorRegistry`,
 //! `ArtifactPublisher`, `CancelToken`, `ArtifactEventKind`,
@@ -37,7 +36,6 @@ mod artifact_publisher;
 mod backend;
 mod backend_registry;
 mod backend_selection;
-mod bridge;
 mod capability;
 mod diagnostic;
 mod error;
@@ -94,9 +92,6 @@ pub use backend_selection::{
     ArcBackendSelectionPolicy, Backend, BackendInstance, BackendInstanceDescriptor,
     BackendOverrides, BackendSelectionOverlay, BackendSelectionPolicy, BackendSelectionRequest,
     DeviceProfile, StaticBackendSelectionPolicy,
-};
-pub use bridge::{
-    BackendBridge, BackendBridgePolicy, BridgePlan, BridgeSupport, RejectAllBridgePolicy,
 };
 pub use capability::{
     InferenceBackendCapabilities, InferenceCapability, InferenceCapabilitySupport,

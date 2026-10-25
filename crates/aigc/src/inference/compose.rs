@@ -5,8 +5,8 @@ use reimagine_config::{AppConfig, InferenceBackendConfig};
 use reimagine_inference::registry::register_builtin_inference_executors;
 use reimagine_inference::{
     BackendInstance, BackendInstanceRuntimeHooks, BackendInstanceStatus, BackendOverrides,
-    CompositeBackendInstanceRuntimeHooks, InferenceBackendRegistry, InferenceRouter,
-    RejectAllBridgePolicy, RouterRef, StaticBackendSelectionPolicy, WorkspaceComputeProfile,
+    CompositeBackendInstanceRuntimeHooks, InferenceBackendRegistry, InferenceRouter, RouterRef,
+    StaticBackendSelectionPolicy, WorkspaceComputeProfile,
 };
 use reimagine_runtime::NodeExecutorRegistry;
 
@@ -537,7 +537,6 @@ fn compose_runtime_router(
     Arc::new(InferenceRouter::with_policy(
         Arc::new(registry),
         Arc::new(policy),
-        Arc::new(RejectAllBridgePolicy),
     ))
 }
 

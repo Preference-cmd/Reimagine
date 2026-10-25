@@ -29,9 +29,8 @@ use reimagine_backend_worker_protocol::{
     BackendExecutionError, BackendInstanceId, CancelAckFrame, CancelFrame, CleanupAckFrame,
     CleanupFrame, CodecError, ControlId, CorrelationId, FrameCodec, HealthAckFrame, HealthFrame,
     HostHello, ProgressFrame, ProtocolRange, ProtocolVersion, RequestFrame, RequestId,
-    ShutdownAckFrame, ShutdownFrame, TensorDataFrame, TensorMetadata, TensorTransferAckFrame,
-    TensorTransferRequestFrame, TerminalFrame, TerminalOutcome, TransferStatus, WireMessage,
-    WorkerHello, WorkerIdentity, WorkerIncarnationId, WorkerInstallationId, WorkerInstanceProfile,
+    ShutdownAckFrame, ShutdownFrame, TerminalFrame, TerminalOutcome, WireMessage, WorkerHello,
+    WorkerIdentity, WorkerIncarnationId, WorkerInstallationId, WorkerInstanceProfile,
     WorkerProfile,
 };
 use serde_json::json;
@@ -223,27 +222,6 @@ fn message_pool() -> Vec<WireMessage> {
             protocol_version: ProtocolVersion(2),
             incarnation_id: WorkerIncarnationId::from("inc-1"),
             control_id: ControlId::from("shutdown-1"),
-        }),
-        WireMessage::TensorTransferRequest(TensorTransferRequestFrame {
-            source_token: "src-tok-1".to_owned(),
-            target_worker_id: "worker-b".to_owned(),
-            tensor_metadata: TensorMetadata {
-                dtype: "f16".to_owned(),
-                shape: vec![1, 3, 512, 512],
-                size_bytes: 1_572_864,
-                backend_format: "burn::nchw".to_owned(),
-            },
-        }),
-        WireMessage::TensorTransferAck(TensorTransferAckFrame {
-            correlation_id: CorrelationId::from("c1"),
-            status: TransferStatus::Accepted,
-            target_token: Some("tgt-tok-1".to_owned()),
-        }),
-        WireMessage::TensorData(TensorDataFrame {
-            correlation_id: CorrelationId::from("c1"),
-            sequence: 0,
-            data: vec![0u8; 64],
-            is_final: true,
         }),
     ]
 }
@@ -463,18 +441,11 @@ fn oversized_payloads_are_rejected_at_encode_time() {
 #[test]
 fn payload_at_the_maximum_boundary_roundtrips() {
     let codec = FrameCodec::new(1024);
-    // A JSON payload close to the boundary (data carries a tensor blob;
-    // JSON array expansion makes 200 bytes land just under 1024).
-    let mut data = vec![0u8; 200];
-    for (index, byte) in data.iter_mut().enumerate() {
-        *byte = (index % 251) as u8;
-    }
-    let message = WireMessage::TensorData(TensorDataFrame {
-        correlation_id: CorrelationId::from("c-boundary"),
-        sequence: 0,
-        data,
-        is_final: false,
-    });
+    // A JSON payload close to the boundary: a ping nonce of 900 ASCII
+    // characters keeps the encoded frame just under the 1024-byte cap.
+    let message = WireMessage::Ping {
+        nonce: "x".repeat(900),
+    };
     let encoded = encode_frame(&codec, &message);
     assert!(encoded.len() as u32 <= 1024);
     assert_eq!(codec.read(&mut Cursor::new(encoded)).unwrap(), message);

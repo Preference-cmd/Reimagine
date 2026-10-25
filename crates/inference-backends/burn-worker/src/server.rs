@@ -323,10 +323,7 @@ pub fn serve_loop(
             | WireMessage::CleanupAck(_)
             | WireMessage::ShutdownAck(_)
             | WireMessage::CancelAck(_)
-            | WireMessage::Terminal(_)
-            | WireMessage::TensorTransferRequest(_)
-            | WireMessage::TensorTransferAck(_)
-            | WireMessage::TensorData(_) => {
+            | WireMessage::Terminal(_) => {
                 eprintln!(
                     "serve loop: unexpected worker-directed message: {:?}",
                     message.kind()
@@ -406,10 +403,7 @@ fn extract_session(message: &WireMessage) -> Option<(ProtocolVersion, &WorkerInc
         | WireMessage::HealthAck(_)
         | WireMessage::CleanupAck(_)
         | WireMessage::ShutdownAck(_)
-        | WireMessage::CancelAck(_)
-        | WireMessage::TensorTransferRequest(_)
-        | WireMessage::TensorTransferAck(_)
-        | WireMessage::TensorData(_) => None,
+        | WireMessage::CancelAck(_) => None,
     }
 }
 

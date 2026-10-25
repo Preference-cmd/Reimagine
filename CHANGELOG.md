@@ -65,6 +65,17 @@ both check it.
 - The experimental `reimagine-agent-daemon` sidecar crate.
 - New projects no longer get an `agent_threads` directory; existing ones are
   left untouched.
+- The unimplemented cross-worker tensor transfer and cross-backend bridge
+  machinery: the `reimagine-backend-worker-transfer` crate (workspace members
+  drop from 18 to 17), the `tensor_transfer_request`, `tensor_transfer_ack`
+  and `tensor_data` messages of the worker wire protocol and their `.proto`
+  mirrors, `aigc`'s `TopologyAwareBridgePolicy`, and `reimagine-inference`'s
+  `BackendBridgePolicy` / `BridgePlan` / `RejectAllBridgePolicy` (the router
+  constructor no longer takes a bridge policy; it rejects cross-backend
+  handle conflicts inline, with the same behavior as the previous reject-all
+  default). None of this was reachable in production: workers answered
+  transfer messages with an "unexpected" diagnostic and the production
+  router always used the reject-all policy.
 
 ### Fixed
 

@@ -28,9 +28,8 @@ use reimagine_inference::{
     CannedCapabilityResponse, CreateEmptyLatentRequest, CreateEmptyLatentResponse, FakeBackend,
     ImageSaveResponse, InferenceBackend, InferenceBackendCapabilities, InferenceBackendRegistry,
     InferenceCapabilitySupport, InferenceError, IntoNodeExecutorError, LoadBundleResponse,
-    ModelFormat, ModelResolver, RejectAllBridgePolicy, ResolvedImageSource, ResolvedInferenceModel,
-    RouterRef, RuntimeLatent, TextEncodeRequest, TextEncodeResponse,
-    register_builtin_inference_executors,
+    ModelFormat, ModelResolver, ResolvedImageSource, ResolvedInferenceModel, RouterRef,
+    RuntimeLatent, TextEncodeRequest, TextEncodeResponse, register_builtin_inference_executors,
 };
 
 // ── Fake model resolver ────────────────────────────────────────────
@@ -165,10 +164,7 @@ fn runtime_for_backend(backend: Arc<dyn InferenceBackend>) -> RouterRef {
     );
     registry.register(descriptor, backend);
     Arc::new(arc_swap::ArcSwap::from_pointee(
-        reimagine_inference::InferenceRouter::new(
-            Arc::new(registry),
-            Arc::new(RejectAllBridgePolicy),
-        ),
+        reimagine_inference::InferenceRouter::new(Arc::new(registry)),
     ))
 }
 

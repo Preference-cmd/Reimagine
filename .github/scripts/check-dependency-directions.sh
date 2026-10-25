@@ -11,7 +11,7 @@
 #              inference, runtime
 #   modules    aigc (inference composition, workers, model services)
 #   backends   inference-burn, inference-burn-worker
-#   workers    backend-worker-host, -transport-quic, -transport-grpc, -transfer
+#   workers    backend-worker-host, -transport-quic, -transport-grpc
 #   host       app-host
 #   entries    reimagine (src-tauri)
 #
@@ -89,9 +89,9 @@ for crate in reimagine-inference-burn reimagine-inference-burn-worker; do
 done
 
 # The worker host manages out-of-process workers and never links a backend;
-# transports and transfer carry protocol messages and know no domain crate.
+# transports carry protocol messages and know no domain crate.
 check reimagine-backend-worker-host "$BACKENDS" "$HTTP_SERVER"
-for crate in reimagine-backend-worker-transport-quic reimagine-backend-worker-transport-grpc reimagine-backend-worker-transfer; do
+for crate in reimagine-backend-worker-transport-quic reimagine-backend-worker-transport-grpc; do
   check "$crate" "$DOMAIN" "$BACKENDS"
 done
 

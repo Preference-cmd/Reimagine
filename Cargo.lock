@@ -50,7 +50,6 @@ dependencies = [
  "hf-hub",
  "reimagine-backend-worker-host",
  "reimagine-backend-worker-protocol",
- "reimagine-backend-worker-transfer",
  "reimagine-backend-worker-transport-grpc",
  "reimagine-backend-worker-transport-quic",
  "reimagine-config",
@@ -6568,21 +6567,6 @@ dependencies = [
  "rand 0.8.7",
  "serde",
  "serde_json",
-]
-
-[[package]]
-name = "reimagine-backend-worker-transfer"
-version = "0.1.0"
-dependencies = [
- "async-trait",
- "quinn",
- "reimagine-backend-worker-protocol",
- "reimagine-backend-worker-transport-quic",
- "serde_json",
- "sha2 0.10.9",
- "tempfile",
- "tokio",
- "tracing",
 ]
 
 [[package]]

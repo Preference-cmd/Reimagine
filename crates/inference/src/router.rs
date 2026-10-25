@@ -3,9 +3,8 @@
 //! [`InferenceRouter`] is the concrete struct that built-in executors
 //! call to dispatch typed capability requests. It resolves the target
 //! backend via a [`BackendSelectionPolicy`](crate::BackendSelectionPolicy),
-//! consults the [`BackendBridgePolicy`](crate::BackendBridgePolicy)
-//! for cross-backend handle conflicts, and delegates to the selected
-//! [`InferenceBackend`](crate::InferenceBackend).
+//! rejects cross-backend handle conflicts inline, and delegates to the
+//! selected [`InferenceBackend`](crate::InferenceBackend).
 
 use std::sync::Arc;
 
@@ -14,7 +13,6 @@ use crate::backend_registry::{InferenceBackendRegistry, RegisteredInstance};
 use crate::backend_selection::{
     BackendInstance, BackendSelectionPolicy, BackendSelectionRequest, StaticBackendSelectionPolicy,
 };
-use crate::bridge::{BackendBridgePolicy, BridgePlan};
 use crate::capability::InferenceCapability;
 use crate::inference_error::InferenceError;
 use crate::invocation::InferenceInvocation;
@@ -42,14 +40,14 @@ pub type RouterRef = Arc<arc_swap::ArcSwap<InferenceRouter>>;
 /// Executor-facing inference router.
 ///
 /// Applies a [`BackendSelectionPolicy`] to derive a candidate
-/// [`BackendInstance`], consults the [`BackendBridgePolicy`] for
-/// cross-backend handle conflicts, and dispatches the typed capability
-/// call to the selected backend.
+/// [`BackendInstance`] and dispatches the typed capability call to the
+/// selected backend. Affinity conflicts that would require moving a
+/// value across backends are rejected inline.
 ///
 /// Selection precedence (deterministic):
 ///
 /// 1. Existing backend-bound handle affinities. Conflicting
-///    affinities ask the bridge policy; no silent fallback.
+///    affinities are rejected; no silent fallback.
 /// 2. Explicit override from the request overlay (when no
 ///    incompatible handles exist).
 /// 3. Priority order from the policy.
@@ -58,32 +56,22 @@ pub type RouterRef = Arc<arc_swap::ArcSwap<InferenceRouter>>;
 pub struct InferenceRouter {
     registry: Arc<InferenceBackendRegistry>,
     selection_policy: Arc<dyn BackendSelectionPolicy>,
-    bridge_policy: Arc<dyn BackendBridgePolicy>,
 }
 
 impl InferenceRouter {
     /// Construct a router with the [`StaticBackendSelectionPolicy`].
-    pub fn new(
-        registry: Arc<InferenceBackendRegistry>,
-        bridge_policy: Arc<dyn BackendBridgePolicy>,
-    ) -> Self {
-        Self::with_policy(
-            registry,
-            Arc::new(StaticBackendSelectionPolicy::default()),
-            bridge_policy,
-        )
+    pub fn new(registry: Arc<InferenceBackendRegistry>) -> Self {
+        Self::with_policy(registry, Arc::new(StaticBackendSelectionPolicy::default()))
     }
 
     /// Construct a router with an explicit selection policy.
     pub fn with_policy(
         registry: Arc<InferenceBackendRegistry>,
         selection_policy: Arc<dyn BackendSelectionPolicy>,
-        bridge_policy: Arc<dyn BackendBridgePolicy>,
     ) -> Self {
         Self {
             registry,
             selection_policy,
-            bridge_policy,
         }
     }
 
@@ -95,17 +83,14 @@ impl InferenceRouter {
         &self.selection_policy
     }
 
-    pub fn bridge_policy(&self) -> &Arc<dyn BackendBridgePolicy> {
-        &self.bridge_policy
-    }
-
     /// Plan-level affinity validation.
     ///
     /// Returns `Some(target_backend)` when the affinities name a
     /// single backend (or are empty, in which case the router falls
-    /// back to policy/override). Conflicting affinities ask the
-    /// bridge policy to plan a transfer; if no plan is available,
-    /// the router returns a bridge diagnostic and the call fails.
+    /// back to policy/override). Conflicting affinities must resolve
+    /// to the same backend: a value owned by one backend cannot be
+    /// used in a request targeting another, so the router returns a
+    /// bridge diagnostic and the call fails.
     fn plan_affinity(
         &self,
         affinities: &[BackendInstance],
@@ -139,22 +124,16 @@ impl InferenceRouter {
                     capability,
                 });
             };
-            match self.bridge_policy.plan_transfer(
-                &first_descriptor.backend,
-                &other_descriptor.backend,
-                capability,
-            ) {
-                BridgePlan::Direct
-                | BridgePlan::Bridgeable { .. }
-                | BridgePlan::CrossWorker { .. } => {}
-                BridgePlan::Unsupported { reason } => {
-                    return Err(InferenceError::BackendBridgeUnsupported {
-                        source: other.to_string(),
-                        target: first.to_string(),
-                        capability,
-                        reason,
-                    });
-                }
+            if first_descriptor.backend != other_descriptor.backend {
+                return Err(InferenceError::BackendBridgeUnsupported {
+                    source: other.to_string(),
+                    target: first.to_string(),
+                    capability,
+                    reason: format!(
+                        "cross-backend transfer from `{}` to `{}` for capability `{capability}` is not supported",
+                        other_descriptor.backend, first_descriptor.backend
+                    ),
+                });
             }
         }
         Ok(Some(first))
@@ -287,7 +266,6 @@ impl std::fmt::Debug for InferenceRouter {
         f.debug_struct("InferenceRouter")
             .field("registry", &self.registry)
             .field("selection_policy", &"<dyn BackendSelectionPolicy>")
-            .field("bridge_policy", &"<dyn BackendBridgePolicy>")
             .finish()
     }
 }
@@ -300,7 +278,6 @@ mod tests {
     use crate::backend::InferenceBackend;
     use crate::backend_registry::InferenceBackendRegistry;
     use crate::backend_selection::BackendInstanceDescriptor;
-    use crate::bridge::RejectAllBridgePolicy;
     use crate::capability::{
         InferenceBackendCapabilities, InferenceCapability, InferenceCapabilitySupport,
     };
@@ -319,30 +296,6 @@ mod tests {
             Self {
                 kind: Backend::new(label),
                 supports_text: false,
-            }
-        }
-    }
-
-    /// Test bridge policy that prices every cross-backend transfer as
-    /// a cross-worker move (T16).
-    #[derive(Debug, Clone, Copy)]
-    struct CrossWorkerBridgePolicy;
-
-    impl BackendBridgePolicy for CrossWorkerBridgePolicy {
-        fn plan_transfer(
-            &self,
-            source_backend: &Backend,
-            target_backend: &Backend,
-            _capability: InferenceCapability,
-        ) -> BridgePlan {
-            if source_backend == target_backend {
-                BridgePlan::Direct
-            } else {
-                BridgePlan::CrossWorker {
-                    source_worker: format!("worker-{source_backend}"),
-                    target_worker: format!("worker-{target_backend}"),
-                    estimated_cost: "~2.0ms".to_owned(),
-                }
             }
         }
     }
@@ -514,7 +467,7 @@ mod tests {
     #[tokio::test]
     async fn routes_through_first_registered_when_no_affinity() {
         let registry = make_registry_with_single_fake();
-        let router = InferenceRouter::new(registry, Arc::new(RejectAllBridgePolicy));
+        let router = InferenceRouter::new(registry);
         let invocation = noop_invocation();
         let response = router
             .create_empty_latent_with_invocation(&invocation, empty_latent_request())
@@ -525,10 +478,7 @@ mod tests {
 
     #[tokio::test]
     async fn returns_no_candidate_when_registry_empty_and_no_policy() {
-        let router = InferenceRouter::new(
-            Arc::new(InferenceBackendRegistry::new()),
-            Arc::new(RejectAllBridgePolicy),
-        );
+        let router = InferenceRouter::new(Arc::new(InferenceBackendRegistry::new()));
         let invocation = noop_invocation();
         let err = router
             .create_empty_latent_with_invocation(&invocation, empty_latent_request())
@@ -544,11 +494,7 @@ mod tests {
     async fn returns_capability_unsupported_when_no_candidate_supports_capability() {
         let registry = make_registry_with_single_fake();
         let policy = StaticBackendSelectionPolicy::new(vec![BackendInstance::new("fake:cpu")]);
-        let router = InferenceRouter::with_policy(
-            registry,
-            Arc::new(policy),
-            Arc::new(RejectAllBridgePolicy),
-        );
+        let router = InferenceRouter::with_policy(registry, Arc::new(policy));
         let clip = crate::RuntimeClipHandle::with_instance(
             reimagine_core::model::ModelId::new("clip"),
             Backend::new("fake"),
@@ -580,7 +526,7 @@ mod tests {
     #[tokio::test]
     async fn explicit_override_pins_known_instance() {
         let registry = make_registry_with_single_fake();
-        let router = InferenceRouter::new(registry, Arc::new(RejectAllBridgePolicy));
+        let router = InferenceRouter::new(registry);
         let invocation = noop_invocation();
         let mut req = empty_latent_request();
         req.set_backend_selection_overlay(crate::BackendSelectionOverlay::with_explicit_override(
@@ -596,7 +542,7 @@ mod tests {
     #[tokio::test]
     async fn explicit_override_for_missing_instance_returns_not_registered() {
         let registry = make_registry_with_single_fake();
-        let router = InferenceRouter::new(registry, Arc::new(RejectAllBridgePolicy));
+        let router = InferenceRouter::new(registry);
         let invocation = noop_invocation();
         let mut req = empty_latent_request();
         req.set_backend_selection_overlay(crate::BackendSelectionOverlay::with_explicit_override(
@@ -621,11 +567,7 @@ mod tests {
             None,
             vec![BackendInstance::new("fake:cpu")],
         );
-        let router = InferenceRouter::with_policy(
-            registry,
-            Arc::new(policy),
-            Arc::new(RejectAllBridgePolicy),
-        );
+        let router = InferenceRouter::with_policy(registry, Arc::new(policy));
         let invocation = noop_invocation();
         let mut req = empty_latent_request();
         req.set_backend_selection_overlay(crate::BackendSelectionOverlay::with_explicit_override(
@@ -644,7 +586,7 @@ mod tests {
     #[tokio::test]
     async fn handle_affinity_pins_concrete_backend_instance() {
         let registry = make_registry_with_two_fake_instances();
-        let router = InferenceRouter::new(registry, Arc::new(RejectAllBridgePolicy));
+        let router = InferenceRouter::new(registry);
         let clip = crate::RuntimeClipHandle::with_instance(
             reimagine_core::model::ModelId::new("clip"),
             Backend::new("fake"),
@@ -686,7 +628,7 @@ mod tests {
             BackendInstanceDescriptor::new(BackendInstance::new("b:cpu"), Backend::new("b")),
             Arc::new(EchoBackend::new("b")),
         );
-        let router = InferenceRouter::new(Arc::new(reg), Arc::new(RejectAllBridgePolicy));
+        let router = InferenceRouter::new(Arc::new(reg));
 
         let clip = crate::RuntimeClipHandle::with_instance(
             reimagine_core::model::ModelId::new("clip"),
@@ -718,10 +660,7 @@ mod tests {
 
     #[tokio::test]
     async fn empty_registry_produces_no_candidate_with_registered_zero() {
-        let router = InferenceRouter::new(
-            Arc::new(InferenceBackendRegistry::new()),
-            Arc::new(RejectAllBridgePolicy),
-        );
+        let router = InferenceRouter::new(Arc::new(InferenceBackendRegistry::new()));
         let invocation = noop_invocation();
         let err = router
             .create_empty_latent_with_invocation(&invocation, empty_latent_request())
@@ -738,7 +677,7 @@ mod tests {
     #[tokio::test]
     async fn invocation_context_is_separate_from_request_and_routes_with_it() {
         let registry = make_registry_with_single_fake();
-        let router = InferenceRouter::new(registry, Arc::new(RejectAllBridgePolicy));
+        let router = InferenceRouter::new(registry);
         let invocation = crate::InferenceInvocation::new(
             RunId::new("invocation-run"),
             NodeId::new("invocation-node"),
@@ -800,39 +739,31 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn reject_all_bridge_policy_blocks_conflicting_cross_backend_affinities() {
-        let router = InferenceRouter::new(
-            registry_with_two_backend_kinds(),
-            Arc::new(RejectAllBridgePolicy),
-        );
+    async fn conflicting_cross_backend_affinities_are_rejected() {
+        let router = InferenceRouter::new(registry_with_two_backend_kinds());
         let invocation = noop_invocation();
         let err = router
             .latent_encode_with_invocation(&invocation, latent_encode_request_on_two_backends())
             .await
             .unwrap_err();
-        assert!(matches!(
-            err,
-            InferenceError::BackendBridgeUnsupported { .. }
-        ));
-    }
-
-    #[tokio::test]
-    async fn cross_worker_bridge_plan_does_not_block_affinity_resolution() {
-        let router = InferenceRouter::new(
-            registry_with_two_backend_kinds(),
-            Arc::new(CrossWorkerBridgePolicy),
-        );
-        let invocation = noop_invocation();
-        let err = router
-            .latent_encode_with_invocation(&invocation, latent_encode_request_on_two_backends())
-            .await
-            .unwrap_err();
-        // The CrossWorker plan passed the bridge gate; the call then
-        // fails only on capability support (EchoBackend does not
-        // advertise latent.encode), never on the bridge policy.
-        assert!(matches!(
-            err,
-            InferenceError::CandidateBackendLacksCapability { .. }
-        ));
+        match err {
+            InferenceError::BackendBridgeUnsupported {
+                source,
+                target,
+                capability,
+                reason,
+            } => {
+                assert_eq!(
+                    source, "b",
+                    "the conflicting value's instance is the source"
+                );
+                assert_eq!(target, "a", "the pinned affinity instance is the target");
+                assert_eq!(capability, InferenceCapability::LatentEncode);
+                assert!(reason.contains("`b`"), "{reason}");
+                assert!(reason.contains("`a`"), "{reason}");
+                assert!(reason.contains("latent.encode"), "{reason}");
+            }
+            other => panic!("expected BackendBridgeUnsupported, got {other:?}"),
+        }
     }
 }

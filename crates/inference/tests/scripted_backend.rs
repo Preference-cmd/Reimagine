@@ -24,8 +24,8 @@ use reimagine_inference::{
     ScriptedBackend, TextEncodeRequest, TextEncodeResponse, register_builtin_inference_executors,
 };
 use reimagine_inference::{
-    ImageSourceResolver, ModelFormat, ModelResolver, RejectAllBridgePolicy, ResolvedImageSource,
-    ResolvedInferenceModel, RouterRef,
+    ImageSourceResolver, ModelFormat, ModelResolver, ResolvedImageSource, ResolvedInferenceModel,
+    RouterRef,
 };
 
 // ── Shared scaffolding (mirrors e2e.rs) ─────────────────────────────
@@ -104,10 +104,7 @@ fn runtime_for_backend(backend: Arc<dyn reimagine_inference::InferenceBackend>) 
     );
     registry.register(descriptor, backend);
     Arc::new(arc_swap::ArcSwap::from_pointee(
-        reimagine_inference::InferenceRouter::new(
-            Arc::new(registry),
-            Arc::new(RejectAllBridgePolicy),
-        ),
+        reimagine_inference::InferenceRouter::new(Arc::new(registry)),
     ))
 }
 

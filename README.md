@@ -99,7 +99,7 @@ Sample workflows live under `examples/workflows/`.
 
 ## Workspace layout
 
-All 18 Cargo workspace members are listed here; `Cargo.toml` `[workspace]` is the
+All 17 Cargo workspace members are listed here; `Cargo.toml` `[workspace]` is the
 authority.
 
 ```text
@@ -119,7 +119,6 @@ crates/backend-worker-protocol/  reimagine-backend-worker-protocol - worker wire
 crates/backend-worker-host/      reimagine-backend-worker-host - out-of-process worker management
 crates/backend-worker-transport-quic/   reimagine-backend-worker-transport-quic - QUIC transport
 crates/backend-worker-transport-grpc/   reimagine-backend-worker-transport-grpc - gRPC transport
-crates/backend-worker-transfer/  reimagine-backend-worker-transfer - transfer planning and execution
 ui/                              React 19 + Vite 7 frontend, Bun-managed
 assets/                          static placeholders and non-secret assets
 examples/                        sample workflow JSON
