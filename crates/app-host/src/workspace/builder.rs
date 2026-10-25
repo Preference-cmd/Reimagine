@@ -5,12 +5,11 @@ use crate::WorkspaceScope;
 #[cfg(feature = "aigc")]
 use reimagine_backend_worker_host::WorkerStorePaths;
 use reimagine_config::{AppConfig, AppPaths, InferenceBackendConfig};
-use reimagine_runtime::BoxedRunEventSink;
-use reimagine_runtime::VecRunEventSink;
+use reimagine_core::event::EventBus;
 
+use crate::AppHostError;
 #[cfg(feature = "aigc")]
 use crate::InstalledWorkerInventoryProvider;
-use crate::{AppHostError, DocumentEventBus};
 #[cfg(feature = "aigc")]
 use crate::{ModelService, WorkerInventoryProvider};
 #[cfg(feature = "aigc")]
@@ -55,10 +54,9 @@ pub struct WorkspaceHostBuilder {
     // Optional - with defaults
     app_data_root: Option<PathBuf>,
     backend_config: Option<InferenceBackendConfig>,
-    event_sink: Option<BoxedRunEventSink>,
+    event_bus: Option<EventBus>,
     #[cfg(feature = "aigc")]
     worker_inventory: Option<Arc<dyn WorkerInventoryProvider>>,
-    document_events: Option<Arc<DocumentEventBus>>,
 }
 
 impl WorkspaceHostBuilder {
@@ -72,16 +70,15 @@ impl WorkspaceHostBuilder {
             base_path: base_path.into(),
             app_data_root: None,
             backend_config: None,
-            event_sink: None,
+            event_bus: None,
             #[cfg(feature = "aigc")]
             worker_inventory: None,
-            document_events: None,
         }
     }
 
-    /// Set an existing document event bus.
-    pub fn document_events(mut self, bus: Arc<DocumentEventBus>) -> Self {
-        self.document_events = Some(bus);
+    /// Set an existing event bus.
+    pub fn event_bus(mut self, bus: EventBus) -> Self {
+        self.event_bus = Some(bus);
         self
     }
 
@@ -103,14 +100,6 @@ impl WorkspaceHostBuilder {
     /// this config directly.
     pub fn backend_config(mut self, config: InferenceBackendConfig) -> Self {
         self.backend_config = Some(config);
-        self
-    }
-
-    /// Set the run event sink for workflow execution events.
-    ///
-    /// When not set, uses [`VecRunEventSink`] (events are discarded).
-    pub fn event_sink(mut self, sink: BoxedRunEventSink) -> Self {
-        self.event_sink = Some(sink);
         self
     }
 
@@ -146,26 +135,17 @@ impl WorkspaceHostBuilder {
             None => load_backend_config_result(&config).await?,
         };
 
-        // Resolve the run event sink
-        let event_sink = self
-            .event_sink
-            .clone()
-            .unwrap_or_else(|| Arc::new(VecRunEventSink::new()));
+        let event_bus = self.event_bus.clone().unwrap_or_default();
 
         let components = self
-            .build_components(&config, &backend_config, &event_sink)
+            .build_components(&config, &backend_config, &event_bus)
             .await;
-
-        let document_events = self
-            .document_events
-            .unwrap_or_else(|| Arc::new(DocumentEventBus::new()));
 
         Ok(WorkspaceHost::assemble(
             self.workspace_scope,
             Arc::new(config),
             backend_config,
-            document_events,
-            event_sink,
+            event_bus,
             Arc::new(reimagine_nodes::BuiltinNodeCatalog::v1()),
             components,
         ))
@@ -176,7 +156,7 @@ impl WorkspaceHostBuilder {
         &self,
         config: &AppConfig,
         backend_config: &InferenceBackendConfig,
-        event_sink: &BoxedRunEventSink,
+        event_bus: &EventBus,
     ) -> super::WorkspaceComponents {
         // Resolve worker inventory
         let worker_inventory = match self.worker_inventory {
@@ -192,8 +172,11 @@ impl WorkspaceHostBuilder {
         };
 
         // Create services
-        let acquisition_service =
-            Arc::new(ModelAcquisitionService::new(config.paths().clone(), config));
+        let acquisition_service = Arc::new(ModelAcquisitionService::with_event_bus(
+            config.paths().clone(),
+            config,
+            event_bus.clone(),
+        ));
         let model_service = Arc::new(ModelService::new(
             config.paths().clone(),
             Arc::clone(&acquisition_service),
@@ -233,7 +216,7 @@ impl WorkspaceHostBuilder {
             reimagine_runtime::RuntimeService::new(
                 bootstrapped.runtime.executor_registry,
                 bootstrapped.runtime.runtime_hooks.clone(),
-                Arc::clone(event_sink),
+                event_bus.clone(),
                 Arc::new(reimagine_runtime::SystemClock),
             )
             .with_resource_hint_sink(worker_switch.as_ref().and_then(|ws| ws.active_hint_sink())),
@@ -269,12 +252,12 @@ impl WorkspaceHostBuilder {
         &self,
         _config: &AppConfig,
         _backend_config: &InferenceBackendConfig,
-        event_sink: &BoxedRunEventSink,
+        event_bus: &EventBus,
     ) -> super::WorkspaceComponents {
         let runtime_service = Arc::new(reimagine_runtime::RuntimeService::new(
             reimagine_inference::NodeExecutorRegistry::default(),
             Arc::new(reimagine_inference::CompositeBackendInstanceRuntimeHooks::new(Vec::new())),
-            Arc::clone(event_sink),
+            event_bus.clone(),
             Arc::new(reimagine_runtime::SystemClock),
         ));
         super::WorkspaceComponents { runtime_service }
@@ -350,15 +333,15 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn builder_with_event_sink() {
+    async fn builder_with_event_bus() {
         let base = temp_dir("sinks");
-        let event_sink: BoxedRunEventSink = Arc::new(VecRunEventSink::new());
+        let event_bus = EventBus::new();
 
         let host = WorkspaceHostBuilder::new(WorkspaceScope::new("test"), &base)
-            .event_sink(event_sink)
+            .event_bus(event_bus)
             .build()
             .await
-            .expect("builder with event sink");
+            .expect("builder with event bus");
 
         assert_eq!(host.base_path(), base);
         let _ = fs::remove_dir_all(&base);

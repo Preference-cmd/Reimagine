@@ -12,7 +12,6 @@ use reimagine_backend_worker_protocol::{
     BackendInstanceId, ProtocolRange, WorkerInstallationId, WorkerInstanceProfile,
 };
 use reimagine_config::InferenceBackendConfig;
-use reimagine_runtime::VecRunEventSink;
 
 fn temp_dir(prefix: &str) -> std::path::PathBuf {
     let nonce = std::time::SystemTime::now()
@@ -59,7 +58,7 @@ async fn inventory_profile_does_not_start_unselected_worker() {
         WorkspaceScope::new("mb04-dormant"),
         &base,
         InferenceBackendConfig::default(),
-        Arc::new(VecRunEventSink::new()),
+        reimagine_core::event::EventBus::new(),
         Arc::new(provider),
     )
     .await
@@ -105,7 +104,7 @@ async fn selected_worker_start_failure_becomes_unavailable_without_fallback() {
             priority_order: vec!["stub:cpu".to_owned()],
             ..InferenceBackendConfig::default()
         },
-        Arc::new(VecRunEventSink::new()),
+        reimagine_core::event::EventBus::new(),
         Arc::new(provider),
     )
     .await
@@ -143,7 +142,7 @@ async fn no_worker_bootstrap_keeps_editing_available_and_explicit_burn_pinned() 
             priority_order: vec!["stub:cpu".to_owned()],
             ..InferenceBackendConfig::default()
         },
-        Arc::new(VecRunEventSink::new()),
+        reimagine_core::event::EventBus::new(),
         Arc::new(EmptyWorkerInventoryProvider),
     )
     .await

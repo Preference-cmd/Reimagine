@@ -1,5 +1,5 @@
 import { useEffect } from "react";
-import { listProjects, subscribeDocumentEvents, getBoardSnapshot, loadWorkflow } from "@/ipc";
+import { listProjects, subscribeEvents, getBoardSnapshot, loadWorkflow } from "@/ipc";
 import { workflowFromJson } from "@/lib/workflowCodec";
 import { useProjectStore } from "@/store/project";
 import { useBoardStore } from "@/store/board";
@@ -10,7 +10,8 @@ export function useWorkspaceSurface(): void {
 
   useEffect(() => {
     void listProjects().then((projects) => useProjectStore.getState().hydrate(projects));
-    void subscribeDocumentEvents((event) => {
+    const unsubscribe = subscribeEvents((event) => {
+      if (event.type !== "document") return;
       const project = useProjectStore.getState().activeProjectId;
       if (event.projectId !== project) return;
       if (event.kind === "board.changed") {
@@ -34,6 +35,7 @@ export function useWorkspaceSurface(): void {
         useWorkflowStore.temporal.getState().clear();
       });
     });
+    return () => unsubscribe();
   }, []);
 
   useEffect(() => {

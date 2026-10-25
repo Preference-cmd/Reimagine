@@ -12,6 +12,9 @@
 
 mod common;
 
+use common::TestRunEventCollector;
+use reimagine_core::event::EventBus;
+
 use std::sync::Arc;
 use std::time::Duration;
 
@@ -39,7 +42,7 @@ use reimagine_model_manager::{
 use reimagine_nodes::{BUILTIN_CHECKPOINT_LOADER, BuiltinNodeCatalog};
 use reimagine_runtime::{
     ArtifactEventKind, BoxedNodeExecutor, ExecutionOutput, NodeExecutionContext, NodeExecutor,
-    NodeExecutorRegistry, RunInputs, RuntimeOptions, RuntimeService, TaskState, VecRunEventSink,
+    NodeExecutorRegistry, RunInputs, RuntimeOptions, RuntimeService, TaskState,
 };
 
 fn empty_compute_profile() -> Arc<WorkspaceComputeProfile> {
@@ -139,17 +142,17 @@ fn build_runtime() -> Arc<RuntimeService> {
     registry
         .register(BUILTIN_CHECKPOINT_LOADER, mock_loader_executor())
         .expect("register mock loader");
-    build_runtime_with_sink(registry, Arc::new(VecRunEventSink::new()))
+    build_runtime_with_bus(registry, EventBus::new())
 }
 
-fn build_runtime_with_sink(
+fn build_runtime_with_bus(
     registry: NodeExecutorRegistry,
-    sink: Arc<VecRunEventSink>,
+    event_bus: EventBus,
 ) -> Arc<RuntimeService> {
     Arc::new(RuntimeService::new(
         registry,
         Arc::new(reimagine_runtime::NoopBackendInstanceRuntimeHooks::default()),
-        sink,
+        event_bus,
         Arc::new(reimagine_runtime::SystemClock),
     ))
 }
@@ -393,8 +396,9 @@ async fn run_workflow_propagates_correlation_id_to_runtime_options() {
     registry
         .register(BUILTIN_CHECKPOINT_LOADER, mock_loader_executor())
         .expect("register mock loader");
-    let sink = Arc::new(VecRunEventSink::new());
-    let runtime = build_runtime_with_sink(registry, Arc::clone(&sink));
+    let event_bus = EventBus::new();
+    let collector = TestRunEventCollector::new(&event_bus);
+    let runtime = build_runtime_with_bus(registry, event_bus);
     let host = WorkspaceHost::new(
         WorkspaceScope::new("ws-run-corr"),
         AppConfig::new(paths),
@@ -422,7 +426,7 @@ async fn run_workflow_propagates_correlation_id_to_runtime_options() {
     };
     run_to_completion(&runtime, &handle).await;
     assert!(
-        sink.events().iter().any(|event| event
+        collector.events().iter().any(|event| event
             .correlation_id()
             .is_some_and(|id| id.as_str() == "corr-1")),
         "expected at least one runtime event to carry corr-1"
@@ -515,7 +519,7 @@ fn artifact_executor(reference: ArtifactRef) -> BoxedNodeExecutor {
 async fn build_artifact_host(
     reference: ArtifactRef,
     base: &str,
-) -> (WorkspaceHost, Arc<RuntimeService>, Arc<VecRunEventSink>) {
+) -> (WorkspaceHost, Arc<RuntimeService>, TestRunEventCollector) {
     let paths = AppPaths::new(unique_temp_dir(base));
     tokio::fs::create_dir_all(paths.models_dir()).await.unwrap();
     tokio::fs::create_dir_all(paths.output_dir()).await.unwrap();
@@ -525,10 +529,11 @@ async fn build_artifact_host(
         .register("mock.artifact", artifact_executor(reference))
         .expect("register artifact executor");
 
-    let sink = Arc::new(VecRunEventSink::new());
-    let runtime = build_runtime_with_sink(registry, sink.clone());
+    let event_bus = EventBus::new();
+    let collector = TestRunEventCollector::new(&event_bus);
+    let runtime = build_runtime_with_bus(registry, event_bus.clone());
 
-    let host = WorkspaceHost::new(
+    let host = WorkspaceHost::new_with_event_bus(
         WorkspaceScope::new(format!("ws-{base}")),
         AppConfig::new(paths),
         reimagine_config::InferenceBackendConfig::default(),
@@ -536,8 +541,9 @@ async fn build_artifact_host(
         builtin_catalog(),
         empty_compute_profile(),
         BackendInstance::new("stub:cpu"),
+        event_bus,
     );
-    (host, runtime, sink)
+    (host, runtime, collector)
 }
 
 fn one_node_plan(type_id: &str, node_id: &str) -> reimagine_core::readiness::ExecutionPlan {
@@ -563,7 +569,7 @@ fn one_node_plan(type_id: &str, node_id: &str) -> reimagine_core::readiness::Exe
 
 #[tokio::test]
 async fn normal_run_completes_and_snapshot_and_artifacts_can_be_retrieved() {
-    let (host, runtime, sink) = build_artifact_host(
+    let (host, runtime, collector) = build_artifact_host(
         ArtifactRef::new("output/generated.png"),
         "artifact-retrieval",
     )
@@ -612,7 +618,7 @@ async fn normal_run_completes_and_snapshot_and_artifacts_can_be_retrieved() {
         .expect("read artifact file");
     assert_eq!(retrieved_bytes, png_bytes);
 
-    let events = sink.events();
+    let events = collector.events();
     assert!(events.iter().any(|e| e.kind() == RunEventKind::RunQueued));
     assert!(events.iter().any(|e| e.kind() == RunEventKind::RunStarted));
     assert!(
@@ -695,12 +701,13 @@ async fn placeholder_model_workflow_fails_without_artifacts() {
         .await
         .expect("save manifest");
 
-    let sink = Arc::new(VecRunEventSink::new());
+    let event_bus = EventBus::new();
+    let collector = TestRunEventCollector::new(&event_bus);
     let host = WorkspaceHost::with_defaults_and_backend(
         WorkspaceScope::new("ws-compute-sdxl"),
         &base_path,
         reimagine_app_host::BackendSelection::default(),
-        sink.clone(),
+        event_bus,
     );
 
     let workflow_json = text_to_image(SdxlWorkflowOptions {
@@ -753,7 +760,7 @@ async fn placeholder_model_workflow_fails_without_artifacts() {
         "placeholder run should not emit artifacts"
     );
 
-    let events = sink.events();
+    let events = collector.events();
     assert!(events.iter().any(|e| e.kind() == RunEventKind::RunQueued));
     assert!(events.iter().any(|e| e.kind() == RunEventKind::RunStarted));
     assert!(events.iter().any(|e| e.kind() == RunEventKind::RunFailed));

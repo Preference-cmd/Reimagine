@@ -16,14 +16,14 @@ use reimagine_core::document::DocumentSession;
 use reimagine_core::model::{BoardId, DocumentVersion, ProjectId};
 use tokio::sync::Mutex as AsyncMutex;
 
-use crate::document_events::{DocumentChangedEvent, DocumentEventBus};
 use crate::document_store::{read_document, write_document};
 use crate::{AppHostError, AppHostResult};
+use reimagine_core::event::{Event, EventBus};
 
 pub struct BoardService {
     paths: AppPaths,
     sessions: RwLock<BTreeMap<ProjectId, Arc<AsyncMutex<DocumentSession<BoardDocument>>>>>,
-    document_events: Arc<DocumentEventBus>,
+    event_bus: EventBus,
 }
 
 impl std::fmt::Debug for BoardService {
@@ -42,14 +42,14 @@ impl std::fmt::Debug for BoardService {
 
 impl BoardService {
     pub fn new(paths: AppPaths) -> Self {
-        Self::with_document_events(paths, Arc::new(DocumentEventBus::new()))
+        Self::with_event_bus(paths, EventBus::new())
     }
 
-    pub fn with_document_events(paths: AppPaths, document_events: Arc<DocumentEventBus>) -> Self {
+    pub fn with_event_bus(paths: AppPaths, event_bus: EventBus) -> Self {
         Self {
             paths,
             sessions: RwLock::new(BTreeMap::new()),
-            document_events,
+            event_bus,
         }
     }
 
@@ -194,7 +194,7 @@ impl BoardService {
 
     fn emit_changed(&self, session: &DocumentSession<BoardDocument>) {
         let board = session.document();
-        self.document_events.publish(DocumentChangedEvent {
+        self.event_bus.publish(Event::Document {
             kind: "board.changed".to_owned(),
             project_id: board.project_id().to_string(),
             document_id: board.id().to_string(),

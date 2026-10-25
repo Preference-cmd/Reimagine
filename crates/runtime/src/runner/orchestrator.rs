@@ -18,7 +18,7 @@ use super::service::RuntimeOptions;
 use crate::artifacts::ArtifactStore;
 use crate::clock::Clock;
 use crate::consumer_index::PlanConsumerIndex;
-use crate::events::RunEventSink;
+use reimagine_core::event::EventBus;
 use reimagine_core::task::{CancelToken, TaskState};
 
 use crate::run_inputs::RunInputs;
@@ -68,7 +68,7 @@ pub(super) struct Runner {
     /// Optional backend resource-hint sink. When absent, hints are
     /// skipped (the default runtime configuration has no sink wired).
     pub(super) hint_sink: Option<Arc<dyn ResourceHintSink>>,
-    pub(super) sink: Arc<dyn RunEventSink>,
+    pub(super) event_bus: EventBus,
     pub(super) clock: Arc<dyn Clock>,
     pub(super) next_event_seq: Arc<AtomicU64>,
 }

@@ -21,17 +21,14 @@ use reimagine_backend_worker_protocol::ProtocolRange;
 use reimagine_config::AppPaths;
 use reimagine_core::board::BoardCommand;
 use reimagine_core::command::{CommandBatch, CommandResult, WorkflowChange, WorkflowCommand};
+use reimagine_core::event::{Event, EventBus};
 use reimagine_core::model::ProjectId;
 use reimagine_core::workflow::Workflow;
-use reimagine_runtime::BoxedRunEventSink;
 #[cfg(feature = "aigc")]
 use serde::Serialize;
 use tauri::ipc::Channel;
 
-use crate::document_event_hub::TauriDocumentEventHub;
-#[cfg(feature = "aigc")]
-use crate::download_event_hub::TauriDownloadEventHub;
-use crate::event_hub::{RunEventPayload, TauriRunEventHub};
+use crate::event_bridge::TauriEventBridge;
 
 const WORKSPACE_SCOPE: &str = "reimagine-tauri-host";
 const APP_HOST_LOCK: &str = "desktop app_host lock poisoned";
@@ -39,11 +36,8 @@ const APP_HOST_LOCK: &str = "desktop app_host lock poisoned";
 #[derive(Debug)]
 pub struct DesktopHostState {
     app_host: RwLock<AppHost>,
-    event_hub: Arc<TauriRunEventHub>,
-    document_event_hub: Arc<TauriDocumentEventHub>,
+    event_bridge: TauriEventBridge,
     active_project: RwLock<ProjectId>,
-    #[cfg(feature = "aigc")]
-    download_event_hub: Arc<TauriDownloadEventHub>,
     #[cfg(feature = "aigc")]
     worker_management: Arc<WorkerManagementService>,
 }
@@ -52,11 +46,8 @@ impl Clone for DesktopHostState {
     fn clone(&self) -> Self {
         Self {
             app_host: RwLock::new(self.app_host.read().expect(APP_HOST_LOCK).clone()),
-            event_hub: self.event_hub.clone(),
-            document_event_hub: self.document_event_hub.clone(),
+            event_bridge: self.event_bridge.clone(),
             active_project: RwLock::new(self.active_project.read().expect(APP_HOST_LOCK).clone()),
-            #[cfg(feature = "aigc")]
-            download_event_hub: self.download_event_hub.clone(),
             #[cfg(feature = "aigc")]
             worker_management: self.worker_management.clone(),
         }
@@ -79,32 +70,15 @@ impl DesktopHostState {
         let app_data_root = app_data_root.into();
         let workspace_base_path = workspace_base_path.into();
         AppPaths::new(&workspace_base_path).ensure_all().await?;
-        let event_hub = Arc::new(TauriRunEventHub::new());
-        let event_sink: BoxedRunEventSink = event_hub.clone();
-        #[cfg(feature = "aigc")]
-        let workspace = WorkspaceHost::try_with_app_data_root_and_event_sink(
-            WorkspaceScope::new(WORKSPACE_SCOPE),
-            &workspace_base_path,
-            &app_data_root,
-            event_sink,
-        )
-        .await?;
+        let event_bus = EventBus::new();
+        let event_bridge = TauriEventBridge::new();
 
-        #[cfg(not(feature = "aigc"))]
-        let workspace = WorkspaceHost::try_with_defaults_and_event_sink(
-            WorkspaceScope::new(WORKSPACE_SCOPE),
-            &workspace_base_path,
-            event_sink,
-        )
-        .await?;
-
-        let document_event_hub = Arc::new(TauriDocumentEventHub::new());
-        let mut document_events = workspace.document_events().subscribe();
-        let event_forwarder = Arc::clone(&document_event_hub);
+        let mut event_rx = event_bus.subscribe();
+        let bridge_forwarder = event_bridge.clone();
         tokio::spawn(async move {
             loop {
-                match document_events.recv().await {
-                    Ok(event) => event_forwarder.send(event),
+                match event_rx.recv().await {
+                    Ok(event) => bridge_forwarder.broadcast(&event),
                     Err(tokio::sync::broadcast::error::RecvError::Lagged(_)) => continue,
                     Err(tokio::sync::broadcast::error::RecvError::Closed) => break,
                 }
@@ -112,17 +86,29 @@ impl DesktopHostState {
         });
 
         #[cfg(feature = "aigc")]
-        let download_event_hub = Arc::new(TauriDownloadEventHub::new());
+        let workspace = WorkspaceHost::try_with_app_data_root_and_event_bus(
+            WorkspaceScope::new(WORKSPACE_SCOPE),
+            &workspace_base_path,
+            &app_data_root,
+            event_bus.clone(),
+        )
+        .await?;
+
+        #[cfg(not(feature = "aigc"))]
+        let workspace = WorkspaceHost::try_with_event_bus(
+            WorkspaceScope::new(WORKSPACE_SCOPE),
+            &workspace_base_path,
+            event_bus.clone(),
+        )
+        .await?;
+
         #[cfg(feature = "aigc")]
         let worker_management = Arc::new(WorkerManagementService::offline(&app_data_root)?);
 
         Ok(Self {
             app_host: RwLock::new(AppHost::new(workspace)),
-            event_hub,
-            document_event_hub,
+            event_bridge,
             active_project: RwLock::new(ProjectId::new("default")),
-            #[cfg(feature = "aigc")]
-            download_event_hub,
             #[cfg(feature = "aigc")]
             worker_management,
         })
@@ -148,11 +134,8 @@ impl DesktopHostState {
         self.active_project.read().expect(APP_HOST_LOCK).clone()
     }
 
-    pub fn subscribe_document_events(
-        &self,
-        channel: Channel<reimagine_app_host::DocumentChangedEvent>,
-    ) {
-        self.document_event_hub.subscribe(channel);
+    pub fn subscribe_events(&self, channel: Channel<Event>) {
+        self.event_bridge.subscribe(channel);
     }
 
     pub async fn list_projects(&self) -> Result<Vec<ProjectDto>, AppHostError> {
@@ -386,9 +369,8 @@ impl DesktopHostState {
     pub async fn run_workflow(
         &self,
         workflow_value: serde_json::Value,
-        channel: Channel<RunEventPayload>,
     ) -> Result<RunWorkflowResponse, AppHostError> {
-        self.run_workflow_for_project("default", workflow_value, channel)
+        self.run_workflow_for_project("default", workflow_value)
             .await
     }
 
@@ -396,7 +378,6 @@ impl DesktopHostState {
         &self,
         project_id: &str,
         workflow_value: serde_json::Value,
-        channel: Channel<RunEventPayload>,
     ) -> Result<RunWorkflowResponse, AppHostError> {
         use reimagine_app_host::RunWorkflowRequest;
 
@@ -437,12 +418,6 @@ impl DesktopHostState {
                 diagnostics,
             } => {
                 let run_id = handle.run_id().clone();
-
-                // 4. Subscribe the channel for live events
-                self.event_hub.subscribe(&run_id, channel);
-
-                // 5. Replay any events already emitted before we subscribed.
-                self.event_hub.replay(&run_id);
 
                 Ok(RunWorkflowResponse::Started {
                     run_id,
@@ -754,6 +729,7 @@ impl DesktopHostState {
     #[allow(clippy::too_many_arguments)]
     pub async fn download_huggingface_model(
         &self,
+        download_id: String,
         repo_id: String,
         revision: Option<String>,
         allow_patterns: Option<Vec<String>>,
@@ -761,23 +737,11 @@ impl DesktopHostState {
         overwrite: Option<String>,
         auto_detect: Option<bool>,
         from_catalog: Option<bool>,
-        channel: Channel<reimagine_app_host::dto::DownloadEventPayload>,
     ) -> Result<reimagine_app_host::dto::ModelDownloadOutput, AppHostError> {
         use reimagine_model_acquisition::{
             AcquireProvider, AllowPatterns, ModelAcquisitionRequest, OverwritePolicy, RepoId,
             Revision, TargetRelativeDir,
         };
-
-        let download_id = format!(
-            "dl-{}",
-            std::time::SystemTime::now()
-                .duration_since(std::time::UNIX_EPOCH)
-                .unwrap_or_default()
-                .as_nanos()
-        );
-
-        // Subscribe the channel for progress events.
-        self.download_event_hub.subscribe(&download_id, channel);
 
         let repo_id = RepoId::new(&repo_id).ok_or_else(|| AppHostError::Io {
             path: std::path::PathBuf::new(),
@@ -820,41 +784,27 @@ impl DesktopHostState {
             let app_host = self.app_host.read().expect(APP_HOST_LOCK);
             Arc::clone(app_host.workspace().services().model_acquisition_service())
         };
-        let progress_sink = self.download_event_hub.sink_for(&download_id);
 
-        // Notify started with catalog metadata when from_catalog.
-        if use_smart_download {
-            if let Ok(card) = {
-                let workspace = {
-                    let app_host = self.app_host.read().expect(APP_HOST_LOCK);
-                    Arc::clone(app_host.workspace())
-                };
-                workspace
-                    .model_service()
-                    .model_card(request.repo_id.as_str())
-                    .await
-            } {
-                let model_name = card.entry.id.clone();
-                let detected_format = format!("{:?}", card.detected_format);
-                let estimated_size = card.estimated_download_size;
-                progress_sink.started(request.repo_id.as_str(), request.revision.as_str());
-                // Enrich the started event with catalog metadata via a custom event.
-                self.download_event_hub.send_enriched_started(
-                    &download_id,
-                    request.repo_id.as_str(),
-                    request.revision.as_str(),
-                    Some(model_name),
-                    Some(detected_format),
-                    Some(estimated_size),
-                );
-            } else {
-                progress_sink.started(request.repo_id.as_str(), request.revision.as_str());
-            }
+        // The catalog card, when available, gives the expected size before
+        // the download reports one.
+        let estimated_bytes = if use_smart_download {
+            let workspace = {
+                let app_host = self.app_host.read().expect(APP_HOST_LOCK);
+                Arc::clone(app_host.workspace())
+            };
+            workspace
+                .model_service()
+                .model_card(request.repo_id.as_str())
+                .await
+                .ok()
+                .map(|card| card.estimated_download_size)
         } else {
-            progress_sink.started(request.repo_id.as_str(), request.revision.as_str());
-        }
+            None
+        };
 
-        let report = acq.acquire(request, Some(progress_sink)).await?;
+        let report = acq
+            .acquire_with_progress_events(download_id, request, estimated_bytes)
+            .await?;
 
         Ok(reimagine_app_host::dto::ModelDownloadOutput::from(report))
     }

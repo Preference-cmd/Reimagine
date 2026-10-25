@@ -154,7 +154,7 @@ async fn board_apply_persists_emits_changed_and_rejects_stale_versions() {
         .await
         .expect("project creates");
 
-    let mut events = host.document_events().subscribe();
+    let mut events = host.event_bus().subscribe();
     let project_id = ProjectId::new("proj-board");
 
     let result = host
@@ -172,10 +172,20 @@ async fn board_apply_persists_emits_changed_and_rejects_stale_versions() {
         .await
         .expect("board.changed arrives")
         .expect("event channel open");
-    assert_eq!(event.kind, "board.changed");
-    assert_eq!(event.project_id, "proj-board");
-    assert_eq!(event.document_id, "board-proj-board");
-    assert_eq!(event.version, 1);
+    match event {
+        reimagine_core::event::Event::Document {
+            kind,
+            project_id,
+            document_id,
+            version,
+        } => {
+            assert_eq!(kind, "board.changed");
+            assert_eq!(project_id, "proj-board");
+            assert_eq!(document_id, "board-proj-board");
+            assert_eq!(version, 1);
+        }
+        other => panic!("expected Event::Document, got: {other:?}"),
+    }
     assert!(
         matches!(
             events.try_recv(),
@@ -223,9 +233,19 @@ async fn board_apply_persists_emits_changed_and_rejects_stale_versions() {
         .await
         .expect("undo event arrives")
         .expect("event channel open");
-    assert_eq!(undo_event.kind, "board.changed");
-    assert_eq!(undo_event.document_id, "board-proj-board");
-    assert_eq!(undo_event.version, 2);
+    match undo_event {
+        reimagine_core::event::Event::Document {
+            kind,
+            document_id,
+            version,
+            ..
+        } => {
+            assert_eq!(kind, "board.changed");
+            assert_eq!(document_id, "board-proj-board");
+            assert_eq!(version, 2);
+        }
+        other => panic!("expected Event::Document, got: {other:?}"),
+    }
     assert!(
         matches!(
             events.try_recv(),
@@ -246,9 +266,19 @@ async fn board_apply_persists_emits_changed_and_rejects_stale_versions() {
         .await
         .expect("redo event arrives")
         .expect("event channel open");
-    assert_eq!(redo_event.kind, "board.changed");
-    assert_eq!(redo_event.document_id, "board-proj-board");
-    assert_eq!(redo_event.version, 3);
+    match redo_event {
+        reimagine_core::event::Event::Document {
+            kind,
+            document_id,
+            version,
+            ..
+        } => {
+            assert_eq!(kind, "board.changed");
+            assert_eq!(document_id, "board-proj-board");
+            assert_eq!(version, 3);
+        }
+        other => panic!("expected Event::Document, got: {other:?}"),
+    }
     assert!(
         matches!(
             events.try_recv(),
@@ -284,7 +314,7 @@ async fn workflow_noop_does_not_emit_changed_event() {
         "workflow-event",
         reimagine_core::model::DocumentVersion::new(0),
     ));
-    let mut events = host.document_events().subscribe();
+    let mut events = host.event_bus().subscribe();
     let batch = reimagine_core::command::CommandBatch::new(
         CommandBatchId::new("workflow-event-batch"),
         reimagine_core::command::OperationContext::new(

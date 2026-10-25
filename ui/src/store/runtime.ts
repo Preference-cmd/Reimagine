@@ -1,6 +1,6 @@
 import { create } from "zustand";
-import type { RunEventPayload } from "@/ipc/schemas";
-import { runWorkflow as ipcRunWorkflow, cancelRun as ipcCancelRun } from "@/ipc";
+import type { RunEvent } from "@/ipc/schemas";
+import { runWorkflow as ipcRunWorkflow, cancelRun as ipcCancelRun, subscribeEvents } from "@/ipc";
 import { useArtifactStore } from "./artifacts";
 import { useProjectStore } from "./project";
 
@@ -26,7 +26,13 @@ type RuntimeState = {
   startRun: (workflowJson?: unknown) => Promise<void>;
   cancelRun: () => Promise<void>;
   reset: () => void;
+  /** Feed a run event from the event bus. */
+  handleEvent: (event: RunEvent) => void;
 };
+
+/** Run events that arrived while `runWorkflow` had not yet returned the run
+    id. The run's first events can beat the response, so they wait here. */
+let pendingEvents: RunEvent[] = [];
 
 export const useRuntimeStore = create<RuntimeState>()((set, get) => ({
   phase: "idle",
@@ -39,10 +45,38 @@ export const useRuntimeStore = create<RuntimeState>()((set, get) => ({
   elapsedMs: 0,
   diagnostics: [],
 
+  handleEvent: (event: RunEvent) => {
+    const { phase, runId } = get();
+    if (phase === "starting") {
+      pendingEvents.push(event);
+      return;
+    }
+    if (event.runId !== runId) return;
+
+    // F5-4: artifact/run lifecycle events drive the inline preview cache.
+    useArtifactStore.getState().handleEvent(event);
+
+    const next = eventKindToPhase(event.kind);
+    set((s) => ({ currentNode: event.nodeId ?? s.currentNode, phase: next }));
+    // Terminal states stop the clock — no more elapsedMs/progress ticks
+    // after the run finishes.
+    if (isTerminalPhase(next)) {
+      stopProgressTimer();
+    }
+  },
+
   startRun: async (workflowJson?: unknown) => {
     // Defensive: a previous run's timer must never outlive a new run.
     stopProgressTimer();
-    set({ phase: "starting", diagnostics: [], progress: 0, elapsedMs: 0 });
+    pendingEvents = [];
+    set({
+      phase: "starting",
+      runId: null,
+      currentNode: null,
+      diagnostics: [],
+      progress: 0,
+      elapsedMs: 0,
+    });
 
     const startedAt = Date.now();
     activeProgressTimer = setInterval(() => {
@@ -52,29 +86,13 @@ export const useRuntimeStore = create<RuntimeState>()((set, get) => ({
       }));
     }, 500);
 
-    const handleEvent = (event: RunEventPayload) => {
-      // F5-4: artifact/run lifecycle events drive the inline preview cache.
-      useArtifactStore.getState().handleEvent(event);
-
-      const phase = eventKindToPhase(event.kind);
-      set((s) => ({
-        runId: event.runId,
-        currentNode: event.nodeId ?? s.currentNode,
-        phase,
-      }));
-      // Terminal states stop the clock — no more elapsedMs/progress ticks
-      // after the run finishes.
-      if (isTerminalPhase(phase)) {
-        stopProgressTimer();
-      }
-    };
-
     try {
       const response = await ipcRunWorkflow(
         useProjectStore.getState().activeProjectId,
         workflowJson as any,
-        handleEvent,
       );
+      const early = pendingEvents;
+      pendingEvents = [];
 
       if (response.outcome === "started") {
         set({
@@ -87,6 +105,10 @@ export const useRuntimeStore = create<RuntimeState>()((set, get) => ({
             source: d.source,
           })),
         });
+        const { handleEvent } = get();
+        for (const event of early) {
+          if (event.runId === response.runId) handleEvent(event);
+        }
       } else {
         set({
           phase: "failed",
@@ -100,6 +122,7 @@ export const useRuntimeStore = create<RuntimeState>()((set, get) => ({
         stopProgressTimer();
       }
     } catch (err) {
+      pendingEvents = [];
       set({
         phase: "failed",
         diagnostics: [
@@ -179,3 +202,7 @@ function stopProgressTimer() {
     activeProgressTimer = null;
   }
 }
+
+subscribeEvents((event) => {
+  if (event.type === "run") useRuntimeStore.getState().handleEvent(event);
+});

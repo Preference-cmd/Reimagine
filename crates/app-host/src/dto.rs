@@ -35,13 +35,12 @@ pub use aigc::dto::models;
 #[cfg(feature = "aigc")]
 pub use aigc::dto::{
     BackendInstanceProfileDto, BackendProfileDto, ComputeProfileDto, DTypeProfileDto,
-    DeviceProfileDto, DownloadEventPayload, FileEntryDto, MemoryProfileDto,
-    ModelAcquireConversionReport, ModelAcquireDownloadReport, ModelAcquireInput,
-    ModelAcquireOutput, ModelCardDto, ModelCatalogEntryDto, ModelComponentDto,
-    ModelConvertConversionReport, ModelConvertInput, ModelConvertOutput, ModelDetailDto,
-    ModelDownloadInput, ModelDownloadOutput, ModelFilters, ModelInfoDto, ModelListEntry,
-    ModelListOutput, ModelRemoveOutput, TopologyWorkerDto, format_status,
-    topology_workers_from_pool,
+    DeviceProfileDto, FileEntryDto, MemoryProfileDto, ModelAcquireConversionReport,
+    ModelAcquireDownloadReport, ModelAcquireInput, ModelAcquireOutput, ModelCardDto,
+    ModelCatalogEntryDto, ModelComponentDto, ModelConvertConversionReport, ModelConvertInput,
+    ModelConvertOutput, ModelDetailDto, ModelDownloadInput, ModelDownloadOutput, ModelFilters,
+    ModelInfoDto, ModelListEntry, ModelListOutput, ModelRemoveOutput, TopologyWorkerDto,
+    format_status, topology_workers_from_pool,
 };
 pub use artifacts::{ArtifactDto, ArtifactMetadataDto};
 pub use boards::{BoardCommandResultDto, BoardSnapshotDto};
@@ -49,10 +48,7 @@ pub use health::{HealthDto, HealthResponse};
 pub use nodes::{NodeCatalogResponse, NodeDefDto, ParamSpecDto, SocketSpecDto};
 pub use projects::{ProjectDto, ProjectMetadataInputDto};
 pub use reimagine_core::command::{CommandBatch, CommandResult, CommandStatus};
-pub use runs::{
-    DiagnosticDto, NodeStateDto, RunDto, RunEventDto, RunEventsResponse, RunSnapshotDto,
-    RunSummaryDto,
-};
+pub use runs::{DiagnosticDto, NodeStateDto, RunDto, RunSnapshotDto, RunSummaryDto};
 pub use workflows::{
     OpenWorkflowRequest, OpenWorkflowResponse, RunTargetDto, RunWorkflowRequestDto,
     RunWorkflowResponse, TargetSelectionDto, WorkflowSource,

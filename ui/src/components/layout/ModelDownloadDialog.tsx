@@ -4,7 +4,12 @@ import { Dialog } from "radix-ui";
 import { useQueryClient } from "@tanstack/react-query";
 import { Button } from "@/components/ui/button";
 import { useModelSearch, useModelCard, useDownloadModel, queryKeys } from "@/hooks/queries";
-import type { DownloadHuggingfaceModelArgs, DownloadEventPayload } from "@/ipc/schemas";
+import { subscribeEvents } from "@/ipc";
+import {
+  DownloadProgressSchema,
+  type DownloadHuggingfaceModelArgs,
+  type DownloadProgress as DownloadProgressPayload,
+} from "@/ipc/schemas";
 
 const SEARCH_DELAY_MS = 300;
 
@@ -118,27 +123,12 @@ export function ModelDownloadDialog({
     setPhase("card");
   }
 
-  function applyDownloadEvent(event: DownloadEventPayload) {
-    setProgress((prev) => {
-      if (event.status === "started") {
-        return { bytes: 0, totalBytes: event.totalBytes ?? null, message: null };
-      }
-      if (event.status === "in_progress") {
-        return {
-          ...prev,
-          bytes: prev.bytes + event.bytesDownloaded,
-          message: event.message ?? prev.message,
-        };
-      }
-      if (event.status === "completed") {
-        return {
-          bytes: event.totalBytes ?? prev.bytes,
-          totalBytes: event.totalBytes ?? prev.totalBytes,
-          message: null,
-        };
-      }
-      return prev;
-    });
+  function applyDownloadEvent(kind: string, event: DownloadProgressPayload) {
+    setProgress((prev) => ({
+      bytes: event.bytesDownloaded,
+      totalBytes: event.totalBytes ?? prev.totalBytes,
+      message: kind === "aigc.download.progress" ? (event.message ?? prev.message) : null,
+    }));
   }
 
   async function startDownload() {
@@ -146,17 +136,23 @@ export function ModelDownloadDialog({
     setDownloadError(null);
     setProgress({ bytes: 0, totalBytes: null, message: null });
     setPhase("downloading");
+    const downloadId = `dl_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
     const args: DownloadHuggingfaceModelArgs = {
+      downloadId,
       repoId: selectedRepoId,
       revision: "main",
       targetRelativeDir: selectedRepoId,
       fromCatalog: true,
     };
+    const unsubscribe = subscribeEvents((event) => {
+      if (event.type !== "module" || !event.kind.startsWith("aigc.download.")) return;
+      const payload = DownloadProgressSchema.safeParse(event.payload);
+      if (payload.success && payload.data.downloadId === downloadId) {
+        applyDownloadEvent(event.kind, payload.data);
+      }
+    });
     try {
-      const result = await downloadMutation.mutateAsync({
-        args,
-        onEvent: (event) => applyDownloadEvent(event),
-      });
+      const result = await downloadMutation.mutateAsync(args);
       if (!alive.current) return;
       setOutput(result);
       setPhase("done");
@@ -167,6 +163,8 @@ export function ModelDownloadDialog({
       if (!alive.current) return;
       setDownloadError(errorMessage(error));
       setPhase("card");
+    } finally {
+      unsubscribe();
     }
   }
 

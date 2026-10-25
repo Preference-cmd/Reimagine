@@ -486,7 +486,7 @@ async fn project_workflow_apply_persists_and_emits_changed_event() {
         .expect("project creates");
     let service = host.workflow_service_for_project(&project_id);
     let workflow_id = service.register_workflow(Workflow::new("wf-event", DocumentVersion::new(0)));
-    let mut events = host.document_events().subscribe();
+    let mut events = host.event_bus().subscribe();
     let result = service
         .apply_commands(
             &workflow_id,
@@ -500,10 +500,20 @@ async fn project_workflow_apply_persists_and_emits_changed_event() {
         .await
         .expect("workflow event arrives")
         .expect("event channel remains open");
-    assert_eq!(event.kind, "workflow.changed");
-    assert_eq!(event.project_id, "project-a");
-    assert_eq!(event.document_id, "wf-event");
-    assert_eq!(event.version, 1);
+    match event {
+        reimagine_core::event::Event::Document {
+            kind,
+            project_id,
+            document_id,
+            version,
+        } => {
+            assert_eq!(kind, "workflow.changed");
+            assert_eq!(project_id, "project-a");
+            assert_eq!(document_id, "wf-event");
+            assert_eq!(version, 1);
+        }
+        other => panic!("expected Event::Document, got: {other:?}"),
+    }
     assert!(
         base.join("projects/project-a/workflows/wf-event.json")
             .is_file()

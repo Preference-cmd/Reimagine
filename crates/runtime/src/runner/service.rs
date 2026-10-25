@@ -3,7 +3,7 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::Duration;
 
 use reimagine_core::diagnostic::{CorrelationId, Diagnostic};
-use reimagine_core::event::{RunEvent, RunEventId, RunEventKind};
+use reimagine_core::event::{Event, EventBus, RunEvent, RunEventId, RunEventKind};
 use reimagine_core::model::{ArtifactId, DocumentVersion, NodeId, RunId, WorkflowId};
 use reimagine_core::readiness::ExecutionPlan;
 use reimagine_inference::{
@@ -14,7 +14,6 @@ use reimagine_inference::{
 use super::orchestrator::Runner;
 use crate::clock::{Clock, SystemClock};
 use crate::error::RuntimeError;
-use crate::events::RunEventSink;
 use crate::handle::RunHandle;
 use crate::resources::NoopBackendInstanceRuntimeHooks;
 use crate::run_inputs::RunInputs;
@@ -115,9 +114,6 @@ pub enum RuntimeServiceError {
         run_id: String,
         type_id: String,
     },
-    EventSink {
-        message: String,
-    },
     InvalidStageConcurrency {
         value: usize,
     },
@@ -141,7 +137,6 @@ impl std::fmt::Display for RuntimeServiceError {
                     "no executor registered for node type {type_id} in run {run_id}"
                 )
             }
-            Self::EventSink { message } => write!(f, "run event sink failed: {message}"),
             Self::InvalidStageConcurrency { value } => {
                 write!(
                     f,
@@ -176,7 +171,6 @@ impl From<RuntimeError> for RuntimeServiceError {
             RuntimeError::MissingExecutor { run_id, type_id } => {
                 Self::MissingExecutor { run_id, type_id }
             }
-            RuntimeError::EventSink { message } => Self::EventSink { message },
         }
     }
 }
@@ -186,7 +180,7 @@ pub struct RuntimeService {
     registry: NodeExecutorRegistry,
     backend: Arc<dyn BackendInstanceRuntimeHooks>,
     hint_sink: Option<Arc<dyn ResourceHintSink>>,
-    sink: Arc<dyn RunEventSink>,
+    event_bus: EventBus,
     clock: Arc<dyn Clock>,
     next_run_seq: Arc<AtomicU64>,
     next_event_seq: Arc<AtomicU64>,
@@ -215,7 +209,7 @@ impl RuntimeService {
     pub fn new(
         registry: NodeExecutorRegistry,
         backend: Arc<dyn BackendInstanceRuntimeHooks>,
-        sink: Arc<dyn RunEventSink>,
+        event_bus: EventBus,
         clock: Arc<dyn Clock>,
     ) -> Self {
         Self {
@@ -223,7 +217,7 @@ impl RuntimeService {
             registry,
             backend,
             hint_sink: None,
-            sink,
+            event_bus,
             clock,
             next_run_seq: Arc::new(AtomicU64::new(0)),
             next_event_seq: Arc::new(AtomicU64::new(0)),
@@ -242,11 +236,11 @@ impl RuntimeService {
         self
     }
 
-    pub fn with_defaults(registry: NodeExecutorRegistry, sink: Arc<dyn RunEventSink>) -> Self {
+    pub fn with_defaults(registry: NodeExecutorRegistry, event_bus: EventBus) -> Self {
         Self::new(
             registry,
             Arc::new(NoopBackendInstanceRuntimeHooks::default()),
-            sink,
+            event_bus,
             Arc::new(SystemClock),
         )
     }
@@ -353,7 +347,7 @@ impl RuntimeService {
             registry: self.registry.clone_for_runner(),
             backend: self.backend.clone(),
             hint_sink: self.hint_sink.clone(),
-            sink: self.sink.clone(),
+            event_bus: self.event_bus.clone(),
             clock: self.clock.clone(),
             next_event_seq: self.next_event_seq.clone(),
         };
@@ -410,21 +404,6 @@ impl RuntimeService {
         if let Some(cid) = lifecycle.correlation_id {
             event = event.with_correlation_id(cid);
         }
-        match std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| self.sink.emit(event))) {
-            Ok(Ok(())) => {}
-            Ok(Err(error)) => {
-                tracing::warn!(
-                    target: "reimagine_runtime",
-                    error = %error,
-                    "run event sink failed; continuing without failing the run"
-                );
-            }
-            Err(_) => {
-                tracing::warn!(
-                    target: "reimagine_runtime",
-                    "run event sink panicked; continuing without failing the run"
-                );
-            }
-        }
+        self.event_bus.publish(Event::Run(event));
     }
 }

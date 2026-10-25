@@ -136,13 +136,56 @@ export const BoardCommandResultSchema = z.object({
 });
 export type BoardCommandResultDto = z.infer<typeof BoardCommandResultSchema>;
 
-export const DocumentChangedEventSchema = z.object({
-  kind: z.enum(["board.changed", "workflow.changed"]),
+/* ───── Events from `subscribe_events` ───── */
+
+export const DocumentEventSchema = z.object({
+  type: z.literal("document"),
+  kind: z.string(),
   projectId: z.string(),
   documentId: z.string(),
   version: z.number(),
 });
-export type DocumentChangedEvent = z.infer<typeof DocumentChangedEventSchema>;
+export type DocumentEvent = z.infer<typeof DocumentEventSchema>;
+
+export const RunEventSchema = z.object({
+  type: z.literal("run"),
+  id: z.string(),
+  runId: z.string(),
+  workflowId: z.string(),
+  workflowVersion: z.number(),
+  kind: z.string(),
+  nodeId: z.string().nullable(),
+  artifact: z.string().nullable(),
+  diagnostics: z.array(z.unknown()),
+  progress: z.unknown().nullable(),
+  createdAt: z.string(),
+  correlationId: z.string().nullable(),
+});
+export type RunEvent = z.infer<typeof RunEventSchema>;
+
+export const ModuleEventSchema = z.object({
+  type: z.literal("module"),
+  kind: z.string(),
+  payload: z.unknown(),
+});
+export type ModuleEvent = z.infer<typeof ModuleEventSchema>;
+
+export const EventSchema = z.discriminatedUnion("type", [
+  DocumentEventSchema,
+  RunEventSchema,
+  ModuleEventSchema,
+]);
+export type Event = z.infer<typeof EventSchema>;
+
+/** Payload of the `aigc.download.*` module events. */
+export const DownloadProgressSchema = z.object({
+  downloadId: z.string(),
+  /** Bytes of the files finished so far. */
+  bytesDownloaded: z.number(),
+  totalBytes: z.number().nullable(),
+  message: z.string().nullable(),
+});
+export type DownloadProgress = z.infer<typeof DownloadProgressSchema>;
 
 /* ───── Misc ───── */
 
@@ -160,18 +203,6 @@ export const ModelInfoSchema = z.object({
   sizeBytes: z.number().nullable(),
 });
 export type ModelInfo = z.infer<typeof ModelInfoSchema>;
-
-/* ───── Run events from Rust IPC ───── */
-
-export const RunEventPayloadSchema = z.object({
-  id: z.string(),
-  runId: z.string(),
-  kind: z.string(),
-  nodeId: z.string().nullable(),
-  artifactId: z.string().nullable(),
-  createdAt: z.string(),
-});
-export type RunEventPayload = z.infer<typeof RunEventPayloadSchema>;
 
 export const RunSnapshotDtoSchema = z.object({
   runId: z.string(),
@@ -273,21 +304,8 @@ export const ModelCardSchema = z.object({
 });
 export type ModelCard = z.infer<typeof ModelCardSchema>;
 
-export const DownloadEventPayloadSchema = z.object({
-  id: z.string(),
-  status: z.string(),
-  repoId: z.string(),
-  revision: z.string(),
-  bytesDownloaded: z.number(),
-  totalBytes: z.number().nullable().optional(),
-  message: z.string().nullable().optional(),
-  modelName: z.string().optional(),
-  detectedFormat: z.string().optional(),
-  estimatedSize: z.number().optional(),
-});
-export type DownloadEventPayload = z.infer<typeof DownloadEventPayloadSchema>;
-
 export const DownloadHuggingfaceModelArgsSchema = z.object({
+  downloadId: z.string(),
   repoId: z.string(),
   revision: z.string().optional(),
   allowPatterns: z.array(z.string()).optional(),

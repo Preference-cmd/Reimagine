@@ -14,7 +14,7 @@ use reimagine_core::diagnostic::{
     Diagnostic, DiagnosticCode, DiagnosticSeverity, DiagnosticSourceName, DiagnosticTarget,
     DiagnosticTargetDomain,
 };
-use reimagine_core::event::{RunEvent, RunEventKind, Timestamp};
+use reimagine_core::event::{Event, EventBus, RunEvent, RunEventKind, Timestamp};
 use reimagine_core::model::{
     ArtifactRef, DiagnosticId, DocumentVersion, NodeId, NodeTypeId, ParamValue, SlotId, WorkflowId,
     WorkflowInputId,
@@ -23,11 +23,45 @@ use reimagine_core::readiness::{
     ExecutionEdge, ExecutionInputBinding, ExecutionInputSource, ExecutionNode, ExecutionPlan,
     ExecutionStage, RunTarget, RunTargetSelection,
 };
+#[derive(Clone)]
+struct TestEventCollector {
+    bus: EventBus,
+    rx: Arc<std::sync::Mutex<tokio::sync::broadcast::Receiver<Event>>>,
+    collected: Arc<std::sync::Mutex<Vec<RunEvent>>>,
+}
+
+impl TestEventCollector {
+    fn new() -> Self {
+        let bus = EventBus::new();
+        let rx = Arc::new(std::sync::Mutex::new(bus.subscribe()));
+        Self {
+            bus,
+            rx,
+            collected: Arc::new(std::sync::Mutex::new(Vec::new())),
+        }
+    }
+
+    fn bus(&self) -> EventBus {
+        self.bus.clone()
+    }
+
+    fn events(&self) -> Vec<RunEvent> {
+        let mut rx = self.rx.lock().unwrap();
+        let mut collected = self.collected.lock().unwrap();
+        while let Ok(event) = rx.try_recv() {
+            if let Event::Run(run_event) = event {
+                collected.push(run_event);
+            }
+        }
+        collected.clone()
+    }
+}
+
 use reimagine_runtime::{
     CancelToken, Clock, DEFAULT_NODE_ESTIMATED_VRAM_BYTES, ExecutionValue, ExecutionValueRetention,
     MemoryBudget, NodeExecutionContext, NodeExecutor, NodeExecutorError, NodeExecutorRegistry,
-    NoopBackendInstanceRuntimeHooks, RunEventSink, RunHandle, RunInputs, RuntimeError,
-    RuntimeOptions, RuntimeService, RuntimeServiceError, StageId, VecRunEventSink,
+    NoopBackendInstanceRuntimeHooks, RunHandle, RunInputs, RuntimeOptions, RuntimeService,
+    RuntimeServiceError, StageId,
 };
 
 /// A clock that always returns the same string timestamp.
@@ -431,11 +465,11 @@ fn runtime_rejects_zero_stage_concurrency() {
                 }),
             )
             .expect("register executor");
-        let sink = Arc::new(VecRunEventSink::new());
+        let sink = TestEventCollector::new();
         let service = RuntimeService::new(
             registry,
             Arc::new(NoopBackendInstanceRuntimeHooks::default()),
-            sink,
+            sink.bus(),
             Arc::new(FixedClock),
         );
 
@@ -480,7 +514,7 @@ fn same_stage_nodes_can_overlap_when_concurrency_is_enabled() {
         let service = RuntimeService::new(
             registry,
             Arc::new(NoopBackendInstanceRuntimeHooks::default()),
-            Arc::new(VecRunEventSink::new()),
+            EventBus::new(),
             Arc::new(FixedClock),
         );
 
@@ -538,7 +572,7 @@ fn next_stage_waits_for_all_inflight_same_stage_nodes() {
         let service = RuntimeService::new(
             registry,
             Arc::new(NoopBackendInstanceRuntimeHooks::default()),
-            Arc::new(VecRunEventSink::new()),
+            EventBus::new(),
             Arc::new(FixedClock),
         );
 
@@ -629,7 +663,7 @@ fn stage_failure_stops_further_same_stage_admission() {
         let service = RuntimeService::new(
             registry,
             Arc::new(NoopBackendInstanceRuntimeHooks::default()),
-            Arc::new(VecRunEventSink::new()),
+            EventBus::new(),
             Arc::new(FixedClock),
         );
 
@@ -736,11 +770,11 @@ fn late_success_output_is_discarded_after_sibling_failure() {
                 }),
             )
             .expect("register inspect executor");
-        let sink = Arc::new(VecRunEventSink::new());
+        let sink = TestEventCollector::new();
         let service = RuntimeService::new(
             registry,
             Arc::new(NoopBackendInstanceRuntimeHooks::default()),
-            sink.clone(),
+            sink.bus(),
             Arc::new(FixedClock),
         );
 
@@ -844,11 +878,11 @@ fn runtime_run_starts_and_completes_a_mock_plan() {
                 }),
             )
             .expect("register executor");
-        let sink = Arc::new(VecRunEventSink::new());
+        let sink = TestEventCollector::new();
         let service = RuntimeService::new(
             registry,
             Arc::new(NoopBackendInstanceRuntimeHooks::default()),
-            sink.clone(),
+            sink.bus(),
             Arc::new(FixedClock),
         );
 
@@ -895,11 +929,11 @@ fn runtime_observations_include_host_neutral_artifact_reference() {
                 }),
             )
             .expect("register executor");
-        let sink = Arc::new(VecRunEventSink::new());
+        let sink = TestEventCollector::new();
         let service = RuntimeService::new(
             registry,
             Arc::new(NoopBackendInstanceRuntimeHooks::default()),
-            sink,
+            sink.bus(),
             Arc::new(FixedClock),
         );
 
@@ -929,7 +963,7 @@ async fn runtime_service_reports_backend_instance_snapshots() {
     let service = RuntimeService::new(
         registry,
         Arc::new(NoopBackendInstanceRuntimeHooks::default()),
-        Arc::new(VecRunEventSink::new()),
+        EventBus::new(),
         Arc::new(FixedClock),
     );
 
@@ -961,12 +995,7 @@ fn runtime_preserves_backend_lifecycle_report_diagnostics() {
                 .with_begin_diagnostic(backend_lifecycle_diagnostic("begin"))
                 .with_cleanup_diagnostic(backend_lifecycle_diagnostic("cleanup")),
         );
-        let service = RuntimeService::new(
-            registry,
-            backend,
-            Arc::new(VecRunEventSink::new()),
-            Arc::new(FixedClock),
-        );
+        let service = RuntimeService::new(registry, backend, EventBus::new(), Arc::new(FixedClock));
 
         let plan = Arc::new(one_node_plan("mock.echo", "node_a"));
         let handle = service
@@ -1054,11 +1083,11 @@ fn runtime_stages_execute_in_order() {
                 ExecutionStage::new(2, vec![NodeId::new("c")]),
             ],
         );
-        let sink = Arc::new(VecRunEventSink::new());
+        let sink = TestEventCollector::new();
         let service = RuntimeService::new(
             registry,
             Arc::new(NoopBackendInstanceRuntimeHooks::default()),
-            sink,
+            sink.bus(),
             Arc::new(FixedClock),
         );
         let handle = service
@@ -1126,11 +1155,11 @@ fn shared_upstream_node_runs_only_once() {
                 }),
             )
             .unwrap();
-        let sink = Arc::new(VecRunEventSink::new());
+        let sink = TestEventCollector::new();
         let service = RuntimeService::new(
             registry,
             Arc::new(NoopBackendInstanceRuntimeHooks::default()),
-            sink,
+            sink.bus(),
             Arc::new(FixedClock),
         );
 
@@ -1251,11 +1280,11 @@ fn executor_failure_marks_run_failed_and_skips_downstream() {
                 }),
             )
             .unwrap();
-        let sink = Arc::new(VecRunEventSink::new());
+        let sink = TestEventCollector::new();
         let service = RuntimeService::new(
             registry,
             Arc::new(NoopBackendInstanceRuntimeHooks::default()),
-            sink.clone(),
+            sink.bus(),
             Arc::new(FixedClock),
         );
         let plan = ExecutionPlan::new(
@@ -1377,11 +1406,11 @@ fn cancellation_stops_downstream_and_emits_cancelled_events() {
                 }),
             )
             .unwrap();
-        let sink = Arc::new(VecRunEventSink::new());
+        let sink = TestEventCollector::new();
         let service = RuntimeService::new(
             registry,
             Arc::new(NoopBackendInstanceRuntimeHooks::default()),
-            sink.clone(),
+            sink.bus(),
             Arc::new(FixedClock),
         );
         let plan = ExecutionPlan::new(
@@ -1467,11 +1496,11 @@ fn executor_cancelled_on_last_node_marks_run_cancelled_not_failed() {
                 }),
             )
             .unwrap();
-        let sink = Arc::new(VecRunEventSink::new());
+        let sink = TestEventCollector::new();
         let service = RuntimeService::new(
             registry,
             Arc::new(NoopBackendInstanceRuntimeHooks::default()),
-            sink.clone(),
+            sink.bus(),
             Arc::new(FixedClock),
         );
 
@@ -1511,11 +1540,11 @@ fn cancel_node_mid_run_cancels_only_that_node_and_run_continues() {
                 }),
             )
             .unwrap();
-        let sink = Arc::new(VecRunEventSink::new());
+        let sink = TestEventCollector::new();
         let service = RuntimeService::new(
             registry,
             Arc::new(NoopBackendInstanceRuntimeHooks::default()),
-            sink.clone(),
+            sink.bus(),
             Arc::new(FixedClock),
         );
         let handle = service
@@ -1579,11 +1608,11 @@ fn node_deadline_expiry_fails_node_with_diagnostic_and_run_continues() {
                 }),
             )
             .unwrap();
-        let sink = Arc::new(VecRunEventSink::new());
+        let sink = TestEventCollector::new();
         let service = RuntimeService::new(
             registry,
             Arc::new(NoopBackendInstanceRuntimeHooks::default()),
-            sink.clone(),
+            sink.bus(),
             Arc::new(FixedClock),
         );
         let mut options = RuntimeOptions::default();
@@ -1683,11 +1712,11 @@ fn stuck_executor_is_aborted_after_deadline_and_stage_continues() {
                 }),
             )
             .unwrap();
-        let sink = Arc::new(VecRunEventSink::new());
+        let sink = TestEventCollector::new();
         let service = RuntimeService::new(
             registry,
             Arc::new(NoopBackendInstanceRuntimeHooks::default()),
-            sink.clone(),
+            sink.bus(),
             Arc::new(FixedClock),
         );
 
@@ -1789,11 +1818,11 @@ fn ready_set_path_respects_node_cancellation() {
                 }),
             )
             .unwrap();
-        let sink = Arc::new(VecRunEventSink::new());
+        let sink = TestEventCollector::new();
         let service = RuntimeService::new(
             registry,
             Arc::new(NoopBackendInstanceRuntimeHooks::default()),
-            sink.clone(),
+            sink.bus(),
             Arc::new(FixedClock),
         );
         let mut options = RuntimeOptions::default();
@@ -1889,7 +1918,7 @@ fn workflow_input_bindings_read_from_workflow_input_run_inputs() {
         let service = RuntimeService::new(
             registry,
             Arc::new(NoopBackendInstanceRuntimeHooks::default()),
-            Arc::new(VecRunEventSink::new()),
+            EventBus::new(),
             Arc::new(FixedClock),
         );
         let plan = ExecutionPlan::new(
@@ -1949,7 +1978,7 @@ fn static_param_bindings_read_from_node_param_run_inputs() {
         let service = RuntimeService::new(
             registry,
             Arc::new(NoopBackendInstanceRuntimeHooks::default()),
-            Arc::new(VecRunEventSink::new()),
+            EventBus::new(),
             Arc::new(FixedClock),
         );
         let plan = ExecutionPlan::new(
@@ -2006,11 +2035,12 @@ fn sink_failure_does_not_fail_the_run() {
                 }),
             )
             .unwrap();
-        let sink = Arc::new(FailingSink::default());
+        // EventBus with no receivers never fails the run
+        let bus = EventBus::new();
         let service = RuntimeService::new(
             registry,
             Arc::new(NoopBackendInstanceRuntimeHooks::default()),
-            sink.clone(),
+            bus,
             Arc::new(FixedClock),
         );
         let plan = one_node_plan("mock.echo", "node_a");
@@ -2024,30 +2054,7 @@ fn sink_failure_does_not_fail_the_run() {
         run_to_completion(&service, &handle);
         let summary = service.summary(handle.run_id()).unwrap();
         assert_eq!(summary.state, reimagine_runtime::TaskState::Completed);
-        assert!(sink.failures.load(Ordering::SeqCst) > 0);
     });
-}
-
-#[derive(Debug, Default)]
-struct FailingSink {
-    failures: AtomicUsize,
-}
-
-impl RunEventSink for FailingSink {
-    fn emit(&self, _event: RunEvent) -> Result<(), RuntimeError> {
-        self.failures.fetch_add(1, Ordering::SeqCst);
-        Err(RuntimeError::EventSink {
-            message: "simulated sink failure".to_owned(),
-        })
-    }
-}
-
-#[derive(Debug, Default)]
-struct PanickingSink;
-impl RunEventSink for PanickingSink {
-    fn emit(&self, _event: RunEvent) -> Result<(), RuntimeError> {
-        panic!("simulated sink failure");
-    }
 }
 
 #[test]
@@ -2066,10 +2073,13 @@ fn sink_panic_is_logged_and_does_not_fail_the_run() {
                 }),
             )
             .unwrap();
+        let bus = EventBus::new();
+        let rx = bus.subscribe();
+        drop(rx); // Closed receiver
         let service = RuntimeService::new(
             registry,
             Arc::new(NoopBackendInstanceRuntimeHooks::default()),
-            Arc::new(PanickingSink),
+            bus,
             Arc::new(FixedClock),
         );
         let plan = one_node_plan("mock.echo", "node_a");
@@ -2081,9 +2091,63 @@ fn sink_panic_is_logged_and_does_not_fail_the_run() {
             )
             .unwrap();
         run_to_completion(&service, &handle);
-        // Run must still reach Completed despite every emit() panicking.
         let summary = service.summary(handle.run_id()).unwrap();
         assert_eq!(summary.state, reimagine_runtime::TaskState::Completed);
+    });
+}
+
+#[test]
+fn events_of_one_run_arrive_through_the_bus_in_publish_order() {
+    let rt = test_runtime();
+    rt.block_on(async {
+        let mut registry = NodeExecutorRegistry::default();
+        registry
+            .register(
+                "mock.echo",
+                Arc::new(MockExecutor {
+                    label: "hello".to_owned(),
+                    count: Arc::new(AtomicUsize::new(0)),
+                    delay: Duration::ZERO,
+                    fail_with: None,
+                }),
+            )
+            .unwrap();
+        let bus = EventBus::new();
+        let mut rx = bus.subscribe();
+        let service = RuntimeService::new(
+            registry,
+            Arc::new(NoopBackendInstanceRuntimeHooks::default()),
+            bus,
+            Arc::new(FixedClock),
+        );
+        let plan = one_node_plan("mock.echo", "node_a");
+        let handle = service
+            .run(
+                Arc::new(plan),
+                Default::default(),
+                RuntimeOptions::default(),
+            )
+            .unwrap();
+        run_to_completion(&service, &handle);
+
+        let mut events = Vec::new();
+        while let Ok(event) = rx.try_recv() {
+            if let Event::Run(run_event) = event {
+                events.push(run_event);
+            }
+        }
+        let kinds: Vec<RunEventKind> = events.iter().map(|e| e.kind()).collect();
+        assert_eq!(
+            kinds,
+            vec![
+                RunEventKind::RunQueued,
+                RunEventKind::RunStarted,
+                RunEventKind::NodeQueued,
+                RunEventKind::NodeStarted,
+                RunEventKind::NodeCompleted,
+                RunEventKind::RunCompleted,
+            ]
+        );
     });
 }
 
@@ -2107,7 +2171,7 @@ fn snapshot_reports_running_node_while_executor_is_in_flight() {
         let service = RuntimeService::new(
             registry,
             Arc::new(NoopBackendInstanceRuntimeHooks::default()),
-            Arc::new(VecRunEventSink::new()),
+            EventBus::new(),
             Arc::new(FixedClock),
         );
         let handle = service
@@ -2149,11 +2213,11 @@ fn snapshot_records_terminal_node_states_and_summary_records_terminal_state() {
                 }),
             )
             .unwrap();
-        let sink = Arc::new(VecRunEventSink::new());
+        let sink = TestEventCollector::new();
         let service = RuntimeService::new(
             registry,
             Arc::new(NoopBackendInstanceRuntimeHooks::default()),
-            sink,
+            sink.bus(),
             Arc::new(FixedClock),
         );
         let plan = one_node_plan("mock.echo", "node_a");
@@ -2209,7 +2273,7 @@ fn run_handle_does_not_expose_value_store() {
                 }),
             )
             .unwrap();
-        let service = RuntimeService::with_defaults(registry, Arc::new(VecRunEventSink::new()));
+        let service = RuntimeService::with_defaults(registry, EventBus::new());
         let handle = service
             .run(
                 Arc::new(one_node_plan("mock.echo", "node_a")),
@@ -2240,7 +2304,7 @@ fn unknown_run_id_returns_error() {
             }),
         )
         .unwrap();
-    let service = RuntimeService::with_defaults(registry, Arc::new(VecRunEventSink::new()));
+    let service = RuntimeService::with_defaults(registry, EventBus::new());
     let err = service
         .cancel(&reimagine_core::model::RunId::new("nope"))
         .unwrap_err();
@@ -2250,7 +2314,7 @@ fn unknown_run_id_returns_error() {
 #[test]
 fn empty_plan_is_rejected() {
     let registry = NodeExecutorRegistry::default();
-    let service = RuntimeService::with_defaults(registry, Arc::new(VecRunEventSink::new()));
+    let service = RuntimeService::with_defaults(registry, EventBus::new());
     let plan = ExecutionPlan::new(
         WorkflowId::new("wf"),
         DocumentVersion::new(1),
@@ -2274,7 +2338,7 @@ fn empty_plan_is_rejected() {
 #[test]
 fn missing_executor_is_rejected_up_front() {
     let registry = NodeExecutorRegistry::default();
-    let service = RuntimeService::with_defaults(registry, Arc::new(VecRunEventSink::new()));
+    let service = RuntimeService::with_defaults(registry, EventBus::new());
     let plan = one_node_plan("mock.missing", "node_a");
     let err = service
         .run(
@@ -2343,7 +2407,7 @@ fn same_stage_siblings_are_skipped_after_a_sibling_fails() {
         let service = RuntimeService::new(
             registry,
             Arc::new(NoopBackendInstanceRuntimeHooks::default()),
-            Arc::new(VecRunEventSink::new()),
+            EventBus::new(),
             Arc::new(FixedClock),
         );
         let plan = ExecutionPlan::new(
@@ -2426,11 +2490,11 @@ fn cancellation_emits_cancelled_for_unvisited_future_stage_nodes() {
                 }),
             )
             .unwrap();
-        let sink = Arc::new(VecRunEventSink::new());
+        let sink = TestEventCollector::new();
         let service = RuntimeService::new(
             registry,
             Arc::new(NoopBackendInstanceRuntimeHooks::default()),
-            sink.clone(),
+            sink.bus(),
             Arc::new(FixedClock),
         );
         let plan = ExecutionPlan::new(
@@ -2558,11 +2622,11 @@ fn artifact_visible_in_snapshot_before_run_completes() {
             )
             .expect("register slow executor");
 
-        let sink = Arc::new(VecRunEventSink::new());
+        let sink = TestEventCollector::new();
         let service = RuntimeService::new(
             registry,
             Arc::new(NoopBackendInstanceRuntimeHooks::default()),
-            sink.clone(),
+            sink.bus(),
             Arc::new(FixedClock),
         );
 
@@ -2683,11 +2747,11 @@ fn terminal_summary_includes_all_artifacts_from_multiple_nodes() {
             )
             .unwrap();
 
-        let sink = Arc::new(VecRunEventSink::new());
+        let sink = TestEventCollector::new();
         let service = RuntimeService::new(
             registry,
             Arc::new(NoopBackendInstanceRuntimeHooks::default()),
-            sink.clone(),
+            sink.bus(),
             Arc::new(FixedClock),
         );
 
@@ -2791,11 +2855,11 @@ fn failed_run_preserves_previously_recorded_artifacts() {
             )
             .unwrap();
 
-        let sink = Arc::new(VecRunEventSink::new());
+        let sink = TestEventCollector::new();
         let service = RuntimeService::new(
             registry,
             Arc::new(NoopBackendInstanceRuntimeHooks::default()),
-            sink.clone(),
+            sink.bus(),
             Arc::new(FixedClock),
         );
 
@@ -2885,11 +2949,11 @@ fn cancelled_run_preserves_previously_recorded_artifacts() {
             )
             .unwrap();
 
-        let sink = Arc::new(VecRunEventSink::new());
+        let sink = TestEventCollector::new();
         let service = RuntimeService::new(
             registry,
             Arc::new(NoopBackendInstanceRuntimeHooks::default()),
-            sink.clone(),
+            sink.bus(),
             Arc::new(FixedClock),
         );
 
@@ -3205,7 +3269,7 @@ fn runtime_sends_resource_hints_before_each_stage() {
         let service = RuntimeService::new(
             registry,
             Arc::new(NoopBackendInstanceRuntimeHooks::default()),
-            Arc::new(VecRunEventSink::new()),
+            EventBus::new(),
             Arc::new(FixedClock),
         )
         .with_resource_hint_sink(Some(hint_sink.clone()));
@@ -3287,13 +3351,9 @@ fn single_use_value_with_fan_out_one_is_dropped_after_unique_consumer() {
             .unwrap();
 
         let backend = Arc::new(SpyBackend::new());
-        let sink = Arc::new(VecRunEventSink::new());
-        let service = RuntimeService::new(
-            registry,
-            backend.clone(),
-            sink.clone(),
-            Arc::new(FixedClock),
-        );
+        let sink = TestEventCollector::new();
+        let service =
+            RuntimeService::new(registry, backend.clone(), sink.bus(), Arc::new(FixedClock));
 
         // producer -> consumer (SingleUse fan-out 1).
         let producer_node = ExecutionNode::new(
@@ -3397,7 +3457,7 @@ fn single_use_value_is_dropped_before_later_stage_after_unique_consumer() {
         let service = RuntimeService::new(
             registry,
             Arc::new(SpyBackend::new()),
-            Arc::new(VecRunEventSink::new()),
+            EventBus::new(),
             Arc::new(FixedClock),
         );
 
@@ -3492,13 +3552,9 @@ fn single_use_value_with_fan_out_zero_is_kept_until_terminal_cleanup() {
             .unwrap();
 
         let backend = Arc::new(SpyBackend::new());
-        let sink = Arc::new(VecRunEventSink::new());
-        let service = RuntimeService::new(
-            registry,
-            backend.clone(),
-            sink.clone(),
-            Arc::new(FixedClock),
-        );
+        let sink = TestEventCollector::new();
+        let service =
+            RuntimeService::new(registry, backend.clone(), sink.bus(), Arc::new(FixedClock));
 
         // 1-node plan: producer only, no edges, no downstream
         // consumers. SingleUse fan-out is zero.
@@ -3576,13 +3632,9 @@ fn single_use_value_is_dropped_after_consumer_is_cancelled() {
             .unwrap();
 
         let backend = Arc::new(SpyBackend::new());
-        let sink = Arc::new(VecRunEventSink::new());
-        let service = RuntimeService::new(
-            registry,
-            backend.clone(),
-            sink.clone(),
-            Arc::new(FixedClock),
-        );
+        let sink = TestEventCollector::new();
+        let service =
+            RuntimeService::new(registry, backend.clone(), sink.bus(), Arc::new(FixedClock));
 
         let producer = ExecutionNode::new(
             NodeId::new("producer"),
@@ -3687,13 +3739,9 @@ fn single_use_value_with_fan_out_greater_than_one_fails_the_run() {
             .unwrap();
 
         let backend = Arc::new(SpyBackend::new());
-        let sink = Arc::new(VecRunEventSink::new());
-        let service = RuntimeService::new(
-            registry,
-            backend.clone(),
-            sink.clone(),
-            Arc::new(FixedClock),
-        );
+        let sink = TestEventCollector::new();
+        let service =
+            RuntimeService::new(registry, backend.clone(), sink.bus(), Arc::new(FixedClock));
 
         // producer -> down_a, down_b (SingleUse fan-out 2 in the
         // active plan; this must fail the run before any downstream
@@ -3814,13 +3862,9 @@ fn run_scoped_value_is_retained_until_terminal_cleanup() {
             .unwrap();
 
         let backend = Arc::new(SpyBackend::new());
-        let sink = Arc::new(VecRunEventSink::new());
-        let service = RuntimeService::new(
-            registry,
-            backend.clone(),
-            sink.clone(),
-            Arc::new(FixedClock),
-        );
+        let sink = TestEventCollector::new();
+        let service =
+            RuntimeService::new(registry, backend.clone(), sink.bus(), Arc::new(FixedClock));
 
         // producer -> consumer; RunScoped value should remain in
         // RunValueStore until the run finishes, even though the
@@ -3921,13 +3965,9 @@ fn workspace_scoped_value_does_not_trigger_single_use_lifecycle() {
             .unwrap();
 
         let backend = Arc::new(SpyBackend::new());
-        let sink = Arc::new(VecRunEventSink::new());
-        let service = RuntimeService::new(
-            registry,
-            backend.clone(),
-            sink.clone(),
-            Arc::new(FixedClock),
-        );
+        let sink = TestEventCollector::new();
+        let service =
+            RuntimeService::new(registry, backend.clone(), sink.bus(), Arc::new(FixedClock));
 
         // WorkspaceScoped: even with two consumers (legal because
         // WorkspaceScoped is not constrained by the consumer index),
@@ -4050,13 +4090,9 @@ fn explicit_target_run_uses_active_plan_fan_out_not_workflow_fan_out() {
             .unwrap();
 
         let backend = Arc::new(SpyBackend::new());
-        let sink = Arc::new(VecRunEventSink::new());
-        let service = RuntimeService::new(
-            registry,
-            backend.clone(),
-            sink.clone(),
-            Arc::new(FixedClock),
-        );
+        let sink = TestEventCollector::new();
+        let service =
+            RuntimeService::new(registry, backend.clone(), sink.bus(), Arc::new(FixedClock));
 
         // Active plan: producer -> consumer only. The
         // "saved workflow" would also have producer -> other, but
@@ -4306,7 +4342,7 @@ fn stage_scoped_value_is_dropped_when_its_stage_completes() {
         let service = RuntimeService::new(
             registry,
             Arc::new(NoopBackendInstanceRuntimeHooks::default()),
-            Arc::new(VecRunEventSink::new()),
+            EventBus::new(),
             Arc::new(FixedClock),
         );
 
@@ -4467,7 +4503,7 @@ fn memory_budget_reject_fails_node_with_out_of_memory_diagnostic() {
         let service = RuntimeService::new(
             registry,
             Arc::new(NoopBackendInstanceRuntimeHooks::default()),
-            Arc::new(VecRunEventSink::new()),
+            EventBus::new(),
             Arc::new(FixedClock),
         );
 
@@ -4525,7 +4561,7 @@ fn memory_budget_backpressure_waits_for_an_inflight_node() {
         let service = RuntimeService::new(
             registry,
             Arc::new(NoopBackendInstanceRuntimeHooks::default()),
-            Arc::new(VecRunEventSink::new()),
+            EventBus::new(),
             Arc::new(FixedClock),
         );
 
@@ -4593,7 +4629,7 @@ fn memory_budget_none_leaves_stage_concurrency_unchanged() {
         let service = RuntimeService::new(
             registry,
             Arc::new(NoopBackendInstanceRuntimeHooks::default()),
-            Arc::new(VecRunEventSink::new()),
+            EventBus::new(),
             Arc::new(FixedClock),
         );
 
@@ -4636,7 +4672,7 @@ fn runtime_rejects_invalid_memory_budget_and_stage_group_concurrency() {
         let service = RuntimeService::new(
             registry,
             Arc::new(NoopBackendInstanceRuntimeHooks::default()),
-            Arc::new(VecRunEventSink::new()),
+            EventBus::new(),
             Arc::new(FixedClock),
         );
 
@@ -4806,7 +4842,7 @@ fn independent_stages_run_concurrently_with_stage_group_parallelism() {
         let service = RuntimeService::new(
             registry,
             Arc::new(NoopBackendInstanceRuntimeHooks::default()),
-            Arc::new(VecRunEventSink::new()),
+            EventBus::new(),
             Arc::new(FixedClock),
         );
 
@@ -4880,7 +4916,7 @@ fn stage_group_parallelism_is_off_by_default() {
         let service = RuntimeService::new(
             registry,
             Arc::new(NoopBackendInstanceRuntimeHooks::default()),
-            Arc::new(VecRunEventSink::new()),
+            EventBus::new(),
             Arc::new(FixedClock),
         );
 

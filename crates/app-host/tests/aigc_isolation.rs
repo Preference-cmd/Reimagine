@@ -28,7 +28,6 @@ use reimagine_core::model::{DocumentVersion, NodeId, ProjectId, SlotId, Workflow
 use reimagine_core::readiness::{RunTarget, RunTargetSelection};
 use reimagine_core::workflow::{Workflow, WorkflowNode};
 use reimagine_nodes::BUILTIN_CHECKPOINT_LOADER;
-use reimagine_runtime::VecRunEventSink;
 
 fn temp_dir(prefix: &str) -> std::path::PathBuf {
     let nonce = std::time::SystemTime::now()
@@ -106,7 +105,7 @@ async fn workspace_builds_and_functions_normally_when_aigc_bootstrap_fails() {
 
     let workspace = WorkspaceHostBuilder::new(WorkspaceScope::new("isolation-test"), &base)
         .backend_config(config)
-        .event_sink(Arc::new(VecRunEventSink::new()))
+        .event_bus(reimagine_core::event::EventBus::new())
         .worker_inventory(Arc::new(EmptyWorkerInventoryProvider))
         .build()
         .await

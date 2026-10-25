@@ -49,6 +49,7 @@ pub enum RunEventKind {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub struct RunEvent {
     id: RunEventId,
     run_id: RunId,
@@ -186,11 +187,11 @@ mod progress_tests {
         // Byte-identical wire format assertion
         let expected = serde_json::json!({
             "id": "progress-1",
-            "run_id": "run",
-            "workflow_id": "workflow",
-            "workflow_version": 1,
+            "runId": "run",
+            "workflowId": "workflow",
+            "workflowVersion": 1,
             "kind": "NodeProgress",
-            "node_id": "node",
+            "nodeId": "node",
             "artifact": null,
             "diagnostics": [],
             "progress": {
@@ -199,8 +200,8 @@ mod progress_tests {
                 "total": 10,
                 "message": "sampling"
             },
-            "created_at": "2026-07-14T00:00:00Z",
-            "correlation_id": null
+            "createdAt": "2026-07-14T00:00:00Z",
+            "correlationId": null
         });
         assert_eq!(json, expected);
     }

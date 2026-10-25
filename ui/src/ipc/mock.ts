@@ -3,18 +3,17 @@ import {
   type BoardCommandResultDto,
   type BoardSnapshot,
   type ComputeProfile,
-  type DocumentChangedEvent,
+  type Event,
   type Project,
   type ProjectMetadataInput,
-  type DownloadEventPayload,
   type DownloadHuggingfaceModelArgs,
+  type DownloadProgress,
   type ModelCard,
   type ModelCatalogEntry,
   type ModelDownloadOutput,
   type ModelInfo,
   type NodeDef,
   type RebootBackendArgs,
-  type RunEventPayload,
   type RunWorkflowResponse,
   type Workflow,
   type WorkflowFileSummary,
@@ -56,19 +55,24 @@ const MOCK_MODELS: ModelInfo[] = [
 
 export async function mockRunWorkflow(
   workflow: Workflow | undefined,
-  onEvent?: (event: RunEventPayload) => void,
 ): Promise<RunWorkflowResponse> {
   await delay(200);
   const runId = rand("run");
 
   const emit = (kind: string, nodeId?: string | null, artifactId?: string | null) =>
-    onEvent?.({
+    emitEvent({
+      type: "run",
       id: rand("evt"),
       runId,
+      workflowId: "mock-workflow",
+      workflowVersion: 1,
       kind,
       nodeId: nodeId ?? null,
-      artifactId: artifactId ?? null,
+      artifact: artifactId ?? null,
+      diagnostics: [],
+      progress: null,
       createdAt: new Date().toISOString(),
+      correlationId: null,
     });
 
   // Demo event stream so inline previews (F5-4) are visible in dev even
@@ -129,10 +133,10 @@ export async function mockCancelRun(_runId: string): Promise<void> {
 
 const PERSISTENCE_KEY = "reimagine.mock.workflows";
 const PROJECTS_KEY = "reimagine.mock.projects";
-const documentSubscribers = new Set<(event: DocumentChangedEvent) => void>();
+const eventSubscribers = new Set<(event: Event) => void>();
 
-function emitDocumentEvent(event: DocumentChangedEvent): void {
-  for (const subscriber of documentSubscribers) subscriber(event);
+function emitEvent(event: Event): void {
+  for (const subscriber of eventSubscribers) subscriber(event);
 }
 
 function mockReadAll(): Record<string, string> {
@@ -176,7 +180,8 @@ export async function mockSaveWorkflow(input: {
   const all = mockReadAll();
   const key = `${input.projectId}/${input.workflowId}`;
   all[key] = JSON.stringify(input.workflowJson);
-  emitDocumentEvent({
+  emitEvent({
+    type: "document",
     kind: "workflow.changed",
     projectId: input.projectId,
     documentId: input.workflowId,
@@ -211,10 +216,8 @@ export async function mockListWorkflows(input: {
   }));
 }
 
-export async function mockSubscribeDocumentEvents(
-  onEvent: (event: DocumentChangedEvent) => void,
-): Promise<void> {
-  documentSubscribers.add(onEvent);
+export async function mockSubscribeEvents(onEvent: (event: Event) => void): Promise<void> {
+  eventSubscribers.add(onEvent);
 }
 
 export async function mockListProjects(): Promise<Project[]> {
@@ -297,7 +300,8 @@ export async function mockApplyBoardCommands(input: {
   commandBatch: unknown;
 }): Promise<BoardCommandResultDto> {
   const result = { ...noOpBoardResult(1), status: "applied" as const, version: 1 };
-  emitDocumentEvent({
+  emitEvent({
+    type: "document",
     kind: "board.changed",
     projectId: input.projectId,
     documentId: "board-" + input.projectId,
@@ -542,36 +546,29 @@ export async function mockGetModelCard(_input: { repoId: string }): Promise<Mode
 
 export async function mockDownloadHuggingfaceModel(
   args: DownloadHuggingfaceModelArgs,
-  onEvent?: (event: DownloadEventPayload) => void,
 ): Promise<ModelDownloadOutput> {
   const total = 6_940_000_000;
   const chunk = 500_000_000;
   let bytes = 0;
-  const id = rand("dl");
   const repoId = args.repoId;
 
-  const emit = (status: string, extra: Partial<DownloadEventPayload> = {}) => {
-    onEvent?.({
-      id,
-      status,
-      repoId,
-      revision: args.revision ?? "main",
-      bytesDownloaded: 0,
-      ...extra,
-    });
+  const emit = (stage: string, message: string | null = null) => {
+    const payload: DownloadProgress = {
+      downloadId: args.downloadId,
+      bytesDownloaded: bytes,
+      totalBytes: total,
+      message,
+    };
+    emitEvent({ type: "module", kind: `aigc.download.${stage}`, payload });
   };
 
-  emit("started", { totalBytes: total, message: "Fetching metadata" });
+  emit("started");
   while (bytes < total) {
     await delay(80);
-    bytes += chunk;
-    emit("in_progress", {
-      bytesDownloaded: Math.min(chunk, total - bytes + chunk),
-      totalBytes: total,
-      message: "Downloading model files",
-    });
+    bytes = Math.min(total, bytes + chunk);
+    emit("progress", "Downloading model files");
   }
-  emit("completed", { bytesDownloaded: total, totalBytes: total });
+  emit("completed");
 
   return {
     effective: true,

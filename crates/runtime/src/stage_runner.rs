@@ -14,8 +14,8 @@ use tokio::sync::Mutex;
 
 use crate::artifacts::{ArtifactStore, RuntimeNodeArtifactCapability};
 use crate::clock::Clock;
-use crate::events::RunEventSink;
 use crate::progress::RuntimeInferenceProgressSink;
+use reimagine_core::event::EventBus;
 use std::collections::HashMap;
 
 #[derive(Debug, Clone)]
@@ -76,7 +76,7 @@ pub struct StageExecutionContext {
     pub workflow_id: WorkflowId,
     pub workflow_version: DocumentVersion,
     pub correlation_id: Option<CorrelationId>,
-    pub sink: Arc<dyn RunEventSink>,
+    pub event_bus: EventBus,
     pub clock: Arc<dyn Clock>,
     pub registry: Arc<NodeExecutorRegistry>,
     pub cancellation: CancelToken,
@@ -111,7 +111,7 @@ pub async fn execute_stage_node(
         context.workflow_version,
         node.node_id().clone(),
         artifact_store,
-        context.sink.clone(),
+        context.event_bus.clone(),
         context.clock.clone(),
         context.cancellation.clone(),
     ));
@@ -126,7 +126,7 @@ pub async fn execute_stage_node(
         context.workflow_version,
         node.node_id().clone(),
         context.correlation_id.clone(),
-        Arc::clone(&context.sink),
+        context.event_bus.clone(),
         Arc::clone(&context.clock),
     ));
     let execution_context = NodeExecutionContext::new(

@@ -1,5 +1,5 @@
 import { expect, test } from "vitest";
-import { BoardSnapshotSchema, DocumentChangedEventSchema, ProjectSchema } from "../src/ipc/schemas";
+import { BoardSnapshotSchema, DocumentEventSchema, ProjectSchema } from "../src/ipc/schemas";
 import { workflowFromJson, workflowToJson } from "../src/lib/workflowCodec";
 
 test("project and board DTOs preserve stable camelCase fields", () => {
@@ -22,15 +22,22 @@ test("project and board DTOs preserve stable camelCase fields", () => {
 
 test("document events require project/document identity and version", () => {
   expect(
-    DocumentChangedEventSchema.parse({
+    DocumentEventSchema.parse({
+      type: "document",
       kind: "workflow.changed",
       projectId: "p1",
       documentId: "wf1",
       version: 2,
     }),
-  ).toEqual({ kind: "workflow.changed", projectId: "p1", documentId: "wf1", version: 2 });
+  ).toEqual({
+    type: "document",
+    kind: "workflow.changed",
+    projectId: "p1",
+    documentId: "wf1",
+    version: 2,
+  });
   expect(() =>
-    DocumentChangedEventSchema.parse({ kind: "workflow.changed", projectId: "p1" }),
+    DocumentEventSchema.parse({ type: "document", kind: "workflow.changed", projectId: "p1" }),
   ).toThrow();
 });
 

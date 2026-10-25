@@ -22,7 +22,7 @@ use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::time::Duration;
 
 use async_trait::async_trait;
-use reimagine_core::event::{RunEventKind, Timestamp};
+use reimagine_core::event::{Event, EventBus, RunEventKind, Timestamp};
 use reimagine_core::model::{
     DocumentVersion, EdgeId, NodeId, NodeTypeId, ParamValue, SlotId, WorkflowId,
 };
@@ -33,7 +33,7 @@ use reimagine_core::readiness::{
 use reimagine_runtime::{
     Clock, ExecutionValue, NodeExecutionContext, NodeExecutor, NodeExecutorError,
     NodeExecutorRegistry, NoopBackendInstanceRuntimeHooks, RunHandle, RunInputs, RuntimeOptions,
-    RuntimeService, VecRunEventSink,
+    RuntimeService,
 };
 
 /// A clock that always returns the same string timestamp.
@@ -327,7 +327,7 @@ fn service_with(registry: NodeExecutorRegistry) -> RuntimeService {
     RuntimeService::new(
         registry,
         Arc::new(NoopBackendInstanceRuntimeHooks::default()),
-        Arc::new(VecRunEventSink::new()),
+        EventBus::new(),
         Arc::new(FixedClock),
     )
 }
@@ -751,7 +751,8 @@ fn cancel_during_concurrent_execution_cancels_in_flight_without_hang() {
             )],
         );
 
-        let sink = Arc::new(VecRunEventSink::new());
+        let sink = EventBus::new();
+        let mut rx = sink.subscribe();
         let service = RuntimeService::new(
             registry,
             Arc::new(NoopBackendInstanceRuntimeHooks::default()),
@@ -805,7 +806,13 @@ fn cancel_during_concurrent_execution_cancels_in_flight_without_hang() {
             snapshot.node_states.get(&NodeId::new("fast_d")),
             Some(&reimagine_runtime::NodeState::Completed)
         );
-        let kinds: Vec<RunEventKind> = sink.events().iter().map(|e| e.kind()).collect();
+        let mut recorded = Vec::new();
+        while let Ok(event) = rx.try_recv() {
+            if let Event::Run(run_event) = event {
+                recorded.push(run_event);
+            }
+        }
+        let kinds: Vec<RunEventKind> = recorded.iter().map(|e| e.kind()).collect();
         assert!(kinds.contains(&RunEventKind::RunCancelled));
         assert!(kinds.contains(&RunEventKind::NodeCancelled));
     });

@@ -1,6 +1,6 @@
 import { create } from "zustand";
 import type { QueryClient } from "@tanstack/react-query";
-import type { RunEventPayload } from "@/ipc/schemas";
+import type { RunEvent } from "@/ipc/schemas";
 import { resolveArtifact } from "@/ipc";
 import { artifactDisplayUrl } from "@/lib/artifacts";
 import { queryKeys } from "@/hooks/queries";
@@ -38,7 +38,7 @@ type ArtifactState = {
   /** nodeId → latest preview for the current run. */
   byNode: Record<string, ArtifactPreview>;
   /** Feed a run event (called by the runtime store for every event). */
-  handleEvent: (event: RunEventPayload) => void;
+  handleEvent: (event: RunEvent) => void;
   /** Start a fresh run — clears all previews. */
   beginRun: (runId: string) => void;
   reset: () => void;
@@ -64,7 +64,7 @@ export const useArtifactStore = create<ArtifactState>()((set, get) => ({
     set({ runId, byNode: {} });
   },
 
-  handleEvent: (event: RunEventPayload) => {
+  handleEvent: (event: RunEvent) => {
     if (event.kind === "RunStarted") {
       get().beginRun(event.runId);
       return;
@@ -82,7 +82,7 @@ export const useArtifactStore = create<ArtifactState>()((set, get) => ({
     }
     if (!ARTIFACT_KINDS.has(event.kind)) return;
 
-    const { nodeId, artifactId } = event;
+    const { nodeId, artifact: artifactId } = event;
     if (!nodeId || !artifactId) return;
     const runId = event.runId;
     const current = get();

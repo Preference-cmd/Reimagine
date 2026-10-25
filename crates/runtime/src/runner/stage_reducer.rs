@@ -315,7 +315,7 @@ impl Runner {
                         workflow_id: self.plan.workflow_id().clone(),
                         workflow_version: self.workflow_version(),
                         correlation_id: self.started_correlation_id(),
-                        sink: self.sink.clone(),
+                        event_bus: self.event_bus.clone(),
                         clock: self.clock.clone(),
                         registry: self.registry.clone(),
                         cancellation: self.cancellation.clone(),

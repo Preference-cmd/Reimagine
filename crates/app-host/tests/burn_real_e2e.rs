@@ -32,7 +32,10 @@ use reimagine_core::event::RunEventKind;
 use reimagine_core::model::NodeId;
 use reimagine_core::readiness::{RunTarget, RunTargetSelection};
 use reimagine_inference::InferenceCapability;
-use reimagine_runtime::{TaskState, VecRunEventSink};
+use reimagine_runtime::TaskState;
+mod common;
+use common::TestRunEventCollector;
+use reimagine_core::event::EventBus;
 use serde_json::Value;
 
 /// Helper to build a `ModelService` for tests with a mock `ModelAcquisitionService`.
@@ -241,13 +244,13 @@ async fn burn_real_sdxl_smoke_workflow_opens() {
         "descriptor id must match the Burn smoke model id"
     );
 
-    let sink = Arc::new(VecRunEventSink::new());
+    let event_bus = EventBus::new();
     let host = Arc::new(
         WorkspaceHost::try_with_backend_config_and_worker_inventory(
             WorkspaceScope::new("ws-burn-smoke-05a"),
             &workspace_root,
             backend_config,
-            sink,
+            event_bus,
             worker_provider(&paths, worker_executable),
         )
         .await
@@ -319,13 +322,14 @@ async fn burn_real_sdxl_smoke_workflow_runs_to_png_artifact() {
         .expect("Burn converted package import should succeed");
     let descriptor_id = descriptor.id().clone();
 
-    let sink = Arc::new(VecRunEventSink::new());
+    let event_bus = EventBus::new();
+    let collector = TestRunEventCollector::new(&event_bus);
     let host = Arc::new(
         WorkspaceHost::try_with_backend_config_and_worker_inventory(
             WorkspaceScope::new("ws-burn-smoke-05b"),
             &workspace_root,
             backend_config,
-            sink.clone(),
+            event_bus,
             worker_provider(&paths, worker_executable),
         )
         .await
@@ -396,7 +400,7 @@ async fn burn_real_sdxl_smoke_workflow_runs_to_png_artifact() {
             "final artifact must be the node_save_image output"
         );
 
-        let events = sink.events();
+        let events = collector.events();
         assert!(
             events
                 .iter()

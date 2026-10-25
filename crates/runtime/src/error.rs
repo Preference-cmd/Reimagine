@@ -13,8 +13,6 @@ pub enum RuntimeError {
     EmptyExecutionGraph { run_id: String },
     /// A plan node references a `NodeTypeId` that has no registered executor.
     MissingExecutor { run_id: String, type_id: String },
-    /// A host-provided event sink failed to emit an event.
-    EventSink { message: String },
 }
 
 impl fmt::Display for RuntimeError {
@@ -29,7 +27,6 @@ impl fmt::Display for RuntimeError {
                 f,
                 "no executor registered for node type {type_id} in run {run_id}"
             ),
-            Self::EventSink { message } => write!(f, "run event sink failed: {message}"),
         }
     }
 }

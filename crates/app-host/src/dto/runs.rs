@@ -2,8 +2,7 @@
 
 use std::collections::HashMap;
 
-use reimagine_core::event::RunEvent;
-use reimagine_core::model::{ArtifactId, DocumentVersion, NodeId, RunId, WorkflowId};
+use reimagine_core::model::{DocumentVersion, NodeId, RunId, WorkflowId};
 use reimagine_core::task::TaskState;
 use reimagine_runtime::NodeState;
 use reimagine_runtime::{RunSnapshot, RunSummary};
@@ -109,50 +108,3 @@ impl From<RunSummary> for RunSummaryDto {
 }
 
 pub use reimagine_core::diagnostic::DiagnosticDto;
-
-/// `GET /runs/:id/events` response. V1 returns the full event list
-/// for the run. SSE/WebSocket streaming is a later refinement.
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct RunEventsResponse {
-    pub run_id: RunId,
-    pub events: Vec<RunEventDto>,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct RunEventDto {
-    pub id: String,
-    pub run_id: RunId,
-    pub workflow_id: WorkflowId,
-    pub workflow_version: DocumentVersion,
-    pub kind: String,
-    pub node_id: Option<NodeId>,
-    pub artifact: Option<ArtifactId>,
-    pub diagnostics: Vec<DiagnosticDto>,
-    pub created_at: String,
-    pub correlation_id: Option<String>,
-}
-
-impl From<RunEvent> for RunEventDto {
-    fn from(value: RunEvent) -> Self {
-        let correlation_id = value.correlation_id().map(|id| id.as_str().to_string());
-        let node_id = value.node_id().cloned();
-        let artifact = value.artifact().cloned();
-        let diagnostics = value
-            .diagnostics()
-            .iter()
-            .map(|d| d.clone().into())
-            .collect();
-        Self {
-            id: value.id().as_str().to_string(),
-            run_id: value.run_id().clone(),
-            workflow_id: value.workflow_id().clone(),
-            workflow_version: value.workflow_version(),
-            kind: format!("{:?}", value.kind()),
-            node_id,
-            artifact,
-            diagnostics,
-            created_at: value.created_at().as_str().to_string(),
-            correlation_id,
-        }
-    }
-}

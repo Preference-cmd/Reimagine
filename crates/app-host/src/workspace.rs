@@ -14,17 +14,18 @@ use crate::WorkspaceScope;
 #[cfg(feature = "aigc")]
 use reimagine_backend_worker_host::WorkerStorePaths;
 use reimagine_config::{AppConfig, AppPaths, ConfigDocument, InferenceBackendConfig};
+use reimagine_core::event::EventBus;
 use reimagine_core::model::{NodeDef, ProjectId};
 #[cfg(feature = "aigc")]
 use reimagine_inference::WorkspaceComputeProfile;
 use reimagine_nodes::BuiltinNodeCatalog;
-use reimagine_runtime::{BoxedRunEventSink, RuntimeService, VecRunEventSink};
+use reimagine_runtime::RuntimeService;
 
 #[cfg(feature = "aigc")]
 use crate::node_catalog::NodeCatalogAlignment;
 use crate::node_catalog::NodeCatalogService;
 use crate::services::WorkspaceServices;
-use crate::{AppHostError, BoardService, DocumentEventBus, ProjectService, WorkflowService};
+use crate::{AppHostError, BoardService, ProjectService, WorkflowService};
 #[cfg(feature = "aigc")]
 use crate::{
     BackendSelection, InstalledWorkerInventoryProvider, ModelService, WorkerInventoryProvider,
@@ -96,15 +97,13 @@ pub struct WorkspaceHost {
     pub(crate) board_service: Arc<BoardService>,
     pub(crate) workflow_service: Arc<WorkflowService>,
     pub(crate) workflow_services: RwLock<BTreeMap<ProjectId, Arc<WorkflowService>>>,
-    pub(crate) document_events: Arc<DocumentEventBus>,
+    pub(crate) event_bus: EventBus,
     pub(crate) runtime_service: Arc<RuntimeService>,
     pub(crate) node_catalog: Arc<NodeCatalogService>,
     pub(crate) builtin_catalog: Arc<BuiltinNodeCatalog>,
     pub(crate) services: Arc<WorkspaceServices>,
     #[cfg(feature = "aigc")]
     pub(crate) aigc: AigcParts,
-    #[cfg_attr(not(feature = "aigc"), allow(dead_code))]
-    pub(crate) event_sink: BoxedRunEventSink,
 }
 
 impl std::fmt::Debug for WorkspaceHost {
@@ -132,19 +131,17 @@ pub(crate) struct WorkspaceComponents {
 }
 
 impl WorkspaceHost {
-    #[allow(clippy::too_many_arguments)]
     pub(crate) fn assemble(
         workspace_scope: WorkspaceScope,
         config: Arc<AppConfig>,
         backend_config: InferenceBackendConfig,
-        document_events: Arc<DocumentEventBus>,
-        event_sink: BoxedRunEventSink,
+        event_bus: EventBus,
         builtin_catalog: Arc<BuiltinNodeCatalog>,
         components: WorkspaceComponents,
     ) -> Self {
-        let board_service = Arc::new(BoardService::with_document_events(
+        let board_service = Arc::new(BoardService::with_event_bus(
             config.paths().clone(),
-            Arc::clone(&document_events),
+            event_bus.clone(),
         ));
         let project_service = Arc::new(ProjectService::new(
             config.paths().clone(),
@@ -154,7 +151,7 @@ impl WorkspaceHost {
         let workflow_service = Arc::new(WorkflowService::for_project_with_events(
             config.paths().clone(),
             default_project_id.clone(),
-            Arc::clone(&document_events),
+            event_bus.clone(),
         ));
         let mut workflow_services = BTreeMap::new();
         workflow_services.insert(default_project_id, Arc::clone(&workflow_service));
@@ -185,14 +182,13 @@ impl WorkspaceHost {
             board_service,
             workflow_service,
             workflow_services: RwLock::new(workflow_services),
-            document_events,
+            event_bus,
             runtime_service: components.runtime_service,
             node_catalog,
             builtin_catalog,
             services,
             #[cfg(feature = "aigc")]
             aigc: components.aigc,
-            event_sink,
         }
     }
 
@@ -206,7 +202,7 @@ impl WorkspaceHost {
         compute_profile: Arc<WorkspaceComputeProfile>,
         resolved_backend_instance: reimagine_inference::BackendInstance,
     ) -> Self {
-        Self::new_with_document_events(
+        Self::new_with_event_bus(
             workspace_scope,
             config,
             backend_config,
@@ -214,13 +210,13 @@ impl WorkspaceHost {
             builtin_catalog,
             compute_profile,
             resolved_backend_instance,
-            Arc::new(DocumentEventBus::new()),
+            EventBus::new(),
         )
     }
 
     #[cfg(feature = "aigc")]
     #[allow(clippy::too_many_arguments)]
-    fn new_with_document_events(
+    pub fn new_with_event_bus(
         workspace_scope: WorkspaceScope,
         config: AppConfig,
         backend_config: InferenceBackendConfig,
@@ -228,12 +224,13 @@ impl WorkspaceHost {
         builtin_catalog: Arc<BuiltinNodeCatalog>,
         compute_profile: Arc<WorkspaceComputeProfile>,
         resolved_backend_instance: reimagine_inference::BackendInstance,
-        document_events: Arc<DocumentEventBus>,
+        event_bus: EventBus,
     ) -> Self {
         let config = Arc::new(config);
-        let acquisition_service = Arc::new(ModelAcquisitionService::new(
+        let acquisition_service = Arc::new(ModelAcquisitionService::with_event_bus(
             config.paths().clone(),
             &config,
+            event_bus.clone(),
         ));
         let model_service = Arc::new(ModelService::new(
             config.paths().clone(),
@@ -259,8 +256,7 @@ impl WorkspaceHost {
             workspace_scope,
             config,
             backend_config,
-            document_events,
-            Arc::new(VecRunEventSink::new()),
+            event_bus,
             builtin_catalog,
             components,
         )
@@ -270,21 +266,53 @@ impl WorkspaceHost {
         workspace_scope: WorkspaceScope,
         base_path: impl Into<std::path::PathBuf>,
     ) -> Self {
-        Self::with_defaults_and_event_sink(
-            workspace_scope,
-            base_path,
-            Arc::new(VecRunEventSink::new()),
-        )
+        Self::with_event_bus(workspace_scope, base_path, EventBus::new())
+    }
+
+    pub fn with_event_bus(
+        workspace_scope: WorkspaceScope,
+        base_path: impl Into<std::path::PathBuf>,
+        event_bus: EventBus,
+    ) -> Self {
+        let config = AppConfig::new(AppPaths::new(base_path));
+        let backend_config = load_backend_config(&config);
+        Self::with_backend_config_inner(workspace_scope, config, backend_config, event_bus)
+    }
+
+    #[cfg(feature = "aigc")]
+    pub fn with_defaults_and_backend(
+        workspace_scope: WorkspaceScope,
+        base_path: impl Into<std::path::PathBuf>,
+        _backend_selection: BackendSelection,
+        event_bus: EventBus,
+    ) -> Self {
+        Self::with_event_bus(workspace_scope, base_path, event_bus)
     }
 
     pub async fn try_with_defaults(
         workspace_scope: WorkspaceScope,
         base_path: impl Into<std::path::PathBuf>,
     ) -> Result<Self, AppHostError> {
-        Self::try_with_defaults_and_event_sink(
+        Self::try_with_event_bus(workspace_scope, base_path, EventBus::new()).await
+    }
+
+    /// Bootstrap asynchronously, loading the backend config from disk and the
+    /// worker inventory from the workspace.
+    pub async fn try_with_event_bus(
+        workspace_scope: WorkspaceScope,
+        base_path: impl Into<std::path::PathBuf>,
+        event_bus: EventBus,
+    ) -> Result<Self, AppHostError> {
+        let base_path = base_path.into();
+        let config = AppConfig::new(AppPaths::new(&base_path));
+        let backend_config = load_backend_config_result(&config).await?;
+        Self::with_backend_config_and_worker_inventory_inner(
             workspace_scope,
-            base_path,
-            Arc::new(VecRunEventSink::new()),
+            config,
+            backend_config,
+            event_bus,
+            #[cfg(feature = "aigc")]
+            Arc::new(InstalledWorkerInventoryProvider::for_base_path(&base_path)),
         )
         .await
     }
@@ -297,11 +325,11 @@ impl WorkspaceHost {
     /// desktop host that passes its real app-data directory sees installed
     /// workers.
     #[cfg(feature = "aigc")]
-    pub async fn try_with_app_data_root_and_event_sink(
+    pub async fn try_with_app_data_root_and_event_bus(
         workspace_scope: WorkspaceScope,
         base_path: impl Into<std::path::PathBuf>,
         app_data_root: impl Into<std::path::PathBuf>,
-        event_sink: BoxedRunEventSink,
+        event_bus: EventBus,
     ) -> Result<Self, AppHostError> {
         let base_path = base_path.into();
         let config = AppConfig::new(AppPaths::new(&base_path));
@@ -311,7 +339,7 @@ impl WorkspaceHost {
             &base_path,
             app_data_root,
             backend_config,
-            event_sink,
+            event_bus,
         )
         .await
     }
@@ -324,18 +352,17 @@ impl WorkspaceHost {
         base_path: impl Into<std::path::PathBuf>,
         app_data_root: impl Into<std::path::PathBuf>,
         backend_config: InferenceBackendConfig,
-        event_sink: BoxedRunEventSink,
+        event_bus: EventBus,
     ) -> Result<Self, AppHostError> {
         let config = AppConfig::new(AppPaths::new(base_path));
         Self::with_backend_config_and_worker_inventory_inner(
             workspace_scope,
             config,
             backend_config,
-            event_sink,
+            event_bus,
             Arc::new(InstalledWorkerInventoryProvider::new(
                 WorkerStorePaths::new(app_data_root),
             )),
-            None,
         )
         .await
     }
@@ -345,7 +372,7 @@ impl WorkspaceHost {
         workspace_scope: WorkspaceScope,
         base_path: impl Into<std::path::PathBuf>,
         backend_config: InferenceBackendConfig,
-        event_sink: BoxedRunEventSink,
+        event_bus: EventBus,
         worker_inventory: Arc<dyn WorkerInventoryProvider>,
     ) -> Result<Self, AppHostError> {
         let config = AppConfig::new(AppPaths::new(base_path));
@@ -353,80 +380,34 @@ impl WorkspaceHost {
             workspace_scope,
             config,
             backend_config,
-            event_sink,
+            event_bus,
             worker_inventory,
-            None,
         )
         .await
-    }
-
-    /// Bootstrap asynchronously with a run event sink, loading the backend
-    /// config from disk and the worker inventory from the workspace.
-    pub async fn try_with_defaults_and_event_sink(
-        workspace_scope: WorkspaceScope,
-        base_path: impl Into<std::path::PathBuf>,
-        event_sink: BoxedRunEventSink,
-    ) -> Result<Self, AppHostError> {
-        let base_path = base_path.into();
-        let config = AppConfig::new(AppPaths::new(&base_path));
-        let backend_config = load_backend_config_result(&config).await?;
-        Self::with_backend_config_and_worker_inventory_inner(
-            workspace_scope,
-            config,
-            backend_config,
-            event_sink,
-            #[cfg(feature = "aigc")]
-            Arc::new(InstalledWorkerInventoryProvider::for_base_path(&base_path)),
-            None,
-        )
-        .await
-    }
-
-    pub fn with_defaults_and_event_sink(
-        workspace_scope: WorkspaceScope,
-        base_path: impl Into<std::path::PathBuf>,
-        event_sink: BoxedRunEventSink,
-    ) -> Self {
-        let config = AppConfig::new(AppPaths::new(base_path));
-        let backend_config = load_backend_config(&config);
-        Self::with_backend_config_inner(workspace_scope, config, backend_config, event_sink)
-    }
-
-    #[cfg(feature = "aigc")]
-    pub fn with_defaults_and_backend(
-        workspace_scope: WorkspaceScope,
-        base_path: impl Into<std::path::PathBuf>,
-        _backend_selection: BackendSelection,
-        event_sink: BoxedRunEventSink,
-    ) -> Self {
-        let config = AppConfig::new(AppPaths::new(base_path));
-        let backend_config = load_backend_config(&config);
-        Self::with_backend_config_inner(workspace_scope, config, backend_config, event_sink)
     }
 
     pub fn with_backend_config(
         workspace_scope: WorkspaceScope,
         base_path: impl Into<std::path::PathBuf>,
         backend_config: InferenceBackendConfig,
-        event_sink: BoxedRunEventSink,
+        event_bus: EventBus,
     ) -> Self {
         let config = AppConfig::new(AppPaths::new(base_path));
-        Self::with_backend_config_inner(workspace_scope, config, backend_config, event_sink)
+        Self::with_backend_config_inner(workspace_scope, config, backend_config, event_bus)
     }
 
     fn with_backend_config_inner(
         workspace_scope: WorkspaceScope,
         config: AppConfig,
         backend_config: InferenceBackendConfig,
-        event_sink: BoxedRunEventSink,
+        event_bus: EventBus,
     ) -> Self {
-        let components = Self::build_sync_components(&config, &backend_config, &event_sink);
+        let components = Self::build_sync_components(&config, &backend_config, &event_bus);
         Self::assemble(
             workspace_scope,
             Arc::new(config),
             backend_config,
-            Arc::new(DocumentEventBus::new()),
-            event_sink,
+            event_bus,
             Arc::new(BuiltinNodeCatalog::v1()),
             components,
         )
@@ -436,10 +417,13 @@ impl WorkspaceHost {
     fn build_sync_components(
         config: &AppConfig,
         backend_config: &InferenceBackendConfig,
-        event_sink: &BoxedRunEventSink,
+        event_bus: &EventBus,
     ) -> WorkspaceComponents {
-        let acquisition_service =
-            Arc::new(ModelAcquisitionService::new(config.paths().clone(), config));
+        let acquisition_service = Arc::new(ModelAcquisitionService::with_event_bus(
+            config.paths().clone(),
+            config,
+            event_bus.clone(),
+        ));
         let model_service = Arc::new(ModelService::new(
             config.paths().clone(),
             acquisition_service.clone(),
@@ -471,7 +455,7 @@ impl WorkspaceHost {
             RuntimeService::new(
                 bootstrapped.runtime.executor_registry,
                 bootstrapped.runtime.runtime_hooks.clone(),
-                event_sink.clone(),
+                event_bus.clone(),
                 Arc::new(reimagine_runtime::SystemClock),
             )
             .with_resource_hint_sink(
@@ -507,12 +491,12 @@ impl WorkspaceHost {
     fn build_sync_components(
         _config: &AppConfig,
         _backend_config: &InferenceBackendConfig,
-        event_sink: &BoxedRunEventSink,
+        event_bus: &EventBus,
     ) -> WorkspaceComponents {
         let runtime_service = Arc::new(RuntimeService::new(
             reimagine_inference::NodeExecutorRegistry::default(),
             Arc::new(reimagine_inference::CompositeBackendInstanceRuntimeHooks::new(Vec::new())),
-            event_sink.clone(),
+            event_bus.clone(),
             Arc::new(reimagine_runtime::SystemClock),
         ));
         WorkspaceComponents { runtime_service }
@@ -522,21 +506,15 @@ impl WorkspaceHost {
         workspace_scope: WorkspaceScope,
         config: AppConfig,
         backend_config: InferenceBackendConfig,
-        event_sink: BoxedRunEventSink,
+        event_bus: EventBus,
         #[cfg(feature = "aigc")] worker_inventory: Arc<dyn WorkerInventoryProvider>,
-        document_events_override: Option<Arc<DocumentEventBus>>,
     ) -> Result<Self, AppHostError> {
         let base_path = config.paths().base_path().to_path_buf();
-        let mut builder = WorkspaceHostBuilder::new(workspace_scope, base_path)
+        let builder = WorkspaceHostBuilder::new(workspace_scope, base_path)
             .backend_config(backend_config)
-            .event_sink(event_sink);
+            .event_bus(event_bus);
         #[cfg(feature = "aigc")]
-        {
-            builder = builder.worker_inventory(worker_inventory);
-        }
-        if let Some(events) = document_events_override {
-            builder = builder.document_events(events);
-        }
+        let builder = builder.worker_inventory(worker_inventory);
         builder.build().await
     }
 
@@ -582,7 +560,7 @@ impl WorkspaceHost {
         let service = Arc::new(WorkflowService::for_project_with_events(
             self.config.paths().clone(),
             project_id.clone(),
-            Arc::clone(&self.document_events),
+            self.event_bus.clone(),
         ));
         self.workflow_services
             .write()
@@ -607,8 +585,8 @@ impl WorkspaceHost {
         Ok(())
     }
 
-    pub fn document_events(&self) -> Arc<DocumentEventBus> {
-        Arc::clone(&self.document_events)
+    pub fn event_bus(&self) -> &EventBus {
+        &self.event_bus
     }
 
     pub fn project_service(&self) -> &Arc<ProjectService> {
@@ -746,9 +724,8 @@ impl WorkspaceHost {
             current.workspace_scope.clone(),
             (*current.config).clone(),
             backend_config,
-            current.event_sink.clone(),
+            current.event_bus.clone(),
             Arc::clone(&current.aigc.worker_inventory),
-            Some(Arc::clone(&current.document_events)),
         )
         .await?;
         if let Some(reason) = rebuilt.aigc_unavailable_reason() {
@@ -1068,9 +1045,11 @@ mod tests {
     fn app_host_inference_composition_registers_builtin_executors() {
         let base = temp_dir("compose-runtime");
         let config = AppConfig::new(reimagine_config::AppPaths::new(&base));
-        let acquisition_service = Arc::new(ModelAcquisitionService::new(
+        let event_bus = reimagine_core::event::EventBus::new();
+        let acquisition_service = Arc::new(ModelAcquisitionService::with_event_bus(
             config.paths().clone(),
             &config,
+            event_bus.clone(),
         ));
         let model_service = Arc::new(ModelService::new(
             config.paths().clone(),
@@ -1252,7 +1231,7 @@ mod tests {
             WorkspaceScope::new("profile-unknown-selected"),
             &base,
             backend_config,
-            Arc::new(VecRunEventSink::new()),
+            EventBus::new(),
         );
 
         assert_eq!(
@@ -1322,7 +1301,7 @@ mod tests {
             &base,
             &app_data_root,
             backend_config,
-            Arc::new(VecRunEventSink::new()),
+            EventBus::new(),
         )
         .await
         .expect("bootstrap with explicit app-data root");
@@ -1486,7 +1465,7 @@ mod tests {
             &base,
             &app_data_root,
             backend_config.clone(),
-            Arc::new(VecRunEventSink::new()),
+            EventBus::new(),
         )
         .await
         .expect("production bootstrap establishes the project layout");
@@ -1510,7 +1489,7 @@ mod tests {
             &base,
             &app_data_root,
             backend_config.clone(),
-            Arc::new(VecRunEventSink::new()),
+            EventBus::new(),
         )
         .await
         .expect("second production bootstrap stays idempotent");
@@ -1564,7 +1543,7 @@ mod tests {
             &base,
             &app_data_root,
             backend_config,
-            Arc::new(VecRunEventSink::new()),
+            EventBus::new(),
         )
         .await
         .expect("bootstrap with legacy workflows");

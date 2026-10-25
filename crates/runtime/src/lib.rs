@@ -21,7 +21,6 @@ mod artifacts;
 mod clock;
 mod consumer_index;
 mod error;
-mod events;
 mod handle;
 mod progress;
 mod resources;
@@ -38,7 +37,6 @@ pub use artifacts::{ArtifactRecord, ArtifactStore, RuntimeNodeArtifactCapability
 pub use clock::{Clock, SystemClock};
 pub use consumer_index::{ConsumerBinding, PlanConsumerIndex};
 pub use error::RuntimeError;
-pub use events::{BoxedRunEventSink, RunEventSink, VecRunEventSink};
 pub use handle::RunHandle;
 pub use reimagine_core::task::{CancelToken, TaskState};
 pub use resources::NoopBackendInstanceRuntimeHooks;

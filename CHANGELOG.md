@@ -12,6 +12,16 @@ both check it.
 
 ### Changed
 
+- Document, run and download events arrive on one IPC subscription,
+  `subscribe_events(channel)`, which replaces `subscribe_document_events`.
+  Each event carries a `type` tag: `document`, `run` or `module`.
+- `run_workflow` no longer takes a channel; its run events arrive on
+  `subscribe_events`, without replay, and their fields are camelCase (`runId`,
+  `nodeId`, `artifact`, `createdAt`, ...).
+- `download_huggingface_model` takes a caller-chosen `downloadId` instead of a
+  channel; progress arrives as `aigc.download.{started,progress,completed,failed}`
+  module events whose payload is `downloadId`, `bytesDownloaded` (cumulative),
+  `totalBytes` and `message`.
 - Board command results (`preview_board_commands`, `apply_board_commands`,
   `undo_board`, `redo_board`) return `version` instead of `boardVersion`.
 - Board command results (`preview_board_commands`, `apply_board_commands`,

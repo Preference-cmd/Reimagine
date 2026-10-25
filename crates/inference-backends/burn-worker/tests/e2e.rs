@@ -254,7 +254,6 @@ async fn app_host_activates_selected_worker_from_injected_inventory() {
         WorkspaceHost,
     };
     use reimagine_config::{AppPaths, InferenceBackendConfig};
-    use reimagine_runtime::VecRunEventSink;
 
     let workspace = tempfile::tempdir().expect("workspace");
     let paths = AppPaths::new(workspace.path());
@@ -292,7 +291,7 @@ async fn app_host_activates_selected_worker_from_injected_inventory() {
             selected_instance: Some(instance.0.clone()),
             ..InferenceBackendConfig::default()
         },
-        Arc::new(VecRunEventSink::new()),
+        reimagine_core::event::EventBus::new(),
         Arc::new(StaticWorkerInventoryProvider::new(
             WorkerInventorySnapshot::new(vec![candidate]),
         )),
@@ -320,7 +319,6 @@ async fn app_host_rejects_manifest_and_live_hello_profile_mismatch() {
         WorkspaceHost,
     };
     use reimagine_config::{AppPaths, InferenceBackendConfig};
-    use reimagine_runtime::VecRunEventSink;
 
     let workspace = tempfile::tempdir().expect("workspace");
     let paths = AppPaths::new(workspace.path());
@@ -344,7 +342,7 @@ async fn app_host_rejects_manifest_and_live_hello_profile_mismatch() {
             selected_instance: Some(instance.0.clone()),
             ..InferenceBackendConfig::default()
         },
-        Arc::new(VecRunEventSink::new()),
+        reimagine_core::event::EventBus::new(),
         Arc::new(StaticWorkerInventoryProvider::new(
             WorkerInventorySnapshot::new(vec![candidate]),
         )),
@@ -380,7 +378,7 @@ async fn workflow_reaches_png_through_process_backed_worker() {
         ModelComponentSource, ModelDescriptor, ModelFormat, ModelManifest, ModelRoot, ModelRootId,
         ModelSource, ModelSourceStatus,
     };
-    use reimagine_runtime::{TaskState, VecRunEventSink};
+    use reimagine_runtime::TaskState;
 
     let workspace = tempfile::tempdir().expect("workspace");
     let paths = AppPaths::new(workspace.path());
@@ -460,7 +458,7 @@ async fn workflow_reaches_png_through_process_backed_worker() {
         },
     )
     .expect("candidate");
-    let sink = Arc::new(VecRunEventSink::new());
+    let bus = reimagine_core::event::EventBus::new();
     let host = Arc::new(
         WorkspaceHost::try_with_backend_config_and_worker_inventory(
             WorkspaceScope::new("mb04-tiny"),
@@ -469,7 +467,7 @@ async fn workflow_reaches_png_through_process_backed_worker() {
                 selected_instance: Some(instance.0.clone()),
                 ..InferenceBackendConfig::default()
             },
-            sink,
+            bus,
             Arc::new(StaticWorkerInventoryProvider::new(
                 WorkerInventorySnapshot::new(vec![candidate]),
             )),

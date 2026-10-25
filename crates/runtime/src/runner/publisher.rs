@@ -3,7 +3,7 @@ use std::sync::Arc;
 use std::sync::atomic::Ordering;
 
 use reimagine_core::diagnostic::Diagnostic;
-use reimagine_core::event::{RunEvent, RunEventId, RunEventKind, Timestamp};
+use reimagine_core::event::{Event, RunEvent, RunEventId, RunEventKind, Timestamp};
 use reimagine_core::model::NodeId;
 use reimagine_core::readiness::ExecutionNode;
 use tokio::sync::Mutex;
@@ -201,24 +201,7 @@ impl Runner {
     }
 
     fn safe_emit(&self, event: RunEvent) {
-        match std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| self.sink.emit(event))) {
-            Ok(Ok(())) => {}
-            Ok(Err(error)) => {
-                tracing::warn!(
-                    target: "reimagine_runtime",
-                    run_id = %self.run_id.as_str(),
-                    error = %error,
-                    "run event sink failed; continuing without failing the run"
-                );
-            }
-            Err(_) => {
-                tracing::warn!(
-                    target: "reimagine_runtime",
-                    run_id = %self.run_id.as_str(),
-                    "run event sink panicked; continuing without failing the run"
-                );
-            }
-        }
+        self.event_bus.publish(Event::Run(event));
     }
 
     fn build_event(

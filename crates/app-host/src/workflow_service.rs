@@ -16,9 +16,9 @@ use reimagine_core::document::DocumentSession;
 use reimagine_core::model::{DiagnosticId, DocumentVersion, NodeCatalog, ProjectId, WorkflowId};
 use reimagine_core::workflow::Workflow;
 
-use crate::document_events::{DocumentChangedEvent, DocumentEventBus};
 use crate::proposal::WorkflowProposal;
 use crate::{AppHostError, AppHostResult};
+use reimagine_core::event::{Event, EventBus};
 
 /// Summary of a workflow file persisted in the workspace `workflows/` dir.
 ///
@@ -39,7 +39,7 @@ pub struct WorkflowService {
     project_id: ProjectId,
     sessions: RwLock<BTreeMap<WorkflowId, Arc<Mutex<DocumentSession<Workflow>>>>>,
     proposals: RwLock<BTreeMap<WorkflowId, WorkflowProposal>>,
-    document_events: Arc<DocumentEventBus>,
+    event_bus: EventBus,
 }
 
 impl std::fmt::Debug for WorkflowService {
@@ -72,25 +72,21 @@ impl WorkflowService {
     /// documents resolve under `projects/{project_id}/workflows/`
     /// (AR-08); cross-project workflows are rejected by ownership checks.
     pub fn for_project(app_paths: AppPaths, project_id: ProjectId) -> Self {
-        Self::for_project_with_events(app_paths, project_id, Arc::new(DocumentEventBus::new()))
+        Self::for_project_with_events(app_paths, project_id, EventBus::new())
     }
 
     pub fn for_project_with_events(
         app_paths: AppPaths,
         project_id: ProjectId,
-        document_events: Arc<DocumentEventBus>,
+        event_bus: EventBus,
     ) -> Self {
         Self {
             app_paths,
             project_id,
             sessions: RwLock::new(BTreeMap::new()),
             proposals: RwLock::new(BTreeMap::new()),
-            document_events,
+            event_bus,
         }
-    }
-
-    pub fn document_events(&self) -> Arc<DocumentEventBus> {
-        Arc::clone(&self.document_events)
     }
 
     /// Clear in-memory workflow sessions and proposals when a project is
@@ -227,7 +223,7 @@ impl WorkflowService {
                 path: path.clone(),
                 message: error.to_string(),
             })?;
-        self.document_events.publish(DocumentChangedEvent {
+        self.event_bus.publish(Event::Document {
             kind: "workflow.changed".to_owned(),
             project_id: self.project_id.to_string(),
             document_id: workflow.id().to_string(),

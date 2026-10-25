@@ -1,13 +1,9 @@
 mod desktop_host;
-mod document_event_hub;
-#[cfg(feature = "aigc")]
-mod download_event_hub;
-mod event_hub;
+mod event_bridge;
 
 #[cfg(feature = "aigc")]
 use desktop_host::WorkerSwitchResultDto;
 use desktop_host::{DesktopHostState, default_workspace_path};
-use event_hub::RunEventPayload;
 use reimagine_app_host::{
     AppHostError, AppHostErrorCode,
     dto::{ArtifactMetadataDto, HealthResponse, NodeDefDto, RunWorkflowResponse},
@@ -16,11 +12,12 @@ use reimagine_app_host::{
 use reimagine_app_host::{
     BackendSelection, WorkerInstallationDto,
     dto::{
-        ComputeProfileDto, DownloadEventPayload, ModelCardDto, ModelCatalogEntryDto,
-        ModelDownloadOutput, ModelFilters, ModelInfoDto,
+        ComputeProfileDto, ModelCardDto, ModelCatalogEntryDto, ModelDownloadOutput, ModelFilters,
+        ModelInfoDto,
     },
 };
 use reimagine_core::command::{CommandResult, WorkflowChange};
+use reimagine_core::event::Event;
 use serde::Serialize;
 use tauri::{Manager, ipc::Channel};
 
@@ -114,10 +111,9 @@ async fn run_workflow(
     state: tauri::State<'_, DesktopHostState>,
     project_id: String,
     workflow: serde_json::Value,
-    channel: Channel<RunEventPayload>,
 ) -> Result<RunWorkflowResponse, TauriCommandError> {
     state
-        .run_workflow_for_project(&project_id, workflow, channel)
+        .run_workflow_for_project(&project_id, workflow)
         .await
         .map_err(app_host_command_error)
 }
@@ -152,14 +148,14 @@ async fn open_artifact(
 
 // ─── Model download commands ───────────────────────────────────────
 
-/// Download a HuggingFace model with progress streaming.
-///
-/// Streams `DownloadEventPayload` events through the provided channel.
+/// Download a HuggingFace model. Progress arrives on `subscribe_events` as
+/// `aigc.download.*` module events carrying the caller's `download_id`.
 #[cfg(feature = "aigc")]
 #[tauri::command]
 #[allow(clippy::too_many_arguments)]
 async fn download_huggingface_model(
     state: tauri::State<'_, DesktopHostState>,
+    download_id: String,
     repo_id: String,
     revision: Option<String>,
     allow_patterns: Option<Vec<String>>,
@@ -167,10 +163,10 @@ async fn download_huggingface_model(
     overwrite: Option<String>,
     auto_detect: Option<bool>,
     from_catalog: Option<bool>,
-    channel: tauri::ipc::Channel<DownloadEventPayload>,
 ) -> Result<ModelDownloadOutput, TauriCommandError> {
     state
         .download_huggingface_model(
+            download_id,
             repo_id,
             revision,
             allow_patterns,
@@ -178,7 +174,6 @@ async fn download_huggingface_model(
             overwrite,
             auto_detect,
             from_catalog,
-            channel,
         )
         .await
         .map_err(app_host_command_error)
@@ -360,11 +355,11 @@ async fn set_active_project(
 }
 
 #[tauri::command]
-async fn subscribe_document_events(
+async fn subscribe_events(
     state: tauri::State<'_, DesktopHostState>,
-    channel: Channel<reimagine_app_host::DocumentChangedEvent>,
+    channel: Channel<Event>,
 ) -> Result<(), TauriCommandError> {
-    state.subscribe_document_events(channel);
+    state.subscribe_events(channel);
     Ok(())
 }
 
@@ -548,7 +543,7 @@ pub fn run() {
             update_project,
             delete_project,
             set_active_project,
-            subscribe_document_events,
+            subscribe_events,
             board_snapshot,
             preview_board_commands,
             apply_board_commands,

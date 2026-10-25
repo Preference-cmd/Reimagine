@@ -1,30 +1,5 @@
 use serde::{Deserialize, Serialize};
 
-/// Progress event payload streamed during model download.
-///
-/// Mirrors the `RunEventPayload` naming convention for Tauri Channel
-/// streaming.
-#[derive(Debug, Clone, Serialize)]
-#[serde(rename_all = "camelCase")]
-pub struct DownloadEventPayload {
-    pub id: String,
-    pub status: String,
-    pub repo_id: String,
-    pub revision: String,
-    pub bytes_downloaded: u64,
-    pub total_bytes: Option<u64>,
-    pub message: Option<String>,
-    /// Model display name from catalog metadata (e.g., "Stable Diffusion XL").
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub model_name: Option<String>,
-    /// Detected repository format (e.g., "Diffusers", "SingleFileSafetensors").
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub detected_format: Option<String>,
-    /// Estimated total download size in bytes from catalog metadata.
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub estimated_size: Option<u64>,
-}
-
 /// Input to a model download request.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]

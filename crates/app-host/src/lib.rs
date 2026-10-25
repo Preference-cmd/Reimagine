@@ -9,7 +9,6 @@
 mod app_host;
 pub mod artifact_access;
 mod board_service;
-mod document_events;
 mod document_store;
 pub mod dto;
 mod error;
@@ -61,7 +60,6 @@ pub use artifact_access::{
     ArtifactAccess, ArtifactAccessError, media_type_for_reference, resolve_artifact_path,
 };
 pub use board_service::BoardService;
-pub use document_events::{DocumentChangedEvent, DocumentEventBus};
 pub use error::{AppHostError, AppHostResult};
 pub use error_code::AppHostErrorCode;
 #[cfg(feature = "aigc")]

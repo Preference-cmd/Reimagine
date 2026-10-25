@@ -3,7 +3,7 @@
 //! The executor contract owns the *shape* of the publisher (this trait)
 //! so that node executors can record artifacts without depending on the
 //! runtime's concrete [`ArtifactStore`](reimagine_runtime::ArtifactStore)
-//! or [`RunEventSink`](reimagine_runtime::RunEventSink). The runtime
+//! or event bus. The runtime
 //! provides a concrete implementation
 //! ([`RuntimeNodeArtifactCapability`](reimagine_runtime::RuntimeNodeArtifactCapability))
 //! at context construction time and wraps it in an `Arc<dyn

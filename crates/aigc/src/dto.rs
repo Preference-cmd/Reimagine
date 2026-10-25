@@ -10,8 +10,8 @@ pub use compute_profile::{
     topology_workers_from_pool,
 };
 pub use model_acquisition::{
-    DownloadEventPayload, FileEntryDto, ModelAcquireConversionReport, ModelAcquireDownloadReport,
-    ModelAcquireInput, ModelAcquireOutput, ModelCardDto, ModelCatalogEntryDto, ModelDownloadInput,
+    FileEntryDto, ModelAcquireConversionReport, ModelAcquireDownloadReport, ModelAcquireInput,
+    ModelAcquireOutput, ModelCardDto, ModelCatalogEntryDto, ModelDownloadInput,
     ModelDownloadOutput, ModelFilters,
 };
 pub use models::{

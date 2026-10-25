@@ -48,7 +48,10 @@ use reimagine_model_manager::{
     ModelComponentSource, ModelDescriptor, ModelFormat, ModelManifest, ModelRoot, ModelRootId,
     ModelSource, ModelSourceStatus,
 };
-use reimagine_runtime::{TaskState, VecRunEventSink};
+use reimagine_runtime::TaskState;
+mod common;
+use common::TestRunEventCollector;
+use reimagine_core::event::EventBus;
 use serde_json::Value;
 
 const WORKFLOW_ID: &str = "wf-burn-full-pipeline";
@@ -643,13 +646,14 @@ async fn burn_full_pipeline_load_encode_latent_sample_decode_saves_png() {
     };
 
     // Boot the process-backed workspace host (real burn worker subprocess).
-    let sink = Arc::new(VecRunEventSink::new());
+    let event_bus = EventBus::new();
+    let collector = TestRunEventCollector::new(&event_bus);
     let host = Arc::new(
         WorkspaceHost::try_with_backend_config_and_worker_inventory(
             WorkspaceScope::new("ws-burn-full-pipeline"),
             &workspace_root,
             backend_config,
-            sink.clone(),
+            event_bus,
             Arc::new(StaticWorkerInventoryProvider::new(
                 WorkerInventorySnapshot::new(vec![
                     WorkerBackendCandidate::try_new(
@@ -742,7 +746,7 @@ async fn burn_full_pipeline_load_encode_latent_sample_decode_saves_png() {
     );
 
     // 5. Events must show run completion and artifact creation.
-    let recorded_events = sink.events();
+    let recorded_events = collector.events();
     assert!(
         recorded_events
             .iter()

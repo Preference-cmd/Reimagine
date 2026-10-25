@@ -8,11 +8,7 @@ import {
   listWorkflows,
   saveWorkflow,
 } from "@/ipc";
-import type {
-  DownloadHuggingfaceModelArgs,
-  ModelDownloadOutput,
-  DownloadEventPayload,
-} from "@/ipc/schemas";
+import type { DownloadHuggingfaceModelArgs, ModelDownloadOutput } from "@/ipc/schemas";
 import { downloadHuggingfaceModel as ipcDownloadModel } from "@/ipc";
 
 /* ─── Query keys ─────────────────────────────────────────── */
@@ -99,15 +95,10 @@ export function useSaveWorkflow() {
   });
 }
 
-/** Download a HuggingFace model with streaming progress. */
+/** Download a HuggingFace model; progress arrives as `aigc.download.*` events. */
 export function useDownloadModel() {
   return useMutation({
-    mutationFn: ({
-      args,
-      onEvent,
-    }: {
-      args: DownloadHuggingfaceModelArgs;
-      onEvent?: (event: DownloadEventPayload) => void;
-    }): Promise<ModelDownloadOutput> => ipcDownloadModel(args, onEvent),
+    mutationFn: (args: DownloadHuggingfaceModelArgs): Promise<ModelDownloadOutput> =>
+      ipcDownloadModel(args),
   });
 }

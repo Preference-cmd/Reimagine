@@ -4,10 +4,9 @@ import {
   type BoardSnapshot,
   type CommandError,
   type ComputeProfile,
-  type DocumentChangedEvent,
+  type Event,
   type Project,
   type ProjectMetadataInput,
-  type DownloadEventPayload,
   type DownloadHuggingfaceModelArgs,
   type ModelCard,
   type ModelCatalogEntry,
@@ -16,7 +15,6 @@ import {
   type ModelInfo,
   type NodeDef,
   type RebootBackendArgs,
-  type RunEventPayload,
   type RunWorkflowResponse,
   type Workflow,
   type WorkflowFileSummary,
@@ -24,7 +22,7 @@ import {
   type WorkerSwitchResult,
   type WorkerSwitchTarget,
   CommandErrorSchema,
-  DocumentChangedEventSchema,
+  EventSchema,
   ProjectMetadataInputSchema,
   DownloadHuggingfaceModelArgsSchema,
   RebootBackendArgsSchema,
@@ -39,7 +37,7 @@ import {
   mockListProjects,
   mockLoadProject,
   mockSetActiveProject,
-  mockSubscribeDocumentEvents,
+  mockSubscribeEvents,
   mockUndoBoard,
   mockRedoBoard,
   mockApplyBoardCommands,
@@ -133,19 +131,8 @@ async function invokeWithFallback<T>(real: () => Promise<T>, mock: () => Promise
 export async function runWorkflow(
   projectId: string,
   workflow: Workflow,
-  onEvent?: (event: RunEventPayload) => void,
 ): Promise<RunWorkflowResponse> {
-  return invokeWithFallback(
-    async () => {
-      const { Channel, invoke } = await import("@tauri-apps/api/core");
-      const channel = new Channel<RunEventPayload>();
-      if (onEvent) {
-        channel.onmessage = onEvent;
-      }
-      return invoke<RunWorkflowResponse>("run_workflow", { projectId, workflow, channel });
-    },
-    () => mockRunWorkflow(workflow, onEvent),
-  );
+  return dispatch("run_workflow", null, { projectId, workflow }, () => mockRunWorkflow(workflow));
 }
 
 export async function cancelRun(runId: string): Promise<void> {
@@ -196,28 +183,12 @@ export function getModelCard(repoId: string): Promise<ModelCard> {
 
 export async function downloadHuggingfaceModel(
   args: DownloadHuggingfaceModelArgs,
-  onEvent?: (event: DownloadEventPayload) => void,
 ): Promise<ModelDownloadOutput> {
-  DownloadHuggingfaceModelArgsSchema.parse(args);
-  return invokeWithFallback(
-    async () => {
-      const { Channel, invoke } = await import("@tauri-apps/api/core");
-      const channel = new Channel<DownloadEventPayload>();
-      if (onEvent) {
-        channel.onmessage = onEvent;
-      }
-      return invoke<ModelDownloadOutput>("download_huggingface_model", {
-        repoId: args.repoId,
-        revision: args.revision,
-        allowPatterns: args.allowPatterns,
-        targetRelativeDir: args.targetRelativeDir,
-        overwrite: args.overwrite,
-        autoDetect: args.autoDetect,
-        fromCatalog: args.fromCatalog,
-        channel,
-      });
-    },
-    () => mockDownloadHuggingfaceModel(args, onEvent),
+  return dispatch(
+    "download_huggingface_model",
+    DownloadHuggingfaceModelArgsSchema,
+    args,
+    mockDownloadHuggingfaceModel,
   );
 }
 
@@ -249,21 +220,45 @@ export function setActiveProject(projectId: string): Promise<Project> {
   return dispatch("set_active_project", null, { projectId }, mockSetActiveProject);
 }
 
-export function subscribeDocumentEvents(
-  onEvent: (event: DocumentChangedEvent) => void,
-): Promise<void> {
-  return invokeWithFallback(
-    async () => {
-      const { Channel, invoke } = await import("@tauri-apps/api/core");
-      const channel = new Channel<DocumentChangedEvent>();
-      channel.onmessage = (payload) => {
-        const event = DocumentChangedEventSchema.safeParse(payload);
-        if (event.success) onEvent(event.data);
-      };
-      return invoke<void>("subscribe_document_events", { channel });
-    },
-    () => mockSubscribeDocumentEvents(onEvent),
-  );
+/* ───── Events: one host subscription fanned out to listeners ───── */
+
+type EventListener = (event: Event) => void;
+const eventListeners = new Set<EventListener>();
+let eventSubscriptionPromise: Promise<void> | null = null;
+
+function ensureEventSubscription(): Promise<void> {
+  if (!eventSubscriptionPromise) {
+    eventSubscriptionPromise = invokeWithFallback(
+      async () => {
+        const { Channel, invoke } = await import("@tauri-apps/api/core");
+        const channel = new Channel<Event>();
+        channel.onmessage = (payload) => {
+          const parsed = EventSchema.safeParse(payload);
+          if (parsed.success) {
+            for (const listener of Array.from(eventListeners)) {
+              listener(parsed.data);
+            }
+          }
+        };
+        return invoke<void>("subscribe_events", { channel });
+      },
+      () =>
+        mockSubscribeEvents((event) => {
+          for (const listener of Array.from(eventListeners)) {
+            listener(event);
+          }
+        }),
+    );
+  }
+  return eventSubscriptionPromise;
+}
+
+export function subscribeEvents(listener: EventListener): () => void {
+  eventListeners.add(listener);
+  void ensureEventSubscription();
+  return () => {
+    eventListeners.delete(listener);
+  };
 }
 
 export function getBoardSnapshot(projectId: string): Promise<BoardSnapshot> {

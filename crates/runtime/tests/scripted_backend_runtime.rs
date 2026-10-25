@@ -19,7 +19,7 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use async_trait::async_trait;
-use reimagine_core::event::Timestamp;
+use reimagine_core::event::{EventBus, Timestamp};
 use reimagine_core::model::{
     DocumentVersion, ModelId, NodeId, NodeTypeId, ParamValue, SlotId, WorkflowId,
 };
@@ -32,7 +32,7 @@ use reimagine_inference::{
 };
 use reimagine_runtime::{
     Clock, NodeExecutionContext, NodeExecutor, NodeExecutorError, NodeExecutorRegistry,
-    NoopBackendInstanceRuntimeHooks, RunHandle, RuntimeOptions, RuntimeService, VecRunEventSink,
+    NoopBackendInstanceRuntimeHooks, RunHandle, RuntimeOptions, RuntimeService,
 };
 
 /// A clock that always returns the same string timestamp.
@@ -189,11 +189,11 @@ fn scripted_error_at_second_node_fails_the_run_with_mapped_message() {
             )
             .expect("register scripted text node");
 
-        let sink = Arc::new(VecRunEventSink::new());
+        let bus = EventBus::new();
         let service = RuntimeService::new(
             registry,
             Arc::new(NoopBackendInstanceRuntimeHooks::default()),
-            sink.clone(),
+            bus.clone(),
             Arc::new(FixedClock),
         );
         let handle = service
@@ -261,7 +261,7 @@ fn held_scripted_step_cancelled_mid_flight_marks_run_cancelled() {
         let service = RuntimeService::new(
             registry,
             Arc::new(NoopBackendInstanceRuntimeHooks::default()),
-            Arc::new(VecRunEventSink::new()),
+            EventBus::new(),
             Arc::new(FixedClock),
         );
         let handle = service

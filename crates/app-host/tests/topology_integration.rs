@@ -13,7 +13,6 @@ use std::sync::Arc;
 use reimagine_app_host::WorkspaceScope;
 use reimagine_app_host::{EmptyWorkerInventoryProvider, WorkspaceHost};
 use reimagine_config::{InferenceBackendConfig, WorkerEndpointConfig};
-use reimagine_runtime::VecRunEventSink;
 
 fn temp_dir(prefix: &str) -> std::path::PathBuf {
     let nonce = std::time::SystemTime::now()
@@ -43,7 +42,7 @@ async fn host_with_backend_config(
         WorkspaceScope::new(scope),
         base,
         backend_config,
-        Arc::new(VecRunEventSink::new()),
+        reimagine_core::event::EventBus::new(),
         Arc::new(EmptyWorkerInventoryProvider),
     )
     .await

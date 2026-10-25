@@ -13,7 +13,7 @@ use reimagine_core::model::{
 use reimagine_inference::{ArtifactEventKind, ArtifactPublisher};
 
 use crate::clock::Clock;
-use crate::events::RunEventSink;
+use reimagine_core::event::{Event, EventBus};
 use reimagine_core::task::CancelToken;
 
 /// One artifact recorded during a run.
@@ -82,12 +82,12 @@ impl ArtifactStore {
 /// [`ArtifactPublisher`](reimagine_inference::ArtifactPublisher).
 ///
 /// Records artifacts into the per-run [`ArtifactStore`] and emits the
-/// matching [`RunEvent`] via the [`RunEventSink`]. Built fresh per
+/// matching [`RunEvent`] via the [`EventBus`]. Built fresh per
 /// node invocation by the runner task.
 pub struct RuntimeNodeArtifactCapability {
     node_id: NodeId,
     store: Arc<tokio::sync::Mutex<ArtifactStore>>,
-    sink: Arc<dyn RunEventSink>,
+    event_bus: EventBus,
     next_artifact_id: Arc<AtomicU64>,
     next_event_id: Arc<AtomicU64>,
     run_id: RunId,
@@ -105,14 +105,14 @@ impl RuntimeNodeArtifactCapability {
         workflow_version: DocumentVersion,
         node_id: NodeId,
         store: Arc<tokio::sync::Mutex<ArtifactStore>>,
-        sink: Arc<dyn RunEventSink>,
+        event_bus: EventBus,
         clock: Arc<dyn Clock>,
         cancellation: CancelToken,
     ) -> Self {
         Self {
             node_id,
             store,
-            sink,
+            event_bus,
             next_artifact_id: Arc::new(AtomicU64::new(0)),
             next_event_id: Arc::new(AtomicU64::new(0)),
             run_id,
@@ -168,26 +168,7 @@ impl ArtifactPublisher for RuntimeNodeArtifactCapability {
         )
         .with_node_id(self.node_id.clone())
         .with_artifact(id.clone());
-        match std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| self.sink.emit(event))) {
-            Ok(Ok(())) => {}
-            Ok(Err(error)) => {
-                tracing::warn!(
-                    target: "reimagine_runtime",
-                    run_id = %self.run_id.as_str(),
-                    node_id = %self.node_id.as_str(),
-                    error = %error,
-                    "run event sink failed while emitting artifact event"
-                );
-            }
-            Err(_) => {
-                tracing::warn!(
-                    target: "reimagine_runtime",
-                    run_id = %self.run_id.as_str(),
-                    node_id = %self.node_id.as_str(),
-                    "run event sink panicked while emitting artifact event"
-                );
-            }
-        }
+        self.event_bus.publish(Event::Run(event));
         Some(id)
     }
 }

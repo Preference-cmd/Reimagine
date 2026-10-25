@@ -2,6 +2,10 @@ use std::future::Future;
 use std::path::PathBuf;
 use std::pin::Pin;
 use std::sync::Arc;
+use std::sync::atomic::{AtomicU64, Ordering};
+
+use reimagine_core::event::{Event, EventBus};
+use serde::Serialize;
 
 use reimagine_config::{AppConfig, AppPaths, ConfigDocument, ConfigHandle, ConfigReport};
 use reimagine_model_acquisition::hf::provider::AcquisitionProgressSink;
@@ -16,16 +20,22 @@ use crate::AigcResult;
 pub struct ModelAcquisitionService {
     models_dir: PathBuf,
     config_handle: ConfigHandle<ModelAcquisitionConfig>,
+    event_bus: EventBus,
 }
 
 impl ModelAcquisitionService {
     pub fn new(paths: AppPaths, app_config: &AppConfig) -> Self {
+        Self::with_event_bus(paths, app_config, EventBus::new())
+    }
+
+    pub fn with_event_bus(paths: AppPaths, app_config: &AppConfig, event_bus: EventBus) -> Self {
         let config_handle = app_config
             .config::<ModelAcquisitionConfig>()
             .expect("ModelAcquisitionConfig handle creation should always succeed");
         Self {
             models_dir: paths.models_dir().to_path_buf(),
             config_handle,
+            event_bus,
         }
     }
 
@@ -45,6 +55,35 @@ impl ModelAcquisitionService {
             .await
             .map_err(crate::AigcError::BootstrapConfig)?;
         Ok(report)
+    }
+
+    /// Download a HuggingFace model and publish its progress on the event bus
+    /// as `aigc.download.{started,progress,completed,failed}` module events
+    /// whose payload carries `download_id`.
+    ///
+    /// `estimated_bytes` seeds `totalBytes` until the download reports the
+    /// real size.
+    pub fn acquire_with_progress_events(
+        self: Arc<Self>,
+        download_id: String,
+        request: ModelAcquisitionRequest,
+        estimated_bytes: Option<u64>,
+    ) -> Pin<Box<dyn Future<Output = AigcResult<AcquisitionReport>> + Send>> {
+        let sink = Arc::new(DownloadEvents::new(
+            self.event_bus.clone(),
+            download_id,
+            estimated_bytes,
+        ));
+        sink.publish("started", None);
+        let download = Arc::clone(&self).acquire(request, Some(sink.clone()));
+        Box::pin(async move {
+            let result = download.await;
+            match &result {
+                Ok(report) => sink.done(report),
+                Err(error) => sink.publish("failed", Some(error.to_string())),
+            }
+            result
+        })
     }
 
     /// Download a HuggingFace model.
@@ -234,5 +273,107 @@ fn load_config_sync(
             path: path.to_path_buf(),
             message: e.to_string(),
         }),
+    }
+}
+
+/// Payload of an `aigc.download.*` event.
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct DownloadProgress<'a> {
+    download_id: &'a str,
+    /// Bytes of the files finished so far.
+    bytes_downloaded: u64,
+    total_bytes: Option<u64>,
+    message: Option<String>,
+}
+
+/// Publishes one download's progress on the event bus.
+struct DownloadEvents {
+    event_bus: EventBus,
+    download_id: String,
+    bytes_downloaded: AtomicU64,
+    total_bytes: AtomicU64,
+}
+
+impl DownloadEvents {
+    fn new(event_bus: EventBus, download_id: String, estimated_bytes: Option<u64>) -> Self {
+        Self {
+            event_bus,
+            download_id,
+            bytes_downloaded: AtomicU64::new(0),
+            total_bytes: AtomicU64::new(estimated_bytes.unwrap_or(0)),
+        }
+    }
+
+    fn publish(&self, stage: &str, message: Option<String>) {
+        let total_bytes = self.total_bytes.load(Ordering::Relaxed);
+        let payload = DownloadProgress {
+            download_id: &self.download_id,
+            bytes_downloaded: self.bytes_downloaded.load(Ordering::Relaxed),
+            total_bytes: (total_bytes > 0).then_some(total_bytes),
+            message,
+        };
+        let payload = serde_json::to_value(payload).expect("download progress serializes");
+        self.event_bus
+            .publish(Event::module(format!("aigc.download.{stage}"), payload));
+    }
+}
+
+impl AcquisitionProgressSink for DownloadEvents {
+    fn file_done(&self, relative_path: &str, bytes: u64, outcome: &str) {
+        self.bytes_downloaded.fetch_add(bytes, Ordering::Relaxed);
+        self.publish("progress", Some(format!("file {outcome}: {relative_path}")));
+    }
+
+    fn done(&self, report: &AcquisitionReport) {
+        self.bytes_downloaded
+            .store(report.total_bytes, Ordering::Relaxed);
+        self.total_bytes
+            .store(report.total_bytes, Ordering::Relaxed);
+        self.publish("completed", None);
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn next_module_event(
+        rx: &mut tokio::sync::broadcast::Receiver<Event>,
+    ) -> (String, serde_json::Value) {
+        match rx.try_recv().expect("an event was published") {
+            Event::Module { kind, payload } => (kind, payload),
+            other => panic!("expected a module event, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn download_progress_is_published_as_aigc_module_events() {
+        let bus = EventBus::new();
+        let mut rx = bus.subscribe();
+        let events = DownloadEvents::new(bus, "dl-1".to_owned(), Some(1000));
+
+        events.publish("started", None);
+        events.file_done("a.safetensors", 300, "downloaded");
+        events.file_done("b.safetensors", 200, "downloaded");
+        let mut report = AcquisitionReport::new("huggingface", "org/model", "main", "org/model");
+        report.total_bytes = 500;
+        events.done(&report);
+
+        let (kind, payload) = next_module_event(&mut rx);
+        assert_eq!(kind, "aigc.download.started");
+        assert_eq!(payload["downloadId"], "dl-1");
+        assert_eq!(payload["totalBytes"], 1000);
+
+        let (kind, payload) = next_module_event(&mut rx);
+        assert_eq!(kind, "aigc.download.progress");
+        assert_eq!(payload["bytesDownloaded"], 300);
+        let (_, payload) = next_module_event(&mut rx);
+        assert_eq!(payload["bytesDownloaded"], 500, "progress is cumulative");
+
+        let (kind, payload) = next_module_event(&mut rx);
+        assert_eq!(kind, "aigc.download.completed");
+        assert_eq!(payload["bytesDownloaded"], 500);
+        assert_eq!(payload["totalBytes"], 500);
     }
 }
