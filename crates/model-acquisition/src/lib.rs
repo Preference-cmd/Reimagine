@@ -31,7 +31,7 @@ pub use request::{
     AcquireProvider, AllowPatterns, ModelAcquisitionRequest, OverwritePolicy, RepoId, Revision,
     TargetRelativeDir,
 };
-pub use staging::{promote_staged, staging_dir};
+pub use staging::{promote_staged, promoted_files, staging_dir};
 
 pub use burn::{
     BurnCheckpointConverter, BurnConversionComponent, BurnConversionComponentRole,

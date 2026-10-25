@@ -22,6 +22,9 @@ both check it.
   channel; progress arrives as `aigc.download.{started,progress,completed,failed}`
   module events whose payload is `downloadId`, `bytesDownloaded` (cumulative),
   `totalBytes` and `message`.
+- The `run_workflow` response and its `initialSnapshot` use camelCase fields
+  (`runId`, `workflowId`, `workflowVersion`, `initialSnapshot`, `nodeStates`,
+  `startedAt`, ...); `workflowVersion` is a number.
 - Board command results (`preview_board_commands`, `apply_board_commands`,
   `undo_board`, `redo_board`) return `version` instead of `boardVersion`.
 - Board command results (`preview_board_commands`, `apply_board_commands`,
@@ -62,6 +65,19 @@ both check it.
 - The experimental `reimagine-agent-daemon` sidecar crate.
 - New projects no longer get an `agent_threads` directory; existing ones are
   left untouched.
+
+### Fixed
+
+- The run panel stayed in "running" with no run id: the UI read camelCase
+  fields from a `run_workflow` response that was snake_case.
+- `cargo tauri dev` and `cargo tauri build` failed to start the frontend:
+  `beforeDevCommand`/`beforeBuildCommand` ran `bun --cwd ../ui` from the
+  repository root.
+- Model downloads reported no files and 0 bytes: the report listed the
+  staging directory after it had been moved into place. Files in
+  subdirectories are now listed too.
+- Download progress counted a file once per progress update, so the byte
+  count overshot; it now tracks each file's latest transferred bytes.
 
 ### Security
 

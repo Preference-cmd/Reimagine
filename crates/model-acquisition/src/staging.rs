@@ -122,10 +122,79 @@ async fn remove_dir_if_exists(path: &Path) -> ModelAcquisitionResult<()> {
     Ok(())
 }
 
+/// List the files under `dir`, recursively, as report entries whose
+/// `relative_path` uses `/` separators. Used after promotion, so it reads the
+/// final target rather than the (renamed) staging directory.
+pub fn promoted_files(
+    dir: &Path,
+) -> crate::ModelAcquisitionResult<Vec<crate::report::AcquisitionFileEntry>> {
+    fn walk(
+        root: &Path,
+        dir: &Path,
+        out: &mut Vec<crate::report::AcquisitionFileEntry>,
+    ) -> crate::ModelAcquisitionResult<()> {
+        let io = |path: &Path, e: std::io::Error| crate::ModelAcquisitionError::Io {
+            path: path.to_path_buf(),
+            message: e.to_string(),
+        };
+        let mut entries = std::fs::read_dir(dir)
+            .map_err(|e| io(dir, e))?
+            .collect::<Result<Vec<_>, _>>()
+            .map_err(|e| io(dir, e))?;
+        entries.sort_by_key(std::fs::DirEntry::file_name);
+        for entry in entries {
+            let path = entry.path();
+            let md = entry.metadata().map_err(|e| io(&path, e))?;
+            if md.is_dir() {
+                walk(root, &path, out)?;
+            } else if md.is_file() {
+                let relative = path.strip_prefix(root).unwrap_or(&path);
+                let relative = relative
+                    .components()
+                    .map(|c| c.as_os_str().to_string_lossy())
+                    .collect::<Vec<_>>()
+                    .join("/");
+                out.push(crate::report::AcquisitionFileEntry {
+                    relative_path: relative,
+                    bytes: md.len(),
+                    outcome: crate::report::AcquisitionOutcome::Downloaded,
+                });
+            }
+        }
+        Ok(())
+    }
+    let mut out = Vec::new();
+    if dir.exists() {
+        walk(dir, dir, &mut out)?;
+    }
+    Ok(out)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
     use std::fs;
+
+    #[test]
+    fn promoted_files_lists_nested_files_with_slash_paths() {
+        let root = std::env::temp_dir().join(format!("promoted-files-{}", std::process::id()));
+        let _ = fs::remove_dir_all(&root);
+        fs::create_dir_all(root.join("unet")).unwrap();
+        fs::write(root.join("model_index.json"), b"{}").unwrap();
+        fs::write(root.join("unet").join("weights.bin"), b"12345").unwrap();
+
+        let files = promoted_files(&root).unwrap();
+        let listed: Vec<_> = files
+            .iter()
+            .map(|f| (f.relative_path.as_str(), f.bytes))
+            .collect();
+        assert_eq!(
+            listed,
+            vec![("model_index.json", 2), ("unet/weights.bin", 5)]
+        );
+        assert!(promoted_files(&root.join("missing")).unwrap().is_empty());
+        let _ = fs::remove_dir_all(&root);
+    }
 
     #[tokio::test]
     async fn test_staging_dir_format() {

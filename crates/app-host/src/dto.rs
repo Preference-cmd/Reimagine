@@ -48,7 +48,7 @@ pub use health::{HealthDto, HealthResponse};
 pub use nodes::{NodeCatalogResponse, NodeDefDto, ParamSpecDto, SocketSpecDto};
 pub use projects::{ProjectDto, ProjectMetadataInputDto};
 pub use reimagine_core::command::{CommandBatch, CommandResult, CommandStatus};
-pub use runs::{DiagnosticDto, NodeStateDto, RunDto, RunSnapshotDto, RunSummaryDto};
+pub use runs::{DiagnosticDto, NodeStateDto, RunSnapshotDto};
 pub use workflows::{
     OpenWorkflowRequest, OpenWorkflowResponse, RunTargetDto, RunWorkflowRequestDto,
     RunWorkflowResponse, TargetSelectionDto, WorkflowSource,

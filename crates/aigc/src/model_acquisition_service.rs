@@ -1,8 +1,9 @@
+use std::collections::HashMap;
 use std::future::Future;
 use std::path::PathBuf;
 use std::pin::Pin;
-use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::{Arc, Mutex};
 
 use reimagine_core::event::{Event, EventBus};
 use serde::Serialize;
@@ -172,8 +173,8 @@ impl ModelAcquisitionService {
                 } else {
                     Some(request.allow_patterns.as_slice().to_vec())
                 };
-                let snapshot_path = repo
-                    .snapshot_download()
+                // The snapshot lands in `stg_dir` (its `local_dir`).
+                repo.snapshot_download()
                     .maybe_revision(Some(request.revision.as_str().to_string()))
                     .maybe_allow_patterns(allow_patterns)
                     .maybe_local_dir(Some(stg_dir.clone()))
@@ -205,35 +206,8 @@ impl ModelAcquisitionService {
                     request.target_relative_dir.as_os_str().to_string_lossy(),
                 );
                 report.detected_format = resolved_format;
-                if snapshot_path.exists() {
-                    for entry in std::fs::read_dir(&snapshot_path).map_err(|e| {
-                        reimagine_model_acquisition::ModelAcquisitionError::Io {
-                            path: snapshot_path.clone(),
-                            message: e.to_string(),
-                        }
-                    })? {
-                        let entry = entry.map_err(|e| {
-                            reimagine_model_acquisition::ModelAcquisitionError::Io {
-                                path: snapshot_path.clone(),
-                                message: e.to_string(),
-                            }
-                        })?;
-                        let md = entry.metadata().map_err(|e| {
-                            reimagine_model_acquisition::ModelAcquisitionError::Io {
-                                path: entry.path(),
-                                message: e.to_string(),
-                            }
-                        })?;
-                        if md.is_file() {
-                            let relative = entry.file_name().to_string_lossy().to_string();
-                            report.add_file(reimagine_model_acquisition::AcquisitionFileEntry {
-                                relative_path: relative,
-                                bytes: md.len(),
-                                outcome:
-                                    reimagine_model_acquisition::AcquisitionOutcome::Downloaded,
-                            });
-                        }
-                    }
+                for file in reimagine_model_acquisition::promoted_files(&target_dir)? {
+                    report.add_file(file);
                 }
                 Ok::<_, reimagine_model_acquisition::ModelAcquisitionError>(report)
             })
@@ -281,7 +255,7 @@ fn load_config_sync(
 #[serde(rename_all = "camelCase")]
 struct DownloadProgress<'a> {
     download_id: &'a str,
-    /// Bytes of the files finished so far.
+    /// Bytes transferred so far, summed over files.
     bytes_downloaded: u64,
     total_bytes: Option<u64>,
     message: Option<String>,
@@ -291,7 +265,8 @@ struct DownloadProgress<'a> {
 struct DownloadEvents {
     event_bus: EventBus,
     download_id: String,
-    bytes_downloaded: AtomicU64,
+    /// Latest transferred byte count per file; a file reports many times.
+    file_bytes: Mutex<HashMap<String, u64>>,
     total_bytes: AtomicU64,
 }
 
@@ -300,16 +275,24 @@ impl DownloadEvents {
         Self {
             event_bus,
             download_id,
-            bytes_downloaded: AtomicU64::new(0),
+            file_bytes: Mutex::new(HashMap::new()),
             total_bytes: AtomicU64::new(estimated_bytes.unwrap_or(0)),
         }
+    }
+
+    fn bytes_downloaded(&self) -> u64 {
+        self.file_bytes
+            .lock()
+            .expect("download progress lock")
+            .values()
+            .sum()
     }
 
     fn publish(&self, stage: &str, message: Option<String>) {
         let total_bytes = self.total_bytes.load(Ordering::Relaxed);
         let payload = DownloadProgress {
             download_id: &self.download_id,
-            bytes_downloaded: self.bytes_downloaded.load(Ordering::Relaxed),
+            bytes_downloaded: self.bytes_downloaded(),
             total_bytes: (total_bytes > 0).then_some(total_bytes),
             message,
         };
@@ -321,15 +304,17 @@ impl DownloadEvents {
 
 impl AcquisitionProgressSink for DownloadEvents {
     fn file_done(&self, relative_path: &str, bytes: u64, outcome: &str) {
-        self.bytes_downloaded.fetch_add(bytes, Ordering::Relaxed);
+        {
+            let mut files = self.file_bytes.lock().expect("download progress lock");
+            let seen = files.entry(relative_path.to_owned()).or_default();
+            *seen = (*seen).max(bytes);
+        }
         self.publish("progress", Some(format!("file {outcome}: {relative_path}")));
     }
 
     fn done(&self, report: &AcquisitionReport) {
-        self.bytes_downloaded
-            .store(report.total_bytes, Ordering::Relaxed);
-        self.total_bytes
-            .store(report.total_bytes, Ordering::Relaxed);
+        let bytes = self.bytes_downloaded().max(report.total_bytes);
+        self.total_bytes.store(bytes, Ordering::Relaxed);
         self.publish("completed", None);
     }
 }
@@ -355,9 +340,10 @@ mod tests {
 
         events.publish("started", None);
         events.file_done("a.safetensors", 300, "downloaded");
+        events.file_done("b.safetensors", 100, "downloading");
         events.file_done("b.safetensors", 200, "downloaded");
-        let mut report = AcquisitionReport::new("huggingface", "org/model", "main", "org/model");
-        report.total_bytes = 500;
+        // The report lists no files: completion keeps the bytes seen so far.
+        let report = AcquisitionReport::new("huggingface", "org/model", "main", "org/model");
         events.done(&report);
 
         let (kind, payload) = next_module_event(&mut rx);
@@ -369,7 +355,12 @@ mod tests {
         assert_eq!(kind, "aigc.download.progress");
         assert_eq!(payload["bytesDownloaded"], 300);
         let (_, payload) = next_module_event(&mut rx);
-        assert_eq!(payload["bytesDownloaded"], 500, "progress is cumulative");
+        assert_eq!(payload["bytesDownloaded"], 400);
+        let (_, payload) = next_module_event(&mut rx);
+        assert_eq!(
+            payload["bytesDownloaded"], 500,
+            "a file's repeated reports are not summed"
+        );
 
         let (kind, payload) = next_module_event(&mut rx);
         assert_eq!(kind, "aigc.download.completed");

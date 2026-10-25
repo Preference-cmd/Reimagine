@@ -207,6 +207,7 @@ export type ModelInfo = z.infer<typeof ModelInfoSchema>;
 export const RunSnapshotDtoSchema = z.object({
   runId: z.string(),
   workflowId: z.string(),
+  workflowVersion: z.number(),
   state: z.string(),
   nodeStates: z.record(z.string(), z.string()),
   diagnostics: z.array(
@@ -230,7 +231,7 @@ export const RunWorkflowResponseSchema = z.discriminatedUnion("outcome", [
     outcome: z.literal("started"),
     runId: z.string(),
     workflowId: z.string(),
-    workflowVersion: z.string(),
+    workflowVersion: z.number(),
     initialSnapshot: RunSnapshotDtoSchema,
     diagnostics: z.array(
       z.object({

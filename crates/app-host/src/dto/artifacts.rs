@@ -5,6 +5,7 @@ use reimagine_runtime::RunArtifactRef;
 use serde::{Deserialize, Serialize};
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub struct ArtifactDto {
     pub id: ArtifactId,
     pub node_id: NodeId,

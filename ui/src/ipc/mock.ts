@@ -99,10 +99,11 @@ export async function mockRunWorkflow(
     outcome: "started",
     runId,
     workflowId: rand("wf"),
-    workflowVersion: "1",
+    workflowVersion: 1,
     initialSnapshot: {
       runId,
       workflowId: "mock-wf",
+      workflowVersion: 1,
       state: "running",
       nodeStates: {},
       diagnostics: [],

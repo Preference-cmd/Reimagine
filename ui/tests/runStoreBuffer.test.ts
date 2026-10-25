@@ -45,10 +45,11 @@ function started(runId: string): RunWorkflowResponse {
     outcome: "started",
     runId,
     workflowId: "wf-1",
-    workflowVersion: "1",
+    workflowVersion: 1,
     initialSnapshot: {
       runId,
       workflowId: "wf-1",
+      workflowVersion: 1,
       state: "running",
       nodeStates: {},
       diagnostics: [],

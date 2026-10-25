@@ -23,6 +23,7 @@ import {
   type WorkerSwitchTarget,
   CommandErrorSchema,
   EventSchema,
+  RunWorkflowResponseSchema,
   ProjectMetadataInputSchema,
   DownloadHuggingfaceModelArgsSchema,
   RebootBackendArgsSchema,
@@ -132,7 +133,12 @@ export async function runWorkflow(
   projectId: string,
   workflow: Workflow,
 ): Promise<RunWorkflowResponse> {
-  return dispatch("run_workflow", null, { projectId, workflow }, () => mockRunWorkflow(workflow));
+  const response = await dispatch("run_workflow", null, { projectId, workflow }, () =>
+    mockRunWorkflow(workflow),
+  );
+  // Parse so a host/UI field mismatch fails here instead of leaving `runId`
+  // undefined and the run store ignoring every run event.
+  return RunWorkflowResponseSchema.parse(response);
 }
 
 export async function cancelRun(runId: string): Promise<void> {

@@ -4,7 +4,7 @@ use hf_hub::progress::{self, DownloadEvent, FileStatus, Progress, ProgressHandle
 
 use crate::error::ModelAcquisitionResult;
 use crate::hf::strategy::resolve_download_patterns;
-use crate::report::{AcquisitionFileEntry, AcquisitionOutcome, AcquisitionReport};
+use crate::report::AcquisitionReport;
 use crate::request::ModelAcquisitionRequest;
 use crate::staging::{self, staging_dir};
 
@@ -12,7 +12,9 @@ use crate::staging::{self, staging_dir};
 pub trait AcquisitionProgressSink: Send + Sync {
     /// Called when the download begins.
     fn started(&self, _repo_id: &str, _revision: &str) {}
-    /// Called per-file as each file download completes or is skipped.
+    /// Called on each progress update of a file with the bytes transferred
+    /// so far; `outcome` is `downloaded` once the file is complete, else
+    /// `downloading`. A file is reported many times.
     fn file_done(&self, relative_path: &str, bytes: u64, outcome: &str);
     /// Called once when the acquisition finishes.
     fn done(&self, report: &AcquisitionReport);
@@ -33,11 +35,15 @@ impl ProgressHandler for ProgressSinkBridge {
     fn on_progress(&self, event: &progress::ProgressEvent) {
         if let progress::ProgressEvent::Download(DownloadEvent::Progress { files }) = event {
             for f in files {
-                let outcome = match f.status {
-                    FileStatus::Complete => "downloaded",
-                    _ => "cached", // Started / InProgress are transient
+                let (bytes, outcome) = match f.status {
+                    // Cached files signal completion with `bytes_completed`
+                    // possibly 0, so take the larger of the two counts.
+                    FileStatus::Complete => (f.bytes_completed.max(f.total_bytes), "downloaded"),
+                    FileStatus::Started | FileStatus::InProgress => {
+                        (f.bytes_completed, "downloading")
+                    }
                 };
-                self.sink.file_done(&f.filename, f.total_bytes, outcome);
+                self.sink.file_done(&f.filename, bytes, outcome);
             }
         }
     }
@@ -120,39 +126,8 @@ impl HuggingFaceProvider {
             request.target_relative_dir.as_os_str().to_string_lossy(),
         );
 
-        if snapshot_path.exists() {
-            let mut entries = tokio::fs::read_dir(&snapshot_path).await.map_err(|e| {
-                crate::ModelAcquisitionError::Io {
-                    path: snapshot_path.clone(),
-                    message: e.to_string(),
-                }
-            })?;
-
-            while let Some(entry) =
-                entries
-                    .next_entry()
-                    .await
-                    .map_err(|e| crate::ModelAcquisitionError::Io {
-                        path: snapshot_path.clone(),
-                        message: e.to_string(),
-                    })?
-            {
-                let md = entry
-                    .metadata()
-                    .await
-                    .map_err(|e| crate::ModelAcquisitionError::Io {
-                        path: entry.path(),
-                        message: e.to_string(),
-                    })?;
-                if md.is_file() {
-                    let relative = entry.file_name().to_string_lossy().to_string();
-                    report.add_file(AcquisitionFileEntry {
-                        relative_path: relative,
-                        bytes: md.len(),
-                        outcome: AcquisitionOutcome::Downloaded,
-                    });
-                }
-            }
+        for file in staging::promoted_files(&target_dir)? {
+            report.add_file(file);
         }
 
         report

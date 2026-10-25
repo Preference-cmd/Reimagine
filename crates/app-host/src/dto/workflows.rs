@@ -127,17 +127,20 @@ impl From<TargetSelectionDto> for RunTargetSelection {
     }
 }
 
-/// `POST /workflows/:id/run` response. V1 always returns the host
-/// outcome: either a started run handle, a blocked readiness report,
-/// or an error. The `Started` variant carries the initial snapshot so
-/// clients can poll immediately without a follow-up `GET /runs/:id`.
+/// `run_workflow` response: either a started run handle or a blocked
+/// readiness report. The `Started` variant carries the initial snapshot;
+/// later progress arrives as run events.
 ///
 /// The `Started` variant also carries any non-blocking diagnostics
 /// from the readiness report (for example catalog/executor orphan
 /// warnings). An empty `diagnostics` vector means the run is fully
 /// clean.
 #[derive(Debug, Clone, Serialize, Deserialize)]
-#[serde(tag = "outcome", rename_all = "snake_case")]
+#[serde(
+    tag = "outcome",
+    rename_all = "snake_case",
+    rename_all_fields = "camelCase"
+)]
 pub enum RunWorkflowResponse {
     Started {
         run_id: RunId,
@@ -150,4 +153,49 @@ pub enum RunWorkflowResponse {
         workflow_id: WorkflowId,
         diagnostics: Vec<DiagnosticDto>,
     },
+}
+
+#[cfg(test)]
+mod tests {
+    use std::collections::HashMap;
+
+    use reimagine_core::task::TaskState;
+
+    use super::*;
+
+    #[test]
+    fn run_workflow_response_fields_are_camel_case() {
+        let started = RunWorkflowResponse::Started {
+            run_id: RunId::new("run-1"),
+            workflow_id: WorkflowId::new("wf-1"),
+            workflow_version: DocumentVersion::new(3),
+            initial_snapshot: Box::new(RunSnapshotDto {
+                run_id: RunId::new("run-1"),
+                workflow_id: WorkflowId::new("wf-1"),
+                workflow_version: DocumentVersion::new(3),
+                state: TaskState::Running,
+                node_states: HashMap::new(),
+                diagnostics: Vec::new(),
+                artifacts: Vec::new(),
+                started_at: "2026-10-25T00:00:00Z".to_owned(),
+                updated_at: "2026-10-25T00:00:00Z".to_owned(),
+            }),
+            diagnostics: Vec::new(),
+        };
+        let json = serde_json::to_value(&started).expect("serialize started");
+        assert_eq!(json["outcome"], "started");
+        assert_eq!(json["runId"], "run-1");
+        assert_eq!(json["workflowId"], "wf-1");
+        assert_eq!(json["workflowVersion"], 3);
+        assert_eq!(json["initialSnapshot"]["runId"], "run-1");
+        assert_eq!(json["initialSnapshot"]["nodeStates"], serde_json::json!({}));
+
+        let blocked = RunWorkflowResponse::Blocked {
+            workflow_id: WorkflowId::new("wf-1"),
+            diagnostics: Vec::new(),
+        };
+        let json = serde_json::to_value(&blocked).expect("serialize blocked");
+        assert_eq!(json["outcome"], "blocked");
+        assert_eq!(json["workflowId"], "wf-1");
+    }
 }
