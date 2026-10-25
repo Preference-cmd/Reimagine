@@ -1,44 +1,37 @@
 use std::sync::Arc;
-use std::time::Duration;
 
 use async_trait::async_trait;
 use reimagine_backend_worker_host::{WorkerProcessState, WorkerRunLeases};
-use reimagine_backend_worker_protocol::{
-    HostHello, ProtocolRange, WireMessage, WorkerHello, WorkerIncarnationId, WorkerTransport,
-    negotiate_protocol,
-};
-use reimagine_backend_worker_transport_grpc::{
-    GrpcAuth,
-    client::{self},
-    proto,
-    transport::GrpcTransport,
-};
+use reimagine_backend_worker_protocol::{WorkerHello, WorkerIncarnationId};
+use reimagine_backend_worker_transport_grpc::GrpcAuth;
+use reimagine_backend_worker_transport_grpc::client::WorkerClient;
+use reimagine_backend_worker_transport_grpc::conversion::hello_from_proto;
 use reimagine_inference::{
     Backend, BackendInstance, BackendInstanceSnapshot, DeviceProfile, InferenceBackend,
 };
 
 use super::switch::{SwitchableWorker, WorkerSwitchError, WorkerSwitchTarget};
 
-/// A worker connected via gRPC, implementing [`SwitchableWorker`].
+/// A remote worker connected via gRPC, implementing [`SwitchableWorker`].
 ///
-/// This wraps a gRPC-connected remote worker and provides the same
-/// interface as [`ProcessSwitchableWorker`] for use with
-/// [`WorkerSwitchService`].
+/// This wraps a connected remote worker and provides the same interface
+/// as [`ProcessSwitchableWorker`] for use with [`WorkerSwitchService`].
 pub struct GrpcSwitchableWorker {
     instance: BackendInstance,
     incarnation_id: WorkerIncarnationId,
     run_leases: Arc<WorkerRunLeases>,
     device_label: String,
     hello: WorkerHello,
-    transport: Arc<GrpcTransport>,
+    client: Arc<WorkerClient>,
 }
 
 impl GrpcSwitchableWorker {
-    /// Create a new `GrpcSwitchableWorker` from a handshake result.
+    /// Create a new `GrpcSwitchableWorker` from a connected client and
+    /// its hello.
     ///
     /// The device label is taken from the worker's advertised instance
-    /// profile (its own `WorkerHello`), falling back to `"remote"`.
-    pub fn new(hello: WorkerHello, transport: Arc<GrpcTransport>) -> Self {
+    /// profile, falling back to `"remote"`.
+    pub fn new(hello: WorkerHello, client: Arc<WorkerClient>) -> Self {
         let device_label = hello
             .profile
             .instances
@@ -51,13 +44,13 @@ impl GrpcSwitchableWorker {
             run_leases: Arc::new(WorkerRunLeases::new()),
             device_label,
             hello,
-            transport,
+            client,
         }
     }
 
-    /// Access the underlying gRPC transport.
-    pub fn transport(&self) -> &Arc<GrpcTransport> {
-        &self.transport
+    /// Access the underlying gRPC client.
+    pub fn client(&self) -> &Arc<WorkerClient> {
+        &self.client
     }
 }
 
@@ -76,12 +69,12 @@ impl SwitchableWorker for GrpcSwitchableWorker {
     }
 
     fn process_state(&self) -> WorkerProcessState {
-        // gRPC workers are always ready once connected
+        // Remote workers are ready once connected and greeted.
         WorkerProcessState::Ready
     }
 
     fn inference_backend(&self) -> Option<Arc<dyn InferenceBackend>> {
-        None // gRPC workers don't expose a local inference backend
+        None // remote workers do not expose a local inference backend
     }
 
     async fn snapshot(&self) -> BackendInstanceSnapshot {
@@ -94,23 +87,21 @@ impl SwitchableWorker for GrpcSwitchableWorker {
             device: Some(DeviceProfile::new(format!("remote:{}", self.device_label))),
             observations: std::collections::BTreeMap::from([
                 ("transport".to_owned(), "grpc".to_owned()),
-                (
-                    "remote_addr".to_owned(),
-                    self.transport.description().endpoint.clone(),
-                ),
+                ("remote_addr".to_owned(), self.client.endpoint().to_owned()),
             ]),
             diagnostics: Vec::new(),
         }
     }
 
     async fn shutdown(&self) -> Result<(), WorkerSwitchError> {
-        self.transport
+        self.client
             .shutdown()
             .await
             .map_err(|error| WorkerSwitchError::Shutdown {
                 instance: self.instance.clone(),
                 message: error.to_string(),
-            })
+            })?;
+        Ok(())
     }
 }
 
@@ -118,18 +109,17 @@ impl SwitchableWorker for GrpcSwitchableWorker {
 #[derive(Clone)]
 pub struct GrpcWorkerCandidateConfig {
     /// The endpoint URI, e.g. `http://127.0.0.1:50051` (loopback dev) or
-    /// `https://worker.example:50051` (cloud; requires `auth.tls`).
+    /// `https://worker.example:50051` (cloud; requires TLS).
     pub endpoint: String,
-    /// TLS + bearer-token settings (T19). A token without TLS is refused
-    /// by the client; non-loopback endpoints without TLS are refused by
+    /// TLS + bearer-token settings. A token without TLS is refused by
+    /// the client; non-loopback endpoints without TLS are refused by
     /// the candidate.
     pub auth: GrpcAuth,
     /// Per-attempt connect timeout. Generous for cloud reachability;
-    /// this is NOT stdio's `startup_timeout` — it bounds a single
-    /// network connect + handshake attempt.
-    pub connect_timeout: Duration,
+    /// this bounds a single network connect + hello attempt.
+    pub connect_timeout: std::time::Duration,
     /// Additional connect attempts after the first failure (0 = single
-    /// attempt). Retries re-run the full connect + stream open.
+    /// attempt). Retries re-run the full connect + hello.
     pub connect_retries: u32,
 }
 
@@ -138,7 +128,7 @@ impl Default for GrpcWorkerCandidateConfig {
         Self {
             endpoint: String::new(),
             auth: GrpcAuth::plain(),
-            connect_timeout: Duration::from_secs(10),
+            connect_timeout: std::time::Duration::from_secs(10),
             connect_retries: 2,
         }
     }
@@ -157,8 +147,9 @@ impl std::fmt::Debug for GrpcWorkerCandidateConfig {
 
 /// A candidate that connects to a remote worker via gRPC.
 ///
-/// Implements [`WorkerSwitchTarget`] to enable switching from a local
-/// stdio worker to a remote gRPC worker (Cloud GPU).
+/// Implements [`WorkerSwitchTarget`] to enable switching to a remote
+/// worker (Cloud GPU). Remote workers are registration-only today;
+/// routing stays out of scope.
 pub struct GrpcWorkerCandidate {
     config: GrpcWorkerCandidateConfig,
 }
@@ -180,9 +171,9 @@ impl GrpcWorkerCandidate {
         }
     }
 
-    /// Connect to the worker and perform the gRPC handshake
-    /// (`HostHello` -> `WorkerHello`), validating protocol agreement.
-    async fn connect(&self) -> Result<(Arc<GrpcTransport>, WorkerHello), WorkerSwitchError> {
+    /// Connect to the worker, fetch its hello, and validate the
+    /// protocol version.
+    async fn connect(&self) -> Result<(Arc<WorkerClient>, WorkerHello), WorkerSwitchError> {
         // Policy guard: remote (non-loopback) endpoints require TLS.
         // The tonic TLS connector only engages for the `https://`
         // scheme, so both a `tls` mode AND an https endpoint are
@@ -208,18 +199,18 @@ impl GrpcWorkerCandidate {
         for attempt in 0..attempts {
             match tokio::time::timeout(
                 self.config.connect_timeout,
-                client::connect_with(&self.config.endpoint, &self.config.auth),
+                WorkerClient::connect(&self.config.endpoint, &self.config.auth),
             )
             .await
             {
-                Ok(Ok(transport)) => {
-                    let hello = self.handshake(&transport).await?;
-                    return Ok((Arc::new(transport), hello));
+                Ok(Ok(client)) => {
+                    let hello = self.hello(&client).await?;
+                    return Ok((Arc::new(client), hello));
                 }
                 Ok(Err(error)) => {
                     last_error = format!("{error}");
                     tracing::warn!(
-                        "[app-host] gRPC connect to `{}` failed (attempt {}/{}): {error}",
+                        "gRPC connect to `{}` failed (attempt {}/{}): {error}",
                         self.config.endpoint,
                         attempt + 1,
                         attempts,
@@ -229,7 +220,7 @@ impl GrpcWorkerCandidate {
                     last_error =
                         format!("connect timed out after {:?}", self.config.connect_timeout);
                     tracing::warn!(
-                        "[app-host] gRPC connect to `{}` timed out (attempt {}/{})",
+                        "gRPC connect to `{}` timed out (attempt {}/{})",
                         self.config.endpoint,
                         attempt + 1,
                         attempts,
@@ -246,75 +237,35 @@ impl GrpcWorkerCandidate {
         })
     }
 
-    /// Exchange the `HostHello`/`WorkerHello` handshake over the opened
-    /// communication stream and validate the negotiated protocol.
-    async fn handshake(&self, transport: &GrpcTransport) -> Result<WorkerHello, WorkerSwitchError> {
-        let host_hello = WireMessage::HostHello(HostHello {
-            supported_protocols: ProtocolRange::new(1, 1),
-        });
-        let proto_message: proto::HostToWorker =
-            (&host_hello)
-                .try_into()
-                .map_err(|error: String| WorkerSwitchError::Startup {
-                    message: format!("serialize HostHello: {error}"),
-                })?;
-        transport
-            .send(proto_message)
-            .await
-            .map_err(|error| WorkerSwitchError::Startup {
-                message: format!("send HostHello: {error}"),
-            })?;
-
-        let response = tokio::time::timeout(self.config.connect_timeout, transport.recv())
+    /// Fetch and validate the worker's hello.
+    async fn hello(&self, client: &WorkerClient) -> Result<WorkerHello, WorkerSwitchError> {
+        let response = tokio::time::timeout(self.config.connect_timeout, client.hello())
             .await
             .map_err(|_elapsed| WorkerSwitchError::Startup {
                 message: format!(
-                    "waiting for WorkerHello from `{}` timed out after {:?}",
+                    "waiting for hello from `{}` timed out after {:?}",
                     self.config.endpoint, self.config.connect_timeout,
                 ),
             })?
             .map_err(|error| WorkerSwitchError::Startup {
-                message: format!("recv WorkerHello: {error}"),
-            })?
-            .ok_or_else(|| WorkerSwitchError::Startup {
-                message: format!(
-                    "gRPC stream from `{}` closed before WorkerHello",
-                    self.config.endpoint
-                ),
+                message: format!("worker hello failed: {error}"),
             })?;
-
-        let message = WireMessage::try_from(response).map_err(|error: String| {
-            WorkerSwitchError::Startup {
-                message: format!("deserialize WorkerHello: {error}"),
-            }
-        })?;
-        let hello = match message {
-            WireMessage::WorkerHello(hello) => hello,
-            other => {
-                return Err(WorkerSwitchError::Startup {
-                    message: format!("expected WorkerHello, got {:?}", other.kind()),
-                });
-            }
-        };
-
-        // The worker selected a protocol; it must lie inside our
-        // supported range (1..=1).
-        let negotiated = negotiate_protocol(
-            ProtocolRange::new(1, 1),
-            ProtocolRange::new(hello.selected_protocol.0, hello.selected_protocol.0),
-        )
-        .map_err(|error| WorkerSwitchError::Startup {
+        let hello = hello_from_proto(response).ok_or_else(|| WorkerSwitchError::Startup {
             message: format!(
-                "worker `{}` selected incompatible protocol: {error}",
+                "worker `{}` returned an incomplete hello",
                 self.config.endpoint
             ),
         })?;
-        tracing::debug!(
-            "[app-host] gRPC handshake with `{}` negotiated protocol v{}",
-            self.config.endpoint,
-            negotiated.0,
-        );
-
+        if hello.protocol.0 != reimagine_backend_worker_protocol::WORKER_PROTOCOL_VERSION.0 {
+            return Err(WorkerSwitchError::Startup {
+                message: format!(
+                    "worker `{}` speaks protocol v{} but this host requires v{}; reinstall the worker",
+                    self.config.endpoint,
+                    hello.protocol.0,
+                    reimagine_backend_worker_protocol::WORKER_PROTOCOL_VERSION.0,
+                ),
+            });
+        }
         Ok(hello)
     }
 }
@@ -322,8 +273,8 @@ impl GrpcWorkerCandidate {
 #[async_trait]
 impl WorkerSwitchTarget for GrpcWorkerCandidate {
     async fn start(&self) -> Result<Arc<dyn SwitchableWorker>, WorkerSwitchError> {
-        let (transport, hello) = self.connect().await?;
-        Ok(Arc::new(GrpcSwitchableWorker::new(hello, transport)))
+        let (client, hello) = self.connect().await?;
+        Ok(Arc::new(GrpcSwitchableWorker::new(hello, client)))
     }
 }
 
@@ -359,12 +310,11 @@ fn is_loopback_endpoint(endpoint: &str) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use reimagine_backend_worker_transport_grpc::GrpcTls;
 
     #[test]
     fn candidate_config_defaults_are_generous() {
         let config = GrpcWorkerCandidateConfig::default();
-        assert_eq!(config.connect_timeout, Duration::from_secs(10));
+        assert_eq!(config.connect_timeout, std::time::Duration::from_secs(10));
         assert_eq!(config.connect_retries, 2);
         assert!(config.auth.token.is_none());
         assert!(config.auth.tls.is_none());
@@ -374,11 +324,14 @@ mod tests {
     fn candidate_config_debug_redacts_auth() {
         let config = GrpcWorkerCandidateConfig {
             endpoint: "https://worker.example:50051".to_owned(),
-            auth: GrpcAuth {
-                token: Some("s3cret".to_owned()),
-                tls: Some(GrpcTls::InsecureSkipVerify {
-                    domain: "worker.example".to_owned(),
-                }),
+            auth: {
+                use reimagine_backend_worker_transport_grpc::GrpcTls;
+                GrpcAuth {
+                    token: Some("s3cret".to_owned()),
+                    tls: Some(GrpcTls::InsecureSkipVerify {
+                        domain: "worker.example".to_owned(),
+                    }),
+                }
             },
             ..GrpcWorkerCandidateConfig::default()
         };
@@ -445,11 +398,14 @@ mod tests {
         // (nothing listens there) without DNS.
         let candidate = GrpcWorkerCandidate::new(GrpcWorkerCandidateConfig {
             endpoint: "https://127.0.0.2:50051".to_owned(),
-            auth: GrpcAuth {
-                token: None,
-                tls: Some(GrpcTls::InsecureSkipVerify {
-                    domain: "127.0.0.2".to_owned(),
-                }),
+            auth: {
+                use reimagine_backend_worker_transport_grpc::GrpcTls;
+                GrpcAuth {
+                    token: None,
+                    tls: Some(GrpcTls::InsecureSkipVerify {
+                        domain: "127.0.0.2".to_owned(),
+                    }),
+                }
             },
             connect_retries: 0,
             ..GrpcWorkerCandidateConfig::default()

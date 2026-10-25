@@ -452,6 +452,8 @@ mod tests {
             installed_at: chrono::Utc::now(),
             install_path: "/installed/test-worker".to_owned(),
             manifest_profile: None,
+            protocol_version_min: 1,
+            protocol_version_max: 1,
         }
     }
 

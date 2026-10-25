@@ -6,7 +6,6 @@
 use std::net::{Ipv4Addr, SocketAddr};
 use std::sync::Mutex;
 
-use reimagine_backend_worker_protocol::WorkerTransport;
 use reimagine_backend_worker_transport_quic::tls::SelfSignedCert;
 use reimagine_backend_worker_transport_quic::{ConnectTrust, QuicTransport, TrustedKeyStore};
 
@@ -42,7 +41,7 @@ async fn connect_ok(addr: SocketAddr, trust: ConnectTrust<'_>) -> String {
     .await
     .expect("connect should succeed");
     let description = transport.description().endpoint;
-    transport.shutdown().await.unwrap();
+    transport.close();
     description
 }
 

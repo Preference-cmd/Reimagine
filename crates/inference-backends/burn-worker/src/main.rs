@@ -1,26 +1,33 @@
-use std::collections::HashMap;
-use std::io::{BufReader, BufWriter, Write};
-use std::net::SocketAddr;
+//! Burn inference worker serving the `reimagine.worker.v2` gRPC
+//! contract over a local socket.
+//!
+//! The host launches the worker with `--listen <endpoint>` and a
+//! per-launch bearer token (`REIMAGINE_WORKER_TOKEN`). The worker binds
+//! the endpoint, prints one `READY <endpoint>` line on stdout (its only
+//! stdout output), and serves until the host closes its stdin.
+
+use std::io::Write as _;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::time::Duration;
 
 use clap::Parser;
-use reimagine_backend_worker_protocol::{
-    FrameCodec, HostHello, ProtocolRange, ProtocolVersion, WireMessage,
-};
-use reimagine_backend_worker_transport_quic::{
-    discovery::MdnsWorkerRegister, listener::QuicWorkerListener, tls::SelfSignedCert,
+use reimagine_backend_worker_transport_grpc::auth::TOKEN_ENV;
+use reimagine_backend_worker_transport_grpc::local::{LocalEndpoint, bind};
+use reimagine_backend_worker_transport_grpc::server::{
+    parse_listen_endpoint, serve_local, worker_server,
 };
 use reimagine_inference_burn::{BurnBackend, BurnBackendConfig};
 
 mod mapping;
 mod probe;
-mod quic_adapter;
-mod server;
+mod service;
 mod shutdown;
 
-const WORKER_PROTOCOL_VERSION: ProtocolVersion = ProtocolVersion(1);
-const MAX_FRAME_BYTES: u32 = 64 * 1024 * 1024; // 64 MB
+/// Grace period between a shutdown acknowledgement and process exit,
+/// giving the ack time to reach the host.
+const SHUTDOWN_EXIT_GRACE: Duration = Duration::from_millis(200);
 
 #[derive(Parser)]
 #[command(
@@ -28,10 +35,10 @@ const MAX_FRAME_BYTES: u32 = 64 * 1024 * 1024; // 64 MB
     about = "Reimagine Burn inference worker"
 )]
 struct Cli {
-    /// Start a QUIC listener on this address (e.g. quic://0.0.0.0:9100).
-    /// When set, the worker accepts remote QUIC connections instead of stdio.
+    /// Local endpoint to serve the v2 contract on (`unix://<path>` or,
+    /// on Windows, `pipe://<name>`).
     #[arg(long = "listen")]
-    listen: Option<String>,
+    listen: String,
 }
 
 fn main() {
@@ -50,326 +57,125 @@ fn main() {
     ));
 
     if !is_within_allowed_roots(&models_dir, &allowed_model_roots) {
-        eprintln!(
+        log(&format!(
             "FATAL: models dir '{}' is not within allowed MODEL roots",
-            models_dir.display(),
-        );
+            models_dir.display()
+        ));
         std::process::exit(1);
     }
     if !is_within_allowed_roots(&output_dir, &allowed_output_roots) {
-        eprintln!(
+        log(&format!(
             "FATAL: output dir '{}' is not within allowed OUTPUT roots",
-            output_dir.display(),
-        );
+            output_dir.display()
+        ));
         std::process::exit(1);
     }
 
     // ----- initialize Burn backend -----
     let config = BurnBackendConfig::new(&models_dir, &output_dir);
     let backend = match BurnBackend::new(config) {
-        Ok(b) => b,
-        Err(e) => {
-            eprintln!("FATAL: failed to initialize Burn backend: {e}");
+        Ok(backend) => backend,
+        Err(error) => {
+            log(&format!(
+                "FATAL: failed to initialize Burn backend: {error}"
+            ));
             std::process::exit(1);
         }
     };
 
-    // ----- tokio runtime for async backend calls -----
-    let rt = match tokio::runtime::Builder::new_current_thread()
-        .enable_all()
-        .build()
-    {
-        Ok(r) => r,
-        Err(e) => {
-            eprintln!("FATAL: failed to create tokio runtime: {e}");
+    let endpoint: LocalEndpoint = match parse_listen_endpoint(&cli.listen) {
+        Ok(endpoint) => endpoint,
+        Err(error) => {
+            log(&format!(
+                "FATAL: invalid --listen `{}`: {error}",
+                cli.listen
+            ));
             std::process::exit(1);
         }
     };
+    let token = std::env::var(TOKEN_ENV)
+        .ok()
+        .filter(|value| !value.is_empty());
 
-    match cli.listen {
-        Some(listen_url) => {
-            run_quic_mode(rt, &backend, &listen_url);
-        }
-        None => {
-            run_stdio_mode(rt, &backend);
-        }
-    }
-}
+    let shutdown_requested = Arc::new(AtomicBool::new(false));
+    let service = service::BurnWorkerService::new(backend, token, Arc::clone(&shutdown_requested));
 
-// ---------------------------------------------------------------------------
-// Stdio mode (default)
-// ---------------------------------------------------------------------------
-
-fn run_stdio_mode(rt: tokio::runtime::Runtime, backend: &BurnBackend) {
-    // ----- protocol handshake over stdio -----
-    let stdin = std::io::stdin();
-    let stdout = std::io::stdout();
-    let mut reader = BufReader::new(stdin.lock());
-    let mut writer = BufWriter::new(stdout.lock());
-    let codec = FrameCodec::new(MAX_FRAME_BYTES);
-    // Read HostHello
-    let host_hello: HostHello = match codec.read(&mut reader) {
-        Ok(WireMessage::HostHello(hello)) => hello,
-        Ok(other) => {
-            eprintln!("FATAL: expected HostHello, got {}", other.kind());
-            std::process::exit(1);
-        }
-        Err(e) => {
-            eprintln!("FATAL: failed to read HostHello: {e}");
-            std::process::exit(1);
-        }
-    };
-
-    // Negotiate protocol version
-    let worker_range = ProtocolRange::new(WORKER_PROTOCOL_VERSION.0, WORKER_PROTOCOL_VERSION.0);
-    let selected = match reimagine_backend_worker_protocol::negotiate_protocol(
-        host_hello.supported_protocols,
-        worker_range,
-    ) {
-        Ok(v) => v,
-        Err(e) => {
-            eprintln!("FATAL: protocol negotiation failed: {e}");
-            std::process::exit(1);
-        }
-    };
-
-    // Build identity and profile from the active backend
-    let (identity, profile) = probe::build(backend);
-    let incarnation_id = identity.incarnation_id.clone();
-
-    // Send WorkerHello
-    let worker_hello = reimagine_backend_worker_protocol::WorkerHello {
-        selected_protocol: selected,
-        identity,
-        profile,
-    };
-    if let Err(e) = codec.write(&mut writer, &WireMessage::WorkerHello(worker_hello)) {
-        eprintln!("FATAL: failed to send WorkerHello: {e}");
-        std::process::exit(1);
-    }
-    if let Err(e) = writer.flush() {
-        eprintln!("FATAL: failed to flush stdout after WorkerHello: {e}");
-        std::process::exit(1);
-    }
-
-    // ----- serve loop -----
-    // The handshake `BufReader` is dropped here: the reader thread in
-    // the serve loop re-locks stdin itself, and the host sends no
-    // frames between WorkerHello and the first request, so no buffered
-    // bytes are lost.
-    drop(reader);
-    server::serve_loop(
-        rt,
-        backend,
-        codec,
-        std::io::stdin(),
-        &mut writer,
-        selected,
-        &incarnation_id,
-    );
-
-    eprintln!("worker: serve loop exited, terminating");
-}
-
-// ---------------------------------------------------------------------------
-// QUIC mode
-// ---------------------------------------------------------------------------
-
-fn run_quic_mode(rt: tokio::runtime::Runtime, backend: &BurnBackend, listen_url: &str) {
-    let listen_addr = parse_quic_listen_url(listen_url);
-
-    // Generate self-signed certificate for LAN development
-    let hostname = listen_addr.ip().to_string();
-    let cert = match SelfSignedCert::generate(&hostname) {
-        Ok(c) => c,
-        Err(e) => {
-            eprintln!("FATAL: failed to generate TLS certificate: {e}");
-            std::process::exit(1);
-        }
-    };
-
-    // Start QUIC endpoint
-    let listener = match QuicWorkerListener::start(listen_addr, &cert) {
-        Ok(l) => l,
-        Err(e) => {
-            eprintln!("FATAL: failed to start QUIC listener: {e}");
-            std::process::exit(1);
-        }
-    };
-
-    let actual_addr = match listener.local_addr() {
-        Ok(a) => a,
-        Err(e) => {
-            eprintln!("FATAL: failed to get listener address: {e}");
-            std::process::exit(1);
-        }
-    };
-
-    // Build identity for mDNS registration
-    let (identity, profile) = probe::build(backend);
-
-    // Register mDNS service
-    let capabilities: Vec<&str> = profile
-        .instances
-        .iter()
-        .flat_map(|inst| inst.capabilities.iter().map(|s| s.as_str()))
-        .collect();
-    let device_labels: Vec<&str> = profile
-        .instances
-        .iter()
-        .map(|inst| inst.device_label.as_str())
-        .collect();
-
-    let mut mdns_props = HashMap::new();
-    mdns_props.insert("endpoint".to_string(), format!("quic://{actual_addr}"));
-    mdns_props.insert("backend".to_string(), identity.backend_kind.clone());
-    mdns_props.insert("devices".to_string(), device_labels.join(","));
-    mdns_props.insert("capabilities".to_string(), capabilities.join(","));
-    mdns_props.insert("fingerprint".to_string(), cert.fingerprint().0);
-
-    let mdns = match MdnsWorkerRegister::register(
-        &identity.backend_instance_id.0,
-        actual_addr,
-        mdns_props,
-    ) {
-        Ok(r) => r,
-        Err(e) => {
-            eprintln!("FATAL: failed to register mDNS service: {e}");
-            std::process::exit(1);
-        }
-    };
-
-    eprintln!(
-        "worker: QUIC listener on {actual_addr}, mDNS registered as '{}'",
-        identity.backend_instance_id.0,
-    );
-
-    // Spawn QUIC accept loop on a dedicated thread with its own tokio runtime.
-    // This avoids interfering with the stdio serve loop's runtime (if dual
-    // mode is added later) and keeps the async QUIC I/O isolated.
-    let quic_rt = match tokio::runtime::Builder::new_multi_thread()
-        .enable_all()
-        .thread_name("quic-accept")
-        .worker_threads(2)
-        .build()
-    {
-        Ok(r) => r,
-        Err(e) => {
-            eprintln!("FATAL: failed to create QUIC runtime: {e}");
-            std::process::exit(1);
-        }
-    };
-
-    let quic_backend = backend.clone();
-    let quic_handle = std::thread::Builder::new()
-        .name("quic-accept".to_owned())
-        .spawn(move || {
-            run_quic_accept_loop(quic_rt, rt, &quic_backend, listener);
-        });
-
-    match quic_handle {
-        Ok(handle) => {
-            // Block the main thread until the QUIC thread exits.
-            // The QUIC thread runs until the endpoint is closed or
-            // an unrecoverable error occurs.
-            if let Err(e) = handle.join() {
-                eprintln!("FATAL: QUIC accept thread panicked: {e:?}");
-                std::process::exit(1);
-            }
-        }
-        Err(e) => {
-            eprintln!("FATAL: failed to spawn QUIC accept thread: {e}");
-            std::process::exit(1);
-        }
-    }
-
-    // Cleanup: drop mDNS registration
-    drop(mdns);
-    eprintln!("worker: QUIC mode terminated, cleaning up");
-}
-
-/// Run the QUIC accept loop on the provided tokio runtime.
-///
-/// Each accepted connection performs the worker handshake and then
-/// enters a `serve_loop` via `spawn_blocking`, reusing the same
-/// synchronous dispatch logic as stdio mode.
-fn run_quic_accept_loop(
-    quic_rt: tokio::runtime::Runtime,
-    serve_rt: tokio::runtime::Runtime,
-    backend: &BurnBackend,
-    listener: QuicWorkerListener,
-) {
-    let serve_rt = Arc::new(serve_rt);
-    let backend = Arc::new(backend.clone());
-
-    quic_rt.block_on(async {
+    // Lifeline: the host holds our stdin open; EOF means the host is
+    // gone and this process must exit instead of becoming an orphan.
+    std::thread::spawn(|| {
+        use std::io::Read;
+        let mut stdin = std::io::stdin().lock();
+        let mut buffer = [0_u8; 256];
         loop {
-            match listener.accept().await {
-                Ok((connection, send, recv, worker_hello)) => {
-                    let remote = connection.remote_address();
-                    eprintln!("worker: QUIC connection from {remote}");
-
-                    let protocol_version = worker_hello.selected_protocol;
-                    let serve_rt = Arc::clone(&serve_rt);
-                    let backend = Arc::clone(&backend);
-
-                    // Handle each connection on a blocking thread, reusing
-                    // the synchronous serve_loop with QUIC stream adapters.
-                    tokio::task::spawn_blocking(move || {
-                        let incarnation = worker_hello.identity.incarnation_id.clone();
-
-                        let read_adapter =
-                            quic_adapter::QuicReadAdapter::new(recv, Arc::clone(&serve_rt));
-                        let mut write_adapter = quic_adapter::QuicWriteAdapter::new(send, serve_rt);
-
-                        let codec = FrameCodec::new(MAX_FRAME_BYTES);
-
-                        // Create a dedicated current-thread runtime for this
-                        // connection's dispatch threads. The serve_loop wraps
-                        // it in an Arc and dispatch threads call rt.block_on()
-                        // to run async backend operations.
-                        let conn_rt = tokio::runtime::Builder::new_current_thread()
-                            .enable_all()
-                            .build()
-                            .expect("failed to create connection runtime");
-
-                        server::serve_loop(
-                            conn_rt,
-                            &backend,
-                            codec,
-                            read_adapter,
-                            &mut write_adapter,
-                            protocol_version,
-                            &incarnation,
-                        );
-
-                        eprintln!("worker: QUIC connection from {remote} closed");
-                    });
-                }
-                Err(e) => {
-                    eprintln!("worker: QUIC accept error: {e}");
-                    break;
-                }
+            match stdin.read(&mut buffer) {
+                Ok(0) | Err(_) => std::process::exit(0),
+                Ok(_) => {}
             }
         }
     });
+
+    // Graceful shutdown: leave a grace period after the shutdown ack so
+    // the response still reaches the host.
+    {
+        let shutdown_requested = Arc::clone(&shutdown_requested);
+        std::thread::spawn(move || {
+            while !shutdown_requested.load(Ordering::Acquire) {
+                std::thread::sleep(Duration::from_millis(20));
+            }
+            std::thread::sleep(SHUTDOWN_EXIT_GRACE);
+            std::process::exit(0);
+        });
+    }
+
+    let runtime = match tokio::runtime::Builder::new_multi_thread()
+        .enable_all()
+        .build()
+    {
+        Ok(runtime) => runtime,
+        Err(error) => {
+            log(&format!("FATAL: failed to create tokio runtime: {error}"));
+            std::process::exit(1);
+        }
+    };
+
+    runtime.block_on(async move {
+        let incoming = match bind(&endpoint).await {
+            Ok(incoming) => incoming,
+            Err(error) => {
+                log(&format!(
+                    "FATAL: cannot bind {}: {error}",
+                    endpoint.to_uri()
+                ));
+                std::process::exit(1);
+            }
+        };
+        // The READY line is the only stdout output of a worker and is
+        // printed only once the endpoint is bound.
+        let mut stdout = std::io::stdout().lock();
+        if writeln!(stdout, "READY {}", endpoint.to_uri()).is_err() || stdout.flush().is_err() {
+            std::process::exit(1);
+        }
+        drop(stdout);
+
+        if let Err(error) = serve_local(incoming, worker_server(service)).await {
+            log(&format!("worker server error: {error}"));
+        }
+    });
+
+    log("worker: server stopped, terminating");
+}
+
+/// Write to stderr, ignoring a broken pipe: the host may already be
+/// gone, and panicking on a dead log sink would kill the worker before
+/// it can honor its lifeline.
+fn log(message: &str) {
+    let _ = std::io::stderr().write_all(message.as_bytes());
+    let _ = std::io::stderr().write_all(b"\n");
 }
 
 // ---------------------------------------------------------------------------
 // CLI helpers
 // ---------------------------------------------------------------------------
-
-/// Parse a `quic://host:port` URL into a `SocketAddr`.
-///
-/// Accepts `quic://0.0.0.0:9100` or `quic://127.0.0.1:9100`.
-fn parse_quic_listen_url(url: &str) -> SocketAddr {
-    let stripped = url.strip_prefix("quic://").unwrap_or(url);
-
-    stripped.parse::<SocketAddr>().unwrap_or_else(|e| {
-        eprintln!("FATAL: invalid QUIC listen address '{url}': {e}");
-        std::process::exit(1);
-    })
-}
 
 /// Parse the `:`-separated allowlist from an environment variable
 /// into a `Vec` of canonical `PathBuf` entries.
@@ -387,17 +193,17 @@ fn parse_allowlist_value(
             match path.canonicalize() {
                 Ok(canon) => roots.push(canon),
                 Err(e) => {
-                    eprintln!(
+                    log(&format!(
                         "worker: {var} entry '{}' cannot be canonicalized: {e}",
                         path.display()
-                    );
+                    ));
                 }
             }
         } else {
-            eprintln!(
+            log(&format!(
                 "worker: {var} entry '{}' is not absolute — skipping",
                 path.display()
-            );
+            ));
         }
     }
     if roots.is_empty() {
@@ -448,7 +254,7 @@ fn startup_or_exit<T>(result: Result<T, String>) -> T {
     match result {
         Ok(value) => value,
         Err(message) => {
-            eprintln!("FATAL: {message}");
+            log(&format!("FATAL: {message}"));
             std::process::exit(1);
         }
     }
@@ -477,17 +283,5 @@ mod tests {
         let canonical = prepare_root_path("TEST_OUTPUT", &output, true).unwrap();
         assert!(canonical.is_dir());
         assert_eq!(canonical, output.canonicalize().unwrap());
-    }
-
-    #[test]
-    fn parse_quic_listen_url_basic() {
-        let addr = parse_quic_listen_url("quic://0.0.0.0:9100");
-        assert_eq!(addr, "0.0.0.0:9100".parse::<SocketAddr>().unwrap());
-    }
-
-    #[test]
-    fn parse_quic_listen_url_localhost() {
-        let addr = parse_quic_listen_url("quic://127.0.0.1:8080");
-        assert_eq!(addr, "127.0.0.1:8080".parse::<SocketAddr>().unwrap());
     }
 }

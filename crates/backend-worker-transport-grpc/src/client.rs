@@ -1,83 +1,137 @@
-use std::sync::Arc;
+//! Typed client for the `reimagine.worker.v2` contract.
+//!
+//! One `WorkerClient` wraps a tonic channel and attaches the bearer
+//! token to every call. Connections are made over an endpoint URI:
+//! `unix://<path>` (Unix socket), `http(s)://<host:port>` (remote), or a
+//! Windows named pipe via [`crate::local`].
 
-use tonic::transport::{Certificate, Channel, ClientTlsConfig};
+use tonic::Status;
+use tonic::Streaming;
+use tonic::service::interceptor::InterceptedService;
+use tonic::transport::{Certificate, Channel, ClientTlsConfig, Endpoint};
 
-use crate::auth::bearer_interceptor;
-use crate::proto::worker_service_client::WorkerServiceClient;
-use crate::transport::GrpcTransport;
+use crate::auth::BearerInterceptor;
+use crate::auth::GrpcAuth;
+use crate::proto::worker_client::WorkerClient as GeneratedClient;
+use crate::proto::{ExecuteEvent, ExecuteRequest, HelloRequest};
+use crate::tls::{GrpcTls, ensure_crypto_provider};
 
-/// TLS mode for a gRPC client connect.
+/// A connected worker client speaking the v2 contract.
 #[derive(Clone, Debug)]
-pub enum GrpcTls {
-    /// Trust the given PEM certificate (e.g. the worker's self-signed
-    /// certificate or a custom CA). The endpoint URI must use `https://`.
-    TrustCert { ca_pem: String, domain: String },
-    /// Accept any server certificate (dev only). The endpoint URI must
-    /// use `https://`.
-    InsecureSkipVerify { domain: String },
+pub struct WorkerClient {
+    inner: GeneratedClient<InterceptedService<Channel, BearerInterceptor>>,
+    endpoint: String,
 }
 
-/// Authentication settings for a gRPC client connect.
-#[derive(Clone, Debug, Default)]
-pub struct GrpcAuth {
-    /// Bearer token attached as `authorization: Bearer <token>` on every
-    /// request. `None` keeps the plain (open) transport.
-    pub token: Option<String>,
-    /// TLS mode; `None` keeps plain HTTP.
-    pub tls: Option<GrpcTls>,
-}
-
-impl GrpcAuth {
-    /// Plain, open connection (backward compatible with T7 behavior).
-    #[must_use]
-    pub fn plain() -> Self {
-        Self::default()
-    }
-
-    /// Read the token from the `REIMAGINE_WORKER_TOKEN` environment
-    /// variable (empty/unset => no token).
+impl WorkerClient {
+    /// Connect to a worker at `endpoint` and authenticate with `auth`.
     ///
-    /// Note: `connect_with` refuses to send a configured token over a
-    /// plain `http://` endpoint (see [`GrpcAuth`] docs); pair this with
-    /// a `tls` setting for real cloud deployments.
+    /// `endpoint` is a URI: `unix://<absolute socket path>` for a local
+    /// worker, `http(s)://host:port` for a remote one. On Windows, named
+    /// pipe connections go through [`crate::local::connect_local`] instead.
+    pub async fn connect(endpoint: &str, auth: &GrpcAuth) -> Result<Self, Status> {
+        let channel = match connect_channel(endpoint, auth).await {
+            Ok(channel) => channel,
+            // Surface connect failures as `unavailable`: the worker is
+            // not reachable, which is a transport condition rather than
+            // a logic error.
+            Err(error) => return Err(Status::unavailable(error.to_string())),
+        };
+        Ok(Self::from_channel(channel, endpoint.to_owned(), auth))
+    }
+
+    /// Wrap an already-connected channel (used for in-process tests and
+    /// custom transports).
     #[must_use]
-    pub fn from_env() -> Self {
-        Self {
-            token: crate::auth::token_from_env(),
-            tls: None,
-        }
+    pub fn from_channel(channel: Channel, endpoint: String, auth: &GrpcAuth) -> Self {
+        let inner =
+            GeneratedClient::with_interceptor(channel, BearerInterceptor::new(auth.token.clone()))
+                .max_decoding_message_size(crate::MAX_MESSAGE_BYTES)
+                .max_encoding_message_size(crate::MAX_MESSAGE_BYTES);
+        Self { inner, endpoint }
+    }
+
+    /// The endpoint description this client was built from.
+    #[must_use]
+    pub fn endpoint(&self) -> &str {
+        &self.endpoint
+    }
+
+    /// Fetch the worker's hello (protocol version, identity, profile).
+    pub async fn hello(&self) -> Result<crate::proto::HelloResponse, Status> {
+        Ok(self
+            .inner
+            .clone()
+            .hello(HelloRequest {})
+            .await?
+            .into_inner())
+    }
+
+    /// Start an `Execute` call and return the event stream.
+    ///
+    /// The stream must be consumed; dropping it cancels the call, which
+    /// is how the host cancels a running operation.
+    pub async fn execute(
+        &self,
+        operation: impl Into<String>,
+        payload: Vec<u8>,
+    ) -> Result<Streaming<ExecuteEvent>, Status> {
+        let request = ExecuteRequest {
+            operation: operation.into(),
+            payload,
+        };
+        Ok(self.inner.clone().execute(request).await?.into_inner())
+    }
+
+    /// Check worker liveness.
+    pub async fn health(&self) -> Result<crate::proto::HealthResponse, Status> {
+        Ok(self
+            .inner
+            .clone()
+            .health(crate::proto::HealthRequest {})
+            .await?
+            .into_inner())
+    }
+
+    /// Release run-scoped payloads held by the worker.
+    pub async fn cleanup(
+        &self,
+        run_id: Option<String>,
+        object_ids: Vec<String>,
+    ) -> Result<crate::proto::CleanupResponse, Status> {
+        Ok(self
+            .inner
+            .clone()
+            .cleanup(crate::proto::CleanupRequest { run_id, object_ids })
+            .await?
+            .into_inner())
+    }
+
+    /// Ask the worker to drain and exit.
+    pub async fn shutdown(&self) -> Result<crate::proto::ShutdownResponse, Status> {
+        Ok(self
+            .inner
+            .clone()
+            .shutdown(crate::proto::ShutdownRequest {})
+            .await?
+            .into_inner())
     }
 }
 
-/// Connect to a remote gRPC worker over plain HTTP without auth.
-///
-/// Backward-compatible shorthand for [`connect_with`] with
-/// [`GrpcAuth::plain`].
-pub async fn connect(endpoint: &str) -> Result<GrpcTransport, tonic::Status> {
-    connect_with(endpoint, &GrpcAuth::plain()).await
-}
-
-/// Connect to a remote gRPC worker and perform the initial handshake.
-///
-/// Returns a `GrpcTransport` ready for protocol communication.
-///
-/// `endpoint` should be a URI like `http://127.0.0.1:50051` (plain) or
-/// `https://worker.example:50051` (when `auth.tls` is set).
-pub async fn connect_with(endpoint: &str, auth: &GrpcAuth) -> Result<GrpcTransport, tonic::Status> {
-    crate::tls::ensure_crypto_provider();
+async fn connect_channel(endpoint: &str, auth: &GrpcAuth) -> Result<Channel, ConnectError> {
     // Never send a bearer token in cleartext: a token without TLS is a
-    // credential leak. The tonic TLS connector only engages for the
-    // `https://` scheme, so a configured `tls` mode alone is not enough
-    // — the endpoint itself must be https. Callers must pair tokens
-    // with an https:// endpoint (the explicit dev escape hatch is
-    // `GrpcTls::InsecureSkipVerify`, still over https).
-    if auth.token.is_some() && !endpoint.to_ascii_lowercase().starts_with("https://") {
-        return Err(tonic::Status::unauthenticated(
-            "bearer token configured but endpoint is not https (refusing cleartext token)",
+    // credential leak. Local worker sockets (`unix://`) are exempt —
+    // they are protected by the private socket path plus the token.
+    if auth.token.is_some()
+        && !endpoint.to_ascii_lowercase().starts_with("https://")
+        && !endpoint.to_ascii_lowercase().starts_with("unix://")
+    {
+        return Err(ConnectError(
+            "refusing to send a bearer token over a cleartext endpoint; use https:// (or a local unix:// socket)".to_owned(),
         ));
     }
-    let mut channel_builder = Channel::from_shared(endpoint.to_owned())
-        .map_err(|e| tonic::Status::internal(format!("invalid endpoint: {e}")))?;
+    let mut channel_builder = Endpoint::from_shared(endpoint.to_owned())
+        .map_err(|error| ConnectError(format!("invalid endpoint `{endpoint}`: {error}")))?;
 
     if let Some(tls) = &auth.tls {
         match tls {
@@ -87,106 +141,38 @@ pub async fn connect_with(endpoint: &str, auth: &GrpcAuth) -> Result<GrpcTranspo
                     .domain_name(domain.clone());
                 channel_builder = channel_builder
                     .tls_config(tls_config)
-                    .map_err(|e| tonic::Status::internal(format!("invalid TLS config: {e}")))?;
+                    .map_err(|error| ConnectError(format!("invalid TLS config: {error}")))?;
             }
             GrpcTls::InsecureSkipVerify { domain } => {
                 let tls_config = ClientTlsConfig::new().domain_name(domain.clone());
-                let verifier: Arc<dyn rustls::client::danger::ServerCertVerifier> =
-                    Arc::new(crate::tls::AcceptAnyServerVerifier::new());
+                let verifier: std::sync::Arc<dyn rustls::client::danger::ServerCertVerifier> =
+                    std::sync::Arc::new(ensure_crypto_provider_and_verifier());
                 channel_builder = channel_builder
                     .tls_config_with_verifier(tls_config, verifier)
-                    .map_err(|e| tonic::Status::internal(format!("invalid TLS config: {e}")))?;
+                    .map_err(|error| ConnectError(format!("invalid TLS config: {error}")))?;
             }
         }
     }
 
-    let channel = channel_builder
+    channel_builder
         .connect()
         .await
-        .map_err(|e| tonic::Status::internal(format!("connect failed: {e}")))?;
-
-    let mut client =
-        WorkerServiceClient::with_interceptor(channel, bearer_interceptor(auth.token.clone()));
-
-    let (tx, rx) = GrpcTransport::channel();
-    let rx_stream = tokio_stream::wrappers::ReceiverStream::new(rx);
-
-    let response = client.communication(rx_stream).await?;
-    let stream = response.into_inner();
-
-    Ok(GrpcTransport::new(tx, stream, endpoint.to_owned()))
+        .map_err(|error| ConnectError(format!("connect to `{endpoint}` failed: {error}")))
 }
 
-#[cfg(test)]
-mod tests {
-    use super::*;
-    use crate::proto;
-    use crate::proto::worker_service_server::WorkerServiceServer;
-    use crate::server::{GrpcWorkerService, MessageHandler};
-    use reimagine_backend_worker_protocol::WorkerTransport;
-    use std::sync::Arc;
+fn ensure_crypto_provider_and_verifier() -> crate::tls::AcceptAnyServerVerifier {
+    ensure_crypto_provider();
+    crate::tls::AcceptAnyServerVerifier::new()
+}
 
-    fn echo_handler() -> MessageHandler {
-        Arc::new(|msg| {
-            Box::pin(async move {
-                match msg.message {
-                    Some(proto::host_to_worker::Message::Request(r)) => Some(proto::WorkerToHost {
-                        message: Some(proto::worker_to_host::Message::Terminal(proto::Terminal {
-                            protocol_version: r.protocol_version,
-                            incarnation_id: r.incarnation_id,
-                            request_id: r.request_id,
-                            correlation_id: r.correlation_id,
-                            outcome: Some(proto::TerminalOutcome {
-                                outcome: Some(proto::terminal_outcome::Outcome::Success(
-                                    proto::Success { output: r.payload },
-                                )),
-                            }),
-                        })),
-                    }),
-                    _ => None,
-                }
-            })
-        })
-    }
+/// Connection failure text for the caller to wrap.
+#[derive(Debug)]
+struct ConnectError(String);
 
-    #[tokio::test]
-    async fn client_connects_and_performs_handshake() {
-        let service = GrpcWorkerService::new(echo_handler());
-        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
-        let addr = listener.local_addr().unwrap();
-
-        let server = tonic::transport::Server::builder()
-            .add_service(WorkerServiceServer::new(service))
-            .serve_with_incoming(tokio_stream::wrappers::TcpListenerStream::new(listener));
-
-        tokio::spawn(server);
-
-        let transport = connect(&format!("http://{addr}")).await.unwrap();
-
-        assert_eq!(
-            transport.description().kind,
-            reimagine_backend_worker_protocol::TransportKind::Grpc
-        );
-
-        // Send a request and receive a terminal response
-        transport
-            .send(proto::HostToWorker {
-                message: Some(proto::host_to_worker::Message::Request(proto::Request {
-                    protocol_version: 1,
-                    incarnation_id: "inc-1".into(),
-                    request_id: "req-1".into(),
-                    correlation_id: "corr-1".into(),
-                    operation: "echo".into(),
-                    payload: serde_json::to_vec(&serde_json::json!({"hello": "world"})).unwrap(),
-                })),
-            })
-            .await
-            .unwrap();
-
-        let response = transport.recv().await.unwrap().unwrap();
-        assert!(matches!(
-            response.message,
-            Some(proto::worker_to_host::Message::Terminal(_))
-        ));
+impl std::fmt::Display for ConnectError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(&self.0)
     }
 }
+
+impl std::error::Error for ConnectError {}

@@ -1,23 +1,23 @@
-//! End-to-end process test for the Burn worker binary.
+//! End-to-end process tests for the Burn worker binary.
 //!
-//! Spawns the real `reimagine-inference-burn-worker` binary,
-//! performs a handshake, sends a `latent.create_empty` request,
-//! and verifies the terminal response. Uses the
-//! `CARGO_BIN_EXE_reimagine-inference-burn-worker` env var that
-//! Cargo sets at test build time.
+//! The real `reimagine-inference-burn-worker` binary is launched by the
+//! worker supervisor over a private Unix socket (the v2 gRPC contract):
+//! handshake, execution, cancellation, health, cleanup, shutdown, the
+//! stdin lifeline, and socket cleanup. Uses the
+//! `CARGO_BIN_EXE_reimagine-inference-burn-worker` env var that Cargo
+//! sets at test build time.
 
-use std::io::{BufReader, Read, Write};
-use std::process::{Child, ChildStdin, ChildStdout, Command, Stdio};
+use std::process::{Command, Stdio};
 use std::sync::Arc;
+use std::time::Duration;
 
+use reimagine_backend_worker_host::ProtocolRange;
 use reimagine_backend_worker_host::{
     ExpectedWorkerIdentity, ProcessInferenceBackend, WorkerLaunchSpec, WorkerLimits,
     WorkerSupervisor,
 };
 use reimagine_backend_worker_protocol::{
-    BackendInstanceId, CleanupFrame, ControlId, CorrelationId, FrameCodec, HostHello,
-    ProtocolRange, ProtocolVersion, RequestFrame, RequestId, ShutdownFrame, TerminalFrame,
-    TerminalOutcome, WireMessage, WorkerHello, WorkerInstallationId, WorkerInstanceProfile,
+    BackendInstanceId, TerminalOutcome, WorkerInstallationId, WorkerInstanceProfile,
 };
 use reimagine_core::model::NodeId;
 use reimagine_inference::{
@@ -39,164 +39,6 @@ fn test_model_service(paths: reimagine_config::AppPaths) -> reimagine_app_host::
 
 mod tiny_fixture {
     include!("../../burn/tests/tiny_sdxl_e2e.rs");
-}
-
-const MAXIMUM_FRAME_BYTES: u32 = 64 * 1024 * 1024;
-
-struct BurnWorkerProcess {
-    child: Child,
-    /// `None` once a test has closed it to simulate a dead host.
-    stdin: Option<ChildStdin>,
-    stdout: BufReader<ChildStdout>,
-    hello: WorkerHello,
-}
-
-impl BurnWorkerProcess {
-    fn spawn() -> Self {
-        let bin = env!("CARGO_BIN_EXE_reimagine-inference-burn-worker");
-        let mut child = Command::new(bin)
-            .stdin(Stdio::piped())
-            .stdout(Stdio::piped())
-            .stderr(Stdio::piped())
-            .env_clear()
-            .env("REIMAGINE_MODELS_DIR", "/tmp")
-            .env("REIMAGINE_OUTPUT_DIR", "/tmp")
-            .env("REIMAGINE_ALLOWED_MODEL_ROOTS", "/tmp")
-            .env("REIMAGINE_ALLOWED_OUTPUT_ROOTS", "/tmp")
-            .spawn()
-            .expect("failed to spawn burn worker process");
-
-        let mut stdin = child.stdin.take().expect("stdin not piped");
-        let mut stdout = BufReader::new(child.stdout.take().expect("stdout not piped"));
-
-        let codec = FrameCodec::new(MAXIMUM_FRAME_BYTES);
-
-        // Send HostHello
-        codec
-            .write(
-                &mut stdin,
-                &WireMessage::HostHello(HostHello {
-                    supported_protocols: ProtocolRange::new(1, 1),
-                }),
-            )
-            .expect("failed to write HostHello");
-        // Write is buffered; must flush through the ChildStdin directly.
-        // FrameCodec::write for BufWriter<&mut dyn Write> — but here we
-        // have ChildStdin. Use write_all via the codec's encode_payload.
-        // Actually FrameCodec has a write(&mut self, writer: &mut impl Write, ...)
-        // which already flushes? Let's just use the standard approach.
-        // The codec write calls writer.write_all which on a ChildStdin does
-        // unbuffered writes. We need to ensure everything is flushed.
-
-        // Read WorkerHello using a manual frame protocol
-        let mut prefix = [0u8; 4];
-        stdout
-            .read_exact(&mut prefix)
-            .expect("failed to read frame prefix");
-        let declared = u32::from_be_bytes(prefix);
-        let mut payload = vec![0u8; declared as usize];
-        stdout
-            .read_exact(&mut payload)
-            .expect("failed to read frame payload");
-        let WireMessage::WorkerHello(hello) = codec
-            .decode_payload(&payload)
-            .expect("failed to decode WorkerHello")
-        else {
-            panic!("expected WorkerHello as first response");
-        };
-
-        Self {
-            child,
-            stdin: Some(stdin),
-            stdout,
-            hello,
-        }
-    }
-
-    fn request(&mut self, operation: &str, payload: serde_json::Value) -> WireMessage {
-        let codec = FrameCodec::new(MAXIMUM_FRAME_BYTES);
-        // Encode and write the request frame
-        let message = WireMessage::Request(RequestFrame {
-            protocol_version: ProtocolVersion(1),
-            incarnation_id: self.hello.identity.incarnation_id.clone(),
-            request_id: RequestId::from("e2e-test"),
-            correlation_id: CorrelationId::from("e2e-correlation"),
-            operation: operation.to_owned(),
-            payload,
-        });
-        let raw = codec
-            .encode_payload(&message)
-            .expect("failed to encode request");
-        let len = u32::try_from(raw.len()).expect("payload too large");
-        let stdin = self.stdin.as_mut().expect("stdin closed");
-        stdin
-            .write_all(&len.to_be_bytes())
-            .expect("failed to write frame prefix");
-        stdin
-            .write_all(&raw)
-            .expect("failed to write frame payload");
-        stdin.flush().expect("failed to flush request");
-
-        // Read the response frame
-        let mut prefix = [0u8; 4];
-        self.stdout
-            .read_exact(&mut prefix)
-            .expect("failed to read response prefix");
-        let declared = u32::from_be_bytes(prefix);
-        let mut payload = vec![0u8; declared as usize];
-        self.stdout
-            .read_exact(&mut payload)
-            .expect("failed to read response payload");
-        codec
-            .decode_payload(&payload)
-            .expect("failed to decode response")
-    }
-
-    fn send(&mut self, message: &WireMessage) {
-        let codec = FrameCodec::new(MAXIMUM_FRAME_BYTES);
-        let stdin = self.stdin.as_mut().expect("stdin closed");
-        codec.write(stdin, message).unwrap();
-        stdin.flush().unwrap();
-    }
-
-    fn read(&mut self) -> WireMessage {
-        FrameCodec::new(MAXIMUM_FRAME_BYTES)
-            .read(&mut self.stdout)
-            .unwrap()
-    }
-
-    fn exits_within(&mut self, deadline: std::time::Duration) -> bool {
-        let started = std::time::Instant::now();
-        while started.elapsed() < deadline {
-            if self.child.try_wait().unwrap().is_some() {
-                return true;
-            }
-            std::thread::sleep(std::time::Duration::from_millis(10));
-        }
-        false
-    }
-}
-
-impl Drop for BurnWorkerProcess {
-    fn drop(&mut self) {
-        // Send shutdown for clean termination
-        let codec = FrameCodec::new(MAXIMUM_FRAME_BYTES);
-        if let Some(stdin) = self.stdin.as_mut()
-            && let Ok(raw) = codec.encode_payload(&WireMessage::Shutdown(ShutdownFrame {
-                protocol_version: ProtocolVersion(1),
-                incarnation_id: self.hello.identity.incarnation_id.clone(),
-                control_id: reimagine_backend_worker_protocol::ControlId::from("e2e-shutdown"),
-            }))
-        {
-            let len = u32::try_from(raw.len()).unwrap_or(0);
-            let _ = stdin.write_all(&len.to_be_bytes());
-            let _ = stdin.write_all(&raw);
-            let _ = stdin.flush();
-            std::thread::sleep(std::time::Duration::from_millis(100));
-        }
-        let _ = self.child.kill();
-        let _ = self.child.wait();
-    }
 }
 
 fn process_launch_spec(
@@ -224,9 +66,10 @@ fn process_launch_spec(
             target: format!("{}-{}", std::env::consts::ARCH, std::env::consts::OS),
             manifest_digest: "dev".to_owned(),
         },
-        supported_protocols: ProtocolRange::new(1, 1),
+        supported_protocols: ProtocolRange::new(2, 2),
         limits: WorkerLimits {
-            request_timeout: std::time::Duration::from_secs(120),
+            startup_timeout: Duration::from_secs(15),
+            request_timeout: Duration::from_secs(120),
             ..WorkerLimits::default()
         },
         environment: vec![
@@ -247,7 +90,6 @@ fn process_launch_spec(
                 output_dir.display().to_string(),
             ),
         ],
-        transport: Default::default(),
     }
 }
 
@@ -709,19 +551,26 @@ async fn process_adapter_imports_and_encodes_image() {
     );
 }
 
-#[test]
-fn worker_handshake_returns_valid_hello() {
-    let worker = BurnWorkerProcess::spawn();
+// ---------------------------------------------------------------------------
+// v2 contract process tests (real worker, supervisor over a Unix socket)
+// ---------------------------------------------------------------------------
 
-    assert_eq!(
-        worker.hello.selected_protocol,
-        ProtocolVersion(1),
-        "selected protocol must be 1"
-    );
-    assert_eq!(
-        worker.hello.identity.backend_kind, "burn",
-        "backend kind must be 'burn'"
-    );
+use reimagine_inference::{CancelToken, InferenceInvocation, NoopProgressSink};
+
+/// The worker's hello (identity + profile + protocol version) must
+/// match the launch expectation, which `start` already enforces; this
+/// test also asserts the reported shape.
+#[tokio::test]
+async fn worker_handshake_returns_valid_hello() {
+    let root = tempfile::tempdir().expect("package root");
+    let output = tempfile::tempdir().expect("output dir");
+    let worker = WorkerSupervisor::new(process_launch_spec(root.path(), output.path()))
+        .start()
+        .await
+        .expect("real worker starts and greets");
+
+    assert_eq!(worker.hello.protocol.0, 2, "worker must report protocol v2");
+    assert_eq!(worker.hello.identity.backend_kind, "burn");
     assert!(
         !worker.hello.identity.incarnation_id.0.is_empty(),
         "incarnation id must be non-empty"
@@ -734,159 +583,268 @@ fn worker_handshake_returns_valid_hello() {
         !worker.hello.profile.instances.is_empty(),
         "profile must have at least one instance"
     );
+
+    worker.shutdown().await.expect("graceful shutdown");
 }
 
-#[test]
-fn worker_create_empty_latent_returns_expected_response() {
-    let mut worker = BurnWorkerProcess::spawn();
+/// The direct `latent.create_empty` operation echoes the request shape
+/// and hands back a worker token.
+#[tokio::test]
+async fn worker_create_empty_latent_returns_expected_response() {
+    let root = tempfile::tempdir().expect("package root");
+    let output = tempfile::tempdir().expect("output dir");
+    let worker = WorkerSupervisor::new(process_launch_spec(root.path(), output.path()))
+        .start()
+        .await
+        .expect("real worker starts");
 
-    let response = worker.request(
-        "latent.create_empty",
-        serde_json::json!({
-            "width": 64,
-            "height": 64,
-            "batch_size": 1,
-        }),
-    );
-
-    match response {
-        WireMessage::Terminal(terminal) => match terminal.outcome {
-            TerminalOutcome::Success { ref output } => {
-                assert!(
-                    output
-                        .get("worker_token")
-                        .and_then(|v| v.as_str())
-                        .is_some(),
-                    "response must contain worker_token: {output}"
-                );
-                assert_eq!(
-                    output.get("width").and_then(|v| v.as_u64()),
-                    Some(64),
-                    "response width must echo request"
-                );
-                assert_eq!(
-                    output.get("height").and_then(|v| v.as_u64()),
-                    Some(64),
-                    "response height must echo request"
-                );
-                assert_eq!(
-                    output.get("batch_size").and_then(|v| v.as_u64()),
-                    Some(1),
-                    "response batch_size must echo request"
-                );
-            }
-            TerminalOutcome::BackendError { ref error } => {
-                panic!(
-                    "create_empty_latent returned backend error: {}: {}",
-                    error.code, error.message
-                );
-            }
-            TerminalOutcome::Cancelled => {
-                panic!("create_empty_latent was cancelled");
-            }
-        },
-        other => {
-            panic!("expected Terminal response, got: {:?}", other.kind());
+    let result = worker
+        .request(
+            "latent.create_empty",
+            serde_json::json!({
+                "width": 64,
+                "height": 64,
+                "batch_size": 1,
+            }),
+        )
+        .await
+        .expect("execute over the v2 contract");
+    match result.terminal {
+        TerminalOutcome::Success { output } => {
+            assert!(
+                output
+                    .get("worker_token")
+                    .and_then(|v| v.as_str())
+                    .is_some(),
+                "response must contain worker_token: {output}"
+            );
+            assert_eq!(output.get("width").and_then(|v| v.as_u64()), Some(64));
+            assert_eq!(output.get("height").and_then(|v| v.as_u64()), Some(64));
+            assert_eq!(output.get("batch_size").and_then(|v| v.as_u64()), Some(1));
         }
+        other => panic!("expected success outcome, got {other:?}"),
     }
+
+    worker.shutdown().await.expect("graceful shutdown");
 }
 
-#[test]
-fn worker_unknown_operation_returns_error() {
-    let mut worker = BurnWorkerProcess::spawn();
+#[tokio::test]
+async fn worker_unknown_operation_returns_error() {
+    let root = tempfile::tempdir().expect("package root");
+    let output = tempfile::tempdir().expect("output dir");
+    let worker = WorkerSupervisor::new(process_launch_spec(root.path(), output.path()))
+        .start()
+        .await
+        .expect("real worker starts");
 
-    let response = worker.request("nonexistent_op", serde_json::json!({}));
-
-    match response {
-        WireMessage::Terminal(terminal) => match terminal.outcome {
-            TerminalOutcome::BackendError { ref error } => {
-                assert_eq!(
-                    error.code, "unknown_operation",
-                    "error code must be 'unknown_operation'"
-                );
-            }
-            _ => panic!("expected backend error for unknown operation"),
-        },
-        other => panic!("expected Terminal response, got: {:?}", other.kind()),
+    let result = worker
+        .request("nonexistent_op", serde_json::json!({}))
+        .await
+        .expect("execute over the v2 contract");
+    match result.terminal {
+        TerminalOutcome::BackendError { error } => {
+            assert_eq!(error.code, "unknown_operation");
+        }
+        other => panic!("expected backend error for unknown operation, got {other:?}"),
     }
+
+    worker.shutdown().await.expect("graceful shutdown");
 }
 
-#[test]
-fn cleanup_reports_actual_run_removals_once() {
-    let mut worker = BurnWorkerProcess::spawn();
-    let response = worker.request(
-        "latent.create_empty",
-        serde_json::json!({
-            "width": 64,
-            "height": 64,
-            "batch_size": 1,
-            "run_id": "cleanup-run",
-        }),
+#[tokio::test]
+async fn cleanup_reports_actual_run_removals_once() {
+    let root = tempfile::tempdir().expect("package root");
+    let output = tempfile::tempdir().expect("output dir");
+    let worker = WorkerSupervisor::new(process_launch_spec(root.path(), output.path()))
+        .start()
+        .await
+        .expect("real worker starts");
+
+    let result = worker
+        .request(
+            "latent.create_empty",
+            serde_json::json!({
+                "width": 64,
+                "height": 64,
+                "batch_size": 1,
+                "run_id": "cleanup-run",
+            }),
+        )
+        .await
+        .expect("execute over the v2 contract");
+    assert!(matches!(result.terminal, TerminalOutcome::Success { .. }));
+
+    let released_first = worker
+        .cleanup(Some("cleanup-run".to_owned()), Vec::new())
+        .await
+        .expect("cleanup call");
+    let released_second = worker
+        .cleanup(Some("cleanup-run".to_owned()), Vec::new())
+        .await
+        .expect("cleanup call");
+    assert_eq!(released_first, 1, "first cleanup removes the run payload");
+    assert_eq!(released_second, 0, "second cleanup finds nothing left");
+
+    worker.shutdown().await.expect("graceful shutdown");
+}
+
+/// Cancelling mid-execution drops the Execute call; the host reports
+/// the single Cancelled terminal even though the worker's model load
+/// would eventually have succeeded.
+#[tokio::test]
+async fn cancel_during_execution_reports_cancelled() {
+    let root = tempfile::tempdir().expect("package root");
+    let output = tempfile::tempdir().expect("output dir");
+    let worker = Arc::new(
+        WorkerSupervisor::new(process_launch_spec(root.path(), output.path()))
+            .start()
+            .await
+            .expect("real worker starts"),
     );
-    assert!(matches!(response, WireMessage::Terminal(_)));
+    let backend = ProcessInferenceBackend::new(Arc::clone(&worker));
 
-    for expected in [1, 0] {
-        worker.send(&WireMessage::Cleanup(CleanupFrame {
-            protocol_version: ProtocolVersion(1),
-            incarnation_id: worker.hello.identity.incarnation_id.clone(),
-            control_id: ControlId::from("cleanup-control"),
-            run_id: Some("cleanup-run".to_owned()),
-            object_ids: Vec::new(),
-        }));
-        let WireMessage::CleanupAck(ack) = worker.read() else {
-            panic!("expected cleanup ack");
-        };
-        assert_eq!(ack.released_objects, expected);
+    let cancellation = CancelToken::new();
+    let invocation = InferenceInvocation::new(
+        tiny_fixture::run_id(),
+        NodeId::new("cancel-mid-load"),
+        None,
+        cancellation.clone(),
+        Arc::new(NoopProgressSink),
+    );
+    let backend_task = tokio::spawn(async move {
+        backend
+            .load_bundle_with_invocation(&invocation, tiny_fixture::load_request(root.path()))
+            .await
+    });
+
+    // The tiny bundle load takes well over this on a cold worker; the
+    // cancel therefore lands while the operation is in flight.
+    tokio::time::sleep(Duration::from_millis(20)).await;
+    cancellation.cancel();
+
+    let error = backend_task
+        .await
+        .expect("task completes")
+        .expect_err("cancelled load must fail");
+    assert!(
+        matches!(error, reimagine_inference::InferenceError::Cancelled),
+        "expected Cancelled, got: {error}"
+    );
+
+    worker.shutdown().await.expect("graceful shutdown");
+}
+
+#[tokio::test]
+async fn health_check_reports_healthy() {
+    let root = tempfile::tempdir().expect("package root");
+    let output = tempfile::tempdir().expect("output dir");
+    let worker = WorkerSupervisor::new(process_launch_spec(root.path(), output.path()))
+        .start()
+        .await
+        .expect("real worker starts");
+
+    let health = worker.health().await.expect("health RPC");
+    assert!(health.healthy);
+
+    worker.shutdown().await.expect("graceful shutdown");
+}
+
+/// The graceful shutdown path removes the worker's private socket file
+/// and its 0700 directory.
+#[tokio::test]
+async fn shutdown_removes_the_worker_socket() {
+    let root = tempfile::tempdir().expect("package root");
+    let output = tempfile::tempdir().expect("output dir");
+    let worker = WorkerSupervisor::new(process_launch_spec(root.path(), output.path()))
+        .start()
+        .await
+        .expect("real worker starts");
+
+    let endpoint = worker.transport_endpoint();
+    #[cfg(windows)]
+    if LocalEndpoint::parse(&endpoint)
+        .expect("local endpoint")
+        .to_uri()
+        .starts_with("pipe://")
+    {
+        return; // nothing to unlink for Windows named pipes
     }
+    #[cfg(not(windows))]
+    let socket_path = {
+        let path = endpoint
+            .strip_prefix("unix://")
+            .expect("local workers use unix:// endpoints");
+        std::path::PathBuf::from(path)
+    };
+    assert!(
+        socket_path.exists(),
+        "socket file must exist while the worker runs"
+    );
+    let socket_dir = socket_path
+        .parent()
+        .expect("socket lives in its own directory")
+        .to_path_buf();
+
+    worker.shutdown().await.expect("graceful shutdown");
+    assert!(
+        !socket_path.exists(),
+        "socket file must be removed after shutdown"
+    );
+    assert!(
+        !socket_dir.exists(),
+        "the private socket directory must be removed after shutdown"
+    );
 }
 
-#[test]
-fn wrong_protocol_version_terminates_session() {
-    let mut worker = BurnWorkerProcess::spawn();
-    worker.send(&WireMessage::Request(RequestFrame {
-        protocol_version: ProtocolVersion(99),
-        incarnation_id: worker.hello.identity.incarnation_id.clone(),
-        request_id: RequestId::from("wrong-version"),
-        correlation_id: CorrelationId::from("wrong-version"),
-        operation: "latent.create_empty".to_owned(),
-        payload: serde_json::json!({ "width": 64, "height": 64, "batch_size": 1 }),
-    }));
-    assert!(worker.exits_within(std::time::Duration::from_secs(1)));
-}
+// ---------------------------------------------------------------------------
+// Lifeline
+// ---------------------------------------------------------------------------
 
-#[test]
-fn stale_incarnation_terminates_session() {
-    let mut worker = BurnWorkerProcess::spawn();
-    worker.send(&WireMessage::Request(RequestFrame {
-        protocol_version: ProtocolVersion(1),
-        incarnation_id: reimagine_backend_worker_protocol::WorkerIncarnationId::from("stale"),
-        request_id: RequestId::from("stale-incarnation"),
-        correlation_id: CorrelationId::from("stale-incarnation"),
-        operation: "latent.create_empty".to_owned(),
-        payload: serde_json::json!({ "width": 64, "height": 64, "batch_size": 1 }),
-    }));
-    assert!(worker.exits_within(std::time::Duration::from_secs(1)));
-}
-
-#[test]
-fn wrong_direction_terminates_session() {
-    let mut worker = BurnWorkerProcess::spawn();
-    worker.send(&WireMessage::Terminal(TerminalFrame {
-        protocol_version: ProtocolVersion(1),
-        incarnation_id: worker.hello.identity.incarnation_id.clone(),
-        request_id: RequestId::from("wrong-direction"),
-        correlation_id: CorrelationId::from("wrong-direction"),
-        outcome: TerminalOutcome::Cancelled,
-    }));
-    assert!(worker.exits_within(std::time::Duration::from_secs(1)));
-}
-
+/// A dead host closes both ends at once: stdin reaches EOF and stderr
+/// becomes a broken pipe, so the worker's own logging fails too. The
+/// worker must still exit.
 #[test]
 fn worker_exits_when_the_host_dies() {
-    // A dead host closes both ends at once: stdin reaches EOF and stderr
-    // becomes a broken pipe, so the worker's own logging fails too.
-    let mut worker = BurnWorkerProcess::spawn();
-    drop(worker.child.stderr.take());
-    drop(worker.stdin.take());
-    assert!(worker.exits_within(std::time::Duration::from_secs(5)));
+    let socket_dir = tempfile::tempdir().expect("socket dir");
+    let socket_path = socket_dir.path().join("worker.sock");
+    let mut child = Command::new(env!("CARGO_BIN_EXE_reimagine-inference-burn-worker"))
+        .arg("--listen")
+        .arg(format!("unix://{}", socket_path.display()))
+        .env_clear()
+        .env("REIMAGINE_WORKER_TOKEN", "lifeline-token")
+        .env("REIMAGINE_MODELS_DIR", "/tmp")
+        .env("REIMAGINE_OUTPUT_DIR", "/tmp")
+        .env("REIMAGINE_ALLOWED_MODEL_ROOTS", "/tmp")
+        .env("REIMAGINE_ALLOWED_OUTPUT_ROOTS", "/tmp")
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .expect("failed to spawn burn worker process");
+
+    // Wait for the READY line before closing the pipes.
+    let mut stdout = std::io::BufReader::new(child.stdout.take().expect("stdout piped"));
+    let mut ready = String::new();
+    std::io::BufRead::read_line(&mut stdout, &mut ready).expect("read READY line");
+    assert!(
+        ready.starts_with("READY "),
+        "expected a READY line, got: {ready}"
+    );
+    drop(stdout);
+    let stderr = child.stderr.take();
+    drop(stderr);
+
+    // Closing stdin is the lifeline going away.
+    drop(child.stdin.take());
+
+    let deadline = std::time::Instant::now() + Duration::from_secs(5);
+    while std::time::Instant::now() < deadline {
+        if child.try_wait().expect("poll worker").is_some() {
+            return;
+        }
+        std::thread::sleep(Duration::from_millis(10));
+    }
+    let _ = child.kill();
+    let _ = child.wait();
+    panic!("worker did not exit within 5s of stdin EOF");
 }

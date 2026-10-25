@@ -176,7 +176,7 @@ fn parse_expiry(expires: &str) -> Result<DateTime<Utc>, CatalogError> {
 
 fn check_expiry(role: &str, expires: &str) -> Result<(), CatalogError> {
     let expiry = parse_expiry(expires)?;
-    if SystemTime::now() > expiry.into() {
+    if SystemTime::now() > SystemTime::from(expiry) {
         return Err(CatalogError::Expired {
             role: role.to_string(),
             expires: expires.to_string(),

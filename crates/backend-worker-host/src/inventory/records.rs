@@ -18,6 +18,17 @@ pub struct InstallationRecord {
     pub install_path: String,
     /// Profile information from the package manifest (optional).
     pub manifest_profile: Option<crate::WorkerInstanceProfile>,
+    /// Worker wire protocol versions the installed package speaks.
+    /// Records predating the field default to v1, which the host's
+    /// compatibility check rejects with a reinstall diagnostic.
+    #[serde(default = "default_protocol_version")]
+    pub protocol_version_min: u16,
+    #[serde(default = "default_protocol_version")]
+    pub protocol_version_max: u16,
+}
+
+fn default_protocol_version() -> u16 {
+    1
 }
 
 /// A snapshot of the entire inventory at a point in time.

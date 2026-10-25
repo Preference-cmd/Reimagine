@@ -33,10 +33,9 @@ fn missing_worker_candidate() -> WorkerBackendCandidate {
                 target: "test-target".to_owned(),
                 manifest_digest: "sha256-test".to_owned(),
             },
-            supported_protocols: ProtocolRange::new(1, 1),
+            supported_protocols: ProtocolRange::new(2, 2),
             limits: WorkerLimits::default(),
             environment: Vec::new(),
-            transport: Default::default(),
         },
         WorkerInstanceProfile {
             backend_instance_id: instance,
@@ -206,6 +205,8 @@ fn installed_record_with_manifest_profile_resolves_switch_candidate() {
         installed_at: chrono::Utc::now(),
         install_path: install_dir.to_string_lossy().into_owned(),
         manifest_profile: Some(profile.clone()),
+        protocol_version_min: 2,
+        protocol_version_max: 2,
     };
 
     let store = InventoryStore::new(WorkerStorePaths::new(temp.path().to_path_buf()));
@@ -225,10 +226,9 @@ fn installed_record_with_manifest_profile_resolves_switch_candidate() {
         WorkerLaunchSpec {
             executable,
             expected: stored.identity.clone(),
-            supported_protocols: ProtocolRange::new(1, 1),
+            supported_protocols: ProtocolRange::new(2, 2),
             limits: WorkerLimits::default(),
             environment: Vec::new(),
-            transport: Default::default(),
         },
         manifest_profile,
     )

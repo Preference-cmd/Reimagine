@@ -4,9 +4,10 @@ use std::time::Duration;
 
 use reimagine_backend_worker_host::{
     ExpectedWorkerIdentity, WorkerLaunchSpec, WorkerLimits, WorkerProcessState, WorkerSupervisor,
-    WorkerTransportConfig,
 };
-use reimagine_backend_worker_protocol::{BackendInstanceId, ProtocolRange, WorkerInstallationId};
+use reimagine_backend_worker_protocol::{
+    BackendInstanceId, ProtocolRange, TerminalOutcome, WorkerInstallationId,
+};
 
 fn launch_spec() -> WorkerLaunchSpec {
     WorkerLaunchSpec {
@@ -18,13 +19,12 @@ fn launch_spec() -> WorkerLaunchSpec {
             target: std::env::consts::ARCH.to_owned(),
             manifest_digest: "test-manifest".to_owned(),
         },
-        supported_protocols: ProtocolRange::new(1, 1),
+        supported_protocols: ProtocolRange::new(2, 2),
         limits: WorkerLimits {
             startup_timeout: Duration::from_secs(2),
             ..WorkerLimits::default()
         },
         environment: Vec::new(),
-        transport: WorkerTransportConfig::Stdio,
     }
 }
 
@@ -47,10 +47,11 @@ async fn construction_does_not_start_and_start_returns_validated_hello() {
         BackendInstanceId::from("fake:cpu:default")
     );
     assert!(!started.hello.profile.instances.is_empty());
+    started.shutdown().await.unwrap();
 }
 
 #[tokio::test]
-async fn one_reader_multiplexes_concurrent_requests_and_progress() {
+async fn one_client_multiplexes_concurrent_requests_and_progress() {
     let supervisor = WorkerSupervisor::new(launch_spec());
     let worker = Arc::new(supervisor.start().await.unwrap());
     let slow_worker = Arc::clone(&worker);
@@ -72,8 +73,8 @@ async fn one_reader_multiplexes_concurrent_requests_and_progress() {
         .unwrap()
         .unwrap();
     assert_eq!(
-        fast.terminal.outcome,
-        reimagine_backend_worker_protocol::TerminalOutcome::Success {
+        fast.terminal,
+        TerminalOutcome::Success {
             output: serde_json::json!({ "value": 7 })
         }
     );
@@ -95,10 +96,12 @@ async fn one_reader_multiplexes_concurrent_requests_and_progress() {
             .collect::<Vec<_>>(),
         vec![1, 2, 3]
     );
+
+    worker.shutdown().await.unwrap();
 }
 
 #[tokio::test]
-async fn cancellation_is_idempotent_and_finishes_once() {
+async fn cancellation_is_idempotent_and_reports_one_cancelled_terminal() {
     let supervisor = WorkerSupervisor::new(launch_spec());
     let worker = supervisor.start().await.unwrap();
     let request = worker
@@ -109,21 +112,26 @@ async fn cancellation_is_idempotent_and_finishes_once() {
     request.cancel().await.unwrap();
     request.cancel().await.unwrap();
     let result = request.finish().await.unwrap();
-    assert!(result.cancel_acknowledged);
-    assert_eq!(
-        result.terminal.outcome,
-        reimagine_backend_worker_protocol::TerminalOutcome::Cancelled
-    );
+    assert_eq!(result.terminal, TerminalOutcome::Cancelled);
+
+    worker.shutdown().await.unwrap();
 }
 
 #[tokio::test]
-async fn startup_timeout_identity_and_malformed_hello_are_distinct() {
+async fn startup_timeout_identity_and_protocol_mismatches_are_distinct() {
     let mut hanging = launch_spec_with_mode("hang");
-    hanging.limits.startup_timeout = Duration::from_millis(50);
-    assert!(matches!(
-        WorkerSupervisor::new(hanging).start().await,
-        Err(reimagine_backend_worker_host::WorkerHostError::StartupTimeout)
-    ));
+    hanging.limits.startup_timeout = Duration::from_millis(500);
+    let error = match WorkerSupervisor::new(hanging).start().await {
+        Ok(_) => panic!("hang mode must not start"),
+        Err(error) => error,
+    };
+    assert!(
+        matches!(
+            error,
+            reimagine_backend_worker_host::WorkerHostError::StartupTimeout
+        ),
+        "expected StartupTimeout, got: {error}"
+    );
 
     assert!(matches!(
         WorkerSupervisor::new(launch_spec_with_mode("wrong_identity"))
@@ -138,44 +146,34 @@ async fn startup_timeout_identity_and_malformed_hello_are_distinct() {
     ));
 
     assert!(matches!(
-        WorkerSupervisor::new(launch_spec_with_mode("malformed_hello"))
-            .start()
-            .await,
-        Err(reimagine_backend_worker_host::WorkerHostError::Protocol(_))
-    ));
-    assert!(matches!(
-        WorkerSupervisor::new(launch_spec_with_mode("partial_hello"))
+        WorkerSupervisor::new(launch_spec_with_mode("wrong_protocol"))
             .start()
             .await,
         Err(
-            reimagine_backend_worker_host::WorkerHostError::IncompleteFrame {
-                operation: "read payload",
-                received: 1,
-                expected: 20,
+            reimagine_backend_worker_host::WorkerHostError::IdentityMismatch {
+                field: "protocol",
                 ..
             }
         )
     ));
+}
+
+#[tokio::test]
+async fn unexpected_stdout_is_rejected() {
+    let mut spec = launch_spec_with_mode("stdout_noise");
+    spec.limits.startup_timeout = Duration::from_secs(2);
+    let error = match WorkerSupervisor::new(spec).start().await {
+        Ok(_) => panic!("unexpected stdout must fail startup"),
+        Err(error) => error,
+    };
     assert!(matches!(
-        WorkerSupervisor::new(launch_spec_with_mode("clean_eof_hello"))
-            .start()
-            .await,
-        Err(reimagine_backend_worker_host::WorkerHostError::CleanEof {
-            operation: "read prefix"
-        })
+        error,
+        reimagine_backend_worker_host::WorkerHostError::Transport(_)
     ));
-    assert!(matches!(
-        WorkerSupervisor::new(launch_spec_with_mode("partial_prefix_hello"))
-            .start()
-            .await,
-        Err(
-            reimagine_backend_worker_host::WorkerHostError::IncompleteFrame {
-                operation: "read prefix",
-                received: 2,
-                expected: 4,
-            }
-        )
-    ));
+    assert!(
+        error.to_string().contains("stdout"),
+        "unexpected stdout must be reported: {error}"
+    );
 }
 
 #[tokio::test]
@@ -183,10 +181,23 @@ async fn stderr_is_drained_and_bounded_without_blocking_hello() {
     let mut spec = launch_spec_with_mode("stderr_flood");
     spec.limits.maximum_stderr_bytes = 1024;
     let worker = WorkerSupervisor::new(spec).start().await.unwrap();
-    tokio::time::sleep(Duration::from_millis(20)).await;
-    let tail = worker.stderr_tail().await;
+    // The drain task runs concurrently with startup; poll until the
+    // bounded tail is full.
+    let tail = {
+        let mut tail = worker.stderr_tail().await;
+        for _ in 0..100 {
+            if tail.len() == 1024 {
+                break;
+            }
+            tokio::time::sleep(Duration::from_millis(20)).await;
+            tail = worker.stderr_tail().await;
+        }
+        tail
+    };
     assert_eq!(tail.len(), 1024);
     assert!(tail.iter().all(|byte| *byte == b'x'));
+
+    worker.shutdown().await.unwrap();
 }
 
 #[tokio::test]
@@ -224,11 +235,12 @@ async fn graceful_shutdown_acknowledges_reaps_and_stops() {
 #[tokio::test]
 async fn ready_supervisor_rejects_a_second_process_start() {
     let supervisor = WorkerSupervisor::new(launch_spec());
-    let _worker = supervisor.start().await.unwrap();
+    let worker = supervisor.start().await.unwrap();
     assert!(matches!(
         supervisor.start().await,
         Err(reimagine_backend_worker_host::WorkerHostError::AlreadyStarted)
     ));
+    worker.shutdown().await.unwrap();
 }
 
 #[tokio::test]
@@ -258,10 +270,11 @@ async fn restart_uses_new_incarnation_and_old_client_stays_stale() {
             .await
             .is_ok()
     );
+    new_worker.shutdown().await.unwrap();
 }
 
 #[tokio::test]
-async fn health_and_cleanup_controls_are_correlated() {
+async fn health_and_cleanup_controls_succeed() {
     let supervisor = WorkerSupervisor::new(launch_spec());
     let worker = supervisor.start().await.unwrap();
 
@@ -269,14 +282,16 @@ async fn health_and_cleanup_controls_are_correlated() {
     assert!(health.healthy);
     assert_eq!(health.message, None);
 
-    let cleanup = worker
+    let released = worker
         .cleanup(
             Some("run-1".to_owned()),
             vec!["latent-1".to_owned(), "latent-2".to_owned()],
         )
         .await
         .unwrap();
-    assert_eq!(cleanup.released_objects, 2);
+    assert_eq!(released, 2);
+
+    worker.shutdown().await.unwrap();
 }
 
 #[tokio::test]
@@ -298,12 +313,39 @@ async fn shutdown_timeout_kills_worker_and_invalidates_client() {
 }
 
 #[tokio::test]
-async fn dropping_last_worker_handle_stops_owned_process() {
+async fn dropping_last_worker_handle_stops_owned_process_and_removes_socket_dir() {
     let supervisor = WorkerSupervisor::new(launch_spec());
     let worker = supervisor.start().await.unwrap();
+    let endpoint = worker.transport_endpoint();
+    let socket_path = PathBuf::from(
+        endpoint
+            .strip_prefix("unix://")
+            .expect("local workers expose a unix:// endpoint"),
+    );
+    assert!(socket_path.exists(), "socket file must exist while running");
+    let socket_dir = socket_path
+        .parent()
+        .expect("socket lives in its own directory")
+        .to_path_buf();
+
     drop(worker);
 
     assert_eq!(supervisor.state(), WorkerProcessState::Stopped);
+    for _ in 0..100 {
+        if !socket_path.exists() && !socket_dir.exists() {
+            break;
+        }
+        tokio::time::sleep(Duration::from_millis(10)).await;
+    }
+    assert!(
+        !socket_path.exists(),
+        "dropping the worker must remove its socket file"
+    );
+    assert!(
+        !socket_dir.exists(),
+        "dropping the worker must remove its private socket directory"
+    );
+
     let restarted = supervisor.start().await.unwrap();
     restarted.shutdown().await.unwrap();
 }
@@ -343,4 +385,17 @@ async fn dropping_stale_client_does_not_overwrite_new_worker_state() {
             .await
             .is_ok()
     );
+    current_worker.shutdown().await.unwrap();
+}
+
+#[tokio::test]
+async fn connect_failure_reports_transport_error_and_stays_stopped() {
+    let mut spec = launch_spec();
+    spec.executable = PathBuf::from("/nonexistent/reimagine-fake-worker");
+    let supervisor = WorkerSupervisor::new(spec);
+    assert!(matches!(
+        supervisor.start().await,
+        Err(reimagine_backend_worker_host::WorkerHostError::Transport(_))
+    ));
+    assert_eq!(supervisor.state(), WorkerProcessState::Stopped);
 }

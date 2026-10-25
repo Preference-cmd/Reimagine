@@ -1,8 +1,17 @@
+//! Protocol versioning for the worker contract.
+//!
+//! The version travels once, in the `Hello` response. A host that cannot
+//! work with the reported version rejects the worker instead of
+//! negotiating down: there is no cross-version wire compatibility.
+
 use std::fmt;
 
 use serde::{Deserialize, Serialize};
 
 use crate::{WorkerIdentity, WorkerProfile};
+
+/// The protocol version this workspace speaks.
+pub const WORKER_PROTOCOL_VERSION: ProtocolVersion = ProtocolVersion(2);
 
 #[derive(Clone, Copy, Debug, Eq, Ord, PartialEq, PartialOrd, Serialize, Deserialize)]
 #[serde(transparent)]
@@ -14,18 +23,6 @@ pub struct ProtocolRange {
     pub maximum: ProtocolVersion,
 }
 
-#[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize, Deserialize)]
-pub struct HostHello {
-    pub supported_protocols: ProtocolRange,
-}
-
-#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
-pub struct WorkerHello {
-    pub selected_protocol: ProtocolVersion,
-    pub identity: WorkerIdentity,
-    pub profile: WorkerProfile,
-}
-
 impl ProtocolRange {
     #[must_use]
     pub const fn new(minimum: u16, maximum: u16) -> Self {
@@ -34,50 +31,44 @@ impl ProtocolRange {
             maximum: ProtocolVersion(maximum),
         }
     }
+
+    /// Whether `version` lies inside this range, inclusive on both ends.
+    #[must_use]
+    pub fn contains(&self, version: ProtocolVersion) -> bool {
+        version >= self.minimum && version <= self.maximum
+    }
 }
 
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub enum HandshakeError {
-    InvalidRange(ProtocolRange),
-    NoCompatibleVersion {
-        host: ProtocolRange,
-        worker: ProtocolRange,
-    },
-}
-
-impl fmt::Display for HandshakeError {
+impl fmt::Display for ProtocolRange {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
-        match self {
-            Self::InvalidRange(range) => write!(
-                formatter,
-                "invalid protocol range {}..={}",
-                range.minimum.0, range.maximum.0
-            ),
-            Self::NoCompatibleVersion { host, worker } => write!(
-                formatter,
-                "no compatible protocol version between host {}..={} and worker {}..={}",
-                host.minimum.0, host.maximum.0, worker.minimum.0, worker.maximum.0
-            ),
-        }
+        write!(formatter, "{}..={}", self.minimum.0, self.maximum.0)
     }
 }
 
-impl std::error::Error for HandshakeError {}
+/// The worker's self-description returned by the `Hello` RPC: the wire
+/// protocol version it speaks, its identity, and the instance profile it
+/// serves.
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+pub struct WorkerHello {
+    pub protocol: ProtocolVersion,
+    pub identity: WorkerIdentity,
+    pub profile: WorkerProfile,
+}
 
-pub fn negotiate_protocol(
-    host: ProtocolRange,
-    worker: ProtocolRange,
-) -> Result<ProtocolVersion, HandshakeError> {
-    if host.minimum > host.maximum {
-        return Err(HandshakeError::InvalidRange(host));
+#[cfg(test)]
+mod tests {
+    use super::{ProtocolRange, ProtocolVersion, WORKER_PROTOCOL_VERSION};
+
+    #[test]
+    fn range_contains_is_inclusive_on_both_ends() {
+        let range = ProtocolRange::new(2, 2);
+        assert!(range.contains(ProtocolVersion(2)));
+        assert!(!range.contains(ProtocolVersion(1)));
+        assert!(!range.contains(ProtocolVersion(3)));
     }
-    if worker.minimum > worker.maximum {
-        return Err(HandshakeError::InvalidRange(worker));
+
+    #[test]
+    fn workspace_speaks_protocol_v2() {
+        assert_eq!(WORKER_PROTOCOL_VERSION.0, 2);
     }
-    let minimum = host.minimum.max(worker.minimum);
-    let maximum = host.maximum.min(worker.maximum);
-    if minimum > maximum {
-        return Err(HandshakeError::NoCompatibleVersion { host, worker });
-    }
-    Ok(maximum)
 }

@@ -3,7 +3,7 @@ use std::sync::{Arc, Mutex};
 
 use reimagine_backend_worker_host::{
     ExpectedWorkerIdentity, ProcessInferenceBackend, WorkerLaunchSpec, WorkerLimits,
-    WorkerSupervisor, WorkerTransportConfig,
+    WorkerSupervisor,
 };
 use reimagine_backend_worker_protocol::{BackendInstanceId, ProtocolRange, WorkerInstallationId};
 use reimagine_core::model::{DocumentVersion, NodeId, RunId, WorkflowId};
@@ -34,10 +34,9 @@ fn launch_spec() -> WorkerLaunchSpec {
             target: std::env::consts::ARCH.to_owned(),
             manifest_digest: "test-manifest".to_owned(),
         },
-        supported_protocols: ProtocolRange::new(1, 1),
+        supported_protocols: ProtocolRange::new(2, 2),
         limits: WorkerLimits::default(),
         environment: Vec::new(),
-        transport: WorkerTransportConfig::Stdio,
     }
 }
 
@@ -157,10 +156,8 @@ async fn invocation_cancellation_reaches_worker_and_wins_once() {
 }
 
 #[tokio::test]
-async fn backend_error_terminal_wins_over_late_cancel_ack_once() {
+async fn backend_error_terminal_wins_and_late_cancel_is_a_no_op() {
     let mut spec = launch_spec();
-    spec.environment
-        .push(("FAKE_LATENT_DELAY_MS".to_owned(), "50".to_owned()));
     spec.environment.push((
         "FAKE_LATENT_TERMINAL".to_owned(),
         "backend_error".to_owned(),
@@ -195,22 +192,20 @@ async fn backend_error_terminal_wins_over_late_cancel_ack_once() {
         })
     };
 
-    tokio::time::sleep(std::time::Duration::from_millis(10)).await;
-    cancellation.cancel();
-
     let error = request_task.await.unwrap().expect_err("backend error wins");
     assert!(matches!(
         error,
         InferenceError::BackendExecutionFailed { .. }
     ));
     assert!(error.to_string().contains("forced_backend_error"));
+
+    // A cancel arriving after the terminal must not change anything.
+    cancellation.cancel();
 }
 
 #[tokio::test]
-async fn success_terminal_wins_over_late_cancel_ack_once() {
+async fn success_terminal_wins_and_late_cancel_is_a_no_op() {
     let mut spec = launch_spec();
-    spec.environment
-        .push(("FAKE_LATENT_DELAY_MS".to_owned(), "50".to_owned()));
     spec.environment
         .push(("FAKE_LATENT_TERMINAL".to_owned(), "success".to_owned()));
     let worker = Arc::new(WorkerSupervisor::new(spec).start().await.unwrap());
@@ -243,15 +238,15 @@ async fn success_terminal_wins_over_late_cancel_ack_once() {
         })
     };
 
-    tokio::time::sleep(std::time::Duration::from_millis(10)).await;
-    cancellation.cancel();
-
     let response = request_task.await.unwrap().expect("success wins");
     assert_eq!(response.latent().width(), 64);
+
+    // A cancel arriving after the terminal must not change anything.
+    cancellation.cancel();
 }
 
 #[tokio::test]
-async fn worker_crash_after_cancel_request_is_transport_lost_not_cancelled() {
+async fn cancel_before_worker_crash_reports_cancelled_once() {
     let mut spec = launch_spec();
     spec.environment
         .push(("FAKE_LATENT_DELAY_MS".to_owned(), "50".to_owned()));
@@ -290,12 +285,10 @@ async fn worker_crash_after_cancel_request_is_transport_lost_not_cancelled() {
     tokio::time::sleep(std::time::Duration::from_millis(10)).await;
     cancellation.cancel();
 
-    let error = request_task.await.unwrap().expect_err("crash wins");
-    assert!(matches!(
-        error,
-        InferenceError::BackendExecutionFailed { .. }
-    ));
-    assert!(error.to_string().contains("transport lost"));
+    // The host dropped the Execute call before the crash, so the host
+    // reports the single Cancelled terminal regardless of the crash.
+    let error = request_task.await.unwrap().expect_err("cancelled");
+    assert!(matches!(error, InferenceError::Cancelled));
 }
 
 #[tokio::test]

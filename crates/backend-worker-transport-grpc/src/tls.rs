@@ -1,10 +1,26 @@
-//! TLS helpers for the gRPC worker transport: self-signed server
-//! identities (dev/LAN) and a dev-only accept-any client verifier.
+//! TLS helpers for the gRPC worker transport: client TLS modes,
+//! self-signed server identities (dev/LAN), and a dev-only accept-any
+//! client verifier.
 
 use rustls::client::danger::{HandshakeSignatureValid, ServerCertVerified, ServerCertVerifier};
 use rustls::crypto::WebPkiSupportedAlgorithms;
 use rustls::pki_types::{CertificateDer, ServerName, UnixTime};
 use rustls::{DigitallySignedStruct, SignatureScheme};
+
+/// TLS mode for a gRPC client connect.
+///
+/// Only relevant for `https://` endpoints; local worker connections
+/// (Unix socket, named pipe) are unencrypted by design and rely on the
+/// filesystem/pipe namespace plus the bearer token for protection.
+#[derive(Clone, Debug)]
+pub enum GrpcTls {
+    /// Trust the given PEM certificate (e.g. the worker's self-signed
+    /// certificate or a custom CA). The endpoint URI must use `https://`.
+    TrustCert { ca_pem: String, domain: String },
+    /// Accept any server certificate (dev only). The endpoint URI must
+    /// use `https://`.
+    InsecureSkipVerify { domain: String },
+}
 
 /// Ensure the process-level rustls crypto provider is installed.
 ///

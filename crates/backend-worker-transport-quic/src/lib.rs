@@ -1,5 +1,4 @@
 pub mod discovery;
-pub mod listener;
 pub mod tls;
 pub mod transport;
 pub mod trust;

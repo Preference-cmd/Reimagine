@@ -1,7 +1,7 @@
 use std::fmt;
 use std::path::PathBuf;
 
-use reimagine_backend_worker_protocol::{CodecError, TransportError};
+use reimagine_backend_worker_protocol::TransportError;
 
 #[derive(Debug)]
 pub enum WorkerHostError {
@@ -10,22 +10,11 @@ pub enum WorkerHostError {
         message: String,
     },
     Transport(TransportError),
-    Io {
-        operation: &'static str,
-        message: String,
-    },
-    CleanEof {
-        operation: &'static str,
-    },
-    IncompleteFrame {
-        operation: &'static str,
-        received: usize,
-        expected: usize,
-    },
-    Protocol(CodecError),
+    /// The worker did not become ready within the startup deadline.
     StartupTimeout,
-    UnexpectedStartupMessage {
-        kind: &'static str,
+    /// The worker printed something other than its READY line on stdout.
+    StartupOutput {
+        line: String,
     },
     IdentityMismatch {
         field: &'static str,
@@ -36,17 +25,9 @@ pub enum WorkerHostError {
         requested: String,
         available: Vec<String>,
     },
-    RequestTimeout {
-        request_id: String,
-    },
-    ControlTimeout {
-        control_id: String,
-    },
+    RequestTimeout,
     TransportLost {
         message: String,
-    },
-    UnexpectedWorkerMessage {
-        kind: &'static str,
     },
     ShutdownTimeout,
     AlreadyStarted,
@@ -63,25 +44,11 @@ impl fmt::Display for WorkerHostError {
                 )
             }
             Self::Transport(error) => write!(formatter, "worker transport failed: {error}"),
-            Self::Io { operation, message } => {
-                write!(formatter, "worker {operation} I/O failed: {message}")
-            }
-            Self::CleanEof { operation } => {
-                write!(formatter, "worker closed stdout before {operation}")
-            }
-            Self::IncompleteFrame {
-                operation,
-                received,
-                expected,
-            } => write!(
+            Self::StartupTimeout => write!(formatter, "worker startup timed out"),
+            Self::StartupOutput { line } => write!(
                 formatter,
-                "worker closed stdout during {operation}: received {received} of {expected} bytes"
+                "worker wrote `{line}` on stdout instead of its READY line"
             ),
-            Self::Protocol(error) => write!(formatter, "worker protocol failed: {error}"),
-            Self::StartupTimeout => write!(formatter, "worker startup handshake timed out"),
-            Self::UnexpectedStartupMessage { kind } => {
-                write!(formatter, "worker sent `{kind}` instead of worker_hello")
-            }
             Self::IdentityMismatch {
                 field,
                 expected,
@@ -98,17 +65,9 @@ impl fmt::Display for WorkerHostError {
                 "worker does not support capability `{requested}`; available: [{}]",
                 available.join(", ")
             ),
-            Self::RequestTimeout { request_id } => {
-                write!(formatter, "worker request `{request_id}` timed out")
-            }
-            Self::ControlTimeout { control_id } => {
-                write!(formatter, "worker control `{control_id}` timed out")
-            }
+            Self::RequestTimeout => write!(formatter, "worker request timed out"),
             Self::TransportLost { message } => {
                 write!(formatter, "worker transport lost: {message}")
-            }
-            Self::UnexpectedWorkerMessage { kind } => {
-                write!(formatter, "unexpected worker message `{kind}`")
             }
             Self::ShutdownTimeout => write!(formatter, "worker graceful shutdown timed out"),
             Self::AlreadyStarted => write!(formatter, "worker supervisor already owns a process"),
@@ -117,9 +76,3 @@ impl fmt::Display for WorkerHostError {
 }
 
 impl std::error::Error for WorkerHostError {}
-
-impl From<CodecError> for WorkerHostError {
-    fn from(error: CodecError) -> Self {
-        Self::Protocol(error)
-    }
-}

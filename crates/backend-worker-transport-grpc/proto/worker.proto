@@ -1,85 +1,32 @@
 syntax = "proto3";
-package reimagine.worker.v1;
+package reimagine.worker.v2;
 
-service WorkerService {
-  /// Bidirectional streaming for the worker protocol.
-  /// Host sends HostToWorker messages, worker responds with WorkerToHost messages.
-  rpc Communication(stream HostToWorker) returns (stream WorkerToHost);
-
-  /// Simple health check RPC.
-  rpc HealthCheck(HealthRequest) returns (HealthResponse);
+// The worker contract: five purpose-specific RPCs. There is no message
+// tunnel and no per-message session fields; gRPC provides multiplexing,
+// deadlines, and cancellation (a cancelled Execute stream tells the
+// worker to stop the operation), and `Hello` carries the protocol
+// version, identity, and profile exactly once per worker incarnation.
+//
+// Payloads are JSON bytes whose shapes are defined by the
+// `reimagine-inference` serde types; a backend error is a result kind
+// (the final Execute event), never a gRPC Status.
+service Worker {
+  // Identity, instance profile, and protocol version.
+  rpc Hello(HelloRequest) returns (HelloResponse);
+  // Zero or more Progress events, then exactly one Result event.
+  rpc Execute(ExecuteRequest) returns (stream ExecuteEvent);
+  // Liveness of the worker process.
+  rpc Health(HealthRequest) returns (HealthResponse);
+  // Release run-scoped payloads held by the worker.
+  rpc Cleanup(CleanupRequest) returns (CleanupResponse);
+  // Ask the worker to drain and exit.
+  rpc Shutdown(ShutdownRequest) returns (ShutdownResponse);
 }
 
-// ── Host → Worker messages ────────────────────────────────────────
+message HelloRequest {}
 
-message HostToWorker {
-  oneof message {
-    HostHello host_hello = 1;
-    Request request = 2;
-    Cancel cancel = 3;
-    Health health = 4;
-    Cleanup cleanup = 5;
-    Shutdown shutdown = 6;
-  }
-}
-
-message HostHello {
-  uint32 protocol_min = 1;
-  uint32 protocol_max = 2;
-}
-
-message Request {
+message HelloResponse {
   uint32 protocol_version = 1;
-  string incarnation_id = 2;
-  string request_id = 3;
-  string correlation_id = 4;
-  string operation = 5;
-  bytes payload = 6;  // JSON-encoded serde_json::Value
-}
-
-message Cancel {
-  uint32 protocol_version = 1;
-  string incarnation_id = 2;
-  string request_id = 3;
-  string correlation_id = 4;
-}
-
-message Health {
-  uint32 protocol_version = 1;
-  string incarnation_id = 2;
-  string control_id = 3;
-}
-
-message Cleanup {
-  uint32 protocol_version = 1;
-  string incarnation_id = 2;
-  string control_id = 3;
-  optional string run_id = 4;
-  repeated string object_ids = 5;
-}
-
-message Shutdown {
-  uint32 protocol_version = 1;
-  string incarnation_id = 2;
-  string control_id = 3;
-}
-
-// ── Worker → Host messages ────────────────────────────────────────
-
-message WorkerToHost {
-  oneof message {
-    WorkerHello worker_hello = 1;
-    Progress progress = 2;
-    CancelAck cancel_ack = 3;
-    Terminal terminal = 4;
-    HealthAck health_ack = 5;
-    CleanupAck cleanup_ack = 6;
-    ShutdownAck shutdown_ack = 7;
-  }
-}
-
-message WorkerHello {
-  uint32 selected_protocol = 1;
   WorkerIdentity identity = 2;
   WorkerProfile profile = 3;
 }
@@ -102,48 +49,43 @@ message WorkerInstanceProfile {
   string backend_instance_id = 1;
   string device_label = 2;
   repeated string capabilities = 3;
-  bytes operation_options = 4;  // JSON-encoded serde_json::Value
+  bytes operation_options = 4; // JSON-encoded serde_json::Value
+}
+
+message ExecuteRequest {
+  string operation = 1;
+  // JSON-encoded request for `operation`.
+  bytes payload = 2;
+}
+
+message ExecuteEvent {
+  oneof event {
+    Progress progress = 1;
+    ExecuteResult result = 2; // always the final event of the stream
+  }
 }
 
 message Progress {
-  uint32 protocol_version = 1;
-  string incarnation_id = 2;
-  string request_id = 3;
-  string correlation_id = 4;
-  uint64 sequence = 5;
-  uint64 completed = 6;
-  optional uint64 total = 7;
-  optional string message = 8;
+  uint64 sequence = 1;
+  uint64 completed = 2;
+  optional uint64 total = 3;
+  optional string message = 4;
 }
 
-message CancelAck {
-  uint32 protocol_version = 1;
-  string incarnation_id = 2;
-  string request_id = 3;
-  string correlation_id = 4;
-  bool accepted = 5;
-  bool already_terminal = 6;
-}
-
-message Terminal {
-  uint32 protocol_version = 1;
-  string incarnation_id = 2;
-  string request_id = 3;
-  string correlation_id = 4;
-  TerminalOutcome outcome = 5;
-}
-
-message TerminalOutcome {
+message ExecuteResult {
   oneof outcome {
     Success success = 1;
-    bytes cancelled = 2;  // unit variant, empty
+    Cancelled cancelled = 2;
     BackendError backend_error = 3;
   }
 }
 
 message Success {
-  bytes output = 1;  // JSON-encoded serde_json::Value
+  // JSON-encoded serde_json::Value response for the operation.
+  bytes output = 1;
 }
+
+message Cancelled {}
 
 message BackendError {
   string code = 1;
@@ -151,32 +93,22 @@ message BackendError {
   bool retryable = 3;
 }
 
-message HealthAck {
-  uint32 protocol_version = 1;
-  string incarnation_id = 2;
-  string control_id = 3;
-  bool healthy = 4;
-  optional string message = 5;
-}
-
-message CleanupAck {
-  uint32 protocol_version = 1;
-  string incarnation_id = 2;
-  string control_id = 3;
-  uint64 released_objects = 4;
-}
-
-message ShutdownAck {
-  uint32 protocol_version = 1;
-  string incarnation_id = 2;
-  string control_id = 3;
-}
-
-// ── Health check messages ─────────────────────────────────────────
-
 message HealthRequest {}
 
 message HealthResponse {
   bool healthy = 1;
-  string message = 2;
+  optional string message = 2;
 }
+
+message CleanupRequest {
+  optional string run_id = 1;
+  repeated string object_ids = 2;
+}
+
+message CleanupResponse {
+  uint64 released_objects = 1;
+}
+
+message ShutdownRequest {}
+
+message ShutdownResponse {}

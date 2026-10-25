@@ -65,10 +65,9 @@ fn dummy_switch_candidate() -> WorkerBackendCandidate {
             target: "test".to_owned(),
             manifest_digest: "seed".to_owned(),
         },
-        supported_protocols: ProtocolRange::new(1, 1),
+        supported_protocols: ProtocolRange::new(2, 2),
         limits: WorkerLimits::default(),
         environment: Vec::new(),
-        transport: Default::default(),
     };
     let profile = WorkerInstanceProfile {
         backend_instance_id: BackendInstanceId("burn:wgpu:default".to_owned()),

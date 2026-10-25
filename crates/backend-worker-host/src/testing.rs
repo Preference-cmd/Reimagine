@@ -151,6 +151,8 @@ pub fn generate_package(params: &PackageFixtureParams) -> Vec<u8> {
         files: file_entries.clone(),
         required_size: 0,    // placeholder
         required_entries: 2, // binary + LICENSE
+        protocol_version_min: 1,
+        protocol_version_max: 1,
     };
 
     // Rebuild manifest with correct required_size

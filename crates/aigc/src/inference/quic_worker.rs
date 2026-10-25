@@ -2,7 +2,7 @@ use std::sync::Arc;
 
 use async_trait::async_trait;
 use reimagine_backend_worker_host::{WorkerProcessState, WorkerRunLeases};
-use reimagine_backend_worker_protocol::{WorkerHello, WorkerIncarnationId, WorkerTransport};
+use reimagine_backend_worker_protocol::WorkerIncarnationId;
 use reimagine_backend_worker_transport_quic::{
     QuicTransport, discovery::DiscoveredWorker, tls::SelfSignedCert,
 };
@@ -12,38 +12,45 @@ use reimagine_inference::{
 
 use super::switch::{SwitchableWorker, WorkerSwitchError, WorkerSwitchTarget};
 
-/// A worker connected via QUIC, implementing [`SwitchableWorker`].
+/// A remote QUIC worker registered through discovery, implementing
+/// [`SwitchableWorker`].
 ///
-/// This wraps a QUIC-connected remote worker and provides the same
-/// interface as [`ProcessSwitchableWorker`] for use with
-/// [`WorkerSwitchService`].
+/// Remote workers are registration-only today: the QUIC path carries no
+/// request protocol, so identity and profile come from the discovery
+/// metadata (mDNS TXT records) rather than a worker hello.
 pub struct QuicSwitchableWorker {
     instance: BackendInstance,
     incarnation_id: WorkerIncarnationId,
     run_leases: Arc<WorkerRunLeases>,
     device_label: String,
-    hello: WorkerHello,
+    backend_kind: String,
+    endpoint: String,
     transport: Arc<QuicTransport>,
 }
 
 impl QuicSwitchableWorker {
-    /// Create a new `QuicSwitchableWorker` from a discovered worker and handshake.
-    pub fn new(
-        discovered: &DiscoveredWorker,
-        hello: WorkerHello,
-        transport: Arc<QuicTransport>,
-    ) -> Self {
+    /// Create a new `QuicSwitchableWorker` from a discovered worker and
+    /// a connected transport.
+    pub fn new(discovered: &DiscoveredWorker, transport: Arc<QuicTransport>) -> Self {
+        let backend_kind = discovered
+            .properties
+            .get("backend")
+            .cloned()
+            .unwrap_or_else(|| "burn".to_owned());
         let device_label = discovered
-            .devices()
-            .first()
-            .unwrap_or(&"remote")
-            .to_string();
+            .properties
+            .get("devices")
+            .and_then(|devices| devices.split(',').next())
+            .filter(|label| !label.is_empty())
+            .unwrap_or("remote")
+            .to_owned();
         Self {
-            instance: BackendInstance::new(hello.identity.backend_instance_id.0.clone()),
-            incarnation_id: hello.identity.incarnation_id.clone(),
+            instance: BackendInstance::new(format!("{backend_kind}:remote:{}", discovered.addr)),
+            incarnation_id: WorkerIncarnationId(discovered.id.clone()),
             run_leases: Arc::new(WorkerRunLeases::new()),
             device_label,
-            hello,
+            backend_kind,
+            endpoint: transport.description().endpoint,
             transport,
         }
     }
@@ -69,41 +76,34 @@ impl SwitchableWorker for QuicSwitchableWorker {
     }
 
     fn process_state(&self) -> WorkerProcessState {
-        // QUIC workers are always ready once connected
+        // Registration-only workers are always reported ready once the
+        // transport connects.
         WorkerProcessState::Ready
     }
 
     fn inference_backend(&self) -> Option<Arc<dyn InferenceBackend>> {
-        None // QUIC workers don't expose a local inference backend
+        None // remote workers do not expose a local inference backend
     }
 
     async fn snapshot(&self) -> BackendInstanceSnapshot {
         BackendInstanceSnapshot {
             backend_instance: self.instance.clone(),
-            backend: Backend::new(self.hello.identity.backend_kind.clone()),
+            backend: Backend::new(self.backend_kind.clone()),
             plugin: None,
             extension: None,
             // Remote workers always report DeviceKind::Remote
             device: Some(DeviceProfile::new(format!("remote:{}", self.device_label))),
             observations: std::collections::BTreeMap::from([
                 ("transport".to_owned(), "quic".to_owned()),
-                (
-                    "remote_addr".to_owned(),
-                    self.transport.description().endpoint.clone(),
-                ),
+                ("remote_addr".to_owned(), self.endpoint.clone()),
             ]),
             diagnostics: Vec::new(),
         }
     }
 
     async fn shutdown(&self) -> Result<(), WorkerSwitchError> {
-        self.transport
-            .shutdown()
-            .await
-            .map_err(|error| WorkerSwitchError::Shutdown {
-                instance: self.instance.clone(),
-                message: error.to_string(),
-            })
+        self.transport.close();
+        Ok(())
     }
 }
 
@@ -131,10 +131,11 @@ impl std::fmt::Debug for QuicWorkerCandidateConfig {
     }
 }
 
-/// A candidate that connects to a remote worker via QUIC.
+/// A candidate that connects to a remote QUIC worker.
 ///
-/// Implements [`WorkerSwitchTarget`] to enable switching from a local
-/// stdio worker to a remote QUIC worker.
+/// Implements [`WorkerSwitchTarget`]. Remote workers are
+/// registration-only today, so the candidate connects the transport
+/// (certificate pinned) but there is no request protocol over it.
 pub struct QuicWorkerCandidate {
     config: QuicWorkerCandidateConfig,
     discovered: DiscoveredWorker,
@@ -146,8 +147,8 @@ impl QuicWorkerCandidate {
         Self { config, discovered }
     }
 
-    /// Perform the QUIC handshake and return the transport and hello.
-    async fn connect(&self) -> Result<(Arc<QuicTransport>, WorkerHello), WorkerSwitchError> {
+    /// Connect the QUIC transport with the pinned certificate.
+    async fn connect(&self) -> Result<Arc<QuicTransport>, WorkerSwitchError> {
         let transport = QuicTransport::connect(
             self.config.bind_addr,
             self.config.server_addr,
@@ -158,75 +159,16 @@ impl QuicWorkerCandidate {
         .map_err(|error| WorkerSwitchError::Startup {
             message: format!("QUIC connect failed: {error}"),
         })?;
-
-        // Perform the handshake: send HostHello, receive WorkerHello
-        let (mut send, mut recv) =
-            transport
-                .open_bi()
-                .await
-                .map_err(|error| WorkerSwitchError::Startup {
-                    message: format!("QUIC open_bi failed: {error}"),
-                })?;
-
-        // Send HostHello
-        use reimagine_backend_worker_protocol::{HostHello, ProtocolRange, WireMessage};
-        let host_hello = HostHello {
-            supported_protocols: ProtocolRange::new(1, 1),
-        };
-        let hello_json =
-            serde_json::to_vec(&WireMessage::HostHello(host_hello)).map_err(|error| {
-                WorkerSwitchError::Startup {
-                    message: format!("serialize HostHello: {error}"),
-                }
-            })?;
-        send.write_all(&(hello_json.len() as u32).to_be_bytes())
-            .await
-            .map_err(|error| WorkerSwitchError::Startup {
-                message: format!("write hello length: {error}"),
-            })?;
-        send.write_all(&hello_json)
-            .await
-            .map_err(|error| WorkerSwitchError::Startup {
-                message: format!("write hello payload: {error}"),
-            })?;
-
-        // Read WorkerHello
-        let mut prefix = [0u8; 4];
-        recv.read_exact(&mut prefix)
-            .await
-            .map_err(|error| WorkerSwitchError::Startup {
-                message: format!("read WorkerHello prefix: {error}"),
-            })?;
-        let len = u32::from_be_bytes(prefix) as usize;
-        let mut payload = vec![0u8; len];
-        recv.read_exact(&mut payload)
-            .await
-            .map_err(|error| WorkerSwitchError::Startup {
-                message: format!("read WorkerHello payload: {error}"),
-            })?;
-        let worker_hello: WorkerHello = match serde_json::from_slice::<WireMessage>(&payload)
-            .map_err(|error| WorkerSwitchError::Startup {
-                message: format!("deserialize WorkerHello: {error}"),
-            })? {
-            WireMessage::WorkerHello(h) => h,
-            other => {
-                return Err(WorkerSwitchError::Startup {
-                    message: format!("expected WorkerHello, got {:?}", other.kind()),
-                });
-            }
-        };
-
-        Ok((Arc::new(transport), worker_hello))
+        Ok(Arc::new(transport))
     }
 }
 
 #[async_trait]
 impl WorkerSwitchTarget for QuicWorkerCandidate {
     async fn start(&self) -> Result<Arc<dyn SwitchableWorker>, WorkerSwitchError> {
-        let (transport, hello) = self.connect().await?;
+        let transport = self.connect().await?;
         Ok(Arc::new(QuicSwitchableWorker::new(
             &self.discovered,
-            hello,
             transport,
         )))
     }
@@ -236,6 +178,7 @@ impl WorkerSwitchTarget for QuicWorkerCandidate {
 mod tests {
     use super::*;
     use std::collections::HashMap;
+    use std::net::{Ipv4Addr, SocketAddr};
 
     fn test_discovered_worker(endpoint: &str) -> DiscoveredWorker {
         let mut props = HashMap::new();
@@ -266,6 +209,47 @@ mod tests {
     #[test]
     fn discovered_worker_device_label_used() {
         let discovered = test_discovered_worker("192.168.1.100:9100");
-        assert_eq!(discovered.devices(), vec!["cuda:0"]);
+        let transport_device = discovered
+            .properties
+            .get("devices")
+            .and_then(|devices| devices.split(',').next())
+            .unwrap_or("remote");
+        assert_eq!(transport_device, "cuda:0");
+    }
+
+    #[tokio::test]
+    async fn switchable_worker_derives_identity_from_discovery() {
+        let cert = Arc::new(SelfSignedCert::generate("localhost").unwrap());
+        let listen_addr = SocketAddr::new(Ipv4Addr::LOCALHOST.into(), 0);
+        let endpoint =
+            reimagine_backend_worker_transport_quic::tls::server_endpoint(listen_addr, &cert)
+                .unwrap();
+        let server_addr = endpoint.local_addr().unwrap();
+        let server = tokio::spawn(async move {
+            while let Some(incoming) = endpoint.accept().await {
+                if let Ok(connection) = incoming.await {
+                    let _ = connection.closed().await;
+                }
+            }
+        });
+        let transport = QuicTransport::connect(
+            SocketAddr::new(Ipv4Addr::LOCALHOST.into(), 0),
+            server_addr,
+            "localhost",
+            &cert,
+        )
+        .await
+        .unwrap();
+        let discovered = test_discovered_worker(&server_addr.to_string());
+        let worker = QuicSwitchableWorker::new(&discovered, Arc::new(transport));
+        assert!(worker.instance().as_str().starts_with("burn:remote:"));
+        let snapshot = worker.snapshot().await;
+        let device = snapshot.device.expect("device present");
+        assert!(
+            device.label.starts_with("remote:"),
+            "device label should start with 'remote:'"
+        );
+        worker.shutdown().await.unwrap();
+        server.abort();
     }
 }

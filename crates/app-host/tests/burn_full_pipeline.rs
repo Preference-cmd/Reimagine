@@ -524,7 +524,7 @@ fn worker_launch_spec(paths: &AppPaths, executable: PathBuf) -> WorkerLaunchSpec
             target: format!("{}-{}", std::env::consts::ARCH, std::env::consts::OS),
             manifest_digest: "dev".to_owned(),
         },
-        supported_protocols: ProtocolRange::new(1, 1),
+        supported_protocols: ProtocolRange::new(2, 2),
         limits: WorkerLimits {
             request_timeout: Duration::from_secs(120),
             ..WorkerLimits::default()
@@ -547,7 +547,6 @@ fn worker_launch_spec(paths: &AppPaths, executable: PathBuf) -> WorkerLaunchSpec
                 paths.output_dir().display().to_string(),
             ),
         ],
-        transport: Default::default(),
     }
 }
 

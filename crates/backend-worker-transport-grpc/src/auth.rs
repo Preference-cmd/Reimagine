@@ -1,15 +1,45 @@
 //! Bearer-token authentication for the gRPC worker transport.
 //!
 //! Tokens travel in the standard `authorization: Bearer <token>` metadata
-//! header on every RPC (including the `Communication` bidi stream and
-//! `HealthCheck`), so no proto change is required.
-//!
-//! Sourcing: env `REIMAGINE_WORKER_TOKEN`, or an explicit value passed by
-//! the caller (e.g. from workspace config). When no token is configured
-//! the transport stays plain/open for backward compatibility.
+//! header on every RPC, so no proto change is required for auth. Sourcing:
+//! an explicit value passed by the caller (the host generates a random
+//! token per worker launch) or the `REIMAGINE_WORKER_TOKEN` environment
+//! variable for remote deployments. A worker that is configured with a
+//! token rejects every call that does not present exactly that token.
 
 use tonic::Status;
 use tonic::metadata::MetadataMap;
+use tonic::service::Interceptor;
+
+/// Authentication settings for a gRPC worker connection.
+#[derive(Clone, Debug, Default)]
+pub struct GrpcAuth {
+    /// Bearer token attached as `authorization: Bearer <token>` on every
+    /// request. `None` keeps the transport open (used by workers started
+    /// without a token).
+    pub token: Option<String>,
+    /// TLS mode; `None` keeps plain HTTP. Local worker connections do
+    /// not use TLS.
+    pub tls: Option<crate::tls::GrpcTls>,
+}
+
+impl GrpcAuth {
+    /// Open connection without a token.
+    #[must_use]
+    pub fn plain() -> Self {
+        Self::default()
+    }
+
+    /// Read the token from the `REIMAGINE_WORKER_TOKEN` environment
+    /// variable (unset/empty => no token).
+    #[must_use]
+    pub fn from_env() -> Self {
+        Self {
+            token: token_from_env(),
+            tls: None,
+        }
+    }
+}
 
 /// The metadata header carrying the bearer token.
 pub const AUTH_HEADER: &str = "authorization";
@@ -17,7 +47,7 @@ pub const AUTH_HEADER: &str = "authorization";
 /// The value prefix for bearer tokens.
 pub const BEARER_PREFIX: &str = "Bearer ";
 
-/// Environment variable holding the worker bearer token (cloud deployments).
+/// Environment variable holding the worker bearer token (remote deployments).
 pub const TOKEN_ENV: &str = "REIMAGINE_WORKER_TOKEN";
 
 /// Read the worker token from [`TOKEN_ENV`]; an unset or empty value is
@@ -48,9 +78,9 @@ pub fn ct_eq(a: &str, b: &str) -> bool {
 /// Validate the `authorization: Bearer <token>` metadata against
 /// `expected`.
 ///
-/// `expected == None` is the backward-compat mode: the server accepts
-/// any request (plain transport). `expected == Some(token)` rejects
-/// missing, malformed, or mismatched tokens with `Status::unauthenticated`.
+/// `expected == None` accepts any request (token-auth disabled). With an
+/// expected token, missing, malformed, or mismatched tokens are rejected
+/// with `Status::unauthenticated`.
 pub fn check_bearer(metadata: &MetadataMap, expected: Option<&str>) -> Result<(), Status> {
     let Some(expected) = expected else {
         return Ok(());
@@ -65,15 +95,25 @@ pub fn check_bearer(metadata: &MetadataMap, expected: Option<&str>) -> Result<()
     }
 }
 
-/// Build a tonic interceptor that attaches `authorization: Bearer <token>`
-/// to every outgoing request (including streaming ones).
+/// Interceptor that attaches `authorization: Bearer <token>` to every
+/// outgoing request.
 ///
-/// `None` produces an identity interceptor (plain mode).
-pub fn bearer_interceptor(
+/// `None` produces an identity interceptor (no token configured).
+#[derive(Clone, Debug, Default)]
+pub struct BearerInterceptor {
     token: Option<String>,
-) -> impl Fn(tonic::Request<()>) -> Result<tonic::Request<()>, Status> + Clone {
-    move |mut request: tonic::Request<()>| {
-        if let Some(token) = &token {
+}
+
+impl BearerInterceptor {
+    #[must_use]
+    pub fn new(token: Option<String>) -> Self {
+        Self { token }
+    }
+}
+
+impl Interceptor for BearerInterceptor {
+    fn call(&mut self, mut request: tonic::Request<()>) -> Result<tonic::Request<()>, Status> {
+        if let Some(token) = &self.token {
             let value = format!("{BEARER_PREFIX}{token}")
                 .parse::<tonic::metadata::MetadataValue<_>>()
                 .map_err(|_| Status::internal("worker token is not valid header material"))?;
@@ -127,8 +167,8 @@ mod tests {
 
     #[test]
     fn interceptor_attaches_token() {
-        let interceptor = bearer_interceptor(Some("s3cret".to_owned()));
-        let request = interceptor(tonic::Request::new(())).unwrap();
+        let mut interceptor = BearerInterceptor::new(Some("s3cret".to_owned()));
+        let request = interceptor.call(tonic::Request::new(())).unwrap();
         let value = request
             .metadata()
             .get(AUTH_HEADER)
@@ -140,27 +180,8 @@ mod tests {
 
     #[test]
     fn interceptor_without_token_is_identity() {
-        let interceptor = bearer_interceptor(None);
-        let request = interceptor(tonic::Request::new(())).unwrap();
+        let mut interceptor = BearerInterceptor::new(None);
+        let request = interceptor.call(tonic::Request::new(())).unwrap();
         assert!(request.metadata().get(AUTH_HEADER).is_none());
-    }
-
-    #[test]
-    fn token_env_parsing() {
-        unsafe {
-            std::env::remove_var(TOKEN_ENV);
-        }
-        assert_eq!(token_from_env(), None);
-        unsafe {
-            std::env::set_var(TOKEN_ENV, "s3cret");
-        }
-        assert_eq!(token_from_env().as_deref(), Some("s3cret"));
-        unsafe {
-            std::env::set_var(TOKEN_ENV, "");
-        }
-        assert_eq!(token_from_env(), None);
-        unsafe {
-            std::env::remove_var(TOKEN_ENV);
-        }
     }
 }

@@ -1,46 +1,10 @@
-use serde::{Deserialize, Serialize};
-use serde_json::Value;
+//! Known request operations carried by an `ExecuteRequest`.
+//!
+//! Operations are identified by name and carry a JSON payload whose
+//! shape is defined by the `reimagine-inference` serde types. New
+//! capabilities are added as operations (a name plus a payload shape)
+//! rather than as new RPCs, so the protobuf contract stays stable.
 
-use crate::{ProtocolVersion, WorkerIncarnationId};
-
-#[derive(Clone, Debug, Eq, Hash, Ord, PartialEq, PartialOrd, Serialize, Deserialize)]
-#[serde(transparent)]
-pub struct RequestId(pub String);
-
-impl From<&str> for RequestId {
-    fn from(value: &str) -> Self {
-        Self(value.to_owned())
-    }
-}
-
-#[derive(Clone, Debug, Eq, Hash, Ord, PartialEq, PartialOrd, Serialize, Deserialize)]
-#[serde(transparent)]
-pub struct CorrelationId(pub String);
-
-impl From<&str> for CorrelationId {
-    fn from(value: &str) -> Self {
-        Self(value.to_owned())
-    }
-}
-
-#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
-pub struct RequestFrame {
-    pub protocol_version: ProtocolVersion,
-    pub incarnation_id: WorkerIncarnationId,
-    pub request_id: RequestId,
-    pub correlation_id: CorrelationId,
-    pub operation: String,
-    pub payload: Value,
-}
-
-/// Known request operations carried by a [`RequestFrame`] `operation`.
-///
-/// New capabilities are added as request operations (an operation
-/// string plus a JSON `payload` shape) rather than as new
-/// [`WireMessage`](crate::WireMessage) variants: the generic
-/// `Request { operation, payload }` shape is shared by every worker
-/// transport (stdio, QUIC, gRPC) and requires no protocol-schema or
-/// conversion changes.
 pub mod request_operation {
     /// Apply resource-management hints (VRAM budget, prefetch intent,
     /// component lifecycle) for the upcoming stage.

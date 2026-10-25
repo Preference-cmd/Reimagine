@@ -1,23 +1,26 @@
 //! Deterministic cleanup and graceful exit for the Burn worker.
 //!
-//! On shutdown the worker drains any pending state and flushes
-//! pending protocol acks before the process exits. After
-//! `execute` returns the process must exit deterministically
-//! (no background threads, no lingering GPU resources).
+//! On shutdown the worker releases stored payloads and cached model
+//! bundles before the process exits. After `execute` returns the
+//! process must exit deterministically (no background threads, no
+//! lingering GPU resources).
 
-use reimagine_backend_worker_protocol::WorkerIncarnationId;
 use reimagine_inference_burn::BurnBackend;
 
-/// Perform run-scoped cleanup for the given incarnation.
-///
-/// V1: releases all stored payloads and cached model bundles
-/// associated with this worker incarnation. After this call the
-/// process is ready to terminate.
-pub fn cleanup(backend: &BurnBackend, _incarnation: &WorkerIncarnationId) {
+/// Release all stored payloads and cached model bundles. After this
+/// call the process is ready to terminate.
+pub fn cleanup(backend: &BurnBackend) {
     let payloads = backend.store().cleanup_all();
     let bundles = backend.model_cache().clear();
-    eprintln!(
-        "worker shutdown: {} payloads released, {} cached bundles",
-        payloads, bundles
-    );
+    writeln_stderr(format!(
+        "worker shutdown: {payloads} payloads released, {bundles} cached bundles"
+    ));
+}
+
+/// Write to stderr, ignoring a broken pipe: the host may already be
+/// gone and a panic here would take the worker down mid-exit.
+pub fn writeln_stderr(message: String) {
+    use std::io::Write;
+    let _ = std::io::stderr().write_all(message.as_bytes());
+    let _ = std::io::stderr().write_all(b"\n");
 }

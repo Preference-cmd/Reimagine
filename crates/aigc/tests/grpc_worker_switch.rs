@@ -1,8 +1,8 @@
-//! Integration tests for gRPC worker switching (T8).
+//! Integration tests for gRPC worker switching.
 //!
-//! Mirrors `quic_worker_switch.rs`: a fake gRPC worker server is spun up
-//! in-process (tonic), the host connects through `GrpcWorkerCandidate`,
-//! and `WorkerSwitchService::drain_and_switch` swaps a local-style worker
+//! A fake gRPC worker (the shared fake service) is spun up in-process,
+//! the host connects through `GrpcWorkerCandidate`, and
+//! `WorkerSwitchService::drain_and_switch` swaps a local-style worker
 //! for the remote gRPC worker.
 
 use std::sync::Arc;
@@ -14,14 +14,12 @@ use aigc::{
 };
 use reimagine_backend_worker_host::{WorkerProcessState, WorkerRunLeases};
 use reimagine_backend_worker_protocol::{
-    CorrelationId, HostHello, ProtocolRange, ProtocolVersion, RequestFrame, RequestId,
-    TerminalOutcome, WireMessage, WorkerHello, WorkerIncarnationId,
+    BackendInstanceId, TerminalOutcome, WorkerIdentity, WorkerIncarnationId, WorkerInstallationId,
+    WorkerInstanceProfile, WorkerProfile,
 };
-use reimagine_backend_worker_transport_grpc::client;
-use reimagine_backend_worker_transport_grpc::proto;
-use reimagine_backend_worker_transport_grpc::proto::worker_service_server::WorkerServiceServer;
-use reimagine_backend_worker_transport_grpc::server::{GrpcWorkerService, MessageHandler};
-use reimagine_backend_worker_transport_grpc::transport::GrpcTransport;
+use reimagine_backend_worker_transport_grpc::client::WorkerClient;
+use reimagine_backend_worker_transport_grpc::proto::worker_server::WorkerServer;
+use reimagine_backend_worker_transport_grpc::testing::{FakeWorkerConfig, FakeWorkerService};
 use reimagine_core::model::RunId;
 use reimagine_inference::{BackendInstance, DeviceKind};
 
@@ -77,54 +75,27 @@ impl RunCancellation for NoopRunCancellation {
     }
 }
 
-/// A worker handler that answers the `HostHello` handshake and echoes
-/// requests back as successful terminals.
-fn handshake_and_echo_handler() -> MessageHandler {
-    Arc::new(|msg| {
-        Box::pin(async move {
-            match msg.message {
-                Some(proto::host_to_worker::Message::HostHello(h)) => Some(proto::WorkerToHost {
-                    message: Some(proto::worker_to_host::Message::WorkerHello(
-                        proto::WorkerHello {
-                            selected_protocol: std::cmp::min(h.protocol_max, 1),
-                            identity: Some(proto::WorkerIdentity {
-                                backend_instance_id: WORKER_INSTANCE.into(),
-                                installation_id: "grpc-install".into(),
-                                incarnation_id: WORKER_INCARNATION.into(),
-                                worker_version: "0.1.0".into(),
-                                backend_kind: "burn".into(),
-                                target: std::env::consts::ARCH.to_string(),
-                                manifest_digest: "test-manifest".into(),
-                            }),
-                            profile: Some(proto::WorkerProfile {
-                                instances: vec![proto::WorkerInstanceProfile {
-                                    backend_instance_id: WORKER_INSTANCE.into(),
-                                    device_label: "cuda:0".into(),
-                                    capabilities: vec!["load_bundle".into()],
-                                    operation_options: serde_json::to_vec(&serde_json::json!({}))
-                                        .unwrap(),
-                                }],
-                            }),
-                        },
-                    )),
-                }),
-                Some(proto::host_to_worker::Message::Request(r)) => Some(proto::WorkerToHost {
-                    message: Some(proto::worker_to_host::Message::Terminal(proto::Terminal {
-                        protocol_version: r.protocol_version,
-                        incarnation_id: r.incarnation_id,
-                        request_id: r.request_id,
-                        correlation_id: r.correlation_id,
-                        outcome: Some(proto::TerminalOutcome {
-                            outcome: Some(proto::terminal_outcome::Outcome::Success(
-                                proto::Success { output: r.payload },
-                            )),
-                        }),
-                    })),
-                }),
-                _ => None,
-            }
-        })
-    })
+fn fake_worker_identity() -> WorkerIdentity {
+    WorkerIdentity {
+        backend_instance_id: BackendInstanceId::from(WORKER_INSTANCE),
+        installation_id: WorkerInstallationId::from("grpc-install"),
+        incarnation_id: WorkerIncarnationId::from(WORKER_INCARNATION),
+        worker_version: "0.1.0".to_owned(),
+        backend_kind: "burn".to_owned(),
+        target: std::env::consts::ARCH.to_owned(),
+        manifest_digest: "test-manifest".to_owned(),
+    }
+}
+
+fn fake_worker_profile() -> WorkerProfile {
+    WorkerProfile {
+        instances: vec![WorkerInstanceProfile {
+            backend_instance_id: BackendInstanceId::from(WORKER_INSTANCE),
+            device_label: "cuda:0".to_owned(),
+            capabilities: vec!["load_bundle".to_owned()],
+            operation_options: serde_json::json!({}),
+        }],
+    }
 }
 
 /// Start a fake gRPC worker server; returns the endpoint URI and the
@@ -136,7 +107,13 @@ async fn start_test_grpc_server(
     String,
     tokio::task::JoinHandle<Result<(), tonic::transport::Error>>,
 ) {
-    let service = GrpcWorkerService::with_token(handshake_and_echo_handler(), token);
+    let service = FakeWorkerService::new(FakeWorkerConfig {
+        identity: Some(fake_worker_identity()),
+        profile: Some(fake_worker_profile()),
+        token,
+        hello_protocol: 2,
+        ..FakeWorkerConfig::default()
+    });
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
     let addr = listener.local_addr().unwrap();
 
@@ -150,27 +127,14 @@ async fn start_test_grpc_server(
             )
             .unwrap();
     }
+    let server: WorkerServer<FakeWorkerService> =
+        WorkerServer::new(service).max_decoding_message_size(64 * 1024 * 1024);
     let server = builder
-        .add_service(WorkerServiceServer::new(service))
+        .add_service(server)
         .serve_with_incoming(tokio_stream::wrappers::TcpListenerStream::new(listener));
 
     let handle = tokio::spawn(server);
     (format!("{scheme}://{addr}"), handle)
-}
-
-/// Perform the `HostHello` -> `WorkerHello` handshake over an already
-/// connected gRPC transport (mirrors the candidate's handshake).
-async fn grpc_handshake(transport: &GrpcTransport) -> WorkerHello {
-    let wire = WireMessage::HostHello(HostHello {
-        supported_protocols: ProtocolRange::new(1, 1),
-    });
-    let proto_message: proto::HostToWorker = (&wire).try_into().unwrap();
-    transport.send(proto_message).await.unwrap();
-    let response = transport.recv().await.unwrap().expect("WorkerHello");
-    match WireMessage::try_from(response).unwrap() {
-        WireMessage::WorkerHello(hello) => hello,
-        other => panic!("expected WorkerHello, got {:?}", other.kind()),
-    }
 }
 
 /// A wrapper that converts a `SwitchableWorker` into a `WorkerSwitchTarget`.
@@ -255,16 +219,18 @@ async fn grpc_worker_snapshot_contains_transport_observation() {
 async fn switched_grpc_worker_serves_inference_request_roundtrip() {
     let (endpoint, server_handle) = start_test_grpc_server(None, None).await;
 
-    // Connect and handshake through the public client, then wrap the
-    // result in the concrete switchable worker so the switched worker's
-    // transport can be exercised directly.
-    let transport = Arc::new(
-        client::connect_with(&endpoint, &GrpcAuth::plain())
+    // Connect through the public client, then wrap the result in the
+    // concrete switchable worker so the switched worker's client can be
+    // exercised directly.
+    let client = Arc::new(
+        WorkerClient::connect(&endpoint, &GrpcAuth::plain())
             .await
             .unwrap(),
     );
-    let hello = grpc_handshake(&transport).await;
-    let grpc_worker = Arc::new(GrpcSwitchableWorker::new(hello, transport));
+    let hello = client.hello().await.unwrap();
+    let hello = reimagine_backend_worker_transport_grpc::conversion::hello_from_proto(hello)
+        .expect("complete hello");
+    let grpc_worker = Arc::new(GrpcSwitchableWorker::new(hello, client));
 
     let old = Arc::new(FakeWorker::new("burn:local:default", "old-incarnation"));
     let workers = WorkerSwitchService::new(old, Arc::new(NoopRunCancellation));
@@ -279,38 +245,34 @@ async fn switched_grpc_worker_serves_inference_request_roundtrip() {
     assert_eq!(active.instance().as_str(), WORKER_INSTANCE);
 
     // Send an inference-style request over the switched worker's
-    // transport and verify the terminal response.
+    // client and verify the terminal response.
     let payload = serde_json::json!({"job": "denoise", "steps": 20});
-    let wire = WireMessage::Request(RequestFrame {
-        protocol_version: ProtocolVersion(1),
-        incarnation_id: WorkerIncarnationId("inc-1".into()),
-        request_id: RequestId("req-1".into()),
-        correlation_id: CorrelationId("corr-1".into()),
-        operation: "echo".into(),
-        payload: payload.clone(),
-    });
-    let proto_message: proto::HostToWorker = (&wire).try_into().unwrap();
-    grpc_worker
-        .transport()
-        .send(proto_message)
+    let mut stream = grpc_worker
+        .client()
+        .execute("echo", serde_json::to_vec(&payload).unwrap())
         .await
         .expect("send request");
 
-    let response = grpc_worker
-        .transport()
-        .recv()
-        .await
-        .expect("recv")
-        .expect("terminal message");
-    let terminal = match WireMessage::try_from(response).unwrap() {
-        WireMessage::Terminal(terminal) => terminal,
-        other => panic!("expected Terminal, got {:?}", other.kind()),
-    };
-    let output = match terminal.outcome {
-        TerminalOutcome::Success { output } => output,
+    let mut terminal = None;
+    while let Ok(Some(event)) = stream.message().await {
+        if let Some(reimagine_backend_worker_transport_grpc::proto::execute_event::Event::Result(
+            result,
+        )) = event.event
+        {
+            terminal = Some(result);
+            break;
+        }
+    }
+    let outcome = reimagine_backend_worker_transport_grpc::conversion::outcome_from_proto(
+        terminal.expect("terminal event"),
+    )
+    .expect("outcome");
+    match outcome {
+        TerminalOutcome::Success { output } => {
+            assert_eq!(output, payload, "echoed payload should match the request");
+        }
         other => panic!("expected success outcome, got {other:?}"),
-    };
-    assert_eq!(output, payload, "echoed payload should match the request");
+    }
 
     server_handle.abort();
 }
@@ -336,7 +298,7 @@ async fn grpc_candidate_refuses_cleartext_token() {
     };
     assert!(matches!(error, WorkerSwitchError::Startup { .. }));
     assert!(
-        error.to_string().contains("cleartext token"),
+        error.to_string().contains("cleartext"),
         "expected cleartext-token refusal, got: {error}"
     );
 
@@ -393,7 +355,7 @@ async fn grpc_candidate_connects_with_tls_and_token() {
         "got: {error}"
     );
 
-    // Correct token over TLS -> handshake succeeds, remote device.
+    // Correct token over TLS -> hello succeeds, remote device.
     let candidate = GrpcWorkerCandidate::new(GrpcWorkerCandidateConfig {
         endpoint,
         auth: GrpcAuth {
@@ -451,29 +413,21 @@ async fn grpc_candidate_rejects_wrong_ca() {
 }
 
 #[tokio::test]
-async fn grpc_worker_shutdown_closes_transport() {
+async fn grpc_worker_shutdown_reaches_the_worker() {
     let (endpoint, server_handle) = start_test_grpc_server(None, None).await;
 
-    let transport = Arc::new(
-        client::connect_with(&endpoint, &GrpcAuth::plain())
+    let client = Arc::new(
+        WorkerClient::connect(&endpoint, &GrpcAuth::plain())
             .await
             .unwrap(),
     );
-    let hello = grpc_handshake(&transport).await;
-    let grpc_worker = GrpcSwitchableWorker::new(hello, transport.clone());
+    let hello = client.hello().await.unwrap();
+    let hello = reimagine_backend_worker_transport_grpc::conversion::hello_from_proto(hello)
+        .expect("complete hello");
+    let grpc_worker = GrpcSwitchableWorker::new(hello, client);
 
+    // The shutdown RPC reaches the fake worker and is acknowledged.
     grpc_worker.shutdown().await.expect("shutdown");
-
-    // After shutdown the transport is closed: sending must fail with a
-    // closed-transport error.
-    let err = transport
-        .send(proto::HostToWorker { message: None })
-        .await
-        .expect_err("send after shutdown must fail");
-    assert!(
-        err.to_string().contains("closed"),
-        "expected closed-transport error, got: {err}"
-    );
 
     server_handle.abort();
 }

@@ -14,21 +14,27 @@ publish.workspace = true
 ignored = ["prost", "tonic-prost"]
 
 [dependencies]
-async-trait = { workspace = true }
 futures-core = "0.3"
+# `hyper-util` and `tower` are direct dependencies because the Windows
+# named-pipe client connector implements `tower::Service` and wraps the
+# pipe stream in `hyper_util::rt::TokioIo` for
+# `Endpoint::connect_with_connector`. Both versions come straight from
+# the existing lockfile.
+hyper-util = "0.1"
 prost = "0.14"
 rcgen = "0.13"
 reimagine-backend-worker-protocol = { path = "../backend-worker-protocol" }
 rustls = { version = "0.23", default-features = false, features = ["ring", "std"] }
 serde_json = { workspace = true }
-tracing = { workspace = true }
-tokio = { workspace = true, features = ["io-util", "rt", "sync", "time"] }
-tokio-stream = "0.1"
+tokio = { workspace = true, features = ["io-util", "net", "rt", "sync", "time"] }
+tokio-stream = { version = "0.1", features = ["net"] }
 tonic = { version = "0.14", features = ["transport", "tls-ring"] }
 tonic-prost = "0.14"
+tower = { workspace = true }
+tracing = { workspace = true }
 
 [dev-dependencies]
-tokio = { workspace = true, features = ["macros", "net", "rt-multi-thread"] }
+tokio = { workspace = true, features = ["io-std", "macros", "rt-multi-thread"] }
 
 [build-dependencies]
 protoc-bin-vendored = "3"

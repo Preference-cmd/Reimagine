@@ -1,34 +1,25 @@
-mod cancellation;
-mod codec;
-mod control;
-mod direction;
+//! The worker host contract: identity, profile, and payload types shared
+//! by the host and the workers it talks to.
+//!
+//! The wire contract itself is the `reimagine.worker.v2` protobuf service
+//! (defined in `backend-worker-transport-grpc`); this crate carries the
+//! Rust types the protobuf messages map to, plus the protocol version the
+//! compatibility checks are written against.
+
 mod error;
-mod frame;
 mod handshake;
 mod identity;
-mod lifecycle;
 mod progress;
 mod request;
 mod response;
 pub mod transport;
 mod worker_profile;
 
-pub use cancellation::{CancelAckFrame, CancelFrame};
-pub use codec::{CodecError, FrameCodec};
-pub use control::{
-    CleanupAckFrame, CleanupFrame, ControlId, HealthAckFrame, HealthFrame, ShutdownAckFrame,
-    ShutdownFrame,
-};
-pub use direction::{MessageSender, ProtocolViolation, validate_message_direction};
 pub use error::BackendExecutionError;
-pub use frame::WireMessage;
-pub use handshake::{
-    HandshakeError, HostHello, ProtocolRange, ProtocolVersion, WorkerHello, negotiate_protocol,
-};
+pub use handshake::{ProtocolRange, ProtocolVersion, WORKER_PROTOCOL_VERSION, WorkerHello};
 pub use identity::{BackendInstanceId, WorkerIdentity, WorkerIncarnationId, WorkerInstallationId};
-pub use lifecycle::{CancelDisposition, LifecycleError, RequestTracker, TransportLost};
 pub use progress::ProgressFrame;
-pub use request::{CorrelationId, RequestFrame, RequestId, request_operation};
-pub use response::{TerminalFrame, TerminalOutcome};
-pub use transport::{TransportDescription, TransportError, TransportKind, WorkerTransport};
+pub use request::request_operation;
+pub use response::TerminalOutcome;
+pub use transport::{TransportDescription, TransportError, TransportKind};
 pub use worker_profile::{WorkerInstanceProfile, WorkerProfile};

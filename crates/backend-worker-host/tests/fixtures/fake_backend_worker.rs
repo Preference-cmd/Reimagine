@@ -1,399 +1,155 @@
-use std::collections::HashMap;
-use std::io::{self, Write};
+//! Fake worker used by the supervisor and adapter tests: a real gRPC
+//! worker process speaking `reimagine.worker.v2` over a private local
+//! socket, built on the shared fake service from the transport crate.
+//!
+//! Behaviour is selected with `FAKE_WORKER_MODE`; operations (`echo`,
+//! `delay`, `progress`, `crash`) mirror the old frame-protocol fixture
+//! so the same scenarios stay covered.
+
+use std::io::Write as _;
 use std::process;
-use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::{Arc, Mutex};
-use std::thread;
-use std::time::{Duration, SystemTime, UNIX_EPOCH};
+use std::time::Duration;
 
 use reimagine_backend_worker_protocol::{
-    BackendExecutionError, BackendInstanceId, CancelAckFrame, CleanupAckFrame, FrameCodec,
-    HealthAckFrame, ProgressFrame, ProtocolRange, RequestFrame, RequestId, ShutdownAckFrame,
-    TerminalFrame, TerminalOutcome, WireMessage, WorkerHello, WorkerIdentity, WorkerIncarnationId,
-    WorkerInstallationId, WorkerInstanceProfile, WorkerProfile, negotiate_protocol,
+    BackendInstanceId, WorkerIdentity, WorkerIncarnationId, WorkerInstallationId,
+    WorkerInstanceProfile, WorkerProfile,
 };
-use serde_json::json;
+use reimagine_backend_worker_transport_grpc::local::{LocalEndpoint, bind};
+use reimagine_backend_worker_transport_grpc::server::{
+    parse_listen_endpoint, serve_local, worker_server,
+};
+use reimagine_backend_worker_transport_grpc::testing::{FakeWorkerConfig, FakeWorkerService};
 
-const MAXIMUM_FRAME_BYTES: u32 = 1024 * 1024;
+/// Worker stderr must never panic on a dead pipe: all writes ignore
+/// errors.
+fn log(message: &str) {
+    let _ = std::io::stderr().write_all(message.as_bytes());
+}
 
-fn main() -> Result<(), Box<dyn std::error::Error>> {
-    eprintln!("host fake worker fixture started");
-    let codec = FrameCodec::new(MAXIMUM_FRAME_BYTES);
-    let stdout = Arc::new(Mutex::new(io::stdout()));
-    let cancellations = Arc::new(Mutex::new(HashMap::<RequestId, Arc<AtomicBool>>::new()));
-    let mut stdin = io::stdin().lock();
-    let WireMessage::HostHello(host) = codec.read(&mut stdin)? else {
-        return Err("first frame must be host_hello".into());
-    };
-    let mode = std::env::var("FAKE_WORKER_MODE").unwrap_or_default();
-    if mode == "hang" {
-        thread::sleep(Duration::from_secs(5));
+fn fixture_identity(mode: &str, incarnation: &str) -> WorkerIdentity {
+    WorkerIdentity {
+        backend_instance_id: BackendInstanceId::from("fake:cpu:default"),
+        installation_id: WorkerInstallationId::from("fake-installation"),
+        incarnation_id: WorkerIncarnationId(incarnation.to_owned()),
+        worker_version: env!("CARGO_PKG_VERSION").to_owned(),
+        backend_kind: "fake".to_owned(),
+        target: std::env::consts::ARCH.to_owned(),
+        manifest_digest: if mode == "wrong_identity" {
+            "wrong-manifest".to_owned()
+        } else {
+            "test-manifest".to_owned()
+        },
     }
-    if mode == "malformed_hello" {
-        let mut stdout = io::stdout().lock();
-        stdout.write_all(&1_u32.to_be_bytes())?;
-        stdout.write_all(b"{")?;
-        stdout.flush()?;
-        return Ok(());
-    }
-    if mode == "partial_hello" {
-        let mut stdout = io::stdout().lock();
-        stdout.write_all(&20_u32.to_be_bytes())?;
-        stdout.write_all(b"{")?;
-        stdout.flush()?;
-        return Ok(());
-    }
-    if mode == "clean_eof_hello" {
-        return Ok(());
-    }
-    if mode == "partial_prefix_hello" {
-        let mut stdout = io::stdout().lock();
-        stdout.write_all(&20_u32.to_be_bytes()[..2])?;
-        stdout.flush()?;
-        return Ok(());
-    }
-    if mode == "stderr_flood" {
-        let mut stderr = io::stderr().lock();
-        stderr.write_all(&vec![b'x'; 256 * 1024])?;
-        stderr.flush()?;
-    }
-    let selected = negotiate_protocol(host.supported_protocols, ProtocolRange::new(1, 1))?;
-    let incarnation = WorkerIncarnationId(format!(
-        "fixture-{}-{}",
-        process::id(),
-        SystemTime::now().duration_since(UNIX_EPOCH)?.as_nanos()
-    ));
+}
+
+fn fixture_profile(mode: &str) -> WorkerProfile {
     let mut capabilities = vec!["echo".to_owned(), "delay".to_owned(), "progress".to_owned()];
     if mode != "profile_without_latent" {
         capabilities.push("latent.create_empty".to_owned());
     }
-    write_message(
-        &stdout,
-        &WireMessage::WorkerHello(WorkerHello {
-            selected_protocol: selected,
-            identity: WorkerIdentity {
-                backend_instance_id: BackendInstanceId::from("fake:cpu:default"),
-                installation_id: WorkerInstallationId::from("fake-installation"),
-                incarnation_id: incarnation.clone(),
-                worker_version: env!("CARGO_PKG_VERSION").to_owned(),
-                backend_kind: "fake".to_owned(),
-                target: std::env::consts::ARCH.to_owned(),
-                manifest_digest: if mode == "wrong_identity" {
-                    "wrong-manifest".to_owned()
-                } else {
-                    "test-manifest".to_owned()
-                },
-            },
-            profile: WorkerProfile {
-                instances: vec![WorkerInstanceProfile {
-                    backend_instance_id: BackendInstanceId::from(if mode == "wrong_profile" {
-                        "fake:cpu:other"
-                    } else {
-                        "fake:cpu:default"
-                    }),
-                    device_label: "cpu".to_owned(),
-                    capabilities,
-                    operation_options: json!({}),
-                }],
-            },
-        }),
-    )?;
-
-    loop {
-        match codec.read(&mut stdin) {
-            Ok(WireMessage::Request(request)) => {
-                validate_session(
-                    request.protocol_version,
-                    &request.incarnation_id,
-                    selected,
-                    &incarnation,
-                )?;
-                spawn_request(request, Arc::clone(&stdout), Arc::clone(&cancellations));
-            }
-            Ok(WireMessage::Cancel(frame)) => {
-                validate_session(
-                    frame.protocol_version,
-                    &frame.incarnation_id,
-                    selected,
-                    &incarnation,
-                )?;
-                let cancellation = cancellations
-                    .lock()
-                    .unwrap()
-                    .get(&frame.request_id)
-                    .cloned();
-                let accepted = cancellation.is_some();
-                if let Some(cancellation) = cancellation {
-                    cancellation.store(true, Ordering::Release);
-                }
-                write_message(
-                    &stdout,
-                    &WireMessage::CancelAck(CancelAckFrame {
-                        protocol_version: selected,
-                        incarnation_id: incarnation.clone(),
-                        request_id: frame.request_id,
-                        correlation_id: frame.correlation_id,
-                        accepted,
-                        already_terminal: !accepted,
-                    }),
-                )?;
-            }
-            Ok(WireMessage::Health(frame)) => {
-                validate_session(
-                    frame.protocol_version,
-                    &frame.incarnation_id,
-                    selected,
-                    &incarnation,
-                )?;
-                write_message(
-                    &stdout,
-                    &WireMessage::HealthAck(HealthAckFrame {
-                        protocol_version: selected,
-                        incarnation_id: incarnation.clone(),
-                        control_id: frame.control_id,
-                        healthy: true,
-                        message: None,
-                    }),
-                )?;
-            }
-            Ok(WireMessage::Cleanup(frame)) => {
-                validate_session(
-                    frame.protocol_version,
-                    &frame.incarnation_id,
-                    selected,
-                    &incarnation,
-                )?;
-                write_message(
-                    &stdout,
-                    &WireMessage::CleanupAck(CleanupAckFrame {
-                        protocol_version: selected,
-                        incarnation_id: incarnation.clone(),
-                        control_id: frame.control_id,
-                        released_objects: frame.object_ids.len() as u64,
-                    }),
-                )?;
-            }
-            Ok(WireMessage::Shutdown(frame)) => {
-                validate_session(
-                    frame.protocol_version,
-                    &frame.incarnation_id,
-                    selected,
-                    &incarnation,
-                )?;
-                if mode != "ignore_shutdown" {
-                    write_message(
-                        &stdout,
-                        &WireMessage::ShutdownAck(ShutdownAckFrame {
-                            protocol_version: selected,
-                            incarnation_id: incarnation.clone(),
-                            control_id: frame.control_id,
-                        }),
-                    )?;
-                    break;
-                }
-            }
-            Err(reimagine_backend_worker_protocol::CodecError::Io(error))
-                if error.kind() == io::ErrorKind::UnexpectedEof =>
-            {
-                break;
-            }
-            Ok(message) => return Err(format!("unexpected host frame `{}`", message.kind()).into()),
-            Err(error) => return Err(error.into()),
-        }
-    }
-    Ok(())
-}
-
-fn validate_session(
-    actual_protocol: reimagine_backend_worker_protocol::ProtocolVersion,
-    actual_incarnation: &WorkerIncarnationId,
-    expected_protocol: reimagine_backend_worker_protocol::ProtocolVersion,
-    expected_incarnation: &WorkerIncarnationId,
-) -> Result<(), Box<dyn std::error::Error>> {
-    if actual_protocol != expected_protocol || actual_incarnation != expected_incarnation {
-        return Err("stale protocol session".into());
-    }
-    Ok(())
-}
-
-fn spawn_request(
-    request: RequestFrame,
-    stdout: Arc<Mutex<io::Stdout>>,
-    cancellations: Arc<Mutex<HashMap<RequestId, Arc<AtomicBool>>>>,
-) {
-    let cancellation = Arc::new(AtomicBool::new(false));
-    cancellations
-        .lock()
-        .unwrap()
-        .insert(request.request_id.clone(), Arc::clone(&cancellation));
-    thread::spawn(move || {
-        if request.operation == "crash" {
-            process::exit(17);
-        }
-        let outcome = match request.operation.as_str() {
-            "echo" => TerminalOutcome::Success {
-                output: request.payload.clone(),
-            },
-            "delay" => {
-                let milliseconds = request
-                    .payload
-                    .get("milliseconds")
-                    .and_then(serde_json::Value::as_u64)
-                    .unwrap_or(25);
-                let steps = (milliseconds / 5).max(1);
-                for _ in 0..steps {
-                    thread::sleep(Duration::from_millis(5));
-                    if cancellation.load(Ordering::Acquire) {
-                        break;
-                    }
-                }
-                if cancellation.load(Ordering::Acquire) {
-                    TerminalOutcome::Cancelled
-                } else {
-                    TerminalOutcome::Success {
-                        output: json!({ "delayed_milliseconds": milliseconds }),
-                    }
-                }
-            }
-            "progress" => {
-                for sequence in 1..=3 {
-                    write_message(
-                        &stdout,
-                        &WireMessage::Progress(ProgressFrame {
-                            protocol_version: request.protocol_version,
-                            incarnation_id: request.incarnation_id.clone(),
-                            request_id: request.request_id.clone(),
-                            correlation_id: request.correlation_id.clone(),
-                            sequence,
-                            completed: sequence,
-                            total: Some(3),
-                            message: Some(format!("step {sequence}")),
-                        }),
-                    )
-                    .unwrap();
-                }
-                TerminalOutcome::Success {
-                    output: json!(null),
-                }
-            }
-            "latent.create_empty" => {
-                if std::env::var_os("FAKE_LATENT_PROGRESS").is_some() {
-                    for sequence in 1..=3 {
-                        write_message(
-                            &stdout,
-                            &WireMessage::Progress(ProgressFrame {
-                                protocol_version: request.protocol_version,
-                                incarnation_id: request.incarnation_id.clone(),
-                                request_id: request.request_id.clone(),
-                                correlation_id: request.correlation_id.clone(),
-                                sequence,
-                                completed: sequence,
-                                total: Some(3),
-                                message: Some(format!("latent step {sequence}")),
-                            }),
-                        )
-                        .unwrap();
-                    }
-                }
-                let milliseconds = std::env::var("FAKE_LATENT_DELAY_MS")
-                    .ok()
-                    .and_then(|value| value.parse::<u64>().ok())
-                    .unwrap_or(0);
-                let forced_terminal = std::env::var("FAKE_LATENT_TERMINAL").ok();
-                for _ in 0..(milliseconds / 5) {
-                    thread::sleep(Duration::from_millis(5));
-                    if forced_terminal.is_none() && cancellation.load(Ordering::Acquire) {
-                        break;
-                    }
-                }
-                if forced_terminal.as_deref() == Some("crash") {
-                    process::exit(17);
-                } else if forced_terminal.as_deref() == Some("backend_error") {
-                    TerminalOutcome::BackendError {
-                        error: BackendExecutionError {
-                            code: "forced_backend_error".to_owned(),
-                            message: "forced backend terminal won the race".to_owned(),
-                            retryable: false,
-                        },
-                    }
-                } else if forced_terminal.as_deref() == Some("success") {
-                    TerminalOutcome::Success {
-                        output: json!({
-                            "worker_token": format!("latent:{}", request.request_id.0),
-                            "width": request.payload["width"],
-                            "height": request.payload["height"],
-                            "batch_size": request.payload["batch_size"]
-                        }),
-                    }
-                } else if cancellation.load(Ordering::Acquire) {
-                    TerminalOutcome::Cancelled
-                } else {
-                    TerminalOutcome::Success {
-                        output: json!({
-                            "worker_token": format!("latent:{}", request.request_id.0),
-                            "width": request.payload["width"],
-                            "height": request.payload["height"],
-                            "batch_size": request.payload["batch_size"]
-                        }),
-                    }
-                }
-            }
-            "resource.apply_hints" => {
-                if std::env::var_os("FAKE_HINTS_FAIL").is_some() {
-                    TerminalOutcome::BackendError {
-                        error: BackendExecutionError {
-                            code: "forced_hints_error".to_owned(),
-                            message: "forced hints backend error".to_owned(),
-                            retryable: false,
-                        },
-                    }
-                } else {
-                    TerminalOutcome::Success {
-                        output: json!({ "applied": true }),
-                    }
-                }
-            }
-            "model.set_cache_budget" => {
-                if std::env::var_os("FAKE_BUDGET_FAIL").is_some() {
-                    TerminalOutcome::BackendError {
-                        error: BackendExecutionError {
-                            code: "forced_budget_error".to_owned(),
-                            message: "forced budget backend error".to_owned(),
-                            retryable: false,
-                        },
-                    }
-                } else {
-                    TerminalOutcome::Success {
-                        output: json!({ "applied": true }),
-                    }
-                }
-            }
-            operation => TerminalOutcome::BackendError {
-                error: BackendExecutionError {
-                    code: "unsupported_operation".to_owned(),
-                    message: format!("unsupported fake operation `{operation}`"),
-                    retryable: false,
-                },
-            },
-        };
-        cancellations.lock().unwrap().remove(&request.request_id);
-        write_message(
-            &stdout,
-            &WireMessage::Terminal(TerminalFrame {
-                protocol_version: request.protocol_version,
-                incarnation_id: request.incarnation_id,
-                request_id: request.request_id,
-                correlation_id: request.correlation_id,
-                outcome,
+    WorkerProfile {
+        instances: vec![WorkerInstanceProfile {
+            backend_instance_id: BackendInstanceId::from(if mode == "wrong_profile" {
+                "fake:cpu:other"
+            } else {
+                "fake:cpu:default"
             }),
-        )
-        .unwrap();
-    });
+            device_label: "cpu".to_owned(),
+            capabilities,
+            operation_options: serde_json::json!({}),
+        }],
+    }
 }
 
-fn write_message(
-    stdout: &Arc<Mutex<io::Stdout>>,
-    message: &WireMessage,
-) -> Result<(), reimagine_backend_worker_protocol::CodecError> {
-    FrameCodec::new(MAXIMUM_FRAME_BYTES).write(&mut *stdout.lock().unwrap(), message)
+fn main() {
+    log("host fake worker fixture started\n");
+    let mode = std::env::var("FAKE_WORKER_MODE").unwrap_or_default();
+    if mode == "hang" {
+        std::thread::sleep(Duration::from_secs(30));
+    }
+    if mode == "stdout_noise" {
+        println!("hello there");
+    }
+
+    let listen = std::env::args()
+        .skip_while(|arg| arg != "--listen")
+        .nth(1)
+        .unwrap_or_default();
+    let endpoint: LocalEndpoint = match parse_listen_endpoint(&listen) {
+        Ok(endpoint) => endpoint,
+        Err(error) => {
+            log(&format!("FATAL: invalid --listen `{listen}`: {error}\n"));
+            process::exit(1);
+        }
+    };
+    let token = std::env::var("REIMAGINE_WORKER_TOKEN")
+        .ok()
+        .filter(|value| !value.is_empty());
+
+    let incarnation = format!(
+        "fixture-{}-{}",
+        process::id(),
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|elapsed| elapsed.as_nanos())
+            .unwrap_or(0)
+    );
+    let service = FakeWorkerService::new(FakeWorkerConfig {
+        identity: Some(fixture_identity(&mode, &incarnation)),
+        profile: Some(fixture_profile(&mode)),
+        token,
+        hello_protocol: if mode == "wrong_protocol" { 1 } else { 2 },
+        ignore_shutdown: mode == "ignore_shutdown",
+        ..FakeWorkerConfig::default()
+    });
+
+    let runtime = tokio::runtime::Builder::new_multi_thread()
+        .enable_all()
+        .build()
+        .expect("fixture runtime");
+
+    // Lifeline: stdin EOF (host death) exits the process.
+    std::thread::spawn(|| {
+        use std::io::Read;
+        let mut stdin = std::io::stdin().lock();
+        let mut buffer = [0_u8; 256];
+        loop {
+            match stdin.read(&mut buffer) {
+                Ok(0) | Err(_) => process::exit(0),
+                Ok(_) => {}
+            }
+        }
+    });
+
+    runtime.block_on(async move {
+        let incoming = match bind(&endpoint).await {
+            Ok(incoming) => incoming,
+            Err(error) => {
+                log(&format!("FATAL: cannot bind {endpoint:?}: {error}\n"));
+                process::exit(1);
+            }
+        };
+        // READY line: the only stdout output of a worker, printed only
+        // after the endpoint is bound.
+        let mut stdout = std::io::stdout().lock();
+        if writeln!(stdout, "READY {}", endpoint.to_uri()).is_err() || stdout.flush().is_err() {
+            process::exit(1);
+        }
+        drop(stdout);
+
+        // The stderr flood runs while serving: the host drains it
+        // concurrently, mirroring a chatty worker. Logs must never
+        // panic on a broken pipe.
+        if mode == "stderr_flood" {
+            std::thread::spawn(|| {
+                let mut stderr = std::io::stderr().lock();
+                let _ = stderr.write_all(&vec![b'x'; 256 * 1024]);
+                let _ = stderr.flush();
+            });
+        }
+
+        if let Err(error) = serve_local(incoming, worker_server(service)).await {
+            log(&format!("fixture server error: {error}\n"));
+        }
+    });
 }

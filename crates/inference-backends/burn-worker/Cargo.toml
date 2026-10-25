@@ -18,14 +18,14 @@ path = "src/lib.rs"
 
 [dependencies]
 clap = { workspace = true }
-quinn = { version = "0.11", default-features = false, features = ["rustls-ring", "runtime-tokio"] }
-reimagine-backend-worker-transport-quic = { path = "../../backend-worker-transport-quic" }
-reimagine-inference-burn = { path = "../burn", default-features = false }
 reimagine-backend-worker-protocol = { path = "../../backend-worker-protocol" }
+reimagine-backend-worker-transport-grpc = { path = "../../backend-worker-transport-grpc" }
 reimagine-core = { path = "../../core" }
 reimagine-inference = { path = "../../inference" }
+reimagine-inference-burn = { path = "../burn", default-features = false }
 serde_json = { workspace = true }
-tokio = { workspace = true, features = ["rt", "rt-multi-thread", "macros"] }
+tokio = { workspace = true, features = ["io-std", "net", "rt", "rt-multi-thread", "macros", "sync", "time"] }
+tokio-stream = { version = "0.1", features = ["net"] }
 tokio-util = { workspace = true, features = ["rt"] }
 
 [features]

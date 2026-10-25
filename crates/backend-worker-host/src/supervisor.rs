@@ -1,21 +1,22 @@
-use std::collections::HashMap;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, AtomicU8, AtomicU64, Ordering};
 use std::time::Duration;
 
 use reimagine_backend_worker_protocol::{
-    CancelAckFrame, CancelFrame, CleanupAckFrame, CleanupFrame, CodecError, ControlId,
-    CorrelationId, FrameCodec, HealthAckFrame, HealthFrame, HostHello, MessageSender,
-    ProgressFrame, ProtocolVersion, RequestFrame, RequestId, ShutdownFrame, TerminalFrame,
-    WireMessage, WorkerHello, WorkerIncarnationId, WorkerTransport, validate_message_direction,
+    ProgressFrame, TerminalOutcome, WorkerHello, WorkerIncarnationId,
 };
-use tokio::io::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt};
-use tokio::sync::{Mutex, mpsc, oneshot};
+use reimagine_backend_worker_transport_grpc::client::WorkerClient;
+use reimagine_backend_worker_transport_grpc::conversion::{
+    hello_from_proto, outcome_from_proto, progress_from_proto,
+};
+use reimagine_backend_worker_transport_grpc::proto;
+use tokio::sync::Mutex;
+use tokio::sync::mpsc;
 use tokio::task::JoinHandle;
 use tokio::time::timeout;
 
-use crate::transport::{StdioTransportFactory, WorkerConnection, WorkerTransportFactory};
-use crate::{ExpectedWorkerIdentity, WorkerHostError, WorkerLaunchSpec, WorkerTransportConfig};
+use crate::transport::{LocalProcessTransportFactory, WorkerConnection, WorkerTransportFactory};
+use crate::{ExpectedWorkerIdentity, WorkerHostError, WorkerLaunchSpec};
 
 const STATE_STOPPED: u8 = 0;
 const STATE_READY: u8 = 1;
@@ -30,51 +31,67 @@ pub enum WorkerProcessState {
     Starting,
 }
 
+/// The terminal result of one executed operation: every progress frame
+/// observed plus the single terminal outcome.
 pub struct WorkerRequestResult {
     pub progress: Vec<ProgressFrame>,
-    pub terminal: TerminalFrame,
-    pub cancel_acknowledged: bool,
+    pub terminal: TerminalOutcome,
+}
+
+/// Liveness answer from the worker's `Health` RPC.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct HealthReport {
+    pub healthy: bool,
+    pub message: Option<String>,
+}
+
+/// Shared per-request cancellation state between a handle and its
+/// canceller.
+struct RequestShared {
+    cancelled: AtomicBool,
+    terminal_seen: AtomicBool,
+    abort: tokio::task::AbortHandle,
 }
 
 pub struct WorkerRequestHandle {
     inner: Arc<WorkerClientInner>,
-    request_id: RequestId,
-    correlation_id: CorrelationId,
+    shared: Arc<RequestShared>,
+    driver: JoinHandle<()>,
     receiver: mpsc::UnboundedReceiver<PendingEvent>,
-    cancel_sent: Arc<AtomicBool>,
+}
+
+impl Drop for WorkerRequestHandle {
+    fn drop(&mut self) {
+        // A dropped handle without `finish` cancels the worker-side
+        // operation: aborting the driver drops the Execute stream, and
+        // the gRPC cancellation reaches the worker.
+        if !self.driver.is_finished() {
+            self.driver.abort();
+        }
+    }
 }
 
 #[derive(Clone)]
 pub struct WorkerRequestCanceller {
     inner: Arc<WorkerClientInner>,
-    request_id: RequestId,
-    correlation_id: CorrelationId,
-    cancel_sent: Arc<AtomicBool>,
+    shared: Arc<RequestShared>,
 }
 
 impl WorkerRequestCanceller {
     pub async fn cancel(&self) -> Result<(), WorkerHostError> {
-        send_cancel(
-            &self.inner,
-            &self.request_id,
-            &self.correlation_id,
-            &self.cancel_sent,
-        )
-        .await
+        cancel_request(&self.inner, &self.shared).await
     }
 }
 
 impl WorkerRequestHandle {
     pub async fn cancel(&self) -> Result<(), WorkerHostError> {
-        self.canceller().cancel().await
+        cancel_request(&self.inner, &self.shared).await
     }
 
     pub fn canceller(&self) -> WorkerRequestCanceller {
         WorkerRequestCanceller {
             inner: Arc::clone(&self.inner),
-            request_id: self.request_id.clone(),
-            correlation_id: self.correlation_id.clone(),
-            cancel_sent: Arc::clone(&self.cancel_sent),
+            shared: Arc::clone(&self.shared),
         }
     }
 
@@ -89,60 +106,69 @@ impl WorkerRequestHandle {
     where
         F: FnMut(&ProgressFrame),
     {
+        let request_timeout = self.inner.request_timeout;
         let receive = async {
             let mut progress = Vec::new();
-            let mut cancel_acknowledged = false;
             loop {
                 match self.receiver.recv().await {
                     Some(PendingEvent::Progress(frame)) => {
                         on_progress(&frame);
                         progress.push(frame);
                     }
-                    Some(PendingEvent::CancelAck(_frame)) => cancel_acknowledged = true,
-                    Some(PendingEvent::Terminal(terminal)) => {
+                    Some(PendingEvent::Terminal(outcome)) => {
+                        self.shared.terminal_seen.store(true, Ordering::Release);
                         return Ok(WorkerRequestResult {
                             progress,
-                            terminal,
-                            cancel_acknowledged,
+                            terminal: outcome,
                         });
                     }
                     Some(PendingEvent::TransportLost(message)) => {
-                        return Err(WorkerHostError::TransportLost { message });
+                        return self.transport_lost_or_cancelled(progress, message);
                     }
                     None => {
-                        return Err(WorkerHostError::TransportLost {
-                            message: "worker response channel closed".to_owned(),
-                        });
+                        return self.transport_lost_or_cancelled(
+                            progress,
+                            "worker response channel closed".to_owned(),
+                        );
                     }
                 }
             }
         };
-        match timeout(self.inner.request_timeout, receive).await {
+        match timeout(request_timeout, receive).await {
             Ok(result) => result,
             Err(_) => {
-                self.inner.pending.lock().await.remove(&self.request_id);
-                Err(WorkerHostError::RequestTimeout {
-                    request_id: self.request_id.0.clone(),
-                })
+                // Abort the driver: dropping the Execute stream cancels
+                // the call and stops the operation on the worker.
+                self.driver.abort();
+                Err(WorkerHostError::RequestTimeout)
             }
+        }
+    }
+
+    /// A cancel reported by the host yields the Cancelled terminal even
+    /// when the worker never delivered one; anything else is a lost
+    /// transport. Either way exactly one terminal is reported.
+    fn transport_lost_or_cancelled(
+        &self,
+        progress: Vec<ProgressFrame>,
+        message: String,
+    ) -> Result<WorkerRequestResult, WorkerHostError> {
+        if self.shared.cancelled.load(Ordering::Acquire) {
+            Ok(WorkerRequestResult {
+                progress,
+                terminal: TerminalOutcome::Cancelled,
+            })
+        } else {
+            Err(WorkerHostError::TransportLost { message })
         }
     }
 }
 
 enum PendingEvent {
     Progress(ProgressFrame),
-    CancelAck(CancelAckFrame),
-    Terminal(TerminalFrame),
+    Terminal(TerminalOutcome),
     TransportLost(String),
 }
-
-struct PendingRequest {
-    correlation_id: CorrelationId,
-    sender: mpsc::UnboundedSender<PendingEvent>,
-}
-
-type PendingRequests = Arc<Mutex<HashMap<RequestId, PendingRequest>>>;
-type PendingControls = Arc<Mutex<HashMap<ControlId, oneshot::Sender<WireMessage>>>>;
 
 struct ReaderLifecycle {
     state: Arc<AtomicU8>,
@@ -152,16 +178,10 @@ struct ReaderLifecycle {
 }
 
 struct WorkerClientInner {
-    write: Mutex<Box<dyn AsyncWrite + Send + Unpin>>,
-    pending: PendingRequests,
-    controls: PendingControls,
-    codec: FrameCodec,
-    protocol_version: ProtocolVersion,
+    client: WorkerClient,
     incarnation_id: WorkerIncarnationId,
     request_timeout: Duration,
     shutdown_timeout: Duration,
-    next_request: AtomicU64,
-    next_control: AtomicU64,
     state: Arc<AtomicU8>,
     current_generation: Arc<AtomicU64>,
     generation: u64,
@@ -185,9 +205,8 @@ impl Drop for WorkerClientInner {
 pub struct StartedWorker {
     pub hello: WorkerHello,
     inner: Arc<WorkerClientInner>,
-    transport: Arc<dyn WorkerTransport>,
+    transport: Arc<dyn crate::transport::WorkerLifecycle>,
     stderr_tail: Arc<Mutex<Vec<u8>>>,
-    _reader_task: JoinHandle<()>,
     _stderr_task: Option<JoinHandle<()>>,
 }
 
@@ -205,7 +224,7 @@ impl StartedWorker {
         &self.inner.incarnation_id
     }
 
-    /// Returns the capabilities advertised by the worker during handshake.
+    /// Returns the capabilities advertised by the worker during hello.
     #[must_use]
     pub fn capabilities(&self) -> Vec<String> {
         self.hello
@@ -227,128 +246,51 @@ impl StartedWorker {
         self.stderr_tail.lock().await.clone()
     }
 
-    pub async fn health(&self) -> Result<HealthAckFrame, WorkerHostError> {
-        let control_id = self.next_control_id("health");
-        let response = self
-            .send_control(
-                control_id.clone(),
-                WireMessage::Health(HealthFrame {
-                    protocol_version: self.inner.protocol_version,
-                    incarnation_id: self.inner.incarnation_id.clone(),
-                    control_id,
-                }),
-                self.inner.request_timeout,
-            )
-            .await?;
-        let WireMessage::HealthAck(frame) = response else {
-            return Err(WorkerHostError::UnexpectedWorkerMessage {
-                kind: response.kind(),
-            });
-        };
-        Ok(frame)
+    /// The transport endpoint the worker is reachable on (for local
+    /// workers: the private socket or pipe URI).
+    #[must_use]
+    pub fn transport_endpoint(&self) -> String {
+        self.transport.description().endpoint
     }
 
+    pub async fn health(&self) -> Result<HealthReport, WorkerHostError> {
+        ensure_alive(&self.inner)?;
+        let response = call_with_timeout(
+            self.inner.request_timeout,
+            "health",
+            self.inner.client.health(),
+        )
+        .await?;
+        Ok(HealthReport {
+            healthy: response.healthy,
+            message: response.message,
+        })
+    }
+
+    /// Release run-scoped payloads held by the worker; returns the
+    /// number of released objects.
     pub async fn cleanup(
         &self,
         run_id: Option<String>,
         object_ids: Vec<String>,
-    ) -> Result<CleanupAckFrame, WorkerHostError> {
-        let control_id = self.next_control_id("cleanup");
-        let response = self
-            .send_control(
-                control_id.clone(),
-                WireMessage::Cleanup(CleanupFrame {
-                    protocol_version: self.inner.protocol_version,
-                    incarnation_id: self.inner.incarnation_id.clone(),
-                    control_id,
-                    run_id,
-                    object_ids,
-                }),
-                self.inner.request_timeout,
-            )
-            .await?;
-        let WireMessage::CleanupAck(frame) = response else {
-            return Err(WorkerHostError::UnexpectedWorkerMessage {
-                kind: response.kind(),
-            });
-        };
-        Ok(frame)
-    }
-
-    fn next_control_id(&self, kind: &str) -> ControlId {
-        let sequence = self.inner.next_control.fetch_add(1, Ordering::Relaxed);
-        ControlId(format!("{kind}-{sequence}"))
-    }
-
-    async fn send_control(
-        &self,
-        control_id: ControlId,
-        message: WireMessage,
-        deadline: Duration,
-    ) -> Result<WireMessage, WorkerHostError> {
+    ) -> Result<u64, WorkerHostError> {
         ensure_alive(&self.inner)?;
-        let (sender, receiver) = oneshot::channel();
-        self.inner
-            .controls
-            .lock()
-            .await
-            .insert(control_id.clone(), sender);
-        {
-            let mut write = self.inner.write.lock().await;
-            if let Err(error) = write_frame(&mut *write, &self.inner.codec, &message).await {
-                self.inner.controls.lock().await.remove(&control_id);
-                return Err(error);
-            }
-        }
-        match timeout(deadline, receiver).await {
-            Ok(Ok(response)) => Ok(response),
-            Ok(Err(_)) => Err(WorkerHostError::TransportLost {
-                message: format!(
-                    "worker incarnation `{}` exited before control acknowledgement",
-                    self.inner.incarnation_id.0
-                ),
-            }),
-            Err(_) => {
-                self.inner.controls.lock().await.remove(&control_id);
-                Err(WorkerHostError::ControlTimeout {
-                    control_id: control_id.0,
-                })
-            }
-        }
+        let response = call_with_timeout(
+            self.inner.request_timeout,
+            "cleanup",
+            self.inner.client.cleanup(run_id, object_ids),
+        )
+        .await?;
+        Ok(response.released_objects)
     }
 
     pub async fn shutdown(&self) -> Result<(), WorkerHostError> {
         ensure_alive(&self.inner)?;
-        let sequence = self.inner.next_control.fetch_add(1, Ordering::Relaxed);
-        let control_id = ControlId(format!("shutdown-{sequence}"));
-        let (sender, receiver) = oneshot::channel();
-        self.inner
-            .controls
-            .lock()
-            .await
-            .insert(control_id.clone(), sender);
-        let message = WireMessage::Shutdown(ShutdownFrame {
-            protocol_version: self.inner.protocol_version,
-            incarnation_id: self.inner.incarnation_id.clone(),
-            control_id: control_id.clone(),
-        });
-        {
-            let mut write = self.inner.write.lock().await;
-            if let Err(error) = write_frame(&mut *write, &self.inner.codec, &message).await {
-                self.inner.controls.lock().await.remove(&control_id);
-                return Err(error);
-            }
-        }
-        match timeout(self.inner.shutdown_timeout, receiver).await {
-            Ok(Ok(WireMessage::ShutdownAck(_))) => {}
-            Ok(Ok(message)) => {
-                return Err(WorkerHostError::UnexpectedWorkerMessage {
-                    kind: message.kind(),
-                });
-            }
-            Ok(Err(_)) => {
+        match timeout(self.inner.shutdown_timeout, self.inner.client.shutdown()).await {
+            Ok(Ok(_)) => {}
+            Ok(Err(status)) => {
                 return Err(WorkerHostError::TransportLost {
-                    message: "worker exited before shutdown acknowledgement".to_owned(),
+                    message: format!("worker shutdown call failed: {status}"),
                 });
             }
             Err(_) => {
@@ -388,65 +330,151 @@ impl StartedWorker {
         payload: serde_json::Value,
     ) -> Result<WorkerRequestHandle, WorkerHostError> {
         ensure_alive(&self.inner)?;
-        let sequence = self.inner.next_request.fetch_add(1, Ordering::Relaxed);
-        let request_id = RequestId(format!("request-{sequence}"));
-        let correlation_id = CorrelationId(format!("worker-{sequence}"));
+        let payload_bytes =
+            serde_json::to_vec(&payload).map_err(|error| WorkerHostError::TransportLost {
+                message: format!("request payload is not serializable: {error}"),
+            })?;
+        let stream = self
+            .inner
+            .client
+            .execute(operation, payload_bytes)
+            .await
+            .map_err(|status| {
+                // A call that never got a stream means the transport is
+                // gone (the worker died mid-call); mark the supervisor
+                // failed the same way the stream driver would have.
+                fail_client(&self.inner);
+                WorkerHostError::TransportLost {
+                    message: format!("worker rejected the execute call: {status}"),
+                }
+            })?;
         let (sender, receiver) = mpsc::unbounded_channel();
-        self.inner.pending.lock().await.insert(
-            request_id.clone(),
-            PendingRequest {
-                correlation_id: correlation_id.clone(),
-                sender,
+        let driver = tokio::spawn(drive_execute(
+            stream,
+            sender,
+            ReaderLifecycle {
+                state: Arc::clone(&self.inner.state),
+                current_generation: Arc::clone(&self.inner.current_generation),
+                generation: self.inner.generation,
+                alive: Arc::clone(&self.inner.alive),
             },
-        );
-        let message = WireMessage::Request(RequestFrame {
-            protocol_version: self.inner.protocol_version,
-            incarnation_id: self.inner.incarnation_id.clone(),
-            request_id: request_id.clone(),
-            correlation_id,
-            operation: operation.into(),
-            payload,
-        });
-        let write_result = {
-            let mut write = self.inner.write.lock().await;
-            write_frame(&mut *write, &self.inner.codec, &message).await
-        };
-        if let Err(error) = write_result {
-            self.inner.pending.lock().await.remove(&request_id);
-            return Err(error);
-        }
+        ));
         Ok(WorkerRequestHandle {
             inner: Arc::clone(&self.inner),
-            request_id,
-            correlation_id: CorrelationId(format!("worker-{sequence}")),
+            shared: Arc::new(RequestShared {
+                cancelled: AtomicBool::new(false),
+                terminal_seen: AtomicBool::new(false),
+                abort: driver.abort_handle(),
+            }),
+            driver,
             receiver,
-            cancel_sent: Arc::new(AtomicBool::new(false)),
         })
     }
 }
 
-async fn send_cancel(
+async fn cancel_request(
     inner: &Arc<WorkerClientInner>,
-    request_id: &RequestId,
-    correlation_id: &CorrelationId,
-    cancel_sent: &AtomicBool,
+    shared: &RequestShared,
 ) -> Result<(), WorkerHostError> {
     ensure_alive(inner)?;
-    if cancel_sent.swap(true, Ordering::AcqRel) {
+    if shared.cancelled.swap(true, Ordering::AcqRel) {
         return Ok(());
     }
-    let message = WireMessage::Cancel(CancelFrame {
-        protocol_version: inner.protocol_version,
-        incarnation_id: inner.incarnation_id.clone(),
-        request_id: request_id.clone(),
-        correlation_id: correlation_id.clone(),
-    });
-    let mut write = inner.write.lock().await;
-    let result = write_frame(&mut *write, &inner.codec, &message).await;
-    if result.is_err() {
-        cancel_sent.store(false, Ordering::Release);
+    if shared.terminal_seen.load(Ordering::Acquire) {
+        return Ok(());
     }
-    result
+    // Dropping the Execute stream is the cancellation: the worker sees
+    // its response stream close and stops the operation.
+    shared.abort.abort();
+    Ok(())
+}
+
+/// Pump one `Execute` stream into the handle's event channel.
+///
+/// Dropping `stream` (through driver abort) is what cancels the call on
+/// the worker, so this task must own the stream until it ends or the
+/// caller gives up.
+async fn drive_execute(
+    mut stream: reimagine_backend_worker_transport_grpc::Streaming<proto::ExecuteEvent>,
+    sender: mpsc::UnboundedSender<PendingEvent>,
+    lifecycle: ReaderLifecycle,
+) {
+    loop {
+        match stream.message().await {
+            Ok(Some(event)) => match event.event {
+                Some(proto::execute_event::Event::Progress(progress)) => {
+                    if sender
+                        .send(PendingEvent::Progress(progress_from_proto(progress)))
+                        .is_err()
+                    {
+                        // Receiver gone: the caller aborted us.
+                        return;
+                    }
+                }
+                Some(proto::execute_event::Event::Result(result)) => {
+                    match outcome_from_proto(result) {
+                        Some(outcome) => {
+                            let _ = sender.send(PendingEvent::Terminal(outcome));
+                        }
+                        None => {
+                            let _ = sender.send(PendingEvent::TransportLost(
+                                "worker sent a result event without an outcome".to_owned(),
+                            ));
+                            fail_reader(
+                                &lifecycle,
+                                "worker result event had no outcome".to_owned(),
+                            );
+                        }
+                    }
+                    return;
+                }
+                None => {
+                    let _ = sender.send(PendingEvent::TransportLost(
+                        "worker closed the execute stream without a result".to_owned(),
+                    ));
+                    fail_reader(
+                        &lifecycle,
+                        "execute stream ended without a result".to_owned(),
+                    );
+                    return;
+                }
+            },
+            Ok(None) => {
+                let _ = sender.send(PendingEvent::TransportLost(
+                    "worker closed the execute stream without a result".to_owned(),
+                ));
+                fail_reader(
+                    &lifecycle,
+                    "execute stream ended without a result".to_owned(),
+                );
+                return;
+            }
+            Err(status) => {
+                let _ = sender.send(PendingEvent::TransportLost(format!(
+                    "execute call failed: {status}"
+                )));
+                fail_reader(&lifecycle, format!("execute call failed: {status}"));
+                return;
+            }
+        }
+    }
+}
+
+async fn call_with_timeout<T, F>(
+    deadline: Duration,
+    operation: &'static str,
+    call: F,
+) -> Result<T, WorkerHostError>
+where
+    F: std::future::Future<Output = Result<T, reimagine_backend_worker_transport_grpc::Status>>,
+{
+    match timeout(deadline, call).await {
+        Ok(Ok(value)) => Ok(value),
+        Ok(Err(status)) => Err(WorkerHostError::TransportLost {
+            message: format!("worker {operation} call failed: {status}"),
+        }),
+        Err(_) => Err(WorkerHostError::RequestTimeout),
+    }
 }
 
 pub struct WorkerSupervisor {
@@ -519,8 +547,7 @@ impl Drop for StartGuard {
 impl WorkerSupervisor {
     #[must_use]
     pub fn new(launch: WorkerLaunchSpec) -> Self {
-        let transport_factory = default_transport_factory(&launch.transport);
-        Self::new_with_factory(launch, transport_factory)
+        Self::new_with_factory(launch, Arc::new(LocalProcessTransportFactory))
     }
 
     #[must_use]
@@ -552,64 +579,54 @@ impl WorkerSupervisor {
             Arc::clone(&self.current_generation),
         )?;
         let generation = start_guard.generation();
-        let WorkerConnection {
-            transport,
-            mut reader,
-            mut writer,
-            stderr,
-        } = self
-            .transport_factory
-            .connect(&self.launch)
-            .await
-            .map_err(WorkerHostError::Transport)?;
-        let stderr_tail = Arc::new(Mutex::new(Vec::new()));
-        let stderr_task = stderr.map(|stderr| {
-            spawn_stderr_drain(
+        let startup = async {
+            let WorkerConnection {
+                transport,
+                client,
                 stderr,
-                Arc::clone(&stderr_tail),
-                self.launch.limits.maximum_stderr_bytes,
-            )
-        });
-        let codec = FrameCodec::new(self.launch.limits.maximum_frame_bytes);
-        let handshake = async {
-            write_frame(
-                &mut writer,
-                &codec,
-                &WireMessage::HostHello(HostHello {
-                    supported_protocols: self.launch.supported_protocols,
-                }),
-            )
-            .await?;
-            let message = read_frame(&mut reader, &codec).await?;
-            validate_message_direction(&message, MessageSender::Worker).map_err(|_| {
-                WorkerHostError::UnexpectedStartupMessage {
-                    kind: message.kind(),
-                }
+            } = self
+                .transport_factory
+                .connect(&self.launch)
+                .await
+                .map_err(WorkerHostError::Transport)?;
+            let stderr_tail = Arc::new(Mutex::new(Vec::new()));
+            let stderr_task = stderr.map(|stderr| {
+                spawn_stderr_drain(
+                    stderr,
+                    Arc::clone(&stderr_tail),
+                    self.launch.limits.maximum_stderr_bytes,
+                )
+            });
+            let response = client.hello().await.map_err(|status| {
+                WorkerHostError::Transport(
+                    reimagine_backend_worker_protocol::TransportError::ConnectionFailed(format!(
+                        "worker hello failed: {status}"
+                    )),
+                )
             })?;
-            let WireMessage::WorkerHello(hello) = message else {
-                return Err(WorkerHostError::UnexpectedStartupMessage {
-                    kind: message.kind(),
-                });
-            };
-            validate_hello(&hello, &self.launch.expected)?;
-            if hello.selected_protocol < self.launch.supported_protocols.minimum
-                || hello.selected_protocol > self.launch.supported_protocols.maximum
-            {
-                return Err(WorkerHostError::IdentityMismatch {
-                    field: "selected_protocol",
-                    expected: format!(
-                        "{}..={}",
-                        self.launch.supported_protocols.minimum.0,
-                        self.launch.supported_protocols.maximum.0
+            let hello = hello_from_proto(response).ok_or_else(|| {
+                WorkerHostError::Transport(
+                    reimagine_backend_worker_protocol::TransportError::ConnectionFailed(
+                        "worker hello response is incomplete".to_owned(),
                     ),
-                    actual: hello.selected_protocol.0.to_string(),
+                )
+            })?;
+            validate_hello(&hello, &self.launch.expected)?;
+            if !self.launch.supported_protocols.contains(hello.protocol) {
+                return Err(WorkerHostError::IdentityMismatch {
+                    field: "protocol",
+                    expected: self.launch.supported_protocols.to_string(),
+                    actual: hello.protocol.0.to_string(),
                 });
             }
-            Ok(hello)
+            Ok((transport, client, hello, stderr_tail, stderr_task))
         };
-        let hello = timeout(self.launch.limits.startup_timeout, handshake)
-            .await
-            .map_err(|_| WorkerHostError::StartupTimeout)??;
+        // The whole startup — spawn, READY line, connect, hello — is
+        // bounded by one budget.
+        let (transport, client, hello, stderr_tail, stderr_task) =
+            timeout(self.launch.limits.startup_timeout, startup)
+                .await
+                .map_err(|_| WorkerHostError::StartupTimeout)??;
         let worker_caps: Vec<String> = hello
             .profile
             .instances
@@ -620,258 +637,51 @@ impl WorkerSupervisor {
         tracing::info!(
             worker = %hello.identity.backend_instance_id.0,
             capabilities = ?worker_caps,
-            "worker handshake complete"
+            "worker hello complete"
         );
-        let pending = Arc::new(Mutex::new(HashMap::new()));
-        let controls = Arc::new(Mutex::new(HashMap::new()));
         let alive = Arc::new(AtomicBool::new(true));
         let inner = Arc::new(WorkerClientInner {
-            write: Mutex::new(writer),
-            pending: Arc::clone(&pending),
-            controls: Arc::clone(&controls),
-            codec: FrameCodec::new(self.launch.limits.maximum_frame_bytes),
-            protocol_version: hello.selected_protocol,
+            client,
             incarnation_id: hello.identity.incarnation_id.clone(),
             request_timeout: self.launch.limits.request_timeout,
             shutdown_timeout: self.launch.limits.shutdown_timeout,
-            next_request: AtomicU64::new(1),
-            next_control: AtomicU64::new(1),
             state: Arc::clone(&self.state),
             current_generation: Arc::clone(&self.current_generation),
             generation,
             alive: Arc::clone(&alive),
         });
         start_guard.commit();
-        let reader_task = tokio::spawn(reader_loop(
-            reader,
-            FrameCodec::new(self.launch.limits.maximum_frame_bytes),
-            pending,
-            controls,
-            hello.selected_protocol,
-            hello.identity.incarnation_id.clone(),
-            ReaderLifecycle {
-                state: Arc::clone(&self.state),
-                current_generation: Arc::clone(&self.current_generation),
-                generation,
-                alive,
-            },
-        ));
         Ok(StartedWorker {
             hello,
             inner,
             transport,
             stderr_tail,
-            _reader_task: reader_task,
             _stderr_task: stderr_task,
         })
     }
 }
 
-fn default_transport_factory(config: &WorkerTransportConfig) -> Arc<dyn WorkerTransportFactory> {
-    match config {
-        WorkerTransportConfig::Stdio => Arc::new(StdioTransportFactory),
-    }
+/// Mark the worker behind `inner` failed: no new calls will succeed
+/// and the supervisor reports a dead worker.
+fn fail_client(inner: &WorkerClientInner) {
+    inner.alive.store(false, Ordering::Release);
+    store_state_if_current(
+        &inner.state,
+        &inner.current_generation,
+        inner.generation,
+        STATE_FAILED,
+    );
 }
 
-async fn reader_loop(
-    mut reader: Box<dyn AsyncRead + Send + Unpin>,
-    codec: FrameCodec,
-    pending: PendingRequests,
-    controls: PendingControls,
-    protocol_version: ProtocolVersion,
-    incarnation_id: WorkerIncarnationId,
-    lifecycle: ReaderLifecycle,
-) {
-    loop {
-        let message = match read_frame(&mut reader, &codec).await {
-            Ok(message) => message,
-            Err(error) => {
-                fail_reader(&lifecycle, &pending, &controls, error.to_string()).await;
-                return;
-            }
-        };
-        if validate_message_direction(&message, MessageSender::Worker).is_err() {
-            fail_reader(
-                &lifecycle,
-                &pending,
-                &controls,
-                format!("worker sent host-only message `{}`", message.kind()),
-            )
-            .await;
-            return;
-        }
-        match message {
-            WireMessage::Progress(frame) => {
-                if !session_matches(
-                    frame.protocol_version,
-                    &frame.incarnation_id,
-                    protocol_version,
-                    &incarnation_id,
-                ) {
-                    fail_reader(
-                        &lifecycle,
-                        &pending,
-                        &controls,
-                        "worker progress used a stale session".to_owned(),
-                    )
-                    .await;
-                    return;
-                }
-                let pending = pending.lock().await;
-                if let Some(request) = pending.get(&frame.request_id)
-                    && request.correlation_id == frame.correlation_id
-                {
-                    let _ = request.sender.send(PendingEvent::Progress(frame));
-                }
-            }
-            WireMessage::Terminal(frame) => {
-                if !session_matches(
-                    frame.protocol_version,
-                    &frame.incarnation_id,
-                    protocol_version,
-                    &incarnation_id,
-                ) {
-                    fail_reader(
-                        &lifecycle,
-                        &pending,
-                        &controls,
-                        "worker terminal used a stale session".to_owned(),
-                    )
-                    .await;
-                    return;
-                }
-                let correlation_matches = pending
-                    .lock()
-                    .await
-                    .get(&frame.request_id)
-                    .is_none_or(|request| request.correlation_id == frame.correlation_id);
-                if !correlation_matches {
-                    fail_reader(
-                        &lifecycle,
-                        &pending,
-                        &controls,
-                        "worker terminal correlation mismatch".to_owned(),
-                    )
-                    .await;
-                    return;
-                }
-                if let Some(request) = pending.lock().await.remove(&frame.request_id) {
-                    let _ = request.sender.send(PendingEvent::Terminal(frame));
-                }
-            }
-            WireMessage::Ping { .. } => {}
-            WireMessage::HealthAck(frame) => {
-                if !session_matches(
-                    frame.protocol_version,
-                    &frame.incarnation_id,
-                    protocol_version,
-                    &incarnation_id,
-                ) {
-                    fail_reader(
-                        &lifecycle,
-                        &pending,
-                        &controls,
-                        "worker health ack used a stale session".to_owned(),
-                    )
-                    .await;
-                    return;
-                }
-                if let Some(sender) = controls.lock().await.remove(&frame.control_id) {
-                    let _ = sender.send(WireMessage::HealthAck(frame));
-                }
-            }
-            WireMessage::CleanupAck(frame) => {
-                if !session_matches(
-                    frame.protocol_version,
-                    &frame.incarnation_id,
-                    protocol_version,
-                    &incarnation_id,
-                ) {
-                    fail_reader(
-                        &lifecycle,
-                        &pending,
-                        &controls,
-                        "worker cleanup ack used a stale session".to_owned(),
-                    )
-                    .await;
-                    return;
-                }
-                if let Some(sender) = controls.lock().await.remove(&frame.control_id) {
-                    let _ = sender.send(WireMessage::CleanupAck(frame));
-                }
-            }
-            WireMessage::ShutdownAck(frame) => {
-                if !session_matches(
-                    frame.protocol_version,
-                    &frame.incarnation_id,
-                    protocol_version,
-                    &incarnation_id,
-                ) {
-                    fail_reader(
-                        &lifecycle,
-                        &pending,
-                        &controls,
-                        "worker shutdown ack used a stale session".to_owned(),
-                    )
-                    .await;
-                    return;
-                }
-                if let Some(sender) = controls.lock().await.remove(&frame.control_id) {
-                    let _ = sender.send(WireMessage::ShutdownAck(frame));
-                }
-            }
-            WireMessage::CancelAck(frame) => {
-                if !session_matches(
-                    frame.protocol_version,
-                    &frame.incarnation_id,
-                    protocol_version,
-                    &incarnation_id,
-                ) {
-                    fail_reader(
-                        &lifecycle,
-                        &pending,
-                        &controls,
-                        "worker cancel ack used a stale session".to_owned(),
-                    )
-                    .await;
-                    return;
-                }
-                let pending = pending.lock().await;
-                if let Some(request) = pending.get(&frame.request_id)
-                    && request.correlation_id == frame.correlation_id
-                {
-                    let _ = request.sender.send(PendingEvent::CancelAck(frame));
-                }
-            }
-            message => {
-                fail_reader(
-                    &lifecycle,
-                    &pending,
-                    &controls,
-                    format!("unexpected worker message `{}`", message.kind()),
-                )
-                .await;
-                return;
-            }
-        }
-    }
-}
-
-async fn fail_reader(
-    lifecycle: &ReaderLifecycle,
-    pending: &PendingRequests,
-    controls: &PendingControls,
-    message: String,
-) {
+fn fail_reader(lifecycle: &ReaderLifecycle, message: String) {
     lifecycle.alive.store(false, Ordering::Release);
-    fail_pending(pending, message).await;
-    controls.lock().await.clear();
     store_state_if_current(
         &lifecycle.state,
         &lifecycle.current_generation,
         lifecycle.generation,
         STATE_FAILED,
     );
+    tracing::warn!("worker request stream failed: {message}");
 }
 
 fn ensure_alive(inner: &WorkerClientInner) -> Result<(), WorkerHostError> {
@@ -895,24 +705,6 @@ fn store_state_if_current(
     if current_generation.load(Ordering::Acquire) == generation {
         state.store(next_state, Ordering::Release);
     }
-}
-
-async fn fail_pending(pending: &PendingRequests, message: String) {
-    let pending_requests = std::mem::take(&mut *pending.lock().await);
-    for (_, request) in pending_requests {
-        let _ = request
-            .sender
-            .send(PendingEvent::TransportLost(message.clone()));
-    }
-}
-
-fn session_matches(
-    actual_protocol: ProtocolVersion,
-    actual_incarnation: &WorkerIncarnationId,
-    expected_protocol: ProtocolVersion,
-    expected_incarnation: &WorkerIncarnationId,
-) -> bool {
-    actual_protocol == expected_protocol && actual_incarnation == expected_incarnation
 }
 
 fn validate_hello(
@@ -976,91 +768,13 @@ fn validate_identity_field(
     })
 }
 
-async fn write_frame(
-    writer: &mut (impl AsyncWrite + Unpin),
-    codec: &FrameCodec,
-    message: &WireMessage,
-) -> Result<(), WorkerHostError> {
-    let payload = codec.encode_payload(message)?;
-    let declared = u32::try_from(payload.len()).map_err(|_| {
-        WorkerHostError::Protocol(CodecError::PayloadLengthOverflow {
-            actual: payload.len(),
-        })
-    })?;
-    writer
-        .write_all(&declared.to_be_bytes())
-        .await
-        .map_err(|error| WorkerHostError::Io {
-            operation: "write",
-            message: error.to_string(),
-        })?;
-    writer
-        .write_all(&payload)
-        .await
-        .map_err(|error| WorkerHostError::Io {
-            operation: "write",
-            message: error.to_string(),
-        })?;
-    writer.flush().await.map_err(|error| WorkerHostError::Io {
-        operation: "flush",
-        message: error.to_string(),
-    })
-}
-
-async fn read_frame(
-    reader: &mut (impl AsyncRead + Unpin),
-    codec: &FrameCodec,
-) -> Result<WireMessage, WorkerHostError> {
-    let mut prefix = [0_u8; 4];
-    read_exact_stage(reader, &mut prefix, "read prefix").await?;
-    let declared = u32::from_be_bytes(prefix);
-    if declared > codec.maximum_frame_bytes() {
-        return Err(WorkerHostError::Protocol(CodecError::FrameTooLarge {
-            declared,
-            maximum: codec.maximum_frame_bytes(),
-        }));
-    }
-    let mut payload = vec![0_u8; declared as usize];
-    read_exact_stage(reader, &mut payload, "read payload").await?;
-    codec
-        .decode_payload(&payload)
-        .map_err(WorkerHostError::from)
-}
-
-async fn read_exact_stage(
-    reader: &mut (impl AsyncRead + Unpin),
-    buffer: &mut [u8],
-    operation: &'static str,
-) -> Result<(), WorkerHostError> {
-    let mut received = 0;
-    while received < buffer.len() {
-        match reader.read(&mut buffer[received..]).await {
-            Ok(0) if received == 0 => return Err(WorkerHostError::CleanEof { operation }),
-            Ok(0) => {
-                return Err(WorkerHostError::IncompleteFrame {
-                    operation,
-                    received,
-                    expected: buffer.len(),
-                });
-            }
-            Ok(count) => received += count,
-            Err(error) => {
-                return Err(WorkerHostError::Io {
-                    operation,
-                    message: error.to_string(),
-                });
-            }
-        }
-    }
-    Ok(())
-}
-
 fn spawn_stderr_drain(
-    mut stderr: Box<dyn AsyncRead + Send + Unpin>,
+    mut stderr: Box<dyn tokio::io::AsyncRead + Send + Unpin>,
     tail: Arc<Mutex<Vec<u8>>>,
     maximum_bytes: usize,
 ) -> JoinHandle<()> {
     tokio::spawn(async move {
+        use tokio::io::AsyncReadExt;
         let mut buffer = [0_u8; 4096];
         while let Ok(count) = stderr.read(&mut buffer).await {
             if count == 0 {
@@ -1074,265 +788,4 @@ fn spawn_stderr_drain(
             }
         }
     })
-}
-
-#[cfg(test)]
-mod tests {
-    use std::path::PathBuf;
-    use std::sync::Arc;
-
-    use async_trait::async_trait;
-    use reimagine_backend_worker_protocol::{
-        BackendExecutionError, BackendInstanceId, FrameCodec, HealthAckFrame, ProtocolRange,
-        ShutdownAckFrame, TerminalFrame, TerminalOutcome, TransportDescription, TransportError,
-        TransportKind, WireMessage, WorkerHello, WorkerIdentity, WorkerIncarnationId,
-        WorkerInstallationId, WorkerInstanceProfile, WorkerProfile, WorkerTransport,
-    };
-    use tokio::io::{AsyncReadExt, AsyncWriteExt, DuplexStream, duplex};
-
-    use super::WorkerSupervisor;
-    use crate::transport::{WorkerConnection, WorkerTransportFactory};
-    use crate::{
-        ExpectedWorkerIdentity, WorkerHostError, WorkerLaunchSpec, WorkerLimits,
-        WorkerProcessState, WorkerTransportConfig,
-    };
-
-    fn mock_launch_spec() -> WorkerLaunchSpec {
-        WorkerLaunchSpec {
-            executable: PathBuf::from("mock-worker"),
-            expected: ExpectedWorkerIdentity {
-                backend_instance_id: BackendInstanceId::from("fake:cpu:default"),
-                installation_id: WorkerInstallationId::from("fake-installation"),
-                backend_kind: "fake".to_owned(),
-                target: std::env::consts::ARCH.to_owned(),
-                manifest_digest: "test-manifest".to_owned(),
-            },
-            supported_protocols: ProtocolRange::new(1, 1),
-            limits: WorkerLimits::default(),
-            environment: Vec::new(),
-            transport: WorkerTransportConfig::Stdio,
-        }
-    }
-
-    struct MockWorkerTransport;
-
-    #[async_trait]
-    impl WorkerTransport for MockWorkerTransport {
-        fn description(&self) -> TransportDescription {
-            TransportDescription {
-                kind: TransportKind::Mock,
-                endpoint: "in-memory mock".to_owned(),
-            }
-        }
-
-        async fn shutdown(&self) -> Result<(), TransportError> {
-            Ok(())
-        }
-    }
-
-    struct MockWorkerTransportFactory;
-
-    #[async_trait]
-    impl WorkerTransportFactory for MockWorkerTransportFactory {
-        async fn connect(
-            &self,
-            spec: &WorkerLaunchSpec,
-        ) -> Result<WorkerConnection, TransportError> {
-            let (client, worker) = duplex(64 * 1024);
-            tokio::spawn(run_mock_worker(worker, spec.clone()));
-            let (reader, writer) = tokio::io::split(client);
-            Ok(WorkerConnection {
-                transport: Arc::new(MockWorkerTransport),
-                reader: Box::new(reader),
-                writer: Box::new(writer),
-                stderr: None,
-            })
-        }
-    }
-
-    struct FailingWorkerTransportFactory;
-
-    #[async_trait]
-    impl WorkerTransportFactory for FailingWorkerTransportFactory {
-        async fn connect(
-            &self,
-            _spec: &WorkerLaunchSpec,
-        ) -> Result<WorkerConnection, TransportError> {
-            Err(TransportError::ConnectionFailed(
-                "mock connect failure".to_owned(),
-            ))
-        }
-    }
-
-    async fn write_frame(
-        io: &mut DuplexStream,
-        codec: &FrameCodec,
-        message: &WireMessage,
-    ) -> std::io::Result<()> {
-        let payload = codec
-            .encode_payload(message)
-            .map_err(|error| std::io::Error::new(std::io::ErrorKind::InvalidData, error))?;
-        let declared = u32::try_from(payload.len()).map_err(|_| {
-            std::io::Error::new(std::io::ErrorKind::InvalidData, "payload too large")
-        })?;
-        io.write_all(&declared.to_be_bytes()).await?;
-        io.write_all(&payload).await?;
-        io.flush().await
-    }
-
-    async fn read_frame(
-        io: &mut DuplexStream,
-        codec: &FrameCodec,
-    ) -> Result<WireMessage, std::io::Error> {
-        let mut prefix = [0_u8; 4];
-        io.read_exact(&mut prefix).await?;
-        let declared = u32::from_be_bytes(prefix);
-        if declared > codec.maximum_frame_bytes() {
-            return Err(std::io::Error::new(
-                std::io::ErrorKind::InvalidData,
-                "frame too large",
-            ));
-        }
-        let mut payload = vec![0_u8; declared as usize];
-        io.read_exact(&mut payload).await?;
-        codec
-            .decode_payload(&payload)
-            .map_err(|error| std::io::Error::new(std::io::ErrorKind::InvalidData, error))
-    }
-
-    async fn run_mock_worker(mut io: DuplexStream, spec: WorkerLaunchSpec) {
-        let codec = FrameCodec::new(spec.limits.maximum_frame_bytes);
-        let Ok(WireMessage::HostHello(_)) = read_frame(&mut io, &codec).await else {
-            return;
-        };
-        let hello = WorkerHello {
-            selected_protocol: ProtocolRange::new(1, 1).minimum,
-            identity: WorkerIdentity {
-                backend_instance_id: spec.expected.backend_instance_id.clone(),
-                installation_id: spec.expected.installation_id.clone(),
-                incarnation_id: WorkerIncarnationId("mock-worker-1".to_owned()),
-                worker_version: "test".to_owned(),
-                backend_kind: spec.expected.backend_kind.clone(),
-                target: spec.expected.target.clone(),
-                manifest_digest: spec.expected.manifest_digest.clone(),
-            },
-            profile: WorkerProfile {
-                instances: vec![WorkerInstanceProfile {
-                    backend_instance_id: spec.expected.backend_instance_id.clone(),
-                    device_label: "mock".to_owned(),
-                    capabilities: vec!["echo".to_owned()],
-                    operation_options: serde_json::json!({}),
-                }],
-            },
-        };
-        if write_frame(&mut io, &codec, &WireMessage::WorkerHello(hello))
-            .await
-            .is_err()
-        {
-            return;
-        }
-        loop {
-            let message = match read_frame(&mut io, &codec).await {
-                Ok(message) => message,
-                Err(_) => return,
-            };
-            match message {
-                WireMessage::Request(frame) => {
-                    let outcome = if frame.operation == "echo" {
-                        TerminalOutcome::Success {
-                            output: frame.payload.clone(),
-                        }
-                    } else {
-                        TerminalOutcome::BackendError {
-                            error: BackendExecutionError {
-                                code: "unsupported_operation".to_owned(),
-                                message: format!(
-                                    "unsupported mock operation `{}`",
-                                    frame.operation
-                                ),
-                                retryable: false,
-                            },
-                        }
-                    };
-                    let terminal = WireMessage::Terminal(TerminalFrame {
-                        protocol_version: frame.protocol_version,
-                        incarnation_id: frame.incarnation_id,
-                        request_id: frame.request_id,
-                        correlation_id: frame.correlation_id,
-                        outcome,
-                    });
-                    if write_frame(&mut io, &codec, &terminal).await.is_err() {
-                        return;
-                    }
-                }
-                WireMessage::Health(frame) => {
-                    let ack = WireMessage::HealthAck(HealthAckFrame {
-                        protocol_version: frame.protocol_version,
-                        incarnation_id: frame.incarnation_id,
-                        control_id: frame.control_id,
-                        healthy: true,
-                        message: None,
-                    });
-                    if write_frame(&mut io, &codec, &ack).await.is_err() {
-                        return;
-                    }
-                }
-                WireMessage::Shutdown(frame) => {
-                    let ack = WireMessage::ShutdownAck(ShutdownAckFrame {
-                        protocol_version: frame.protocol_version,
-                        incarnation_id: frame.incarnation_id,
-                        control_id: frame.control_id,
-                    });
-                    let _ = write_frame(&mut io, &codec, &ack).await;
-                    return;
-                }
-                _ => return,
-            }
-        }
-    }
-
-    #[tokio::test]
-    async fn supervisor_supervises_custom_transport_connection() {
-        let supervisor = WorkerSupervisor::new_with_factory(
-            mock_launch_spec(),
-            Arc::new(MockWorkerTransportFactory),
-        );
-        let worker = supervisor.start().await.unwrap();
-        assert_eq!(
-            worker.hello.identity.backend_instance_id,
-            BackendInstanceId::from("fake:cpu:default")
-        );
-
-        let result = worker
-            .request("echo", serde_json::json!({ "value": 7 }))
-            .await
-            .unwrap();
-        assert_eq!(
-            result.terminal.outcome,
-            TerminalOutcome::Success {
-                output: serde_json::json!({ "value": 7 })
-            }
-        );
-
-        let health = worker.health().await.unwrap();
-        assert!(health.healthy);
-
-        worker.shutdown().await.unwrap();
-        assert_eq!(supervisor.state(), WorkerProcessState::Stopped);
-    }
-
-    #[tokio::test]
-    async fn transport_connect_failure_reports_transport_error_and_stays_stopped() {
-        let supervisor = WorkerSupervisor::new_with_factory(
-            mock_launch_spec(),
-            Arc::new(FailingWorkerTransportFactory),
-        );
-        assert!(matches!(
-            supervisor.start().await,
-            Err(WorkerHostError::Transport(
-                TransportError::ConnectionFailed(_,)
-            ))
-        ));
-        assert_eq!(supervisor.state(), WorkerProcessState::Stopped);
-    }
 }

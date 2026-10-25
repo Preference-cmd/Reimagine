@@ -30,9 +30,11 @@ pub use install::{
 };
 pub use inventory::{
     InstallationRecord, InventoryError, InventoryResult, InventorySnapshot, InventoryStore,
-    VersionPolicy,
+    ProtocolIncompatibility, VersionPolicy, check_installed_protocol, check_record_protocol,
 };
-pub use launch::{ExpectedWorkerIdentity, WorkerLaunchSpec, WorkerLimits, WorkerTransportConfig};
+pub use launch::{
+    ExpectedWorkerIdentity, SUPPORTED_WORKER_PROTOCOLS, WorkerLaunchSpec, WorkerLimits,
+};
 pub use leases::{WorkerAdmissionState, WorkerRunLeaseError, WorkerRunLeases};
 pub use package::{
     ExtractionLimits, PackageError, PackageExtractor, PackageFileEntry, PackageManifest,
@@ -40,15 +42,15 @@ pub use package::{
 };
 pub use store_paths::WorkerStorePaths;
 pub use supervisor::{
-    StartedWorker, WorkerProcessState, WorkerRequestCanceller, WorkerRequestHandle,
+    HealthReport, StartedWorker, WorkerProcessState, WorkerRequestCanceller, WorkerRequestHandle,
     WorkerRequestResult, WorkerSupervisor,
 };
 pub use transport::{
-    StdioTransport, StdioTransportFactory, WorkerConnection, WorkerTransportFactory,
+    LocalProcessTransportFactory, WorkerConnection, WorkerLifecycle, WorkerTransportFactory,
 };
 
 // Re-export worker protocol types used in our public API
 pub use reimagine_backend_worker_protocol::{
-    BackendInstanceId, ProtocolRange, ProtocolVersion, WorkerIdentity, WorkerIncarnationId,
-    WorkerInstallationId, WorkerInstanceProfile, WorkerProfile,
+    BackendInstanceId, ProtocolRange, ProtocolVersion, WorkerHello, WorkerIdentity,
+    WorkerIncarnationId, WorkerInstallationId, WorkerInstanceProfile, WorkerProfile,
 };

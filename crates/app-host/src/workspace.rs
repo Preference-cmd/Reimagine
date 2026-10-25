@@ -989,6 +989,8 @@ mod tests {
             installed_at: chrono::Utc::now(),
             install_path: install_dir.display().to_string(),
             manifest_profile: None,
+            protocol_version_min: 2,
+            protocol_version_max: 2,
         };
         store.add(&record).expect("seed inventory record");
     }

@@ -170,10 +170,9 @@ impl BackendCandidate for BurnBackendCandidate {
                 target: std::env::consts::ARCH.to_string(),
                 manifest_digest: "local-discovery".to_string(),
             },
-            supported_protocols: ProtocolRange::new(1, 1),
+            supported_protocols: ProtocolRange::new(2, 2),
             limits: Default::default(),
             environment: Vec::new(),
-            transport: Default::default(),
         };
 
         // Start the worker process

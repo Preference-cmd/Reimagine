@@ -114,6 +114,8 @@ impl InstallEngine {
             installed_at: now,
             install_path: target_path.to_string_lossy().to_string(),
             manifest_profile,
+            protocol_version_min: manifest.protocol_version_min,
+            protocol_version_max: manifest.protocol_version_max,
         };
 
         // 7. Mark verified, including the durable inventory intent.
@@ -267,6 +269,8 @@ mod tests {
             installed_at: chrono::Utc::now(),
             install_path: target.to_string_lossy().into_owned(),
             manifest_profile: None,
+            protocol_version_min: 1,
+            protocol_version_max: 1,
         };
         let mut journal = JournalManager::begin(&paths, "worker-v1", &staging, &target).unwrap();
         JournalManager::mark_verified(&paths, &mut journal, record).unwrap();

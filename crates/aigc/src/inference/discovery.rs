@@ -275,7 +275,7 @@ impl WorkerDiscovery for ConfigDiscovery {
 fn config_endpoint(cfg: &WorkerEndpointConfig) -> Result<WorkerEndpoint, String> {
     let transport_kind = match cfg.transport.as_str() {
         "quic" => TransportKind::Quic,
-        "stdio" => TransportKind::Stdio,
+        "local" => TransportKind::Local,
         "grpc" => TransportKind::Grpc,
         other => return Err(format!("unsupported transport kind `{other}`")),
     };

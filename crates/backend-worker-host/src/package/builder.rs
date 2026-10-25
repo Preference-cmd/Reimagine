@@ -147,6 +147,8 @@ pub fn build_package(params: &PackageParams) -> PackageResult<BuiltPackage> {
         files: file_entries.clone(),
         required_size: total_size,
         required_entries: file_entries.len(),
+        protocol_version_min: reimagine_backend_worker_protocol::WORKER_PROTOCOL_VERSION.0,
+        protocol_version_max: reimagine_backend_worker_protocol::WORKER_PROTOCOL_VERSION.0,
     };
 
     let manifest_json =
@@ -172,6 +174,8 @@ pub fn build_package(params: &PackageParams) -> PackageResult<BuiltPackage> {
         files: file_entries.clone(),
         required_size: total_size,
         required_entries: file_entries.len(),
+        protocol_version_min: reimagine_backend_worker_protocol::WORKER_PROTOCOL_VERSION.0,
+        protocol_version_max: reimagine_backend_worker_protocol::WORKER_PROTOCOL_VERSION.0,
     };
 
     let final_manifest_json = serde_json::to_vec(&manifest).map_err(|e| PackageError::Build {

@@ -41,6 +41,17 @@ pub struct PackageManifest {
     pub required_size: u64,
     /// Number of entries in the archive.
     pub required_entries: usize,
+    /// Worker wire protocol versions this package speaks. Packages
+    /// predating the field default to v1, which the host's
+    /// compatibility check rejects.
+    #[serde(default = "default_protocol_version")]
+    pub protocol_version_min: u16,
+    #[serde(default = "default_protocol_version")]
+    pub protocol_version_max: u16,
+}
+
+fn default_protocol_version() -> u16 {
+    1
 }
 
 fn default_version() -> String {

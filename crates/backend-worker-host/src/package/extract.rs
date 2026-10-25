@@ -428,6 +428,8 @@ mod tests {
                     .collect(),
                 required_size: files.iter().map(|(_, d)| d.len() as u64).sum(),
                 required_entries: files.len(),
+                protocol_version_min: 1,
+                protocol_version_max: 1,
             };
             let manifest_json = serde_json::to_vec(&manifest).unwrap();
             let mut header = tar::Header::new_gnu();
@@ -503,6 +505,8 @@ mod tests {
             }],
             required_size: worker.len() as u64,
             required_entries: 1,
+            protocol_version_min: 1,
+            protocol_version_max: 1,
         };
         let manifest_json = serde_json::to_vec(&manifest).unwrap();
 
@@ -574,6 +578,8 @@ mod tests {
                 }],
                 required_size: worker.len() as u64,
                 required_entries: 1,
+                protocol_version_min: 1,
+                protocol_version_max: 1,
             };
             let manifest_json = serde_json::to_vec(&manifest).unwrap();
             let mut header = tar::Header::new_gnu();

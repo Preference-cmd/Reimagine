@@ -12,6 +12,15 @@ both check it.
 
 ### Changed
 
+- Workers speak protocol v2 over purpose-built gRPC calls (`Hello`,
+  `Execute`, `Health`, `Cleanup`, `Shutdown` in `reimagine.worker.v2`)
+  instead of a JSON message tunnel. The host reaches local workers over a
+  private Unix socket (Windows: named pipe) with a per-launch bearer token;
+  remote workers will move to HTTP/2 with TLS in a later change.
+- Installed worker packages that only speak protocol v1 are rejected by the
+  compatibility check with a reinstall diagnostic; old workers must be
+  reinstalled.
+
 - Document, run and download events arrive on one IPC subscription,
   `subscribe_events(channel)`, which replaces `subscribe_document_events`.
   Each event carries a `type` tag: `document`, `run` or `module`.

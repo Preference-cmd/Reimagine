@@ -6546,6 +6546,7 @@ dependencies = [
  "hex",
  "rand 0.8.7",
  "reimagine-backend-worker-protocol",
+ "reimagine-backend-worker-transport-grpc",
  "reimagine-core",
  "reimagine-inference",
  "reqwest 0.12.28",
@@ -6563,8 +6564,6 @@ dependencies = [
 name = "reimagine-backend-worker-protocol"
 version = "0.1.0"
 dependencies = [
- "async-trait",
- "rand 0.8.7",
  "serde",
  "serde_json",
 ]
@@ -6573,8 +6572,8 @@ dependencies = [
 name = "reimagine-backend-worker-transport-grpc"
 version = "0.1.0"
 dependencies = [
- "async-trait",
  "futures-core",
+ "hyper-util",
  "prost",
  "protoc-bin-vendored",
  "rcgen",
@@ -6586,6 +6585,7 @@ dependencies = [
  "tonic",
  "tonic-prost",
  "tonic-prost-build",
+ "tower",
  "tracing",
 ]
 
@@ -6593,7 +6593,6 @@ dependencies = [
 name = "reimagine-backend-worker-transport-quic"
 version = "0.1.0"
 dependencies = [
- "async-trait",
  "hex",
  "mdns-sd",
  "quinn",
@@ -6674,11 +6673,10 @@ version = "0.1.0"
 dependencies = [
  "clap",
  "image",
- "quinn",
  "reimagine-app-host",
  "reimagine-backend-worker-host",
  "reimagine-backend-worker-protocol",
- "reimagine-backend-worker-transport-quic",
+ "reimagine-backend-worker-transport-grpc",
  "reimagine-config",
  "reimagine-core",
  "reimagine-inference",
@@ -6689,6 +6687,7 @@ dependencies = [
  "serde_json",
  "tempfile",
  "tokio",
+ "tokio-stream",
  "tokio-util",
 ]
 

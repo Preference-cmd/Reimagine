@@ -923,10 +923,9 @@ impl DesktopHostState {
         let launch = WorkerLaunchSpec {
             executable,
             expected: record.identity.clone(),
-            supported_protocols: ProtocolRange::new(1, 1),
+            supported_protocols: ProtocolRange::new(2, 2),
             limits: WorkerLimits::default(),
             environment: Vec::new(),
-            transport: Default::default(),
         };
         WorkerBackendCandidate::try_new(launch, manifest_profile).map_err(|error| {
             WorkerSwitchError::Startup {

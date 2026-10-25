@@ -1,10 +1,7 @@
 use std::net::SocketAddr;
 use std::sync::{Arc, Mutex};
 
-use async_trait::async_trait;
-use reimagine_backend_worker_protocol::{
-    TransportDescription, TransportError, TransportKind, WorkerTransport,
-};
+use reimagine_backend_worker_protocol::{TransportDescription, TransportError, TransportKind};
 
 use crate::tls::SelfSignedCert;
 use crate::trust::{
@@ -72,11 +69,10 @@ impl<'a> ConnectTrust<'a> {
     }
 }
 
-/// QUIC-based transport for remote worker communication.
+/// QUIC transport for remote worker registration.
 ///
-/// Wraps a `quinn::Connection` and provides bidirectional streams
-/// for the worker protocol. The `FrameCodec` (length-prefixed JSON)
-/// works over QUIC streams without modification.
+/// Wraps a `quinn::Connection`; remote workers are registration-only,
+/// so the transport carries no request protocol.
 pub struct QuicTransport {
     connection: quinn::Connection,
     server_name: String,
@@ -243,18 +239,18 @@ impl QuicTransport {
     }
 }
 
-#[async_trait]
-impl WorkerTransport for QuicTransport {
-    fn description(&self) -> TransportDescription {
+impl QuicTransport {
+    /// Descriptive metadata about this connection.
+    pub fn description(&self) -> TransportDescription {
         TransportDescription {
             kind: TransportKind::Quic,
             endpoint: format!("quic://{}:{}", self.server_name, self.remote_addr()),
         }
     }
 
-    async fn shutdown(&self) -> Result<(), TransportError> {
+    /// Close the connection.
+    pub fn close(&self) {
         self.connection.close(0u32.into(), b"shutdown");
-        Ok(())
     }
 }
 
@@ -313,7 +309,7 @@ mod tests {
         assert_eq!(response, b"hello quic");
 
         // Shutdown
-        transport.shutdown().await.unwrap();
+        transport.close();
         server.await.unwrap();
     }
 }

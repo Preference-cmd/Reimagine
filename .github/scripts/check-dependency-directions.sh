@@ -23,6 +23,11 @@
 # humans and agents alike; an agent integration is an operator adapter above
 # it, and the change that adds one grants that crate the only exception.
 #
+# tonic 0.14's gRPC server (the worker contract's server) depends on axum
+# internally. The HTTP_SERVER ban still guards against direct HTTP-server
+# usage: the worker crates' checks strip tonic's subtree from the tree, so
+# an axum edge reachable any other way still fails.
+#
 # Patterns are extended regexes matched against cargo-tree lines after the
 # "-- " edge marker, so the crate itself (the root line) never matches.
 # End a crate name with " v" to stop it matching longer names:
@@ -40,6 +45,50 @@ DOMAIN='(reimagine-core|reimagine-config|reimagine-nodes|reimagine-model-manager
 
 tree_of() {
   cargo tree -p "$1" --edges normal --all-features --target all --locked --charset ascii
+}
+
+# Strip a named package's subtree from ASCII `cargo tree` output.
+without_subtree() { # ... | without_subtree PACKAGE  (tree text on stdin)
+  awk -v root=" $1 v" '
+    function depth(line) {
+      n = 0
+      while (substr(line, 1, 4) == "|   " || substr(line, 1, 4) == "    ") {
+        n++
+        line = substr(line, 5)
+      }
+      return n
+    }
+    BEGIN { skipping = -1 }
+    {
+      if (skipping >= 0) {
+        if (depth($0) > skipping) next
+        skipping = -1
+      }
+      if (index($0, root) > 0) {
+        skipping = depth($0)
+        next
+      }
+      print
+    }
+  '
+}
+
+# check_without_tonic CRATE PATTERN... — like check, but the tree is
+# matched with tonic's subtree removed (see the HTTP_SERVER note above).
+check_without_tonic() {
+  local root="$1"
+  shift
+  local tree found
+  tree=$(tree_of "$root" | without_subtree tonic)
+  local banned
+  for banned in "$@"; do
+    found=$(grep -oE -- "-- ${banned}" <<<"$tree" | head -n 1 || true)
+    if [[ -n "$found" ]]; then
+      echo "FAIL: $root must not depend on ${found#-- } (outside tonic)" >&2
+      exit 1
+    fi
+  done
+  echo "ok: $root"
 }
 
 # check CRATE PATTERN... — CRATE's graph reaches none of PATTERN.
@@ -84,13 +133,15 @@ check reimagine-inference "$BACKENDS" "$HTTP_SERVER" 'reimagine-runtime v'
 check reimagine-runtime "$BACKENDS" "$HTTP_SERVER" 'reimagine-model-manager v'
 
 # Backends implement the inference contract and know nothing above it.
+# The worker binary reaches tonic's gRPC transport (the worker contract),
+# which carries axum internally — see the HTTP_SERVER note above.
 for crate in reimagine-inference-burn reimagine-inference-burn-worker; do
-  check "$crate" "$HTTP_SERVER" 'reimagine-runtime v' 'reimagine-model-manager v'
+  check_without_tonic "$crate" "$HTTP_SERVER" 'reimagine-runtime v' 'reimagine-model-manager v'
 done
 
 # The worker host manages out-of-process workers and never links a backend;
 # transports carry protocol messages and know no domain crate.
-check reimagine-backend-worker-host "$BACKENDS" "$HTTP_SERVER"
+check_without_tonic reimagine-backend-worker-host "$BACKENDS" "$HTTP_SERVER"
 for crate in reimagine-backend-worker-transport-quic reimagine-backend-worker-transport-grpc; do
   check "$crate" "$DOMAIN" "$BACKENDS"
 done

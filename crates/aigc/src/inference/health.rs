@@ -8,7 +8,7 @@
 //! supervised by the host process; a dead network worker needs a
 //! fresh connect via its candidate).
 //!
-//! The production probe seam (`StartedWorker::health()` for stdio,
+//! The production probe seam (`StartedWorker::health()` for local
 //! QUIC connection liveness, gRPC `HealthCheck`) is wired by the
 //! topology integration (T13); this module ships the state machine,
 //! thresholds, and tests.
@@ -38,7 +38,7 @@ pub trait WorkerHealthProbe: Send + Sync {
     async fn probe(&self, endpoint: &WorkerEndpoint) -> Result<HealthProbeResult, String>;
 }
 
-/// Per-transport check policy (ticket: tight for stdio, generous for
+/// Per-transport check policy (tight for local workers, generous for
 /// network transports).
 #[derive(Debug, Clone, Copy)]
 pub struct TransportHealthPolicy {
@@ -60,7 +60,7 @@ impl Default for TransportHealthPolicy {
 impl TransportHealthPolicy {
     pub fn for_kind(kind: TransportKind) -> Self {
         match kind {
-            TransportKind::Stdio => Self {
+            TransportKind::Local => Self {
                 check_interval: Duration::from_secs(5),
                 probe_timeout: Duration::from_secs(2),
                 failure_threshold: 2,
@@ -223,7 +223,7 @@ mod tests {
     fn test_endpoint(id: &str) -> WorkerEndpoint {
         WorkerEndpoint {
             id: id.to_owned(),
-            transport_kind: TransportKind::Stdio,
+            transport_kind: TransportKind::Local,
             address: "local".to_owned(),
             capabilities: vec!["echo".to_owned()],
             device_label: "cpu".to_owned(),
@@ -302,7 +302,7 @@ mod tests {
             pool.clone(),
             Arc::new(FakeProbe::new(vec![failing("down")])),
         );
-        // One failing sweep: stdio threshold is 2.
+        // One failing sweep: local threshold is 2.
         let changed = monitor.check_once().await;
         assert!(changed.is_empty());
         let pool = pool.lock().await;
@@ -360,11 +360,11 @@ mod tests {
 
     #[tokio::test]
     async fn per_transport_policy_differs() {
-        let stdio = TransportHealthPolicy::for_kind(TransportKind::Stdio);
+        let local = TransportHealthPolicy::for_kind(TransportKind::Local);
         let quic = TransportHealthPolicy::for_kind(TransportKind::Quic);
         let grpc = TransportHealthPolicy::for_kind(TransportKind::Grpc);
-        assert!(stdio.check_interval < quic.check_interval);
+        assert!(local.check_interval < quic.check_interval);
         assert!(quic.check_interval < grpc.check_interval);
-        assert!(stdio.failure_threshold <= quic.failure_threshold);
+        assert!(local.failure_threshold <= quic.failure_threshold);
     }
 }

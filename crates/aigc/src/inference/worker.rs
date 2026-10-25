@@ -2,8 +2,9 @@ use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
 use reimagine_backend_worker_host::{
-    InstallationRecord, InventoryStore, ProcessInferenceBackend, WorkerHostError, WorkerLaunchSpec,
-    WorkerLimits, WorkerStorePaths, WorkerSupervisor,
+    InstallationRecord, InventoryStore, ProcessInferenceBackend, SUPPORTED_WORKER_PROTOCOLS,
+    WorkerHostError, WorkerLaunchSpec, WorkerLimits, WorkerStorePaths, WorkerSupervisor,
+    check_record_protocol,
 };
 use reimagine_backend_worker_protocol::{BackendInstanceId, ProtocolRange, WorkerInstanceProfile};
 use reimagine_core::diagnostic::{
@@ -163,6 +164,13 @@ fn candidate_from_record(record: &InstallationRecord) -> Option<WorkerBackendCan
         );
         return None;
     };
+    if let Err(incompatible) = check_record_protocol(record, SUPPORTED_WORKER_PROTOCOLS) {
+        tracing::warn!(
+            "skipping installed worker `{}`: {incompatible}",
+            record.installation_id.0
+        );
+        return None;
+    }
     let manifest_profile = record.manifest_profile.clone().unwrap_or_else(|| {
         default_burn_manifest_profile(record.identity.backend_instance_id.0.as_str())
     });
@@ -170,10 +178,9 @@ fn candidate_from_record(record: &InstallationRecord) -> Option<WorkerBackendCan
         WorkerLaunchSpec {
             executable,
             expected: record.identity.clone(),
-            supported_protocols: ProtocolRange::new(1, 1),
+            supported_protocols: ProtocolRange::new(2, 2),
             limits: WorkerLimits::default(),
             environment: Vec::new(),
-            transport: Default::default(),
         },
         manifest_profile,
     ) {
@@ -421,6 +428,19 @@ mod tests {
     use reimagine_backend_worker_host::ExpectedWorkerIdentity;
     use reimagine_backend_worker_protocol::WorkerInstallationId;
 
+    fn test_record_with_protocol(
+        id: &str,
+        install_dir: &Path,
+        protocol_version_min: u16,
+        protocol_version_max: u16,
+    ) -> InstallationRecord {
+        InstallationRecord {
+            protocol_version_min,
+            protocol_version_max,
+            ..test_record(id, install_dir)
+        }
+    }
+
     fn test_record(id: &str, install_dir: &Path) -> InstallationRecord {
         InstallationRecord {
             installation_id: WorkerInstallationId(id.to_owned()),
@@ -435,6 +455,8 @@ mod tests {
             installed_at: chrono::Utc::now(),
             install_path: install_dir.to_string_lossy().into_owned(),
             manifest_profile: None,
+            protocol_version_min: 2,
+            protocol_version_max: 2,
         }
     }
 
@@ -526,6 +548,24 @@ mod tests {
         let missing = temp.path().join("never-installed");
         let store = InventoryStore::new(WorkerStorePaths::new(temp.path()));
         store.add(&test_record("burn-stale", &missing)).unwrap();
+
+        let provider = InstalledWorkerInventoryProvider::new(store.store_paths().clone());
+        assert!(provider.snapshot().candidates().is_empty());
+    }
+
+    #[test]
+    fn installed_provider_skips_v1_only_workers_with_reinstall_hint() {
+        let temp = tempfile::tempdir().unwrap();
+        let install_dir = installed_dir(&temp, "burn-wgpu-v1");
+        let store = InventoryStore::new(WorkerStorePaths::new(temp.path()));
+        store
+            .add(&test_record_with_protocol(
+                "burn-wgpu-v1",
+                &install_dir,
+                1,
+                1,
+            ))
+            .unwrap();
 
         let provider = InstalledWorkerInventoryProvider::new(store.store_paths().clone());
         assert!(provider.snapshot().candidates().is_empty());

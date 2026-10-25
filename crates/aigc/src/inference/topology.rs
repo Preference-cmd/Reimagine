@@ -214,7 +214,7 @@ mod tests {
     fn test_endpoint(id: &str) -> WorkerEndpoint {
         WorkerEndpoint {
             id: id.to_owned(),
-            transport_kind: TransportKind::Stdio,
+            transport_kind: TransportKind::Local,
             address: "local".to_owned(),
             capabilities: vec!["echo".to_owned()],
             device_label: "cpu".to_owned(),

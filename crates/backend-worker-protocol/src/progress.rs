@@ -1,13 +1,13 @@
+//! Progress events streamed while an operation is executing.
+
 use serde::{Deserialize, Serialize};
 
-use crate::{CorrelationId, ProtocolVersion, RequestId, WorkerIncarnationId};
-
+/// One progress update of a running operation.
+///
+/// Progress is advisory: workers are free to send none, and the host
+/// forwards each frame to the run's progress sink unchanged.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct ProgressFrame {
-    pub protocol_version: ProtocolVersion,
-    pub incarnation_id: WorkerIncarnationId,
-    pub request_id: RequestId,
-    pub correlation_id: CorrelationId,
     pub sequence: u64,
     pub completed: u64,
     pub total: Option<u64>,

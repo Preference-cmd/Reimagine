@@ -176,7 +176,7 @@ impl ProcessInferenceBackend {
     fn map_worker_result(
         result: crate::WorkerRequestResult,
     ) -> Result<serde_json::Value, InferenceError> {
-        match result.terminal.outcome {
+        match result.terminal {
             TerminalOutcome::Success { output } => Ok(output),
             TerminalOutcome::Cancelled => Err(InferenceError::Cancelled),
             TerminalOutcome::BackendError { error } => {
