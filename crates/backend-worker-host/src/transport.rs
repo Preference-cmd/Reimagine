@@ -19,9 +19,9 @@ use tokio::time::timeout;
 
 use crate::launch::WorkerLaunchSpec;
 
-pub use reimagine_backend_worker_transport_grpc::auth::{GrpcAuth, TOKEN_ENV};
-pub use reimagine_backend_worker_transport_grpc::local::LocalEndpoint;
-use reimagine_backend_worker_transport_grpc::{client::WorkerClient, local::connect_local};
+pub use reimagine_backend_worker_protocol::auth::{GrpcAuth, TOKEN_ENV};
+pub use reimagine_backend_worker_protocol::local::LocalEndpoint;
+use reimagine_backend_worker_protocol::{client::WorkerClient, local::connect_local};
 
 /// How long a single connect attempt waits for the named pipe on
 /// Windows before surfacing the busy state as a failed startup.

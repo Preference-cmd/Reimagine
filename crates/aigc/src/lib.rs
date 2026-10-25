@@ -24,11 +24,8 @@ mod readiness;
 mod worker_management;
 
 pub use error::{AigcError, AigcResult};
-pub use inference::grpc_worker::{
-    GrpcSwitchableWorker, GrpcWorkerCandidate, GrpcWorkerCandidateConfig,
-};
-pub use inference::quic_worker::{
-    QuicSwitchableWorker, QuicWorkerCandidate, QuicWorkerCandidateConfig,
+pub use inference::remote_worker::{
+    RemoteSwitchableWorker, RemoteWorkerCandidate, RemoteWorkerCandidateConfig,
 };
 pub use inference::switch::{
     ProcessSwitchableWorker, RunCancellation, SwitchableWorker, WorkerSelectionHandle,
@@ -47,7 +44,7 @@ pub use model_conversion::{
 };
 pub use model_service::{AcquireAndConvertReport, AcquireAndConvertRequest, ModelService};
 pub use readiness::SnapshotExternalReadinessProvider;
-pub use reimagine_backend_worker_transport_grpc::{GrpcAuth, GrpcTls};
+pub use reimagine_backend_worker_protocol::{GrpcAuth, GrpcTls};
 pub use worker_management::{
     WorkerCatalogItemDto, WorkerInstallationDto, WorkerManagementError, WorkerManagementService,
 };

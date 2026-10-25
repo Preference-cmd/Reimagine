@@ -1,11 +1,19 @@
-use std::sync::Arc;
+//! A remote worker reached over gRPC, implementing [`SwitchableWorker`].
+//!
+//! A remote worker serves the `reimagine.worker.v2` contract over TLS on
+//! an `https://` endpoint (self-signed certificate, TOFU certificate
+//! pinning against a [`TrustedKeyStore`], bearer-token authentication —
+//! the same client and contract local workers use). Remote workers are
+//! registration-only today: they are registered and displayed in the
+//! compute topology but never routed to.
+
+use std::sync::{Arc, Mutex};
 
 use async_trait::async_trait;
 use reimagine_backend_worker_host::{WorkerProcessState, WorkerRunLeases};
-use reimagine_backend_worker_protocol::{WorkerHello, WorkerIncarnationId};
-use reimagine_backend_worker_transport_grpc::GrpcAuth;
-use reimagine_backend_worker_transport_grpc::client::WorkerClient;
-use reimagine_backend_worker_transport_grpc::conversion::hello_from_proto;
+use reimagine_backend_worker_protocol::remote::connect_with_trust;
+use reimagine_backend_worker_protocol::trust::TrustedKeyStore;
+use reimagine_backend_worker_protocol::{GrpcAuth, WorkerClient, WorkerHello, WorkerIncarnationId};
 use reimagine_inference::{
     Backend, BackendInstance, BackendInstanceSnapshot, DeviceProfile, InferenceBackend,
 };
@@ -16,7 +24,7 @@ use super::switch::{SwitchableWorker, WorkerSwitchError, WorkerSwitchTarget};
 ///
 /// This wraps a connected remote worker and provides the same interface
 /// as [`ProcessSwitchableWorker`] for use with [`WorkerSwitchService`].
-pub struct GrpcSwitchableWorker {
+pub struct RemoteSwitchableWorker {
     instance: BackendInstance,
     incarnation_id: WorkerIncarnationId,
     run_leases: Arc<WorkerRunLeases>,
@@ -25,8 +33,8 @@ pub struct GrpcSwitchableWorker {
     client: Arc<WorkerClient>,
 }
 
-impl GrpcSwitchableWorker {
-    /// Create a new `GrpcSwitchableWorker` from a connected client and
+impl RemoteSwitchableWorker {
+    /// Create a new `RemoteSwitchableWorker` from a connected client and
     /// its hello.
     ///
     /// The device label is taken from the worker's advertised instance
@@ -55,7 +63,7 @@ impl GrpcSwitchableWorker {
 }
 
 #[async_trait]
-impl SwitchableWorker for GrpcSwitchableWorker {
+impl SwitchableWorker for RemoteSwitchableWorker {
     fn instance(&self) -> &BackendInstance {
         &self.instance
     }
@@ -107,14 +115,21 @@ impl SwitchableWorker for GrpcSwitchableWorker {
 
 /// Configuration for connecting to a remote gRPC worker.
 #[derive(Clone)]
-pub struct GrpcWorkerCandidateConfig {
-    /// The endpoint URI, e.g. `http://127.0.0.1:50051` (loopback dev) or
-    /// `https://worker.example:50051` (cloud; requires TLS).
+pub struct RemoteWorkerCandidateConfig {
+    /// The stable worker identity the trust store pins certificates
+    /// under (the mDNS instance id, or the configured endpoint id).
+    pub worker_id: String,
+    /// The endpoint URI, e.g. `https://192.168.1.50:9100` (remote, TLS
+    /// with TOFU pinning) or `http://127.0.0.1:50051` (loopback dev).
     pub endpoint: String,
-    /// TLS + bearer-token settings. A token without TLS is refused by
-    /// the client; non-loopback endpoints without TLS are refused by
-    /// the candidate.
+    /// Bearer-token settings. A token without TLS is refused by the
+    /// client; non-loopback endpoints without TLS are refused by the
+    /// candidate. An explicit `tls` mode overrides TOFU pinning for
+    /// `https://` endpoints.
     pub auth: GrpcAuth,
+    /// The TOFU trust store: the first connect pins the presented
+    /// certificate, later connects require a match.
+    pub trust_store: Arc<Mutex<TrustedKeyStore>>,
     /// Per-attempt connect timeout. Generous for cloud reachability;
     /// this bounds a single network connect + hello attempt.
     pub connect_timeout: std::time::Duration,
@@ -123,22 +138,13 @@ pub struct GrpcWorkerCandidateConfig {
     pub connect_retries: u32,
 }
 
-impl Default for GrpcWorkerCandidateConfig {
-    fn default() -> Self {
-        Self {
-            endpoint: String::new(),
-            auth: GrpcAuth::plain(),
-            connect_timeout: std::time::Duration::from_secs(10),
-            connect_retries: 2,
-        }
-    }
-}
-
-impl std::fmt::Debug for GrpcWorkerCandidateConfig {
+impl std::fmt::Debug for RemoteWorkerCandidateConfig {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.debug_struct("GrpcWorkerCandidateConfig")
+        f.debug_struct("RemoteWorkerCandidateConfig")
+            .field("worker_id", &self.worker_id)
             .field("endpoint", &self.endpoint)
             .field("auth", &"<GrpcAuth (redacted)>")
+            .field("trust_store", &"<TrustedKeyStore>")
             .field("connect_timeout", &self.connect_timeout)
             .field("connect_retries", &self.connect_retries)
             .finish()
@@ -148,25 +154,33 @@ impl std::fmt::Debug for GrpcWorkerCandidateConfig {
 /// A candidate that connects to a remote worker via gRPC.
 ///
 /// Implements [`WorkerSwitchTarget`] to enable switching to a remote
-/// worker (Cloud GPU). Remote workers are registration-only today;
-/// routing stays out of scope.
-pub struct GrpcWorkerCandidate {
-    config: GrpcWorkerCandidateConfig,
+/// worker. Remote workers are registration-only today; routing stays
+/// out of scope.
+pub struct RemoteWorkerCandidate {
+    config: RemoteWorkerCandidateConfig,
 }
 
-impl GrpcWorkerCandidate {
+impl RemoteWorkerCandidate {
     /// Create a new candidate from a configuration.
-    pub fn new(config: GrpcWorkerCandidateConfig) -> Self {
+    pub fn new(config: RemoteWorkerCandidateConfig) -> Self {
         Self { config }
     }
 
     /// Create a new candidate with default timeout/retry settings.
-    pub fn with_defaults(endpoint: impl Into<String>, auth: GrpcAuth) -> Self {
+    pub fn with_defaults(
+        worker_id: impl Into<String>,
+        endpoint: impl Into<String>,
+        auth: GrpcAuth,
+        trust_store: Arc<Mutex<TrustedKeyStore>>,
+    ) -> Self {
         Self {
-            config: GrpcWorkerCandidateConfig {
+            config: RemoteWorkerCandidateConfig {
+                worker_id: worker_id.into(),
                 endpoint: endpoint.into(),
                 auth,
-                ..GrpcWorkerCandidateConfig::default()
+                trust_store,
+                connect_timeout: std::time::Duration::from_secs(10),
+                connect_retries: 2,
             },
         }
     }
@@ -176,19 +190,17 @@ impl GrpcWorkerCandidate {
     async fn connect(&self) -> Result<(Arc<WorkerClient>, WorkerHello), WorkerSwitchError> {
         // Policy guard: remote (non-loopback) endpoints require TLS.
         // The tonic TLS connector only engages for the `https://`
-        // scheme, so both a `tls` mode AND an https endpoint are
-        // required — anything else would downgrade to cleartext.
+        // scheme, so both TLS AND an https endpoint are required —
+        // anything else would downgrade to cleartext.
         let https_scheme = self
             .config
             .endpoint
             .to_ascii_lowercase()
             .starts_with("https://");
-        if !is_loopback_endpoint(&self.config.endpoint)
-            && (self.config.auth.tls.is_none() || !https_scheme)
-        {
+        if !is_loopback_endpoint(&self.config.endpoint) && !https_scheme {
             return Err(WorkerSwitchError::Startup {
                 message: format!(
-                    "refusing cleartext gRPC connection to non-loopback endpoint `{}`: TLS (`auth.tls` + https:// endpoint) is required for remote (cloud) workers",
+                    "refusing cleartext connection to non-loopback endpoint `{}`: TLS (https:// endpoint) is required for remote workers",
                     self.config.endpoint
                 ),
             });
@@ -197,12 +209,28 @@ impl GrpcWorkerCandidate {
         let mut last_error = String::new();
         let attempts = self.config.connect_retries + 1;
         for attempt in 0..attempts {
-            match tokio::time::timeout(
-                self.config.connect_timeout,
-                WorkerClient::connect(&self.config.endpoint, &self.config.auth),
-            )
-            .await
-            {
+            let attempt_connect = async {
+                if https_scheme && self.config.auth.tls.is_none() {
+                    // Default remote trust: TOFU. The first connect pins
+                    // the presented certificate in the trust store;
+                    // later connects require a match.
+                    connect_with_trust(
+                        &self.config.endpoint,
+                        reimagine_backend_worker_protocol::remote::ConnectTrust::new(
+                            self.config.trust_store.as_ref(),
+                            &self.config.worker_id,
+                        ),
+                        &self.config.auth,
+                    )
+                    .await
+                } else {
+                    // Loopback dev endpoints, and https endpoints whose
+                    // auth carries an explicit TLS mode (`GrpcTls`):
+                    // the explicit trust configuration overrides TOFU.
+                    WorkerClient::connect(&self.config.endpoint, &self.config.auth).await
+                }
+            };
+            match tokio::time::timeout(self.config.connect_timeout, attempt_connect).await {
                 Ok(Ok(client)) => {
                     let hello = self.hello(&client).await?;
                     return Ok((Arc::new(client), hello));
@@ -250,12 +278,13 @@ impl GrpcWorkerCandidate {
             .map_err(|error| WorkerSwitchError::Startup {
                 message: format!("worker hello failed: {error}"),
             })?;
-        let hello = hello_from_proto(response).ok_or_else(|| WorkerSwitchError::Startup {
-            message: format!(
-                "worker `{}` returned an incomplete hello",
-                self.config.endpoint
-            ),
-        })?;
+        let hello = reimagine_backend_worker_protocol::conversion::hello_from_proto(response)
+            .ok_or_else(|| WorkerSwitchError::Startup {
+                message: format!(
+                    "worker `{}` returned an incomplete hello",
+                    self.config.endpoint
+                ),
+            })?;
         if hello.protocol.0 != reimagine_backend_worker_protocol::WORKER_PROTOCOL_VERSION.0 {
             return Err(WorkerSwitchError::Startup {
                 message: format!(
@@ -271,10 +300,10 @@ impl GrpcWorkerCandidate {
 }
 
 #[async_trait]
-impl WorkerSwitchTarget for GrpcWorkerCandidate {
+impl WorkerSwitchTarget for RemoteWorkerCandidate {
     async fn start(&self) -> Result<Arc<dyn SwitchableWorker>, WorkerSwitchError> {
         let (client, hello) = self.connect().await?;
-        Ok(Arc::new(GrpcSwitchableWorker::new(hello, client)))
+        Ok(Arc::new(RemoteSwitchableWorker::new(hello, client)))
     }
 }
 
@@ -312,8 +341,15 @@ mod tests {
     use super::*;
 
     #[test]
-    fn candidate_config_defaults_are_generous() {
-        let config = GrpcWorkerCandidateConfig::default();
+    fn candidate_with_defaults_is_generous() {
+        let (_dir, store) = test_store();
+        let config = RemoteWorkerCandidate::with_defaults(
+            "worker-1",
+            "https://127.0.0.1:59997",
+            GrpcAuth::plain(),
+            store,
+        )
+        .config;
         assert_eq!(config.connect_timeout, std::time::Duration::from_secs(10));
         assert_eq!(config.connect_retries, 2);
         assert!(config.auth.token.is_none());
@@ -322,18 +358,21 @@ mod tests {
 
     #[test]
     fn candidate_config_debug_redacts_auth() {
-        let config = GrpcWorkerCandidateConfig {
+        let (_dir, store) = test_store();
+        let config = RemoteWorkerCandidateConfig {
+            worker_id: "worker-1".to_owned(),
             endpoint: "https://worker.example:50051".to_owned(),
-            auth: {
-                use reimagine_backend_worker_transport_grpc::GrpcTls;
-                GrpcAuth {
-                    token: Some("s3cret".to_owned()),
-                    tls: Some(GrpcTls::InsecureSkipVerify {
+            auth: GrpcAuth {
+                token: Some("s3cret".to_owned()),
+                tls: Some(
+                    reimagine_backend_worker_protocol::GrpcTls::InsecureSkipVerify {
                         domain: "worker.example".to_owned(),
-                    }),
-                }
+                    },
+                ),
             },
-            ..GrpcWorkerCandidateConfig::default()
+            trust_store: store,
+            connect_timeout: std::time::Duration::from_secs(10),
+            connect_retries: 2,
         };
         let rendered = format!("{config:?}");
         assert!(
@@ -375,8 +414,13 @@ mod tests {
 
     #[tokio::test]
     async fn candidate_refuses_cleartext_non_loopback_endpoint() {
-        let candidate =
-            GrpcWorkerCandidate::with_defaults("http://192.168.1.50:50051", GrpcAuth::plain());
+        let (_dir, store) = test_store();
+        let candidate = RemoteWorkerCandidate::with_defaults(
+            "worker-1",
+            "http://192.168.1.50:50051",
+            GrpcAuth::plain(),
+            store,
+        );
         let error = match candidate.start().await {
             Ok(_) => panic!("must be refused"),
             Err(error) => error,
@@ -396,24 +440,27 @@ mod tests {
         // `127.0.0.2` is loopback /8 but not the literal `127.0.0.1`,
         // so the guard treats it as remote while the connect fails fast
         // (nothing listens there) without DNS.
-        let candidate = GrpcWorkerCandidate::new(GrpcWorkerCandidateConfig {
+        let (_dir, store) = test_store();
+        let candidate = RemoteWorkerCandidate::new(RemoteWorkerCandidateConfig {
+            worker_id: "worker-1".to_owned(),
             endpoint: "https://127.0.0.2:50051".to_owned(),
-            auth: {
-                use reimagine_backend_worker_transport_grpc::GrpcTls;
-                GrpcAuth {
-                    token: None,
-                    tls: Some(GrpcTls::InsecureSkipVerify {
-                        domain: "127.0.0.2".to_owned(),
-                    }),
-                }
-            },
+            auth: GrpcAuth::plain(),
+            trust_store: store,
+            connect_timeout: std::time::Duration::from_secs(2),
             connect_retries: 0,
-            ..GrpcWorkerCandidateConfig::default()
         });
         let error = match candidate.start().await {
             Ok(_) => panic!("connect fails"),
             Err(error) => error,
         };
         assert!(!error.to_string().contains("cleartext"), "got: {error}");
+    }
+
+    fn test_store() -> (tempfile::TempDir, Arc<Mutex<TrustedKeyStore>>) {
+        let dir = tempfile::tempdir().unwrap();
+        let store = Arc::new(Mutex::new(
+            TrustedKeyStore::load(dir.path().join("trusted-keys.json")).unwrap(),
+        ));
+        (dir, store)
     }
 }

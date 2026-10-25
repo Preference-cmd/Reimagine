@@ -54,7 +54,7 @@ async fn configured_workers_bootstrap_topology_and_profile() {
     let base = temp_dir("topology-on");
     let config = InferenceBackendConfig {
         workers: vec![
-            worker_config("quic-worker-a", "quic", "quic://192.168.1.10:9100"),
+            worker_config("lan-worker-a", "grpc", "https://192.168.1.10:9100"),
             worker_config("grpc-cloud", "grpc", "https://cloud.example:50051"),
         ],
         ..InferenceBackendConfig::default()
@@ -74,22 +74,22 @@ async fn configured_workers_bootstrap_topology_and_profile() {
     // adds nothing in the test environment).
     let guard = topology.try_lock().expect("lock");
     assert_eq!(guard.pool().len(), 2, "configured workers registered");
-    assert!(guard.pool().get("quic-worker-a").is_some());
+    assert!(guard.pool().get("lan-worker-a").is_some());
     assert!(guard.pool().get("grpc-cloud").is_some());
     drop(guard);
 
     // Compute profile DTO exposes the topology workers.
     let dto = workspace.compute_profile_dto();
     assert_eq!(dto.topology_workers.len(), 2);
-    let quic = dto
+    let lan = dto
         .topology_workers
         .iter()
-        .find(|w| w.id == "quic-worker-a")
-        .expect("quic worker in dto");
-    assert_eq!(quic.transport, "quic");
-    assert_eq!(quic.address, "quic://192.168.1.10:9100");
+        .find(|w| w.id == "lan-worker-a")
+        .expect("lan worker in dto");
+    assert_eq!(lan.transport, "grpc");
+    assert_eq!(lan.address, "https://192.168.1.10:9100");
     // Config endpoints with a pre-shared fingerprint are trusted.
-    assert!(quic.trusted);
+    assert!(lan.trusted);
     let grpc = dto
         .topology_workers
         .iter()
@@ -121,12 +121,12 @@ async fn untrusted_worker_surfaces_as_untrusted_in_profile() {
     let config = InferenceBackendConfig {
         workers: vec![WorkerEndpointConfig {
             id: "mdns-like".to_owned(),
-            transport: "quic".to_owned(),
-            address: "quic://192.168.1.99:9100".to_owned(),
+            transport: "grpc".to_owned(),
+            address: "https://192.168.1.99:9100".to_owned(),
             capabilities: Vec::new(),
             device_label: String::new(),
             // No pre-shared fingerprint: registered but untrusted
-            // (pending the T19 trust flow).
+            // (pending the trust flow).
             fingerprint: None,
         }],
         ..InferenceBackendConfig::default()

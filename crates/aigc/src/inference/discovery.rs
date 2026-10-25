@@ -7,15 +7,15 @@
 //! are registered, and workers that vanished (missed mDNS removal
 //! events, host restarts) are deregistered.
 //!
-//! # Trust gate (T19)
+//! # Trust gate
 //!
-//! mDNS TXT records carry no certificate fingerprint, so an attacker on
+//! mDNS TXT records carry no verified identity, so an attacker on
 //! the LAN can advertise a spoofed worker. Discovery therefore **never
 //! auto-connects**: every discovered endpoint is registered as
 //! *untrusted* ([`WorkerEndpoint::trusted`] = `false`) and the
 //! orchestrator stops at pool registration. Connecting to an untrusted
-//! endpoint is the caller's job (T8/T13) and must go through the T19
-//! trust flow (`connect_with_trust` + [`TrustedKeyStore`],
+//! endpoint is the caller's job and must go through the TOFU trust flow
+//! (`connect_with_trust` + [`TrustedKeyStore`],
 //! [`ConnectTrust::require_pin`]) or an explicit user trust action.
 //! [`ConfigDiscovery`] endpoints with a pre-shared `fingerprint` are
 //! registered as trusted.
@@ -29,7 +29,7 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use reimagine_backend_worker_protocol::TransportKind;
-use reimagine_backend_worker_transport_quic::discovery::{DiscoveredWorker, MdnsWorkerDiscovery};
+use reimagine_backend_worker_protocol::discovery::{DiscoveredWorker, MdnsWorkerDiscovery};
 use reimagine_config::{InferenceBackendConfig, WorkerEndpointConfig};
 use tokio::sync::Mutex;
 
@@ -43,7 +43,7 @@ pub const DEFAULT_DISCOVERY_INTERVAL: Duration = Duration::from_secs(10);
 const MIN_DISCOVERY_INTERVAL: Duration = Duration::from_millis(1);
 
 /// The mDNS service type advertised by Reimagine workers (must match
-/// `SERVICE_TYPE` in `reimagine-backend-worker-transport-quic`).
+/// `SERVICE_TYPE` in `reimagine-backend-worker-protocol`).
 const MDNS_SERVICE_TYPE: &str = "_reimagine-worker._tcp.local.";
 
 /// A pluggable source of worker endpoints.
@@ -78,7 +78,7 @@ pub struct ReconcileReport {
 ///
 /// Wraps [`MdnsWorkerDiscovery`] and converts each [`DiscoveredWorker`]
 /// into an untrusted [`WorkerEndpoint`]. The worker's advertised
-/// `fingerprint` TXT (T19) is preserved in
+/// `fingerprint` TXT is preserved in
 /// `metadata["fingerprint"]` as advisory information for the caller's
 /// trust flow — it is not itself a pin.
 pub struct MdnsDiscovery {
@@ -159,19 +159,19 @@ fn normalize_mdns_id(fullname: &str) -> String {
 
 /// Map a discovered mDNS worker to a [`WorkerEndpoint`].
 ///
-/// # Trust gating (T19)
+/// # Trust gating
 ///
 /// mDNS is unauthenticated, so the endpoint is always registered as
 /// **untrusted** (`trusted: false`): the orchestrator registers it in
 /// the pool but never connects. The advertised `fingerprint` TXT is kept
 /// in `metadata` so the caller can pre-validate it against pinned keys
-/// before running the T19 trust flow
+/// before running the TOFU trust flow
 /// (`connect_with_trust`, [`ConnectTrust::require_pin`]).
 fn mdns_endpoint(worker: DiscoveredWorker) -> WorkerEndpoint {
     let address = worker
-        .quic_endpoint()
-        .map(|addr| format!("quic://{addr}"))
-        .unwrap_or_else(|| format!("quic://{}", worker.addr));
+        .https_endpoint()
+        .map(|addr| format!("https://{addr}"))
+        .unwrap_or_else(|| format!("https://{}", worker.addr));
     let capabilities: Vec<String> = worker
         .capabilities()
         .into_iter()
@@ -185,7 +185,7 @@ fn mdns_endpoint(worker: DiscoveredWorker) -> WorkerEndpoint {
     let fingerprint = worker.fingerprint().map(str::to_owned);
     WorkerEndpoint {
         id: normalize_mdns_id(&worker.id),
-        transport_kind: TransportKind::Quic,
+        transport_kind: TransportKind::Grpc,
         address,
         capabilities,
         device_label,
@@ -200,9 +200,9 @@ fn mdns_endpoint(worker: DiscoveredWorker) -> WorkerEndpoint {
 /// Static/manual discovery source backed by [`InferenceBackendConfig`].
 ///
 /// Endpoints come from `config.workers` (manual configuration; also the
-/// T12 home for T19 pre-shared fingerprints). An endpoint configured
+/// home for pre-shared fingerprints). An endpoint configured
 /// with a `fingerprint` is registered as **trusted** (verifiable
-/// identity); one without a fingerprint is untrusted pending the T19
+/// identity); one without a fingerprint is untrusted pending the TOFU
 /// trust flow.
 pub struct ConfigDiscovery {
     endpoints: Vec<WorkerEndpoint>,
@@ -274,12 +274,14 @@ impl WorkerDiscovery for ConfigDiscovery {
 /// Map a configured endpoint to a [`WorkerEndpoint`].
 fn config_endpoint(cfg: &WorkerEndpointConfig) -> Result<WorkerEndpoint, String> {
     let transport_kind = match cfg.transport.as_str() {
-        "quic" => TransportKind::Quic,
         "local" => TransportKind::Local,
         "grpc" => TransportKind::Grpc,
+        "quic" => {
+            return Err("unsupported transport kind `quic` (removed; use `grpc`)".to_owned());
+        }
         other => return Err(format!("unsupported transport kind `{other}`")),
     };
-    // A pre-shared fingerprint (T19) is the only verifiable identity a
+    // A pre-shared fingerprint is the only verifiable identity a
     // manual config can hold; without one the endpoint stays untrusted
     // pending the trust flow.
     let trusted = cfg.fingerprint.is_some();
@@ -485,8 +487,8 @@ mod tests {
     fn test_endpoint(id: &str, trusted: bool) -> WorkerEndpoint {
         WorkerEndpoint {
             id: id.to_owned(),
-            transport_kind: TransportKind::Quic,
-            address: "quic://192.168.1.10:9100".to_owned(),
+            transport_kind: TransportKind::Grpc,
+            address: "https://192.168.1.10:9100".to_owned(),
             capabilities: vec!["load_bundle".to_owned()],
             device_label: "cuda:0".to_owned(),
             trusted,
@@ -573,7 +575,7 @@ mod tests {
         let mut props = HashMap::new();
         props.insert(
             "endpoint".to_owned(),
-            "quic://192.168.1.100:9100".to_owned(),
+            "https://192.168.1.100:9100".to_owned(),
         );
         props.insert("backend".to_owned(), "burn".to_owned());
         props.insert("devices".to_owned(), "cuda:0,cuda:1".to_owned());
@@ -592,13 +594,13 @@ mod tests {
     }
 
     #[test]
-    fn mdns_mapping_produces_untrusted_quic_endpoint() {
+    fn mdns_mapping_produces_untrusted_grpc_endpoint() {
         let endpoint = mdns_endpoint(discovered_worker("worker-a", Some("aabbcc")));
         // The service fullname is normalized to a bare id so config
         // (pinned) and mDNS entries for the same worker deduplicate.
         assert_eq!(endpoint.id, "worker-a");
-        assert_eq!(endpoint.transport_kind, TransportKind::Quic);
-        assert_eq!(endpoint.address, "quic://192.168.1.100:9100");
+        assert_eq!(endpoint.transport_kind, TransportKind::Grpc);
+        assert_eq!(endpoint.address, "https://192.168.1.100:9100");
         assert_eq!(
             endpoint.capabilities,
             vec!["load_bundle".to_owned(), "text_encode".to_owned()]
@@ -653,16 +655,16 @@ mod tests {
             workers: vec![
                 WorkerEndpointConfig {
                     id: "worker-a".to_owned(),
-                    transport: "quic".to_owned(),
-                    address: "quic://192.168.1.5:9100".to_owned(),
+                    transport: "grpc".to_owned(),
+                    address: "https://192.168.1.5:9100".to_owned(),
                     capabilities: vec!["load_bundle".to_owned()],
                     device_label: "cuda:0".to_owned(),
                     fingerprint: Some("aabbccdd".to_owned()),
                 },
                 WorkerEndpointConfig {
                     id: "worker-b".to_owned(),
-                    transport: "quic".to_owned(),
-                    address: "quic://192.168.1.6:9100".to_owned(),
+                    transport: "grpc".to_owned(),
+                    address: "https://192.168.1.6:9100".to_owned(),
                     capabilities: Vec::new(),
                     device_label: String::new(),
                     fingerprint: None,
@@ -679,14 +681,14 @@ mod tests {
 
         let a = &endpoints[0];
         assert_eq!(a.id, "worker-a");
-        assert_eq!(a.transport_kind, TransportKind::Quic);
-        assert_eq!(a.address, "quic://192.168.1.5:9100");
+        assert_eq!(a.transport_kind, TransportKind::Grpc);
+        assert_eq!(a.address, "https://192.168.1.5:9100");
         // A pre-shared fingerprint marks the endpoint trusted.
         assert!(a.trusted);
         assert_eq!(a.metadata["fingerprint"], "aabbccdd");
 
         // Without a fingerprint the manual endpoint stays untrusted
-        // pending the T19 trust flow.
+        // pending the trust flow.
         assert!(!endpoints[1].trusted);
         assert_eq!(
             endpoints[1].metadata["fingerprint"],
@@ -722,7 +724,7 @@ mod tests {
             workers: vec![WorkerEndpointConfig {
                 id: "w".to_owned(),
                 transport: "carrier-pigeon".to_owned(),
-                address: "quic://x".to_owned(),
+                address: "https://x".to_owned(),
                 capabilities: Vec::new(),
                 device_label: String::new(),
                 fingerprint: None,
@@ -904,7 +906,7 @@ mod tests {
         // + register — the pool API rejects duplicate ids).
         topology.lock().await.deregister_endpoint("w1").unwrap();
         let mut foreign = test_endpoint("w1", true);
-        foreign.address = "quic://10.0.0.99:9100".to_owned();
+        foreign.address = "https://10.0.0.99:9100".to_owned();
         topology.lock().await.register_endpoint(foreign).unwrap();
 
         source.set(Vec::new());
@@ -914,7 +916,7 @@ mod tests {
         assert_eq!(pool.pool().len(), 1);
         assert_eq!(
             pool.pool().get("w1").unwrap().endpoint.address,
-            "quic://10.0.0.99:9100"
+            "https://10.0.0.99:9100"
         );
     }
 

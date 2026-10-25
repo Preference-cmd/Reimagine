@@ -66,11 +66,11 @@ impl ComputeProfileDto {
 pub struct TopologyWorkerDto {
     /// Stable worker id (unique across the pool).
     pub id: String,
-    /// Transport kind string: `"local"` / `"quic"` / `"grpc"`.
+    /// Transport kind string: `"local"` / `"grpc"`.
     pub transport: String,
-    /// Connectable address (e.g. `quic://192.168.1.10:9100`).
+    /// Connectable address (e.g. `https://192.168.1.10:9100`).
     pub address: String,
-    /// Whether the endpoint's identity is verified (T19 trust gate).
+    /// Whether the endpoint's identity is verified (trust gate).
     pub trusted: bool,
     /// Human-readable device label (e.g. `"cuda:0"`).
     pub device_label: String,
@@ -106,7 +106,6 @@ pub fn topology_workers_from_pool(
 fn transport_label(kind: reimagine_backend_worker_protocol::TransportKind) -> &'static str {
     match kind {
         reimagine_backend_worker_protocol::TransportKind::Local => "local",
-        reimagine_backend_worker_protocol::TransportKind::Quic => "quic",
         reimagine_backend_worker_protocol::TransportKind::Grpc => "grpc",
         reimagine_backend_worker_protocol::TransportKind::Mock => "mock",
     }

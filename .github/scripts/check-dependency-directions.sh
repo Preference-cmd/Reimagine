@@ -11,7 +11,7 @@
 #              inference, runtime
 #   modules    aigc (inference composition, workers, model services)
 #   backends   inference-burn, inference-burn-worker
-#   workers    backend-worker-host, -transport-quic, -transport-grpc
+#   workers    backend-worker-host (the wire protocol is a leaf above)
 #   host       app-host
 #   entries    reimagine (src-tauri)
 #
@@ -41,7 +41,6 @@ APP_HOST='reimagine-app-host v'
 ENTRIES='reimagine v'
 BACKENDS='(reimagine-inference-(burn|burn-worker)|burn-[a-z]+|cubecl(-[a-z]+)?|wgpu) v'
 HTTP_SERVER='axum v'
-DOMAIN='(reimagine-core|reimagine-config|reimagine-nodes|reimagine-model-manager|reimagine-model-acquisition|reimagine-inference|reimagine-runtime|reimagine-plugin|reimagine-backend-worker-host|aigc) v'
 
 tree_of() {
   cargo tree -p "$1" --edges normal --all-features --target all --locked --charset ascii
@@ -139,12 +138,10 @@ for crate in reimagine-inference-burn reimagine-inference-burn-worker; do
   check_without_tonic "$crate" "$HTTP_SERVER" 'reimagine-runtime v' 'reimagine-model-manager v'
 done
 
-# The worker host manages out-of-process workers and never links a backend;
-# transports carry protocol messages and know no domain crate.
+# The worker host manages out-of-process workers and never links a backend.
+# The wire-protocol crate (the merged transports) is a workspace leaf, so
+# the leaf check above already keeps it away from domain crates and backends.
 check_without_tonic reimagine-backend-worker-host "$BACKENDS" "$HTTP_SERVER"
-for crate in reimagine-backend-worker-transport-quic reimagine-backend-worker-transport-grpc; do
-  check "$crate" "$DOMAIN" "$BACKENDS"
-done
 
 # Every crate stays free of the agent stack. Only the desktop entry point
 # uses Tauri; nothing below the entry points depends on the host facade;

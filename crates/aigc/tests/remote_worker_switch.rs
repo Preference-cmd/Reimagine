@@ -1,32 +1,37 @@
-//! Integration tests for gRPC worker switching.
+//! Integration tests for remote gRPC worker switching.
 //!
 //! A fake gRPC worker (the shared fake service) is spun up in-process,
-//! the host connects through `GrpcWorkerCandidate`, and
-//! `WorkerSwitchService::drain_and_switch` swaps a local-style worker
-//! for the remote gRPC worker.
+//! the host connects through `RemoteWorkerCandidate` (TLS + TOFU trust
+//! store where the endpoint is https), and `WorkerSwitchService::
+//! drain_and_switch` swaps a local-style worker for the remote worker.
 
 use std::sync::Arc;
+use std::sync::Mutex;
 use std::time::Duration;
 
 use aigc::{
-    GrpcAuth, GrpcSwitchableWorker, GrpcTls, GrpcWorkerCandidate, GrpcWorkerCandidateConfig,
+    GrpcAuth, GrpcTls, RemoteSwitchableWorker, RemoteWorkerCandidate, RemoteWorkerCandidateConfig,
     RunCancellation, SwitchableWorker, WorkerSwitchError, WorkerSwitchService, WorkerSwitchTarget,
 };
 use reimagine_backend_worker_host::{WorkerProcessState, WorkerRunLeases};
+use reimagine_backend_worker_protocol::client::WorkerClient;
+use reimagine_backend_worker_protocol::conversion::{hello_from_proto, outcome_from_proto};
+use reimagine_backend_worker_protocol::proto::worker_server::WorkerServer;
+use reimagine_backend_worker_protocol::testing::{FakeWorkerConfig, FakeWorkerService};
+use reimagine_backend_worker_protocol::tls::generate_self_signed_identity;
+use reimagine_backend_worker_protocol::trust::TrustedKeyStore;
 use reimagine_backend_worker_protocol::{
     BackendInstanceId, TerminalOutcome, WorkerIdentity, WorkerIncarnationId, WorkerInstallationId,
-    WorkerInstanceProfile, WorkerProfile,
+    WorkerInstanceProfile, WorkerProfile, proto,
 };
-use reimagine_backend_worker_transport_grpc::client::WorkerClient;
-use reimagine_backend_worker_transport_grpc::proto::worker_server::WorkerServer;
-use reimagine_backend_worker_transport_grpc::testing::{FakeWorkerConfig, FakeWorkerService};
 use reimagine_core::model::RunId;
 use reimagine_inference::{BackendInstance, DeviceKind};
 
-const WORKER_INSTANCE: &str = "burn:grpc:remote";
-const WORKER_INCARNATION: &str = "grpc-incarnation-001";
+const WORKER_INSTANCE: &str = "burn:remote:default";
+const WORKER_INCARNATION: &str = "remote-incarnation-001";
+const WORKER_ID: &str = "worker-1";
 
-/// A fake worker for testing switch operations with gRPC workers.
+/// A fake worker for testing switch operations.
 struct FakeWorker {
     instance: BackendInstance,
     incarnation: WorkerIncarnationId,
@@ -78,7 +83,7 @@ impl RunCancellation for NoopRunCancellation {
 fn fake_worker_identity() -> WorkerIdentity {
     WorkerIdentity {
         backend_instance_id: BackendInstanceId::from(WORKER_INSTANCE),
-        installation_id: WorkerInstallationId::from("grpc-install"),
+        installation_id: WorkerInstallationId::from("remote-install"),
         incarnation_id: WorkerIncarnationId::from(WORKER_INCARNATION),
         worker_version: "0.1.0".to_owned(),
         backend_kind: "burn".to_owned(),
@@ -137,30 +142,55 @@ async fn start_test_grpc_server(
     (format!("{scheme}://{addr}"), handle)
 }
 
+fn temp_store() -> (tempfile::TempDir, Arc<Mutex<TrustedKeyStore>>) {
+    let dir = tempfile::tempdir().unwrap();
+    let store = Arc::new(Mutex::new(
+        TrustedKeyStore::load(dir.path().join("trusted-keys.json")).unwrap(),
+    ));
+    (dir, store)
+}
+
+fn candidate_config(
+    endpoint: String,
+    auth: GrpcAuth,
+    store: Arc<Mutex<TrustedKeyStore>>,
+) -> RemoteWorkerCandidateConfig {
+    RemoteWorkerCandidateConfig {
+        worker_id: WORKER_ID.to_owned(),
+        endpoint,
+        auth,
+        trust_store: store,
+        connect_timeout: Duration::from_secs(10),
+        connect_retries: 0,
+    }
+}
+
 /// A wrapper that converts a `SwitchableWorker` into a `WorkerSwitchTarget`.
-struct GrpcWorkerTarget(Arc<dyn SwitchableWorker>);
+struct RemoteWorkerTarget(Arc<dyn SwitchableWorker>);
 
 #[async_trait::async_trait]
-impl WorkerSwitchTarget for GrpcWorkerTarget {
+impl WorkerSwitchTarget for RemoteWorkerTarget {
     async fn start(&self) -> Result<Arc<dyn SwitchableWorker>, WorkerSwitchError> {
         Ok(Arc::clone(&self.0))
     }
 }
 
 #[tokio::test]
-async fn drain_and_switch_to_grpc_worker_reports_remote_device() {
+async fn drain_and_switch_to_remote_worker_reports_remote_device() {
     let (endpoint, server_handle) = start_test_grpc_server(None, None).await;
+    let (_dir, store) = temp_store();
 
-    let candidate = GrpcWorkerCandidate::with_defaults(endpoint, GrpcAuth::plain());
-    let grpc_worker = candidate.start().await.expect("start gRPC worker");
+    let candidate =
+        RemoteWorkerCandidate::new(candidate_config(endpoint, GrpcAuth::plain(), store));
+    let remote_worker = candidate.start().await.expect("start remote worker");
 
     // Verify the worker reports Remote device kind.
-    let snapshot = grpc_worker.snapshot().await;
+    let snapshot = remote_worker.snapshot().await;
     let device = snapshot.device.expect("device should be present");
     assert_eq!(
         device.kind,
         DeviceKind::Remote,
-        "gRPC workers should report DeviceKind::Remote"
+        "remote workers should report DeviceKind::Remote"
     );
     assert!(
         device.label.starts_with("remote:"),
@@ -168,15 +198,15 @@ async fn drain_and_switch_to_grpc_worker_reports_remote_device() {
     );
 
     // Verify the worker is ready.
-    assert_eq!(grpc_worker.process_state(), WorkerProcessState::Ready);
+    assert_eq!(remote_worker.process_state(), WorkerProcessState::Ready);
 
-    // Switch from a local-style worker to the gRPC worker.
+    // Switch from a local-style worker to the remote worker.
     let old = Arc::new(FakeWorker::new("burn:local:default", "old-incarnation"));
     let workers = WorkerSwitchService::new(old, Arc::new(NoopRunCancellation));
 
     let selected = workers
         .drain_and_switch(
-            Arc::new(GrpcWorkerTarget(grpc_worker)),
+            Arc::new(RemoteWorkerTarget(remote_worker)),
             Duration::from_secs(5),
         )
         .await
@@ -187,7 +217,7 @@ async fn drain_and_switch_to_grpc_worker_reports_remote_device() {
     assert_eq!(
         active.process_state(),
         WorkerProcessState::Ready,
-        "gRPC worker should be ready after switch"
+        "remote worker should be ready after switch"
     );
     assert_eq!(active.incarnation_id().0, WORKER_INCARNATION);
 
@@ -195,15 +225,17 @@ async fn drain_and_switch_to_grpc_worker_reports_remote_device() {
 }
 
 #[tokio::test]
-async fn grpc_worker_snapshot_contains_transport_observation() {
+async fn remote_worker_snapshot_contains_transport_observation() {
     let (endpoint, server_handle) = start_test_grpc_server(None, None).await;
+    let (_dir, store) = temp_store();
 
-    let candidate = GrpcWorkerCandidate::with_defaults(endpoint, GrpcAuth::plain());
-    let grpc_worker = candidate.start().await.expect("start gRPC worker");
+    let candidate =
+        RemoteWorkerCandidate::new(candidate_config(endpoint, GrpcAuth::plain(), store));
+    let remote_worker = candidate.start().await.expect("start remote worker");
 
-    let snapshot = grpc_worker.snapshot().await;
+    let snapshot = remote_worker.snapshot().await;
     assert_eq!(
-        snapshot.observations.get("transport").map(|s| s.as_str()),
+        snapshot.observations.get("transport").map(String::as_str),
         Some("grpc"),
         "snapshot should report grpc transport"
     );
@@ -216,7 +248,7 @@ async fn grpc_worker_snapshot_contains_transport_observation() {
 }
 
 #[tokio::test]
-async fn switched_grpc_worker_serves_inference_request_roundtrip() {
+async fn switched_remote_worker_serves_inference_request_roundtrip() {
     let (endpoint, server_handle) = start_test_grpc_server(None, None).await;
 
     // Connect through the public client, then wrap the result in the
@@ -228,15 +260,14 @@ async fn switched_grpc_worker_serves_inference_request_roundtrip() {
             .unwrap(),
     );
     let hello = client.hello().await.unwrap();
-    let hello = reimagine_backend_worker_transport_grpc::conversion::hello_from_proto(hello)
-        .expect("complete hello");
-    let grpc_worker = Arc::new(GrpcSwitchableWorker::new(hello, client));
+    let hello = hello_from_proto(hello).expect("complete hello");
+    let remote_worker = Arc::new(RemoteSwitchableWorker::new(hello, client));
 
     let old = Arc::new(FakeWorker::new("burn:local:default", "old-incarnation"));
     let workers = WorkerSwitchService::new(old, Arc::new(NoopRunCancellation));
     let selected = workers
         .drain_and_switch(
-            Arc::new(GrpcWorkerTarget(grpc_worker.clone())),
+            Arc::new(RemoteWorkerTarget(remote_worker.clone())),
             Duration::from_secs(5),
         )
         .await
@@ -247,7 +278,7 @@ async fn switched_grpc_worker_serves_inference_request_roundtrip() {
     // Send an inference-style request over the switched worker's
     // client and verify the terminal response.
     let payload = serde_json::json!({"job": "denoise", "steps": 20});
-    let mut stream = grpc_worker
+    let mut stream = remote_worker
         .client()
         .execute("echo", serde_json::to_vec(&payload).unwrap())
         .await
@@ -255,18 +286,12 @@ async fn switched_grpc_worker_serves_inference_request_roundtrip() {
 
     let mut terminal = None;
     while let Ok(Some(event)) = stream.message().await {
-        if let Some(reimagine_backend_worker_transport_grpc::proto::execute_event::Event::Result(
-            result,
-        )) = event.event
-        {
+        if let Some(proto::execute_event::Event::Result(result)) = event.event {
             terminal = Some(result);
             break;
         }
     }
-    let outcome = reimagine_backend_worker_transport_grpc::conversion::outcome_from_proto(
-        terminal.expect("terminal event"),
-    )
-    .expect("outcome");
+    let outcome = outcome_from_proto(terminal.expect("terminal event")).expect("outcome");
     match outcome {
         TerminalOutcome::Success { output } => {
             assert_eq!(output, payload, "echoed payload should match the request");
@@ -278,20 +303,20 @@ async fn switched_grpc_worker_serves_inference_request_roundtrip() {
 }
 
 #[tokio::test]
-async fn grpc_candidate_refuses_cleartext_token() {
+async fn remote_candidate_refuses_cleartext_token() {
     let (endpoint, server_handle) = start_test_grpc_server(None, None).await;
+    let (_dir, _store) = temp_store();
 
     // A token without TLS must be refused by the client guard before
     // any request is sent.
-    let candidate = GrpcWorkerCandidate::new(GrpcWorkerCandidateConfig {
+    let candidate = RemoteWorkerCandidate::new(candidate_config(
         endpoint,
-        auth: GrpcAuth {
+        GrpcAuth {
             token: Some("s3cret".to_owned()),
             tls: None,
         },
-        connect_retries: 0,
-        ..GrpcWorkerCandidateConfig::default()
-    });
+        _store,
+    ));
     let error = match candidate.start().await {
         Ok(_) => panic!("cleartext token must be refused"),
         Err(error) => error,
@@ -306,11 +331,16 @@ async fn grpc_candidate_refuses_cleartext_token() {
 }
 
 #[tokio::test]
-async fn grpc_candidate_refuses_cleartext_non_loopback() {
+async fn remote_candidate_refuses_cleartext_non_loopback() {
     // The policy guard fires before any network I/O: a plain endpoint
     // that is not loopback is refused outright.
-    let candidate =
-        GrpcWorkerCandidate::with_defaults("http://203.0.113.10:50051", GrpcAuth::plain());
+    let (_dir, store) = temp_store();
+    let candidate = RemoteWorkerCandidate::with_defaults(
+        WORKER_ID,
+        "http://203.0.113.10:50051",
+        GrpcAuth::plain(),
+        store,
+    );
     let error = match candidate.start().await {
         Ok(_) => panic!("non-loopback plain endpoint must be refused"),
         Err(error) => error,
@@ -323,29 +353,27 @@ async fn grpc_candidate_refuses_cleartext_non_loopback() {
 }
 
 #[tokio::test]
-async fn grpc_candidate_connects_with_tls_and_token() {
-    let identity =
-        reimagine_backend_worker_transport_grpc::tls::generate_self_signed_identity("localhost")
-            .unwrap();
+async fn remote_candidate_connects_with_tls_and_token() {
+    let identity = generate_self_signed_identity("localhost").unwrap();
     let (endpoint, server_handle) = start_test_grpc_server(
         Some("cloud-token".to_owned()),
-        Some((identity.cert_pem.clone(), identity.key_pem)),
+        Some((identity.cert_pem.clone(), identity.key_pem.clone())),
     )
     .await;
+    let (_dir, store) = temp_store();
 
     // Missing token over TLS -> refused by the server.
-    let missing_token = GrpcWorkerCandidate::new(GrpcWorkerCandidateConfig {
-        endpoint: endpoint.clone(),
-        auth: GrpcAuth {
+    let missing_token = RemoteWorkerCandidate::new(candidate_config(
+        endpoint.clone(),
+        GrpcAuth {
             token: None,
             tls: Some(GrpcTls::TrustCert {
                 ca_pem: identity.cert_pem.clone(),
                 domain: "localhost".to_owned(),
             }),
         },
-        connect_retries: 0,
-        ..GrpcWorkerCandidateConfig::default()
-    });
+        store.clone(),
+    ));
     let error = match missing_token.start().await {
         Ok(_) => panic!("missing token must be refused"),
         Err(error) => error,
@@ -356,19 +384,19 @@ async fn grpc_candidate_connects_with_tls_and_token() {
     );
 
     // Correct token over TLS -> hello succeeds, remote device.
-    let candidate = GrpcWorkerCandidate::new(GrpcWorkerCandidateConfig {
+    let candidate = RemoteWorkerCandidate::new(candidate_config(
         endpoint,
-        auth: GrpcAuth {
+        GrpcAuth {
             token: Some("cloud-token".to_owned()),
             tls: Some(GrpcTls::TrustCert {
                 ca_pem: identity.cert_pem,
                 domain: "localhost".to_owned(),
             }),
         },
-        ..GrpcWorkerCandidateConfig::default()
-    });
-    let grpc_worker = candidate.start().await.expect("token + TLS connect");
-    let snapshot = grpc_worker.snapshot().await;
+        store,
+    ));
+    let remote_worker = candidate.start().await.expect("token + TLS connect");
+    let snapshot = remote_worker.snapshot().await;
     let device = snapshot.device.expect("device should be present");
     assert_eq!(device.kind, DeviceKind::Remote);
 
@@ -376,33 +404,79 @@ async fn grpc_candidate_connects_with_tls_and_token() {
 }
 
 #[tokio::test]
-async fn grpc_candidate_rejects_wrong_ca() {
+async fn remote_candidate_pins_the_certificate_on_first_connect() {
+    let identity = generate_self_signed_identity("localhost").unwrap();
+    let (endpoint, server_handle) = start_test_grpc_server(
+        None,
+        Some((identity.cert_pem.clone(), identity.key_pem.clone())),
+    )
+    .await;
+    let (_dir, store) = temp_store();
+
+    // First connect: TOFU records the presented fingerprint.
+    let candidate = RemoteWorkerCandidate::new(candidate_config(
+        endpoint.clone(),
+        GrpcAuth::plain(),
+        store.clone(),
+    ));
+    candidate.start().await.expect("first connect");
+
+    // The pin key is `worker_id@host` (no port): a worker restart that
+    // changes the port must keep its pin.
+    let host = endpoint
+        .trim_start_matches("https://")
+        .rsplit_once(':')
+        .expect("endpoint carries a port")
+        .0;
+    let pin_key = format!("{WORKER_ID}@{host}");
+    let pin = store
+        .lock()
+        .unwrap()
+        .pinned(&pin_key)
+        .expect("pin recorded")
+        .clone();
+    assert_eq!(pin, identity.fingerprint());
+
+    // A rotated worker presenting a different certificate from the same
+    // host is rejected by the pin.
+    let rotated = generate_self_signed_identity("localhost").unwrap();
+    let (rotated_endpoint, rotated_handle) =
+        start_test_grpc_server(None, Some((rotated.cert_pem, rotated.key_pem))).await;
+    let candidate =
+        RemoteWorkerCandidate::new(candidate_config(rotated_endpoint, GrpcAuth::plain(), store));
+    assert!(
+        candidate.start().await.is_err(),
+        "pinned connect to a different cert must fail"
+    );
+
+    server_handle.abort();
+    rotated_handle.abort();
+}
+
+#[tokio::test]
+async fn remote_candidate_rejects_wrong_ca() {
     // MITM simulation: the client pins a CA that did not sign the
     // server's certificate — the TLS handshake must fail.
-    let server_identity =
-        reimagine_backend_worker_transport_grpc::tls::generate_self_signed_identity("localhost")
-            .unwrap();
-    let attacker_identity =
-        reimagine_backend_worker_transport_grpc::tls::generate_self_signed_identity("localhost")
-            .unwrap();
+    let server_identity = generate_self_signed_identity("localhost").unwrap();
+    let attacker_identity = generate_self_signed_identity("localhost").unwrap();
     let (endpoint, server_handle) = start_test_grpc_server(
         None,
         Some((server_identity.cert_pem.clone(), server_identity.key_pem)),
     )
     .await;
+    let (_dir, store) = temp_store();
 
-    let candidate = GrpcWorkerCandidate::new(GrpcWorkerCandidateConfig {
+    let candidate = RemoteWorkerCandidate::new(candidate_config(
         endpoint,
-        auth: GrpcAuth {
+        GrpcAuth {
             token: None,
             tls: Some(GrpcTls::TrustCert {
                 ca_pem: attacker_identity.cert_pem,
                 domain: "localhost".to_owned(),
             }),
         },
-        connect_retries: 0,
-        ..GrpcWorkerCandidateConfig::default()
-    });
+        store,
+    ));
     let error = match candidate.start().await {
         Ok(_) => panic!("wrong CA must be rejected"),
         Err(error) => error,
@@ -413,7 +487,7 @@ async fn grpc_candidate_rejects_wrong_ca() {
 }
 
 #[tokio::test]
-async fn grpc_worker_shutdown_reaches_the_worker() {
+async fn remote_worker_shutdown_reaches_the_worker() {
     let (endpoint, server_handle) = start_test_grpc_server(None, None).await;
 
     let client = Arc::new(
@@ -422,12 +496,11 @@ async fn grpc_worker_shutdown_reaches_the_worker() {
             .unwrap(),
     );
     let hello = client.hello().await.unwrap();
-    let hello = reimagine_backend_worker_transport_grpc::conversion::hello_from_proto(hello)
-        .expect("complete hello");
-    let grpc_worker = GrpcSwitchableWorker::new(hello, client);
+    let hello = hello_from_proto(hello).expect("complete hello");
+    let remote_worker = RemoteSwitchableWorker::new(hello, client);
 
     // The shutdown RPC reaches the fake worker and is acknowledged.
-    grpc_worker.shutdown().await.expect("shutdown");
+    remote_worker.shutdown().await.expect("shutdown");
 
     server_handle.abort();
 }

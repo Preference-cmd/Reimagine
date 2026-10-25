@@ -1426,7 +1426,7 @@ mod tests {
             workers: vec![reimagine_config::WorkerEndpointConfig {
                 id: "invalid-worker".to_owned(),
                 transport: "carrier-pigeon".to_owned(),
-                address: "quic://127.0.0.1:9999".to_owned(),
+                address: "https://127.0.0.1:9999".to_owned(),
                 capabilities: Vec::new(),
                 device_label: String::new(),
                 fingerprint: None,

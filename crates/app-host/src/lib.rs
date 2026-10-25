@@ -30,12 +30,8 @@ pub use aigc::ModelAcquisitionService;
 #[cfg(feature = "aigc")]
 pub use aigc::SnapshotExternalReadinessProvider;
 #[cfg(feature = "aigc")]
-pub use aigc::inference::grpc_worker::{
-    GrpcSwitchableWorker, GrpcWorkerCandidate, GrpcWorkerCandidateConfig,
-};
-#[cfg(feature = "aigc")]
-pub use aigc::inference::quic_worker::{
-    QuicSwitchableWorker, QuicWorkerCandidate, QuicWorkerCandidateConfig,
+pub use aigc::inference::remote_worker::{
+    RemoteSwitchableWorker, RemoteWorkerCandidate, RemoteWorkerCandidateConfig,
 };
 #[cfg(feature = "aigc")]
 pub use aigc::inference::switch::{

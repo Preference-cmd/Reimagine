@@ -3,13 +3,11 @@
 
 use std::time::Duration;
 
-use reimagine_backend_worker_transport_grpc::auth::GrpcAuth;
-use reimagine_backend_worker_transport_grpc::client::WorkerClient;
-use reimagine_backend_worker_transport_grpc::local::{LocalEndpoint, bind, connect_local};
-use reimagine_backend_worker_transport_grpc::server::{
-    parse_listen_endpoint, serve_local, worker_server,
-};
-use reimagine_backend_worker_transport_grpc::testing::{FakeWorkerConfig, FakeWorkerService};
+use reimagine_backend_worker_protocol::auth::GrpcAuth;
+use reimagine_backend_worker_protocol::client::WorkerClient;
+use reimagine_backend_worker_protocol::local::{LocalEndpoint, bind, connect_local};
+use reimagine_backend_worker_protocol::server::{serve_local, worker_server};
+use reimagine_backend_worker_protocol::testing::{FakeWorkerConfig, FakeWorkerService};
 
 const TOKEN: &str = "local-secret";
 
@@ -29,7 +27,7 @@ async fn serve_fake_worker(endpoint: &LocalEndpoint) {
 fn temp_endpoint(name: &str) -> LocalEndpoint {
     let path = std::env::temp_dir().join(format!("reimagine-auth-{name}-{}", std::process::id()));
     let _ = std::fs::remove_file(&path);
-    parse_listen_endpoint(&format!("unix://{}", path.display())).unwrap()
+    LocalEndpoint::parse(&format!("unix://{}", path.display())).unwrap()
 }
 
 #[tokio::test]

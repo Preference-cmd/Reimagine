@@ -1,11 +1,16 @@
 //! Burn inference worker serving the `reimagine.worker.v2` gRPC
-//! contract over a local socket.
+//! contract.
 //!
 //! The host launches the worker with `--listen <endpoint>` and a
 //! per-launch bearer token (`REIMAGINE_WORKER_TOKEN`). The worker binds
 //! the endpoint, prints one `READY <endpoint>` line on stdout (its only
-//! stdout output), and serves until the host closes its stdin.
+//! stdout output), and serves until the host closes its stdin. Endpoints:
+//! a private local socket (`unix://<path>`, Windows `pipe://<name>`) for
+//! host-launched workers, or `https://<ip>:<port>` for remote workers,
+//! which additionally serves TLS with a self-signed certificate and
+//! registers itself with mDNS for discovery.
 
+use std::collections::HashMap;
 use std::io::Write as _;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
@@ -13,10 +18,10 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::Duration;
 
 use clap::Parser;
-use reimagine_backend_worker_transport_grpc::auth::TOKEN_ENV;
-use reimagine_backend_worker_transport_grpc::local::{LocalEndpoint, bind};
-use reimagine_backend_worker_transport_grpc::server::{
-    parse_listen_endpoint, serve_local, worker_server,
+use reimagine_backend_worker_protocol::auth::TOKEN_ENV;
+use reimagine_backend_worker_protocol::discovery::MdnsWorkerRegister;
+use reimagine_backend_worker_protocol::server::{
+    ListenEndpoint, bind_listen, serve_bound, worker_server,
 };
 use reimagine_inference_burn::{BurnBackend, BurnBackendConfig};
 
@@ -35,8 +40,9 @@ const SHUTDOWN_EXIT_GRACE: Duration = Duration::from_millis(200);
     about = "Reimagine Burn inference worker"
 )]
 struct Cli {
-    /// Local endpoint to serve the v2 contract on (`unix://<path>` or,
-    /// on Windows, `pipe://<name>`).
+    /// Endpoint to serve the v2 contract on: `unix://<path>` or, on
+    /// Windows, `pipe://<name>` for a host-launched worker; `https://<ip>:<port>`
+    /// for a remote worker.
     #[arg(long = "listen")]
     listen: String,
 }
@@ -83,7 +89,7 @@ fn main() {
         }
     };
 
-    let endpoint: LocalEndpoint = match parse_listen_endpoint(&cli.listen) {
+    let endpoint: ListenEndpoint = match ListenEndpoint::parse(&cli.listen) {
         Ok(endpoint) => endpoint,
         Err(error) => {
             log(&format!(
@@ -96,6 +102,14 @@ fn main() {
     let token = std::env::var(TOKEN_ENV)
         .ok()
         .filter(|value| !value.is_empty());
+
+    // Identity for the mDNS registration of a remote (`https://`)
+    // worker; computed before the backend moves into the service.
+    let mdns_identity = if matches!(endpoint, ListenEndpoint::Https(_)) {
+        Some(probe::build(&backend))
+    } else {
+        None
+    };
 
     let shutdown_requested = Arc::new(AtomicBool::new(false));
     let service = service::BurnWorkerService::new(backend, token, Arc::clone(&shutdown_requested));
@@ -139,8 +153,8 @@ fn main() {
     };
 
     runtime.block_on(async move {
-        let incoming = match bind(&endpoint).await {
-            Ok(incoming) => incoming,
+        let bound = match bind_listen(&endpoint).await {
+            Ok(bound) => bound,
             Err(error) => {
                 log(&format!(
                     "FATAL: cannot bind {}: {error}",
@@ -149,17 +163,66 @@ fn main() {
                 std::process::exit(1);
             }
         };
+        // A remote worker advertises itself on the LAN so hosts can
+        // discover it; the advertised fingerprint lets a host pre-validate
+        // its TOFU pin. Registration failure is not fatal: the worker
+        // stays reachable at its endpoint with token authentication. The
+        // registration handle is held for the worker's whole lifetime;
+        // dropping it would unregister the service.
+        let mut mdns_registration = None;
+        if let (Some((identity, profile)), Some(tls_identity)) = (&mdns_identity, bound.identity())
+        {
+            let capabilities: Vec<&str> = profile
+                .instances
+                .iter()
+                .flat_map(|instance| instance.capabilities.iter().map(String::as_str))
+                .collect();
+            let devices: Vec<&str> = profile
+                .instances
+                .iter()
+                .map(|instance| instance.device_label.as_str())
+                .collect();
+            let mut properties = HashMap::new();
+            properties.insert("endpoint".to_owned(), bound.uri().to_owned());
+            properties.insert("backend".to_owned(), identity.backend_kind.clone());
+            properties.insert("devices".to_owned(), devices.join(","));
+            properties.insert("capabilities".to_owned(), capabilities.join(","));
+            properties.insert(
+                "fingerprint".to_owned(),
+                tls_identity.fingerprint().as_str().to_owned(),
+            );
+            match MdnsWorkerRegister::register(
+                &identity.backend_instance_id.0,
+                bound.https_addr().expect("https listener has an address"),
+                properties,
+            ) {
+                Ok(registration) => {
+                    log(&format!(
+                        "worker: mDNS registered as '{}'",
+                        identity.backend_instance_id.0
+                    ));
+                    mdns_registration = Some(registration);
+                }
+                Err(error) => {
+                    log(&format!(
+                        "worker: mDNS registration failed (worker stays reachable at {}): {error}",
+                        bound.uri()
+                    ));
+                }
+            }
+        }
         // The READY line is the only stdout output of a worker and is
         // printed only once the endpoint is bound.
         let mut stdout = std::io::stdout().lock();
-        if writeln!(stdout, "READY {}", endpoint.to_uri()).is_err() || stdout.flush().is_err() {
+        if writeln!(stdout, "READY {}", bound.uri()).is_err() || stdout.flush().is_err() {
             std::process::exit(1);
         }
         drop(stdout);
 
-        if let Err(error) = serve_local(incoming, worker_server(service)).await {
+        if let Err(error) = serve_bound(bound, worker_server(service)).await {
             log(&format!("worker server error: {error}"));
         }
+        drop(mdns_registration);
     });
 
     log("worker: server stopped, terminating");

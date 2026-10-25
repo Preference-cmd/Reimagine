@@ -11,19 +11,18 @@ use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 
 use reimagine_backend_worker_protocol::{
-    BackendExecutionError, TerminalOutcome, WORKER_PROTOCOL_VERSION,
+    BackendExecutionError, Request, Response, Status, TerminalOutcome, WORKER_PROTOCOL_VERSION,
+    async_trait,
+    conversion::outcome_to_proto,
+    conversion::profile_to_proto,
+    proto,
+    proto::worker_server::Worker,
+    proto::{
+        CleanupRequest, CleanupResponse, ExecuteEvent, ExecuteRequest, HealthRequest,
+        HealthResponse, HelloRequest, HelloResponse, ShutdownRequest, ShutdownResponse,
+    },
+    server::require_bearer,
 };
-use reimagine_backend_worker_transport_grpc::Request;
-use reimagine_backend_worker_transport_grpc::Response;
-use reimagine_backend_worker_transport_grpc::Status;
-use reimagine_backend_worker_transport_grpc::async_trait;
-use reimagine_backend_worker_transport_grpc::conversion::outcome_to_proto;
-use reimagine_backend_worker_transport_grpc::proto::worker_server::Worker;
-use reimagine_backend_worker_transport_grpc::proto::{
-    self, CleanupRequest, CleanupResponse, ExecuteEvent, ExecuteRequest, HealthRequest,
-    HealthResponse, HelloRequest, HelloResponse, ShutdownRequest, ShutdownResponse,
-};
-use reimagine_backend_worker_transport_grpc::server::require_bearer;
 use reimagine_inference_burn::{BurnBackend, with_request_cancellation};
 use tokio::sync::mpsc;
 use tokio_stream::Stream;
@@ -108,9 +107,7 @@ impl Worker for BurnWorkerService {
                 target: identity.target,
                 manifest_digest: identity.manifest_digest,
             }),
-            profile: Some(
-                reimagine_backend_worker_transport_grpc::conversion::profile_to_proto(&profile),
-            ),
+            profile: Some(profile_to_proto(&profile)),
         }))
     }
 

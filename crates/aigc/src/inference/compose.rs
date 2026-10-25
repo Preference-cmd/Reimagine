@@ -143,11 +143,11 @@ pub type TopologyHandle = Arc<tokio::sync::Mutex<super::topology::ConnectionTopo
 /// manager is created with an empty pool and a discovery orchestrator
 /// (config endpoints + mDNS) starts polling it in the background.
 ///
-/// # Trust gate (T19)
+/// # Trust gate
 ///
 /// Discovery only *registers* endpoints in the pool — it never
 /// connects. Untrusted (mDNS-discovered) workers are surfaced in the
-/// compute profile but are not routable until the T19 trust flow has
+/// compute profile but are not routable until the trust flow has
 /// pinned their certificate.
 fn build_topology(
     backend_config: &InferenceBackendConfig,
@@ -169,7 +169,7 @@ fn build_topology(
         ) -> Option<Arc<dyn reimagine_inference::InferenceBackend>> {
             // T13 registers endpoints without connecting: routing to
             // remote workers happens through the worker switch service
-            // after the T19 trust flow, not through a factory-built
+            // after the trust flow, not through a factory-built
             // backend at bootstrap.
             None
         }

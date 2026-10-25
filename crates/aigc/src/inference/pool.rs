@@ -21,7 +21,7 @@ pub struct WorkerEndpoint {
     /// fingerprint is held for it).
     ///
     /// `false` means the endpoint was discovered (e.g. via mDNS) but not
-    /// yet verified — connecting must go through the T19 trust flow
+    /// yet verified — connecting must go through the TOFU trust flow
     /// (`connect_with_trust` + `TrustedKeyStore`, never an unauthenticated
     /// auto-connect). See `crate::inference::discovery`.
     pub trusted: bool,

@@ -17,9 +17,7 @@ use crate::proto::{
     self, CleanupRequest, CleanupResponse, ExecuteEvent, ExecuteRequest, HealthRequest,
     HealthResponse, HelloRequest, HelloResponse, ShutdownRequest, ShutdownResponse,
 };
-use reimagine_backend_worker_protocol::{
-    BackendExecutionError, TerminalOutcome, WorkerIdentity, WorkerProfile,
-};
+use crate::{BackendExecutionError, TerminalOutcome, WorkerIdentity, WorkerProfile};
 
 /// Behaviour knobs for [`FakeWorkerService`].
 #[derive(Clone, Debug, Default)]
@@ -123,7 +121,7 @@ impl Worker for FakeWorkerService {
             manifest_digest: "test-manifest".to_owned(),
         });
         let profile = self.config.profile.clone().unwrap_or(WorkerProfile {
-            instances: vec![reimagine_backend_worker_protocol::WorkerInstanceProfile {
+            instances: vec![crate::WorkerInstanceProfile {
                 backend_instance_id: identity.backend_instance_id.clone(),
                 device_label: "cpu".to_owned(),
                 capabilities: vec!["echo".to_owned(), "delay".to_owned()],

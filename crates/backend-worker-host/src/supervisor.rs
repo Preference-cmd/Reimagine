@@ -2,14 +2,14 @@ use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, AtomicU8, AtomicU64, Ordering};
 use std::time::Duration;
 
+use reimagine_backend_worker_protocol::client::WorkerClient;
+use reimagine_backend_worker_protocol::conversion::{
+    hello_from_proto, outcome_from_proto, progress_from_proto,
+};
+use reimagine_backend_worker_protocol::proto;
 use reimagine_backend_worker_protocol::{
     ProgressFrame, TerminalOutcome, WorkerHello, WorkerIncarnationId,
 };
-use reimagine_backend_worker_transport_grpc::client::WorkerClient;
-use reimagine_backend_worker_transport_grpc::conversion::{
-    hello_from_proto, outcome_from_proto, progress_from_proto,
-};
-use reimagine_backend_worker_transport_grpc::proto;
 use tokio::sync::Mutex;
 use tokio::sync::mpsc;
 use tokio::task::JoinHandle;
@@ -395,7 +395,7 @@ async fn cancel_request(
 /// the worker, so this task must own the stream until it ends or the
 /// caller gives up.
 async fn drive_execute(
-    mut stream: reimagine_backend_worker_transport_grpc::Streaming<proto::ExecuteEvent>,
+    mut stream: reimagine_backend_worker_protocol::Streaming<proto::ExecuteEvent>,
     sender: mpsc::UnboundedSender<PendingEvent>,
     lifecycle: ReaderLifecycle,
 ) {
@@ -466,7 +466,7 @@ async fn call_with_timeout<T, F>(
     call: F,
 ) -> Result<T, WorkerHostError>
 where
-    F: std::future::Future<Output = Result<T, reimagine_backend_worker_transport_grpc::Status>>,
+    F: std::future::Future<Output = Result<T, reimagine_backend_worker_protocol::Status>>,
 {
     match timeout(deadline, call).await {
         Ok(Ok(value)) => Ok(value),

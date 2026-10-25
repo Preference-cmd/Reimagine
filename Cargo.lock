@@ -50,8 +50,6 @@ dependencies = [
  "hf-hub",
  "reimagine-backend-worker-host",
  "reimagine-backend-worker-protocol",
- "reimagine-backend-worker-transport-grpc",
- "reimagine-backend-worker-transport-quic",
  "reimagine-config",
  "reimagine-core",
  "reimagine-inference",
@@ -6546,7 +6544,6 @@ dependencies = [
  "hex",
  "rand 0.8.7",
  "reimagine-backend-worker-protocol",
- "reimagine-backend-worker-transport-grpc",
  "reimagine-core",
  "reimagine-inference",
  "reqwest 0.12.28",
@@ -6564,46 +6561,24 @@ dependencies = [
 name = "reimagine-backend-worker-protocol"
 version = "0.1.0"
 dependencies = [
- "serde",
- "serde_json",
-]
-
-[[package]]
-name = "reimagine-backend-worker-transport-grpc"
-version = "0.1.0"
-dependencies = [
  "futures-core",
+ "hex",
  "hyper-util",
+ "mdns-sd",
  "prost",
  "protoc-bin-vendored",
  "rcgen",
- "reimagine-backend-worker-protocol",
- "rustls",
- "serde_json",
- "tokio",
- "tokio-stream",
- "tonic",
- "tonic-prost",
- "tonic-prost-build",
- "tower",
- "tracing",
-]
-
-[[package]]
-name = "reimagine-backend-worker-transport-quic"
-version = "0.1.0"
-dependencies = [
- "hex",
- "mdns-sd",
- "quinn",
- "rcgen",
- "reimagine-backend-worker-protocol",
  "rustls",
  "serde",
  "serde_json",
  "sha2 0.10.9",
  "tempfile",
  "tokio",
+ "tokio-stream",
+ "tonic",
+ "tonic-prost",
+ "tonic-prost-build",
+ "tower",
  "tracing",
 ]
 
@@ -6676,7 +6651,6 @@ dependencies = [
  "reimagine-app-host",
  "reimagine-backend-worker-host",
  "reimagine-backend-worker-protocol",
- "reimagine-backend-worker-transport-grpc",
  "reimagine-config",
  "reimagine-core",
  "reimagine-inference",

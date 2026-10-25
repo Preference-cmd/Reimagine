@@ -29,7 +29,7 @@ impl std::error::Error for TransportError {}
 pub enum TransportKind {
     /// A local child process reached over a private socket or named pipe.
     Local,
-    Quic,
+    /// A remote worker reached over TLS-protected HTTP/2.
     Grpc,
     /// In-memory transport used by tests.
     Mock,

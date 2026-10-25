@@ -1,4 +1,5 @@
-//! Trust On First Use (TOFU) store and certificate pinning for QUIC workers.
+//! Trust On First Use (TOFU) store and certificate pinning for remote
+//! workers.
 //!
 //! A worker presents a self-signed certificate. The host derives a stable
 //! fingerprint (SHA-256 over the DER bytes, hex-encoded) and pins it in a
@@ -24,7 +25,7 @@ use rustls::{DigitallySignedStruct, SignatureScheme};
 use serde::{Deserialize, Serialize};
 use sha2::Digest;
 
-use crate::Error;
+use crate::transport::TransportError;
 
 /// Environment variable that disables pinning (dev/test escape hatch).
 ///
@@ -91,15 +92,15 @@ pub struct TrustedKeyStore {
 
 impl TrustedKeyStore {
     /// Load the store from `path`; a missing file yields an empty store.
-    pub fn load(path: impl Into<PathBuf>) -> Result<Self, Error> {
+    pub fn load(path: impl Into<PathBuf>) -> Result<Self, TransportError> {
         let path = path.into();
         let keys = match std::fs::read(&path) {
             Ok(bytes) => {
                 let file: TrustedKeysFile = serde_json::from_slice(&bytes).map_err(|e| {
-                    Error::Store(format!("corrupt trusted-keys file {}: {e}", path.display()))
+                    TransportError::Io(format!("corrupt trusted-keys file {}: {e}", path.display()))
                 })?;
                 if file.version != STORE_VERSION {
-                    return Err(Error::Store(format!(
+                    return Err(TransportError::Io(format!(
                         "unsupported trusted-keys format version {} in {}",
                         file.version,
                         path.display()
@@ -109,7 +110,7 @@ impl TrustedKeyStore {
             }
             Err(e) if e.kind() == std::io::ErrorKind::NotFound => BTreeMap::new(),
             Err(e) => {
-                return Err(Error::Store(format!(
+                return Err(TransportError::Io(format!(
                     "failed to read trusted-keys file {}: {e}",
                     path.display()
                 )));
@@ -148,7 +149,11 @@ impl TrustedKeyStore {
     /// under the same lock before calling this; a concurrent first-trust
     /// that recorded a different fingerprint for the same id would
     /// otherwise be silently overwritten (last-writer-wins).
-    pub fn trust(&mut self, worker_id: &str, fingerprint: &CertFingerprint) -> Result<(), Error> {
+    pub fn trust(
+        &mut self,
+        worker_id: &str,
+        fingerprint: &CertFingerprint,
+    ) -> Result<(), TransportError> {
         self.keys.insert(worker_id.to_owned(), fingerprint.clone());
         self.persist()
     }
@@ -156,7 +161,7 @@ impl TrustedKeyStore {
     /// Remove the pin for `worker_id` and persist.
     ///
     /// Returns whether a pin existed for the id.
-    pub fn forget(&mut self, worker_id: &str) -> Result<bool, Error> {
+    pub fn forget(&mut self, worker_id: &str) -> Result<bool, TransportError> {
         let removed = self.keys.remove(worker_id).is_some();
         if removed {
             self.persist()?;
@@ -165,7 +170,7 @@ impl TrustedKeyStore {
     }
 
     /// Remove every pin and persist. Returns the number of pins removed.
-    pub fn forget_all(&mut self) -> Result<usize, Error> {
+    pub fn forget_all(&mut self) -> Result<usize, TransportError> {
         let count = self.keys.len();
         if count > 0 {
             self.keys.clear();
@@ -175,17 +180,18 @@ impl TrustedKeyStore {
     }
 
     /// Atomically persist the store to disk.
-    fn persist(&self) -> Result<(), Error> {
+    fn persist(&self) -> Result<(), TransportError> {
         if let Some(parent) = self.path.parent() {
-            std::fs::create_dir_all(parent)
-                .map_err(|e| Error::Store(format!("failed to create {}: {e}", parent.display())))?;
+            std::fs::create_dir_all(parent).map_err(|e| {
+                TransportError::Io(format!("failed to create {}: {e}", parent.display()))
+            })?;
         }
         let file = TrustedKeysFile {
             version: STORE_VERSION,
             keys: self.keys.clone(),
         };
         let bytes = serde_json::to_vec_pretty(&file)
-            .map_err(|e| Error::Store(format!("serialize trusted-keys: {e}")))?;
+            .map_err(|e| TransportError::Io(format!("serialize trusted-keys: {e}")))?;
         // Unique temp name + O_EXCL: a fixed name would let a second
         // principal race a symlink into the store directory; the parent
         // dir is user-owned today, but harden the window anyway.
@@ -202,16 +208,18 @@ impl TrustedKeyStore {
                 .write(true)
                 .create_new(true)
                 .open(&tmp)
-                .map_err(|e| Error::Store(format!("failed to create {}: {e}", tmp.display())))?;
-            handle
-                .write_all(&bytes)
-                .map_err(|e| Error::Store(format!("failed to write {}: {e}", tmp.display())))?;
-            handle
-                .sync_all()
-                .map_err(|e| Error::Store(format!("failed to sync {}: {e}", tmp.display())))?;
+                .map_err(|e| {
+                    TransportError::Io(format!("failed to create {}: {e}", tmp.display()))
+                })?;
+            handle.write_all(&bytes).map_err(|e| {
+                TransportError::Io(format!("failed to write {}: {e}", tmp.display()))
+            })?;
+            handle.sync_all().map_err(|e| {
+                TransportError::Io(format!("failed to sync {}: {e}", tmp.display()))
+            })?;
         }
         std::fs::rename(&tmp, &self.path)
-            .map_err(|e| Error::Store(format!("failed to rename {}: {e}", tmp.display())))?;
+            .map_err(|e| TransportError::Io(format!("failed to rename {}: {e}", tmp.display())))?;
         if let Some(parent) = self.path.parent()
             && let Ok(dir) = std::fs::File::open(parent)
         {
@@ -384,7 +392,10 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join("trusted-keys.json");
         std::fs::write(&path, b"not json").unwrap();
-        assert!(matches!(TrustedKeyStore::load(&path), Err(Error::Store(_))));
+        assert!(matches!(
+            TrustedKeyStore::load(&path),
+            Err(TransportError::Io(_))
+        ));
     }
 
     #[test]

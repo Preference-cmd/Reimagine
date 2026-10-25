@@ -7,11 +7,10 @@
 pub mod candidate;
 pub mod compose;
 pub mod discovery;
-pub mod grpc_worker;
 pub mod health;
 pub mod image_source_resolver;
 pub mod pool;
-pub mod quic_worker;
+pub mod remote_worker;
 pub mod resolver;
 pub mod selection;
 pub mod switch;

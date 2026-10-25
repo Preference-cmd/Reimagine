@@ -32,14 +32,28 @@ pub fn ensure_crypto_provider() {
     let _ = rustls::crypto::ring::default_provider().install_default();
 }
 
-/// A self-signed certificate identity in PEM form, for
-/// `tonic::transport::Identity::from_pem`.
+/// A self-signed certificate identity: PEM forms for
+/// `tonic::transport::Identity::from_pem`, plus the DER form of the
+/// certificate for fingerprint publication (mDNS TXT) and TOFU pinning.
 #[derive(Debug, Clone)]
 pub struct SelfSignedIdentity {
     /// PEM-encoded certificate chain.
     pub cert_pem: String,
     /// PEM-encoded PKCS#8 private key.
     pub key_pem: String,
+    /// DER-encoded leaf certificate (same bytes as `cert_pem`).
+    pub cert_der: Vec<u8>,
+}
+
+impl SelfSignedIdentity {
+    /// SHA-256 fingerprint of the certificate DER, hex-encoded.
+    ///
+    /// This is the value a TOFU host pins for this identity and the
+    /// value a worker publishes as its mDNS `fingerprint` TXT record.
+    #[must_use]
+    pub fn fingerprint(&self) -> crate::trust::CertFingerprint {
+        crate::trust::CertFingerprint::of_der(&CertificateDer::from(self.cert_der.clone()))
+    }
 }
 
 /// Generate a fresh self-signed identity for the given hostname.
@@ -53,6 +67,7 @@ pub fn generate_self_signed_identity(hostname: &str) -> Result<SelfSignedIdentit
     Ok(SelfSignedIdentity {
         cert_pem: certified.cert.pem(),
         key_pem: certified.key_pair.serialize_pem(),
+        cert_der: CertificateDer::from(certified.cert).to_vec(),
     })
 }
 

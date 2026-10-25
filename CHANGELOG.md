@@ -16,7 +16,8 @@ both check it.
   `Execute`, `Health`, `Cleanup`, `Shutdown` in `reimagine.worker.v2`)
   instead of a JSON message tunnel. The host reaches local workers over a
   private Unix socket (Windows: named pipe) with a per-launch bearer token;
-  remote workers will move to HTTP/2 with TLS in a later change.
+  remote workers serve the same contract over HTTP/2 with TLS, a bearer
+  token and TOFU certificate pinning, and advertise themselves over mDNS.
 - Installed worker packages that only speak protocol v1 are rejected by the
   compatibility check with a reinstall diagnostic; old workers must be
   reinstalled.
@@ -85,6 +86,14 @@ both check it.
   default). None of this was reachable in production: workers answered
   transfer messages with an "unexpected" diagnostic and the production
   router always used the reject-all policy.
+- The QUIC worker transport and the standalone transport crates: the
+  `reimagine-backend-worker-transport-quic` and
+  `reimagine-backend-worker-transport-grpc` crates are gone (workspace
+  members drop from 17 to 15); the gRPC contract, the local socket and TLS
+  transports, the TOFU trust store, token handling and mDNS discovery now
+  live in `reimagine-backend-worker-protocol`. Remote workers serve
+  `https://` endpoints instead of `quic://`; remote workers were never
+  routed, so no behavior is lost.
 
 ### Fixed
 

@@ -65,11 +65,6 @@ impl TransportHealthPolicy {
                 probe_timeout: Duration::from_secs(2),
                 failure_threshold: 2,
             },
-            TransportKind::Quic => Self {
-                check_interval: Duration::from_secs(15),
-                probe_timeout: Duration::from_secs(5),
-                failure_threshold: 3,
-            },
             TransportKind::Grpc => Self {
                 check_interval: Duration::from_secs(30),
                 probe_timeout: Duration::from_secs(10),
@@ -358,13 +353,10 @@ mod tests {
         assert_eq!(pool.get("w1").unwrap().state, WorkerState::Ready);
     }
 
-    #[tokio::test]
-    async fn per_transport_policy_differs() {
+    #[test]
+    fn per_transport_policy_differs() {
         let local = TransportHealthPolicy::for_kind(TransportKind::Local);
-        let quic = TransportHealthPolicy::for_kind(TransportKind::Quic);
         let grpc = TransportHealthPolicy::for_kind(TransportKind::Grpc);
-        assert!(local.check_interval < quic.check_interval);
-        assert!(quic.check_interval < grpc.check_interval);
-        assert!(local.failure_threshold <= quic.failure_threshold);
+        assert!(local.check_interval < grpc.check_interval);
     }
 }

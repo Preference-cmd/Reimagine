@@ -104,7 +104,7 @@ impl WorkerStorePaths {
     /// Path for the TOFU trusted-keys (certificate pinning) store.
     ///
     /// Maps worker identity/endpoint ids to pinned SHA-256 certificate
-    /// fingerprints; consumed by the QUIC transport trust model (T19).
+    /// fingerprints; consumed by the remote-worker TOFU trust model.
     #[must_use]
     pub fn trusted_keys_path(&self) -> PathBuf {
         self.root().join("trusted-keys.json")

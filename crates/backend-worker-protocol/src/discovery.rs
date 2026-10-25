@@ -5,15 +5,15 @@ use std::time::Duration;
 
 use mdns_sd::{ServiceDaemon, ServiceEvent, ServiceInfo};
 
-use crate::Error;
+use crate::transport::TransportError;
 
 /// The mDNS service type for Reimagine GPU workers.
-const SERVICE_TYPE: &str = "_reimagine-worker._tcp.local.";
+pub const SERVICE_TYPE: &str = "_reimagine-worker._tcp.local.";
 
 /// TXT records published/consumed by the discovery protocol:
-/// `endpoint=quic://<ip>:<port>`, `backend=<kind>`,
+/// `endpoint=https://<ip>:<port>`, `backend=<kind>`,
 /// `devices=<comma-separated>`, `capabilities=<comma-separated>`,
-/// `fingerprint=<sha256-of-cert-der, hex>` (T19 trust model).
+/// `fingerprint=<sha256-of-cert-der, hex>`.
 /// A discovered worker on the LAN.
 #[derive(Debug, Clone)]
 pub struct DiscoveredWorker {
@@ -23,11 +23,11 @@ pub struct DiscoveredWorker {
 }
 
 impl DiscoveredWorker {
-    /// Parse the QUIC endpoint from the properties.
-    pub fn quic_endpoint(&self) -> Option<SocketAddr> {
+    /// Parse the `https://` endpoint from the properties.
+    pub fn https_endpoint(&self) -> Option<SocketAddr> {
         self.properties
             .get("endpoint")
-            .and_then(|ep| ep.strip_prefix("quic://"))
+            .and_then(|ep| ep.strip_prefix("https://"))
             .and_then(|addr| addr.parse().ok())
     }
 
@@ -74,29 +74,33 @@ pub struct MdnsWorkerRegister {
 
 impl MdnsWorkerRegister {
     /// Register a new worker service.
+    ///
+    /// The service is published with `<id>.local.` as the advertised
+    /// hostname and `<id>.local` as the instance name, so the full
+    /// service name is `<id>.local._reimagine-worker._tcp.local.`.
     pub fn register(
         id: &str,
         addr: SocketAddr,
         properties: HashMap<String, String>,
-    ) -> Result<Self, Error> {
+    ) -> Result<Self, TransportError> {
         let daemon = ServiceDaemon::new()
-            .map_err(|e| Error::ConnectionFailed(format!("mdns daemon: {e}")))?;
+            .map_err(|e| TransportError::ConnectionFailed(format!("mdns daemon: {e}")))?;
 
         let service_info = ServiceInfo::new(
             SERVICE_TYPE,
             &format!("{id}.local"),
-            &format!("{id}.local"),
+            &format!("{id}.local."),
             addr.ip().to_string(),
             addr.port(),
             properties,
         )
-        .map_err(|e| Error::ConnectionFailed(format!("mdns service info: {e}")))?;
+        .map_err(|e| TransportError::ConnectionFailed(format!("mdns service info: {e}")))?;
 
         daemon
             .register(service_info)
-            .map_err(|e| Error::ConnectionFailed(format!("mdns register: {e}")))?;
+            .map_err(|e| TransportError::ConnectionFailed(format!("mdns register: {e}")))?;
 
-        let service_name = format!("{id}.{}", SERVICE_TYPE);
+        let service_name = format!("{id}.local.{}", SERVICE_TYPE);
 
         Ok(Self {
             daemon,
@@ -105,10 +109,10 @@ impl MdnsWorkerRegister {
     }
 
     /// Unregister the service.
-    pub fn unregister(&self) -> Result<(), Error> {
+    pub fn unregister(&self) -> Result<(), TransportError> {
         self.daemon
             .unregister(&self.service_name)
-            .map_err(|e| Error::ConnectionFailed(format!("mdns unregister: {e}")))?;
+            .map_err(|e| TransportError::ConnectionFailed(format!("mdns unregister: {e}")))?;
         Ok(())
     }
 }
@@ -128,13 +132,13 @@ pub struct MdnsWorkerDiscovery {
 
 impl MdnsWorkerDiscovery {
     /// Start browsing for workers.
-    pub fn start() -> Result<Self, Error> {
+    pub fn start() -> Result<Self, TransportError> {
         let daemon = ServiceDaemon::new()
-            .map_err(|e| Error::ConnectionFailed(format!("mdns daemon: {e}")))?;
+            .map_err(|e| TransportError::ConnectionFailed(format!("mdns daemon: {e}")))?;
 
         let rx = daemon
             .browse(SERVICE_TYPE)
-            .map_err(|e| Error::ConnectionFailed(format!("mdns browse: {e}")))?;
+            .map_err(|e| TransportError::ConnectionFailed(format!("mdns browse: {e}")))?;
 
         let workers = Arc::new(Mutex::new(HashMap::new()));
         let workers_clone = workers.clone();
@@ -197,10 +201,10 @@ impl MdnsWorkerDiscovery {
     }
 
     /// Stop browsing and drop all discovered workers.
-    pub fn stop(&self) -> Result<(), Error> {
+    pub fn stop(&self) -> Result<(), TransportError> {
         self.daemon
             .stop_browse(SERVICE_TYPE)
-            .map_err(|e| Error::ConnectionFailed(format!("mdns stop browse: {e}")))?;
+            .map_err(|e| TransportError::ConnectionFailed(format!("mdns stop browse: {e}")))?;
         self.workers.lock().unwrap().clear();
         Ok(())
     }
@@ -215,7 +219,7 @@ mod tests {
         let mut props = HashMap::new();
         props.insert(
             "endpoint".to_string(),
-            "quic://192.168.1.100:9100".to_string(),
+            "https://192.168.1.100:9100".to_string(),
         );
         props.insert("backend".to_string(), "burn".to_string());
         props.insert("devices".to_string(), "cuda:0,cuda:1".to_string());
@@ -231,7 +235,7 @@ mod tests {
         };
 
         assert_eq!(
-            worker.quic_endpoint(),
+            worker.https_endpoint(),
             Some("192.168.1.100:9100".parse().unwrap())
         );
         assert_eq!(worker.backend_kind(), "burn");

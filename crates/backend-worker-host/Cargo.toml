@@ -17,7 +17,6 @@ flate2 = { workspace = true }
 fs2 = { workspace = true }
 hex = { workspace = true }
 reimagine-backend-worker-protocol = { path = "../backend-worker-protocol" }
-reimagine-backend-worker-transport-grpc = { path = "../backend-worker-transport-grpc" }
 reimagine-core = { path = "../core" }
 reimagine-inference = { path = "../inference" }
 reqwest = { workspace = true }

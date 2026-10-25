@@ -1,7 +1,7 @@
 //! Conversions between the `reimagine.worker.v2` protobuf messages and
-//! the shared protocol types in `reimagine-backend-worker-protocol`.
+//! the shared protocol types in this crate.
 
-use reimagine_backend_worker_protocol::{
+use crate::{
     BackendExecutionError, BackendInstanceId, ProgressFrame, ProtocolVersion, TerminalOutcome,
     WorkerHello, WorkerIdentity, WorkerIncarnationId, WorkerInstallationId, WorkerInstanceProfile,
     WorkerProfile,

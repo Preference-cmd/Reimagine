@@ -16,8 +16,6 @@ members = [
     "crates/plugin",
     "crates/backend-worker-protocol",
     "crates/backend-worker-host",
-    "crates/backend-worker-transport-quic",
-    "crates/backend-worker-transport-grpc",
 ]
 
 [workspace.package]
@@ -66,6 +64,7 @@ ed25519-dalek = "2"
 tar = "0.4"
 flate2 = "1"
 fs2 = "0.4"
+hyper-util = "0.1"
 chrono = { version = "0.4", features = ["serde"] }
 hex = "0.4"
 reqwest = { version = "0.12", default-features = false, features = ["rustls-tls", "stream"] }

@@ -1,6 +1,6 @@
 //! Fake worker used by the supervisor and adapter tests: a real gRPC
 //! worker process speaking `reimagine.worker.v2` over a private local
-//! socket, built on the shared fake service from the transport crate.
+//! socket, built on the shared fake service from the protocol crate.
 //!
 //! Behaviour is selected with `FAKE_WORKER_MODE`; operations (`echo`,
 //! `delay`, `progress`, `crash`) mirror the old frame-protocol fixture
@@ -10,15 +10,13 @@ use std::io::Write as _;
 use std::process;
 use std::time::Duration;
 
+use reimagine_backend_worker_protocol::local::{LocalEndpoint, bind};
+use reimagine_backend_worker_protocol::server::{serve_local, worker_server};
+use reimagine_backend_worker_protocol::testing::{FakeWorkerConfig, FakeWorkerService};
 use reimagine_backend_worker_protocol::{
     BackendInstanceId, WorkerIdentity, WorkerIncarnationId, WorkerInstallationId,
     WorkerInstanceProfile, WorkerProfile,
 };
-use reimagine_backend_worker_transport_grpc::local::{LocalEndpoint, bind};
-use reimagine_backend_worker_transport_grpc::server::{
-    parse_listen_endpoint, serve_local, worker_server,
-};
-use reimagine_backend_worker_transport_grpc::testing::{FakeWorkerConfig, FakeWorkerService};
 
 /// Worker stderr must never panic on a dead pipe: all writes ignore
 /// errors.
@@ -75,7 +73,7 @@ fn main() {
         .skip_while(|arg| arg != "--listen")
         .nth(1)
         .unwrap_or_default();
-    let endpoint: LocalEndpoint = match parse_listen_endpoint(&listen) {
+    let endpoint: LocalEndpoint = match LocalEndpoint::parse(&listen) {
         Ok(endpoint) => endpoint,
         Err(error) => {
             log(&format!("FATAL: invalid --listen `{listen}`: {error}\n"));
