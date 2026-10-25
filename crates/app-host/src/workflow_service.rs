@@ -22,7 +22,7 @@ use crate::{AppHostError, AppHostResult};
 
 /// Summary of a workflow file persisted in the workspace `workflows/` dir.
 ///
-/// Kept crate-internal: Tauri/Axum adapters serialize it to JSON via serde
+/// Kept crate-internal: host adapters (such as Tauri) serialize it to JSON via serde
 /// without needing to name the type.
 #[derive(Debug, Clone, serde::Serialize)]
 pub struct SavedWorkflowInfo {

@@ -3,7 +3,7 @@
 //!
 //! Each service crate keeps its own local event enum and implements
 //! [`DomainEventAdapter`] for that enum when it needs to surface its events
-//! to a host (Tauri, future Axum, tests). Core owns the trait and the
+//! to a host (Tauri, tests). Core owns the trait and the
 //! [`EventReport`] / [`EventAdapterContext`] shapes; it does not own an event
 //! bus, a sink, or a service-specific event enum.
 

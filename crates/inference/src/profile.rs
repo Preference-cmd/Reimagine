@@ -14,7 +14,7 @@
 //! perform one global hardware probe for every backend.
 //!
 //! App-host collects providers and exposes the aggregate
-//! [`WorkspaceComputeProfile`] to Tauri / Axum / Agent / UI. Runtime
+//! [`WorkspaceComputeProfile`] to Tauri / Agent / UI. Runtime
 //! and node executors never consume these DTOs.
 //!
 //! V1 omits `generated_at` so profile tests remain deterministic.
@@ -183,7 +183,7 @@ pub enum BackendInstanceStatus {
 /// flat list of top-level diagnostics that do not belong to a single
 /// backend (e.g. configuration errors detected during discovery).
 ///
-/// This is the host-neutral DTO surfaced to Tauri / Axum / Agent / UI.
+/// This is the host-neutral DTO surfaced to Tauri / Agent / UI.
 /// Host adapters should project it through app-host DTOs rather than
 /// bind directly to this type.
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]

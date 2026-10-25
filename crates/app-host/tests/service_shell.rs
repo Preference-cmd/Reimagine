@@ -279,7 +279,7 @@ fn host_neutral_catalog_drives_workflow_validation() {
     // Locks in that the host-neutral `NodeCatalogService` exposed by
     // `WorkspaceHost` is the same catalog the readiness/validation
     // path consumes. This prevents accidental drift between the
-    // surface UI/Tauri/Axum read from and the surface the
+    // surface UI/Tauri read from and the surface the
     // workflow validation reads from.
     let workspace = WorkspaceHost::with_defaults(
         WorkspaceScope::new("ws-host-catalog"),

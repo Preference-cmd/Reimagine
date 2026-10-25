@@ -19,7 +19,7 @@ use crate::{AppHostResult, WorkspaceHost};
 /// Request payload for [`WorkspaceHost::run_workflow`].
 ///
 /// `target_selection`, `run_inputs`, `options`, and `correlation_id` are
-/// all host-supplied. V1 host adapters (Tauri, future Axum) construct one
+/// all host-supplied. V1 host adapters (such as Tauri) construct one
 /// of these per run request; Agent tools are not allowed to call
 /// `run_workflow` directly.
 #[derive(Debug, Clone)]

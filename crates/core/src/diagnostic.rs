@@ -83,7 +83,7 @@ impl From<&str> for CorrelationId {
     }
 }
 
-/// An actionable diagnostic that a host (Tauri, Axum, CLI) can present to a
+/// An actionable diagnostic that a host (Tauri, CLI) can present to a
 /// user or agent.
 #[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub struct Diagnostic {

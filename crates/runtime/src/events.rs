@@ -9,7 +9,7 @@ use crate::RuntimeError;
 
 /// Destination for run timeline events.
 ///
-/// Implementations are provided by hosts (Tauri, future Axum, tests). The
+/// Implementations are provided by hosts (Tauri, tests). The
 /// runtime invokes this for each event; failures are reported/logged and do
 /// not fail the run itself.
 pub trait RunEventSink: Send + Sync + 'static {

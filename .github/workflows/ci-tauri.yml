@@ -128,7 +128,7 @@ jobs:
         run: >
           cargo check
           --locked --no-default-features
-          -p reimagine-app-host -p reimagine-axum-host -p reimagine
+          -p reimagine-app-host -p reimagine
 
       - name: Rust clippy
         if: matrix.platform == 'linux'

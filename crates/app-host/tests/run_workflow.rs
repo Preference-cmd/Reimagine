@@ -10,21 +10,23 @@
 //! V1 Agent tools remain out of scope for `run_workflow`; this slice only
 //! wires the host-side orchestration path.
 
+mod common;
+
 use std::sync::Arc;
 use std::time::Duration;
 
 use async_trait::async_trait;
 use reimagine_app_host::WorkspaceScope;
 use reimagine_app_host::{
-    AppHostError, BackendInstance, ModelService, RunWorkflowRequest, RunWorkflowResult,
-    SnapshotExternalReadinessProvider, WorkspaceComputeProfile, WorkspaceHost,
+    AppHostError, ArtifactAccessError, BackendInstance, ModelService, RunWorkflowRequest,
+    RunWorkflowResult, SnapshotExternalReadinessProvider, WorkspaceComputeProfile, WorkspaceHost,
 };
 use reimagine_config::{AppConfig, AppPaths};
 use reimagine_core::diagnostic::DiagnosticSeverity;
-use reimagine_core::event::OperationReport;
+use reimagine_core::event::{OperationReport, RunEventKind};
 use reimagine_core::model::{
-    DocumentVersion, ModelId, ModelRef, ModelRole, ModelSeries, ModelVariant, NodeId, ParamValue,
-    RunId, SlotId, WorkflowId,
+    ArtifactRef, DocumentVersion, ModelId, ModelRef, ModelRole, ModelSeries, ModelVariant, NodeId,
+    NodeTypeId, ParamValue, RunId, SlotId, WorkflowId,
 };
 use reimagine_core::readiness::{
     ExternalReadinessContext, ExternalReadinessProvider, ExternalReadinessSubject, RunTarget,
@@ -36,8 +38,8 @@ use reimagine_model_manager::{
 };
 use reimagine_nodes::{BUILTIN_CHECKPOINT_LOADER, BuiltinNodeCatalog};
 use reimagine_runtime::{
-    BoxedNodeExecutor, ExecutionOutput, NodeExecutionContext, NodeExecutor, NodeExecutorRegistry,
-    RunInputs, RuntimeOptions, RuntimeService, TaskState, VecRunEventSink,
+    ArtifactEventKind, BoxedNodeExecutor, ExecutionOutput, NodeExecutionContext, NodeExecutor,
+    NodeExecutorRegistry, RunInputs, RuntimeOptions, RuntimeService, TaskState, VecRunEventSink,
 };
 
 fn empty_compute_profile() -> Arc<WorkspaceComputeProfile> {
@@ -482,4 +484,335 @@ fn app_host_does_not_expose_runtime_run_or_cancel() {
     // types in this slice. The runtime surface is reachable through
     // `WorkspaceHost::runtime_service` but is gated behind host APIs;
     // there is no agent-tool escape hatch in the public exports.
+}
+
+struct MockArtifactExecutor {
+    reference: ArtifactRef,
+}
+
+#[async_trait]
+impl NodeExecutor for MockArtifactExecutor {
+    async fn execute(
+        &self,
+        context: NodeExecutionContext,
+    ) -> Result<Vec<ExecutionOutput>, reimagine_runtime::NodeExecutorError> {
+        context
+            .artifacts()
+            .record(
+                SlotId::new("artifact"),
+                self.reference.clone(),
+                ArtifactEventKind::Saved,
+            )
+            .await;
+        Ok(Vec::new())
+    }
+}
+
+fn artifact_executor(reference: ArtifactRef) -> BoxedNodeExecutor {
+    Arc::new(MockArtifactExecutor { reference })
+}
+
+async fn build_artifact_host(
+    reference: ArtifactRef,
+    base: &str,
+) -> (WorkspaceHost, Arc<RuntimeService>, Arc<VecRunEventSink>) {
+    let paths = AppPaths::new(unique_temp_dir(base));
+    tokio::fs::create_dir_all(paths.models_dir()).await.unwrap();
+    tokio::fs::create_dir_all(paths.output_dir()).await.unwrap();
+
+    let mut registry = NodeExecutorRegistry::default();
+    registry
+        .register("mock.artifact", artifact_executor(reference))
+        .expect("register artifact executor");
+
+    let sink = Arc::new(VecRunEventSink::new());
+    let runtime = build_runtime_with_sink(registry, sink.clone());
+
+    let host = WorkspaceHost::new(
+        WorkspaceScope::new(format!("ws-{base}")),
+        AppConfig::new(paths),
+        reimagine_config::InferenceBackendConfig::default(),
+        runtime.clone(),
+        builtin_catalog(),
+        empty_compute_profile(),
+        BackendInstance::new("stub:cpu"),
+    );
+    (host, runtime, sink)
+}
+
+fn one_node_plan(type_id: &str, node_id: &str) -> reimagine_core::readiness::ExecutionPlan {
+    use reimagine_core::readiness::{ExecutionNode, ExecutionPlan, ExecutionStage};
+    ExecutionPlan::new(
+        WorkflowId::new("workflow-artifact-test"),
+        DocumentVersion::new(1),
+        RunTargetSelection::AllDefaultTargets,
+        vec![RunTarget::Node {
+            node_id: NodeId::new(node_id),
+        }],
+        vec![ExecutionNode::new(
+            NodeId::new(node_id),
+            NodeTypeId::new(type_id),
+            Vec::new(),
+            Vec::new(),
+        )],
+        Vec::new(),
+        Vec::new(),
+        vec![ExecutionStage::new(0, vec![NodeId::new(node_id)])],
+    )
+}
+
+#[tokio::test]
+async fn normal_run_completes_and_snapshot_and_artifacts_can_be_retrieved() {
+    let (host, runtime, sink) = build_artifact_host(
+        ArtifactRef::new("output/generated.png"),
+        "artifact-retrieval",
+    )
+    .await;
+
+    let png_bytes = [
+        0x89, b'P', b'N', b'G', 0x0d, 0x0a, 0x1a, 0x0a, b't', b'e', b's', b't',
+    ];
+    tokio::fs::write(
+        host.config().paths().output_dir().join("generated.png"),
+        png_bytes,
+    )
+    .await
+    .expect("write png artifact file");
+
+    let handle = runtime
+        .run(
+            Arc::new(one_node_plan("mock.artifact", "save")),
+            RunInputs::default(),
+            RuntimeOptions::default(),
+        )
+        .expect("start artifact run");
+
+    let live_snapshot = host.run_snapshot(handle.run_id()).expect("live snapshot");
+    assert!(
+        live_snapshot.state == TaskState::Queued || live_snapshot.state == TaskState::Running,
+        "live snapshot should be Queued or Running, got {:?}",
+        live_snapshot.state
+    );
+
+    run_to_completion(&runtime, &handle).await;
+
+    let summary = host
+        .run_summary(handle.run_id())
+        .expect("summary must exist");
+    assert_eq!(summary.state, TaskState::Completed);
+    assert_eq!(summary.artifacts.len(), 1);
+
+    let artifact_meta = &summary.artifacts[0];
+    let access = host
+        .resolve_artifact(&artifact_meta.id)
+        .expect("artifact must resolve");
+    assert_eq!(access.media_type, "image/png");
+    let retrieved_bytes = tokio::fs::read(&access.path)
+        .await
+        .expect("read artifact file");
+    assert_eq!(retrieved_bytes, png_bytes);
+
+    let events = sink.events();
+    assert!(events.iter().any(|e| e.kind() == RunEventKind::RunQueued));
+    assert!(events.iter().any(|e| e.kind() == RunEventKind::RunStarted));
+    assert!(
+        events
+            .iter()
+            .any(|e| e.kind() == RunEventKind::RunCompleted)
+    );
+    assert!(
+        events
+            .iter()
+            .any(|e| e.kind() == RunEventKind::ArtifactCreated)
+    );
+}
+
+#[tokio::test]
+async fn run_handoff_uses_explicit_target_selection() {
+    let model_id = ModelId::new(MODEL_ID);
+    let paths = AppPaths::new(unique_temp_dir("run-explicit-targets"));
+    tokio::fs::create_dir_all(paths.models_dir()).await.unwrap();
+    tokio::fs::write(
+        paths.models_dir().join("sdxl-base-1.0.safetensors"),
+        b"placeholder",
+    )
+    .await
+    .unwrap();
+
+    let manifest = manifest_with_model(&model_id, "sdxl-base-1.0.safetensors");
+    let model_service = test_model_service(paths.clone());
+    model_service.save_manifest(&manifest).await.unwrap();
+
+    let runtime = build_runtime();
+    let host = WorkspaceHost::new(
+        WorkspaceScope::new("ws-run-explicit-targets"),
+        AppConfig::new(paths),
+        reimagine_config::InferenceBackendConfig::default(),
+        runtime.clone(),
+        builtin_catalog(),
+        empty_compute_profile(),
+        BackendInstance::new("stub:cpu"),
+    );
+
+    let workflow_id = host
+        .workflow_service()
+        .register_workflow(build_workflow(&model_id));
+
+    let request = RunWorkflowRequest::new(workflow_id, checkpoint_model_target());
+    let result = host
+        .run_workflow(request)
+        .await
+        .expect("run_workflow should succeed");
+    let RunWorkflowResult::Started { handle, .. } = result else {
+        panic!("expected Started outcome");
+    };
+
+    run_to_completion(&runtime, &handle).await;
+    let summary = host
+        .run_summary(handle.run_id())
+        .expect("summary should exist");
+    assert_eq!(summary.state, TaskState::Completed);
+}
+
+#[tokio::test]
+async fn placeholder_model_workflow_fails_without_artifacts() {
+    use common::sdxl_workflows::{SdxlWorkflowOptions, text_to_image};
+
+    let model_id = ModelId::new(MODEL_ID);
+    let base_path = unique_temp_dir("compute-sdxl");
+    let paths = AppPaths::new(&base_path);
+    tokio::fs::create_dir_all(paths.models_dir()).await.unwrap();
+    tokio::fs::write(
+        paths.models_dir().join("sdxl-base-1.0.safetensors"),
+        b"placeholder",
+    )
+    .await
+    .unwrap();
+
+    let model_service = test_model_service(paths.clone());
+    model_service
+        .save_manifest(&manifest_with_model(&model_id, "sdxl-base-1.0.safetensors"))
+        .await
+        .expect("save manifest");
+
+    let sink = Arc::new(VecRunEventSink::new());
+    let host = WorkspaceHost::with_defaults_and_backend(
+        WorkspaceScope::new("ws-compute-sdxl"),
+        &base_path,
+        reimagine_app_host::BackendSelection::default(),
+        sink.clone(),
+    );
+
+    let workflow_json = text_to_image(SdxlWorkflowOptions {
+        workflow_id: WORKFLOW_ID,
+        model_id: MODEL_ID,
+        name: "SDXL Placeholder E2E",
+        description: "Inline SDXL workflow used to verify backend diagnostics.",
+        filename_prefix: "sdxl_placeholder_e2e",
+        denoise: 1.0,
+    });
+    let workflow: Workflow = serde_json::from_value(workflow_json).expect("valid workflow");
+    let workflow_id = host.workflow_service().register_workflow(workflow);
+
+    let request = RunWorkflowRequest::new(
+        workflow_id,
+        RunTargetSelection::ExplicitTargets(vec![RunTarget::Node {
+            node_id: NodeId::new("node_save_image"),
+        }]),
+    )
+    .with_correlation_id(reimagine_core::diagnostic::CorrelationId::new(
+        "corr-compute-sdxl",
+    ));
+
+    let result = host.run_workflow(request).await.expect("start run");
+    let RunWorkflowResult::Started { handle, .. } = result else {
+        panic!("expected Started outcome");
+    };
+
+    let run_id = handle.run_id().clone();
+    let deadline = std::time::Instant::now() + Duration::from_secs(5);
+    let summary = loop {
+        if let Some(summary) = host.run_summary(&run_id)
+            && summary.state.is_terminal()
+        {
+            break summary;
+        }
+        if std::time::Instant::now() > deadline {
+            panic!("run {run_id} did not finish in time");
+        }
+        tokio::time::sleep(Duration::from_millis(10)).await;
+    };
+
+    assert_eq!(summary.state, TaskState::Failed);
+    assert!(
+        !summary.diagnostics.is_empty(),
+        "placeholder run should produce failure diagnostics"
+    );
+    assert!(
+        summary.artifacts.is_empty(),
+        "placeholder run should not emit artifacts"
+    );
+
+    let events = sink.events();
+    assert!(events.iter().any(|e| e.kind() == RunEventKind::RunQueued));
+    assert!(events.iter().any(|e| e.kind() == RunEventKind::RunStarted));
+    assert!(events.iter().any(|e| e.kind() == RunEventKind::RunFailed));
+    assert!(
+        !events
+            .iter()
+            .any(|e| e.kind() == RunEventKind::RunCompleted)
+    );
+    assert!(
+        events.iter().any(|e| e
+            .correlation_id()
+            .is_some_and(|id| id.as_str() == "corr-compute-sdxl")),
+        "event should carry correlation id"
+    );
+}
+
+#[tokio::test]
+async fn resolve_artifact_reports_unknown_gone_and_unsupported() {
+    use reimagine_core::model::ArtifactId;
+
+    async fn resolve_single(reference: &str, base: &str) -> Result<(), ArtifactAccessError> {
+        let (host, runtime, _sink) = build_artifact_host(ArtifactRef::new(reference), base).await;
+        if reference.ends_with(".txt") {
+            tokio::fs::write(
+                host.config().paths().output_dir().join("not-png.txt"),
+                b"text",
+            )
+            .await
+            .expect("write non-png artifact file");
+        }
+        let handle = runtime
+            .run(
+                Arc::new(one_node_plan("mock.artifact", "save")),
+                RunInputs::default(),
+                RuntimeOptions::default(),
+            )
+            .expect("start artifact run");
+        run_to_completion(&runtime, &handle).await;
+        let summary = host.run_summary(handle.run_id()).expect("summary");
+        host.resolve_artifact(&summary.artifacts[0].id).map(|_| ())
+    }
+
+    assert!(matches!(
+        resolve_single("output/missing.png", "artifact-gone").await,
+        Err(ArtifactAccessError::FileGone)
+    ));
+    assert!(matches!(
+        resolve_single("output/not-png.txt", "artifact-unsupported").await,
+        Err(ArtifactAccessError::UnsupportedMedia)
+    ));
+
+    let (host, _runtime, _sink) =
+        build_artifact_host(ArtifactRef::new("output/unused.png"), "artifact-unknown").await;
+    assert!(matches!(
+        host.resolve_artifact(&ArtifactId::new("nonexistent-artifact-id")),
+        Err(ArtifactAccessError::UnknownArtifact)
+    ));
+    assert!(matches!(
+        host.resolve_artifact(&ArtifactId::new("../../../etc/passwd")),
+        Err(ArtifactAccessError::UnknownArtifact)
+    ));
 }

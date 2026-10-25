@@ -1,7 +1,7 @@
 //! Host-neutral application service shell.
 //!
-//! This crate owns the V1 workspace host boundary that future Tauri and Axum
-//! adapters call into. It deliberately keeps concrete UI/server types out of
+//! This crate owns the V1 workspace host boundary that host adapters (such as
+//! the Tauri desktop app) call into. It deliberately keeps concrete UI types out of
 //! the public API and delegates domain semantics to the lower-level crates.
 
 #![deny(unsafe_code)]

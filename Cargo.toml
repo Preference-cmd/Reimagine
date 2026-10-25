@@ -10,7 +10,6 @@ members = [
     "crates/runtime",
     "crates/aigc",
     "crates/app-host",
-    "crates/axum-host",
     "crates/inference",
     "crates/inference-backends/burn",
     "crates/inference-backends/burn-worker",

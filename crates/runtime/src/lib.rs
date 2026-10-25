@@ -2,7 +2,7 @@
 //!
 //! This crate executes prepared workflow execution plans through
 //! [`RuntimeService`], managing run state, stage scheduling, cancellation, and
-//! artifact collection. It does not depend on a host adapter (Tauri, Axum),
+//! artifact collection. It does not depend on a host adapter (such as Tauri),
 //! `reimagine-model-manager` or a concrete inference backend.
 //!
 //! The executor contract (`NodeExecutor`, `NodeExecutionContext`,

@@ -50,11 +50,9 @@ document; board items reference workflows, assets and runs, or hold notes. A
 appears as a workflow frame. Runs and generated files stay outside the workflow
 document, under the workspace base path.
 
-### Desktop app + headless server
+### Desktop app
 
-The engine runs in two modes: a **desktop app** with the canvas editor, and a
-**headless server** for automation and scripting. Workflows built in the GUI run
-on the server without changes.
+The engine runs as a **desktop app** with the canvas editor (`src-tauri`).
 
 ### Cross-platform inference
 
@@ -75,7 +73,6 @@ No accounts, no cloud, no telemetry.
 | ----------------- | --------------------------------------------------- |
 | Domain / runtime  | Rust 2024 workspace                                 |
 | Desktop host      | Tauri 2                                             |
-| HTTP host         | Axum 0.8                                            |
 | Inference         | Burn 0.21 (`wgpu` default, `flex` CPU)              |
 | UI                | React 19 + Vite 7 (Bun)                             |
 
@@ -94,19 +91,15 @@ No accounts, no cloud, no telemetry.
 cd ui && bun install && cd ..
 cd src-tauri && cargo tauri dev
 
-# HTTP host (script-driven / remote workflow execution)
-cargo run -p reimagine-axum-host -- --base-path ./workspace
-
 # Frontend build only
 cd ui && bun run build
 ```
 
-The Axum host defaults to `127.0.0.1:7878`; pass `--addr` to override.
 Sample workflows live under `examples/workflows/`.
 
 ## Workspace layout
 
-All 20 Cargo workspace members are listed here; `Cargo.toml` `[workspace]` is the
+All 18 Cargo workspace members are listed here; `Cargo.toml` `[workspace]` is the
 authority.
 
 ```text
@@ -122,7 +115,6 @@ crates/inference-backends/       burn/ burn-worker/ - concrete backend
 crates/plugin/                   reimagine-plugin - plugin package and extension metadata contract
 crates/aigc/                     aigc - optional AIGC module: inference composition, worker management, model services
 crates/app-host/                 reimagine-app-host - WorkspaceHost, Project/Board/Workflow/Run services, proposals
-crates/axum-host/                reimagine-axum-host - HTTP E2E test harness
 crates/backend-worker-protocol/  reimagine-backend-worker-protocol - worker wire protocol
 crates/backend-worker-host/      reimagine-backend-worker-host - out-of-process worker management
 crates/backend-worker-transport-quic/   reimagine-backend-worker-transport-quic - QUIC transport
@@ -133,15 +125,15 @@ assets/                          static placeholders and non-secret assets
 examples/                        sample workflow JSON
 ```
 
-`src-tauri/` and `crates/axum-host/` are thin host adapters that share the
+`src-tauri/` is the thin desktop host adapter driving the
 `reimagine-app-host` facade; all domain logic lives under `crates/`.
 
 No workspace crate depends on an agent stack. The open-source agent kernel
 lives in the sibling repository `../agent-stack-oss` (`Causa`: `causa`,
 `causa-kernel`, `causa-protocol`, `causa-runtime`, `causa-provider`,
 `causa-extension`). A future agent integration will depend on it from an
-operator adapter crate above `reimagine-app-host`, alongside the Tauri and
-Axum hosts; nothing depends on it today.
+operator adapter crate above `reimagine-app-host`, alongside the Tauri desktop
+host; nothing depends on it today.
 
 ## Conventions
 

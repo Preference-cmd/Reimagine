@@ -11,16 +11,16 @@ application, not a published library.
 
 ## Layout
 
-19 Cargo workspace members: 18 crates under `crates/` plus `src-tauri/`.
+18 Cargo workspace members: 17 crates under `crates/` plus `src-tauri/`.
 `Cargo.toml` `[workspace]` is the authority; one line per crate is in
 [`README.md`](README.md#workspace-layout).
 
 ```text
 src-tauri/      Tauri 2 shell and IPC; the only crate that uses Tauri
-crates/         18 workspace crates (members: Cargo.toml; one line each: README)
+crates/         17 workspace crates (members: Cargo.toml; one line each: README)
 ui/             React 19 + Vite 7 frontend (Bun)
 assets/         static placeholders
-examples/       sample workflow JSON (axum-host E2E input)
+examples/       sample workflow JSON
 docs/           machine-local architecture notes, design and generated catalogs (untracked)
 .github/        ci-tauri.yml, ci-workers*.yml; scripts/ holds the tracked gates
 ```
@@ -39,7 +39,7 @@ to `ci-tauri.yml`.
 # Rust gates - "quality" job
 cargo fmt --all -- --check
 cargo check --workspace --all-targets --locked --exclude reimagine-inference-burn-worker
-cargo check --locked --no-default-features -p reimagine-app-host -p reimagine-axum-host -p reimagine
+cargo check --locked --no-default-features -p reimagine-app-host -p reimagine
 cargo clippy --workspace --all-targets --locked --exclude reimagine-inference-burn-worker -- -D warnings
 cargo test --workspace --locked --exclude reimagine --exclude reimagine-inference-burn --exclude reimagine-inference-burn-worker
 cargo test -p reimagine-inference-burn --lib --locked --no-default-features --features flex   # Linux: Flex CPU
@@ -107,9 +107,9 @@ workflows.
 - Humans and agents are operators of one pipeline in `app-host`, which records
   who acted as a `CommandActor`. No workspace crate depends on an agent stack
   (`reimagine-agent-*`, `causa*`; the layering guard enforces it). An agent
-  integration is an adapter crate above `app-host`, beside `src-tauri` and
-  `axum-host`; its tools call the public `app-host` services, and its change
-  grants that crate the guard's only exception.
+  integration is an adapter crate above `app-host`, beside `src-tauri`; its
+  tools call the public `app-host` services, and its change grants that crate
+  the guard's only exception.
 - When a crate, gate or workflow changes, update the copies together: Layout
   and Commands here, `README.md`, and the owning guard.
 - Do not commit build outputs, local runtime data, model weights, secrets or

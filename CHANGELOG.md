@@ -23,6 +23,9 @@ both check it.
 
 ### Removed
 
+- The `reimagine-axum-host` crate and its HTTP API (`cargo run -p reimagine-axum-host`).
+  The desktop app (`src-tauri`) is now the only host adapter; humans and agents
+  drive the kernel directly through `reimagine-app-host`.
 - The deprecated in-process Candle backend: the `reimagine-inference-candle`
   crate and its `import-sdxl` binary, the `candle` cargo feature of
   `reimagine-app-host`, `aigc`, `reimagine-axum-host` and `reimagine`, and the

@@ -6515,38 +6515,12 @@ dependencies = [
  "aigc",
  "async-trait",
  "chrono",
- "reimagine-backend-worker-host",
- "reimagine-backend-worker-protocol",
- "reimagine-config",
- "reimagine-core",
- "reimagine-inference",
- "reimagine-model-acquisition",
- "reimagine-model-manager",
- "reimagine-nodes",
- "reimagine-runtime",
- "serde",
- "serde_json",
- "tempfile",
- "tokio",
- "tracing",
-]
-
-[[package]]
-name = "reimagine-axum-host"
-version = "0.1.0"
-dependencies = [
- "async-trait",
- "axum",
- "clap",
- "http-body-util",
  "image",
- "reimagine-app-host",
  "reimagine-backend-worker-host",
  "reimagine-backend-worker-protocol",
  "reimagine-config",
  "reimagine-core",
  "reimagine-inference",
- "reimagine-inference-burn",
  "reimagine-model-acquisition",
  "reimagine-model-manager",
  "reimagine-nodes",
@@ -6554,12 +6528,9 @@ dependencies = [
  "safetensors",
  "serde",
  "serde_json",
+ "tempfile",
  "tokio",
- "tokio-util",
- "tower",
- "tower-http",
  "tracing",
- "tracing-subscriber",
 ]
 
 [[package]]
@@ -6717,13 +6688,10 @@ dependencies = [
 name = "reimagine-inference-burn-worker"
 version = "0.1.0"
 dependencies = [
- "axum",
  "clap",
- "http-body-util",
  "image",
  "quinn",
  "reimagine-app-host",
- "reimagine-axum-host",
  "reimagine-backend-worker-host",
  "reimagine-backend-worker-protocol",
  "reimagine-backend-worker-transport-quic",
@@ -6738,7 +6706,6 @@ dependencies = [
  "tempfile",
  "tokio",
  "tokio-util",
- "tower",
 ]
 
 [[package]]
@@ -8719,7 +8686,6 @@ dependencies = [
  "tower",
  "tower-layer",
  "tower-service",
- "tracing",
  "url",
 ]
 

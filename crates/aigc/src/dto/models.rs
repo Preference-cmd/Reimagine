@@ -4,10 +4,10 @@ use reimagine_model_manager::ModelDescriptor;
 use serde::{Deserialize, Serialize};
 
 // ------------------------------------------------------------------
-//  ModelInfoDto — existing host-neutral projection for Tauri + Axum
+//  ModelInfoDto — existing host-neutral projection for Tauri
 // ------------------------------------------------------------------
 
-/// Host-neutral projection of a model suitable for both Tauri and Axum.
+/// Host-neutral projection of a model suitable for host adapters such as Tauri.
 ///
 /// This shape strips absolute filesystem paths and backend‑internal types
 /// so frontends never see arbitrary paths or model‑manager internals.

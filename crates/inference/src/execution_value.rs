@@ -16,8 +16,8 @@
 //! DTO, **not** a snapshot / event payload, and **not** an Agent tool
 //! result. It is the internal execution value used by runtime,
 //! inference node executors, inference requests, and backend-produced
-//! handles. Workflow JSON, snapshots, summaries, run events, Axum /
-//! Tauri DTOs, and Agent tool results must not expose `ExecutionValue`,
+//! handles. Workflow JSON, snapshots, summaries, run events, Tauri DTOs,
+//! and Agent tool results must not expose `ExecutionValue`,
 //! backend tensor handles, or loaded model handles.
 
 mod backend;

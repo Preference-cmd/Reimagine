@@ -13,10 +13,10 @@
 #   backends   inference-burn, inference-burn-worker
 #   workers    backend-worker-host, -transport-quic, -transport-grpc, -transfer
 #   host       app-host
-#   entries    reimagine (src-tauri), axum-host
+#   entries    reimagine (src-tauri)
 #
-# In kernel-only builds (--no-default-features), app-host, reimagine and
-# reimagine-axum-host must not reach the optional aigc module.
+# In kernel-only builds (--no-default-features), app-host and reimagine
+# must not reach the optional aigc module.
 #
 # No workspace crate depends on an agent stack (reimagine-agent-*, the legacy
 # agent kernel crates, causa*). The operation pipeline in app-host serves
@@ -33,7 +33,7 @@ WORKSPACE='(reimagine(-[a-z-]+)?|aigc) v'
 TAURI='tauri(-[a-z-]+)? v'
 AGENT='(reimagine-agent-[a-z-]+|reimagine-ai-protocol|reimagine-context-kernel|causa(-[a-z]+)?) v'
 APP_HOST='reimagine-app-host v'
-ENTRIES='(reimagine|reimagine-axum-host) v'
+ENTRIES='reimagine v'
 BACKENDS='(reimagine-inference-(burn|burn-worker)|burn-[a-z]+|cubecl(-[a-z]+)?|wgpu) v'
 HTTP_SERVER='axum v'
 DOMAIN='(reimagine-core|reimagine-config|reimagine-nodes|reimagine-model-manager|reimagine-model-acquisition|reimagine-inference|reimagine-runtime|reimagine-plugin|reimagine-backend-worker-host|aigc) v'
@@ -101,14 +101,13 @@ done
 while read -r crate; do
   case "$crate" in
     reimagine) check "$crate" "$AGENT" "$ENTRIES" ;;
-    reimagine-axum-host) check "$crate" "$AGENT" "$TAURI" "$ENTRIES" ;;
     *) check "$crate" "$AGENT" "$TAURI" "$APP_HOST" "$ENTRIES" ;;
   esac
 done <<<"$members"
 
 # Kernel-only assertion: app-host and entry crates compile without the
 # optional aigc module when built with --no-default-features.
-for crate in reimagine-app-host reimagine reimagine-axum-host; do
+for crate in reimagine-app-host reimagine; do
   tree=$(cargo tree -p "$crate" --no-default-features --edges normal --target all --locked --charset ascii)
   if grep -E -- "aigc v" <<<"$tree" >/dev/null; then
     echo "FAIL: $crate --no-default-features must not depend on aigc" >&2

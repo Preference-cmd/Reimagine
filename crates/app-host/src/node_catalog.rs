@@ -14,7 +14,7 @@
 //! - `core` owns the `NodeDef` schema types.
 //! - `reimagine-nodes` owns the V1 built-in catalog data.
 //! - `app-host` exposes the workspace catalog handle and the alignment
-//!   report. UI, Tauri, Axum, and Agent tools must read node metadata
+//!   report. UI, Tauri, and Agent tools must read node metadata
 //!   from the catalog exposed here, never from a parallel hard-coded
 //!   list.
 //! - The runtime executor registry remains execution behavior only. The
@@ -75,7 +75,7 @@ impl NodeCatalogService {
 
     /// List every `NodeDef` exposed by the workspace catalog.
     ///
-    /// The returned entries are clones; callers (UI, Tauri, Axum, Agent
+    /// The returned entries are clones; callers (UI, Tauri, Agent
     /// tools, import adapters) must not mutate them and must not derive
     /// node metadata from any other source.
     pub fn list_node_defs(&self) -> Vec<NodeDef> {

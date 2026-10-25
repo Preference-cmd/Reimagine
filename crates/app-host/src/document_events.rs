@@ -2,7 +2,7 @@ use tokio::sync::broadcast;
 
 /// Stable host-level notification emitted after a project-owned document is
 /// durably changed. Host adapters may forward this value directly to UI
-/// transports; the domain services remain unaware of Tauri or Axum.
+/// transports; the domain services remain unaware of concrete host frameworks such as Tauri.
 #[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct DocumentChangedEvent {

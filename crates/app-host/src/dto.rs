@@ -1,7 +1,7 @@
 //! Cross-host shared data transfer objects.
 //!
-//! These types are the V1 wire contract shared between host adapters
-//! (Axum, Tauri). The shapes are intentionally minimal — they wrap
+//! These types are the V1 wire contract exposed to host adapters
+//! (such as Tauri). The shapes are intentionally minimal — they wrap
 //! host-neutral types from `reimagine-core` and `reimagine-runtime`
 //! so that the JSON surface stays stable even as the underlying types
 //! evolve.

@@ -367,36 +367,20 @@ async fn app_host_rejects_manifest_and_live_hello_profile_mismatch() {
 }
 
 #[tokio::test]
-async fn axum_workflow_reaches_png_through_process_backed_worker() {
-    use axum::body::Body;
-    use axum::http::{Request, header};
-    use http_body_util::BodyExt;
+async fn workflow_reaches_png_through_process_backed_worker() {
     use reimagine_app_host::WorkspaceScope;
     use reimagine_app_host::{
-        StaticWorkerInventoryProvider, WorkerBackendCandidate, WorkerInventorySnapshot,
-        WorkspaceHost,
+        RunWorkflowRequest, RunWorkflowResult, StaticWorkerInventoryProvider,
+        WorkerBackendCandidate, WorkerInventorySnapshot, WorkspaceHost,
     };
-    use reimagine_axum_host::{AxumHostState, RunEventRecorder, build_router};
     use reimagine_config::{AppPaths, InferenceBackendConfig};
-    use reimagine_core::model::{ModelId, ModelRole, ModelSeries, ModelVariant};
+    use reimagine_core::model::{ModelId, ModelRole, ModelSeries, ModelVariant, NodeId};
+    use reimagine_core::readiness::{RunTarget, RunTargetSelection};
     use reimagine_model_manager::{
         ModelComponentSource, ModelDescriptor, ModelFormat, ModelManifest, ModelRoot, ModelRootId,
         ModelSource, ModelSourceStatus,
     };
-    use reimagine_runtime::RunEventSink;
-    use tower::ServiceExt;
-
-    fn request(method: &str, uri: &str, body: Option<serde_json::Value>) -> Request<Body> {
-        let mut builder = Request::builder().method(method).uri(uri);
-        let body = match body {
-            Some(value) => {
-                builder = builder.header(header::CONTENT_TYPE, "application/json");
-                Body::from(value.to_string())
-            }
-            None => Body::empty(),
-        };
-        builder.body(body).expect("request")
-    }
+    use reimagine_runtime::{TaskState, VecRunEventSink};
 
     let workspace = tempfile::tempdir().expect("workspace");
     let paths = AppPaths::new(workspace.path());
@@ -476,16 +460,16 @@ async fn axum_workflow_reaches_png_through_process_backed_worker() {
         },
     )
     .expect("candidate");
-    let recorder = Arc::new(RunEventRecorder::new());
+    let sink = Arc::new(VecRunEventSink::new());
     let host = Arc::new(
         WorkspaceHost::try_with_backend_config_and_worker_inventory(
-            WorkspaceScope::new("mb04-axum-tiny"),
+            WorkspaceScope::new("mb04-tiny"),
             workspace.path(),
             InferenceBackendConfig {
                 selected_instance: Some(instance.0.clone()),
                 ..InferenceBackendConfig::default()
             },
-            recorder.clone() as Arc<dyn RunEventSink>,
+            sink,
             Arc::new(StaticWorkerInventoryProvider::new(
                 WorkerInventorySnapshot::new(vec![candidate]),
             )),
@@ -493,10 +477,9 @@ async fn axum_workflow_reaches_png_through_process_backed_worker() {
         .await
         .expect("host"),
     );
-    let app = build_router().with_state(AxumHostState::new(host, recorder));
 
     let workflow_path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
-        .join("../../../examples/workflows/sdxl-base-burn-smoke-workflow.json");
+        .join("../../app-host/tests/fixtures/sdxl-base-burn-smoke-workflow.json");
     let mut workflow: serde_json::Value =
         serde_json::from_slice(&std::fs::read(workflow_path).expect("workflow fixture"))
             .expect("workflow json");
@@ -504,68 +487,45 @@ async fn axum_workflow_reaches_png_through_process_backed_worker() {
     workflow["nodes"][0]["params"]["checkpoint"]["value"]["id"] = "tiny-sdxl-burn".into();
     workflow["nodes"][5]["params"]["width"]["value"] = 64.into();
     workflow["nodes"][5]["params"]["height"]["value"] = 64.into();
-    let open = app
-        .clone()
-        .oneshot(request(
-            "POST",
-            "/workflows/open",
-            Some(serde_json::json!({"workflow": workflow})),
-        ))
-        .await
-        .unwrap();
-    assert_eq!(open.status(), axum::http::StatusCode::OK);
-    let run = app.clone().oneshot(request(
-        "POST", "/workflows/wf-tiny-sdxl/run",
-        Some(serde_json::json!({"target_selection":{"kind":"explicit","targets":[{"kind":"node","node_id":"node_save_image"}]}})),
-    )).await.unwrap();
-    assert_eq!(run.status(), axum::http::StatusCode::OK);
-    let run_json: serde_json::Value =
-        serde_json::from_slice(&run.into_body().collect().await.unwrap().to_bytes()).unwrap();
-    let run_id = run_json["run_id"].as_str().expect("run id");
+
+    let parsed_workflow: reimagine_core::workflow::Workflow =
+        serde_json::from_value(workflow).expect("valid workflow");
+    let workflow_id = host.workflow_service().register_workflow(parsed_workflow);
+
+    let run_request = RunWorkflowRequest::new(
+        workflow_id,
+        RunTargetSelection::ExplicitTargets(vec![RunTarget::Node {
+            node_id: NodeId::new("node_save_image"),
+        }]),
+    );
+    let run_result = host.run_workflow(run_request).await.expect("start run");
+    let RunWorkflowResult::Started { handle, .. } = run_result else {
+        panic!("expected run to start, got {run_result:?}");
+    };
+    let run_id = handle.run_id().clone();
+
     let deadline = std::time::Instant::now() + std::time::Duration::from_secs(60);
     let summary = loop {
-        let response = app
-            .clone()
-            .oneshot(request("GET", &format!("/runs/{run_id}"), None))
-            .await
-            .unwrap();
-        let json: serde_json::Value =
-            serde_json::from_slice(&response.into_body().collect().await.unwrap().to_bytes())
-                .unwrap();
-        let state = json
-            .pointer("/summary/state")
-            .or_else(|| json.get("state"))
-            .and_then(|value| value.as_str());
-        if matches!(
-            state,
-            Some("Completed") | Some("completed") | Some("Failed") | Some("failed")
-        ) {
-            break json;
+        if let Some(summary) = host.run_summary(&run_id)
+            && summary.state.is_terminal()
+        {
+            break summary;
         }
-        assert!(std::time::Instant::now() < deadline, "run timeout: {json}");
+        assert!(std::time::Instant::now() < deadline, "run timeout");
         tokio::time::sleep(std::time::Duration::from_millis(50)).await;
     };
-    let state = summary
-        .pointer("/summary/state")
-        .or_else(|| summary.get("state"))
-        .and_then(|value| value.as_str())
-        .unwrap();
-    assert!(
-        state.eq_ignore_ascii_case("completed"),
-        "worker-backed run failed: {summary}"
+    assert_eq!(
+        summary.state,
+        TaskState::Completed,
+        "worker-backed run failed: {:?}",
+        summary.diagnostics
     );
-    let artifacts = summary
-        .pointer("/summary/artifacts")
-        .or_else(|| summary.get("artifacts"))
-        .and_then(|value| value.as_array())
-        .expect("artifacts");
-    let artifact_id = artifacts[0]["id"].as_str().expect("artifact id");
-    let artifact = app
-        .oneshot(request("GET", &format!("/artifacts/{artifact_id}"), None))
-        .await
-        .unwrap();
-    assert_eq!(artifact.status(), axum::http::StatusCode::OK);
-    let bytes = artifact.into_body().collect().await.unwrap().to_bytes();
+    assert!(!summary.artifacts.is_empty(), "artifacts must not be empty");
+    let artifact_id = summary.artifacts[0].id.clone();
+    let access = host
+        .resolve_artifact(&artifact_id)
+        .expect("resolve artifact");
+    let bytes = std::fs::read(&access.path).expect("read artifact file");
     let image = image::load_from_memory(&bytes).expect("PNG");
     assert_eq!((image.width(), image.height()), (64, 64));
 }

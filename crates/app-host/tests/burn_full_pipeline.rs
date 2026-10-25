@@ -1,7 +1,7 @@
-//! BE-25 (B5-5): full SDXL pipeline integration test through the Axum host.
+//! Full SDXL pipeline integration test through `reimagine-app-host`.
 //!
-//! Exercises the complete capability chain over real HTTP routes with a real
-//! `reimagine-inference-burn-worker` subprocess:
+//! Exercises the complete capability chain directly through `WorkspaceHost`
+//! with a real `reimagine-inference-burn-worker` subprocess:
 //!
 //!   load model (builtin.checkpoint_loader) -> text encode (builtin.clip_text_encode x2)
 //!   -> create latent (builtin.empty_latent_image) -> sample (builtin.ksampler)
@@ -11,7 +11,7 @@
 //! test time (same fixture shape as `crates/inference-backends/burn/tests/
 //! tiny_sdxl_e2e.rs`): no real weights, no network, runs on the default wgpu
 //! device. The test asserts the run completes and the produced artifact is a
-//! 64x64 PNG (signature + decoded dimensions + content-type).
+//! 64x64 PNG (signature + decoded dimensions).
 //!
 //! Worker binary resolution order:
 //!   1. `REIMAGINE_BURN_WORKER` env var (explicit override)
@@ -29,29 +29,27 @@
 use std::path::{Path, PathBuf};
 use std::process::Command;
 use std::sync::Arc;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
-use axum::body::Body;
-use axum::http::{Request, header};
 use reimagine_app_host::WorkspaceScope;
 use reimagine_app_host::{
-    ModelService, StaticWorkerInventoryProvider, WorkerBackendCandidate, WorkerInventorySnapshot,
-    WorkspaceHost,
+    ModelService, RunWorkflowRequest, RunWorkflowResult, StaticWorkerInventoryProvider,
+    WorkerBackendCandidate, WorkerInventorySnapshot, WorkspaceHost,
 };
-use reimagine_axum_host::{AxumHostState, RunEventRecorder, build_router};
 use reimagine_backend_worker_host::{ExpectedWorkerIdentity, WorkerLaunchSpec, WorkerLimits};
 use reimagine_backend_worker_protocol::{
     BackendInstanceId, ProtocolRange, WorkerInstallationId, WorkerInstanceProfile,
 };
 use reimagine_config::{AppPaths, InferenceBackendConfig, InferenceBackendKind};
-use reimagine_core::model::{ModelId, ModelRole, ModelSeries, ModelVariant};
+use reimagine_core::event::RunEventKind;
+use reimagine_core::model::{ModelId, ModelRole, ModelSeries, ModelVariant, NodeId};
+use reimagine_core::readiness::{RunTarget, RunTargetSelection};
 use reimagine_model_manager::{
     ModelComponentSource, ModelDescriptor, ModelFormat, ModelManifest, ModelRoot, ModelRootId,
     ModelSource, ModelSourceStatus,
 };
-use reimagine_runtime::RunEventSink;
+use reimagine_runtime::{TaskState, VecRunEventSink};
 use serde_json::Value;
-use tower::ServiceExt;
 
 const WORKFLOW_ID: &str = "wf-burn-full-pipeline";
 const MODEL_ID: &str = "tiny-sdxl-burn";
@@ -261,7 +259,7 @@ mod tiny_fixture {
             zeros(512 * 4 * 3 * 3),
         ));
         tensors.push(tensor("conv_in.bias", vec![512], vec![0.0; 512]));
-        // mid_block.resnets.0/1: 512→512
+        // mid_block.resnets.0/1: 512->512
         for rn in 0..2 {
             for nm in ["norm1", "norm2"] {
                 tensors.push(tensor(
@@ -288,7 +286,7 @@ mod tiny_fixture {
                 ));
             }
         }
-        // mid_block.attentions.0: 512→512 (diffusers dialect)
+        // mid_block.attentions.0: 512->512 (diffusers dialect)
         for tk in ["to_q", "to_k", "to_v"] {
             tensors.push(tensor(
                 &format!("mid_block.attentions.0.{tk}.weight"),
@@ -441,7 +439,7 @@ fn unique_temp_dir(prefix: &str) -> PathBuf {
         .duration_since(std::time::UNIX_EPOCH)
         .expect("system clock before unix epoch")
         .as_nanos();
-    std::env::temp_dir().join(format!("reimagine-axum-{prefix}-{nonce}"))
+    std::env::temp_dir().join(format!("reimagine-burn-pipeline-{prefix}-{nonce}"))
 }
 
 /// Resolve the burn worker binary; returns `None` (test skips) when it can
@@ -601,41 +599,21 @@ async fn write_tiny_manifest(paths: &AppPaths) {
         .expect("save tiny manifest");
 }
 
-fn json_request(method: &str, uri: &str, body: Option<&str>) -> Request<Body> {
-    let mut builder = Request::builder().method(method).uri(uri);
-    let body = match body {
-        Some(json) => {
-            builder = builder.header(header::CONTENT_TYPE, "application/json");
-            Body::from(json.to_string())
-        }
-        None => Body::empty(),
-    };
-    builder.body(body).expect("build request")
-}
-
-async fn body_bytes(body: Body) -> Vec<u8> {
-    use http_body_util::BodyExt;
-    body.collect().await.unwrap().to_bytes().to_vec()
-}
-
-/// The smoke SDXL workflow (checkpoint -> clip x2 -> latent -> ksampler ->
-/// vae_decode -> save_image) re-parameterized for the tiny 64x64 fixture.
-fn tiny_workflow_json() -> Value {
+/// The smoke SDXL workflow re-parameterized for the tiny 64x64 fixture.
+fn tiny_workflow() -> reimagine_core::workflow::Workflow {
     let workflow_path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
-        .join("..")
-        .join("..")
-        .join("examples")
-        .join("workflows")
+        .join("tests")
+        .join("fixtures")
         .join("sdxl-base-burn-smoke-workflow.json");
     let workflow_raw = std::fs::read_to_string(&workflow_path)
-        .expect("sdxl-base-burn-smoke-workflow.json must be readable from crate root");
+        .expect("sdxl-base-burn-smoke-workflow.json must be readable");
     let mut workflow: Value =
         serde_json::from_str(&workflow_raw).expect("smoke workflow must be valid JSON");
     workflow["id"] = WORKFLOW_ID.into();
     workflow["nodes"][0]["params"]["checkpoint"]["value"]["id"] = MODEL_ID.into();
     workflow["nodes"][5]["params"]["width"]["value"] = 64.into();
     workflow["nodes"][5]["params"]["height"]["value"] = 64.into();
-    workflow
+    serde_json::from_value(workflow).expect("workflow JSON to Workflow domain model")
 }
 
 #[tokio::test]
@@ -643,9 +621,7 @@ fn tiny_workflow_json() -> Value {
 // runners have none (macOS job runs this for real). Runs locally and
 // on macos; ignored on Linux CI. Override with `cargo test -- --ignored`.
 #[cfg_attr(target_os = "linux", ignore = "requires GPU-backed wgpu worker")]
-async fn burn_full_pipeline_load_encode_latent_sample_decode_saves_png_via_axum() {
-    use std::time::Instant;
-
+async fn burn_full_pipeline_load_encode_latent_sample_decode_saves_png() {
     let executable = match resolve_worker_executable() {
         Some(path) => path,
         None => return,
@@ -667,13 +643,13 @@ async fn burn_full_pipeline_load_encode_latent_sample_decode_saves_png_via_axum(
     };
 
     // Boot the process-backed workspace host (real burn worker subprocess).
-    let recorder = Arc::new(RunEventRecorder::new());
+    let sink = Arc::new(VecRunEventSink::new());
     let host = Arc::new(
         WorkspaceHost::try_with_backend_config_and_worker_inventory(
             WorkspaceScope::new("ws-burn-full-pipeline"),
             &workspace_root,
             backend_config,
-            recorder.clone() as Arc<dyn RunEventSink>,
+            sink.clone(),
             Arc::new(StaticWorkerInventoryProvider::new(
                 WorkerInventorySnapshot::new(vec![
                     WorkerBackendCandidate::try_new(
@@ -705,179 +681,92 @@ async fn burn_full_pipeline_load_encode_latent_sample_decode_saves_png_via_axum(
         .await
         .expect("process-backed workspace host"),
     );
-    let app = build_router().with_state(AxumHostState::new(host.clone(), recorder.clone()));
 
-    // 1. Open the tiny workflow via HTTP.
-    let open_response = app
-        .clone()
-        .oneshot(json_request(
-            "POST",
-            "/workflows/open",
-            Some(&serde_json::json!({ "workflow": tiny_workflow_json() }).to_string()),
-        ))
-        .await
-        .unwrap();
-    assert_eq!(open_response.status(), axum::http::StatusCode::OK);
-    let open_json: Value =
-        serde_json::from_slice(&body_bytes(open_response.into_body()).await).unwrap();
-    assert_eq!(
-        open_json.get("source").and_then(|v| v.as_str()),
-        Some("inline")
-    );
-    assert_eq!(
-        open_json.get("workflow_id").and_then(|v| v.as_str()),
-        Some(WORKFLOW_ID)
-    );
+    // 1. Open / register the tiny workflow.
+    let workflow = tiny_workflow();
+    let workflow_id = host.workflow_service().register_workflow(workflow);
+    assert_eq!(workflow_id.as_str(), WORKFLOW_ID);
 
-    // 2. Run the full pipeline up to save_image via HTTP.
-    let run_response = app
-        .clone()
-        .oneshot(json_request(
-            "POST",
-            &format!("/workflows/{WORKFLOW_ID}/run"),
-            Some(
-                &serde_json::json!({
-                    "target_selection": {
-                        "kind": "explicit",
-                        "targets": [{ "kind": "node", "node_id": "node_save_image" }]
-                    },
-                    "correlation_id": "burn-full-pipeline"
-                })
-                .to_string(),
-            ),
-        ))
+    // 2. Run the full pipeline up to save_image directly via app-host.
+    let request = RunWorkflowRequest::new(
+        workflow_id,
+        RunTargetSelection::ExplicitTargets(vec![RunTarget::Node {
+            node_id: NodeId::new("node_save_image"),
+        }]),
+    )
+    .with_correlation_id(reimagine_core::diagnostic::CorrelationId::new(
+        "burn-full-pipeline",
+    ));
+
+    let result = host
+        .run_workflow(request)
         .await
-        .unwrap();
-    assert_eq!(run_response.status(), axum::http::StatusCode::OK);
-    let run_json: Value =
-        serde_json::from_slice(&body_bytes(run_response.into_body()).await).unwrap();
-    let run_id = run_json
-        .get("run_id")
-        .and_then(|v| v.as_str())
-        .expect("run response must include run_id");
-    assert_eq!(
-        run_json.get("outcome").and_then(|v| v.as_str()),
-        Some("started")
-    );
+        .expect("start workflow run");
+    let RunWorkflowResult::Started { handle, .. } = result else {
+        panic!("expected Started outcome, got {result:?}");
+    };
+    let run_id = handle.run_id().clone();
 
     // 3. Poll for a terminal state.
     let deadline = Instant::now() + Duration::from_secs(300);
     let summary = loop {
-        let poll_response = app
-            .clone()
-            .oneshot(json_request("GET", &format!("/runs/{run_id}"), None))
-            .await
-            .unwrap();
-        assert_eq!(poll_response.status(), axum::http::StatusCode::OK);
-        let poll_json: Value =
-            serde_json::from_slice(&body_bytes(poll_response.into_body()).await).unwrap();
-        let state = poll_json
-            .pointer("/summary/state")
-            .or_else(|| poll_json.pointer("/snapshot/state"))
-            .or_else(|| poll_json.get("state"))
-            .and_then(|v| v.as_str())
-            .map(|s| s.to_lowercase());
-        if matches!(
-            state.as_deref(),
-            Some("completed") | Some("failed") | Some("cancelled")
-        ) {
-            break poll_json;
+        if let Some(summary) = host.run_summary(&run_id)
+            && summary.state.is_terminal()
+        {
+            break summary;
         }
         assert!(
             Instant::now() < deadline,
-            "run {run_id} did not reach a terminal state within 300s; last summary: {}",
-            serde_json::to_string_pretty(&poll_json).unwrap_or_default()
+            "run {run_id} did not reach a terminal state within 300s"
         );
         tokio::time::sleep(Duration::from_millis(200)).await;
     };
 
     // 4. The full pipeline must complete with a save_image PNG artifact.
-    let terminal_state = summary
-        .get("state")
-        .or_else(|| summary.pointer("/summary/state"))
-        .and_then(|v| v.as_str())
-        .unwrap_or("unknown")
-        .to_lowercase();
     assert_eq!(
-        terminal_state,
-        "completed",
-        "full pipeline run must complete; summary: {}",
-        serde_json::to_string_pretty(&summary).unwrap_or_default()
+        summary.state,
+        TaskState::Completed,
+        "full pipeline run must complete; summary diagnostics: {:?}",
+        summary.diagnostics
     );
 
-    let artifacts = summary
-        .pointer("/summary/artifacts")
-        .or_else(|| summary.get("artifacts"))
-        .and_then(|v| v.as_array())
-        .expect("completed summary must include artifacts");
-    let artifact_id = artifacts
-        .iter()
-        .find_map(|a| a.get("id").and_then(|v| v.as_str()).map(String::from))
-        .expect("artifact collection must include an id");
-    let artifact_node = artifacts
-        .iter()
-        .find_map(|a| {
-            a.get("node_id")
-                .or_else(|| a.get("node"))
-                .and_then(|v| v.as_str())
-                .map(String::from)
-        })
-        .expect("artifact must carry a node identifier");
+    assert!(
+        !summary.artifacts.is_empty(),
+        "completed summary must include artifacts"
+    );
+    let artifact_meta = &summary.artifacts[0];
     assert_eq!(
-        artifact_node, "node_save_image",
+        artifact_meta.node_id.as_str(),
+        "node_save_image",
         "final artifact must be the node_save_image output"
     );
 
     // 5. Events must show run completion and artifact creation.
-    let events_response = app
-        .clone()
-        .oneshot(json_request("GET", &format!("/runs/{run_id}/events"), None))
-        .await
-        .unwrap();
-    assert_eq!(events_response.status(), axum::http::StatusCode::OK);
-    let events_json: Value =
-        serde_json::from_slice(&body_bytes(events_response.into_body()).await).unwrap();
-    let events = events_json
-        .get("events")
-        .and_then(|v| v.as_array())
-        .expect("events endpoint must include an events array");
+    let recorded_events = sink.events();
     assert!(
-        events.iter().any(|e| {
-            e.get("kind").and_then(|v| v.as_str()) == Some("RunCompleted")
-                || e.get("event").and_then(|v| v.as_str()) == Some("RunCompleted")
-        }),
+        recorded_events
+            .iter()
+            .any(|e| e.kind() == RunEventKind::RunCompleted),
         "events must include RunCompleted evidence"
     );
     assert!(
-        events.iter().any(|e| {
-            e.get("kind").and_then(|v| v.as_str()) == Some("ArtifactCreated")
-                || e.get("event").and_then(|v| v.as_str()) == Some("ArtifactCreated")
-        }),
+        recorded_events
+            .iter()
+            .any(|e| e.kind() == RunEventKind::ArtifactCreated),
         "events must include ArtifactCreated evidence"
     );
 
-    // 6. Download the artifact and verify PNG format + dimensions.
-    let artifact_response = app
-        .clone()
-        .oneshot(json_request(
-            "GET",
-            &format!("/artifacts/{artifact_id}"),
-            None,
-        ))
-        .await
-        .unwrap();
-    assert_eq!(artifact_response.status(), axum::http::StatusCode::OK);
-    let content_type = artifact_response
-        .headers()
-        .get("content-type")
-        .expect("artifact response must include content-type")
-        .to_str()
-        .expect("content-type must be a string");
-    assert!(
-        content_type.starts_with("image/png"),
-        "artifact content-type must be image/png, got {content_type}"
+    // 6. Access the artifact through WorkspaceHost and verify PNG format + dimensions.
+    let access = host
+        .resolve_artifact(&artifact_meta.id)
+        .expect("artifact must resolve");
+    assert_eq!(
+        access.media_type, "image/png",
+        "artifact media type must be image/png"
     );
-    let artifact_bytes = body_bytes(artifact_response.into_body()).await;
+    let artifact_bytes = tokio::fs::read(&access.path)
+        .await
+        .expect("read artifact bytes");
     assert!(
         artifact_bytes.starts_with(PNG_SIGNATURE),
         "artifact must be a valid PNG (signature mismatch)"
@@ -890,9 +779,8 @@ async fn burn_full_pipeline_load_encode_latent_sample_decode_saves_png_via_axum(
     );
 
     eprintln!(
-        "burn_full_pipeline completed: model={MODEL_ID}, instance={INSTANCE_LABEL}, run_id={run_id}, artifact_id={artifact_id}, artifact_node={artifact_node}, width={}, height={}, duration={}s",
-        image.width(),
-        image.height(),
+        "burn_full_pipeline completed: model={MODEL_ID}, instance={INSTANCE_LABEL}, run_id={run_id}, artifact_id={}, duration={}s",
+        artifact_meta.id,
         started_at.elapsed().as_secs(),
     );
 }

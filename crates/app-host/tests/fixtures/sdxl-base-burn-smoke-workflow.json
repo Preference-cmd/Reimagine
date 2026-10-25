@@ -4,7 +4,7 @@
   "version": 1,
   "metadata": {
     "name": "SDXL Burn Smoke (Real E2E)",
-    "description": "Minimal SDXL Burn smoke workflow (256x256, one Euler/normal step) gated behind the 05a opt-in test. Read at workspace-bootstrap time via REIMAGINE_BURN_AXUM_WORKSPACE and REIMAGINE_BURN_AXUM_PACKAGE_REPORT env vars.",
+    "description": "Minimal SDXL Burn smoke workflow (256x256, one Euler/normal step) gated behind the 05a opt-in test. Read at workspace-bootstrap time via REIMAGINE_BURN_E2E_WORKSPACE and REIMAGINE_BURN_E2E_PACKAGE_REPORT env vars.",
     "created_by": "human"
   },
   "interface": { "inputs": [], "outputs": [] },
