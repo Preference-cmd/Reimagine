@@ -121,7 +121,7 @@ async fn model_service_wraps_manifest_store_and_resolver() {
         .save_manifest(&manifest)
         .await
         .expect("manifest should save");
-    assert!(save_report.diagnostics().is_empty());
+    assert!(save_report.is_empty());
 
     let models = service.list_models().await.expect("models should list");
     assert_eq!(models.len(), 1);
@@ -153,7 +153,7 @@ async fn model_service_imports_burn_package_report_and_persists_manifest() {
         .await
         .expect("burn package import should persist descriptor");
 
-    assert!(report.diagnostics().is_empty());
+    assert!(report.is_empty());
     assert_eq!(descriptor.id().as_str(), "sdxl-base-1.0-burn");
     assert_eq!(manifest.models(), std::slice::from_ref(&descriptor));
     assert_eq!(descriptor.components().len(), 4);
@@ -177,12 +177,11 @@ async fn model_service_imports_burn_package_report_and_persists_manifest() {
         .expect("resolver should run");
     assert!(
         resolved
-            .report()
             .diagnostics()
             .iter()
             .all(|diagnostic| !diagnostic.severity().is_error()),
         "resolved burn package should not emit error diagnostics: {:?}",
-        resolved.report().diagnostics()
+        resolved.diagnostics()
     );
     assert_eq!(resolved.value().unwrap().components().len(), 4);
 }

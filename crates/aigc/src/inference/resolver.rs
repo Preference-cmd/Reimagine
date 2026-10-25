@@ -40,7 +40,6 @@ impl ModelResolver for ModelResolverAdapter {
             })?;
 
         let error_diagnostics = resolution
-            .report()
             .diagnostics()
             .iter()
             .filter(|diagnostic| diagnostic.severity().is_error())

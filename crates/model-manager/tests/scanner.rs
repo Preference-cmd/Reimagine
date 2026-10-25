@@ -170,8 +170,12 @@ async fn manifest_update_policy_auto_adds_new_supported_files() {
     assert_eq!(model.observed_size_bytes(), Some(7));
     assert!(model.fingerprint().is_none());
     assert!(model.id().as_str().contains("stable_diffusion-sdxl"));
-    assert_eq!(update.report().events().len(), 1);
-    assert_eq!(update.report().events()[0].kind().as_str(), "model.added");
+    assert!(
+        update
+            .diagnostics()
+            .iter()
+            .any(|d| d.code().as_str() == "MODEL_MANAGER/SCAN_MODEL_ADDED")
+    );
 
     cleanup(base).await;
 }
@@ -196,10 +200,11 @@ fn manifest_update_policy_marks_missing_without_deleting_entry() {
         update.manifest().models()[0].source_status(),
         ModelSourceStatus::Missing
     );
-    assert_eq!(update.report().events().len(), 1);
-    assert_eq!(
-        update.report().events()[0].kind().as_str(),
-        "model.marked_missing"
+    assert!(
+        update
+            .diagnostics()
+            .iter()
+            .any(|d| d.code().as_str() == "MODEL_MANAGER/SCAN_SOURCE_MISSING")
     );
 }
 
@@ -224,10 +229,9 @@ fn manifest_update_policy_marks_unavailable_root_entries_missing() {
     );
     assert!(
         update
-            .report()
-            .events()
+            .diagnostics()
             .iter()
-            .any(|event| { event.kind().as_str() == "model.marked_missing" })
+            .any(|d| d.code().as_str() == "MODEL_MANAGER/SCAN_SOURCE_MISSING")
     );
 }
 
@@ -278,7 +282,7 @@ async fn manifest_update_policy_only_marks_missing_for_scanned_roots() {
         .find(|model| model.id().as_str() == "external")
         .unwrap();
     assert_eq!(external.source_status(), ModelSourceStatus::Available);
-    assert_eq!(update.report().events().len(), 0);
+    assert!(update.diagnostics().is_empty());
 
     cleanup(base).await;
 }
@@ -314,10 +318,11 @@ async fn manifest_update_policy_marks_changed_known_files_stale() {
     let model = &update.manifest().models()[0];
     assert_eq!(model.source_status(), ModelSourceStatus::Stale);
     assert_eq!(model.observed_size_bytes(), Some(8));
-    assert_eq!(update.report().events().len(), 1);
-    assert_eq!(
-        update.report().events()[0].kind().as_str(),
-        "model.marked_stale"
+    assert!(
+        update
+            .diagnostics()
+            .iter()
+            .any(|d| d.code().as_str() == "MODEL_MANAGER/SCAN_SOURCE_STALE")
     );
 
     cleanup(base).await;

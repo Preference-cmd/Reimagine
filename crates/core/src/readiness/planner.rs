@@ -1,6 +1,6 @@
 use std::collections::{BTreeMap, BTreeSet, HashMap, VecDeque};
 
-use crate::event::OperationReport;
+use crate::diagnostic::Diagnostic;
 use crate::execution_plan::{
     ExecutionEdge, ExecutionInputSource, ExecutionNode, ExecutionPlan, ExecutionStage,
     ExecutionWorkflowOutputSource,
@@ -23,7 +23,7 @@ pub fn trace_execution_subgraph(
     workflow: &Workflow,
     node_catalog: &impl NodeCatalog,
     resolved_targets: &ResolvedTargets,
-    report: &mut OperationReport,
+    diagnostics: &mut Vec<Diagnostic>,
 ) -> Option<PlanningGraph> {
     let incoming = incoming_edges_by_node(workflow);
     let mut node_ids = BTreeSet::new();
@@ -60,7 +60,7 @@ pub fn trace_execution_subgraph(
     }
 
     if has_cycle(workflow, &node_ids, &edge_ids) {
-        report.push_diagnostic(executable_cycle(workflow.id()));
+        diagnostics.push(executable_cycle(workflow.id()));
         return None;
     }
 
@@ -70,7 +70,7 @@ pub fn trace_execution_subgraph(
         node_catalog,
         resolved_targets,
         &planning_graph,
-        report,
+        diagnostics,
     );
 
     Some(planning_graph)
@@ -81,7 +81,7 @@ fn validate_required_outputs(
     node_catalog: &impl NodeCatalog,
     resolved_targets: &ResolvedTargets,
     planning_graph: &PlanningGraph,
-    report: &mut OperationReport,
+    diagnostics: &mut Vec<Diagnostic>,
 ) {
     let exposed_outputs: BTreeSet<(NodeId, SlotId)> = resolved_targets
         .targets
@@ -130,7 +130,7 @@ fn validate_required_outputs(
             });
 
             if !consumed && !exposed_outputs.contains(&output_key) {
-                report.push_diagnostic(non_contributing_pure_graph(workflow.id()));
+                diagnostics.push(non_contributing_pure_graph(workflow.id()));
             }
         }
     }

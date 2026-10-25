@@ -14,7 +14,6 @@ pub use crate::execution_plan::{
 pub use external::{ExternalReadinessContext, ExternalReadinessProvider, ExternalReadinessSubject};
 
 use crate::diagnostic::DiagnosticSeverity;
-use crate::event::OperationReport;
 use crate::model::NodeCatalog;
 use crate::workflow::Workflow;
 
@@ -30,25 +29,25 @@ pub fn build_execution_plan(
     target_selection: RunTargetSelection,
     external_provider: Option<&dyn ExternalReadinessProvider>,
 ) -> ExecutionPlanResult {
-    let mut report = OperationReport::new();
+    let mut diagnostics = Vec::new();
 
     let Some(resolved_targets) =
-        resolve_targets(workflow, node_catalog, &target_selection, &mut report)
+        resolve_targets(workflow, node_catalog, &target_selection, &mut diagnostics)
     else {
-        return ExecutionPlanResult::new(None, report);
+        return ExecutionPlanResult::new(None, diagnostics);
     };
 
     let Some(planning_graph) =
-        trace_execution_subgraph(workflow, node_catalog, &resolved_targets, &mut report)
+        trace_execution_subgraph(workflow, node_catalog, &resolved_targets, &mut diagnostics)
     else {
-        return ExecutionPlanResult::new(None, report);
+        return ExecutionPlanResult::new(None, diagnostics);
     };
 
     validate_effective_inputs(
         workflow,
         node_catalog,
         &planning_graph,
-        &mut report,
+        &mut diagnostics,
         |context, subject| {
             if let Some(provider) = external_provider {
                 check_external_readiness(provider, context, subject)
@@ -58,12 +57,11 @@ pub fn build_execution_plan(
         },
     );
 
-    let has_errors = report
-        .diagnostics()
+    let has_errors = diagnostics
         .iter()
         .any(|diagnostic| diagnostic.severity() == DiagnosticSeverity::Error);
     if has_errors {
-        return ExecutionPlanResult::new(None, report);
+        return ExecutionPlanResult::new(None, diagnostics);
     }
 
     let plan = build_plan(
@@ -74,5 +72,5 @@ pub fn build_execution_plan(
         planning_graph,
     );
 
-    ExecutionPlanResult::new(Some(plan), report)
+    ExecutionPlanResult::new(Some(plan), diagnostics)
 }

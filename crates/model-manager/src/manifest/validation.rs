@@ -5,7 +5,6 @@ use reimagine_core::diagnostic::{
     Diagnostic, DiagnosticCode, DiagnosticSeverity, DiagnosticSourceName, DiagnosticTarget,
     DiagnosticTargetDomain,
 };
-use reimagine_core::event::OperationReport;
 use reimagine_core::model::{DiagnosticId, ModelRole};
 
 use crate::classify::ModelSeriesConfig;
@@ -16,12 +15,10 @@ use super::{
     resolve_root_path, resolve_source_path,
 };
 
-pub type ManifestValidationReport = OperationReport;
-
 pub async fn validate_manifest(
     manifest: &ModelManifest,
     models_dir: impl Into<PathBuf>,
-) -> ManifestValidationReport {
+) -> Vec<Diagnostic> {
     validate_manifest_with_series_config(manifest, models_dir, &ModelSeriesConfig::default()).await
 }
 
@@ -29,12 +26,12 @@ pub async fn validate_manifest_with_series_config(
     manifest: &ModelManifest,
     models_dir: impl Into<PathBuf>,
     series_config: &ModelSeriesConfig,
-) -> ManifestValidationReport {
+) -> Vec<Diagnostic> {
     let models_dir = models_dir.into();
-    let mut report = ManifestValidationReport::new();
+    let mut report = Vec::new();
 
     if manifest.schema_version() != MODEL_MANIFEST_SCHEMA_VERSION {
-        report.push_diagnostic(model_diagnostic(
+        report.push(model_diagnostic(
             "schema_version",
             None,
             Some("models/manifest.json".to_owned()),
@@ -46,7 +43,7 @@ pub async fn validate_manifest_with_series_config(
     let mut seen_ids = HashSet::new();
     for root in manifest.model_roots() {
         if !is_valid_root_path(root.path(), root.kind()) {
-            report.push_diagnostic(model_diagnostic(
+            report.push(model_diagnostic(
                 "root_invalid",
                 Some(root.id().as_str().to_owned()),
                 Some(root.path().to_owned()),
@@ -59,7 +56,7 @@ pub async fn validate_manifest_with_series_config(
     for descriptor in manifest.models() {
         let model_id = descriptor.id().as_str().to_owned();
         if !seen_ids.insert(model_id.clone()) {
-            report.push_diagnostic(model_diagnostic(
+            report.push(model_diagnostic(
                 "duplicate_id",
                 Some(model_id.clone()),
                 Some(descriptor.source().path().to_owned()),
@@ -71,7 +68,7 @@ pub async fn validate_manifest_with_series_config(
         let series_empty = descriptor.model_series().as_str().trim().is_empty();
         let variant_empty = descriptor.variant().as_str().trim().is_empty();
         if series_empty || variant_empty {
-            report.push_diagnostic(model_diagnostic(
+            report.push(model_diagnostic(
                 "descriptor_unknown",
                 Some(model_id.clone()),
                 Some(descriptor.source().path().to_owned()),
@@ -88,7 +85,7 @@ pub async fn validate_manifest_with_series_config(
             && matches!(descriptor.format(), super::ModelFormat::Unknown);
 
         if !fully_unknown && (series_unknown || variant_unknown) {
-            report.push_diagnostic(model_diagnostic(
+            report.push(model_diagnostic(
                 "descriptor_unknown",
                 Some(model_id.clone()),
                 Some(descriptor.source().path().to_owned()),
@@ -105,7 +102,7 @@ pub async fn validate_manifest_with_series_config(
             && !series_config
                 .supports_series_variant(descriptor.model_series(), descriptor.variant())
         {
-            report.push_diagnostic(model_diagnostic(
+            report.push(model_diagnostic(
                 "descriptor_unknown",
                 Some(model_id.clone()),
                 Some(descriptor.source().path().to_owned()),
@@ -115,7 +112,7 @@ pub async fn validate_manifest_with_series_config(
         }
 
         if descriptor.roles().is_empty() && !series_unknown && !variant_unknown {
-            report.push_diagnostic(model_diagnostic(
+            report.push(model_diagnostic(
                 "roles_missing",
                 Some(model_id.clone()),
                 Some(descriptor.source().path().to_owned()),
@@ -125,7 +122,7 @@ pub async fn validate_manifest_with_series_config(
         }
 
         if !descriptor.format().is_supported() && !fully_unknown {
-            report.push_diagnostic(model_diagnostic(
+            report.push(model_diagnostic(
                 "format_unsupported",
                 Some(model_id.clone()),
                 Some(descriptor.source().path().to_owned()),
@@ -144,7 +141,7 @@ pub async fn validate_manifest_with_series_config(
 }
 
 async fn validate_source_shape(
-    report: &mut ManifestValidationReport,
+    report: &mut Vec<Diagnostic>,
     descriptor: &ModelDescriptor,
     manifest: &ModelManifest,
     models_dir: &Path,
@@ -154,7 +151,7 @@ async fn validate_source_shape(
     match descriptor.source() {
         ModelSource::LocalFileRelative { root_id, path } => {
             if !is_valid_relative_path(path) {
-                report.push_diagnostic(model_diagnostic(
+                report.push(model_diagnostic(
                     "source_invalid",
                     Some(model_id),
                     Some(path.clone()),
@@ -162,7 +159,7 @@ async fn validate_source_shape(
                     "relative model source path is invalid",
                 ));
             } else if !root_exists(manifest, root_id) {
-                report.push_diagnostic(model_diagnostic(
+                report.push(model_diagnostic(
                     "source_root_missing",
                     Some(descriptor.id().as_str().to_owned()),
                     Some(path.clone()),
@@ -173,7 +170,7 @@ async fn validate_source_shape(
                 resolve_relative_root_path(manifest, root_id, models_dir)
                 && !tokio::fs::try_exists(&root_path).await.unwrap_or(false)
             {
-                report.push_diagnostic(model_diagnostic(
+                report.push(model_diagnostic(
                     "model_root_missing",
                     Some(descriptor.id().as_str().to_owned()),
                     Some(root_path.display().to_string()),
@@ -184,7 +181,7 @@ async fn validate_source_shape(
         }
         ModelSource::LocalFileAbsolute { path } => {
             if path.trim().is_empty() || !Path::new(path).is_absolute() {
-                report.push_diagnostic(model_diagnostic(
+                report.push(model_diagnostic(
                     "source_invalid",
                     Some(model_id),
                     Some(path.clone()),
@@ -197,7 +194,7 @@ async fn validate_source_shape(
 }
 
 async fn validate_source_status(
-    report: &mut ManifestValidationReport,
+    report: &mut Vec<Diagnostic>,
     descriptor: &ModelDescriptor,
     manifest: &ModelManifest,
     models_dir: &Path,
@@ -216,7 +213,7 @@ async fn validate_source_status(
     let status = descriptor.source_status();
 
     if !exists {
-        report.push_diagnostic(model_diagnostic(
+        report.push(model_diagnostic(
             "source_file_missing",
             Some(descriptor.id().as_str().to_owned()),
             Some(source_path.display().to_string()),
@@ -233,7 +230,7 @@ async fn validate_source_status(
     };
 
     if inconsistent {
-        report.push_diagnostic(model_diagnostic(
+        report.push(model_diagnostic(
             "source_status_inconsistent",
             Some(descriptor.id().as_str().to_owned()),
             Some(source_path.display().to_string()),
@@ -243,15 +240,12 @@ async fn validate_source_status(
     }
 }
 
-fn validate_size_and_fingerprint(
-    report: &mut ManifestValidationReport,
-    descriptor: &ModelDescriptor,
-) {
+fn validate_size_and_fingerprint(report: &mut Vec<Diagnostic>, descriptor: &ModelDescriptor) {
     if let (Some(expected), Some(observed)) =
         (descriptor.size_bytes(), descriptor.observed_size_bytes())
         && expected != observed
     {
-        report.push_diagnostic(model_diagnostic(
+        report.push(model_diagnostic(
             "size_mismatch",
             Some(descriptor.id().as_str().to_owned()),
             Some(descriptor.source().path().to_owned()),
@@ -263,7 +257,7 @@ fn validate_size_and_fingerprint(
     if let Some(fingerprint) = descriptor.fingerprint()
         && !is_valid_fingerprint(fingerprint)
     {
-        report.push_diagnostic(model_diagnostic(
+        report.push(model_diagnostic(
             "fingerprint_invalid",
             Some(descriptor.id().as_str().to_owned()),
             Some(descriptor.source().path().to_owned()),
@@ -274,7 +268,7 @@ fn validate_size_and_fingerprint(
 }
 
 async fn validate_components(
-    report: &mut ManifestValidationReport,
+    report: &mut Vec<Diagnostic>,
     descriptor: &ModelDescriptor,
     manifest: &ModelManifest,
     models_dir: &Path,
@@ -290,7 +284,7 @@ async fn validate_components(
         let component_label = component.label();
 
         if !component.format().is_supported() {
-            report.push_diagnostic(model_diagnostic(
+            report.push(model_diagnostic(
                 "component_format_unsupported",
                 Some(model_id.clone()),
                 Some(component.source().path().to_owned()),
@@ -302,7 +296,7 @@ async fn validate_components(
         if let ModelSource::LocalFileAbsolute { path } = component.source()
             && (path.trim().is_empty() || !Path::new(path).is_absolute())
         {
-            report.push_diagnostic(model_diagnostic(
+            report.push(model_diagnostic(
                 "component_source_invalid",
                 Some(model_id.clone()),
                 Some(path.clone()),
@@ -315,7 +309,7 @@ async fn validate_components(
         let resolved_path = match resolve_component_source_path(manifest, component, models_dir) {
             Some(path) => path,
             None => {
-                report.push_diagnostic(model_diagnostic(
+                report.push(model_diagnostic(
                     "component_source_invalid",
                     Some(model_id.clone()),
                     Some(component.source().path().to_owned()),
@@ -328,7 +322,7 @@ async fn validate_components(
 
         let exists = tokio::fs::try_exists(&resolved_path).await.unwrap_or(false);
         if !exists {
-            report.push_diagnostic(model_diagnostic(
+            report.push(model_diagnostic(
                 "component_source_missing",
                 Some(model_id.clone()),
                 Some(resolved_path.display().to_string()),
@@ -341,7 +335,7 @@ async fn validate_components(
         }
 
         if !seen_keys.insert((component.role(), component_label.clone())) {
-            report.push_diagnostic(model_diagnostic(
+            report.push(model_diagnostic(
                 "component_duplicate",
                 Some(model_id.clone()),
                 Some(resolved_path.display().to_string()),

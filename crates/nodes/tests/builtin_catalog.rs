@@ -121,11 +121,7 @@ fn sdxl_base_workflow_example_validates_against_builtin_catalog() {
 
     let report = validate_structure(&workflow, &BuiltinNodeCatalog::v1());
 
-    assert!(
-        report.diagnostics().is_empty(),
-        "unexpected diagnostics: {:?}",
-        report.diagnostics()
-    );
+    assert!(report.is_empty(), "unexpected diagnostics: {:?}", report);
 }
 
 #[test]
@@ -138,7 +134,6 @@ fn dynamic_slots_still_reject_static_params_with_builtin_catalog() {
 
     let report = validate_structure(&workflow, &BuiltinNodeCatalog::v1());
     let codes: Vec<_> = report
-        .diagnostics()
         .iter()
         .map(|diagnostic| diagnostic.code().as_str())
         .collect();

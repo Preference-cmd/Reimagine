@@ -1,4 +1,4 @@
-use crate::event::OperationReport;
+use crate::diagnostic::Diagnostic;
 use crate::model::{
     DocumentVersion, EdgeId, NodeId, NodeTypeId, SlotId, WorkflowId, WorkflowInputId,
     WorkflowOutputId,
@@ -7,20 +7,20 @@ use crate::model::{
 #[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub struct ExecutionPlanResult {
     plan: Option<ExecutionPlan>,
-    report: OperationReport,
+    diagnostics: Vec<Diagnostic>,
 }
 
 impl ExecutionPlanResult {
-    pub fn new(plan: Option<ExecutionPlan>, report: OperationReport) -> Self {
-        Self { plan, report }
+    pub fn new(plan: Option<ExecutionPlan>, diagnostics: Vec<Diagnostic>) -> Self {
+        Self { plan, diagnostics }
     }
 
     pub fn plan(&self) -> Option<&ExecutionPlan> {
         self.plan.as_ref()
     }
 
-    pub fn report(&self) -> &OperationReport {
-        &self.report
+    pub fn diagnostics(&self) -> &[Diagnostic] {
+        &self.diagnostics
     }
 }
 

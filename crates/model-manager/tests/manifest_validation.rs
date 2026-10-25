@@ -1,11 +1,12 @@
 use std::path::PathBuf;
 
 use reimagine_config::AppPaths;
+use reimagine_core::diagnostic::Diagnostic;
 use reimagine_core::model::{ModelId, ModelRole, ModelSeries, ModelVariant};
 use reimagine_model_manager::{
-    Fingerprint, ManifestValidationReport, ModelComponentSource, ModelDescriptor, ModelFormat,
-    ModelManifest, ModelRoot, ModelRootId, ModelRootKind, ModelSeriesConfig, ModelSeriesRule,
-    ModelSource, ModelSourceStatus, validate_manifest, validate_manifest_with_series_config,
+    Fingerprint, ModelComponentSource, ModelDescriptor, ModelFormat, ModelManifest, ModelRoot,
+    ModelRootId, ModelRootKind, ModelSeriesConfig, ModelSeriesRule, ModelSource, ModelSourceStatus,
+    validate_manifest, validate_manifest_with_series_config,
 };
 
 #[tokio::test]
@@ -31,9 +32,9 @@ async fn unsupported_schema_version_produces_diagnostic() {
     let (manifest, report) = store.load().await.unwrap();
 
     assert_eq!(manifest.schema_version(), "reimagine.model_manifest.v9");
-    assert_eq!(report.diagnostics().len(), 1);
+    assert_eq!(report.len(), 1);
     assert_eq!(
-        report.diagnostics()[0].code().as_str(),
+        report[0].code().as_str(),
         "MODEL_MANAGER/SCHEMA_VERSION_UNSUPPORTED"
     );
 
@@ -200,10 +201,9 @@ async fn fully_unknown_descriptor_is_allowed_without_diagnostic() {
     let report = validate_manifest(&manifest, base.join("models")).await;
 
     assert!(
-        report.diagnostics().is_empty(),
+        report.is_empty(),
         "expected no diagnostics, got {:?}",
         report
-            .diagnostics()
             .iter()
             .map(|diagnostic| diagnostic.code().as_str())
             .collect::<Vec<_>>()
@@ -488,7 +488,6 @@ async fn component_with_invalid_absolute_source_path_emits_source_path_invalid()
     let report = validate_manifest(&manifest, base.join("models")).await;
 
     let count = report
-        .diagnostics()
         .iter()
         .filter(|d| d.code().as_str() == "MODEL_MANAGER/SOURCE_PATH_INVALID")
         .count();
@@ -637,9 +636,8 @@ async fn happy_path_split_descriptor_has_no_component_diagnostics() {
     cleanup(base).await;
 }
 
-fn assert_codes(report: &ManifestValidationReport, expected: &[&str]) {
+fn assert_codes(report: &[Diagnostic], expected: &[&str]) {
     let codes: Vec<_> = report
-        .diagnostics()
         .iter()
         .map(|diagnostic| diagnostic.code().as_str().to_owned())
         .collect();
@@ -653,9 +651,8 @@ fn assert_codes(report: &ManifestValidationReport, expected: &[&str]) {
     }
 }
 
-fn assert_lacks_code(report: &ManifestValidationReport, unexpected: &str) {
+fn assert_lacks_code(report: &[Diagnostic], unexpected: &str) {
     let codes: Vec<_> = report
-        .diagnostics()
         .iter()
         .map(|diagnostic| diagnostic.code().as_str().to_owned())
         .collect();
@@ -667,9 +664,8 @@ fn assert_lacks_code(report: &ManifestValidationReport, unexpected: &str) {
     );
 }
 
-fn assert_code_count(report: &ManifestValidationReport, expected: &str, count: usize) {
+fn assert_code_count(report: &[Diagnostic], expected: &str, count: usize) {
     let actual_count = report
-        .diagnostics()
         .iter()
         .filter(|diagnostic| diagnostic.code().as_str() == expected)
         .count();

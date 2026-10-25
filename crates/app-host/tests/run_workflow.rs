@@ -23,7 +23,7 @@ use reimagine_app_host::{
 };
 use reimagine_config::{AppConfig, AppPaths};
 use reimagine_core::diagnostic::DiagnosticSeverity;
-use reimagine_core::event::{OperationReport, RunEventKind};
+use reimagine_core::event::RunEventKind;
 use reimagine_core::model::{
     ArtifactRef, DocumentVersion, ModelId, ModelRef, ModelRole, ModelSeries, ModelVariant, NodeId,
     NodeTypeId, ParamValue, RunId, SlotId, WorkflowId,
@@ -284,16 +284,16 @@ async fn run_workflow_returns_blocked_when_model_is_missing() {
         .await
         .expect("run_workflow should not error");
 
-    let RunWorkflowResult::Blocked { report } = result else {
+    let RunWorkflowResult::Blocked { diagnostics } = result else {
         panic!("expected Blocked, got {result:?}");
     };
     assert!(
-        report.diagnostics().iter().any(|d| {
+        diagnostics.iter().any(|d| {
             d.code().as_str() == "MODEL_MANAGER/MODEL_REF_NOT_FOUND"
                 && d.severity() == DiagnosticSeverity::Error
         }),
         "blocked report should surface the model not-found error, got {:?}",
-        report.diagnostics()
+        diagnostics
     );
 }
 
@@ -348,7 +348,7 @@ async fn run_workflow_handoff_completes_when_readiness_passes() {
     let RunWorkflowResult::Started {
         handle,
         initial_snapshot,
-        report: _,
+        diagnostics: _,
     } = result
     else {
         panic!("expected Started, got {result:?}");
@@ -434,8 +434,8 @@ fn run_workflow_result_does_not_expose_runtime_value_store() {
     // The host-facing result variants must not carry runtime value-store
     // handles or backend tensor handles. This guards the boundary in
     // `run_workflow.rs::RunWorkflowResult`.
-    let report: OperationReport = OperationReport::new();
-    let blocked = RunWorkflowResult::Blocked { report };
+    let diagnostics: Vec<reimagine_core::diagnostic::Diagnostic> = Vec::new();
+    let blocked = RunWorkflowResult::Blocked { diagnostics };
     let json = format!("{blocked:?}");
     assert!(!json.contains("RunValueStore"));
     assert!(!json.contains("BackendTensorHandle"));

@@ -2,9 +2,6 @@ use reimagine_core::diagnostic::{
     Diagnostic, DiagnosticCode, DiagnosticSeverity, DiagnosticSourceName, DiagnosticTarget,
     DiagnosticTargetDomain,
 };
-use reimagine_core::event::{
-    DomainEvent, DomainEventId, DomainEventKind, DomainEventSource, OperationReport, Timestamp,
-};
 use reimagine_core::model::{DiagnosticId, ModelRole};
 
 use crate::{
@@ -17,12 +14,15 @@ use super::ScanObservation;
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ManifestUpdate {
     manifest: ModelManifest,
-    report: OperationReport,
+    diagnostics: Vec<Diagnostic>,
 }
 
 impl ManifestUpdate {
-    fn new(manifest: ModelManifest, report: OperationReport) -> Self {
-        Self { manifest, report }
+    fn new(manifest: ModelManifest, diagnostics: Vec<Diagnostic>) -> Self {
+        Self {
+            manifest,
+            diagnostics,
+        }
     }
 
     pub fn manifest(&self) -> &ModelManifest {
@@ -33,8 +33,8 @@ impl ManifestUpdate {
         self.manifest
     }
 
-    pub fn report(&self) -> &OperationReport {
-        &self.report
+    pub fn diagnostics(&self) -> &[Diagnostic] {
+        &self.diagnostics
     }
 }
 
@@ -70,7 +70,7 @@ impl<'a> ManifestUpdatePolicy<'a> {
         scanned_root: Option<&ModelRootId>,
         observations: &[ScanObservation],
     ) -> ManifestUpdate {
-        let mut report = OperationReport::new();
+        let mut diagnostics = Vec::new();
         let observed_sources = observations
             .iter()
             .map(|observation| observation.source().clone())
@@ -82,9 +82,14 @@ impl<'a> ManifestUpdatePolicy<'a> {
                 .iter_mut()
                 .find(|model| model.source() == observation.source())
             {
-                update_existing(existing, observation, &mut report);
+                update_existing(existing, observation, &mut diagnostics);
             } else {
-                add_new_model(&mut manifest, observation, self.classifier, &mut report);
+                add_new_model(
+                    &mut manifest,
+                    observation,
+                    self.classifier,
+                    &mut diagnostics,
+                );
             }
         }
 
@@ -99,12 +104,7 @@ impl<'a> ManifestUpdatePolicy<'a> {
                 && descriptor.source_status() != ModelSourceStatus::Missing
             {
                 descriptor.set_source_status(ModelSourceStatus::Missing);
-                report.push_event(model_event(
-                    "model.marked_missing",
-                    descriptor.id().as_str(),
-                    descriptor.source().path(),
-                ));
-                report.push_diagnostic(model_diagnostic(
+                diagnostics.push(model_diagnostic(
                     "scan_missing",
                     descriptor.id().as_str(),
                     descriptor.source().path(),
@@ -115,7 +115,7 @@ impl<'a> ManifestUpdatePolicy<'a> {
             }
         }
 
-        ManifestUpdate::new(manifest, report)
+        ManifestUpdate::new(manifest, diagnostics)
     }
 }
 
@@ -132,7 +132,7 @@ fn descriptor_in_scope(descriptor: &ModelDescriptor, scanned_root: Option<&Model
 fn update_existing(
     descriptor: &mut ModelDescriptor,
     observation: &ScanObservation,
-    report: &mut OperationReport,
+    diagnostics: &mut Vec<Diagnostic>,
 ) {
     let changed = descriptor
         .observed_size_bytes()
@@ -147,12 +147,7 @@ fn update_existing(
 
     if changed && descriptor.source_status() != ModelSourceStatus::Stale {
         descriptor.set_source_status(ModelSourceStatus::Stale);
-        report.push_event(model_event(
-            "model.marked_stale",
-            descriptor.id().as_str(),
-            descriptor.source().path(),
-        ));
-        report.push_diagnostic(model_diagnostic(
+        diagnostics.push(model_diagnostic(
             "scan_stale",
             descriptor.id().as_str(),
             descriptor.source().path(),
@@ -167,7 +162,7 @@ fn add_new_model(
     manifest: &mut ModelManifest,
     observation: &ScanObservation,
     classifier: &Classifier<'_>,
-    report: &mut OperationReport,
+    diagnostics: &mut Vec<Diagnostic>,
 ) {
     let candidate = ClassificationCandidate::new(
         Some(observation.root_id().clone()),
@@ -189,7 +184,7 @@ fn add_new_model(
         observation.source(),
         None,
     );
-    report.extend(id_result.report().clone());
+    diagnostics.extend_from_slice(id_result.diagnostics());
 
     let descriptor = ModelDescriptor::new(
         id_result.id().clone(),
@@ -210,8 +205,7 @@ fn add_new_model(
     let model_path = descriptor.source().path().to_owned();
 
     manifest.models_mut().push(descriptor);
-    report.push_event(model_event("model.added", &model_id, &model_path));
-    report.push_diagnostic(model_diagnostic(
+    diagnostics.push(model_diagnostic(
         "scan_added",
         &model_id,
         &model_path,
@@ -219,20 +213,6 @@ fn add_new_model(
         "model source was added to the manifest",
         DiagnosticSeverity::Info,
     ));
-}
-
-fn model_event(kind: &str, model_id: &str, path: &str) -> DomainEvent {
-    DomainEvent::new(
-        DomainEventId::new(format!("model-manager:{kind}:{model_id}")),
-        DomainEventSource::new("model-manager"),
-        DomainEventKind::new(kind),
-        Timestamp::new("scan"),
-    )
-    .with_subject(
-        DiagnosticTarget::new(DiagnosticTargetDomain::new("model-manager"))
-            .with_id(model_id.to_owned())
-            .with_path(path.to_owned()),
-    )
 }
 
 fn model_diagnostic(

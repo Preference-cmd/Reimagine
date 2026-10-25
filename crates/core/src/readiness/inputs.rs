@@ -1,7 +1,6 @@
 use std::collections::HashMap;
 
-use crate::diagnostic::{DiagnosticTarget, DiagnosticTargetDomain};
-use crate::event::OperationReport;
+use crate::diagnostic::{Diagnostic, DiagnosticTarget, DiagnosticTargetDomain};
 use crate::model::{InputSlotDef, NodeCatalog, ParamValue, SlotId};
 use crate::workflow::{Endpoint, Workflow, WorkflowEdge, WorkflowNode};
 
@@ -16,11 +15,11 @@ pub fn validate_effective_inputs(
     workflow: &Workflow,
     node_catalog: &impl NodeCatalog,
     planning_graph: &PlanningGraph,
-    report: &mut OperationReport,
+    diagnostics: &mut Vec<Diagnostic>,
     external_lookup: impl Fn(
         &ExternalReadinessContext,
         &ExternalReadinessSubject,
-    ) -> Option<Vec<crate::diagnostic::Diagnostic>>,
+    ) -> Option<Vec<Diagnostic>>,
 ) {
     let incoming = incoming_edges_by_node(workflow);
 
@@ -36,7 +35,7 @@ pub fn validate_effective_inputs(
         for input_slot in node_def.input_slots() {
             let binding = effective_binding_for_slot(workflow, node, input_slot, &incoming);
             if input_slot.is_required() && binding.is_none() {
-                report.push_diagnostic(required_input_missing(node.id(), input_slot.id()));
+                diagnostics.push(required_input_missing(node.id(), input_slot.id()));
                 continue;
             }
 
@@ -58,15 +57,13 @@ pub fn validate_effective_inputs(
                     .with_path(format!("params.{}", input_slot.id().as_str()));
 
                 match external_lookup(&context, &subject) {
-                    Some(diagnostics) => {
-                        for diagnostic in diagnostics {
-                            report.push_diagnostic(project_external_diagnostic(
-                                &diagnostic,
-                                primary.clone(),
-                            ));
+                    Some(results) => {
+                        for diagnostic in results {
+                            diagnostics
+                                .push(project_external_diagnostic(&diagnostic, primary.clone()));
                         }
                     }
-                    None => report.push_diagnostic(external_readiness_missing(&context, &subject)),
+                    None => diagnostics.push(external_readiness_missing(&context, &subject)),
                 }
             }
         }

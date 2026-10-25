@@ -1,10 +1,7 @@
 use std::path::PathBuf;
 use std::time::{SystemTime, UNIX_EPOCH};
 
-use reimagine_core::diagnostic::{DiagnosticTarget, DiagnosticTargetDomain};
-use reimagine_core::event::{
-    DomainEvent, DomainEventId, DomainEventKind, DomainEventSource, OperationReport, Timestamp,
-};
+use reimagine_core::diagnostic::Diagnostic;
 
 use crate::manifest::resolve_source_path;
 use crate::{
@@ -17,12 +14,15 @@ use super::sha256::hash_file;
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct FingerprintRefresh {
     descriptor: ModelDescriptor,
-    report: OperationReport,
+    diagnostics: Vec<Diagnostic>,
 }
 
 impl FingerprintRefresh {
-    fn new(descriptor: ModelDescriptor, report: OperationReport) -> Self {
-        Self { descriptor, report }
+    fn new(descriptor: ModelDescriptor, diagnostics: Vec<Diagnostic>) -> Self {
+        Self {
+            descriptor,
+            diagnostics,
+        }
     }
 
     pub fn descriptor(&self) -> &ModelDescriptor {
@@ -33,8 +33,8 @@ impl FingerprintRefresh {
         self.descriptor
     }
 
-    pub fn report(&self) -> &OperationReport {
-        &self.report
+    pub fn diagnostics(&self) -> &[Diagnostic] {
+        &self.diagnostics
     }
 }
 
@@ -83,27 +83,9 @@ impl<'a> ModelFingerprintVerifier<'a> {
         refreshed.set_fingerprint(Some(fingerprint));
         refreshed.set_verified_at(Some(refreshed_at.clone()));
         refreshed.set_source_status(ModelSourceStatus::Available);
-        refreshed.set_updated_at(Some(refreshed_at.clone()));
+        refreshed.set_updated_at(Some(refreshed_at));
 
-        let event = DomainEvent::new(
-            DomainEventId::new(format!(
-                "model-manager:model.verified:{}",
-                refreshed.id().as_str()
-            )),
-            DomainEventSource::new("model-manager"),
-            DomainEventKind::new("model.verified"),
-            Timestamp::new(refreshed_at),
-        )
-        .with_subject(
-            DiagnosticTarget::new(DiagnosticTargetDomain::new("model-manager"))
-                .with_id(refreshed.id().as_str().to_owned())
-                .with_path(source_path.display().to_string()),
-        );
-
-        Ok(FingerprintRefresh::new(
-            refreshed,
-            OperationReport::with_event(event),
-        ))
+        Ok(FingerprintRefresh::new(refreshed, Vec::new()))
     }
 }
 

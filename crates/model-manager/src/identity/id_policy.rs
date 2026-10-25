@@ -4,7 +4,6 @@ use reimagine_core::diagnostic::{
     Diagnostic, DiagnosticCode, DiagnosticSeverity, DiagnosticSourceName, DiagnosticTarget,
     DiagnosticTargetDomain,
 };
-use reimagine_core::event::OperationReport;
 use reimagine_core::model::ModelId;
 use reimagine_core::model::{ModelRole, ModelSeries, ModelVariant};
 use sha2::{Digest, Sha256};
@@ -36,15 +35,15 @@ impl fmt::Display for IdResolution {
 pub struct AutoIdResult {
     id: ModelId,
     resolution: IdResolution,
-    report: OperationReport,
+    diagnostics: Vec<Diagnostic>,
 }
 
 impl AutoIdResult {
-    fn new(id: ModelId, resolution: IdResolution, report: OperationReport) -> Self {
+    fn new(id: ModelId, resolution: IdResolution, diagnostics: Vec<Diagnostic>) -> Self {
         Self {
             id,
             resolution,
-            report,
+            diagnostics,
         }
     }
 
@@ -56,8 +55,8 @@ impl AutoIdResult {
         self.resolution
     }
 
-    pub fn report(&self) -> &OperationReport {
-        &self.report
+    pub fn diagnostics(&self) -> &[Diagnostic] {
+        &self.diagnostics
     }
 }
 
@@ -73,10 +72,10 @@ impl<'a> IdPolicy<'a> {
 
     /// Validate a manually-chosen id against existing ids. Returns a report
     /// with a diagnostic if the id conflicts.
-    pub fn validate_manual_id(&self, id: &str) -> OperationReport {
-        let mut report = OperationReport::new();
+    pub fn validate_manual_id(&self, id: &str) -> Vec<Diagnostic> {
+        let mut diagnostics = Vec::new();
         if self.existing.iter().any(|d| d.id().as_str() == id) {
-            report.push_diagnostic(Diagnostic::new(
+            diagnostics.push(Diagnostic::new(
                 reimagine_core::model::DiagnosticId::new(format!(
                     "model_manager:manual_id_conflict:{id}"
                 )),
@@ -88,7 +87,7 @@ impl<'a> IdPolicy<'a> {
                     .with_id(id.to_owned()),
             ));
         }
-        report
+        diagnostics
     }
 
     /// Generate a deterministic auto-id from descriptor data without collision
@@ -119,11 +118,7 @@ impl<'a> IdPolicy<'a> {
         let base_id = self.generate_auto_id(series, variant, role, source);
 
         match self.existing.iter().find(|d| d.id().as_str() == base_id) {
-            None => AutoIdResult::new(
-                ModelId::new(&base_id),
-                IdResolution::NoConflict,
-                OperationReport::new(),
-            ),
+            None => AutoIdResult::new(ModelId::new(&base_id), IdResolution::NoConflict, Vec::new()),
             Some(existing) => {
                 let same_source = existing.source() == source;
                 let same_fp = match (fingerprint, existing.fingerprint()) {
@@ -135,13 +130,13 @@ impl<'a> IdPolicy<'a> {
                     AutoIdResult::new(
                         ModelId::new(&base_id),
                         IdResolution::SameIdentity,
-                        OperationReport::new(),
+                        Vec::new(),
                     )
                 } else {
                     let suffixed =
                         self.resolve_suffixed_id(&base_id, series, variant, role, source);
-                    let mut report = OperationReport::new();
-                    report.push_diagnostic(Diagnostic::new(
+                    let mut diagnostics = Vec::new();
+                    diagnostics.push(Diagnostic::new(
                         reimagine_core::model::DiagnosticId::new(format!(
                             "model_manager:auto_id_collision:{suffixed}"
                         )),
@@ -154,7 +149,11 @@ impl<'a> IdPolicy<'a> {
                         DiagnosticTarget::new(DiagnosticTargetDomain::new("model-manager"))
                             .with_id(suffixed.clone()),
                     ));
-                    AutoIdResult::new(ModelId::new(suffixed), IdResolution::SuffixAppended, report)
+                    AutoIdResult::new(
+                        ModelId::new(suffixed),
+                        IdResolution::SuffixAppended,
+                        diagnostics,
+                    )
                 }
             }
         }

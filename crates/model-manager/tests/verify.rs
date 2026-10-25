@@ -34,11 +34,7 @@ async fn refresh_clears_stale_and_marks_descriptor_available() {
     assert!(refreshed.descriptor().observed_modified_at().is_some());
     assert!(refreshed.descriptor().verified_at().is_some());
     assert!(refreshed.descriptor().updated_at().is_some());
-    assert_eq!(refreshed.report().events().len(), 1);
-    assert_eq!(
-        refreshed.report().events()[0].kind().as_str(),
-        "model.verified"
-    );
+    assert!(refreshed.diagnostics().is_empty());
 
     cleanup(base).await;
 }
@@ -72,12 +68,7 @@ async fn first_add_refresh_computes_sha256_and_updates_descriptor_metadata() {
         refreshed.descriptor().source_status(),
         ModelSourceStatus::Available
     );
-    assert!(refreshed.report().diagnostics().is_empty());
-    assert_eq!(refreshed.report().events().len(), 1);
-    assert_eq!(
-        refreshed.report().events()[0].kind().as_str(),
-        "model.verified"
-    );
+    assert!(refreshed.diagnostics().is_empty());
 
     cleanup(base).await;
 }

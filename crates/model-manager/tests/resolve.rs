@@ -27,8 +27,8 @@ async fn successful_resolve_returns_readiness_info_and_descriptor() {
 
     assert!(readiness.is_resolved());
     assert!(descriptor.is_resolved());
-    assert!(readiness.report().diagnostics().is_empty());
-    assert!(descriptor.report().diagnostics().is_empty());
+    assert!(readiness.diagnostics().is_empty());
+    assert!(descriptor.diagnostics().is_empty());
 
     let info = readiness.value().unwrap();
     assert_eq!(info.id().as_str(), "demo-model");
@@ -55,13 +55,13 @@ async fn resolve_reports_not_found_when_id_is_missing() {
         .await;
 
     assert!(!resolution.is_resolved());
-    assert_eq!(resolution.report().diagnostics().len(), 1);
+    assert_eq!(resolution.diagnostics().len(), 1);
     assert_eq!(
-        resolution.report().diagnostics()[0].code().as_str(),
+        resolution.diagnostics()[0].code().as_str(),
         "MODEL_MANAGER/MODEL_REF_NOT_FOUND"
     );
     assert_eq!(
-        resolution.report().diagnostics()[0].severity(),
+        resolution.diagnostics()[0].severity(),
         DiagnosticSeverity::Error
     );
 }
@@ -85,7 +85,7 @@ async fn resolve_blocks_when_model_series_mismatches() {
 
     assert!(!resolution.is_resolved());
     assert_eq!(
-        resolution.report().diagnostics()[0].code().as_str(),
+        resolution.diagnostics()[0].code().as_str(),
         "MODEL_MANAGER/MODEL_SERIES_MISMATCH"
     );
 
@@ -111,7 +111,7 @@ async fn resolve_blocks_when_variant_mismatches() {
 
     assert!(!resolution.is_resolved());
     assert_eq!(
-        resolution.report().diagnostics()[0].code().as_str(),
+        resolution.diagnostics()[0].code().as_str(),
         "MODEL_MANAGER/MODEL_VARIANT_MISMATCH"
     );
 
@@ -137,7 +137,7 @@ async fn resolve_blocks_when_requested_role_is_missing() {
 
     assert!(!resolution.is_resolved());
     assert_eq!(
-        resolution.report().diagnostics()[0].code().as_str(),
+        resolution.diagnostics()[0].code().as_str(),
         "MODEL_MANAGER/MODEL_ROLE_MISSING"
     );
 
@@ -158,7 +158,7 @@ async fn resolve_blocks_when_source_file_is_missing() {
 
     assert!(!resolution.is_resolved());
     assert_eq!(
-        resolution.report().diagnostics()[0].code().as_str(),
+        resolution.diagnostics()[0].code().as_str(),
         "MODEL_MANAGER/MODEL_SOURCE_MISSING"
     );
 }
@@ -182,7 +182,7 @@ async fn resolve_blocks_when_model_is_stale() {
 
     assert!(!resolution.is_resolved());
     assert_eq!(
-        resolution.report().diagnostics()[0].code().as_str(),
+        resolution.diagnostics()[0].code().as_str(),
         "MODEL_MANAGER/MODEL_SOURCE_STALE"
     );
 
@@ -203,13 +203,13 @@ async fn resolve_allows_unverified_models_with_warning_when_fingerprint_is_missi
         .await;
 
     assert!(resolution.is_resolved());
-    assert_eq!(resolution.report().diagnostics().len(), 1);
+    assert_eq!(resolution.diagnostics().len(), 1);
     assert_eq!(
-        resolution.report().diagnostics()[0].code().as_str(),
+        resolution.diagnostics()[0].code().as_str(),
         "MODEL_MANAGER/MODEL_FINGERPRINT_MISSING"
     );
     assert_eq!(
-        resolution.report().diagnostics()[0].severity(),
+        resolution.diagnostics()[0].severity(),
         DiagnosticSeverity::Warning
     );
 
@@ -235,7 +235,7 @@ async fn resolve_blocks_when_recorded_fingerprint_can_no_longer_match_observed_m
 
     assert!(!resolution.is_resolved());
     assert_eq!(
-        resolution.report().diagnostics()[0].code().as_str(),
+        resolution.diagnostics()[0].code().as_str(),
         "MODEL_MANAGER/MODEL_FINGERPRINT_MISMATCH"
     );
 
@@ -361,7 +361,7 @@ async fn split_descriptor_resolves_components_with_absolute_paths() {
         .await;
 
     assert!(view.is_resolved());
-    assert!(view.report().diagnostics().is_empty());
+    assert!(view.diagnostics().is_empty());
 
     let resolved = view.value().expect("resolved view");
     let components = resolved.components();
@@ -435,7 +435,7 @@ async fn split_descriptor_marks_missing_components_with_specific_codes() {
         })
         .expect("clip_l component entry");
     assert!(clip_l_missing.is_missing());
-    assert!(view.report().diagnostics().iter().any(|d| d.code().as_str()
+    assert!(view.diagnostics().iter().any(|d| d.code().as_str()
         == "MODEL_MANAGER/COMPONENT_SOURCE_MISSING"
         && d.message().contains("clip_l")));
 
@@ -485,8 +485,7 @@ async fn split_descriptor_reports_duplicate_component_metadata() {
     assert_eq!(clip_l_count, 2);
 
     assert!(
-        view.report()
-            .diagnostics()
+        view.diagnostics()
             .iter()
             .any(|d| d.code().as_str() == "MODEL_MANAGER/COMPONENT_DUPLICATE")
     );
@@ -532,7 +531,7 @@ async fn assert_single_missing_component_reports_specific_code(
         })
         .expect("missing component entry");
     assert!(missing.is_missing(), "{expected_label} should be missing");
-    assert!(view.report().diagnostics().iter().any(|d| d.code().as_str()
+    assert!(view.diagnostics().iter().any(|d| d.code().as_str()
         == "MODEL_MANAGER/COMPONENT_SOURCE_MISSING"
         && d.message().contains(expected_label)));
 
@@ -622,13 +621,11 @@ async fn resolver_emits_component_format_unsupported_for_unknown_component_forma
         .await;
 
     assert!(
-        view.report()
-            .diagnostics()
+        view.diagnostics()
             .iter()
             .any(|d| d.code().as_str() == "MODEL_MANAGER/COMPONENT_FORMAT_UNSUPPORTED"),
         "expected COMPONENT_FORMAT_UNSUPPORTED diagnostic, got {:?}",
-        view.report()
-            .diagnostics()
+        view.diagnostics()
             .iter()
             .map(|d| d.code().as_str())
             .collect::<Vec<_>>()
@@ -695,7 +692,6 @@ async fn resolver_emits_source_path_invalid_for_malformed_absolute_component_pat
         .await;
 
     let source_path_invalid: Vec<_> = view
-        .report()
         .diagnostics()
         .iter()
         .filter(|d| d.code().as_str() == "MODEL_MANAGER/SOURCE_PATH_INVALID")
@@ -705,8 +701,7 @@ async fn resolver_emits_source_path_invalid_for_malformed_absolute_component_pat
         2,
         "expected two SOURCE_PATH_INVALID diagnostics, got {} (codes: {:?})",
         source_path_invalid.len(),
-        view.report()
-            .diagnostics()
+        view.diagnostics()
             .iter()
             .map(|d| d.code().as_str())
             .collect::<Vec<_>>()

@@ -20,7 +20,7 @@ fn structural_validation_accepts_sdxl_example_with_matching_catalog() {
 
     let report = validate_structure(&workflow, &catalog);
 
-    assert!(report.diagnostics().is_empty());
+    assert!(report.is_empty());
 }
 
 #[test]
@@ -84,7 +84,6 @@ fn structural_validation_reports_representative_graph_errors() {
 
     let report = validate_structure(&workflow, &catalog);
     let codes: Vec<&str> = report
-        .diagnostics()
         .iter()
         .map(|diagnostic| diagnostic.code().as_str())
         .collect();
@@ -157,7 +156,6 @@ fn structural_validation_reports_remaining_v1_structural_errors() {
 
     let report = validate_structure(&workflow, &catalog);
     let codes: Vec<&str> = report
-        .diagnostics()
         .iter()
         .map(|diagnostic| diagnostic.code().as_str())
         .collect();
@@ -192,7 +190,6 @@ fn structural_validation_rejects_missing_workflow_interface_endpoints() {
 
     let report = validate_structure(&workflow, &catalog);
     let codes: Vec<&str> = report
-        .diagnostics()
         .iter()
         .map(|diagnostic| diagnostic.code().as_str())
         .collect();
@@ -251,11 +248,10 @@ fn structural_validation_uses_workflow_interface_slot_kinds_for_endpoint_compati
     let catalog = representative_catalog();
 
     let valid_report = validate_structure(&valid_workflow, &catalog);
-    assert!(valid_report.diagnostics().is_empty());
+    assert!(valid_report.is_empty());
 
     let mismatch_report = validate_structure(&mismatch_workflow, &catalog);
     let mismatch_codes: Vec<&str> = mismatch_report
-        .diagnostics()
         .iter()
         .map(|diagnostic| diagnostic.code().as_str())
         .collect();

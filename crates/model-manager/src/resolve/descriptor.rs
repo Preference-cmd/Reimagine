@@ -6,7 +6,6 @@ use reimagine_core::diagnostic::{
     Diagnostic, DiagnosticCode, DiagnosticSeverity, DiagnosticSourceName, DiagnosticTarget,
     DiagnosticTargetDomain,
 };
-use reimagine_core::event::OperationReport;
 use reimagine_core::model::{
     DiagnosticId, ModelId, ModelRef, ModelRole, ModelSeries, ModelVariant,
 };
@@ -75,21 +74,21 @@ impl ResolvedModelInfo {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ModelResolution<T> {
     value: Option<T>,
-    report: OperationReport,
+    diagnostics: Vec<Diagnostic>,
 }
 
 impl<T> ModelResolution<T> {
-    fn resolved(value: T, report: OperationReport) -> Self {
+    fn resolved(value: T, diagnostics: Vec<Diagnostic>) -> Self {
         Self {
             value: Some(value),
-            report,
+            diagnostics,
         }
     }
 
-    fn blocked(report: OperationReport) -> Self {
+    fn blocked(diagnostics: Vec<Diagnostic>) -> Self {
         Self {
             value: None,
-            report,
+            diagnostics,
         }
     }
 
@@ -105,8 +104,8 @@ impl<T> ModelResolution<T> {
         self.value
     }
 
-    pub fn report(&self) -> &OperationReport {
-        &self.report
+    pub fn diagnostics(&self) -> &[Diagnostic] {
+        &self.diagnostics
     }
 }
 
@@ -198,18 +197,19 @@ impl<'a> ManifestModelResolver<'a> {
     /// [`crate::ModelComponentSource`] entry to an absolute path,
     /// reporting per-component diagnostics (missing files, duplicate
     /// role+component pairs) on the returned
-    /// [`ModelResolution::report`].
+    /// [`ModelResolution::diagnostics`].
     pub async fn resolve_descriptor_with_components(
         &self,
         model_ref: &ModelRef,
     ) -> ModelResolution<ResolvedDescriptorView> {
         let base = self.resolve_internal(model_ref).await;
-        let report = base.report().clone();
+        let diagnostics = base.diagnostics().to_vec();
         match base.into_value() {
             Some(descriptor) => {
-                let (components, component_report) = self.resolve_components(&descriptor).await;
-                let mut merged = report;
-                merged.extend(component_report);
+                let (components, component_diagnostics) =
+                    self.resolve_components(&descriptor).await;
+                let mut merged = diagnostics;
+                merged.extend(component_diagnostics);
                 ModelResolution::resolved(
                     ResolvedDescriptorView {
                         descriptor,
@@ -218,19 +218,19 @@ impl<'a> ManifestModelResolver<'a> {
                     merged,
                 )
             }
-            None => ModelResolution::blocked(report),
+            None => ModelResolution::blocked(diagnostics),
         }
     }
 
     async fn resolve_components(
         &self,
         descriptor: &ModelDescriptor,
-    ) -> (Vec<ResolvedComponent>, OperationReport) {
+    ) -> (Vec<ResolvedComponent>, Vec<Diagnostic>) {
         if descriptor.components().is_empty() {
-            return (Vec::new(), OperationReport::new());
+            return (Vec::new(), Vec::new());
         }
 
-        let mut report = OperationReport::new();
+        let mut report = Vec::new();
         let mut components = Vec::with_capacity(descriptor.components().len());
         let mut seen_keys: HashSet<(ModelRole, String)> = HashSet::new();
 
@@ -239,7 +239,7 @@ impl<'a> ManifestModelResolver<'a> {
             let component_label = component.label();
 
             if !component.format().is_supported() {
-                report.push_diagnostic(model_diagnostic(
+                report.push(model_diagnostic(
                     "component_format_unsupported",
                     model_id,
                     Some(component.source().path().to_owned()),
@@ -252,7 +252,7 @@ impl<'a> ManifestModelResolver<'a> {
             if let ModelSource::LocalFileAbsolute { path } = component.source()
                 && (path.trim().is_empty() || !std::path::Path::new(path).is_absolute())
             {
-                report.push_diagnostic(model_diagnostic(
+                report.push(model_diagnostic(
                     "component_source_invalid",
                     model_id,
                     Some(path.clone()),
@@ -268,7 +268,7 @@ impl<'a> ManifestModelResolver<'a> {
             let (path, path_known) = match resolved_path.as_ref() {
                 Some(path) => (path.clone(), true),
                 None => {
-                    report.push_diagnostic(model_diagnostic(
+                    report.push(model_diagnostic(
                         "component_source_invalid",
                         model_id,
                         Some(component.source().path().to_owned()),
@@ -287,7 +287,7 @@ impl<'a> ManifestModelResolver<'a> {
             };
 
             if !exists {
-                report.push_diagnostic(model_diagnostic(
+                report.push(model_diagnostic(
                     "component_source_missing",
                     model_id,
                     Some(path.display().to_string()),
@@ -301,7 +301,7 @@ impl<'a> ManifestModelResolver<'a> {
             }
 
             if !seen_keys.insert((component.role(), component_label.clone())) {
-                report.push_diagnostic(model_diagnostic(
+                report.push(model_diagnostic(
                     "component_duplicate",
                     model_id,
                     Some(path.display().to_string()),
@@ -326,47 +326,47 @@ impl<'a> ManifestModelResolver<'a> {
             .iter()
             .find(|descriptor| descriptor.id() == model_ref.id())
         else {
-            return ModelResolution::blocked(OperationReport::with_diagnostic(model_diagnostic(
+            return ModelResolution::blocked(vec![model_diagnostic(
                 "not_found",
                 model_ref.id().as_str(),
                 None,
                 "MODEL_MANAGER/MODEL_REF_NOT_FOUND",
                 "requested model id does not exist in the manifest",
                 DiagnosticSeverity::Error,
-            )));
+            )]);
         };
 
         if descriptor.model_series() != model_ref.model_series() {
-            return ModelResolution::blocked(OperationReport::with_diagnostic(model_diagnostic(
+            return ModelResolution::blocked(vec![model_diagnostic(
                 "series_mismatch",
                 descriptor.id().as_str(),
                 Some(descriptor.source().path().to_owned()),
                 "MODEL_MANAGER/MODEL_SERIES_MISMATCH",
                 "requested model series does not match the manifest descriptor",
                 DiagnosticSeverity::Error,
-            )));
+            )]);
         }
 
         if descriptor.variant() != model_ref.variant() {
-            return ModelResolution::blocked(OperationReport::with_diagnostic(model_diagnostic(
+            return ModelResolution::blocked(vec![model_diagnostic(
                 "variant_mismatch",
                 descriptor.id().as_str(),
                 Some(descriptor.source().path().to_owned()),
                 "MODEL_MANAGER/MODEL_VARIANT_MISMATCH",
                 "requested model variant does not match the manifest descriptor",
                 DiagnosticSeverity::Error,
-            )));
+            )]);
         }
 
         if !descriptor.roles().contains(&model_ref.role()) {
-            return ModelResolution::blocked(OperationReport::with_diagnostic(model_diagnostic(
+            return ModelResolution::blocked(vec![model_diagnostic(
                 "role_missing",
                 descriptor.id().as_str(),
                 Some(descriptor.source().path().to_owned()),
                 "MODEL_MANAGER/MODEL_ROLE_MISSING",
                 "requested model role is not provided by the manifest descriptor",
                 DiagnosticSeverity::Error,
-            )));
+            )]);
         }
 
         let source_path = resolve_source_path(self.manifest, descriptor.source(), &self.models_dir);
@@ -376,7 +376,7 @@ impl<'a> ManifestModelResolver<'a> {
         };
 
         if !source_available {
-            return ModelResolution::blocked(OperationReport::with_diagnostic(model_diagnostic(
+            return ModelResolution::blocked(vec![model_diagnostic(
                 "source_missing",
                 descriptor.id().as_str(),
                 source_path
@@ -386,29 +386,29 @@ impl<'a> ManifestModelResolver<'a> {
                 "MODEL_MANAGER/MODEL_SOURCE_MISSING",
                 "model source is missing",
                 DiagnosticSeverity::Error,
-            )));
+            )]);
         }
 
         if descriptor.source_status() == ModelSourceStatus::Missing {
-            return ModelResolution::blocked(OperationReport::with_diagnostic(model_diagnostic(
+            return ModelResolution::blocked(vec![model_diagnostic(
                 "status_missing",
                 descriptor.id().as_str(),
                 Some(descriptor.source().path().to_owned()),
                 "MODEL_MANAGER/MODEL_SOURCE_MISSING",
                 "model source is marked missing",
                 DiagnosticSeverity::Error,
-            )));
+            )]);
         }
 
         if descriptor.source_status() == ModelSourceStatus::Stale {
-            return ModelResolution::blocked(OperationReport::with_diagnostic(model_diagnostic(
+            return ModelResolution::blocked(vec![model_diagnostic(
                 "stale",
                 descriptor.id().as_str(),
                 Some(descriptor.source().path().to_owned()),
                 "MODEL_MANAGER/MODEL_SOURCE_STALE",
                 "model source metadata changed and requires explicit refresh",
                 DiagnosticSeverity::Error,
-            )));
+            )]);
         }
 
         let fingerprint_missing = descriptor.fingerprint().is_none();
@@ -434,19 +434,19 @@ impl<'a> ManifestModelResolver<'a> {
         };
 
         if !fingerprint_missing && (recorded_size_mismatch || observed_metadata_mismatch) {
-            return ModelResolution::blocked(OperationReport::with_diagnostic(model_diagnostic(
+            return ModelResolution::blocked(vec![model_diagnostic(
                 "fingerprint_mismatch",
                 descriptor.id().as_str(),
                 Some(descriptor.source().path().to_owned()),
                 "MODEL_MANAGER/MODEL_FINGERPRINT_MISMATCH",
                 "recorded fingerprint can no longer be trusted for the current file",
                 DiagnosticSeverity::Error,
-            )));
+            )]);
         }
 
-        let mut report = OperationReport::new();
+        let mut diagnostics = Vec::new();
         if fingerprint_missing {
-            report.push_diagnostic(model_diagnostic(
+            diagnostics.push(model_diagnostic(
                 "fingerprint_missing",
                 descriptor.id().as_str(),
                 Some(descriptor.source().path().to_owned()),
@@ -456,20 +456,20 @@ impl<'a> ManifestModelResolver<'a> {
             ));
         }
 
-        ModelResolution::resolved(descriptor.clone(), report)
+        ModelResolution::resolved(descriptor.clone(), diagnostics)
     }
 }
 
 impl ModelReadinessResolver for ManifestModelResolver<'_> {
     async fn resolve_readiness(&self, model_ref: &ModelRef) -> ModelResolution<ResolvedModelInfo> {
         let resolution = self.resolve_internal(model_ref).await;
-        let report = resolution.report().clone();
+        let diagnostics = resolution.diagnostics().to_vec();
         match resolution.into_value() {
             Some(descriptor) => ModelResolution::resolved(
                 ResolvedModelInfo::from_descriptor(&descriptor, true),
-                report,
+                diagnostics,
             ),
-            None => ModelResolution::blocked(report),
+            None => ModelResolution::blocked(diagnostics),
         }
     }
 }

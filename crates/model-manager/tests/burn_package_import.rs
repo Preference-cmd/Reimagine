@@ -107,9 +107,9 @@ async fn burn_package_report_projects_to_split_sdxl_descriptor() {
         .with_model(descriptor);
     let validation = validate_manifest(&manifest, &models_dir).await;
     assert!(
-        validation.diagnostics().is_empty(),
+        validation.is_empty(),
         "imported descriptor should validate cleanly: {:?}",
-        validation.diagnostics()
+        validation
     );
 
     cleanup(base).await;

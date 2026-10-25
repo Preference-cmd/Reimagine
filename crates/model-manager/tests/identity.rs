@@ -40,8 +40,8 @@ fn manual_id_no_conflict() {
         ModelFormat::SafeTensors,
     )];
     let policy = IdPolicy::new(&existing);
-    let report = policy.validate_manual_id("other-model");
-    assert!(report.is_empty());
+    let diagnostics = policy.validate_manual_id("other-model");
+    assert!(diagnostics.is_empty());
 }
 
 #[test]
@@ -55,16 +55,13 @@ fn manual_id_conflict_rejected() {
         ModelFormat::SafeTensors,
     )];
     let policy = IdPolicy::new(&existing);
-    let report = policy.validate_manual_id("my-model");
-    assert_eq!(report.diagnostics().len(), 1);
+    let diagnostics = policy.validate_manual_id("my-model");
+    assert_eq!(diagnostics.len(), 1);
     assert_eq!(
-        report.diagnostics()[0].code().as_str(),
+        diagnostics[0].code().as_str(),
         "MODEL_MANAGER/MANUAL_ID_CONFLICT"
     );
-    assert_eq!(
-        report.diagnostics()[0].severity(),
-        DiagnosticSeverity::Error
-    );
+    assert_eq!(diagnostics[0].severity(), DiagnosticSeverity::Error);
 }
 
 // --- Auto ID deterministic generation tests ---
@@ -199,7 +196,7 @@ fn auto_id_collision_same_fingerprint_resolves_to_same() {
     );
     assert_eq!(result.id().as_str(), generated_id);
     assert_eq!(result.resolution(), IdResolution::SameIdentity);
-    assert!(result.report().is_empty());
+    assert!(result.diagnostics().is_empty());
 }
 
 #[test]
@@ -247,10 +244,10 @@ fn auto_id_collision_different_fingerprint_suffixes_and_diagnostic() {
     assert!(result.id().as_str().contains("sdxl"));
     assert!(result.id().as_str().contains("CheckpointBundle"));
 
-    let report = result.report();
-    assert_eq!(report.diagnostics().len(), 1);
+    let diagnostics = result.diagnostics();
+    assert_eq!(diagnostics.len(), 1);
     assert_eq!(
-        report.diagnostics()[0].code().as_str(),
+        diagnostics[0].code().as_str(),
         "MODEL_MANAGER/AUTO_ID_COLLISION_RESOLVED"
     );
 }
@@ -333,7 +330,7 @@ fn auto_id_no_collision_when_id_unused() {
     );
     assert!(result.id().as_str().contains("stable_diffusion"));
     assert_eq!(result.resolution(), IdResolution::NoConflict);
-    assert!(result.report().is_empty());
+    assert!(result.diagnostics().is_empty());
 }
 
 #[test]

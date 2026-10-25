@@ -1,6 +1,6 @@
 use std::collections::HashSet;
 
-use crate::event::OperationReport;
+use crate::diagnostic::Diagnostic;
 use crate::model::{EdgeId, NodeCatalog, NodeDef, NodeId, SlotId, SlotKind};
 use crate::workflow::{Endpoint, Workflow, WorkflowSchemaVersion};
 
@@ -13,16 +13,16 @@ use kinds::param_value_matches_slot;
 pub fn validate_structure(
     workflow: &Workflow,
     node_catalog: &(impl NodeCatalog + ?Sized),
-) -> OperationReport {
+) -> Vec<Diagnostic> {
     let mut validator = StructuralValidator::new(workflow, node_catalog);
     validator.validate();
-    validator.report
+    validator.diagnostics
 }
 
 struct StructuralValidator<'a, C: ?Sized> {
     workflow: &'a Workflow,
     node_catalog: &'a C,
-    report: OperationReport,
+    diagnostics: Vec<Diagnostic>,
 }
 
 impl<'a, C: NodeCatalog + ?Sized> StructuralValidator<'a, C> {
@@ -30,7 +30,7 @@ impl<'a, C: NodeCatalog + ?Sized> StructuralValidator<'a, C> {
         Self {
             workflow,
             node_catalog,
-            report: OperationReport::new(),
+            diagnostics: Vec::new(),
         }
     }
 
@@ -304,7 +304,7 @@ impl<'a, C: NodeCatalog + ?Sized> StructuralValidator<'a, C> {
         message: &str,
         path: Option<impl Into<String>>,
     ) {
-        self.report.push_diagnostic(workflow_diagnostic(
+        self.diagnostics.push(workflow_diagnostic(
             suffix,
             self.workflow.id(),
             code,
@@ -321,7 +321,7 @@ impl<'a, C: NodeCatalog + ?Sized> StructuralValidator<'a, C> {
         message: &str,
         path: Option<impl Into<String>>,
     ) {
-        self.report.push_diagnostic(node_diagnostic(
+        self.diagnostics.push(node_diagnostic(
             suffix,
             node_id,
             code,
@@ -338,7 +338,7 @@ impl<'a, C: NodeCatalog + ?Sized> StructuralValidator<'a, C> {
         message: &str,
         path: Option<impl Into<String>>,
     ) {
-        self.report.push_diagnostic(edge_diagnostic(
+        self.diagnostics.push(edge_diagnostic(
             suffix,
             edge_id,
             code,

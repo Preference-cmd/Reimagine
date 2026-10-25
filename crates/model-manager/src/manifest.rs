@@ -23,9 +23,7 @@ pub use source::ModelSource;
 pub(crate) use source_resolution::resolve_root_path;
 pub use source_resolution::resolve_source_path;
 pub use status::ModelSourceStatus;
-pub use validation::{
-    ManifestValidationReport, validate_manifest, validate_manifest_with_series_config,
-};
+pub use validation::{validate_manifest, validate_manifest_with_series_config};
 
 pub const MODEL_MANIFEST_SCHEMA_VERSION: &str = "reimagine.model_manifest.v1";
 

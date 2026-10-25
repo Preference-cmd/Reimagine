@@ -17,7 +17,7 @@ async fn missing_manifest_loads_empty_v1_with_default_base_root() {
     assert_eq!(manifest.schema_version(), "reimagine.model_manifest.v1");
     assert_eq!(manifest.model_roots(), &[ModelRoot::base_models()]);
     assert!(manifest.models().is_empty());
-    assert!(report.diagnostics().is_empty());
+    assert!(report.is_empty());
 
     cleanup(base).await;
 }
@@ -37,12 +37,12 @@ async fn save_and_reload_roundtrip_preserves_manifest() {
     tokio::fs::write(&source_path, b"weights").await.unwrap();
 
     let save_report = store.save(&manifest).await.unwrap();
-    assert!(save_report.diagnostics().is_empty());
+    assert!(save_report.is_empty());
 
     let (loaded, load_report) = store.load().await.unwrap();
 
     assert_eq!(loaded, manifest);
-    assert!(load_report.diagnostics().is_empty());
+    assert!(load_report.is_empty());
     assert_eq!(store.path(), &base.join("models/manifest.json"));
 
     cleanup(base).await;
@@ -90,7 +90,7 @@ async fn remove_model_updates_manifest_only() {
     let (updated, report) = store.remove_model(descriptor.id()).await.unwrap();
 
     assert!(updated.models().is_empty());
-    assert!(report.diagnostics().is_empty());
+    assert!(report.is_empty());
     assert!(tokio::fs::try_exists(&relative_path).await.unwrap());
 
     cleanup(base).await;
@@ -120,7 +120,7 @@ async fn top_level_load_helper_matches_store_behavior() {
         .unwrap();
 
     assert_eq!(manifest.model_roots(), &[ModelRoot::base_models()]);
-    assert!(report.diagnostics().is_empty());
+    assert!(report.is_empty());
 
     cleanup(base).await;
 }

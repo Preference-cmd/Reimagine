@@ -34,7 +34,7 @@ fn successful_sdxl_like_plan_is_built_for_default_targets() {
         Some(&provider),
     );
 
-    assert!(result.report().diagnostics().is_empty());
+    assert!(result.diagnostics().is_empty());
 
     let plan = result.plan().expect("plan should be available");
     assert_eq!(
@@ -170,7 +170,7 @@ fn edged_model_ref_param_does_not_trigger_external_check_for_overridden_param() 
     );
 
     assert!(result.plan().is_some());
-    assert!(result.report().diagnostics().is_empty());
+    assert!(result.diagnostics().is_empty());
 }
 
 #[test]
@@ -504,7 +504,7 @@ fn pure_required_output_is_valid_when_explicitly_targeted() {
     );
 
     assert!(result.plan().is_some());
-    assert!(result.report().diagnostics().is_empty());
+    assert!(result.diagnostics().is_empty());
 }
 
 #[test]
@@ -684,7 +684,6 @@ impl ExternalReadinessProvider for SnapshotProvider {
 
 fn diagnostic_codes(result: &reimagine_core::readiness::ExecutionPlanResult) -> Vec<&str> {
     result
-        .report()
         .diagnostics()
         .iter()
         .map(|diagnostic| diagnostic.code().as_str())

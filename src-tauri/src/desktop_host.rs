@@ -434,7 +434,7 @@ impl DesktopHostState {
             reimagine_app_host::RunWorkflowResult::Started {
                 handle,
                 initial_snapshot,
-                report,
+                diagnostics,
             } => {
                 let run_id = handle.run_id().clone();
 
@@ -449,21 +449,13 @@ impl DesktopHostState {
                     workflow_id: handle.workflow_id().clone(),
                     workflow_version: handle.workflow_version(),
                     initial_snapshot: Box::new((*initial_snapshot).into()),
-                    diagnostics: report
-                        .diagnostics()
-                        .iter()
-                        .map(|d| d.clone().into())
-                        .collect(),
+                    diagnostics: diagnostics.into_iter().map(Into::into).collect(),
                 })
             }
-            reimagine_app_host::RunWorkflowResult::Blocked { report } => {
+            reimagine_app_host::RunWorkflowResult::Blocked { diagnostics } => {
                 Ok(RunWorkflowResponse::Blocked {
                     workflow_id,
-                    diagnostics: report
-                        .diagnostics()
-                        .iter()
-                        .map(|d| d.clone().into())
-                        .collect(),
+                    diagnostics: diagnostics.into_iter().map(Into::into).collect(),
                 })
             }
         }

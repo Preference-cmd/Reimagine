@@ -1,6 +1,6 @@
 use std::collections::{BTreeSet, HashSet};
 
-use crate::event::OperationReport;
+use crate::diagnostic::Diagnostic;
 use crate::execution_plan::{ExecutionWorkflowOutput, ExecutionWorkflowOutputSource};
 use crate::model::{NodeCatalog, NodeId};
 use crate::workflow::{Endpoint, Workflow};
@@ -22,7 +22,7 @@ pub fn resolve_targets(
     workflow: &Workflow,
     node_catalog: &impl NodeCatalog,
     target_selection: &RunTargetSelection,
-    report: &mut OperationReport,
+    diagnostics: &mut Vec<Diagnostic>,
 ) -> Option<ResolvedTargets> {
     let target_capable_nodes: HashSet<NodeId> = workflow
         .nodes()
@@ -53,13 +53,13 @@ pub fn resolve_targets(
                 .collect();
 
             if targets.is_empty() {
-                report.push_diagnostic(no_target(workflow.id()));
+                diagnostics.push(no_target(workflow.id()));
                 if workflow
                     .nodes()
                     .iter()
                     .any(|node| node_catalog.get(node.type_id()).is_some())
                 {
-                    report.push_diagnostic(non_contributing_pure_graph(workflow.id()));
+                    diagnostics.push(non_contributing_pure_graph(workflow.id()));
                 }
                 return None;
             }
@@ -78,7 +78,7 @@ pub fn resolve_targets(
         }
         RunTargetSelection::ExplicitTargets(targets) => {
             if targets.is_empty() {
-                report.push_diagnostic(workflow_target_invalid(workflow.id(), "targets"));
+                diagnostics.push(workflow_target_invalid(workflow.id(), "targets"));
                 return None;
             }
 
@@ -89,7 +89,7 @@ pub fn resolve_targets(
                 match target {
                     RunTarget::Node { node_id } => {
                         if !target_capable_nodes.contains(node_id) {
-                            report.push_diagnostic(target_invalid(node_id));
+                            diagnostics.push(target_invalid(node_id));
                         } else {
                             target_node_ids.insert(node_id.clone());
                         }
@@ -97,22 +97,22 @@ pub fn resolve_targets(
                     RunTarget::NodeOutput { node_id, slot_id } => {
                         let Some(node) = workflow.nodes().iter().find(|node| node.id() == node_id)
                         else {
-                            report.push_diagnostic(target_invalid(node_id));
+                            diagnostics.push(target_invalid(node_id));
                             continue;
                         };
                         let Some(node_def) = node_catalog.get(node.type_id()) else {
-                            report.push_diagnostic(target_invalid(node_id));
+                            diagnostics.push(target_invalid(node_id));
                             continue;
                         };
                         if node_def.output_slot(slot_id).is_none() {
-                            report.push_diagnostic(target_invalid(node_id));
+                            diagnostics.push(target_invalid(node_id));
                             continue;
                         }
                         target_node_ids.insert(node_id.clone());
                     }
                     RunTarget::WorkflowOutput { output_id } => {
                         if workflow.interface().output(output_id).is_none() {
-                            report.push_diagnostic(workflow_target_invalid(
+                            diagnostics.push(workflow_target_invalid(
                                 workflow.id(),
                                 format!("interface.outputs.{}", output_id.as_str()),
                             ));
@@ -126,7 +126,7 @@ pub fn resolve_targets(
                                     if workflow_output == output_id
                             )
                         }) else {
-                            report.push_diagnostic(workflow_target_invalid(
+                            diagnostics.push(workflow_target_invalid(
                                 workflow.id(),
                                 format!("interface.outputs.{}", output_id.as_str()),
                             ));
@@ -153,7 +153,7 @@ pub fn resolve_targets(
                                 ));
                             }
                             Endpoint::WorkflowOutput { .. } => {
-                                report.push_diagnostic(workflow_target_invalid(
+                                diagnostics.push(workflow_target_invalid(
                                     workflow.id(),
                                     format!("interface.outputs.{}", output_id.as_str()),
                                 ));

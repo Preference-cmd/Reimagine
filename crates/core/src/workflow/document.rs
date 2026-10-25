@@ -55,7 +55,7 @@ impl Document for Workflow {
     }
 
     fn validate(&self, context: &Self::Context) -> Vec<Diagnostic> {
-        validate_structure(self, context).diagnostics().to_vec()
+        validate_structure(self, context)
     }
 
     fn version_conflict_diagnostic(

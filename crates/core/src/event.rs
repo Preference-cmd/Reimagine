@@ -1,15 +1,7 @@
-//! Domain event and operation report payloads.
+//! Runtime execution events and timestamp types.
 
-mod adapter;
-mod domain_event;
-mod kind;
-mod report;
 mod run_event;
-mod source;
+mod timestamp;
 
-pub use adapter::{DomainEventAdapter, EventAdapterContext, EventReport};
-pub use domain_event::{DomainEvent, DomainEventId, Timestamp};
-pub use kind::DomainEventKind;
-pub use report::OperationReport;
 pub use run_event::{RunEvent, RunEventId, RunEventKind};
-pub use source::DomainEventSource;
+pub use timestamp::Timestamp;

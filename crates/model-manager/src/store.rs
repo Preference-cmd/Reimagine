@@ -1,11 +1,9 @@
 use std::path::{Path, PathBuf};
 
 use reimagine_config::{AppPaths, atomic_write};
+use reimagine_core::diagnostic::Diagnostic;
 
-use crate::{
-    ManifestValidationReport, ModelManagerError, ModelManagerResult, ModelManifest, ModelRoot,
-    validate_manifest,
-};
+use crate::{ModelManagerError, ModelManagerResult, ModelManifest, ModelRoot, validate_manifest};
 
 const MANIFEST_RELATIVE_PATH: &str = "models/manifest.json";
 
@@ -27,7 +25,7 @@ impl ModelManifestStore {
         &self.manifest_path
     }
 
-    pub async fn load(&self) -> ModelManagerResult<(ModelManifest, ManifestValidationReport)> {
+    pub async fn load(&self) -> ModelManagerResult<(ModelManifest, Vec<Diagnostic>)> {
         let bytes = match tokio::fs::read(&self.manifest_path).await {
             Ok(bytes) => bytes,
             Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
@@ -54,10 +52,7 @@ impl ModelManifestStore {
         Ok((manifest, report))
     }
 
-    pub async fn save(
-        &self,
-        manifest: &ModelManifest,
-    ) -> ModelManagerResult<ManifestValidationReport> {
+    pub async fn save(&self, manifest: &ModelManifest) -> ModelManagerResult<Vec<Diagnostic>> {
         let bytes = serde_json::to_vec_pretty(manifest).map_err(|error| {
             ModelManagerError::ManifestInvalid {
                 path: MANIFEST_RELATIVE_PATH.to_owned(),
@@ -77,7 +72,7 @@ impl ModelManifestStore {
     pub async fn update<F>(
         &self,
         mutator: F,
-    ) -> ModelManagerResult<(ModelManifest, ManifestValidationReport)>
+    ) -> ModelManagerResult<(ModelManifest, Vec<Diagnostic>)>
     where
         F: FnOnce(&mut ModelManifest),
     {
@@ -90,7 +85,7 @@ impl ModelManifestStore {
     pub async fn remove_model(
         &self,
         model_id: &reimagine_core::model::ModelId,
-    ) -> ModelManagerResult<(ModelManifest, ManifestValidationReport)> {
+    ) -> ModelManagerResult<(ModelManifest, Vec<Diagnostic>)> {
         self.update(|manifest| manifest.remove_model(model_id))
             .await
     }
@@ -98,7 +93,7 @@ impl ModelManifestStore {
 
 pub async fn load_model_manifest(
     app_paths: AppPaths,
-) -> ModelManagerResult<(ModelManifest, ManifestValidationReport)> {
+) -> ModelManagerResult<(ModelManifest, Vec<Diagnostic>)> {
     ModelManifestStore::new(app_paths).load().await
 }
 

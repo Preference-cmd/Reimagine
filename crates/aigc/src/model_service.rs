@@ -1,6 +1,7 @@
 use std::sync::{Arc, RwLock};
 
 use reimagine_config::AppPaths;
+use reimagine_core::diagnostic::Diagnostic;
 use reimagine_core::model::{ModelId, ModelRef, ModelRole, ModelSeries, ModelVariant};
 
 use reimagine_model_acquisition::{
@@ -9,10 +10,10 @@ use reimagine_model_acquisition::{
     resolve_from_model_index,
 };
 use reimagine_model_manager::{
-    ManifestModelResolver, ManifestValidationReport, ModelComponentSource, ModelDescriptor,
-    ModelDescriptorResolver, ModelFormat, ModelManifest, ModelManifestStore,
-    ModelReadinessResolver, ModelResolution, ModelRootId, ModelSource, ModelSourceStatus,
-    ResolvedDescriptorView, ResolvedModelInfo, resolve_source_path, upsert_burn_package_descriptor,
+    ManifestModelResolver, ModelComponentSource, ModelDescriptor, ModelDescriptorResolver,
+    ModelFormat, ModelManifest, ModelManifestStore, ModelReadinessResolver, ModelResolution,
+    ModelRootId, ModelSource, ModelSourceStatus, ResolvedDescriptorView, ResolvedModelInfo,
+    resolve_source_path, upsert_burn_package_descriptor,
 };
 
 use crate::AigcResult;
@@ -23,7 +24,7 @@ pub struct ModelService {
     app_paths: AppPaths,
     store: Arc<ModelManifestStore>,
     manifest: RwLock<Option<ModelManifest>>,
-    report: RwLock<Option<ManifestValidationReport>>,
+    diagnostics: RwLock<Option<Vec<Diagnostic>>>,
     acquisition_service: Arc<ModelAcquisitionService>,
 }
 
@@ -42,7 +43,7 @@ impl ModelService {
             store: Arc::new(ModelManifestStore::new(app_paths.clone())),
             app_paths,
             manifest: RwLock::new(None),
-            report: RwLock::new(None),
+            diagnostics: RwLock::new(None),
             acquisition_service,
         }
     }
@@ -56,16 +57,13 @@ impl ModelService {
         self.app_paths.models_dir()
     }
 
-    pub async fn load_manifest(&self) -> AigcResult<(ModelManifest, ManifestValidationReport)> {
+    pub async fn load_manifest(&self) -> AigcResult<(ModelManifest, Vec<Diagnostic>)> {
         let (manifest, report) = self.store.load().await?;
         self.replace_cached_manifest(manifest.clone(), report.clone());
         Ok((manifest, report))
     }
 
-    pub async fn save_manifest(
-        &self,
-        manifest: &ModelManifest,
-    ) -> AigcResult<ManifestValidationReport> {
+    pub async fn save_manifest(&self, manifest: &ModelManifest) -> AigcResult<Vec<Diagnostic>> {
         let report = self.store.save(manifest).await?;
         self.replace_cached_manifest(manifest.clone(), report.clone());
         Ok(report)
@@ -79,7 +77,7 @@ impl ModelService {
     pub async fn remove_model(
         &self,
         model_id: &ModelId,
-    ) -> AigcResult<(ModelManifest, ManifestValidationReport)> {
+    ) -> AigcResult<(ModelManifest, Vec<Diagnostic>)> {
         let (manifest, report) = self.store.remove_model(model_id).await?;
         self.replace_cached_manifest(manifest.clone(), report.clone());
         Ok((manifest, report))
@@ -88,7 +86,7 @@ impl ModelService {
     pub async fn import_burn_converted_package(
         &self,
         report_path: impl AsRef<std::path::Path>,
-    ) -> AigcResult<(ModelManifest, ManifestValidationReport, ModelDescriptor)> {
+    ) -> AigcResult<(ModelManifest, Vec<Diagnostic>, ModelDescriptor)> {
         let report_path = self.normalize_burn_package_report_path(report_path.as_ref())?;
         let (mut manifest, _) = self.load_manifest().await?;
         let descriptor = upsert_burn_package_descriptor(
@@ -201,7 +199,7 @@ impl ModelService {
         for model_ref in collect_model_refs(workflow) {
             let subject = ExternalReadinessSubject::ModelRef(model_ref.clone());
             let resolution = resolver.resolve_readiness(&model_ref).await;
-            let diagnostics = resolution.report().diagnostics().to_vec();
+            let diagnostics = resolution.diagnostics().to_vec();
             match resolution.into_value() {
                 Some(_info) if diagnostics.is_empty() => provider.record_ok(subject),
                 Some(_) | None => {
@@ -219,10 +217,10 @@ impl ModelService {
             .clone()
     }
 
-    pub fn cached_report(&self) -> Option<ManifestValidationReport> {
-        self.report
+    pub fn cached_diagnostics(&self) -> Option<Vec<Diagnostic>> {
+        self.diagnostics
             .read()
-            .expect("model manifest report cache poisoned")
+            .expect("model manifest diagnostics cache poisoned")
             .clone()
     }
 
@@ -262,15 +260,15 @@ impl ModelService {
             .map_err(crate::AigcError::from)
     }
 
-    fn replace_cached_manifest(&self, manifest: ModelManifest, report: ManifestValidationReport) {
+    fn replace_cached_manifest(&self, manifest: ModelManifest, diagnostics: Vec<Diagnostic>) {
         *self
             .manifest
             .write()
             .expect("model manifest cache poisoned") = Some(manifest);
         *self
-            .report
+            .diagnostics
             .write()
-            .expect("model manifest report cache poisoned") = Some(report);
+            .expect("model manifest diagnostics cache poisoned") = Some(diagnostics);
     }
 
     fn normalize_burn_package_report_path(

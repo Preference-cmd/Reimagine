@@ -3,12 +3,11 @@
 //! `run_workflow` is the single host-facing entry point that turns a
 //! `WorkflowService` snapshot into either a started run (returning the
 //! host-safe run handle and initial snapshot) or a `Blocked` diagnostic
-//! report when readiness fails.
+//! list when readiness fails.
 
 use std::sync::Arc;
 
-use reimagine_core::diagnostic::CorrelationId;
-use reimagine_core::event::OperationReport;
+use reimagine_core::diagnostic::{CorrelationId, Diagnostic};
 use reimagine_core::model::{ProjectId, RunId, WorkflowId};
 use reimagine_core::readiness::{ExecutionPlanResult, RunTargetSelection, build_execution_plan};
 use reimagine_core::workflow::Workflow;
@@ -78,24 +77,24 @@ impl RunWorkflowRequest {
 
 /// Outcome of [`WorkspaceHost::run_workflow`].
 ///
-/// `Blocked` carries the readiness `OperationReport` so the host can
-/// surface the diagnostics. `Started` carries the host-safe [`RunHandle`]
+/// `Blocked` carries the readiness diagnostics so the host can
+/// surface them. `Started` carries the host-safe [`RunHandle`]
 /// and the initial [`RunSnapshot`]; it never exposes the runtime value
 /// store or backend tensor handles.
 ///
-/// `Started` also carries the readiness `OperationReport` so the host
+/// `Started` also carries the readiness diagnostics so the host
 /// can surface non-blocking warnings (for example, the catalog/executor
-/// orphan warnings produced by the alignment check). An empty report
+/// orphan warnings produced by the alignment check). An empty list
 /// means the run is fully clean.
 #[derive(Debug, Clone)]
 pub enum RunWorkflowResult {
     Blocked {
-        report: OperationReport,
+        diagnostics: Vec<Diagnostic>,
     },
     Started {
         handle: RunHandle,
         initial_snapshot: Box<RunSnapshot>,
-        report: OperationReport,
+        diagnostics: Vec<Diagnostic>,
     },
 }
 
@@ -174,11 +173,11 @@ impl WorkspaceHost {
 
         let Some(plan) = plan_result.plan() else {
             return Ok(RunWorkflowResult::Blocked {
-                report: plan_result.report().clone(),
+                diagnostics: plan_result.diagnostics().to_vec(),
             });
         };
 
-        let started_report = plan_result.report().clone();
+        let started_diagnostics = plan_result.diagnostics().to_vec();
 
         let plan = Arc::new(plan.clone());
         let handle = self.runtime_service().run(plan, run_inputs, options)?;
@@ -193,7 +192,7 @@ impl WorkspaceHost {
         Ok(RunWorkflowResult::Started {
             handle,
             initial_snapshot: Box::new(initial_snapshot),
-            report: started_report,
+            diagnostics: started_diagnostics,
         })
     }
 
@@ -254,21 +253,19 @@ impl WorkspaceHost {
             return Ok(result);
         }
 
-        let mut report = result.report().clone();
-        for diagnostic in alignment_diagnostics {
-            report.push_diagnostic(diagnostic);
-        }
+        let mut diagnostics = result.diagnostics().to_vec();
+        diagnostics.extend(alignment_diagnostics.iter().cloned());
 
         let has_blocking = alignment
             .missing_executors()
             .iter()
             .any(|id| workflow_uses_node_type(workflow, id));
         if has_blocking {
-            return Ok(ExecutionPlanResult::new(None, report));
+            return Ok(ExecutionPlanResult::new(None, diagnostics));
         }
 
         let plan = result.plan().cloned();
-        Ok(ExecutionPlanResult::new(plan, report))
+        Ok(ExecutionPlanResult::new(plan, diagnostics))
     }
 
     #[cfg(not(feature = "aigc"))]
