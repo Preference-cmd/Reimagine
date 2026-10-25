@@ -71,8 +71,11 @@ pub fn serve_loop(
                         }
                     }
                     Err(e) => {
-                        eprintln!("serve loop: read error: {e}");
+                        // Report before logging: when the host dies, stderr is a
+                        // broken pipe too, and `eprintln!` would panic this thread
+                        // before the serve loop learns the transport is gone.
                         let _ = reader_tx.send(ServeEvent::TransportClosed(e.to_string()));
+                        let _ = writeln!(std::io::stderr(), "serve loop: read error: {e}");
                         break;
                     }
                 }

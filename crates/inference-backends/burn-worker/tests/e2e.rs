@@ -45,7 +45,8 @@ const MAXIMUM_FRAME_BYTES: u32 = 64 * 1024 * 1024;
 
 struct BurnWorkerProcess {
     child: Child,
-    stdin: ChildStdin,
+    /// `None` once a test has closed it to simulate a dead host.
+    stdin: Option<ChildStdin>,
     stdout: BufReader<ChildStdout>,
     hello: WorkerHello,
 }
@@ -106,7 +107,7 @@ impl BurnWorkerProcess {
 
         Self {
             child,
-            stdin,
+            stdin: Some(stdin),
             stdout,
             hello,
         }
@@ -127,13 +128,14 @@ impl BurnWorkerProcess {
             .encode_payload(&message)
             .expect("failed to encode request");
         let len = u32::try_from(raw.len()).expect("payload too large");
-        self.stdin
+        let stdin = self.stdin.as_mut().expect("stdin closed");
+        stdin
             .write_all(&len.to_be_bytes())
             .expect("failed to write frame prefix");
-        self.stdin
+        stdin
             .write_all(&raw)
             .expect("failed to write frame payload");
-        self.stdin.flush().expect("failed to flush request");
+        stdin.flush().expect("failed to flush request");
 
         // Read the response frame
         let mut prefix = [0u8; 4];
@@ -152,8 +154,9 @@ impl BurnWorkerProcess {
 
     fn send(&mut self, message: &WireMessage) {
         let codec = FrameCodec::new(MAXIMUM_FRAME_BYTES);
-        codec.write(&mut self.stdin, message).unwrap();
-        self.stdin.flush().unwrap();
+        let stdin = self.stdin.as_mut().expect("stdin closed");
+        codec.write(stdin, message).unwrap();
+        stdin.flush().unwrap();
     }
 
     fn read(&mut self) -> WireMessage {
@@ -178,15 +181,17 @@ impl Drop for BurnWorkerProcess {
     fn drop(&mut self) {
         // Send shutdown for clean termination
         let codec = FrameCodec::new(MAXIMUM_FRAME_BYTES);
-        if let Ok(raw) = codec.encode_payload(&WireMessage::Shutdown(ShutdownFrame {
-            protocol_version: ProtocolVersion(1),
-            incarnation_id: self.hello.identity.incarnation_id.clone(),
-            control_id: reimagine_backend_worker_protocol::ControlId::from("e2e-shutdown"),
-        })) {
+        if let Some(stdin) = self.stdin.as_mut()
+            && let Ok(raw) = codec.encode_payload(&WireMessage::Shutdown(ShutdownFrame {
+                protocol_version: ProtocolVersion(1),
+                incarnation_id: self.hello.identity.incarnation_id.clone(),
+                control_id: reimagine_backend_worker_protocol::ControlId::from("e2e-shutdown"),
+            }))
+        {
             let len = u32::try_from(raw.len()).unwrap_or(0);
-            let _ = self.stdin.write_all(&len.to_be_bytes());
-            let _ = self.stdin.write_all(&raw);
-            let _ = self.stdin.flush();
+            let _ = stdin.write_all(&len.to_be_bytes());
+            let _ = stdin.write_all(&raw);
+            let _ = stdin.flush();
             std::thread::sleep(std::time::Duration::from_millis(100));
         }
         let _ = self.child.kill();
@@ -874,4 +879,14 @@ fn wrong_direction_terminates_session() {
         outcome: TerminalOutcome::Cancelled,
     }));
     assert!(worker.exits_within(std::time::Duration::from_secs(1)));
+}
+
+#[test]
+fn worker_exits_when_the_host_dies() {
+    // A dead host closes both ends at once: stdin reaches EOF and stderr
+    // becomes a broken pipe, so the worker's own logging fails too.
+    let mut worker = BurnWorkerProcess::spawn();
+    drop(worker.child.stderr.take());
+    drop(worker.stdin.take());
+    assert!(worker.exits_within(std::time::Duration::from_secs(5)));
 }
