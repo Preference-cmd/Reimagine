@@ -72,3 +72,4 @@ reqwest = { version = "0.12", default-features = false, features = ["rustls-tls"
 arc-swap = "1"
 blake3 = "1"
 thiserror = "2"
+jsonschema = { version = "0.60", default-features = false }

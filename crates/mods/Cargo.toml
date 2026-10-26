@@ -10,11 +10,16 @@ publish.workspace = true
 
 [dependencies]
 async-trait = { workspace = true }
+jsonschema = { workspace = true }
 reimagine-core = { path = "../core" }
 semver = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }
 tracing = { workspace = true }
 
+[features]
+testing = []
+
 [dev-dependencies]
-tokio = { workspace = true, features = ["macros", "rt"] }
+mods = { path = ".", features = ["testing"] }
+tokio = { workspace = true, features = ["macros", "rt", "time"] }

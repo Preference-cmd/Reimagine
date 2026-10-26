@@ -1,6 +1,7 @@
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 
+use jsonschema::Validator;
 use reimagine_core::diagnostic::Diagnostic;
 use reimagine_core::event::EventBus;
 use reimagine_core::health::Health;
@@ -12,6 +13,7 @@ use crate::context::ModContext;
 use crate::diagnostic::caller_error;
 use crate::interface::Mod;
 use crate::manifest::{API_VERSION, ModManifest};
+use crate::schema;
 
 /// Namespaces the kernel keeps for itself; no mod may take one as its id.
 pub const RESERVED_NAMESPACES: &[&str] =
@@ -28,6 +30,7 @@ pub struct ModEntry {
 struct Registered {
     entry: ModEntry,
     instance: Arc<dyn Mod>,
+    input_validators: HashMap<String, Validator>,
 }
 
 /// The started mods of one application. A rejected mod stays listed as
@@ -40,8 +43,10 @@ impl ModRegistry {
     /// Validate every manifest, then start each accepted mod in order.
     ///
     /// A manifest is rejected when its id is reserved, not snake_case or
-    /// already taken, when its api requirement excludes [`API_VERSION`], or
-    /// when an operation or event leaves the mod's namespace or repeats.
+    /// already taken, when its api requirement excludes [`API_VERSION`],
+    /// when an operation or event leaves the mod's namespace or repeats,
+    /// or when a schema does not compile or an input schema is not an object
+    /// schema.
     pub async fn start(mods: Vec<Arc<dyn Mod>>, event_bus: &EventBus) -> Self {
         let mut registered: Vec<Registered> = Vec::with_capacity(mods.len());
         for instance in mods {
@@ -49,13 +54,13 @@ impl ModRegistry {
             let taken = registered
                 .iter()
                 .any(|other| other.entry.manifest.id == manifest.id);
-            let health = match validate(&manifest, taken) {
-                Err(diagnostic) => Health::Unavailable(diagnostic),
-                Ok(()) => {
+            let (health, input_validators) = match validate_and_compile(&manifest, taken) {
+                Err(diagnostic) => (Health::Unavailable(diagnostic), HashMap::new()),
+                Ok(validators) => {
                     let ctx = ModContext::new(Arc::clone(&manifest), event_bus.clone());
                     match instance.start(ctx).await {
-                        Ok(()) => Health::Available,
-                        Err(diagnostic) => Health::Unavailable(diagnostic),
+                        Ok(()) => (Health::Available, validators),
+                        Err(diagnostic) => (Health::Unavailable(diagnostic), HashMap::new()),
                     }
                 }
             };
@@ -69,6 +74,7 @@ impl ModRegistry {
             registered.push(Registered {
                 entry: ModEntry { manifest, health },
                 instance,
+                input_validators,
             });
         }
         Self { mods: registered }
@@ -88,12 +94,14 @@ impl ModRegistry {
     }
 
     /// Call `operation` on mod `mod_id`. Fails before reaching the mod when
-    /// the mod is unknown or unavailable or does not declare the operation.
+    /// the mod is unknown or unavailable, does not declare the operation, or
+    /// `payload` does not match the operation's input schema.
     pub async fn invoke(
         &self,
         mod_id: &str,
         operation: &str,
         payload: Value,
+        cancel: CancelToken,
     ) -> Result<Value, Diagnostic> {
         let registered = self
             .mods
@@ -117,10 +125,18 @@ impl ModRegistry {
                 format!("mod `{mod_id}` declares no operation `{operation}`"),
             ));
         }
-        registered
-            .instance
-            .invoke(operation, payload, CancelToken::new())
-            .await
+        if let Some(message) = registered
+            .input_validators
+            .get(operation)
+            .and_then(|validator| schema::violations(validator, &payload))
+        {
+            return Err(caller_error(
+                mod_id,
+                "INVALID_INPUT",
+                format!("invalid input for operation `{operation}`: {message}"),
+            ));
+        }
+        registered.instance.invoke(operation, payload, cancel).await
     }
 
     /// Every registered mod, in registration order.
@@ -138,7 +154,17 @@ impl ModRegistry {
     }
 }
 
-fn validate(manifest: &ModManifest, id_taken: bool) -> Result<(), Diagnostic> {
+/// Check `manifest` and compile its schemas; the input validators are kept
+/// for [`ModRegistry::invoke`].
+pub(crate) fn validate_and_compile(
+    manifest: &ModManifest,
+    id_taken: bool,
+) -> Result<HashMap<String, Validator>, Diagnostic> {
+    validate_manifest_structure(manifest, id_taken)?;
+    compile_schemas(manifest)
+}
+
+fn validate_manifest_structure(manifest: &ModManifest, id_taken: bool) -> Result<(), Diagnostic> {
     let id = manifest.id.as_str();
     let reject = |code: &str, message: String| Err(caller_error(id, code, message));
 
@@ -220,6 +246,44 @@ fn validate(manifest: &ModManifest, id_taken: bool) -> Result<(), Diagnostic> {
     Ok(())
 }
 
+fn compile_schemas(manifest: &ModManifest) -> Result<HashMap<String, Validator>, Diagnostic> {
+    let id = manifest.id.as_str();
+    let compile = |schema: &Value, what: String| {
+        schema::compile(schema).map_err(|error| {
+            caller_error(
+                id,
+                "INVALID_SCHEMA",
+                format!("{what} is not valid JSON Schema 2020-12: {error}"),
+            )
+        })
+    };
+
+    let mut input_validators = HashMap::with_capacity(manifest.operations.len());
+    for operation in &manifest.operations {
+        let name = &operation.name;
+        if !schema::is_object(&operation.input_schema) {
+            return Err(caller_error(
+                id,
+                "INVALID_SCHEMA",
+                format!("operation `{name}` input_schema root must be `\"type\": \"object\"`"),
+            ));
+        }
+        let input = compile(
+            &operation.input_schema,
+            format!("operation `{name}` input_schema"),
+        )?;
+        compile(
+            &operation.output_schema,
+            format!("operation `{name}` output_schema"),
+        )?;
+        input_validators.insert(name.clone(), input);
+    }
+    for event in &manifest.events {
+        compile(&event.schema, format!("event `{}` schema", event.kind))?;
+    }
+    Ok(input_validators)
+}
+
 fn is_snake_case(id: &str) -> bool {
     id.starts_with(|c: char| c.is_ascii_lowercase())
         && !id.ends_with('_')
@@ -270,6 +334,7 @@ mod tests {
         }
 
         async fn stop(&self) -> Result<(), Diagnostic> {
+            self.calls.lock().unwrap().push("stop".to_owned());
             Ok(())
         }
     }
@@ -318,6 +383,13 @@ mod tests {
         }
     }
 
+    fn rejection_message(registry: &ModRegistry, index: usize) -> String {
+        match &registry.list()[index].health {
+            Health::Unavailable(diagnostic) => diagnostic.message().to_owned(),
+            Health::Available => panic!("mod {index} was accepted"),
+        }
+    }
+
     #[tokio::test]
     async fn invalid_manifests_are_unavailable_with_a_reason() {
         let mut outside_op = manifest("outside_op");
@@ -352,9 +424,58 @@ mod tests {
             assert_eq!(rejection(&registry, 0), code, "{id}");
             assert!(registry.list()[1].health.is_available(), "{id} spared good");
             registry
-                .invoke("good", "good.ping", json!({}))
+                .invoke("good", "good.ping", json!({}), CancelToken::new())
                 .await
                 .expect("the other mod still works");
+        }
+    }
+
+    #[tokio::test]
+    async fn invalid_schemas_are_rejected_with_invalid_schema_code() {
+        // Non-object input root
+        let mut non_object_input = manifest("bad_input_root");
+        non_object_input.operations[0].input_schema = json!({ "type": "string" });
+
+        // Uncompilable input schema
+        let mut uncompilable_input = manifest("bad_input_schema");
+        uncompilable_input.operations[0].input_schema = json!({
+            "type": "object",
+            "properties": { "foo": { "type": 123 } }
+        });
+
+        // Uncompilable output schema
+        let mut uncompilable_output = manifest("bad_output_schema");
+        uncompilable_output.operations[0].output_schema = json!({
+            "type": 456
+        });
+
+        // Uncompilable event schema
+        let mut uncompilable_event = manifest("bad_event_schema");
+        uncompilable_event.events[0].schema = json!({
+            "type": 789
+        });
+
+        let cases = [
+            (non_object_input, "bad_input_root.ping"),
+            (uncompilable_input, "bad_input_schema.ping"),
+            (uncompilable_output, "bad_output_schema.ping"),
+            (uncompilable_event, "bad_event_schema.pinged"),
+        ];
+
+        for (manifest, target_name) in cases {
+            let id = manifest.id.clone();
+            let registry = registry(vec![fake(manifest), fake(self::manifest("good"))]).await;
+            assert_eq!(rejection(&registry, 0), "MOD/CALLER_INVALID_SCHEMA", "{id}");
+            let msg = rejection_message(&registry, 0);
+            assert!(
+                msg.contains(target_name),
+                "rejection message for {id} ({msg}) must name `{target_name}`"
+            );
+            assert!(registry.list()[1].health.is_available(), "{id} spared good");
+            registry
+                .invoke("good", "good.ping", json!({}), CancelToken::new())
+                .await
+                .expect("good mod still works");
         }
     }
 
@@ -366,7 +487,7 @@ mod tests {
         assert!(registry.list()[0].health.is_available());
         assert_eq!(rejection(&registry, 1), "MOD/CALLER_DUPLICATE_ID");
         registry
-            .invoke("demo", "demo.ping", json!({}))
+            .invoke("demo", "demo.ping", json!({}), CancelToken::new())
             .await
             .expect("first registration serves");
         assert_eq!(first.calls.lock().unwrap().len(), 1);
@@ -383,7 +504,7 @@ mod tests {
         let registry = registry(vec![Arc::clone(&broken), Arc::clone(&demo)]).await;
 
         let output = registry
-            .invoke("demo", "demo.ping", json!({ "n": 1 }))
+            .invoke("demo", "demo.ping", json!({ "n": 1 }), CancelToken::new())
             .await
             .expect("declared operation");
         assert_eq!(output, json!({ "echo": { "n": 1 } }));
@@ -392,18 +513,102 @@ mod tests {
             result.expect_err("rejected").code().as_str().to_owned()
         };
         assert_eq!(
-            code(registry.invoke("broken", "broken.ping", json!({})).await),
+            code(
+                registry
+                    .invoke("broken", "broken.ping", json!({}), CancelToken::new())
+                    .await
+            ),
             "MOD/INTERNAL_START"
         );
         assert_eq!(
-            code(registry.invoke("demo", "demo.pong", json!({})).await),
+            code(
+                registry
+                    .invoke("demo", "demo.pong", json!({}), CancelToken::new())
+                    .await
+            ),
             "MOD/CALLER_UNKNOWN_OPERATION"
         );
         assert_eq!(
-            code(registry.invoke("missing", "missing.ping", json!({})).await),
+            code(
+                registry
+                    .invoke("missing", "missing.ping", json!({}), CancelToken::new())
+                    .await
+            ),
             "MOD/CALLER_UNKNOWN_MOD"
         );
         assert!(broken.calls.lock().unwrap().is_empty());
         assert_eq!(*demo.calls.lock().unwrap(), ["demo.ping"]);
+    }
+
+    #[tokio::test]
+    async fn invoke_validates_input_against_schema_before_calling_mod() {
+        let mut demo_manifest = manifest("demo");
+        demo_manifest.operations[0].input_schema = json!({
+            "type": "object",
+            "properties": {
+                "text": { "type": "string" }
+            },
+            "required": ["text"]
+        });
+        let demo = fake(demo_manifest);
+        let registry = registry(vec![Arc::clone(&demo)]).await;
+
+        // Valid payload succeeds
+        registry
+            .invoke(
+                "demo",
+                "demo.ping",
+                json!({ "text": "hello" }),
+                CancelToken::new(),
+            )
+            .await
+            .expect("valid input");
+        assert_eq!(*demo.calls.lock().unwrap(), ["demo.ping"]);
+
+        // Missing required field rejected with MOD/CALLER_INVALID_INPUT
+        let err = registry
+            .invoke("demo", "demo.ping", json!({}), CancelToken::new())
+            .await
+            .expect_err("missing text");
+        assert_eq!(err.code().as_str(), "MOD/CALLER_INVALID_INPUT");
+        assert!(err.message().contains("text"));
+
+        // Wrong type rejected with MOD/CALLER_INVALID_INPUT
+        let err2 = registry
+            .invoke(
+                "demo",
+                "demo.ping",
+                json!({ "text": 123 }),
+                CancelToken::new(),
+            )
+            .await
+            .expect_err("wrong type");
+        assert_eq!(err2.code().as_str(), "MOD/CALLER_INVALID_INPUT");
+
+        // The mod was NOT called for either invalid invocation
+        assert_eq!(demo.calls.lock().unwrap().len(), 1);
+    }
+
+    #[tokio::test]
+    async fn stop_reaches_only_started_mods() {
+        let broken = Arc::new(Fake {
+            manifest: manifest("broken"),
+            fail_start: true,
+            calls: Mutex::new(Vec::new()),
+        });
+        let demo = fake(manifest("demo"));
+        let rejected = fake(manifest("board"));
+        let registry = registry(vec![
+            Arc::clone(&broken),
+            Arc::clone(&demo),
+            Arc::clone(&rejected),
+        ])
+        .await;
+
+        registry.stop().await;
+
+        assert_eq!(*demo.calls.lock().unwrap(), ["stop"]);
+        assert!(broken.calls.lock().unwrap().is_empty());
+        assert!(rejected.calls.lock().unwrap().is_empty());
     }
 }

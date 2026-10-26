@@ -19,6 +19,16 @@ pub fn internal_error(mod_id: &str, code: &str, message: impl Into<String>) -> D
     error(mod_id, "INTERNAL", code, message)
 }
 
+/// The operation was cancelled by the caller.
+/// The code becomes `MOD/CALLER_CANCELLED`.
+pub fn cancelled(mod_id: &str) -> Diagnostic {
+    caller_error(
+        mod_id,
+        "CANCELLED",
+        format!("operation on mod `{mod_id}` was cancelled"),
+    )
+}
+
 fn error(mod_id: &str, class: &str, code: &str, message: impl Into<String>) -> Diagnostic {
     Diagnostic::new(
         DiagnosticId::new(format!("mod:{mod_id}:{code}")),

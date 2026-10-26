@@ -112,7 +112,7 @@ crates/nodes/                    reimagine-nodes - V1 builtin SDXL node catalog
 crates/runtime/                  reimagine-runtime - RuntimeService, scheduler, run/value store
 crates/inference/                reimagine-inference - backend contract, router, execution values, executors
 crates/inference-backends/       burn/ burn-worker/ - concrete backend
-crates/mods/                     mods - mod manifest, interface, and in-process registry
+crates/mods/                     mods - mod manifest, interface, in-process registry, and conformance kit
 crates/aigc/                     aigc - optional AIGC module: inference composition, worker management, model services
 crates/app-host/                 reimagine-app-host - WorkspaceHost, Project/Board/Workflow/Run services, proposals
 crates/backend-worker-protocol/  reimagine-backend-worker-protocol - worker wire protocol, gRPC contract, local and TLS transports
