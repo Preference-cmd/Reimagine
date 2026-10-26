@@ -17,7 +17,7 @@ use reimagine_inference::{
     BackendInstanceRuntimeHooks, BackendInstanceStatus, BackendProfile, DeviceProfile,
     InferenceBackend, InferenceCapability,
 };
-use reimagine_plugin::{Extension, Plugin};
+use reimagine_inference::{Extension, Plugin};
 
 use super::candidate::BuiltBackendInstance;
 use super::switch::{

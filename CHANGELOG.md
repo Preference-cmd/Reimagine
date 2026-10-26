@@ -24,13 +24,13 @@ both check it.
 
 - Document, run and download events arrive on one IPC subscription,
   `subscribe_events(channel)`, which replaces `subscribe_document_events`.
-  Each event carries a `type` tag: `document`, `run` or `module`.
+  Each event carries a `type` tag: `document`, `run` or `mod`.
 - `run_workflow` no longer takes a channel; its run events arrive on
   `subscribe_events`, without replay, and their fields are camelCase (`runId`,
   `nodeId`, `artifact`, `createdAt`, ...).
 - `download_huggingface_model` takes a caller-chosen `downloadId` instead of a
   channel; progress arrives as `aigc.download.{started,progress,completed,failed}`
-  module events whose payload is `downloadId`, `bytesDownloaded` (cumulative),
+  mod events whose payload is `downloadId`, `bytesDownloaded` (cumulative),
   `totalBytes` and `message`.
 - The `run_workflow` response and its `initialSnapshot` use camelCase fields
   (`runId`, `workflowId`, `workflowVersion`, `initialSnapshot`, `nodeStates`,
@@ -46,6 +46,9 @@ both check it.
 
 ### Removed
 
+- The `reimagine-plugin` crate. Its plugin and extension descriptors had no
+  caller; the plugin and extension ids moved to `reimagine-inference`, and the
+  new `mods` crate defines the mod manifest, interface and registry.
 - The `reimagine-axum-host` crate and its HTTP API (`cargo run -p reimagine-axum-host`).
   The desktop app (`src-tauri`) is now the only host adapter; humans and agents
   drive the kernel directly through `reimagine-app-host`.

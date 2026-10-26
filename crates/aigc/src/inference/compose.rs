@@ -551,7 +551,7 @@ mod tests {
         CreateEmptyLatentResponse, DeviceKind, DeviceProfile, FakeBackend, InferenceError,
         LatentContent, LatentSpaceMetadata, RuntimeLatent,
     };
-    use reimagine_plugin::{Extension, Plugin};
+    use reimagine_inference::{Extension, Plugin};
     use std::collections::BTreeMap;
 
     use crate::inference::candidate::BurnBackendCandidate;

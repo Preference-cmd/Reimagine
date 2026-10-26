@@ -42,6 +42,7 @@ mod error;
 mod execution_value;
 mod executor;
 mod executors;
+mod ids;
 mod inference_error;
 mod invocation;
 pub mod latent_content;
@@ -100,6 +101,7 @@ pub use diagnostic::{
     backend_bridge_required, backend_bridge_unsupported, backend_capability_unsupported,
     backend_not_registered, incompatible_handle_affinity,
 };
+pub use ids::{Extension, Plugin, PluginIdError};
 pub use inference_error::InferenceError;
 pub use invocation::InferenceInvocation;
 pub use profile::{

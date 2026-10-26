@@ -163,21 +163,21 @@ export const RunEventSchema = z.object({
 });
 export type RunEvent = z.infer<typeof RunEventSchema>;
 
-export const ModuleEventSchema = z.object({
-  type: z.literal("module"),
+export const ModEventSchema = z.object({
+  type: z.literal("mod"),
   kind: z.string(),
   payload: z.unknown(),
 });
-export type ModuleEvent = z.infer<typeof ModuleEventSchema>;
+export type ModEvent = z.infer<typeof ModEventSchema>;
 
 export const EventSchema = z.discriminatedUnion("type", [
   DocumentEventSchema,
   RunEventSchema,
-  ModuleEventSchema,
+  ModEventSchema,
 ]);
 export type Event = z.infer<typeof EventSchema>;
 
-/** Payload of the `aigc.download.*` module events. */
+/** Payload of the `aigc.download.*` mod events. */
 export const DownloadProgressSchema = z.object({
   downloadId: z.string(),
   /** Bytes of the files finished so far. */

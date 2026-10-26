@@ -380,7 +380,7 @@ mod tests {
         SamplerName, SamplerOptionProfile, SamplerSchedulerPairProfile, SchedulerName,
         SchedulerOptionProfile, WorkspaceComputeProfile,
     };
-    use reimagine_plugin::{Extension, Plugin};
+    use reimagine_inference::{Extension, Plugin};
 
     fn sample_profile() -> WorkspaceComputeProfile {
         let device = DeviceProfile::new("cpu")

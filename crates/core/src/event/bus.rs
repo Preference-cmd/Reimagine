@@ -6,8 +6,8 @@ use super::run_event::RunEvent;
 /// A notification published on the [`EventBus`].
 ///
 /// Serialized with a `type` tag: `document` (a document reached a new
-/// version), `run` (workflow run timeline) or `module` (a module-owned event
-/// whose `kind` starts with the module's namespace, such as `aigc.`).
+/// version), `run` (workflow run timeline) or `mod` (a mod-owned event
+/// whose `kind` starts with the mod's namespace, such as `aigc.`).
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(tag = "type")]
 pub enum Event {
@@ -22,8 +22,8 @@ pub enum Event {
     },
     #[serde(rename = "run")]
     Run(RunEvent),
-    #[serde(rename = "module")]
-    Module {
+    #[serde(rename = "mod")]
+    Mod {
         kind: String,
         payload: serde_json::Value,
     },
@@ -44,8 +44,8 @@ impl Event {
         }
     }
 
-    pub fn module(kind: impl Into<String>, payload: serde_json::Value) -> Self {
-        Self::Module {
+    pub fn mod_event(kind: impl Into<String>, payload: serde_json::Value) -> Self {
+        Self::Mod {
             kind: kind.into(),
             payload,
         }
@@ -158,24 +158,24 @@ mod tests {
     }
 
     #[test]
-    fn event_serde_module_shape() {
+    fn event_serde_mod_shape() {
         let payload = serde_json::json!({
             "downloadId": "dl-1",
             "status": "in_progress",
             "bytesDownloaded": 1024
         });
-        let event = Event::module("aigc.download.progress", payload.clone());
-        let val = serde_json::to_value(&event).expect("serialize module event");
+        let event = Event::mod_event("aigc.download.progress", payload.clone());
+        let val = serde_json::to_value(&event).expect("serialize mod event");
         assert_eq!(
             val,
             serde_json::json!({
-                "type": "module",
+                "type": "mod",
                 "kind": "aigc.download.progress",
                 "payload": payload
             })
         );
 
-        let roundtrip: Event = serde_json::from_value(val).expect("deserialize module event");
+        let roundtrip: Event = serde_json::from_value(val).expect("deserialize mod event");
         assert_eq!(roundtrip, event);
     }
 }

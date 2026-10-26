@@ -19,7 +19,6 @@ reimagine-core = { path = "../core" }
 reimagine-inference = { path = "../inference" }
 reimagine-model-acquisition = { path = "../model-acquisition" }
 reimagine-model-manager = { path = "../model-manager" }
-reimagine-plugin = { path = "../plugin" }
 reimagine-runtime = { path = "../runtime" }
 serde = { workspace = true }
 serde_json = { workspace = true }

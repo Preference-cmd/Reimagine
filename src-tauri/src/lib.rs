@@ -149,7 +149,7 @@ async fn open_artifact(
 // ─── Model download commands ───────────────────────────────────────
 
 /// Download a HuggingFace model. Progress arrives on `subscribe_events` as
-/// `aigc.download.*` module events carrying the caller's `download_id`.
+/// `aigc.download.*` mod events carrying the caller's `download_id`.
 #[cfg(feature = "aigc")]
 #[tauri::command]
 #[allow(clippy::too_many_arguments)]

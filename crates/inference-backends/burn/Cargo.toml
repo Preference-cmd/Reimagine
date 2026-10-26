@@ -36,7 +36,6 @@ burn-rocm = { workspace = true, optional = true }
 image = { workspace = true }
 reimagine-core = { path = "../../core" }
 reimagine-inference = { path = "../../inference" }
-reimagine-plugin = { path = "../../plugin" }
 serde = { workspace = true }
 serde_json = { workspace = true }
 safetensors = { workspace = true }

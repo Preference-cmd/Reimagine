@@ -6,7 +6,7 @@
 # Dev-dependencies are exempt by design: tests may wire layers together,
 # shipped code may not.
 #
-#   leaves     core, plugin, backend-worker-protocol    no workspace crate
+#   leaves     core, mods, backend-worker-protocol    core/protocol no workspace crate; mods reaches only core
 #   domain     config, nodes, model-manager, model-acquisition,
 #              inference, runtime
 #   modules    aigc (inference composition, workers, model services)
@@ -34,7 +34,7 @@
 # "reimagine-inference v" does not match "reimagine-inference-burn v".
 set -euo pipefail
 
-WORKSPACE='(reimagine(-[a-z-]+)?|aigc) v'
+WORKSPACE='(reimagine(-[a-z-]+)?|aigc|mods) v'
 TAURI='tauri(-[a-z-]+)? v'
 AGENT='(reimagine-agent-[a-z-]+|reimagine-ai-protocol|reimagine-context-kernel|causa(-[a-z]+)?) v'
 APP_HOST='reimagine-app-host v'
@@ -114,11 +114,10 @@ if [[ -z "$members" ]]; then
   exit 1
 fi
 
-# Leaves: the domain vocabulary, the plugin descriptors and the worker wire
-# protocol depend on no other workspace crate. The domain root also stays
-# free of HTTP and the desktop shell (tokio sync-only is used for CancelToken).
+# Leaves: the domain vocabulary, the mod contract and the worker wire
+# protocol. The domain root also stays free of HTTP and the desktop shell.
 check reimagine-core "$WORKSPACE" 'reqwest v' "$HTTP_SERVER" "$TAURI"
-check reimagine-plugin "$WORKSPACE"
+check mods "$BACKENDS" "$HTTP_SERVER" 'reimagine-runtime v' 'reimagine-inference v' 'reimagine-model-manager v' 'reimagine-model-acquisition v' 'reimagine-nodes v' 'reimagine-config v' 'reimagine-backend-worker-host v' 'aigc v'
 check reimagine-backend-worker-protocol "$WORKSPACE"
 
 # Domain crates and contracts never reach a concrete inference backend,

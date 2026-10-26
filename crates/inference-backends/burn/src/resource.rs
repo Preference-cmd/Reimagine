@@ -6,7 +6,7 @@ use reimagine_inference::{
     BackendRunLifecycle, BackendRunLifecycleReport, BackendRunLifecycleRequest, DeviceProfile,
     InferenceError,
 };
-use reimagine_plugin::{Extension, Plugin};
+use reimagine_inference::{Extension, Plugin};
 
 use crate::store::{BurnModelCache, BurnStore};
 

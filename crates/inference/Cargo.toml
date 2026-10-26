@@ -12,7 +12,6 @@ publish.workspace = true
 arc-swap = { workspace = true }
 async-trait = { workspace = true }
 reimagine-core = { path = "../core" }
-reimagine-plugin = { path = "../plugin" }
 serde = { workspace = true }
 tokio = { workspace = true, features = ["macros", "rt", "time"] }
 

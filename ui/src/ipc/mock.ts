@@ -560,7 +560,7 @@ export async function mockDownloadHuggingfaceModel(
       totalBytes: total,
       message,
     };
-    emitEvent({ type: "module", kind: `aigc.download.${stage}`, payload });
+    emitEvent({ type: "mod", kind: `aigc.download.${stage}`, payload });
   };
 
   emit("started");

@@ -21,8 +21,8 @@
 
 use serde::{Deserialize, Deserializer, Serialize, Serializer};
 
+use crate::{Extension, Plugin};
 use reimagine_core::diagnostic::Diagnostic;
-use reimagine_plugin::{Extension, Plugin};
 
 use crate::backend_selection::{Backend, BackendInstance, DeviceProfile};
 use crate::capability::InferenceCapability;

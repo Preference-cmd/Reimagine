@@ -2,7 +2,7 @@ use reimagine_inference::{
     Backend, BackendInstance, BackendInstanceProfile, BackendInstanceStatus, BackendProfile,
     BackendProfileProvider, DeviceKind, DeviceProfile, InferenceCapability,
 };
-use reimagine_plugin::{Extension, Plugin};
+use reimagine_inference::{Extension, Plugin};
 
 pub(crate) const BACKEND_LABEL: &str = "burn";
 pub(crate) const PLUGIN_LABEL: &str = "builtin.burn";

@@ -145,7 +145,7 @@ export function ModelDownloadDialog({
       fromCatalog: true,
     };
     const unsubscribe = subscribeEvents((event) => {
-      if (event.type !== "module" || !event.kind.startsWith("aigc.download.")) return;
+      if (event.type !== "mod" || !event.kind.startsWith("aigc.download.")) return;
       const payload = DownloadProgressSchema.safeParse(event.payload);
       if (payload.success && payload.data.downloadId === downloadId) {
         applyDownloadEvent(event.kind, payload.data);

@@ -244,9 +244,9 @@ impl SwitchableWorker for ProcessSwitchableWorker {
         BackendInstanceSnapshot {
             backend_instance: self.instance.clone(),
             backend: self.backend.backend_kind().clone(),
-            plugin: Some(reimagine_plugin::Plugin::try_from("builtin.burn").expect("plugin id")),
+            plugin: Some(reimagine_inference::Plugin::try_from("builtin.burn").expect("plugin id")),
             extension: Some(
-                reimagine_plugin::Extension::try_from("backend.burn").expect("extension id"),
+                reimagine_inference::Extension::try_from("backend.burn").expect("extension id"),
             ),
             device: live.map(|profile| DeviceProfile::new(profile.device_label.clone())),
             observations: std::collections::BTreeMap::from([

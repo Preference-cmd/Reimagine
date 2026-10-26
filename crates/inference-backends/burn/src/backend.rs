@@ -98,8 +98,8 @@ impl BurnBackend {
 
     pub fn runtime_hooks(
         &self,
-        plugin: Option<reimagine_plugin::Plugin>,
-        extension: Option<reimagine_plugin::Extension>,
+        plugin: Option<reimagine_inference::Plugin>,
+        extension: Option<reimagine_inference::Extension>,
         device: Option<reimagine_inference::DeviceProfile>,
     ) -> BurnBackendInstanceRuntimeHooks {
         BurnBackendInstanceRuntimeHooks::new(

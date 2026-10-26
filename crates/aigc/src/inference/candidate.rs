@@ -17,7 +17,7 @@ use reimagine_inference::{
     InferenceBackend, InferenceCapability,
 };
 
-use reimagine_plugin::{Extension, Plugin};
+use reimagine_inference::{Extension, Plugin};
 
 /// Error during backend candidate resolution and bootstrap.
 #[derive(Debug)]

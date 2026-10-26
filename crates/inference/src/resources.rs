@@ -16,12 +16,12 @@
 use std::collections::BTreeMap;
 use std::sync::Arc;
 
+use crate::{Extension, Plugin};
 use reimagine_core::diagnostic::{
     Diagnostic, DiagnosticCode, DiagnosticSeverity, DiagnosticSourceName, DiagnosticTarget,
     DiagnosticTargetDomain,
 };
 use reimagine_core::model::{DiagnosticId, RunId};
-use reimagine_plugin::{Extension, Plugin};
 
 use crate::backend_selection::{Backend, BackendInstance, DeviceProfile};
 use crate::inference_error::InferenceError;

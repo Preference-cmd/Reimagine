@@ -59,7 +59,7 @@ impl ModelAcquisitionService {
     }
 
     /// Download a HuggingFace model and publish its progress on the event bus
-    /// as `aigc.download.{started,progress,completed,failed}` module events
+    /// as `aigc.download.{started,progress,completed,failed}` mod events
     /// whose payload carries `download_id`.
     ///
     /// `estimated_bytes` seeds `totalBytes` until the download reports the
@@ -298,7 +298,7 @@ impl DownloadEvents {
         };
         let payload = serde_json::to_value(payload).expect("download progress serializes");
         self.event_bus
-            .publish(Event::module(format!("aigc.download.{stage}"), payload));
+            .publish(Event::mod_event(format!("aigc.download.{stage}"), payload));
     }
 }
 
@@ -323,17 +323,17 @@ impl AcquisitionProgressSink for DownloadEvents {
 mod tests {
     use super::*;
 
-    fn next_module_event(
+    fn next_mod_event(
         rx: &mut tokio::sync::broadcast::Receiver<Event>,
     ) -> (String, serde_json::Value) {
         match rx.try_recv().expect("an event was published") {
-            Event::Module { kind, payload } => (kind, payload),
-            other => panic!("expected a module event, got {other:?}"),
+            Event::Mod { kind, payload } => (kind, payload),
+            other => panic!("expected a mod event, got {other:?}"),
         }
     }
 
     #[test]
-    fn download_progress_is_published_as_aigc_module_events() {
+    fn download_progress_is_published_as_aigc_mod_events() {
         let bus = EventBus::new();
         let mut rx = bus.subscribe();
         let events = DownloadEvents::new(bus, "dl-1".to_owned(), Some(1000));
@@ -346,23 +346,23 @@ mod tests {
         let report = AcquisitionReport::new("huggingface", "org/model", "main", "org/model");
         events.done(&report);
 
-        let (kind, payload) = next_module_event(&mut rx);
+        let (kind, payload) = next_mod_event(&mut rx);
         assert_eq!(kind, "aigc.download.started");
         assert_eq!(payload["downloadId"], "dl-1");
         assert_eq!(payload["totalBytes"], 1000);
 
-        let (kind, payload) = next_module_event(&mut rx);
+        let (kind, payload) = next_mod_event(&mut rx);
         assert_eq!(kind, "aigc.download.progress");
         assert_eq!(payload["bytesDownloaded"], 300);
-        let (_, payload) = next_module_event(&mut rx);
+        let (_, payload) = next_mod_event(&mut rx);
         assert_eq!(payload["bytesDownloaded"], 400);
-        let (_, payload) = next_module_event(&mut rx);
+        let (_, payload) = next_mod_event(&mut rx);
         assert_eq!(
             payload["bytesDownloaded"], 500,
             "a file's repeated reports are not summed"
         );
 
-        let (kind, payload) = next_module_event(&mut rx);
+        let (kind, payload) = next_mod_event(&mut rx);
         assert_eq!(kind, "aigc.download.completed");
         assert_eq!(payload["bytesDownloaded"], 500);
         assert_eq!(payload["totalBytes"], 500);

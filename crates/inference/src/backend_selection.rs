@@ -42,15 +42,14 @@ use serde::{Deserialize, Serialize};
 
 use crate::capability::InferenceCapability;
 use crate::profile::{DTypeProfile, DeviceKind, MemoryProfile};
+use crate::{Extension, Plugin};
 use reimagine_core::model::NodeId;
-use reimagine_plugin::{Extension, Plugin};
 
 /// Open stable backend implementation label, e.g. `"fake"` or
 /// `"remote"`. Distinct from a concrete configured [`BackendInstance`].
 ///
 /// Backend labels are not a closed enum. Built-in and future external
 /// backends are modeled as plugin extensions over
-/// `HostSurface::InferenceBackend`; the open label is the stable
 /// identity they advertise.
 #[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[serde(transparent)]
@@ -247,7 +246,6 @@ pub struct BackendInstanceDescriptor {
     pub device: Option<DeviceProfile>,
     /// Optional plugin that contributed this instance. Populated when
     /// the instance was discovered through a
-    /// `PluginExtension` over `HostSurface::InferenceBackend`.
     pub plugin: Option<Plugin>,
     /// Optional extension identity within the contributing plugin.
     pub extension: Option<Extension>,
