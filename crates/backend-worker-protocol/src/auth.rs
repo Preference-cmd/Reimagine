@@ -60,6 +60,20 @@ pub fn token_from_env() -> Option<String> {
     }
 }
 
+/// `len` bytes from the operating system's random number generator,
+/// hex-encoded.
+///
+/// Used for per-launch bearer tokens and private endpoint names, which
+/// must be unguessable by other local processes.
+pub fn random_hex(len: usize) -> Result<String, String> {
+    let mut bytes = vec![0_u8; len];
+    rustls::crypto::ring::default_provider()
+        .secure_random
+        .fill(&mut bytes)
+        .map_err(|_| "the operating system random number generator failed".to_owned())?;
+    Ok(hex::encode(bytes))
+}
+
 /// Constant-time equality over two strings.
 #[must_use]
 pub fn ct_eq(a: &str, b: &str) -> bool {
@@ -127,6 +141,13 @@ impl Interceptor for BearerInterceptor {
 mod tests {
     use super::*;
     use tonic::metadata::MetadataMap;
+
+    #[test]
+    fn random_hex_is_unique_and_sized() {
+        let first = random_hex(32).unwrap();
+        assert_eq!(first.len(), 64);
+        assert_ne!(first, random_hex(32).unwrap());
+    }
 
     #[test]
     fn ct_eq_compares_constantly() {

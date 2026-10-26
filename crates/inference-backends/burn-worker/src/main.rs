@@ -7,8 +7,8 @@
 //! stdout output), and serves until the host closes its stdin. Endpoints:
 //! a private local socket (`unix://<path>`, Windows `pipe://<name>`) for
 //! host-launched workers, or `https://<ip>:<port>` for remote workers,
-//! which additionally serves TLS with a self-signed certificate and
-//! registers itself with mDNS for discovery.
+//! which require a token, serve TLS with a self-signed certificate,
+//! register themselves with mDNS for discovery, and ignore stdin.
 
 use std::collections::HashMap;
 use std::io::Write as _;
@@ -102,10 +102,19 @@ fn main() {
     let token = std::env::var(TOKEN_ENV)
         .ok()
         .filter(|value| !value.is_empty());
+    let remote = matches!(endpoint, ListenEndpoint::Https(_));
+    // A remote worker is reachable by every machine on the network and
+    // advertises itself over mDNS, so it never serves without a token.
+    if remote && token.is_none() {
+        log(&format!(
+            "FATAL: --listen https:// requires a bearer token in {TOKEN_ENV}"
+        ));
+        std::process::exit(1);
+    }
 
     // Identity for the mDNS registration of a remote (`https://`)
     // worker; computed before the backend moves into the service.
-    let mdns_identity = if matches!(endpoint, ListenEndpoint::Https(_)) {
+    let mdns_identity = if remote {
         Some(probe::build(&backend))
     } else {
         None
@@ -114,19 +123,24 @@ fn main() {
     let shutdown_requested = Arc::new(AtomicBool::new(false));
     let service = service::BurnWorkerService::new(backend, token, Arc::clone(&shutdown_requested));
 
-    // Lifeline: the host holds our stdin open; EOF means the host is
-    // gone and this process must exit instead of becoming an orphan.
-    std::thread::spawn(|| {
-        use std::io::Read;
-        let mut stdin = std::io::stdin().lock();
-        let mut buffer = [0_u8; 256];
-        loop {
-            match stdin.read(&mut buffer) {
-                Ok(0) | Err(_) => std::process::exit(0),
-                Ok(_) => {}
+    // Lifeline for a host-launched (local) worker: the host holds our
+    // stdin open; EOF means the host is gone and this process must exit
+    // instead of becoming an orphan. A remote worker is started on its
+    // own (service manager, `nohup ... </dev/null`), has no host to
+    // outlive, and must not read a stdin it does not own.
+    if !remote {
+        std::thread::spawn(|| {
+            use std::io::Read;
+            let mut stdin = std::io::stdin().lock();
+            let mut buffer = [0_u8; 256];
+            loop {
+                match stdin.read(&mut buffer) {
+                    Ok(0) | Err(_) => std::process::exit(0),
+                    Ok(_) => {}
+                }
             }
-        }
-    });
+        });
+    }
 
     // Graceful shutdown: leave a grace period after the shutdown ack so
     // the response still reaches the host.

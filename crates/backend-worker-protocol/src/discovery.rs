@@ -23,12 +23,22 @@ pub struct DiscoveredWorker {
 }
 
 impl DiscoveredWorker {
-    /// Parse the `https://` endpoint from the properties.
+    /// The `https://` endpoint to connect to.
+    ///
+    /// The advertised `endpoint` TXT record wins when it names a concrete
+    /// address. A worker listening on every interface advertises
+    /// `0.0.0.0`, so its port is combined with the resolved service
+    /// address; a worker without the record is reached at the resolved
+    /// address. A non-`https://` record yields `None`.
     pub fn https_endpoint(&self) -> Option<SocketAddr> {
-        self.properties
-            .get("endpoint")
-            .and_then(|ep| ep.strip_prefix("https://"))
-            .and_then(|addr| addr.parse().ok())
+        let Some(advertised) = self.properties.get("endpoint") else {
+            return Some(self.addr);
+        };
+        let addr: SocketAddr = advertised.strip_prefix("https://")?.parse().ok()?;
+        if addr.ip().is_unspecified() {
+            return Some(SocketAddr::new(self.addr.ip(), addr.port()));
+        }
+        Some(addr)
     }
 
     /// Get the backend kind.
@@ -78,6 +88,9 @@ impl MdnsWorkerRegister {
     /// The service is published with `<id>.local.` as the advertised
     /// hostname and `<id>.local` as the instance name, so the full
     /// service name is `<id>.local._reimagine-worker._tcp.local.`.
+    ///
+    /// An unspecified `addr` (`0.0.0.0`, a worker listening on every
+    /// interface) advertises each non-loopback interface address instead.
     pub fn register(
         id: &str,
         addr: SocketAddr,
@@ -86,15 +99,24 @@ impl MdnsWorkerRegister {
         let daemon = ServiceDaemon::new()
             .map_err(|e| TransportError::ConnectionFailed(format!("mdns daemon: {e}")))?;
 
-        let service_info = ServiceInfo::new(
+        let unspecified = addr.ip().is_unspecified();
+        let host_ip = if unspecified {
+            String::new()
+        } else {
+            addr.ip().to_string()
+        };
+        let mut service_info = ServiceInfo::new(
             SERVICE_TYPE,
             &format!("{id}.local"),
             &format!("{id}.local."),
-            addr.ip().to_string(),
+            host_ip,
             addr.port(),
             properties,
         )
         .map_err(|e| TransportError::ConnectionFailed(format!("mdns service info: {e}")))?;
+        if unspecified {
+            service_info = service_info.enable_addr_auto();
+        }
 
         daemon
             .register(service_info)
@@ -147,10 +169,14 @@ impl MdnsWorkerDiscovery {
             while let Ok(event) = rx.recv() {
                 match event {
                     ServiceEvent::ServiceResolved(info) => {
-                        let addr: Option<SocketAddr> =
-                            info.get_addresses().iter().next().and_then(|addr| {
-                                format!("{}:{}", addr, info.get_port()).parse().ok()
-                            });
+                        // Prefer IPv4: an IPv6 link-local address is not
+                        // connectable without its interface scope.
+                        let addresses = info.get_addresses();
+                        let addr: Option<SocketAddr> = addresses
+                            .iter()
+                            .find(|addr| addr.is_ipv4())
+                            .or_else(|| addresses.iter().next())
+                            .map(|ip| SocketAddr::new(*ip, info.get_port()));
                         if let Some(addr) = addr {
                             let properties: HashMap<String, String> = info
                                 .get_properties()

@@ -583,20 +583,13 @@ impl WorkerSupervisor {
             let WorkerConnection {
                 transport,
                 client,
-                stderr,
+                stderr_tail,
+                stderr_task,
             } = self
                 .transport_factory
                 .connect(&self.launch)
                 .await
                 .map_err(WorkerHostError::Transport)?;
-            let stderr_tail = Arc::new(Mutex::new(Vec::new()));
-            let stderr_task = stderr.map(|stderr| {
-                spawn_stderr_drain(
-                    stderr,
-                    Arc::clone(&stderr_tail),
-                    self.launch.limits.maximum_stderr_bytes,
-                )
-            });
             let response = client.hello().await.map_err(|status| {
                 WorkerHostError::Transport(
                     reimagine_backend_worker_protocol::TransportError::ConnectionFailed(format!(
@@ -765,27 +758,5 @@ fn validate_identity_field(
         field,
         expected: expected.to_owned(),
         actual: actual.to_owned(),
-    })
-}
-
-fn spawn_stderr_drain(
-    mut stderr: Box<dyn tokio::io::AsyncRead + Send + Unpin>,
-    tail: Arc<Mutex<Vec<u8>>>,
-    maximum_bytes: usize,
-) -> JoinHandle<()> {
-    tokio::spawn(async move {
-        use tokio::io::AsyncReadExt;
-        let mut buffer = [0_u8; 4096];
-        while let Ok(count) = stderr.read(&mut buffer).await {
-            if count == 0 {
-                break;
-            }
-            let mut tail = tail.lock().await;
-            tail.extend_from_slice(&buffer[..count]);
-            if tail.len() > maximum_bytes {
-                let excess = tail.len() - maximum_bytes;
-                tail.drain(..excess);
-            }
-        }
     })
 }

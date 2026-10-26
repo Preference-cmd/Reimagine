@@ -75,7 +75,9 @@ async fn registered_worker_is_discovered() {
     }
 
     let id = format!("reimagine-mdns-test-{}", std::process::id());
-    let addr: SocketAddr = "127.0.0.1:59100".parse().unwrap();
+    // Registered like a real remote worker, which listens on every
+    // interface: mDNS never announces loopback addresses.
+    let addr: SocketAddr = "0.0.0.0:59100".parse().unwrap();
     let mut properties = HashMap::new();
     properties.insert("endpoint".to_owned(), format!("https://{addr}"));
     properties.insert("backend".to_owned(), "burn".to_owned());
@@ -101,10 +103,15 @@ async fn registered_worker_is_discovered() {
     }
 
     let worker = found.expect("registered worker should be discovered within 20s");
+    let endpoint = worker.https_endpoint().expect("an https endpoint");
     assert_eq!(
-        worker.https_endpoint(),
-        Some(addr),
-        "the advertised https endpoint must round-trip"
+        endpoint.port(),
+        59100,
+        "the advertised port must round-trip"
+    );
+    assert!(
+        !endpoint.ip().is_unspecified(),
+        "a 0.0.0.0 listener must resolve to a connectable address, got {endpoint}"
     );
     assert_eq!(worker.backend_kind(), "burn");
     assert_eq!(worker.devices(), vec!["cuda:0"]);
@@ -132,11 +139,24 @@ fn register_then_unregister_roundtrip() {
 }
 
 #[test]
+fn unspecified_endpoint_txt_uses_the_resolved_address() {
+    let worker = DiscoveredWorker {
+        id: "w._reimagine-worker._tcp.local.".to_owned(),
+        addr: "192.168.1.10:5353".parse().unwrap(),
+        properties: HashMap::from([("endpoint".to_owned(), "https://0.0.0.0:9100".to_owned())]),
+    };
+    assert_eq!(
+        worker.https_endpoint(),
+        Some("192.168.1.10:9100".parse().unwrap())
+    );
+}
+
+#[test]
 fn endpoint_txt_must_be_https() {
     let worker = DiscoveredWorker {
         id: "w._reimagine-worker._tcp.local.".to_owned(),
         addr: "192.168.1.10:9100".parse().unwrap(),
-        properties: HashMap::from([("endpoint".to_owned(), "quic://192.168.1.10:9100".to_owned())]),
+        properties: HashMap::from([("endpoint".to_owned(), "http://192.168.1.10:9100".to_owned())]),
     };
     assert_eq!(worker.https_endpoint(), None);
 }

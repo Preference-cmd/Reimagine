@@ -208,13 +208,14 @@ async fn crash_fails_every_pending_request_and_marks_supervisor_failed() {
         .begin_request("delay", serde_json::json!({ "milliseconds": 500 }))
         .await
         .unwrap();
-    let crash = worker
-        .begin_request("crash", serde_json::json!({}))
-        .await
-        .unwrap();
-
+    // The worker may die before or after the Execute call is
+    // established; either way the request reports a lost transport.
+    let crash = match worker.begin_request("crash", serde_json::json!({})).await {
+        Ok(handle) => handle.finish().await.map(|_| ()),
+        Err(error) => Err(error),
+    };
     assert!(matches!(
-        crash.finish().await,
+        crash,
         Err(reimagine_backend_worker_host::WorkerHostError::TransportLost { .. })
     ));
     assert!(matches!(

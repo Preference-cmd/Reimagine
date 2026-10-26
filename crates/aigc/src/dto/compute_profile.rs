@@ -29,7 +29,7 @@ pub struct ComputeProfileDto {
     /// Workers registered in the connection topology manager (T13).
     ///
     /// Local inventory workers surface as ordinary backend profiles;
-    /// this list carries the *topology pool* — discovered QUIC/gRPC
+    /// this list carries the *topology pool* — discovered remote gRPC
     /// endpoints that are registered but not necessarily connected.
     /// Empty when no topology manager is configured.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]

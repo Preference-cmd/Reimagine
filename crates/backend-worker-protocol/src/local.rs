@@ -331,16 +331,16 @@ impl tower::Service<tonic::codegen::http::Uri> for NamedPipeConnector {
     fn call(&mut self, _uri: tonic::codegen::http::Uri) -> Self::Future {
         let pipe_name = self.pipe_name.clone();
         Box::pin(async move {
-            // `connect` fails with ERROR_PIPE_BUSY while the server is
-            // between instances; retry briefly instead of failing.
+            // Opening fails with ERROR_PIPE_BUSY while the server is
+            // between instances; retry that briefly, fail on anything else.
+            const ERROR_PIPE_BUSY: i32 = 231;
             let mut attempt = 0;
             loop {
                 match tokio::net::windows::named_pipe::ClientOptions::new().open(&pipe_name) {
                     Ok(client) => return Ok(hyper_util::rt::TokioIo::new(client)),
-                    Err(error) if attempt < 50 => {
+                    Err(error) if attempt < 50 && error.raw_os_error() == Some(ERROR_PIPE_BUSY) => {
                         attempt += 1;
                         tokio::time::sleep(std::time::Duration::from_millis(10)).await;
-                        let _ = error;
                     }
                     Err(error) => return Err(error),
                 }

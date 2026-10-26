@@ -15,18 +15,15 @@ use async_trait::async_trait;
 use reimagine_backend_worker_protocol::{TransportDescription, TransportError, TransportKind};
 use tokio::process::{Child, ChildStderr, ChildStdin, ChildStdout};
 use tokio::sync::Mutex;
+use tokio::task::JoinHandle;
 use tokio::time::timeout;
 
 use crate::launch::WorkerLaunchSpec;
 
+use reimagine_backend_worker_protocol::auth::random_hex;
 pub use reimagine_backend_worker_protocol::auth::{GrpcAuth, TOKEN_ENV};
 pub use reimagine_backend_worker_protocol::local::LocalEndpoint;
 use reimagine_backend_worker_protocol::{client::WorkerClient, local::connect_local};
-
-/// How long a single connect attempt waits for the named pipe on
-/// Windows before surfacing the busy state as a failed startup.
-#[cfg(windows)]
-const PIPE_CONNECT_RETRIES: usize = 50;
 
 /// Lifecycle handle for a launched worker.
 ///
@@ -48,8 +45,12 @@ pub struct WorkerConnection {
     pub transport: Arc<dyn WorkerLifecycle>,
     /// Client speaking the v2 contract with the launch token attached.
     pub client: WorkerClient,
-    /// Optional stderr stream (local process transports have one).
-    pub stderr: Option<Box<dyn tokio::io::AsyncRead + Send + Unpin>>,
+    /// The most recent bytes the worker wrote to stderr.
+    pub stderr_tail: Arc<Mutex<Vec<u8>>>,
+    /// The task draining stderr into `stderr_tail`. It starts at spawn,
+    /// so a worker that logs before its READY line never blocks on a
+    /// full pipe.
+    pub stderr_task: Option<JoinHandle<()>>,
 }
 
 /// Resolves a worker launch spec into a connected transport.
@@ -74,7 +75,27 @@ impl WorkerTransportFactory for LocalProcessTransportFactory {
             .stdout
             .take()
             .ok_or_else(|| TransportError::ConnectionFailed("stdout already consumed".into()))?;
-        wait_for_ready(&mut stdout, &launch.endpoint, spec.limits.startup_timeout).await?;
+        let stderr_tail = Arc::new(Mutex::new(Vec::new()));
+        let mut stderr_task = spawn_stderr_drain(
+            launch.stderr,
+            Arc::clone(&stderr_tail),
+            spec.limits.maximum_stderr_bytes,
+        );
+        if let Err(error) =
+            wait_for_ready(&mut stdout, &launch.endpoint, spec.limits.startup_timeout).await
+        {
+            // A worker that dies before READY usually said why on
+            // stderr; give the drain a moment to read it to EOF.
+            let _ = timeout(Duration::from_millis(200), &mut stderr_task).await;
+            let tail = stderr_tail.lock().await;
+            if tail.is_empty() {
+                return Err(error);
+            }
+            return Err(TransportError::ConnectionFailed(format!(
+                "{error}; worker stderr: {}",
+                String::from_utf8_lossy(&tail).trim_end()
+            )));
+        }
         // stdout carries only the READY line; release our read end.
         drop(stdout);
         let auth = GrpcAuth {
@@ -87,9 +108,33 @@ impl WorkerTransportFactory for LocalProcessTransportFactory {
         Ok(WorkerConnection {
             transport: Arc::new(launch.process),
             client,
-            stderr: Some(Box::new(launch.stderr)),
+            stderr_tail,
+            stderr_task: Some(stderr_task),
         })
     }
+}
+
+/// Keep the last `maximum_bytes` the worker writes to stderr.
+fn spawn_stderr_drain(
+    mut stderr: ChildStderr,
+    tail: Arc<Mutex<Vec<u8>>>,
+    maximum_bytes: usize,
+) -> JoinHandle<()> {
+    tokio::spawn(async move {
+        use tokio::io::AsyncReadExt;
+        let mut buffer = [0_u8; 4096];
+        while let Ok(count) = stderr.read(&mut buffer).await {
+            if count == 0 {
+                break;
+            }
+            let mut tail = tail.lock().await;
+            tail.extend_from_slice(&buffer[..count]);
+            if tail.len() > maximum_bytes {
+                let excess = tail.len() - maximum_bytes;
+                tail.drain(..excess);
+            }
+        }
+    })
 }
 
 /// A freshly spawned local worker plus the streams the host keeps.
@@ -166,8 +211,8 @@ impl std::fmt::Debug for LocalWorkerProcess {
 /// `REIMAGINE_WORKER_TOKEN`; its environment is otherwise empty so no
 /// host state leaks into the worker.
 pub fn spawn_local(spec: &WorkerLaunchSpec) -> Result<LocalLaunch, TransportError> {
-    let token = generate_launch_token();
-    let (endpoint, socket_dir) = private_endpoint(&token)?;
+    let token = random_hex(32).map_err(TransportError::ConnectionFailed)?;
+    let (endpoint, socket_dir) = private_endpoint()?;
 
     let mut command = tokio::process::Command::new(&spec.executable);
     command
@@ -273,68 +318,28 @@ pub async fn wait_for_ready(
         .map_err(|_| TransportError::Timeout)?
 }
 
-/// Generate a fresh per-launch bearer token.
-///
-/// The token protects the worker's private endpoint from other local
-/// processes. It is derived from OS-level per-process entropy (ASLR
-/// addresses), the process id, and a high-resolution timestamp, hashed
-/// with SHA-256 — unpredictable to any process that cannot read our
-/// memory, without pulling in an RNG dependency.
-fn generate_launch_token() -> String {
-    use sha2::{Digest, Sha256};
-    use std::sync::atomic::{AtomicU64, Ordering};
-
-    /// Monotonic per-process launch counter: guarantees uniqueness
-    /// within a host even when the clock granularity is coarse.
-    static LAUNCH_SEQUENCE: AtomicU64 = AtomicU64::new(0);
-
-    // Per-process entropy without an RNG dependency: a monotonic launch
-    // counter, ASLR addresses (stack and a heap allocation), the
-    // process id, and a high-resolution timestamp.
-    let heap = Box::new(0_u8);
-    let stack = 0_u8;
-    let mut hasher = Sha256::new();
-    hasher.update(
-        LAUNCH_SEQUENCE
-            .fetch_add(1, Ordering::Relaxed)
-            .to_le_bytes(),
-    );
-    hasher.update(
-        std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .map(|elapsed| elapsed.as_nanos())
-            .unwrap_or(0)
-            .to_le_bytes(),
-    );
-    hasher.update(std::process::id().to_le_bytes());
-    hasher.update((std::ptr::from_ref(&*heap) as usize).to_le_bytes());
-    hasher.update((std::ptr::from_ref(&stack) as usize).to_le_bytes());
-    hex::encode(hasher.finalize())
-}
-
 /// Choose the private endpoint for a launch: a socket inside a fresh
 /// 0700 directory (Unix) or a uniquely named pipe (Windows).
-fn private_endpoint(token: &str) -> Result<(LocalEndpoint, Option<PathBuf>), TransportError> {
-    let suffix = token.get(..16).unwrap_or(token);
+///
+/// The name is random and independent of the bearer token, because
+/// directory and pipe names are visible to every local process.
+fn private_endpoint() -> Result<(LocalEndpoint, Option<PathBuf>), TransportError> {
+    let suffix = random_hex(8).map_err(TransportError::ConnectionFailed)?;
     #[cfg(unix)]
     {
-        use std::os::unix::fs::PermissionsExt;
+        use std::os::unix::fs::DirBuilderExt;
+        // Created 0700 in one step (never briefly world-readable), and
+        // never reused: an existing directory of this name is an error.
         let dir = std::env::temp_dir().join(format!("reimagine-worker-{suffix}"));
-        let _ = std::fs::remove_dir_all(&dir);
-        std::fs::create_dir(&dir).map_err(|error| {
-            TransportError::ConnectionFailed(format!(
-                "cannot create worker socket directory {}: {error}",
-                dir.display()
-            ))
-        })?;
-        std::fs::set_permissions(&dir, std::fs::Permissions::from_mode(0o700)).map_err(
-            |error| {
+        std::fs::DirBuilder::new()
+            .mode(0o700)
+            .create(&dir)
+            .map_err(|error| {
                 TransportError::ConnectionFailed(format!(
-                    "cannot restrict worker socket directory {}: {error}",
+                    "cannot create worker socket directory {}: {error}",
                     dir.display()
                 ))
-            },
-        )?;
+            })?;
         Ok((
             LocalEndpoint::UnixSocket(dir.join("worker.sock")),
             Some(dir),
@@ -342,7 +347,6 @@ fn private_endpoint(token: &str) -> Result<(LocalEndpoint, Option<PathBuf>), Tra
     }
     #[cfg(windows)]
     {
-        let _ = std::fs::remove_dir_all;
         Ok((
             LocalEndpoint::NamedPipe(format!(r"\\.\pipe\reimagine-worker-{suffix}")),
             None,
@@ -352,7 +356,7 @@ fn private_endpoint(token: &str) -> Result<(LocalEndpoint, Option<PathBuf>), Tra
 
 #[cfg(test)]
 mod tests {
-    use super::{generate_launch_token, private_endpoint, wait_for_ready};
+    use super::{private_endpoint, wait_for_ready};
     use crate::launch::{WorkerLaunchSpec, WorkerLimits};
     use std::time::Duration;
 
@@ -376,17 +380,47 @@ mod tests {
         }
     }
 
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn startup_failure_reports_the_worker_stderr() {
+        use super::{LocalProcessTransportFactory, WorkerTransportFactory};
+        use std::os::unix::fs::PermissionsExt;
+
+        let dir = tempfile::tempdir().unwrap();
+        let script = dir.path().join("dying-worker");
+        std::fs::write(
+            &script,
+            "#!/bin/sh\necho 'cannot open the GPU' >&2\nexit 3\n",
+        )
+        .unwrap();
+        std::fs::set_permissions(&script, std::fs::Permissions::from_mode(0o755)).unwrap();
+        let mut spec = minimal_spec();
+        spec.executable = script;
+
+        let error = match LocalProcessTransportFactory.connect(&spec).await {
+            Ok(_) => panic!("a worker that exits before READY must fail to connect"),
+            Err(error) => error.to_string(),
+        };
+        assert!(
+            error.contains("before printing its READY line"),
+            "got: {error}"
+        );
+        assert!(error.contains("cannot open the GPU"), "got: {error}");
+    }
+
     #[test]
-    fn launch_tokens_are_unique_and_long() {
-        let first = generate_launch_token();
-        let second = generate_launch_token();
+    fn private_endpoints_are_unique() {
+        let (first, first_dir) = private_endpoint().unwrap();
+        let (second, second_dir) = private_endpoint().unwrap();
         assert_ne!(first, second);
-        assert_eq!(first.len(), 64);
+        for dir in [first_dir, second_dir].into_iter().flatten() {
+            std::fs::remove_dir_all(dir).unwrap();
+        }
     }
 
     #[tokio::test]
     async fn ready_wait_accepts_the_matching_endpoint_line() {
-        let endpoint = private_endpoint(&generate_launch_token()).unwrap().0;
+        let endpoint = private_endpoint().unwrap().0;
         // Spawn `cat`-like echo of the READY line through a real process
         // is overkill; drive the parser through a pipe instead.
         let (mut reader, mut writer) = tokio::io::simplex(64);
@@ -405,7 +439,7 @@ mod tests {
 
     #[tokio::test]
     async fn ready_wait_rejects_unexpected_stdout() {
-        let endpoint = private_endpoint(&generate_launch_token()).unwrap().0;
+        let endpoint = private_endpoint().unwrap().0;
         let (mut reader, mut writer) = tokio::io::simplex(64);
         let expected = endpoint;
         let task = tokio::spawn(async move {
@@ -419,7 +453,7 @@ mod tests {
 
     #[tokio::test]
     async fn ready_wait_times_out_without_a_line() {
-        let endpoint = private_endpoint(&generate_launch_token()).unwrap().0;
+        let endpoint = private_endpoint().unwrap().0;
         let (mut reader, _writer) = tokio::io::simplex(64);
         let expected = endpoint;
         let error = wait_for_ready(&mut reader, &expected, Duration::from_millis(20))

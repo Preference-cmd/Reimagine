@@ -8,8 +8,8 @@
 //! supervised by the host process; a dead network worker needs a
 //! fresh connect via its candidate).
 //!
-//! The production probe seam (`StartedWorker::health()` for local
-//! QUIC connection liveness, gRPC `HealthCheck`) is wired by the
+//! The production probe seam (the worker contract's `Health` call, for
+//! local and remote workers alike) is wired by the
 //! topology integration (T13); this module ships the state machine,
 //! thresholds, and tests.
 #![allow(dead_code)]

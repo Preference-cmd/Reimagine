@@ -848,3 +848,61 @@ fn worker_exits_when_the_host_dies() {
     let _ = child.wait();
     panic!("worker did not exit within 5s of stdin EOF");
 }
+
+// ---------------------------------------------------------------------------
+// Remote mode
+// ---------------------------------------------------------------------------
+
+fn remote_worker_command(token: Option<&str>) -> Command {
+    let mut command = Command::new(env!("CARGO_BIN_EXE_reimagine-inference-burn-worker"));
+    command
+        .arg("--listen")
+        .arg("https://127.0.0.1:0")
+        .env_clear()
+        .env("REIMAGINE_MODELS_DIR", "/tmp")
+        .env("REIMAGINE_OUTPUT_DIR", "/tmp")
+        .env("REIMAGINE_ALLOWED_MODEL_ROOTS", "/tmp")
+        .env("REIMAGINE_ALLOWED_OUTPUT_ROOTS", "/tmp");
+    if let Some(token) = token {
+        command.env("REIMAGINE_WORKER_TOKEN", token);
+    }
+    command
+}
+
+/// A remote worker is reachable from the whole network, so it refuses
+/// to start without a bearer token.
+#[test]
+fn remote_worker_refuses_to_start_without_a_token() {
+    let output = remote_worker_command(None)
+        .stdin(Stdio::null())
+        .output()
+        .expect("run burn worker");
+    assert!(!output.status.success());
+    assert!(output.stdout.is_empty(), "no READY line without a token");
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(stderr.contains("requires a bearer token"), "got: {stderr}");
+}
+
+/// A remote worker is started on its own, often with stdin at EOF
+/// (`</dev/null`, a service manager); that must not stop it.
+#[test]
+fn remote_worker_keeps_serving_with_stdin_at_eof() {
+    let mut child = remote_worker_command(Some("remote-token"))
+        .stdin(Stdio::null())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::null())
+        .spawn()
+        .expect("spawn burn worker");
+    let mut stdout = std::io::BufReader::new(child.stdout.take().expect("stdout piped"));
+    let mut ready = String::new();
+    std::io::BufRead::read_line(&mut stdout, &mut ready).expect("read READY line");
+    std::thread::sleep(Duration::from_millis(500));
+    let still_running = child.try_wait().expect("poll worker").is_none();
+    let _ = child.kill();
+    let _ = child.wait();
+    assert!(
+        ready.starts_with("READY https://"),
+        "expected a READY line, got: {ready}"
+    );
+    assert!(still_running, "remote worker exited on stdin EOF");
+}

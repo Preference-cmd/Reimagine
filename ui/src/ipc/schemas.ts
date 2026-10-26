@@ -399,7 +399,7 @@ export type RebootBackendArgs = z.infer<typeof RebootBackendArgsSchema>;
 export const ComputeProfileSchema = z.object({
   backend_profiles: z.array(z.any()),
   diagnostics: z.array(z.any()),
-  /** Topology pool workers (T13): discovered QUIC/gRPC endpoints that
+  /** Topology pool workers (T13): discovered remote gRPC endpoints that
    *  are registered but not necessarily connected. Optional — absent
    *  when no topology manager is configured. */
   topology_workers: z

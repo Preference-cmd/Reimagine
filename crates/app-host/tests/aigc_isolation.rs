@@ -46,7 +46,7 @@ fn failing_inference_backend_config() -> InferenceBackendConfig {
         workers: vec![WorkerEndpointConfig {
             id: "invalid-worker".to_owned(),
             transport: "carrier-pigeon".to_owned(),
-            address: "quic://127.0.0.1:9999".to_owned(),
+            address: "https://127.0.0.1:9999".to_owned(),
             capabilities: Vec::new(),
             device_label: String::new(),
             fingerprint: None,

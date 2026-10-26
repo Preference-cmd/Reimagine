@@ -276,9 +276,6 @@ fn config_endpoint(cfg: &WorkerEndpointConfig) -> Result<WorkerEndpoint, String>
     let transport_kind = match cfg.transport.as_str() {
         "local" => TransportKind::Local,
         "grpc" => TransportKind::Grpc,
-        "quic" => {
-            return Err("unsupported transport kind `quic` (removed; use `grpc`)".to_owned());
-        }
         other => return Err(format!("unsupported transport kind `{other}`")),
     };
     // A pre-shared fingerprint is the only verifiable identity a
