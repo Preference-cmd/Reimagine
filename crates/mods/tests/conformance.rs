@@ -6,7 +6,10 @@ use std::time::Duration;
 
 use async_trait::async_trait;
 use mods::testing::{SampleMod, check_manifest, validate};
-use mods::{Mod, ModContext, ModManifest, ModOperation, ModRegistry, OperationAnnotations};
+use mods::{
+    Mod, ModContext, ModManifest, ModOperation, ModRegistry, OperationAnnotations, ProcessMod,
+    ProcessModSpec,
+};
 use reimagine_core::diagnostic::Diagnostic;
 use reimagine_core::event::{Event, EventBus, EventReceiver};
 use reimagine_core::health::Health;
@@ -16,15 +19,25 @@ use serde_json::{Value, json};
 #[derive(Debug, Clone, Copy)]
 enum Host {
     InProcess,
+    Process,
 }
 
-const HOSTS: &[Host] = &[Host::InProcess];
+const HOSTS: &[Host] = &[Host::InProcess, Host::Process];
 
 /// The sample mod hosted as `host`; `failing` makes its `start` fail.
 async fn sample(host: Host, failing: bool) -> Arc<dyn Mod> {
     match host {
         Host::InProcess if failing => Arc::new(SampleMod::failing_start()),
         Host::InProcess => Arc::new(SampleMod::new()),
+        Host::Process => {
+            let bin = env!("CARGO_BIN_EXE_sample-mod");
+            let mut spec = ProcessModSpec::new(bin);
+            if failing {
+                spec.args.push("failing".into());
+            }
+            let proc = ProcessMod::spawn(spec).await.expect("spawn sample-mod");
+            Arc::new(proc)
+        }
     }
 }
 

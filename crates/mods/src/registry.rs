@@ -29,7 +29,9 @@ pub struct ModEntry {
 
 struct Registered {
     entry: ModEntry,
-    instance: Arc<dyn Mod>,
+    /// Present only while the mod is available; dropping it releases whatever
+    /// the instance owns (for a process mod, the child process).
+    instance: Option<Arc<dyn Mod>>,
     input_validators: HashMap<String, Validator>,
 }
 
@@ -54,16 +56,19 @@ impl ModRegistry {
             let taken = registered
                 .iter()
                 .any(|other| other.entry.manifest.id == manifest.id);
-            let (health, input_validators) = match validate_and_compile(&manifest, taken) {
-                Err(diagnostic) => (Health::Unavailable(diagnostic), HashMap::new()),
+            let (health, input_validators, keep) = match validate_and_compile(&manifest, taken) {
+                Err(diagnostic) => (Health::Unavailable(diagnostic), HashMap::new(), false),
                 Ok(validators) => {
                     let ctx = ModContext::new(Arc::clone(&manifest), event_bus.clone());
                     match instance.start(ctx).await {
-                        Ok(()) => (Health::Available, validators),
-                        Err(diagnostic) => (Health::Unavailable(diagnostic), HashMap::new()),
+                        Ok(()) => (Health::Available, validators, true),
+                        Err(diagnostic) => (Health::Unavailable(diagnostic), HashMap::new(), false),
                     }
                 }
             };
+            // An unavailable mod keeps no instance: a process mod would
+            // otherwise stay alive (and keep publishing) while rejected.
+            let instance = if keep { Some(instance) } else { None };
             if let Health::Unavailable(diagnostic) = &health {
                 tracing::warn!(
                     mod_id = %manifest.id,
@@ -83,7 +88,10 @@ impl ModRegistry {
     /// Stop every mod that started.
     pub async fn stop(&self) {
         for registered in self.available() {
-            if let Err(diagnostic) = registered.instance.stop().await {
+            let Some(instance) = registered.instance.as_ref() else {
+                continue;
+            };
+            if let Err(diagnostic) = instance.stop().await {
                 tracing::warn!(
                     mod_id = %registered.entry.manifest.id,
                     message = diagnostic.message(),
@@ -136,7 +144,14 @@ impl ModRegistry {
                 format!("invalid input for operation `{operation}`: {message}"),
             ));
         }
-        registered.instance.invoke(operation, payload, cancel).await
+        let instance = registered.instance.as_ref().ok_or_else(|| {
+            caller_error(
+                mod_id,
+                "NOT_RUNNING",
+                format!("mod `{mod_id}` has no running instance"),
+            )
+        })?;
+        instance.invoke(operation, payload, cancel).await
     }
 
     /// Every registered mod, in registration order.
