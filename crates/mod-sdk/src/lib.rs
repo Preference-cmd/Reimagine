@@ -21,15 +21,16 @@ mod manifest;
 mod process;
 mod protocol;
 mod registry;
-mod schema;
+pub mod schema;
 pub mod sdk;
 
 #[cfg(feature = "testing")]
 pub mod testing;
 
 pub use context::ModContext;
-pub use interface::Mod;
-pub use manifest::{API_VERSION, ModEvent, ModManifest, ModOperation, OperationAnnotations};
+pub use interface::{Invocation, Mod};
+pub use manifest::{API_VERSION, ModEvent, ModManifest, OperationAnnotations, OperationSpec};
 pub use process::{ProcessMod, ProcessModSpec};
 pub use protocol::PROTOCOL_VERSION;
 pub use registry::{ModEntry, ModRegistry, RESERVED_NAMESPACES};
+pub use schema::{AssetField, check_asset_marker_locations, find_asset_fields};

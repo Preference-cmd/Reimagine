@@ -16,7 +16,7 @@ use tokio::task::JoinHandle;
 
 use crate::context::ModContext;
 use crate::diagnostic::internal_error;
-use crate::interface::Mod;
+use crate::interface::{Invocation, Mod};
 use crate::protocol::{
     CancelParams, IncomingRpcMsg, InitializeParams, InitializeResult, InvokeParams,
     NotificationMsg, PROTOCOL_VERSION, PublishParams, ResponseErrorMsg, ResponseSuccessMsg,
@@ -120,14 +120,14 @@ pub async fn serve(module: impl Mod + 'static) -> std::io::Result<()> {
                 continue;
             }
         };
-        let message: IncomingRpcMsg = match serde_json::from_value(value.clone()) {
+
+        let message: IncomingRpcMsg = match serde_json::from_value(value) {
             Ok(message) => message,
-            Err(error) => {
-                let id = value.get("id").and_then(Value::as_i64);
+            Err(_) => {
                 send_error(
                     &writer_tx,
-                    id,
-                    RpcError::invalid_request(format!("invalid JSON-RPC request: {error}")),
+                    None,
+                    RpcError::invalid_request("not a valid JSON-RPC 2.0 object"),
                 )
                 .await;
                 continue;
@@ -135,27 +135,20 @@ pub async fn serve(module: impl Mod + 'static) -> std::io::Result<()> {
         };
 
         if message.jsonrpc != "2.0" {
-            // Notifications are never answered, even with a broken envelope.
-            if let Some(id) = message.id.as_ref().and_then(Value::as_i64) {
-                send_error(
-                    &writer_tx,
-                    Some(id),
-                    RpcError::invalid_request("invalid jsonrpc version; expected \"2.0\""),
-                )
-                .await;
-            }
+            send_error(
+                &writer_tx,
+                None,
+                RpcError::invalid_request("protocol envelope requires jsonrpc == '2.0'"),
+            )
+            .await;
             continue;
         }
 
-        // An omitted id is a notification; a null id is documented as one too,
-        // because it has no usable request identity and the kernel never sends it.
-        let is_notification = match &message.id {
-            None => true,
-            Some(id) => id.is_null(),
-        };
-        if is_notification {
+        // Notifications have no id; we currently only support $/cancelRequest.
+        let Some(req_id_val) = message.id else {
             if message.method.as_deref() == Some("$/cancelRequest")
-                && let Some(Ok(cancel)) = message.params.map(serde_json::from_value::<CancelParams>)
+                && let Some(params_val) = message.params
+                && let Ok(cancel) = serde_json::from_value::<CancelParams>(params_val)
             {
                 let tokens = cancel_tokens.lock().await;
                 if let Some(token) = tokens.get(&cancel.id) {
@@ -163,9 +156,9 @@ pub async fn serve(module: impl Mod + 'static) -> std::io::Result<()> {
                 }
             }
             continue;
-        }
+        };
 
-        let req_id = match message.id.as_ref().and_then(Value::as_i64) {
+        let req_id = match req_id_val.as_i64() {
             Some(id) => id,
             None => {
                 send_error(
@@ -178,65 +171,54 @@ pub async fn serve(module: impl Mod + 'static) -> std::io::Result<()> {
             }
         };
 
-        let method = match message.method {
-            Some(method) => method,
-            None => {
-                send_error(
-                    &writer_tx,
-                    Some(req_id),
-                    RpcError::invalid_request("request missing method"),
-                )
-                .await;
-                continue;
-            }
+        let Some(method) = message.method.as_deref() else {
+            send_error(
+                &writer_tx,
+                Some(req_id),
+                RpcError::invalid_request("request is missing method"),
+            )
+            .await;
+            continue;
         };
 
-        match method.as_str() {
+        match method {
             "initialize" => {
                 let params: Result<InitializeParams, _> =
                     serde_json::from_value(message.params.unwrap_or(Value::Null));
                 match params {
-                    Ok(params) if params.protocol_version == PROTOCOL_VERSION => {
+                    Ok(params) => {
+                        if params.protocol_version != PROTOCOL_VERSION {
+                            let diagnostic = internal_error(
+                                &module.manifest().id,
+                                "PROTOCOL_MISMATCH",
+                                format!(
+                                    "host requested protocol {} but mod requires {PROTOCOL_VERSION}",
+                                    params.protocol_version
+                                ),
+                            );
+                            send_error(&writer_tx, Some(req_id), RpcError::diagnostic(&diagnostic))
+                                .await;
+                            continue;
+                        }
+
+                        let result = InitializeResult {
+                            protocol_version: PROTOCOL_VERSION.to_owned(),
+                            manifest: module.manifest().clone(),
+                        };
                         let response = ResponseSuccessMsg {
                             jsonrpc: "2.0",
                             id: req_id,
-                            result: InitializeResult {
-                                protocol_version: PROTOCOL_VERSION.to_owned(),
-                                manifest: module.manifest().clone(),
-                            },
+                            result,
                         };
-                        let line = serde_json::to_string(&response).expect("serialize init");
+                        let line =
+                            serde_json::to_string(&response).expect("serialize initialize result");
                         let _ = writer_tx.send(WriterMsg::Response(line)).await;
                     }
-                    Ok(params) => {
-                        let diagnostic = internal_error(
-                            &module.manifest().id,
-                            "PROTOCOL_MISMATCH",
-                            format!(
-                                "unsupported protocol version `{}`; expected `{PROTOCOL_VERSION}`",
-                                params.protocol_version
-                            ),
-                        );
-                        send_error(
-                            &writer_tx,
-                            Some(req_id),
-                            RpcError::invalid_params_with_diag(
-                                "protocol version mismatch",
-                                &diagnostic,
-                            ),
-                        )
-                        .await;
-                    }
                     Err(error) => {
-                        let diagnostic = internal_error(
-                            &module.manifest().id,
-                            "PROTOCOL",
-                            format!("invalid initialize params: {error}"),
-                        );
                         send_error(
                             &writer_tx,
                             Some(req_id),
-                            RpcError::invalid_params_with_diag("invalid params", &diagnostic),
+                            RpcError::invalid_params(format!("invalid initialize params: {error}")),
                         )
                         .await;
                     }
@@ -302,14 +284,14 @@ pub async fn serve(module: impl Mod + 'static) -> std::io::Result<()> {
                         let task_writer_tx = writer_tx.clone();
                         let cancel_tokens = Arc::clone(&cancel_tokens);
                         let task_mod_id = task_module.manifest().id.clone();
+                        let invocation = Invocation {
+                            operation: params.operation,
+                            input: params.payload,
+                            output_dir: params.output_dir,
+                            cancel: cancel_token,
+                        };
                         let handle = tokio::spawn(async move {
-                            let result = match catch_panic(task_module.invoke(
-                                &params.operation,
-                                params.payload,
-                                cancel_token,
-                            ))
-                            .await
-                            {
+                            let result = match catch_panic(task_module.invoke(invocation)).await {
                                 Ok(result) => result,
                                 Err(payload) => {
                                     let message = panic_message(payload);

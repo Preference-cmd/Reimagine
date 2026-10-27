@@ -1,3 +1,5 @@
+use std::path::PathBuf;
+
 use reimagine_core::diagnostic::Diagnostic;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
@@ -5,7 +7,7 @@ use serde_json::Value;
 use crate::manifest::ModManifest;
 
 /// The wire protocol version supported by this crate.
-pub const PROTOCOL_VERSION: &str = "0.1";
+pub const PROTOCOL_VERSION: &str = "0.2";
 
 pub const PARSE_ERROR: i32 = -32700;
 pub const INVALID_REQUEST: i32 = -32600;
@@ -30,6 +32,7 @@ pub struct InitializeResult {
 pub struct InvokeParams {
     pub operation: String,
     pub payload: Value,
+    pub output_dir: PathBuf,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -92,14 +95,6 @@ impl RpcError {
             data: None,
         }
     }
-
-    pub fn invalid_params_with_diag(msg: impl Into<String>, diag: &Diagnostic) -> Self {
-        Self {
-            code: INVALID_PARAMS,
-            message: msg.into(),
-            data: serde_json::to_value(diag).ok(),
-        }
-    }
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -155,7 +150,7 @@ mod tests {
             id: 1,
             method: "initialize",
             params: InitializeParams {
-                protocol_version: "0.1".to_owned(),
+                protocol_version: "0.2".to_owned(),
             },
         };
         let req_json = serde_json::to_value(&req).expect("serialize req");
@@ -166,7 +161,7 @@ mod tests {
                 "id": 1,
                 "method": "initialize",
                 "params": {
-                    "protocolVersion": "0.1"
+                    "protocolVersion": "0.2"
                 }
             })
         );
@@ -219,6 +214,7 @@ mod tests {
             params: InvokeParams {
                 operation: "sample.echo".to_owned(),
                 payload: json!({ "text": "hi" }),
+                output_dir: PathBuf::from("/tmp/scratch"),
             },
         };
         let invoke_json = serde_json::to_value(&invoke).expect("serialize invoke");
@@ -230,7 +226,8 @@ mod tests {
                 "method": "mod/invoke",
                 "params": {
                     "operation": "sample.echo",
-                    "payload": { "text": "hi" }
+                    "payload": { "text": "hi" },
+                    "output_dir": "/tmp/scratch"
                 }
             })
         );

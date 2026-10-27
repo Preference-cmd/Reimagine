@@ -9,14 +9,13 @@ use std::time::Duration;
 
 use async_trait::async_trait;
 use reimagine_core::diagnostic::Diagnostic;
-use reimagine_core::task::CancelToken;
 use serde_json::Value;
 use tokio::io::AsyncBufReadExt;
 use tokio::sync::{Mutex, mpsc, oneshot};
 
 use crate::context::ModContext;
 use crate::diagnostic::internal_error;
-use crate::interface::Mod;
+use crate::interface::{Invocation, Mod};
 use crate::manifest::ModManifest;
 use crate::protocol::{
     CancelParams, IncomingRpcMsg, InitializeParams, InitializeResult, InvokeParams,
@@ -367,12 +366,7 @@ impl Mod for ProcessMod {
         Err(error)
     }
 
-    async fn invoke(
-        &self,
-        operation: &str,
-        payload: Value,
-        cancel: CancelToken,
-    ) -> Result<Value, Diagnostic> {
+    async fn invoke(&self, invocation: Invocation) -> Result<Value, Diagnostic> {
         if self.exited.load(Ordering::SeqCst) {
             return Err(exited_diagnostic(&self.manifest.id, &self.stderr_tail).await);
         }
@@ -386,8 +380,9 @@ impl Mod for ProcessMod {
             id: req_id,
             method: "mod/invoke",
             params: InvokeParams {
-                operation: operation.to_owned(),
-                payload,
+                operation: invocation.operation,
+                payload: invocation.input,
+                output_dir: invocation.output_dir,
             },
         })
         .expect("serialize mod/invoke request");
@@ -406,7 +401,7 @@ impl Mod for ProcessMod {
                     Err(_) => Err(exited_diagnostic(&self.manifest.id, &self.stderr_tail).await),
                 }
             }
-            _ = cancel.cancelled() => {
+            _ = invocation.cancel.cancelled() => {
                 let cancel_msg = serde_json::to_string(&NotificationMsg {
                     jsonrpc: "2.0",
                     method: "$/cancelRequest",

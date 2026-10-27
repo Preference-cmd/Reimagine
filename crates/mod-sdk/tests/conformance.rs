@@ -7,8 +7,8 @@ use std::time::Duration;
 use async_trait::async_trait;
 use mod_sdk::testing::{SampleMod, check_manifest, validate};
 use mod_sdk::{
-    Mod, ModContext, ModManifest, ModOperation, ModRegistry, OperationAnnotations, ProcessMod,
-    ProcessModSpec,
+    Invocation, Mod, ModContext, ModManifest, ModRegistry, OperationAnnotations, OperationSpec,
+    ProcessMod, ProcessModSpec,
 };
 use reimagine_core::diagnostic::Diagnostic;
 use reimagine_core::event::{Event, EventBus, EventReceiver};
@@ -53,7 +53,10 @@ async fn call(
     payload: Value,
 ) -> Result<Value, Diagnostic> {
     registry
-        .invoke("sample", operation, payload, CancelToken::new())
+        .invoke(
+            "sample",
+            Invocation::new(operation, payload, std::env::temp_dir(), CancelToken::new()),
+        )
         .await
 }
 
@@ -95,7 +98,7 @@ impl Pong {
             name: "Pong".to_owned(),
             version: "0.1.0".to_owned(),
             api: "0.1".to_owned(),
-            operations: vec![ModOperation {
+            operations: vec![OperationSpec {
                 name: "pong.ping".to_owned(),
                 description: "Answer.".to_owned(),
                 input_schema: json!({ "type": "object" }),
@@ -115,7 +118,7 @@ impl Mod for Pong {
     async fn start(&self, _ctx: ModContext) -> Result<(), Diagnostic> {
         Ok(())
     }
-    async fn invoke(&self, _: &str, _: Value, _: CancelToken) -> Result<Value, Diagnostic> {
+    async fn invoke(&self, _invocation: Invocation) -> Result<Value, Diagnostic> {
         Ok(json!({ "pong": true }))
     }
     async fn stop(&self) -> Result<(), Diagnostic> {
@@ -170,6 +173,29 @@ fn check_manifest_reports_every_problem() {
     );
 }
 
+#[test]
+fn check_manifest_rejects_asset_marker_under_oneof() {
+    let mut manifest = SampleMod::new().manifest().clone();
+    manifest.operations[0].input_schema = json!({
+        "type": "object",
+        "properties": {
+            "doc": {
+                "oneOf": [
+                    { "type": "string", "format": "asset" },
+                    { "type": "null" }
+                ]
+            }
+        },
+        "examples": [{}]
+    });
+    let problems = check_manifest(&manifest).expect_err("must reject asset marker under oneOf");
+    assert!(
+        problems
+            .iter()
+            .any(|p| p.contains("asset markers are allowed only under `properties` and `items`"))
+    );
+}
+
 #[tokio::test]
 async fn echo_returns_its_input_and_publishes_a_declared_event() {
     for &host in HOSTS {
@@ -190,34 +216,26 @@ async fn echo_returns_its_input_and_publishes_a_declared_event() {
 }
 
 #[tokio::test]
-async fn input_that_fails_the_schema_never_reaches_the_mod() {
-    for &host in HOSTS {
-        let (registry, mut rx) = start(vec![sample(host, false).await]).await;
-
-        for bad in [
-            json!({}),
-            json!({ "text": 1 }),
-            json!({ "text": "a", "x": 1 }),
-        ] {
-            let error = call(&registry, "sample.echo", bad.clone())
-                .await
-                .expect_err("rejected");
-            assert_eq!(
-                error.code().as_str(),
-                "MOD/CALLER_INVALID_INPUT",
-                "{host:?} {bad}"
-            );
-        }
-        // The first echo event comes from the first valid call.
-        call(&registry, "sample.echo", json!({ "text": "ok" }))
-            .await
-            .expect("valid call");
-        assert_eq!(
-            next_event(&mut rx, "sample.echoed").await,
-            json!({ "text": "ok" }),
-            "{host:?}"
+async fn operation_validator_rejects_invalid_input() {
+    let s = sample(Host::InProcess, false).await;
+    let op = s
+        .manifest()
+        .operations
+        .iter()
+        .find(|op| op.name == "sample.echo")
+        .expect("echo operation");
+    let validator = mod_sdk::schema::compile(&op.input_schema).expect("compiled validator");
+    for bad in [
+        json!({}),
+        json!({ "text": 1 }),
+        json!({ "text": "a", "x": 1 }),
+    ] {
+        assert!(
+            mod_sdk::schema::violations(&validator, &bad).is_some(),
+            "{bad}"
         );
     }
+    assert!(mod_sdk::schema::violations(&validator, &json!({ "text": "ok" })).is_none());
 }
 
 #[tokio::test]
@@ -244,7 +262,10 @@ async fn cancelling_a_call_returns_cancelled() {
             let cancel = cancel.clone();
             async move {
                 registry
-                    .invoke("sample", "sample.wait", json!({}), cancel)
+                    .invoke(
+                        "sample",
+                        Invocation::new("sample.wait", json!({}), std::env::temp_dir(), cancel),
+                    )
                     .await
             }
         });
@@ -283,7 +304,15 @@ async fn a_mod_that_fails_to_start_is_unavailable_alone() {
 
         assert!(entries[1].health.is_available());
         registry
-            .invoke("pong", "pong.ping", json!({}), CancelToken::new())
+            .invoke(
+                "pong",
+                Invocation::new(
+                    "pong.ping",
+                    json!({}),
+                    std::env::temp_dir(),
+                    CancelToken::new(),
+                ),
+            )
             .await
             .expect("the other mod works");
     }
@@ -299,6 +328,40 @@ async fn stop_reaches_the_started_mod() {
         assert_eq!(
             next_event(&mut rx, "sample.progress.stopped").await,
             json!({ "stage": "stopped" }),
+            "{host:?}"
+        );
+    }
+}
+
+#[tokio::test]
+async fn sample_transform_reads_input_and_writes_output_dir() {
+    for &host in HOSTS {
+        let temp = tempfile::tempdir().unwrap();
+        let input_path = temp.path().join("input.txt");
+        std::fs::write(&input_path, "hello asset").unwrap();
+        let out_dir = temp.path().join("out");
+        std::fs::create_dir_all(&out_dir).unwrap();
+
+        let (registry, _rx) = start(vec![sample(host, false).await]).await;
+        let res = registry
+            .invoke(
+                "sample",
+                Invocation::new(
+                    "sample.transform",
+                    json!({ "input_file": input_path.to_str().unwrap() }),
+                    &out_dir,
+                    CancelToken::new(),
+                ),
+            )
+            .await
+            .expect("transform success");
+
+        assert_eq!(res, json!({ "output_file": "transformed.txt" }), "{host:?}");
+        let written = std::fs::read_to_string(out_dir.join("transformed.txt")).unwrap();
+        assert_eq!(
+            written,
+            "hello asset
+transformed",
             "{host:?}"
         );
     }

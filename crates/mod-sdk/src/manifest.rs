@@ -15,14 +15,14 @@ pub struct ModManifest {
     pub version: String,
     /// Semver requirement on [`API_VERSION`], e.g. `"0.1"`.
     pub api: String,
-    pub operations: Vec<ModOperation>,
+    pub operations: Vec<OperationSpec>,
     pub events: Vec<ModEvent>,
 }
 
 /// An operation callable through [`crate::Mod::invoke`].
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
-pub struct ModOperation {
-    /// `<mod id>.<name>`.
+pub struct OperationSpec {
+    /// `<namespace>.<name>`.
     pub name: String,
     pub description: String,
     /// JSON Schema 2020-12 of the input; always an object schema.
@@ -32,7 +32,7 @@ pub struct ModOperation {
     pub annotations: OperationAnnotations,
 }
 
-/// Behavior hints, the same three MCP tool annotations carry.
+/// Behavior hints for an operation.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
 pub struct OperationAnnotations {
     /// Changes no state.
@@ -41,6 +41,10 @@ pub struct OperationAnnotations {
     pub destructive: bool,
     /// Repeating the call with the same input has no further effect.
     pub idempotent: bool,
+    /// Produces identical results given identical inputs.
+    pub deterministic: bool,
+    /// May affect or depend on state outside the project (network, exports).
+    pub open_world: bool,
 }
 
 /// An event kind the mod publishes.

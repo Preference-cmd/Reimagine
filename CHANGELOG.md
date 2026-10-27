@@ -12,6 +12,14 @@ both check it.
 
 ### Changed
 
+- `mod-sdk` bumped its JSON-RPC wire protocol version to `"0.2"` and updated
+  `Mod::invoke` to receive `Invocation { operation, input, output_dir, cancel }`.
+  Mods receive read-only absolute paths for input assets and output relative paths
+  into `output_dir` for generated assets.
+- Renamed `ModOperation` to `OperationSpec` and added `deterministic` and
+  `open_world` to `OperationAnnotations`.
+- Input validation was extracted from `ModRegistry::invoke` to decouple lifecycle
+  management from execution.
 - Workers speak protocol v2 over purpose-built gRPC calls (`Hello`,
   `Execute`, `Health`, `Cleanup`, `Shutdown` in `reimagine.worker.v2`)
   instead of a JSON message tunnel. The host reaches local workers over a

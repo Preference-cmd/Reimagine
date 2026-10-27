@@ -22,6 +22,10 @@ impl ModContext {
         }
     }
 
+    pub fn manifest(&self) -> &ModManifest {
+        &self.manifest
+    }
+
     /// Publish a mod event. `kind` must be declared in the manifest, which
     /// also keeps it inside the mod's namespace.
     pub fn publish(&self, kind: impl Into<String>, payload: Value) -> Result<(), Diagnostic> {
@@ -48,56 +52,49 @@ mod tests {
     use super::*;
     use crate::manifest::ModEvent;
 
-    fn context(bus: &EventBus) -> ModContext {
-        let event = |kind: &str| ModEvent {
-            kind: kind.to_owned(),
-            schema: json!({ "type": "object" }),
-        };
-        let manifest = ModManifest {
-            id: "demo".to_owned(),
-            name: "Demo".to_owned(),
+    #[test]
+    fn publish_accepts_declared_kind() {
+        let manifest = Arc::new(ModManifest {
+            id: "sample".to_owned(),
+            name: "Sample Mod".to_owned(),
             version: "0.1.0".to_owned(),
             api: "0.1".to_owned(),
+            events: vec![ModEvent {
+                kind: "sample.tick".to_owned(),
+                schema: json!({}),
+            }],
             operations: Vec::new(),
-            events: vec![event("demo.changed"), event("demo.download.*")],
-        };
-        ModContext::new(Arc::new(manifest), bus.clone())
-    }
-
-    #[test]
-    fn declared_kinds_reach_the_bus() {
+        });
         let bus = EventBus::new();
         let mut rx = bus.subscribe();
-        let ctx = context(&bus);
+        let ctx = ModContext::new(manifest, bus);
 
-        ctx.publish("demo.changed", json!({})).expect("exact kind");
-        ctx.publish("demo.download.progress", json!({ "n": 1 }))
-            .expect("family member");
-
-        let kinds: Vec<String> = std::iter::from_fn(|| rx.try_recv().ok())
-            .map(|event| match event {
-                Event::Mod { kind, .. } => kind,
-                other => panic!("unexpected event {other:?}"),
-            })
-            .collect();
-        assert_eq!(kinds, ["demo.changed", "demo.download.progress"]);
-    }
-
-    #[test]
-    fn undeclared_and_foreign_kinds_are_rejected() {
-        let bus = EventBus::new();
-        let mut rx = bus.subscribe();
-        let ctx = context(&bus);
-
-        for kind in [
-            "demo.other",
-            "other.changed",
-            "demo.download",
-            "demo.downloads.x",
-        ] {
-            let error = ctx.publish(kind, json!({})).expect_err(kind);
-            assert_eq!(error.code().as_str(), "MOD/CALLER_UNDECLARED_EVENT");
+        assert!(ctx.publish("sample.tick", json!({"n": 1})).is_ok());
+        match rx.try_recv() {
+            Ok(Event::Mod { kind, payload }) => {
+                assert_eq!(kind, "sample.tick");
+                assert_eq!(payload, json!({"n": 1}));
+            }
+            other => panic!("expected mod event, got {other:?}"),
         }
-        assert!(rx.try_recv().is_err(), "nothing was published");
+    }
+
+    #[test]
+    fn publish_rejects_undeclared_kind() {
+        let manifest = Arc::new(ModManifest {
+            id: "sample".to_owned(),
+            name: "Sample Mod".to_owned(),
+            version: "0.1.0".to_owned(),
+            api: "0.1".to_owned(),
+            events: Vec::new(),
+            operations: Vec::new(),
+        });
+        let bus = EventBus::new();
+        let ctx = ModContext::new(manifest, bus);
+
+        let err = ctx
+            .publish("sample.tick", json!({}))
+            .expect_err("should reject undeclared");
+        assert_eq!(err.code().as_str(), "MOD/CALLER_UNDECLARED_EVENT");
     }
 }

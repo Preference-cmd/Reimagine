@@ -6,7 +6,7 @@ use std::time::Duration;
 
 use async_trait::async_trait;
 use mod_sdk::testing::SampleMod;
-use mod_sdk::{Mod, ModContext, ModManifest, ProcessMod, ProcessModSpec};
+use mod_sdk::{Invocation, Mod, ModContext, ModManifest, ProcessMod, ProcessModSpec};
 use reimagine_core::diagnostic::Diagnostic;
 use reimagine_core::event::{Event, EventBus};
 use reimagine_core::task::CancelToken;
@@ -24,12 +24,7 @@ impl Mod for ExitOnInvokeMod {
         self.0.start(ctx).await
     }
 
-    async fn invoke(
-        &self,
-        _operation: &str,
-        _payload: Value,
-        _cancel: CancelToken,
-    ) -> Result<Value, Diagnostic> {
+    async fn invoke(&self, _invocation: Invocation) -> Result<Value, Diagnostic> {
         eprintln!("sample-mod: exiting on invoke");
         std::process::exit(3);
     }
@@ -68,13 +63,8 @@ impl Mod for HangStartMod {
         std::future::pending().await
     }
 
-    async fn invoke(
-        &self,
-        operation: &str,
-        payload: Value,
-        cancel: CancelToken,
-    ) -> Result<Value, Diagnostic> {
-        self.inner.invoke(operation, payload, cancel).await
+    async fn invoke(&self, invocation: Invocation) -> Result<Value, Diagnostic> {
+        self.inner.invoke(invocation).await
     }
 
     async fn stop(&self) -> Result<(), Diagnostic> {
@@ -95,12 +85,7 @@ impl Mod for PanicOnInvokeMod {
         self.0.start(ctx).await
     }
 
-    async fn invoke(
-        &self,
-        _operation: &str,
-        _payload: Value,
-        _cancel: CancelToken,
-    ) -> Result<Value, Diagnostic> {
+    async fn invoke(&self, _invocation: Invocation) -> Result<Value, Diagnostic> {
         panic!("sample-mod: panicking on invoke")
     }
 
@@ -218,9 +203,13 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 .map_err(|e| e.message().to_owned())?;
             let invoking = Arc::clone(&module);
             tokio::spawn(async move {
-                let _ = invoking
-                    .invoke("sample.wait", serde_json::json!({}), CancelToken::new())
-                    .await;
+                let invocation = Invocation::new(
+                    "sample.wait",
+                    serde_json::json!({}),
+                    std::env::temp_dir(),
+                    CancelToken::new(),
+                );
+                let _ = invoking.invoke(invocation).await;
             });
             loop {
                 match tokio::time::timeout(Duration::from_secs(10), events.recv()).await {

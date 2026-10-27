@@ -1,14 +1,14 @@
+use std::path::Path;
 use std::sync::OnceLock;
 
 use async_trait::async_trait;
 use reimagine_core::diagnostic::Diagnostic;
-use reimagine_core::task::CancelToken;
 use serde_json::{Value, json};
 
 use crate::context::ModContext;
 use crate::diagnostic::{caller_error, cancelled, internal_error};
-use crate::interface::Mod;
-use crate::manifest::{ModEvent, ModManifest, ModOperation, OperationAnnotations};
+use crate::interface::{Invocation, Mod};
+use crate::manifest::{ModEvent, ModManifest, OperationAnnotations, OperationSpec};
 
 const ID: &str = "sample";
 
@@ -19,6 +19,8 @@ const ID: &str = "sample";
 ///   (`"internal"`) error;
 /// - `sample.wait {}` publishes `sample.progress.started`, then waits for
 ///   cancellation and returns `MOD/CALLER_CANCELLED`;
+/// - `sample.transform {input_file, escape, symlink}` reads an input asset file
+///   and writes a transformed asset file to `output_dir`;
 /// - `stop` publishes `sample.progress.stopped`;
 /// - [`SampleMod::failing_start`] fails `start` with `MOD/INTERNAL_START_FAILED`.
 ///
@@ -81,26 +83,73 @@ impl Mod for SampleMod {
             .map_err(|_| internal_error(ID, "STARTED_TWICE", "sample mod started twice"))
     }
 
-    async fn invoke(
-        &self,
-        operation: &str,
-        payload: Value,
-        cancel: CancelToken,
-    ) -> Result<Value, Diagnostic> {
-        match operation {
+    async fn invoke(&self, invocation: Invocation) -> Result<Value, Diagnostic> {
+        match invocation.operation.as_str() {
             "sample.echo" => {
-                let text = payload["text"].clone();
+                let text = invocation.input["text"].clone();
                 self.publish("sample.echoed", json!({ "text": text }))?;
                 Ok(json!({ "text": text }))
             }
-            "sample.fail" => match payload["kind"].as_str() {
+            "sample.fail" => match invocation.input["kind"].as_str() {
                 Some("caller") => Err(caller_error(ID, "SAMPLE", "the caller asked to fail")),
                 _ => Err(internal_error(ID, "SAMPLE", "the sample mod failed")),
             },
             "sample.wait" => {
                 self.publish("sample.progress.started", json!({ "stage": "started" }))?;
-                cancel.cancelled().await;
+                invocation.cancel.cancelled().await;
                 Err(cancelled(ID))
+            }
+            "sample.transform" => {
+                let input_file_str = invocation.input["input_file"]
+                    .as_str()
+                    .ok_or_else(|| caller_error(ID, "INVALID_INPUT", "missing input_file"))?;
+                if invocation
+                    .input
+                    .get("escape")
+                    .and_then(Value::as_bool)
+                    .unwrap_or(false)
+                {
+                    return Ok(json!({ "output_file": "../escaped.txt" }));
+                }
+                if invocation
+                    .input
+                    .get("escape_second")
+                    .and_then(Value::as_bool)
+                    .unwrap_or(false)
+                {
+                    let content = std::fs::read_to_string(input_file_str)
+                        .map_err(|e| internal_error(ID, "IO", e.to_string()))?;
+                    let transformed = format!("{content}\ntransformed");
+                    let out_file = invocation.output_dir.join("transformed.txt");
+                    std::fs::write(&out_file, transformed)
+                        .map_err(|e| internal_error(ID, "IO", e.to_string()))?;
+                    return Ok(json!({
+                        "output_file": "transformed.txt",
+                        "second_file": "../escaped.txt"
+                    }));
+                }
+                if invocation
+                    .input
+                    .get("symlink")
+                    .and_then(Value::as_bool)
+                    .unwrap_or(false)
+                {
+                    let symlink_path = invocation.output_dir.join("symlink.txt");
+                    #[cfg(unix)]
+                    std::os::unix::fs::symlink(Path::new(input_file_str), &symlink_path)
+                        .map_err(|e| internal_error(ID, "IO", e.to_string()))?;
+                    #[cfg(windows)]
+                    std::os::windows::fs::symlink_file(Path::new(input_file_str), &symlink_path)
+                        .map_err(|e| internal_error(ID, "IO", e.to_string()))?;
+                    return Ok(json!({ "output_file": "symlink.txt" }));
+                }
+                let content = std::fs::read_to_string(input_file_str)
+                    .map_err(|e| internal_error(ID, "IO", e.to_string()))?;
+                let transformed = format!("{content}\ntransformed");
+                let out_file = invocation.output_dir.join("transformed.txt");
+                std::fs::write(&out_file, transformed)
+                    .map_err(|e| internal_error(ID, "IO", e.to_string()))?;
+                Ok(json!({ "output_file": "transformed.txt" }))
             }
             other => Err(caller_error(
                 ID,
@@ -132,18 +181,25 @@ fn manifest() -> ModManifest {
         })
     };
     let text = json!({ "text": { "type": "string" } });
-    let operation =
-        |name: &str, description: &str, input: Value, output: Value, read_only| ModOperation {
-            name: name.to_owned(),
-            description: description.to_owned(),
-            input_schema: input,
-            output_schema: output,
-            annotations: OperationAnnotations {
-                read_only,
-                destructive: false,
-                idempotent: read_only,
-            },
-        };
+    let operation = |name: &str,
+                     description: &str,
+                     input: Value,
+                     output: Value,
+                     read_only: bool,
+                     deterministic: bool,
+                     open_world: bool| OperationSpec {
+        name: name.to_owned(),
+        description: description.to_owned(),
+        input_schema: input,
+        output_schema: output,
+        annotations: OperationAnnotations {
+            read_only,
+            destructive: false,
+            idempotent: read_only,
+            deterministic,
+            open_world,
+        },
+    };
     let stage = json!({
         "type": "object",
         "properties": { "stage": { "enum": ["started", "stopped"] } },
@@ -161,6 +217,8 @@ fn manifest() -> ModManifest {
                 object(text.clone(), json!([{ "text": "hello" }])),
                 object(text.clone(), json!([{ "text": "hello" }])),
                 true,
+                true,
+                false,
             ),
             operation(
                 "sample.fail",
@@ -171,12 +229,57 @@ fn manifest() -> ModManifest {
                 ),
                 json!({ "type": "object" }),
                 true,
+                true,
+                false,
             ),
             operation(
                 "sample.wait",
                 "Publish sample.progress.started and wait until cancelled.",
                 object(json!({}), json!([{}])),
                 json!({ "type": "object" }),
+                false,
+                false,
+                false,
+            ),
+            operation(
+                "sample.transform",
+                "Read input_file and write transformed.txt to output_dir.",
+                json!({
+                    "type": "object",
+                    "properties": {
+                        "input_file": {
+                            "type": "string",
+                            "format": "asset",
+                            "contentMediaType": "text/plain"
+                        },
+                        "escape": { "type": "boolean" },
+                        "escape_second": { "type": "boolean" },
+                        "symlink": { "type": "boolean" }
+                    },
+                    "required": ["input_file"],
+                    "additionalProperties": false,
+                    "examples": [{ "input_file": "sample-asset-1" }],
+                }),
+                json!({
+                    "type": "object",
+                    "properties": {
+                        "output_file": {
+                            "type": "string",
+                            "format": "asset",
+                            "contentMediaType": "text/plain"
+                        },
+                        "second_file": {
+                            "type": "string",
+                            "format": "asset",
+                            "contentMediaType": "text/plain"
+                        }
+                    },
+                    "required": ["output_file"],
+                    "additionalProperties": false,
+                    "examples": [{ "output_file": "transformed.txt" }],
+                }),
+                false,
+                true,
                 false,
             ),
         ],

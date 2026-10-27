@@ -1,23 +1,29 @@
-use std::collections::{HashMap, HashSet};
+use std::collections::HashSet;
 use std::sync::Arc;
 
-use jsonschema::Validator;
 use reimagine_core::diagnostic::Diagnostic;
 use reimagine_core::event::EventBus;
 use reimagine_core::health::Health;
-use reimagine_core::task::CancelToken;
 use semver::VersionReq;
 use serde_json::Value;
 
 use crate::context::ModContext;
 use crate::diagnostic::caller_error;
-use crate::interface::Mod;
+use crate::interface::{Invocation, Mod};
 use crate::manifest::{API_VERSION, ModManifest};
 use crate::schema;
 
 /// Namespaces the kernel keeps for itself; no mod may take one as its id.
-pub const RESERVED_NAMESPACES: &[&str] =
-    &["project", "board", "workflow", "run", "job", "asset", "mod"];
+pub const RESERVED_NAMESPACES: &[&str] = &[
+    "project",
+    "board",
+    "collection",
+    "dynamic_workflow",
+    "recipe",
+    "job",
+    "asset",
+    "mod",
+];
 
 /// A registered mod as the kernel sees it.
 #[derive(Debug, Clone)]
@@ -32,7 +38,6 @@ struct Registered {
     /// Present only while the mod is available; dropping it releases whatever
     /// the instance owns (for a process mod, the child process).
     instance: Option<Arc<dyn Mod>>,
-    input_validators: HashMap<String, Validator>,
 }
 
 /// The started mods of one application. A rejected mod stays listed as
@@ -42,13 +47,18 @@ pub struct ModRegistry {
 }
 
 impl ModRegistry {
+    /// Create an empty mod registry.
+    pub fn empty() -> Self {
+        Self { mods: Vec::new() }
+    }
+
     /// Validate every manifest, then start each accepted mod in order.
     ///
     /// A manifest is rejected when its id is reserved, not snake_case or
     /// already taken, when its api requirement excludes [`API_VERSION`],
     /// when an operation or event leaves the mod's namespace or repeats,
-    /// or when a schema does not compile or an input schema is not an object
-    /// schema.
+    /// or when a schema does not compile, an input schema is not an object
+    /// schema, or asset markers are used outside properties and items.
     pub async fn start(mods: Vec<Arc<dyn Mod>>, event_bus: &EventBus) -> Self {
         let mut registered: Vec<Registered> = Vec::with_capacity(mods.len());
         for instance in mods {
@@ -56,13 +66,13 @@ impl ModRegistry {
             let taken = registered
                 .iter()
                 .any(|other| other.entry.manifest.id == manifest.id);
-            let (health, input_validators, keep) = match validate_and_compile(&manifest, taken) {
-                Err(diagnostic) => (Health::Unavailable(diagnostic), HashMap::new(), false),
-                Ok(validators) => {
+            let (health, keep) = match validate_and_compile(&manifest, taken) {
+                Err(diagnostic) => (Health::Unavailable(diagnostic), false),
+                Ok(()) => {
                     let ctx = ModContext::new(Arc::clone(&manifest), event_bus.clone());
                     match instance.start(ctx).await {
-                        Ok(()) => (Health::Available, validators, true),
-                        Err(diagnostic) => (Health::Unavailable(diagnostic), HashMap::new(), false),
+                        Ok(()) => (Health::Available, true),
+                        Err(diagnostic) => (Health::Unavailable(diagnostic), false),
                     }
                 }
             };
@@ -79,7 +89,6 @@ impl ModRegistry {
             registered.push(Registered {
                 entry: ModEntry { manifest, health },
                 instance,
-                input_validators,
             });
         }
         Self { mods: registered }
@@ -101,16 +110,10 @@ impl ModRegistry {
         }
     }
 
-    /// Call `operation` on mod `mod_id`. Fails before reaching the mod when
-    /// the mod is unknown or unavailable, does not declare the operation, or
-    /// `payload` does not match the operation's input schema.
-    pub async fn invoke(
-        &self,
-        mod_id: &str,
-        operation: &str,
-        payload: Value,
-        cancel: CancelToken,
-    ) -> Result<Value, Diagnostic> {
+    /// Call an operation on mod `mod_id`. Fails before reaching the mod when
+    /// the mod is unknown, unavailable, or does not declare the operation.
+    /// Input validation is owned by the caller (the operation service).
+    pub async fn invoke(&self, mod_id: &str, invocation: Invocation) -> Result<Value, Diagnostic> {
         let registered = self
             .mods
             .iter()
@@ -126,22 +129,18 @@ impl ModRegistry {
             return Err(diagnostic.clone());
         }
         let manifest = &registered.entry.manifest;
-        if !manifest.operations.iter().any(|op| op.name == operation) {
-            return Err(caller_error(
-                mod_id,
-                "UNKNOWN_OPERATION",
-                format!("mod `{mod_id}` declares no operation `{operation}`"),
-            ));
-        }
-        if let Some(message) = registered
-            .input_validators
-            .get(operation)
-            .and_then(|validator| schema::violations(validator, &payload))
+        if !manifest
+            .operations
+            .iter()
+            .any(|op| op.name == invocation.operation)
         {
             return Err(caller_error(
                 mod_id,
-                "INVALID_INPUT",
-                format!("invalid input for operation `{operation}`: {message}"),
+                "UNKNOWN_OPERATION",
+                format!(
+                    "mod `{mod_id}` declares no operation `{}`",
+                    invocation.operation
+                ),
             ));
         }
         let instance = registered.instance.as_ref().ok_or_else(|| {
@@ -151,7 +150,7 @@ impl ModRegistry {
                 format!("mod `{mod_id}` has no running instance"),
             )
         })?;
-        instance.invoke(operation, payload, cancel).await
+        instance.invoke(invocation).await
     }
 
     /// Every registered mod, in registration order.
@@ -169,12 +168,11 @@ impl ModRegistry {
     }
 }
 
-/// Check `manifest` and compile its schemas; the input validators are kept
-/// for [`ModRegistry::invoke`].
+/// Check `manifest` and compile its schemas to verify validity.
 pub(crate) fn validate_and_compile(
     manifest: &ModManifest,
     id_taken: bool,
-) -> Result<HashMap<String, Validator>, Diagnostic> {
+) -> Result<(), Diagnostic> {
     validate_manifest_structure(manifest, id_taken)?;
     compile_schemas(manifest)
 }
@@ -242,6 +240,18 @@ fn validate_manifest_structure(manifest: &ModManifest, id_taken: bool) -> Result
                 format!("operation `{}` is declared twice", operation.name),
             );
         }
+        if let Err(why) = schema::check_asset_marker_locations(&operation.input_schema) {
+            return reject(
+                "INVALID_SCHEMA",
+                format!("operation `{}` input_schema: {why}", operation.name),
+            );
+        }
+        if let Err(why) = schema::check_asset_marker_locations(&operation.output_schema) {
+            return reject(
+                "INVALID_SCHEMA",
+                format!("operation `{}` output_schema: {why}", operation.name),
+            );
+        }
     }
     let mut kinds = HashSet::new();
     for event in &manifest.events {
@@ -261,7 +271,7 @@ fn validate_manifest_structure(manifest: &ModManifest, id_taken: bool) -> Result
     Ok(())
 }
 
-fn compile_schemas(manifest: &ModManifest) -> Result<HashMap<String, Validator>, Diagnostic> {
+fn compile_schemas(manifest: &ModManifest) -> Result<(), Diagnostic> {
     let id = manifest.id.as_str();
     let compile = |schema: &Value, what: String| {
         schema::compile(schema).map_err(|error| {
@@ -273,7 +283,6 @@ fn compile_schemas(manifest: &ModManifest) -> Result<HashMap<String, Validator>,
         })
     };
 
-    let mut input_validators = HashMap::with_capacity(manifest.operations.len());
     for operation in &manifest.operations {
         let name = &operation.name;
         if !schema::is_object(&operation.input_schema) {
@@ -283,7 +292,7 @@ fn compile_schemas(manifest: &ModManifest) -> Result<HashMap<String, Validator>,
                 format!("operation `{name}` input_schema root must be `\"type\": \"object\"`"),
             ));
         }
-        let input = compile(
+        compile(
             &operation.input_schema,
             format!("operation `{name}` input_schema"),
         )?;
@@ -291,12 +300,11 @@ fn compile_schemas(manifest: &ModManifest) -> Result<HashMap<String, Validator>,
             &operation.output_schema,
             format!("operation `{name}` output_schema"),
         )?;
-        input_validators.insert(name.clone(), input);
     }
     for event in &manifest.events {
         compile(&event.schema, format!("event `{}` schema", event.kind))?;
     }
-    Ok(input_validators)
+    Ok(())
 }
 
 fn is_snake_case(id: &str) -> bool {
@@ -308,16 +316,24 @@ fn is_snake_case(id: &str) -> bool {
             .all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || c == '_')
 }
 
+impl Default for ModRegistry {
+    fn default() -> Self {
+        Self::empty()
+    }
+}
+
 #[cfg(test)]
 mod tests {
+    use std::path::PathBuf;
     use std::sync::Mutex;
 
     use async_trait::async_trait;
+    use reimagine_core::task::CancelToken;
     use serde_json::json;
 
     use super::*;
     use crate::diagnostic::internal_error;
-    use crate::manifest::{ModEvent, ModOperation, OperationAnnotations};
+    use crate::manifest::{ModEvent, OperationAnnotations, OperationSpec};
 
     struct Fake {
         manifest: ModManifest,
@@ -338,14 +354,9 @@ mod tests {
             Ok(())
         }
 
-        async fn invoke(
-            &self,
-            operation: &str,
-            payload: Value,
-            _cancel: CancelToken,
-        ) -> Result<Value, Diagnostic> {
-            self.calls.lock().unwrap().push(operation.to_owned());
-            Ok(json!({ "echo": payload }))
+        async fn invoke(&self, invocation: Invocation) -> Result<Value, Diagnostic> {
+            self.calls.lock().unwrap().push(invocation.operation);
+            Ok(json!({ "echo": invocation.input }))
         }
 
         async fn stop(&self) -> Result<(), Diagnostic> {
@@ -368,8 +379,8 @@ mod tests {
         }
     }
 
-    fn operation(name: &str) -> ModOperation {
-        ModOperation {
+    fn operation(name: &str) -> OperationSpec {
+        OperationSpec {
             name: name.to_owned(),
             description: "ping".to_owned(),
             input_schema: json!({ "type": "object" }),
@@ -403,6 +414,10 @@ mod tests {
             Health::Unavailable(diagnostic) => diagnostic.message().to_owned(),
             Health::Available => panic!("mod {index} was accepted"),
         }
+    }
+
+    fn test_invocation(op: &str, input: Value) -> Invocation {
+        Invocation::new(op, input, PathBuf::from("/tmp"), CancelToken::new())
     }
 
     #[tokio::test]
@@ -439,7 +454,7 @@ mod tests {
             assert_eq!(rejection(&registry, 0), code, "{id}");
             assert!(registry.list()[1].health.is_available(), "{id} spared good");
             registry
-                .invoke("good", "good.ping", json!({}), CancelToken::new())
+                .invoke("good", test_invocation("good.ping", json!({})))
                 .await
                 .expect("the other mod still works");
         }
@@ -470,11 +485,26 @@ mod tests {
             "type": 789
         });
 
+        // Asset marker under oneOf
+        let mut oneof_marker = manifest("bad_oneof");
+        oneof_marker.operations[0].input_schema = json!({
+            "type": "object",
+            "properties": {
+                "doc": {
+                    "oneOf": [
+                        { "type": "string", "format": "asset" },
+                        { "type": "null" }
+                    ]
+                }
+            }
+        });
+
         let cases = [
             (non_object_input, "bad_input_root.ping"),
             (uncompilable_input, "bad_input_schema.ping"),
             (uncompilable_output, "bad_output_schema.ping"),
             (uncompilable_event, "bad_event_schema.pinged"),
+            (oneof_marker, "bad_oneof.ping"),
         ];
 
         for (manifest, target_name) in cases {
@@ -488,7 +518,7 @@ mod tests {
             );
             assert!(registry.list()[1].health.is_available(), "{id} spared good");
             registry
-                .invoke("good", "good.ping", json!({}), CancelToken::new())
+                .invoke("good", test_invocation("good.ping", json!({})))
                 .await
                 .expect("good mod still works");
         }
@@ -502,7 +532,7 @@ mod tests {
         assert!(registry.list()[0].health.is_available());
         assert_eq!(rejection(&registry, 1), "MOD/CALLER_DUPLICATE_ID");
         registry
-            .invoke("demo", "demo.ping", json!({}), CancelToken::new())
+            .invoke("demo", test_invocation("demo.ping", json!({})))
             .await
             .expect("first registration serves");
         assert_eq!(first.calls.lock().unwrap().len(), 1);
@@ -519,7 +549,7 @@ mod tests {
         let registry = registry(vec![Arc::clone(&broken), Arc::clone(&demo)]).await;
 
         let output = registry
-            .invoke("demo", "demo.ping", json!({ "n": 1 }), CancelToken::new())
+            .invoke("demo", test_invocation("demo.ping", json!({ "n": 1 })))
             .await
             .expect("declared operation");
         assert_eq!(output, json!({ "echo": { "n": 1 } }));
@@ -530,7 +560,7 @@ mod tests {
         assert_eq!(
             code(
                 registry
-                    .invoke("broken", "broken.ping", json!({}), CancelToken::new())
+                    .invoke("broken", test_invocation("broken.ping", json!({})))
                     .await
             ),
             "MOD/INTERNAL_START"
@@ -538,7 +568,7 @@ mod tests {
         assert_eq!(
             code(
                 registry
-                    .invoke("demo", "demo.pong", json!({}), CancelToken::new())
+                    .invoke("demo", test_invocation("demo.pong", json!({})))
                     .await
             ),
             "MOD/CALLER_UNKNOWN_OPERATION"
@@ -546,62 +576,13 @@ mod tests {
         assert_eq!(
             code(
                 registry
-                    .invoke("missing", "missing.ping", json!({}), CancelToken::new())
+                    .invoke("missing", test_invocation("missing.ping", json!({})))
                     .await
             ),
             "MOD/CALLER_UNKNOWN_MOD"
         );
         assert!(broken.calls.lock().unwrap().is_empty());
         assert_eq!(*demo.calls.lock().unwrap(), ["demo.ping"]);
-    }
-
-    #[tokio::test]
-    async fn invoke_validates_input_against_schema_before_calling_mod() {
-        let mut demo_manifest = manifest("demo");
-        demo_manifest.operations[0].input_schema = json!({
-            "type": "object",
-            "properties": {
-                "text": { "type": "string" }
-            },
-            "required": ["text"]
-        });
-        let demo = fake(demo_manifest);
-        let registry = registry(vec![Arc::clone(&demo)]).await;
-
-        // Valid payload succeeds
-        registry
-            .invoke(
-                "demo",
-                "demo.ping",
-                json!({ "text": "hello" }),
-                CancelToken::new(),
-            )
-            .await
-            .expect("valid input");
-        assert_eq!(*demo.calls.lock().unwrap(), ["demo.ping"]);
-
-        // Missing required field rejected with MOD/CALLER_INVALID_INPUT
-        let err = registry
-            .invoke("demo", "demo.ping", json!({}), CancelToken::new())
-            .await
-            .expect_err("missing text");
-        assert_eq!(err.code().as_str(), "MOD/CALLER_INVALID_INPUT");
-        assert!(err.message().contains("text"));
-
-        // Wrong type rejected with MOD/CALLER_INVALID_INPUT
-        let err2 = registry
-            .invoke(
-                "demo",
-                "demo.ping",
-                json!({ "text": 123 }),
-                CancelToken::new(),
-            )
-            .await
-            .expect_err("wrong type");
-        assert_eq!(err2.code().as_str(), "MOD/CALLER_INVALID_INPUT");
-
-        // The mod was NOT called for either invalid invocation
-        assert_eq!(demo.calls.lock().unwrap().len(), 1);
     }
 
     #[tokio::test]

@@ -28,3 +28,4 @@ required-features = ["testing"]
 
 [dev-dependencies]
 mod-sdk = { path = ".", features = ["testing"] }
+tempfile = { workspace = true }
