@@ -20,20 +20,30 @@ macro_rules! id_type {
         pub struct $name(String);
 
         impl $name {
-            pub fn new(id: impl Into<String>) -> Self {
+            pub fn try_new(id: impl Into<String>) -> Result<Self, &'static str> {
                 let s = id.into();
-                assert!(!s.is_empty(), "ID must not be empty");
-                assert!(s.is_ascii(), "ID must be ASCII");
+                if s.is_empty() {
+                    return Err("ID must not be empty");
+                }
+                if !s.is_ascii() {
+                    return Err("ID must be ASCII");
+                }
                 let banned: &[char] = if $allow_slash {
                     &['\\', '\0']
                 } else {
                     &['/', '\\', '\0']
                 };
-                assert!(
-                    !s.contains(banned),
-                    "ID contains invalid characters"
-                );
-                Self(s)
+                if s.contains(banned) {
+                    return Err("ID contains invalid characters");
+                }
+                Ok(Self(s))
+            }
+
+            pub fn new(id: impl Into<String>) -> Self {
+                match Self::try_new(id) {
+                    Ok(val) => val,
+                    Err(msg) => panic!("{msg}"),
+                }
             }
 
             pub fn as_str(&self) -> &str {
@@ -82,6 +92,8 @@ id_type!(ProposalId);
 id_type!(ModelId);
 id_type!(BoardId);
 id_type!(BoardItemId);
+id_type!(AssetId);
+id_type!(StepId);
 
 #[derive(
     Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, serde::Serialize, serde::Deserialize,

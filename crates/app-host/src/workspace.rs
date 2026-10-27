@@ -25,7 +25,7 @@ use reimagine_runtime::RuntimeService;
 use crate::node_catalog::NodeCatalogAlignment;
 use crate::node_catalog::NodeCatalogService;
 use crate::services::WorkspaceServices;
-use crate::{AppHostError, BoardService, ProjectService, WorkflowService};
+use crate::{AppHostError, BoardService, OperationService, ProjectService, WorkflowService};
 #[cfg(feature = "aigc")]
 use crate::{
     BackendSelection, InstalledWorkerInventoryProvider, ModelService, WorkerInventoryProvider,
@@ -36,6 +36,7 @@ use aigc::ModelAcquisitionService;
 use aigc::inference::compose::compose_inference_runtime;
 #[cfg(feature = "aigc")]
 use aigc::inference::compose::{BootstrapInference, ComposedInferenceRuntime, bootstrap_inference};
+use mod_sdk::ModRegistry;
 
 #[cfg(feature = "aigc")]
 /// How long a re-bootstrap waits for in-flight runs to drain before giving
@@ -102,6 +103,7 @@ pub struct WorkspaceHost {
     pub(crate) node_catalog: Arc<NodeCatalogService>,
     pub(crate) builtin_catalog: Arc<BuiltinNodeCatalog>,
     pub(crate) services: Arc<WorkspaceServices>,
+    pub(crate) operation_service: Arc<OperationService>,
     #[cfg(feature = "aigc")]
     pub(crate) aigc: AigcParts,
 }
@@ -113,7 +115,8 @@ impl std::fmt::Debug for WorkspaceHost {
             .field("config", &self.config)
             .field("backend_config", &self.backend_config)
             .field("runtime_service", &self.runtime_service)
-            .field("node_catalog", &self.node_catalog);
+            .field("node_catalog", &self.node_catalog)
+            .field("operation_service", &self.operation_service);
         #[cfg(feature = "aigc")]
         d.field("aigc", &self.aigc);
         d.finish_non_exhaustive()
@@ -131,6 +134,7 @@ pub(crate) struct WorkspaceComponents {
 }
 
 impl WorkspaceHost {
+    #[allow(clippy::too_many_arguments)]
     pub(crate) fn assemble(
         workspace_scope: WorkspaceScope,
         config: Arc<AppConfig>,
@@ -138,6 +142,7 @@ impl WorkspaceHost {
         event_bus: EventBus,
         builtin_catalog: Arc<BuiltinNodeCatalog>,
         components: WorkspaceComponents,
+        operation_service: Arc<OperationService>,
     ) -> Self {
         let board_service = Arc::new(BoardService::with_event_bus(
             config.paths().clone(),
@@ -187,6 +192,7 @@ impl WorkspaceHost {
             node_catalog,
             builtin_catalog,
             services,
+            operation_service,
             #[cfg(feature = "aigc")]
             aigc: components.aigc,
         }
@@ -252,6 +258,11 @@ impl WorkspaceHost {
             acquisition_service,
             aigc,
         };
+        let mod_registry = Arc::new(ModRegistry::empty());
+        let operation_service = Arc::new(OperationService::new(
+            config.paths().clone(),
+            Arc::clone(&mod_registry),
+        ));
         Self::assemble(
             workspace_scope,
             config,
@@ -259,6 +270,7 @@ impl WorkspaceHost {
             event_bus,
             builtin_catalog,
             components,
+            operation_service,
         )
     }
 
@@ -403,13 +415,20 @@ impl WorkspaceHost {
         event_bus: EventBus,
     ) -> Self {
         let components = Self::build_sync_components(&config, &backend_config, &event_bus);
+        let config = Arc::new(config);
+        let mod_registry = Arc::new(ModRegistry::empty());
+        let operation_service = Arc::new(OperationService::new(
+            config.paths().clone(),
+            Arc::clone(&mod_registry),
+        ));
         Self::assemble(
             workspace_scope,
-            Arc::new(config),
+            config,
             backend_config,
             event_bus,
             Arc::new(BuiltinNodeCatalog::v1()),
             components,
+            operation_service,
         )
     }
 
@@ -601,6 +620,10 @@ impl WorkspaceHost {
     }
     pub fn runtime_service(&self) -> &Arc<RuntimeService> {
         &self.runtime_service
+    }
+
+    pub fn operation_service(&self) -> &Arc<OperationService> {
+        &self.operation_service
     }
 
     /// Operating health of the workspace AIGC subsystem.

@@ -9,9 +9,9 @@ mod values;
 
 pub use artifacts::ArtifactRef;
 pub use ids::{
-    ArtifactId, BoardId, BoardItemId, CommandBatchId, DiagnosticId, DocumentVersion, EdgeId,
-    HistoryEntryId, ModelId, NodeId, NodeTypeId, ProjectId, ProposalId, RunId, SlotId, WorkflowId,
-    WorkflowInputId, WorkflowOutputId,
+    ArtifactId, AssetId, BoardId, BoardItemId, CommandBatchId, DiagnosticId, DocumentVersion,
+    EdgeId, HistoryEntryId, ModelId, NodeId, NodeTypeId, ProjectId, ProposalId, RunId, SlotId,
+    StepId, WorkflowId, WorkflowInputId, WorkflowOutputId,
 };
 pub use models::{ModelFormat, ModelRef, ModelRole, ModelSeries, ModelVariant};
 pub use nodes::{

@@ -18,8 +18,10 @@ use aigc::ModelAcquisitionService;
 use aigc::inference::compose::{
     BootstrapInference, ComposedInferenceRuntime, bootstrap_inference_with_worker_inventory,
 };
+use mod_sdk::ModRegistry;
 #[cfg(feature = "aigc")]
 use reimagine_inference::WorkspaceComputeProfile;
+use reimagine_runtime::RuntimeService;
 
 #[cfg(feature = "aigc")]
 use super::AigcParts;
@@ -55,6 +57,7 @@ pub struct WorkspaceHostBuilder {
     app_data_root: Option<PathBuf>,
     backend_config: Option<InferenceBackendConfig>,
     event_bus: Option<EventBus>,
+    mod_registry: Option<Arc<ModRegistry>>,
     #[cfg(feature = "aigc")]
     worker_inventory: Option<Arc<dyn WorkerInventoryProvider>>,
 }
@@ -71,6 +74,7 @@ impl WorkspaceHostBuilder {
             app_data_root: None,
             backend_config: None,
             event_bus: None,
+            mod_registry: None,
             #[cfg(feature = "aigc")]
             worker_inventory: None,
         }
@@ -100,6 +104,12 @@ impl WorkspaceHostBuilder {
     /// this config directly.
     pub fn backend_config(mut self, config: InferenceBackendConfig) -> Self {
         self.backend_config = Some(config);
+        self
+    }
+
+    /// Set a custom mod registry.
+    pub fn mod_registry(mut self, registry: Arc<ModRegistry>) -> Self {
+        self.mod_registry = Some(registry);
         self
     }
 
@@ -141,6 +151,14 @@ impl WorkspaceHostBuilder {
             .build_components(&config, &backend_config, &event_bus)
             .await;
 
+        let mod_registry = self
+            .mod_registry
+            .unwrap_or_else(|| Arc::new(ModRegistry::empty()));
+        let operation_service = Arc::new(crate::OperationService::new(
+            config.paths().clone(),
+            Arc::clone(&mod_registry),
+        ));
+
         Ok(WorkspaceHost::assemble(
             self.workspace_scope,
             Arc::new(config),
@@ -148,6 +166,7 @@ impl WorkspaceHostBuilder {
             event_bus,
             Arc::new(reimagine_nodes::BuiltinNodeCatalog::v1()),
             components,
+            operation_service,
         ))
     }
 
@@ -193,9 +212,9 @@ impl WorkspaceHostBuilder {
         {
             Ok(bootstrapped) => (bootstrapped, Health::Available),
             Err(error) => {
-                let reason = error.to_string();
-                tracing::error!(
-                    %error,
+                let diagnostic = aigc_bootstrap_failed_diagnostic(error.to_string());
+                tracing::warn!(
+                    reason = %error,
                     "inference bootstrap failed on workspace build; continuing with degraded runtime"
                 );
                 (
@@ -205,25 +224,26 @@ impl WorkspaceHostBuilder {
                         topology: None,
                         discovery: None,
                     },
-                    Health::Unavailable(aigc_bootstrap_failed_diagnostic(reason)),
+                    Health::Unavailable(diagnostic),
                 )
             }
         };
 
-        // Wire runtime service
         let worker_switch = bootstrapped.runtime.worker_switch.clone();
         let runtime_service = Arc::new(
-            reimagine_runtime::RuntimeService::new(
+            RuntimeService::new(
                 bootstrapped.runtime.executor_registry,
                 bootstrapped.runtime.runtime_hooks.clone(),
                 event_bus.clone(),
                 Arc::new(reimagine_runtime::SystemClock),
             )
-            .with_resource_hint_sink(worker_switch.as_ref().and_then(|ws| ws.active_hint_sink())),
+            .with_resource_hint_sink(
+                worker_switch
+                    .as_ref()
+                    .and_then(|worker_switch| worker_switch.active_hint_sink()),
+            ),
         );
-
-        // Wire run cancellation to worker switch
-        if let Some(ref worker_switch) = worker_switch {
+        if let Some(worker_switch) = &worker_switch {
             let cancellation: Arc<dyn crate::RunCancellation> = runtime_service.clone();
             worker_switch.set_run_cancellation(cancellation);
         }
@@ -254,7 +274,7 @@ impl WorkspaceHostBuilder {
         _backend_config: &InferenceBackendConfig,
         event_bus: &EventBus,
     ) -> super::WorkspaceComponents {
-        let runtime_service = Arc::new(reimagine_runtime::RuntimeService::new(
+        let runtime_service = Arc::new(RuntimeService::new(
             reimagine_inference::NodeExecutorRegistry::default(),
             Arc::new(reimagine_inference::CompositeBackendInstanceRuntimeHooks::new(Vec::new())),
             event_bus.clone(),

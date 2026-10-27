@@ -79,6 +79,7 @@ pub enum AppHostError {
     },
     #[cfg(feature = "aigc")]
     WorkerSwitch(aigc::WorkerSwitchError),
+    Diagnostic(Box<reimagine_core::diagnostic::Diagnostic>),
 }
 
 impl std::fmt::Display for AppHostError {
@@ -116,6 +117,7 @@ impl std::fmt::Display for AppHostError {
             Self::UnknownRun { run_id } => {
                 write!(f, "unknown run `{run_id}`")
             }
+            Self::Diagnostic(diag) => write!(f, "{}", diag.message()),
             Self::WorkflowIdPathUnsafe { workflow_id } => {
                 write!(f, "workflow id `{workflow_id}` is not safe as a file name")
             }
@@ -213,6 +215,7 @@ impl AppHostError {
             Self::AigcUnavailable { .. } => AppHostErrorCode::AigcUnavailable,
             #[cfg(feature = "aigc")]
             Self::WorkerSwitch(error) => crate::error_code::worker_switch_error_code(error),
+            Self::Diagnostic(_) => AppHostErrorCode::CommandFailed,
         }
     }
 
@@ -270,6 +273,7 @@ impl AppHostError {
             Self::AigcUnavailable { reason } => Some(serde_json::json!({ "reason": reason })),
             #[cfg(feature = "aigc")]
             Self::WorkerSwitch(error) => crate::error_code::worker_switch_error_details(error),
+            Self::Diagnostic(diag) => serde_json::to_value(diag.as_ref()).ok(),
             _ => None,
         }
     }
@@ -335,5 +339,11 @@ impl From<aigc::AigcError> for AppHostError {
 impl From<aigc::WorkerSwitchError> for AppHostError {
     fn from(error: aigc::WorkerSwitchError) -> Self {
         Self::WorkerSwitch(error)
+    }
+}
+
+impl From<reimagine_core::diagnostic::Diagnostic> for AppHostError {
+    fn from(diag: reimagine_core::diagnostic::Diagnostic) -> Self {
+        Self::Diagnostic(Box::new(diag))
     }
 }

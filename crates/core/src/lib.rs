@@ -14,6 +14,7 @@
 
 #![deny(unsafe_code)]
 
+pub mod asset;
 pub mod board;
 pub mod command;
 pub mod diagnostic;
@@ -24,6 +25,7 @@ pub mod health;
 pub mod model;
 pub mod project;
 pub mod readiness;
+pub mod step;
 pub mod task;
 pub mod validation;
 pub mod workflow;

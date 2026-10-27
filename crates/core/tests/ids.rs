@@ -159,3 +159,27 @@ fn project_id_new_rejects_backslash() {
 fn project_id_new_rejects_null_byte() {
     ProjectId::new("project\0test");
 }
+
+#[test]
+fn id_try_new_valid() {
+    let id = AssetId::try_new("asset-123").expect("valid asset id");
+    assert_eq!(id.as_str(), "asset-123");
+}
+
+#[test]
+fn id_try_new_rejects_invalid() {
+    assert_eq!(AssetId::try_new(""), Err("ID must not be empty"));
+    assert_eq!(
+        AssetId::try_new("asset/bad"),
+        Err("ID contains invalid characters")
+    );
+    assert_eq!(
+        AssetId::try_new("asset\0bad"),
+        Err("ID contains invalid characters")
+    );
+    assert_eq!(
+        AssetId::try_new("asset\\bad"),
+        Err("ID contains invalid characters")
+    );
+    assert_eq!(AssetId::try_new("asseté"), Err("ID must be ASCII"));
+}

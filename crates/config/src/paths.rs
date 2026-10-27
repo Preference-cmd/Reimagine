@@ -86,6 +86,11 @@ impl AppPaths {
         self.project_dir(project_id).join("workflows")
     }
 
+    /// Get the directory for ephemeral files that may be wiped at startup.
+    pub fn tmp_dir(&self) -> PathBuf {
+        self.base_path.join("tmp")
+    }
+
     /// Get the default project directory.
     pub fn default_project_dir(&self) -> PathBuf {
         self.project_dir("default")

@@ -3,7 +3,8 @@
 use crate::diagnostic::Diagnostic;
 
 /// Whether a subsystem can serve requests. The reason it cannot is a diagnostic.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[serde(tag = "status", rename_all = "snake_case")]
 #[allow(clippy::large_enum_variant)]
 pub enum Health {
     Available,
