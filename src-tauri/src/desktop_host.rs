@@ -8,7 +8,9 @@ use reimagine_app_host::dto::{
 };
 #[cfg(feature = "aigc")]
 use reimagine_app_host::dto::{ComputeProfileDto, ModelInfoDto};
-use reimagine_app_host::{AppHost, AppHostError, WorkspaceHost};
+use reimagine_app_host::{
+    AppHost, AppHostError, InvokeRequest, InvokeResult, OperationInfo, WorkspaceHost,
+};
 #[cfg(feature = "aigc")]
 use reimagine_app_host::{
     BackendSelection, WorkerBackendCandidate, WorkerInstallationDto, WorkerManagementService,
@@ -20,9 +22,13 @@ use reimagine_backend_worker_host::{WorkerLaunchSpec, WorkerLimits};
 use reimagine_backend_worker_protocol::ProtocolRange;
 use reimagine_config::AppPaths;
 use reimagine_core::board::BoardCommand;
-use reimagine_core::command::{CommandBatch, CommandResult, WorkflowChange, WorkflowCommand};
+use reimagine_core::command::{
+    CommandActor, CommandActorKind, CommandBatch, CommandProvenance, CommandResult,
+    OperationContext, WorkflowChange, WorkflowCommand,
+};
 use reimagine_core::event::{Event, EventBus};
 use reimagine_core::model::ProjectId;
+use reimagine_core::task::CancelToken;
 use reimagine_core::workflow::Workflow;
 #[cfg(feature = "aigc")]
 use serde::Serialize;
@@ -313,7 +319,56 @@ impl DesktopHostState {
         Ok(project_id)
     }
 
-    fn require_project_sync(&self, project_id: &str) -> Result<ProjectId, AppHostError> {
+    pub async fn op_list(&self, project_id: &str) -> Result<Vec<OperationInfo>, AppHostError> {
+        let project_id = self.require_project(project_id).await?;
+        let workspace = self.workspace_arc();
+        Ok(workspace.operation_service().list(&project_id).await)
+    }
+
+    pub async fn op_invoke(
+        &self,
+        project_id: &str,
+        name: String,
+        input: serde_json::Value,
+    ) -> Result<InvokeResult, AppHostError> {
+        let project_id = self.require_project(project_id).await?;
+        let workspace = self.workspace_arc();
+        let context = OperationContext::new(
+            CommandActor::new(CommandActorKind::Human),
+            CommandProvenance::Direct,
+        );
+        let cancel = CancelToken::new();
+        let request = InvokeRequest {
+            name,
+            input,
+            context,
+            cancel,
+        };
+        workspace
+            .operation_service()
+            .invoke(&project_id, request)
+            .await
+            .map_err(AppHostError::from)
+    }
+
+    pub async fn op_preview(
+        &self,
+        project_id: &str,
+        name: String,
+        input: serde_json::Value,
+        preview_key: String,
+    ) -> Result<serde_json::Value, AppHostError> {
+        let project_id = self.require_project(project_id).await?;
+        let workspace = self.workspace_arc();
+        let cancel = CancelToken::new();
+        workspace
+            .operation_service()
+            .preview(&project_id, &name, input, &preview_key, cancel)
+            .await
+            .map_err(AppHostError::from)
+    }
+
+    pub(crate) fn require_project_sync(&self, project_id: &str) -> Result<ProjectId, AppHostError> {
         let project_id = parse_project_id(project_id)?;
         let workspace = self.workspace_arc();
         if !workspace.project_service().contains_project(&project_id) {
@@ -322,7 +377,7 @@ impl DesktopHostState {
         Ok(project_id)
     }
 
-    fn workspace_arc(&self) -> Arc<WorkspaceHost> {
+    pub(crate) fn workspace_arc(&self) -> Arc<WorkspaceHost> {
         Arc::clone(self.app_host.read().expect(APP_HOST_LOCK).workspace())
     }
 

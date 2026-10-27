@@ -5,7 +5,7 @@ mod event_bridge;
 use desktop_host::WorkerSwitchResultDto;
 use desktop_host::{DesktopHostState, default_workspace_path};
 use reimagine_app_host::{
-    AppHostError, AppHostErrorCode,
+    AppHostError, AppHostErrorCode, AssetStore, InvokeResult, OperationInfo,
     dto::{ArtifactMetadataDto, HealthResponse, NodeDefDto, RunWorkflowResponse},
 };
 #[cfg(feature = "aigc")]
@@ -507,10 +507,304 @@ fn list_workflows(
         .map_err(app_host_command_error)
 }
 
+// ─── Operation commands (W-a) ────────────────────────────────────────────────
+
+#[tauri::command]
+async fn op_list(
+    state: tauri::State<'_, DesktopHostState>,
+    project_id: String,
+) -> Result<Vec<OperationInfo>, TauriCommandError> {
+    state
+        .op_list(&project_id)
+        .await
+        .map_err(app_host_command_error)
+}
+
+#[tauri::command]
+async fn op_invoke(
+    state: tauri::State<'_, DesktopHostState>,
+    project_id: String,
+    name: String,
+    input: serde_json::Value,
+) -> Result<InvokeResult, TauriCommandError> {
+    state
+        .op_invoke(&project_id, name, input)
+        .await
+        .map_err(app_host_command_error)
+}
+
+#[tauri::command]
+async fn op_preview(
+    state: tauri::State<'_, DesktopHostState>,
+    project_id: String,
+    name: String,
+    input: serde_json::Value,
+    preview_key: String,
+) -> Result<serde_json::Value, TauriCommandError> {
+    state
+        .op_preview(&project_id, name, input, preview_key)
+        .await
+        .map_err(app_host_command_error)
+}
+
+#[derive(Debug, PartialEq, Eq)]
+pub(crate) enum ParsedAssetUri {
+    Asset { project: String, asset_id: String },
+    Preview { key: String, relative_path: String },
+}
+
+pub(crate) fn parse_asset_uri(uri: &tauri::http::Uri) -> Result<ParsedAssetUri, String> {
+    let scheme = uri.scheme_str().unwrap_or_default();
+    if scheme != "reimagine-asset" {
+        return Err(format!("invalid scheme: {scheme}"));
+    }
+
+    let host = uri.host();
+    let path = uri.path();
+
+    if host == Some("preview") {
+        let trimmed_path = path.trim_start_matches('/');
+        if let Some((key, rel)) = trimmed_path.split_once('/') {
+            let key = key.trim();
+            let rel = rel.trim_start_matches('/');
+            if key.is_empty() || rel.is_empty() {
+                return Err("missing preview key or relative path".to_string());
+            }
+            if !reimagine_app_host::is_valid_preview_key(key) {
+                return Err(format!("invalid preview key: {key}"));
+            }
+            return Ok(ParsedAssetUri::Preview {
+                key: key.to_string(),
+                relative_path: rel.to_string(),
+            });
+        } else {
+            return Err("missing relative path in preview URI".to_string());
+        }
+    }
+
+    if let Some(host) = host
+        && !host.is_empty()
+    {
+        let asset_id = path.trim_matches('/');
+        if asset_id.is_empty() {
+            return Err("missing asset id".to_string());
+        }
+        if reimagine_core::model::ProjectId::try_new(host).is_err() {
+            return Err(format!("invalid project id: {host}"));
+        }
+        if reimagine_core::model::AssetId::try_new(asset_id).is_err() {
+            return Err(format!("invalid asset id: {asset_id}"));
+        }
+        return Ok(ParsedAssetUri::Asset {
+            project: host.to_string(),
+            asset_id: asset_id.to_string(),
+        });
+    }
+
+    let trimmed = path.trim_start_matches('/');
+    if let Some((first, rest)) = trimmed.split_once('/') {
+        if first == "preview" {
+            if let Some((key, rel)) = rest.split_once('/') {
+                let key = key.trim();
+                let rel = rel.trim_start_matches('/');
+                if key.is_empty() || rel.is_empty() {
+                    return Err("missing preview key or relative path".to_string());
+                }
+                if !reimagine_app_host::is_valid_preview_key(key) {
+                    return Err(format!("invalid preview key: {key}"));
+                }
+                return Ok(ParsedAssetUri::Preview {
+                    key: key.to_string(),
+                    relative_path: rel.to_string(),
+                });
+            } else {
+                return Err("missing relative path in preview URI".to_string());
+            }
+        } else {
+            let asset_id = rest.trim_matches('/');
+            if first.is_empty() || asset_id.is_empty() {
+                return Err("missing project or asset id".to_string());
+            }
+            if reimagine_core::model::ProjectId::try_new(first).is_err() {
+                return Err(format!("invalid project id: {first}"));
+            }
+            if reimagine_core::model::AssetId::try_new(asset_id).is_err() {
+                return Err(format!("invalid asset id: {asset_id}"));
+            }
+            return Ok(ParsedAssetUri::Asset {
+                project: first.to_string(),
+                asset_id: asset_id.to_string(),
+            });
+        }
+    }
+
+    Err(format!("invalid reimagine-asset URI: {uri}"))
+}
+
+pub(crate) fn handle_asset_uri_request(
+    state: &DesktopHostState,
+    uri: &tauri::http::Uri,
+) -> tauri::http::Response<Vec<u8>> {
+    let parsed = match parse_asset_uri(uri) {
+        Ok(p) => p,
+        Err(err) => {
+            return tauri::http::Response::builder()
+                .status(tauri::http::StatusCode::BAD_REQUEST)
+                .header("Content-Type", "text/plain")
+                .body(err.into_bytes())
+                .unwrap_or_default();
+        }
+    };
+
+    match parsed {
+        ParsedAssetUri::Asset { project, asset_id } => {
+            let id = match reimagine_core::model::AssetId::try_new(&asset_id) {
+                Ok(id) => id,
+                Err(_) => {
+                    return tauri::http::Response::builder()
+                        .status(tauri::http::StatusCode::BAD_REQUEST)
+                        .header("Content-Type", "text/plain")
+                        .body(b"invalid asset id".to_vec())
+                        .unwrap_or_default();
+                }
+            };
+            let project_id = match state.require_project_sync(&project) {
+                Ok(id) => id,
+                Err(AppHostError::UnknownProject { .. }) => {
+                    return tauri::http::Response::builder()
+                        .status(tauri::http::StatusCode::NOT_FOUND)
+                        .header("Content-Type", "text/plain")
+                        .body(b"project not found".to_vec())
+                        .unwrap_or_default();
+                }
+                Err(_) => {
+                    return tauri::http::Response::builder()
+                        .status(tauri::http::StatusCode::BAD_REQUEST)
+                        .header("Content-Type", "text/plain")
+                        .body(b"invalid project id".to_vec())
+                        .unwrap_or_default();
+                }
+            };
+            let workspace = state.workspace_arc();
+            let project_dir = workspace.config().paths().project_dir(project_id.as_str());
+            let store = AssetStore::new(&project_dir);
+            let record = match store.get_asset_sync(&id) {
+                Ok(Some(r)) => r,
+                Ok(None) => {
+                    return tauri::http::Response::builder()
+                        .status(tauri::http::StatusCode::NOT_FOUND)
+                        .header("Content-Type", "text/plain")
+                        .body(b"asset not found".to_vec())
+                        .unwrap_or_default();
+                }
+                Err(e) => {
+                    return tauri::http::Response::builder()
+                        .status(tauri::http::StatusCode::INTERNAL_SERVER_ERROR)
+                        .header("Content-Type", "text/plain")
+                        .body(e.message().as_bytes().to_vec())
+                        .unwrap_or_default();
+                }
+            };
+
+            let file_path = store.content_path(&record.hash);
+            let bytes = match std::fs::read(&file_path) {
+                Ok(b) => b,
+                Err(e) => {
+                    return tauri::http::Response::builder()
+                        .status(tauri::http::StatusCode::NOT_FOUND)
+                        .header("Content-Type", "text/plain")
+                        .body(format!("asset content file not found: {e}").into_bytes())
+                        .unwrap_or_default();
+                }
+            };
+
+            tauri::http::Response::builder()
+                .status(tauri::http::StatusCode::OK)
+                .header("Content-Type", record.media_type)
+                .header("Content-Length", record.size.to_string())
+                .body(bytes)
+                .unwrap_or_default()
+        }
+        ParsedAssetUri::Preview { key, relative_path } => {
+            if !reimagine_app_host::is_valid_preview_key(&key) {
+                return tauri::http::Response::builder()
+                    .status(tauri::http::StatusCode::BAD_REQUEST)
+                    .header("Content-Type", "text/plain")
+                    .body(b"invalid preview key".to_vec())
+                    .unwrap_or_default();
+            }
+
+            let workspace = state.workspace_arc();
+            let file_path = match workspace
+                .operation_service()
+                .resolve_preview_file(&key, &relative_path)
+            {
+                Ok(p) => p,
+                Err(e) => {
+                    let is_bad_request = match &e {
+                        AppHostError::Diagnostic(d) => {
+                            d.code().as_str().contains("INVALID_PREVIEW_KEY")
+                        }
+                        _ => e.to_string().contains("preview key"),
+                    };
+                    let is_forbidden = match &e {
+                        AppHostError::Diagnostic(d) => {
+                            let code = d.code().as_str();
+                            code.contains("ESCAPE") || code.contains("SYMLINK")
+                        }
+                        _ => false,
+                    } || {
+                        let msg = e.to_string();
+                        msg.contains("symlink")
+                            || msg.contains("escape")
+                            || msg.contains("relative")
+                    };
+                    let status = if is_bad_request {
+                        tauri::http::StatusCode::BAD_REQUEST
+                    } else if is_forbidden {
+                        tauri::http::StatusCode::FORBIDDEN
+                    } else {
+                        tauri::http::StatusCode::NOT_FOUND
+                    };
+                    return tauri::http::Response::builder()
+                        .status(status)
+                        .header("Content-Type", "text/plain")
+                        .body(e.to_string().into_bytes())
+                        .unwrap_or_default();
+                }
+            };
+
+            let bytes = match std::fs::read(&file_path) {
+                Ok(b) => b,
+                Err(e) => {
+                    return tauri::http::Response::builder()
+                        .status(tauri::http::StatusCode::NOT_FOUND)
+                        .header("Content-Type", "text/plain")
+                        .body(format!("preview file not found: {e}").into_bytes())
+                        .unwrap_or_default();
+                }
+            };
+
+            let media_type = reimagine_app_host::resolve_media_type(&file_path, None);
+            tauri::http::Response::builder()
+                .status(tauri::http::StatusCode::OK)
+                .header("Content-Type", media_type)
+                .header("Content-Length", bytes.len().to_string())
+                .body(bytes)
+                .unwrap_or_default()
+        }
+    }
+}
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     match tauri::Builder::default()
         .plugin(tauri_plugin_opener::init())
+        .register_uri_scheme_protocol("reimagine-asset", |ctx, req| {
+            let app_handle = ctx.app_handle();
+            let state = app_handle.state::<DesktopHostState>();
+            handle_asset_uri_request(&state, req.uri())
+        })
         .setup(|app| {
             let app_data_dir = app
                 .path()
@@ -557,6 +851,10 @@ pub fn run() {
             save_workflow,
             load_workflow,
             list_workflows,
+            // Operation commands (W-a)
+            op_list,
+            op_invoke,
+            op_preview,
             // Model download commands
             #[cfg(feature = "aigc")]
             download_huggingface_model,
@@ -1072,5 +1370,178 @@ mod tests {
         assert!(super::switch_deadline(Some(5.0)).is_ok());
         assert!(super::switch_deadline(Some(0.0)).is_err());
         assert!(super::switch_deadline(Some(-1.0)).is_err());
+    }
+    // ─── W-a operation & asset URI tests ─────────────────────────────────────────
+
+    #[test]
+    fn parse_asset_uri_validates_and_parses() {
+        use super::{ParsedAssetUri, parse_asset_uri};
+
+        // Project asset URI
+        let uri: tauri::http::Uri = "reimagine-asset://my-project/asset-123".parse().unwrap();
+        assert_eq!(
+            parse_asset_uri(&uri).unwrap(),
+            ParsedAssetUri::Asset {
+                project: "my-project".to_string(),
+                asset_id: "asset-123".to_string(),
+            }
+        );
+
+        // Preview URI
+        let uri: tauri::http::Uri = "reimagine-asset://preview/key-1/sub/image.png"
+            .parse()
+            .unwrap();
+        assert_eq!(
+            parse_asset_uri(&uri).unwrap(),
+            ParsedAssetUri::Preview {
+                key: "key-1".to_string(),
+                relative_path: "sub/image.png".to_string(),
+            }
+        );
+
+        // Another valid project URI
+        let uri: tauri::http::Uri = "reimagine-asset://another-project/asset-456"
+            .parse()
+            .unwrap();
+        assert_eq!(
+            parse_asset_uri(&uri).unwrap(),
+            ParsedAssetUri::Asset {
+                project: "another-project".to_string(),
+                asset_id: "asset-456".to_string(),
+            }
+        );
+
+        // Invalid scheme
+        let uri: tauri::http::Uri = "http://localhost/asset-123".parse().unwrap();
+        assert!(parse_asset_uri(&uri).is_err());
+
+        // Missing relative path for preview
+        let uri: tauri::http::Uri = "reimagine-asset://preview/key-only".parse().unwrap();
+        assert!(parse_asset_uri(&uri).is_err());
+    }
+
+    #[test]
+    fn op_commands_and_asset_uri_protocol_serving() {
+        use super::handle_asset_uri_request;
+        use reimagine_app_host::dto::ProjectMetadataInputDto;
+
+        let base_path = temp_dir("desktop-ops");
+        let state = tauri::async_runtime::block_on(DesktopHostState::bootstrap(&base_path))
+            .expect("desktop host state should bootstrap");
+
+        // 1. op_list returns kernel ops including asset.import
+        let ops =
+            tauri::async_runtime::block_on(state.op_list("default")).expect("op_list succeeds");
+        assert!(ops.iter().any(|op| op.spec.name == "asset.import"));
+
+        // Create a test project
+        let project_dto = tauri::async_runtime::block_on(state.create_project(
+            "test-op-proj".to_string(),
+            ProjectMetadataInputDto {
+                name: "Test Op Proj".to_string(),
+                description: "desc".to_string(),
+                created_at: None,
+                updated_at: None,
+            },
+        ))
+        .expect("create project");
+        assert_eq!(project_dto.id, "test-op-proj");
+
+        // 2. Prepare an input file and invoke asset.import
+        let input_path = base_path.join("sample.txt");
+        std::fs::write(&input_path, b"hello asset uri").unwrap();
+
+        let invoke_res = tauri::async_runtime::block_on(state.op_invoke(
+            "test-op-proj",
+            "asset.import".to_string(),
+            serde_json::json!({ "paths": [input_path.to_str().unwrap()] }),
+        ))
+        .expect("op_invoke asset.import succeeds");
+
+        // Actor must be Human
+        assert_eq!(
+            invoke_res.step.context.actor().kind(),
+            reimagine_core::command::CommandActorKind::Human
+        );
+
+        let asset_id = invoke_res.output["assets"][0].as_str().unwrap();
+
+        // 3. Test reimagine-asset://<project>/<asset id>
+        let asset_uri: tauri::http::Uri = format!("reimagine-asset://test-op-proj/{asset_id}")
+            .parse()
+            .unwrap();
+        let resp = handle_asset_uri_request(&state, &asset_uri);
+        assert_eq!(resp.status(), tauri::http::StatusCode::OK);
+        assert_eq!(resp.headers().get("Content-Type").unwrap(), "text/plain");
+        assert_eq!(resp.body(), b"hello asset uri");
+
+        // 4. Test 404 for nonexistent asset
+        let missing_uri: tauri::http::Uri = "reimagine-asset://test-op-proj/asset-nonexistent"
+            .parse()
+            .unwrap();
+        let resp = handle_asset_uri_request(&state, &missing_uri);
+        assert_eq!(resp.status(), tauri::http::StatusCode::NOT_FOUND);
+
+        // 5. Test 404 for unknown project
+        let unknown_proj_uri: tauri::http::Uri =
+            format!("reimagine-asset://unknown-proj/{asset_id}")
+                .parse()
+                .unwrap();
+        let resp = handle_asset_uri_request(&state, &unknown_proj_uri);
+        assert_eq!(resp.status(), tauri::http::StatusCode::NOT_FOUND);
+
+        // 5b. Test 400 for malformed asset id, project id, or preview key
+        let bad_asset_uri: tauri::http::Uri = "reimagine-asset://test-op-proj/sub/nested/asset"
+            .parse()
+            .unwrap();
+        let resp = handle_asset_uri_request(&state, &bad_asset_uri);
+        assert_eq!(resp.status(), tauri::http::StatusCode::BAD_REQUEST);
+
+        let bad_proj_uri: tauri::http::Uri =
+            format!("reimagine-asset://../{asset_id}").parse().unwrap();
+        let resp = handle_asset_uri_request(&state, &bad_proj_uri);
+        assert_eq!(resp.status(), tauri::http::StatusCode::BAD_REQUEST);
+
+        let bad_preview_uri: tauri::http::Uri = "reimagine-asset://preview/../escape/preview.png"
+            .parse()
+            .unwrap();
+        let resp = handle_asset_uri_request(&state, &bad_preview_uri);
+        assert_eq!(resp.status(), tauri::http::StatusCode::BAD_REQUEST);
+
+        // 6. Test preview serving
+        let preview_key = "test-preview-key";
+        let workspace = state.workspace_arc();
+        let preview_dir = workspace
+            .operation_service()
+            .preview_dir(preview_key)
+            .unwrap();
+        std::fs::create_dir_all(&preview_dir).unwrap();
+        let preview_file = preview_dir.join("preview.png");
+        std::fs::write(&preview_file, b"\x89PNG\r\n\x1a\n").unwrap();
+
+        let preview_uri: tauri::http::Uri =
+            format!("reimagine-asset://preview/{preview_key}/preview.png")
+                .parse()
+                .unwrap();
+        let resp = handle_asset_uri_request(&state, &preview_uri);
+        assert_eq!(resp.status(), tauri::http::StatusCode::OK);
+        assert_eq!(resp.headers().get("Content-Type").unwrap(), "image/png");
+        assert_eq!(resp.body(), b"\x89PNG\r\n\x1a\n");
+
+        // 7. Test preview symlink rejection (forbidden)
+        #[cfg(unix)]
+        {
+            let symlink_path = preview_dir.join("sym.png");
+            let _ = std::os::unix::fs::symlink(&preview_file, &symlink_path);
+            let sym_uri: tauri::http::Uri =
+                format!("reimagine-asset://preview/{preview_key}/sym.png")
+                    .parse()
+                    .unwrap();
+            let resp = handle_asset_uri_request(&state, &sym_uri);
+            assert_eq!(resp.status(), tauri::http::StatusCode::FORBIDDEN);
+        }
+
+        let _ = std::fs::remove_dir_all(&base_path);
+        let _ = std::fs::remove_dir_all(&preview_dir);
     }
 }
