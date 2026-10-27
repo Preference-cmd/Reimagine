@@ -48,7 +48,7 @@ both check it.
 
 - The `reimagine-plugin` crate. Its plugin and extension descriptors had no
   caller; the plugin and extension ids moved to `reimagine-inference`, and the
-  new `mods` crate defines the mod manifest, interface and registry.
+  new `mod-sdk` crate defines the mod manifest, interface and registry.
 - The `reimagine-axum-host` crate and its HTTP API (`cargo run -p reimagine-axum-host`).
   The desktop app (`src-tauri`) is now the only host adapter; humans and agents
   drive the kernel directly through `reimagine-app-host`.

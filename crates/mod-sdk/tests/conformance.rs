@@ -5,8 +5,8 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use async_trait::async_trait;
-use mods::testing::{SampleMod, check_manifest, validate};
-use mods::{
+use mod_sdk::testing::{SampleMod, check_manifest, validate};
+use mod_sdk::{
     Mod, ModContext, ModManifest, ModOperation, ModRegistry, OperationAnnotations, ProcessMod,
     ProcessModSpec,
 };

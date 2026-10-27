@@ -5,8 +5,8 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use async_trait::async_trait;
-use mods::testing::SampleMod;
-use mods::{Mod, ModContext, ModManifest, ProcessMod, ProcessModSpec};
+use mod_sdk::testing::SampleMod;
+use mod_sdk::{Mod, ModContext, ModManifest, ProcessMod, ProcessModSpec};
 use reimagine_core::diagnostic::Diagnostic;
 use reimagine_core::event::{Event, EventBus};
 use reimagine_core::task::CancelToken;
@@ -120,19 +120,19 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     match mode {
         None => {
-            mods::sdk::serve(SampleMod::new()).await?;
+            mod_sdk::sdk::serve(SampleMod::new()).await?;
         }
         Some("failing") => {
-            mods::sdk::serve(SampleMod::failing_start()).await?;
+            mod_sdk::sdk::serve(SampleMod::failing_start()).await?;
         }
         Some("exit-on-invoke") => {
-            mods::sdk::serve(ExitOnInvokeMod(SampleMod::new())).await?;
+            mod_sdk::sdk::serve(ExitOnInvokeMod(SampleMod::new())).await?;
         }
         Some("hang-start") => {
-            mods::sdk::serve(HangStartMod::new(None)).await?;
+            mod_sdk::sdk::serve(HangStartMod::new(None)).await?;
         }
         Some("panic-on-invoke") => {
-            mods::sdk::serve(PanicOnInvokeMod(SampleMod::new())).await?;
+            mod_sdk::sdk::serve(PanicOnInvokeMod(SampleMod::new())).await?;
         }
         Some("wrong-protocol") => {
             use tokio::io::{AsyncBufReadExt, AsyncWriteExt};
@@ -160,23 +160,23 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         Some("pid-file") => {
             let path = args.get(2).expect("pid file path required");
             write_pid(path)?;
-            mods::sdk::serve(SampleMod::new()).await?;
+            mod_sdk::sdk::serve(SampleMod::new()).await?;
         }
         Some("pid-file-failing") => {
             let path = args.get(2).expect("pid file path required");
             write_pid(path)?;
-            mods::sdk::serve(SampleMod::failing_start()).await?;
+            mod_sdk::sdk::serve(SampleMod::failing_start()).await?;
         }
         Some("pid-file-hang-start") => {
             let path = args.get(2).expect("pid file path required");
             write_pid(path)?;
-            mods::sdk::serve(HangStartMod::new(None)).await?;
+            mod_sdk::sdk::serve(HangStartMod::new(None)).await?;
         }
         Some("pid-file-hang-start-marker") => {
             let path = args.get(2).expect("pid file path required");
             let marker = args.get(3).expect("start marker path required");
             write_pid(path)?;
-            mods::sdk::serve(HangStartMod::new(Some(marker.into()))).await?;
+            mod_sdk::sdk::serve(HangStartMod::new(Some(marker.into()))).await?;
         }
         Some("host") => {
             let pid_file_path = args.get(2).expect("pid file path required");

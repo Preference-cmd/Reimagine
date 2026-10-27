@@ -1,5 +1,5 @@
 [package]
-name = "mods"
+name = "mod-sdk"
 version.workspace = true
 description.workspace = true
 authors.workspace = true
@@ -27,4 +27,4 @@ path = "src/bin/sample_mod.rs"
 required-features = ["testing"]
 
 [dev-dependencies]
-mods = { path = ".", features = ["testing"] }
+mod-sdk = { path = ".", features = ["testing"] }

@@ -3,7 +3,7 @@
 use std::sync::Arc;
 use std::time::Duration;
 
-use mods::{Mod, ModContext, ModRegistry, ProcessMod, ProcessModSpec};
+use mod_sdk::{Mod, ModContext, ModRegistry, ProcessMod, ProcessModSpec};
 use reimagine_core::event::EventBus;
 use reimagine_core::health::Health;
 use reimagine_core::task::CancelToken;

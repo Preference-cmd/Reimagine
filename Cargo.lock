@@ -4938,12 +4938,12 @@ dependencies = [
 ]
 
 [[package]]
-name = "mods"
+name = "mod-sdk"
 version = "0.1.0"
 dependencies = [
  "async-trait",
  "jsonschema",
- "mods",
+ "mod-sdk",
  "reimagine-core",
  "semver",
  "serde",
