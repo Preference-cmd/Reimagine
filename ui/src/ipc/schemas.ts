@@ -109,9 +109,34 @@ export const ProjectMetadataInputSchema = z.object({
 });
 export type ProjectMetadataInput = z.infer<typeof ProjectMetadataInputSchema>;
 
+export const BoardItemKindWorkflowSchema = z.object({
+  type: z.literal("workflow"),
+  workflow_id: z.string(),
+});
+export const BoardItemKindAssetSchema = z.object({
+  type: z.literal("asset"),
+  asset_id: z.string(),
+});
+export const BoardItemKindCollectionSchema = z.object({
+  type: z.literal("collection"),
+  collection_id: z.string(),
+});
+export const BoardItemKindNoteSchema = z.object({
+  type: z.literal("note"),
+  content: z.string(),
+});
+
+export const BoardItemKindSchema = z.discriminatedUnion("type", [
+  BoardItemKindWorkflowSchema,
+  BoardItemKindAssetSchema,
+  BoardItemKindCollectionSchema,
+  BoardItemKindNoteSchema,
+]);
+export type BoardItemKind = z.infer<typeof BoardItemKindSchema>;
+
 export const BoardItemSchema = z.object({
   id: z.string(),
-  kind: z.record(z.string(), z.unknown()),
+  kind: z.union([BoardItemKindSchema, z.record(z.string(), z.unknown())]),
   position: z.object({ x: z.number(), y: z.number() }),
   size: z.object({ width: z.number(), height: z.number() }),
   z: z.number(),
@@ -418,3 +443,25 @@ export const ComputeProfileSchema = z.object({
     .default([]),
 });
 export type ComputeProfile = z.infer<typeof ComputeProfileSchema>;
+
+/* ───── Operation Orchestration (W-a / W-b) ───── */
+
+export const InvokeResultSchema = z.object({
+  step: z.unknown(),
+  output: z.unknown(),
+});
+export type InvokeResult = z.infer<typeof InvokeResultSchema>;
+
+export const CollectionSlotSchema = z.object({
+  id: z.string(),
+  asset_id: z.string(),
+});
+export type CollectionSlot = z.infer<typeof CollectionSlotSchema>;
+
+export const CollectionDocumentSchema = z.object({
+  id: z.string(),
+  name: z.string(),
+  version: z.number(),
+  slots: z.array(CollectionSlotSchema),
+});
+export type CollectionDocument = z.infer<typeof CollectionDocumentSchema>;

@@ -21,6 +21,7 @@ import {
   type WorkerSwitchResult,
   type WorkerSwitchTarget,
   NodeDefSchema,
+  type InvokeResult,
 } from "./schemas";
 import { useWorkflowStore } from "@/store/workflow";
 
@@ -277,8 +278,18 @@ export async function mockSetActiveProject(input: { projectId: string }): Promis
   return mockLoadProject(input);
 }
 
+const mockBoards: Record<string, BoardSnapshot> = {};
+
 export async function mockGetBoardSnapshot(input: { projectId: string }): Promise<BoardSnapshot> {
-  return { id: "board-" + input.projectId, projectId: input.projectId, version: 0, items: [] };
+  if (!mockBoards[input.projectId]) {
+    mockBoards[input.projectId] = {
+      id: "board-" + input.projectId,
+      projectId: input.projectId,
+      version: 0,
+      items: [],
+    };
+  }
+  return mockBoards[input.projectId];
 }
 
 const noOpBoardResult = (version = 0): BoardCommandResultDto => ({
@@ -639,5 +650,247 @@ export async function mockRebootBackend(input: RebootBackendArgs): Promise<Compu
     ],
     diagnostics: [],
     topology_workers: [],
+  };
+}
+
+/* ───── Operation Orchestration Mocks (W-a / W-b) ───── */
+
+export type MockCollectionDoc = {
+  id: string;
+  projectId: string;
+  name: string;
+  version: number;
+  slots: Array<{ id: string; asset_id: string }>;
+};
+
+const mockCollections: Record<string, MockCollectionDoc> = {};
+const mockCollectionHistory: Record<
+  string,
+  { past: MockCollectionDoc[]; future: MockCollectionDoc[] }
+> = {};
+const mockAssets: Record<string, { mediaType: string; content: string }> = {};
+
+export async function mockReadAssetPreview(
+  url: string,
+  assetId: string,
+  maxLines: number,
+): Promise<{ url: string; mediaType: string; text: string | null }> {
+  const asset = mockAssets[assetId];
+  if (!asset) throw new Error(`mock asset ${assetId} not found`);
+  const textual = asset.mediaType.startsWith("text/") || asset.mediaType === "application/json";
+  return {
+    url,
+    mediaType: asset.mediaType,
+    text: textual ? asset.content.split("\n").slice(0, maxLines).join("\n") : null,
+  };
+}
+
+export async function mockOpInvoke(input: {
+  projectId: string;
+  name: string;
+  input: unknown;
+}): Promise<InvokeResult> {
+  const { projectId, name, input: opInput } = input;
+  const args = (opInput as Record<string, unknown>) ?? {};
+
+  if (name === "asset.import") {
+    const paths = (args.paths as string[]) ?? [];
+    const assetIds: string[] = [];
+    for (const p of paths) {
+      const assetId = rand("ast");
+      assetIds.push(assetId);
+      const filename = p.split(/[/\\]/).pop() ?? "file.txt";
+      mockAssets[assetId] = {
+        mediaType: filename.endsWith(".png")
+          ? "image/png"
+          : filename.endsWith(".json")
+            ? "application/json"
+            : "text/plain",
+        content: `Preview of ${filename}\nImported from ${p}\nLine 3 sample text content`,
+      };
+    }
+    return {
+      step: {
+        id: rand("step"),
+        op: "asset.import",
+        outcome: "succeeded",
+      },
+      output: { assets: assetIds },
+    };
+  }
+
+  if (name === "collection.create") {
+    const colName = (args.name as string) || "Untitled Collection";
+    const assets = (args.assets as string[]) || [];
+    const collectionId = rand("col");
+    const boardItemId = rand("item");
+
+    const slots = assets.map((asset, idx) => ({
+      id: `slot-${idx + 1}`,
+      asset_id: asset,
+    }));
+
+    const doc: MockCollectionDoc = {
+      id: collectionId,
+      projectId,
+      name: colName,
+      version: 1,
+      slots,
+    };
+    mockCollections[collectionId] = doc;
+    mockCollectionHistory[collectionId] = { past: [], future: [] };
+
+    const board = await mockGetBoardSnapshot({ projectId });
+    board.version += 1;
+    board.items.push({
+      id: boardItemId,
+      kind: { type: "collection", collection_id: collectionId },
+      position: { x: 0, y: 0 },
+      size: { width: 300, height: 200 },
+      z: board.items.length + 1,
+      locked: false,
+    });
+
+    emitEvent({
+      type: "document",
+      kind: "collection.changed",
+      projectId,
+      documentId: collectionId,
+      version: 1,
+    });
+    emitEvent({
+      type: "document",
+      kind: "board.changed",
+      projectId,
+      documentId: board.id,
+      version: board.version,
+    });
+
+    return {
+      step: { id: rand("step"), op: "collection.create", outcome: "succeeded" },
+      output: {
+        collection_id: collectionId,
+        board_item_id: boardItemId,
+      },
+    };
+  }
+
+  if (name === "collection.get") {
+    const colId = (args.collection_id as string) || "";
+    const doc = mockCollections[colId];
+    if (!doc) {
+      throw new Error(`COLLECTION/CALLER_UNKNOWN_COLLECTION: collection ${colId} not found`);
+    }
+    return {
+      step: { id: rand("step"), op: "collection.get", outcome: "succeeded" },
+      output: {
+        id: doc.id,
+        name: doc.name,
+        version: doc.version,
+        slots: doc.slots,
+      },
+    };
+  }
+
+  if (name === "collection.set_slot") {
+    const colId = (args.collection_id as string) || "";
+    const slotId = (args.slot_id as string) || "";
+    const asset = (args.asset as string) || "";
+    const doc = mockCollections[colId];
+    if (!doc) {
+      throw new Error(`COLLECTION/CALLER_UNKNOWN_COLLECTION: collection ${colId} not found`);
+    }
+    const history = mockCollectionHistory[colId] || { past: [], future: [] };
+    history.past.push(JSON.parse(JSON.stringify(doc)));
+    history.future = [];
+
+    const slot = doc.slots.find((s) => s.id === slotId);
+    if (!slot) {
+      throw new Error(`COLLECTION/CALLER_UNKNOWN_SLOT: slot ${slotId} not found`);
+    }
+    slot.asset_id = asset;
+    doc.version += 1;
+
+    emitEvent({
+      type: "document",
+      kind: "collection.changed",
+      projectId,
+      documentId: colId,
+      version: doc.version,
+    });
+
+    return {
+      step: { id: rand("step"), op: "collection.set_slot", outcome: "succeeded" },
+      output: { version: doc.version },
+    };
+  }
+
+  if (name === "collection.undo") {
+    const colId = (args.collection_id as string) || "";
+    const doc = mockCollections[colId];
+    if (!doc) {
+      throw new Error(`COLLECTION/CALLER_UNKNOWN_COLLECTION: collection ${colId} not found`);
+    }
+    const history = mockCollectionHistory[colId] || { past: [], future: [] };
+    const prev = history.past.pop();
+    if (prev) {
+      history.future.push(JSON.parse(JSON.stringify(doc)));
+      doc.name = prev.name;
+      doc.slots = prev.slots;
+      doc.version += 1;
+
+      emitEvent({
+        type: "document",
+        kind: "collection.changed",
+        projectId,
+        documentId: colId,
+        version: doc.version,
+      });
+      return {
+        step: { id: rand("step"), op: "collection.undo", outcome: "succeeded" },
+        output: { applied: true, version: doc.version },
+      };
+    }
+    return {
+      step: { id: rand("step"), op: "collection.undo", outcome: "succeeded" },
+      output: { applied: false, version: doc.version },
+    };
+  }
+
+  if (name === "collection.redo") {
+    const colId = (args.collection_id as string) || "";
+    const doc = mockCollections[colId];
+    if (!doc) {
+      throw new Error(`COLLECTION/CALLER_UNKNOWN_COLLECTION: collection ${colId} not found`);
+    }
+    const history = mockCollectionHistory[colId] || { past: [], future: [] };
+    const next = history.future.pop();
+    if (next) {
+      history.past.push(JSON.parse(JSON.stringify(doc)));
+      doc.name = next.name;
+      doc.slots = next.slots;
+      doc.version += 1;
+
+      emitEvent({
+        type: "document",
+        kind: "collection.changed",
+        projectId,
+        documentId: colId,
+        version: doc.version,
+      });
+      return {
+        step: { id: rand("step"), op: "collection.redo", outcome: "succeeded" },
+        output: { applied: true, version: doc.version },
+      };
+    }
+    return {
+      step: { id: rand("step"), op: "collection.redo", outcome: "succeeded" },
+      output: { applied: false, version: doc.version },
+    };
+  }
+
+  return {
+    step: { id: rand("step"), op: name, outcome: "succeeded" },
+    output: {},
   };
 }

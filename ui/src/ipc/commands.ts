@@ -21,6 +21,7 @@ import {
   type WorkerSwitchArgs,
   type WorkerSwitchResult,
   type WorkerSwitchTarget,
+  type InvokeResult,
   CommandErrorSchema,
   EventSchema,
   RunWorkflowResponseSchema,
@@ -58,7 +59,10 @@ import {
   mockRunWorkflow,
   mockSaveWorkflow,
   mockSearchModels,
+  mockOpInvoke,
+  mockReadAssetPreview,
 } from "./mock";
+import { getAssetUrl } from "../lib/assetUrl";
 
 /**
  * Mock polarity (F1-4): real IPC is always attempted first; mocks are used
@@ -369,4 +373,40 @@ export function toCommandError(error: unknown): CommandError | null {
   if (!error || typeof error !== "object") return null;
   const parsed = CommandErrorSchema.safeParse(error);
   return parsed.success ? parsed.data : null;
+}
+
+/* ───── Operation Orchestration (W-a / W-b) ───── */
+
+export function opInvoke(projectId: string, name: string, input: unknown): Promise<InvokeResult> {
+  return dispatch("op_invoke", null, { projectId, name, input }, () =>
+    mockOpInvoke({ projectId, name, input }),
+  );
+}
+
+/** Media type of an asset and, for textual assets, its first `maxLines` lines. */
+export type AssetPreview = { url: string; mediaType: string; text: string | null };
+
+function isTextual(mediaType: string): boolean {
+  return mediaType.startsWith("text/") || mediaType === "application/json";
+}
+
+/** Read an asset through the `reimagine-asset` protocol; HTTP errors reject. */
+export async function readAssetPreview(
+  projectId: string,
+  assetId: string,
+  maxLines: number,
+): Promise<AssetPreview> {
+  const url = getAssetUrl(projectId, assetId);
+  return await invokeWithFallback(
+    async () => {
+      const res = await fetch(url);
+      if (!res.ok) throw new Error(`HTTP ${res.status} reading asset ${assetId}`);
+      const mediaType = res.headers.get("content-type") ?? "application/octet-stream";
+      const text = isTextual(mediaType)
+        ? (await res.text()).split("\n").slice(0, maxLines).join("\n")
+        : null;
+      return { url, mediaType, text };
+    },
+    () => mockReadAssetPreview(url, assetId, maxLines),
+  );
 }

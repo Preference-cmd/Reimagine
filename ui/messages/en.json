@@ -6,7 +6,6 @@
   "common.close": "Close",
   "common.loading": "Loading…",
   "common.empty": "Nothing here yet",
-
   "sidebar.workflows": "Workflows",
   "sidebar.new": "New",
   "sidebar.models": "Models",
@@ -24,11 +23,9 @@
   "sidebar.projects": "Projects",
   "sidebar.tasks": "Tasks",
   "sidebar.noTasks": "No tasks",
-
   "settings.groupPersonal": "Personal",
   "settings.groupIntegration": "Integrations",
   "settings.groupCoding": "Coding",
-
   "settings.searchPlaceholder": "Search settings…",
   "settings.personal": "Personal",
   "settings.project": "Project",
@@ -42,14 +39,12 @@
   "settings.browser": "Browser",
   "settings.hooks": "Hooks",
   "settings.language": "Language",
-
   "settings.auto-save": "Auto-save",
   "settings.auto-save-desc": "Automatically save workflow changes to local storage",
   "settings.restore-session": "Restore last session",
   "settings.restore-session-desc": "Auto-load the last open workflow on startup",
   "settings.check-updates": "Check for updates",
   "settings.check-updates-desc": "Check for new versions on startup",
-
   "settings.color-mode": "Color mode",
   "settings.color-mode-desc": "Choose light or dark theme",
   "settings.light": "Light",
@@ -61,11 +56,9 @@
   "settings.none": "None",
   "settings.minimap": "Show minimap",
   "settings.minimap-desc": "Display thumbnail map in canvas bottom-right",
-
   "settings.cmd-palette": "Command palette",
   "settings.undo": "Undo",
   "settings.redo": "Redo",
-
   "settings.default-backend": "Default backend",
   "settings.default-backend-desc": "Backend type for inference execution",
   "settings.burn": "Burn",
@@ -81,7 +74,6 @@
   "settings.4gb": "4 GB",
   "settings.8gb": "8 GB",
   "settings.16gb": "16 GB",
-
   "settings.project-directory": "Project directory",
   "settings.project-directory-desc": "Default storage location for workflows and assets",
   "settings.autosave-interval": "Autosave interval",
@@ -89,15 +81,12 @@
   "settings.10-seconds": "10 seconds",
   "settings.30-seconds": "30 seconds",
   "settings.1-minute": "1 minute",
-
   "settings.download-directory": "Download directory",
   "settings.download-directory-desc": "Default storage location for model files",
   "settings.auto-convert": "Auto-convert format",
   "settings.auto-convert-desc": "Automatically convert checkpoints to Burn format after download",
-
   "canvas.runWorkflow": "Run workflow",
   "canvas.cancelRun": "Cancel run",
-
   "inspector.title": "Inspector",
   "inspector.metadata": "Metadata",
   "inspector.ports": "Ports",
@@ -107,7 +96,6 @@
   "inspector.nodeId": "Node ID",
   "inspector.nodeType": "Type",
   "inspector.position": "Position",
-
   "models.title": "Models",
   "models.install": "Install model",
   "models.search": "Search models…",
@@ -115,7 +103,6 @@
   "models.installHint": "Click \"Install model\" to download your first model",
   "models.downloading": "Downloading…",
   "models.installed": "Installed",
-
   "runs.title": "Runs",
   "runs.phase": "Phase",
   "runs.elapsed": "Elapsed",
@@ -130,16 +117,13 @@
   "runs.completed": "Completed",
   "runs.failed": "Failed",
   "runs.cancelled": "Cancelled",
-
   "assets.title": "Assets",
   "assets.noAssets": "No assets yet",
   "assets.assetsHint": "Generated images and imported files will appear here",
-
   "commandPalette.placeholder": "Type a command or search…",
   "commandPalette.commands": "Commands",
   "commandPalette.nodes": "Nodes",
   "commandPalette.noResults": "No results found",
-
   "welcome.title": "What are we working on?",
   "welcome.subtitle": "Ask a question, create an output, or build a workflow.",
   "welcome.inputPlaceholder": "Start a new conversation…",
@@ -151,5 +135,30 @@
   "welcome.inpaint": "Inpaint",
   "welcome.inpaintDesc": "Edit specific areas of an image",
   "welcome.upscale": "Upscale",
-  "welcome.upscaleDesc": "Enhance image resolution and quality"
+  "welcome.upscaleDesc": "Enhance image resolution and quality",
+  "sidebar.collections": "Collections",
+  "collections.title": "Collections",
+  "collections.subtitle": "Document collections and ordered slot assets",
+  "collections.import": "Import",
+  "collections.importing": "Importing…",
+  "collections.emptyTitle": "No collections yet",
+  "collections.emptyDesc": "Import files to create your first collection and view its slots.",
+  "collections.importFiles": "Import files",
+  "collections.collectionPrefix": "Collection",
+  "collections.boardItemPrefix": "Board Item:",
+  "collections.backToCollections": "Back to collections",
+  "collections.defaultTitle": "Collection",
+  "collections.loading": "Loading…",
+  "collections.loadingCollection": "Loading collection…",
+  "collections.slot": "slot",
+  "collections.slots": "slots",
+  "collections.version": "Version",
+  "collections.undo": "Undo",
+  "collections.redo": "Redo",
+  "collections.notFound": "Collection not found.",
+  "collections.emptySlots": "This collection has no slots.",
+  "collections.slotPrefix": "Slot:",
+  "collections.assetIdPrefix": "Asset ID:",
+  "collections.noPreview": "No text preview available",
+  "collections.loadAssetError": "Failed to load asset content"
 }
