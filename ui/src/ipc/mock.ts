@@ -1,6 +1,7 @@
 import {
   type ArtifactMetadata,
   type BoardCommandResultDto,
+  type BoardItem,
   type BoardSnapshot,
   type ComputeProfile,
   type Event,
@@ -272,6 +273,7 @@ export async function mockDeleteProject(input: { projectId: string }): Promise<v
   const projects = mockReadProjects();
   delete projects[input.projectId];
   mockWriteProjects(projects);
+  mockResetBoard(input.projectId);
 }
 
 export async function mockSetActiveProject(input: { projectId: string }): Promise<Project> {
@@ -279,6 +281,27 @@ export async function mockSetActiveProject(input: { projectId: string }): Promis
 }
 
 const mockBoards: Record<string, BoardSnapshot> = {};
+const mockBoardHistory: Record<
+  string,
+  {
+    past: BoardItem[][];
+    future: BoardItem[][];
+  }
+> = {};
+
+export function mockResetBoard(projectId?: string): void {
+  if (projectId) {
+    delete mockBoards[projectId];
+    delete mockBoardHistory[projectId];
+  } else {
+    for (const key of Object.keys(mockBoards)) {
+      delete mockBoards[key];
+    }
+    for (const key of Object.keys(mockBoardHistory)) {
+      delete mockBoardHistory[key];
+    }
+  }
+}
 
 export async function mockGetBoardSnapshot(input: { projectId: string }): Promise<BoardSnapshot> {
   if (!mockBoards[input.projectId]) {
@@ -288,49 +311,415 @@ export async function mockGetBoardSnapshot(input: { projectId: string }): Promis
       version: 0,
       items: [],
     };
+    mockBoardHistory[input.projectId] = { past: [], future: [] };
   }
   return mockBoards[input.projectId];
 }
 
-const noOpBoardResult = (version = 0): BoardCommandResultDto => ({
-  status: "no_op",
-  version,
-  changes: [],
-  diagnostics: [],
-  historyEntryId: null,
-});
+type RawBoardCommand =
+  | {
+      type: "add_item";
+      item_id: string;
+      kind: BoardItem["kind"];
+      position: { x: number; y: number };
+      size: { width: number; height: number };
+    }
+  | { type: "remove_item"; item_id: string }
+  | { type: "move_item"; item_id: string; position: { x: number; y: number } }
+  | { type: "resize_item"; item_id: string; size: { width: number; height: number } }
+  | { type: "set_z"; item_id: string; z: number }
+  | { type: "update_note"; item_id: string; content: string }
+  | { type: "lock_item"; item_id: string; locked: boolean };
 
-export async function mockPreviewBoardCommands(_input: {
+function itemMissingDiagnostic(itemId: string) {
+  return {
+    id: `board-item-missing-${itemId}`,
+    code: "CORE/BOARD_ITEM_MISSING",
+    severity: "error",
+    source: "core",
+    message: "board item does not exist",
+    target: "board",
+  };
+}
+
+function itemLockedDiagnostic(itemId: string) {
+  return {
+    id: `board-item-locked-${itemId}`,
+    code: "CORE/BOARD_ITEM_LOCKED",
+    severity: "error",
+    source: "core",
+    message: "cannot modify locked board item",
+    target: "board",
+  };
+}
+
+function evaluateBoardCommands(
+  currentItems: BoardItem[],
+  commands: RawBoardCommand[],
+): { nextItems: BoardItem[]; changes: unknown[]; diagnostics: unknown[] } {
+  const nextItems: BoardItem[] = JSON.parse(JSON.stringify(currentItems));
+  const diagnostics: unknown[] = [];
+  const changes: unknown[] = [];
+
+  for (const cmd of commands) {
+    if (!cmd || typeof cmd !== "object") continue;
+    switch (cmd.type) {
+      case "add_item": {
+        const { item_id, kind, position, size } = cmd;
+        if (nextItems.some((i) => i.id === item_id)) {
+          diagnostics.push({
+            id: `board-item-duplicate-${item_id}`,
+            code: "CORE/BOARD_ITEM_DUPLICATE",
+            severity: "error",
+            source: "core",
+            message: "board item id already exists",
+            target: "board",
+          });
+          break;
+        }
+        nextItems.push({
+          id: item_id,
+          kind,
+          position: { x: position?.x ?? 0, y: position?.y ?? 0 },
+          size: { width: size?.width ?? 0, height: size?.height ?? 0 },
+          z: 0,
+          locked: false,
+        });
+        changes.push({ type: "item_added", item_id });
+        break;
+      }
+      case "remove_item": {
+        const { item_id } = cmd;
+        const idx = nextItems.findIndex((i) => i.id === item_id);
+        if (idx === -1) {
+          diagnostics.push(itemMissingDiagnostic(item_id));
+          break;
+        }
+        nextItems.splice(idx, 1);
+        changes.push({ type: "item_removed", item_id });
+        break;
+      }
+      case "move_item": {
+        const { item_id, position } = cmd;
+        const item = nextItems.find((i) => i.id === item_id);
+        if (!item) {
+          diagnostics.push(itemMissingDiagnostic(item_id));
+          break;
+        }
+        if (item.locked) {
+          diagnostics.push(itemLockedDiagnostic(item_id));
+          break;
+        }
+        if (item.position.x === position.x && item.position.y === position.y) {
+          break;
+        }
+        item.position = { x: position.x, y: position.y };
+        changes.push({ type: "item_moved", item_id, position });
+        break;
+      }
+      case "resize_item": {
+        const { item_id, size } = cmd;
+        const item = nextItems.find((i) => i.id === item_id);
+        if (!item) {
+          diagnostics.push(itemMissingDiagnostic(item_id));
+          break;
+        }
+        if (item.locked) {
+          diagnostics.push(itemLockedDiagnostic(item_id));
+          break;
+        }
+        if (item.size.width === size.width && item.size.height === size.height) {
+          break;
+        }
+        item.size = { width: size.width, height: size.height };
+        changes.push({ type: "item_resized", item_id, size });
+        break;
+      }
+      case "set_z": {
+        const { item_id, z } = cmd;
+        const item = nextItems.find((i) => i.id === item_id);
+        if (!item) {
+          diagnostics.push(itemMissingDiagnostic(item_id));
+          break;
+        }
+        if (item.z === z) {
+          break;
+        }
+        item.z = z;
+        changes.push({ type: "item_z_changed", item_id, z });
+        break;
+      }
+      case "update_note": {
+        const { item_id, content } = cmd;
+        const item = nextItems.find((i) => i.id === item_id);
+        if (!item) {
+          diagnostics.push(itemMissingDiagnostic(item_id));
+          break;
+        }
+        if (item.locked) {
+          diagnostics.push(itemLockedDiagnostic(item_id));
+          break;
+        }
+        if (item.kind.type !== "note") {
+          diagnostics.push({
+            id: `board-item-not-note-${item_id}`,
+            code: "CORE/BOARD_ITEM_NOT_NOTE",
+            severity: "error",
+            source: "core",
+            message: "board item is not a note",
+            target: "board",
+          });
+          break;
+        }
+        if ((item.kind as { type: "note"; content: string }).content === content) {
+          break;
+        }
+        (item.kind as { type: "note"; content: string }).content = content;
+        changes.push({ type: "note_updated", item_id, content });
+        break;
+      }
+      case "lock_item": {
+        const { item_id, locked } = cmd;
+        const item = nextItems.find((i) => i.id === item_id);
+        if (!item) {
+          diagnostics.push(itemMissingDiagnostic(item_id));
+          break;
+        }
+        if (item.locked === locked) {
+          break;
+        }
+        item.locked = locked;
+        changes.push({ type: "item_locked", item_id, locked });
+        break;
+      }
+    }
+  }
+
+  return { nextItems, changes, diagnostics };
+}
+
+export async function mockPreviewBoardCommands(input: {
   projectId: string;
   commandBatch: unknown;
 }): Promise<BoardCommandResultDto> {
-  return noOpBoardResult();
+  const board = await mockGetBoardSnapshot({ projectId: input.projectId });
+  const batch = input.commandBatch as
+    | {
+        base_version?: number;
+        commands?: RawBoardCommand[];
+      }
+    | null
+    | undefined;
+
+  if (batch?.base_version !== undefined && batch.base_version !== board.version) {
+    return {
+      status: "rejected",
+      version: board.version,
+      changes: [],
+      diagnostics: [
+        {
+          id: `board-version-conflict-${board.id}-${batch.base_version}`,
+          code: "CORE/BOARD_VERSION_CONFLICT",
+          severity: "error",
+          source: "core",
+          message: `board version conflict: expected ${board.version}, got ${batch.base_version}`,
+          target: "board",
+        },
+      ],
+      historyEntryId: null,
+    };
+  }
+
+  const commands = batch?.commands ?? [];
+  if (commands.length === 0) {
+    return {
+      status: "no_op",
+      version: board.version,
+      changes: [],
+      diagnostics: [],
+      historyEntryId: null,
+    };
+  }
+
+  const { changes, diagnostics } = evaluateBoardCommands(board.items, commands);
+  if (diagnostics.length > 0) {
+    return {
+      status: "rejected",
+      version: board.version,
+      changes: [],
+      diagnostics,
+      historyEntryId: null,
+    };
+  }
+
+  if (changes.length === 0) {
+    return {
+      status: "no_op",
+      version: board.version,
+      changes: [],
+      diagnostics: [],
+      historyEntryId: null,
+    };
+  }
+
+  return {
+    status: "applied",
+    version: board.version + 1,
+    changes,
+    diagnostics: [],
+    historyEntryId: null,
+  };
 }
 
 export async function mockApplyBoardCommands(input: {
   projectId: string;
   commandBatch: unknown;
 }): Promise<BoardCommandResultDto> {
-  const result = { ...noOpBoardResult(1), status: "applied" as const, version: 1 };
+  const board = await mockGetBoardSnapshot({ projectId: input.projectId });
+  const history =
+    mockBoardHistory[input.projectId] ??
+    (mockBoardHistory[input.projectId] = { past: [], future: [] });
+
+  const batch = input.commandBatch as
+    | {
+        id?: string;
+        base_version?: number;
+        commands?: RawBoardCommand[];
+      }
+    | null
+    | undefined;
+
+  if (batch?.base_version !== undefined && batch.base_version !== board.version) {
+    return {
+      status: "rejected",
+      version: board.version,
+      changes: [],
+      diagnostics: [
+        {
+          id: `board-version-conflict-${board.id}-${batch.base_version}`,
+          code: "CORE/BOARD_VERSION_CONFLICT",
+          severity: "error",
+          source: "core",
+          message: `board version conflict: expected ${board.version}, got ${batch.base_version}`,
+          target: "board",
+        },
+      ],
+      historyEntryId: null,
+    };
+  }
+
+  const commands = batch?.commands ?? [];
+  if (commands.length === 0) {
+    return {
+      status: "no_op",
+      version: board.version,
+      changes: [],
+      diagnostics: [],
+      historyEntryId: null,
+    };
+  }
+
+  const { nextItems, changes, diagnostics } = evaluateBoardCommands(board.items, commands);
+  if (diagnostics.length > 0) {
+    return {
+      status: "rejected",
+      version: board.version,
+      changes: [],
+      diagnostics,
+      historyEntryId: null,
+    };
+  }
+
+  if (changes.length === 0) {
+    return {
+      status: "no_op",
+      version: board.version,
+      changes: [],
+      diagnostics: [],
+      historyEntryId: null,
+    };
+  }
+
+  history.past.push(JSON.parse(JSON.stringify(board.items)));
+  history.future = [];
+  board.items = nextItems;
+  board.version += 1;
+
   emitEvent({
     type: "document",
     kind: "board.changed",
     projectId: input.projectId,
-    documentId: "board-" + input.projectId,
-    version: 1,
+    documentId: board.id,
+    version: board.version,
   });
-  return result;
+
+  return {
+    status: "applied",
+    version: board.version,
+    changes,
+    diagnostics: [],
+    historyEntryId: `board-history:${batch?.id ?? rand("batch")}`,
+  };
 }
 
-export async function mockUndoBoard(_input: {
+export async function mockUndoBoard(input: {
   projectId: string;
 }): Promise<BoardCommandResultDto | null> {
-  return null;
+  const board = await mockGetBoardSnapshot({ projectId: input.projectId });
+  const history = mockBoardHistory[input.projectId];
+  if (!history || history.past.length === 0) {
+    return null;
+  }
+  const previousItems = history.past.pop()!;
+  history.future.push(JSON.parse(JSON.stringify(board.items)));
+  board.items = previousItems;
+  board.version += 1;
+
+  emitEvent({
+    type: "document",
+    kind: "board.changed",
+    projectId: input.projectId,
+    documentId: board.id,
+    version: board.version,
+  });
+
+  return {
+    status: "applied",
+    version: board.version,
+    changes: [],
+    diagnostics: [],
+    historyEntryId: null,
+  };
 }
-export async function mockRedoBoard(_input: {
+
+export async function mockRedoBoard(input: {
   projectId: string;
 }): Promise<BoardCommandResultDto | null> {
-  return null;
+  const board = await mockGetBoardSnapshot({ projectId: input.projectId });
+  const history = mockBoardHistory[input.projectId];
+  if (!history || history.future.length === 0) {
+    return null;
+  }
+  const nextItems = history.future.pop()!;
+  history.past.push(JSON.parse(JSON.stringify(board.items)));
+  board.items = nextItems;
+  board.version += 1;
+
+  emitEvent({
+    type: "document",
+    kind: "board.changed",
+    projectId: input.projectId,
+    documentId: board.id,
+    version: board.version,
+  });
+
+  return {
+    status: "applied",
+    version: board.version,
+    changes: [],
+    diagnostics: [],
+    historyEntryId: null,
+  };
 }
 
 export async function mockListModels(): Promise<ModelInfo[]> {

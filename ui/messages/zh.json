@@ -160,5 +160,17 @@
   "collections.slotPrefix": "槽位：",
   "collections.assetIdPrefix": "资源 ID：",
   "collections.noPreview": "无文本预览",
-  "collections.loadAssetError": "加载资源内容失败"
+  "collections.loadAssetError": "加载资源内容失败",
+  "sidebar.canvas": "画布",
+  "board.newNote": "新建便签",
+  "board.commandRejected": "画布指令被拒绝",
+  "board.note": "便签",
+  "board.asset": "资源",
+  "board.workflow": "工作流",
+  "board.run": "运行",
+  "board.unregisteredItem": "未注册的画布项",
+  "board.doubleClickToEdit": "双击编辑便签…",
+  "board.notePlaceholder": "输入便签内容… (Cmd/Ctrl+Enter 或失焦保存，Esc 取消)",
+  "board.loadFailed": "加载画布快照失败",
+  "board.locked": "已锁定"
 }

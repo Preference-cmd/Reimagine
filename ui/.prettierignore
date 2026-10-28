@@ -3,3 +3,5 @@ dist
 src/paraglide
 src/routeTree.gen.ts
 target
+project.inlang/*
+!project.inlang/settings.json

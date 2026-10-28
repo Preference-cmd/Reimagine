@@ -29,6 +29,7 @@ import {
   DownloadHuggingfaceModelArgsSchema,
   RebootBackendArgsSchema,
   WorkerSwitchArgsSchema,
+  BoardSnapshotSchema,
 } from "./schemas";
 import {
   mockCancelAndSwitchWorker,
@@ -271,8 +272,9 @@ export function subscribeEvents(listener: EventListener): () => void {
   };
 }
 
-export function getBoardSnapshot(projectId: string): Promise<BoardSnapshot> {
-  return dispatch("board_snapshot", null, { projectId }, mockGetBoardSnapshot);
+export async function getBoardSnapshot(projectId: string): Promise<BoardSnapshot> {
+  const result = await dispatch("board_snapshot", null, { projectId }, mockGetBoardSnapshot);
+  return BoardSnapshotSchema.parse(result);
 }
 
 export function previewBoardCommands(

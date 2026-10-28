@@ -109,34 +109,60 @@ export const ProjectMetadataInputSchema = z.object({
 });
 export type ProjectMetadataInput = z.infer<typeof ProjectMetadataInputSchema>;
 
-export const BoardItemKindWorkflowSchema = z.object({
-  type: z.literal("workflow"),
+export const BoardItemKindWorkflowRefSchema = z.object({
+  type: z.literal("workflow_ref"),
   workflow_id: z.string(),
 });
-export const BoardItemKindAssetSchema = z.object({
-  type: z.literal("asset"),
-  asset_id: z.string(),
-});
-export const BoardItemKindCollectionSchema = z.object({
-  type: z.literal("collection"),
-  collection_id: z.string(),
+export const BoardItemKindAssetRefSchema = z.object({
+  type: z.literal("asset_ref"),
+  artifact_id: z.string(),
 });
 export const BoardItemKindNoteSchema = z.object({
   type: z.literal("note"),
   content: z.string(),
 });
+export const BoardItemKindRunRefSchema = z.object({
+  type: z.literal("run_ref"),
+  run_id: z.string(),
+});
+export const BoardItemKindCollectionSchema = z.object({
+  type: z.literal("collection"),
+  collection_id: z.string(),
+});
 
 export const BoardItemKindSchema = z.discriminatedUnion("type", [
-  BoardItemKindWorkflowSchema,
-  BoardItemKindAssetSchema,
-  BoardItemKindCollectionSchema,
+  BoardItemKindWorkflowRefSchema,
+  BoardItemKindAssetRefSchema,
   BoardItemKindNoteSchema,
+  BoardItemKindRunRefSchema,
+  BoardItemKindCollectionSchema,
 ]);
 export type BoardItemKind = z.infer<typeof BoardItemKindSchema>;
 
+export const KNOWN_BOARD_ITEM_KINDS = [
+  "workflow_ref",
+  "asset_ref",
+  "note",
+  "run_ref",
+  "collection",
+] as const;
+
+export const BoardItemUnknownKindSchema = z
+  .object({
+    type: z
+      .string()
+      .refine(
+        (val) => !KNOWN_BOARD_ITEM_KINDS.includes(val as (typeof KNOWN_BOARD_ITEM_KINDS)[number]),
+        {
+          message: "Known board item kinds must match their specific schema",
+        },
+      ),
+  })
+  .passthrough();
+
 export const BoardItemSchema = z.object({
   id: z.string(),
-  kind: z.union([BoardItemKindSchema, z.record(z.string(), z.unknown())]),
+  kind: z.union([BoardItemKindSchema, BoardItemUnknownKindSchema]),
   position: z.object({ x: z.number(), y: z.number() }),
   size: z.object({ width: z.number(), height: z.number() }),
   z: z.number(),

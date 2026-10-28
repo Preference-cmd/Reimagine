@@ -9,6 +9,7 @@
 // Additionally, you should also exclude this file from your linter and/or formatter to prevent it from being checked or modified.
 
 import { Route as rootRouteImport } from "./routes/__root"
+import { Route as IndexRouteImport } from "./routes/index"
 import { Route as AssetsRouteImport } from "./routes/assets"
 import { Route as ModelsRouteImport } from "./routes/models"
 import { Route as NewRouteImport } from "./routes/new"
@@ -17,6 +18,11 @@ import { Route as SettingsRouteImport } from "./routes/settings"
 import { Route as CollectionsIndexRouteImport } from "./routes/collections/index"
 import { Route as CollectionsIdRouteImport } from "./routes/collections/$id"
 
+const IndexRoute = IndexRouteImport.update({
+  id: "/",
+  path: "/",
+  getParentRoute: () => rootRouteImport,
+} as any)
 const AssetsRoute = AssetsRouteImport.update({
   id: "/assets",
   path: "/assets",
@@ -54,6 +60,7 @@ const CollectionsIdRoute = CollectionsIdRouteImport.update({
 } as any)
 
 export interface FileRoutesByFullPath {
+  "/": typeof IndexRoute
   "/assets": typeof AssetsRoute
   "/models": typeof ModelsRoute
   "/new": typeof NewRoute
@@ -63,6 +70,7 @@ export interface FileRoutesByFullPath {
   "/collections/": typeof CollectionsIndexRoute
 }
 export interface FileRoutesByTo {
+  "/": typeof IndexRoute
   "/assets": typeof AssetsRoute
   "/models": typeof ModelsRoute
   "/new": typeof NewRoute
@@ -73,6 +81,7 @@ export interface FileRoutesByTo {
 }
 export interface FileRoutesById {
   __root__: typeof rootRouteImport
+  "/": typeof IndexRoute
   "/assets": typeof AssetsRoute
   "/models": typeof ModelsRoute
   "/new": typeof NewRoute
@@ -84,6 +93,7 @@ export interface FileRoutesById {
 export interface FileRouteTypes {
   fileRoutesByFullPath: FileRoutesByFullPath
   fullPaths:
+    | "/"
     | "/assets"
     | "/models"
     | "/new"
@@ -93,6 +103,7 @@ export interface FileRouteTypes {
     | "/collections/"
   fileRoutesByTo: FileRoutesByTo
   to:
+    | "/"
     | "/assets"
     | "/models"
     | "/new"
@@ -102,6 +113,7 @@ export interface FileRouteTypes {
     | "/collections"
   id:
     | "__root__"
+    | "/"
     | "/assets"
     | "/models"
     | "/new"
@@ -112,6 +124,7 @@ export interface FileRouteTypes {
   fileRoutesById: FileRoutesById
 }
 export interface RootRouteChildren {
+  IndexRoute: typeof IndexRoute
   AssetsRoute: typeof AssetsRoute
   ModelsRoute: typeof ModelsRoute
   NewRoute: typeof NewRoute
@@ -123,6 +136,13 @@ export interface RootRouteChildren {
 
 declare module "@tanstack/react-router" {
   interface FileRoutesByPath {
+    "/": {
+      id: "/"
+      path: "/"
+      fullPath: "/"
+      preLoaderRoute: typeof IndexRouteImport
+      parentRoute: typeof rootRouteImport
+    }
     "/assets": {
       id: "/assets"
       path: "/assets"
@@ -176,6 +196,7 @@ declare module "@tanstack/react-router" {
 }
 
 const rootRouteChildren: RootRouteChildren = {
+  IndexRoute: IndexRoute,
   AssetsRoute: AssetsRoute,
   ModelsRoute: ModelsRoute,
   NewRoute: NewRoute,

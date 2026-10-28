@@ -1,4 +1,6 @@
 import { useEffect } from "react";
+import { toast } from "sonner";
+import * as m from "$paraglide/messages";
 import { listProjects, subscribeEvents, getBoardSnapshot, loadWorkflow } from "@/ipc";
 import { workflowFromJson } from "@/lib/workflowCodec";
 import { useProjectStore } from "@/store/project";
@@ -17,11 +19,13 @@ export function useWorkspaceSurface(): void {
       if (event.kind === "board.changed") {
         const board = useBoardStore.getState();
         if (event.version < board.version) return;
-        void getBoardSnapshot(project).then((snapshot) => {
-          if (useProjectStore.getState().activeProjectId === snapshot.projectId) {
-            useBoardStore.getState().hydrate(snapshot);
-          }
-        });
+        void getBoardSnapshot(project)
+          .then((snapshot) => {
+            useBoardStore.getState().hydrateIfNewer(snapshot);
+          })
+          .catch(() => {
+            toast.error(m["board.loadFailed"]());
+          });
         return;
       }
       const workflow = useWorkflowStore.getState();
@@ -42,10 +46,12 @@ export function useWorkspaceSurface(): void {
     useWorkflowStore.getState().hydrate([], [], "main", "Untitled Workflow", activeProjectId, 0);
     useWorkflowStore.temporal.getState().clear();
     useBoardStore.getState().hydrate({ id: "", projectId: activeProjectId, version: 0, items: [] });
-    void getBoardSnapshot(activeProjectId).then((snapshot) => {
-      if (useProjectStore.getState().activeProjectId === snapshot.projectId) {
-        useBoardStore.getState().hydrate(snapshot);
-      }
-    });
+    void getBoardSnapshot(activeProjectId)
+      .then((snapshot) => {
+        useBoardStore.getState().hydrateIfNewer(snapshot);
+      })
+      .catch(() => {
+        toast.error(m["board.loadFailed"]());
+      });
   }, [activeProjectId]);
 }

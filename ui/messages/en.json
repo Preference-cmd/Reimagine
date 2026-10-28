@@ -160,5 +160,17 @@
   "collections.slotPrefix": "Slot:",
   "collections.assetIdPrefix": "Asset ID:",
   "collections.noPreview": "No text preview available",
-  "collections.loadAssetError": "Failed to load asset content"
+  "collections.loadAssetError": "Failed to load asset content",
+  "sidebar.canvas": "Canvas",
+  "board.newNote": "New note",
+  "board.commandRejected": "Board command rejected",
+  "board.note": "Note",
+  "board.asset": "Asset",
+  "board.workflow": "Workflow",
+  "board.run": "Run",
+  "board.unregisteredItem": "Unregistered board item",
+  "board.doubleClickToEdit": "Double-click to edit note…",
+  "board.notePlaceholder": "Type note content… (Cmd/Ctrl+Enter or blur to save, Esc to cancel)",
+  "board.loadFailed": "Failed to load board snapshot",
+  "board.locked": "Locked"
 }

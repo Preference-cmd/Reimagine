@@ -1,4 +1,4 @@
-import { Boxes, FileImage, Layers, Play, Plus } from "lucide-react";
+import { Boxes, FileImage, Layers, LayoutGrid, Play, Plus } from "lucide-react";
 import { Link, useLocation } from "@tanstack/react-router";
 import { cn } from "@/lib/utils";
 import * as m from "$paraglide/messages";
@@ -12,6 +12,7 @@ type PrimaryNavItem = {
 };
 
 const PRIMARY_NAV_ITEMS: PrimaryNavItem[] = [
+  { icon: LayoutGrid, labelKey: "sidebar.canvas", to: "/" },
   { icon: Plus, labelKey: "sidebar.new", to: "/new" },
   { icon: Layers, labelKey: "sidebar.collections", to: "/collections" },
   { icon: Boxes, labelKey: "sidebar.models", to: "/models" },

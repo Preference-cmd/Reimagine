@@ -1,14 +1,11 @@
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { ArrowLeft, Redo2, Undo2 } from "lucide-react";
 import { Link, useNavigate, useParams } from "@tanstack/react-router";
 import * as m from "$paraglide/messages";
 import { useProjectStore } from "@/store/project";
-import { opInvoke, readAssetPreview, subscribeEvents, type AssetPreview } from "@/ipc";
-import {
-  CollectionDocumentSchema,
-  type CollectionDocument,
-  type CollectionSlot,
-} from "@/ipc/schemas";
+import { opInvoke, readAssetPreview, type AssetPreview } from "@/ipc";
+import { type CollectionSlot } from "@/ipc/schemas";
+import { useCollection } from "@/hooks/useCollection";
 
 const PREVIEW_LINES = 4;
 
@@ -76,76 +73,44 @@ export function CollectionView() {
   const activeProjectId = useProjectStore((s) => s.activeProjectId);
   const navigate = useNavigate();
 
-  const [collection, setCollection] = useState<CollectionDocument | null>(null);
-  const [loading, setLoading] = useState(true);
-  const [error, setError] = useState<string | null>(null);
+  const {
+    collection,
+    loading,
+    error: collectionError,
+    refresh: fetchCollection,
+  } = useCollection(activeProjectId, id);
+  const [actionError, setActionError] = useState<string | null>(null);
+  const error = collectionError ?? actionError;
 
   // On project switch: reset state and navigate back to /collections
   const prevProjectIdRef = useRef(activeProjectId);
   useEffect(() => {
     if (prevProjectIdRef.current !== activeProjectId) {
       prevProjectIdRef.current = activeProjectId;
-      setCollection(null);
-      setError(null);
-      setLoading(true);
+      setActionError(null);
       void navigate({ to: "/collections" });
     }
   }, [activeProjectId, navigate]);
 
-  const fetchCollection = useCallback(async () => {
-    if (!id) return;
-    setLoading(true);
-    try {
-      const res = await opInvoke(activeProjectId, "collection.get", {
-        collection_id: id,
-      });
-      const output = CollectionDocumentSchema.parse(res.output);
-      setCollection(output);
-      setError(null);
-    } catch (e) {
-      setCollection(null);
-      setError(e instanceof Error ? e.message : String(e));
-    } finally {
-      setLoading(false);
-    }
-  }, [activeProjectId, id]);
-
-  useEffect(() => {
-    void fetchCollection();
-  }, [fetchCollection]);
-
-  // Subscribe to collection.changed events for this collection and project
-  useEffect(() => {
-    const unsubscribe = subscribeEvents((event) => {
-      if (
-        event.type === "document" &&
-        event.kind === "collection.changed" &&
-        event.projectId === activeProjectId &&
-        event.documentId === id
-      ) {
-        void fetchCollection();
-      }
-    });
-    return () => unsubscribe();
-  }, [activeProjectId, fetchCollection, id]);
-
   async function handleUndo() {
     if (!id) return;
     try {
+      setActionError(null);
       await opInvoke(activeProjectId, "collection.undo", { collection_id: id });
       await fetchCollection();
     } catch (e) {
-      setError(e instanceof Error ? e.message : String(e));
+      setActionError(e instanceof Error ? e.message : String(e));
     }
   }
 
   async function handleRedo() {
     if (!id) return;
     try {
+      setActionError(null);
       await opInvoke(activeProjectId, "collection.redo", { collection_id: id });
       await fetchCollection();
     } catch (e) {
-      setError(e instanceof Error ? e.message : String(e));
+      setActionError(e instanceof Error ? e.message : String(e));
     }
   }
 
