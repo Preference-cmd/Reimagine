@@ -20,6 +20,7 @@ pub mod collection;
 pub mod command;
 pub mod diagnostic;
 pub mod document;
+pub mod dynamic_workflow;
 pub mod event;
 pub mod execution_plan;
 pub mod health;

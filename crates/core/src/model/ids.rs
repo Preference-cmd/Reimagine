@@ -95,6 +95,7 @@ id_type!(BoardId);
 id_type!(BoardItemId);
 id_type!(AssetId);
 id_type!(StepId);
+id_type!(DynamicWorkflowId);
 
 #[derive(
     Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, serde::Serialize, serde::Deserialize,

@@ -4,7 +4,15 @@ use serde_json::Value;
 use crate::command::OperationContext;
 use crate::diagnostic::Diagnostic;
 use crate::event::Timestamp;
-use crate::model::StepId;
+use crate::model::{RunId, StepId};
+
+/// Which dynamic workflow run item and step produced a record.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct StepRun {
+    pub run_id: RunId,
+    pub item_id: String,
+    pub step_id: String,
+}
 
 /// Outcome of an operation step execution.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -36,6 +44,8 @@ pub struct StepRecord {
     pub started_at: Timestamp,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub finished_at: Option<Timestamp>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub run: Option<StepRun>,
 }
 
 impl StepRecord {
@@ -56,7 +66,14 @@ impl StepRecord {
             outcome: StepOutcome::Running,
             started_at,
             finished_at: None,
+            run: None,
         }
+    }
+
+    /// Attach the dynamic workflow run context that caused this record.
+    pub fn with_run(mut self, run: StepRun) -> Self {
+        self.run = Some(run);
+        self
     }
 
     pub fn finish(&mut self, outcome: StepOutcome, finished_at: Timestamp) {
@@ -85,9 +102,15 @@ mod tests {
             json!({ "foo": "bar" }),
             context,
             Timestamp::new("2026-10-27T10:00:00Z"),
-        );
+        )
+        .with_run(StepRun {
+            run_id: crate::model::RunId::new("run-1"),
+            item_id: "slot-1".to_owned(),
+            step_id: "norm".to_owned(),
+        });
         assert!(matches!(record.outcome, StepOutcome::Running));
         assert!(record.finished_at.is_none());
+        assert_eq!(record.run.as_ref().unwrap().step_id, "norm");
 
         let serialized = serde_json::to_string(&record).expect("serialize running");
         let deserialized: StepRecord =
