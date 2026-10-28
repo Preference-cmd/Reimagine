@@ -914,6 +914,80 @@ async fn interrupted_run_resumes_after_the_last_successful_step() {
 }
 
 #[tokio::test]
+async fn a_failing_run_task_marks_the_run_failed() {
+    let base = temp_dir("task-error");
+    let ops = TestOps::new();
+    let host = build_host(&base).await;
+    let project = create_project(&host, "proj").await;
+    let assets = import_assets(&host, &project, &base, &[("a.txt", "alpha")]).await;
+    let collection = create_collection(&host, &project, &assets).await;
+    let workflow = json!({
+        "inputs": { "doc": { "type": "string", "format": "asset" } },
+        "params": { "type": "object" },
+        "steps": [
+            {
+                "id": "copy",
+                "op": "test.copy",
+                "input": { "doc": { "$from": "inputs.doc" } }
+            },
+            {
+                "id": "pause",
+                "op": "test.pause",
+                "input": { "doc": { "$from": "steps.copy.doc" } }
+            }
+        ],
+        "output": { "$from": "steps.pause.doc" }
+    });
+    let workflow_id = create_workflow(&host, &project, workflow).await;
+    ops.register(&host);
+
+    let run_id = start_run(
+        &host,
+        &project,
+        &workflow_id,
+        json!({ "collection_id": collection.as_str() }),
+        None,
+    )
+    .await;
+    ops.pause_started.notified().await;
+
+    host.shutdown().await;
+    drop(host);
+    for _ in 0..10 {
+        tokio::task::yield_now().await;
+    }
+
+    // A new session whose target collection is gone: preparing the resumed
+    // run fails before any item executes.
+    let host = build_host(&base).await;
+    ops.register(&host);
+    let collection_path = host
+        .config()
+        .paths()
+        .project_dir(project.as_str())
+        .join("collections")
+        .join(format!("{}.json", collection.as_str()));
+    tokio::fs::remove_file(&collection_path)
+        .await
+        .expect("remove collection");
+
+    let output = invoke(
+        &host,
+        &project,
+        "dynamic_workflow.resume",
+        json!({ "run_id": run_id.as_str() }),
+    )
+    .await;
+    assert_eq!(output["state"], "failed");
+
+    let run = get_run(&host, &project, &run_id).await;
+    assert_eq!(run.state, RunState::Failed);
+    assert!(run.finished_at.is_some(), "a failed run is finished");
+
+    let _ = std::fs::remove_dir_all(&base);
+}
+
+#[tokio::test]
 async fn interrupted_open_world_step_needs_confirmation_and_is_not_replayed() {
     let base = temp_dir("needs-confirmation");
     let ops = TestOps::new();

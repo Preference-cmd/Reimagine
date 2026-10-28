@@ -86,6 +86,15 @@ impl DynamicWorkflowService {
                 error = %error.message(),
                 "dynamic workflow run could not finish"
             );
+            let mut run = doc.lock().await;
+            if run.state.is_active() {
+                run.state = RunState::Failed;
+                run.finished_at = Some(Timestamp::new(chrono::Utc::now().to_rfc3339()));
+                run.version += 1;
+                if self.write_run(&project_id, &run).await.is_ok() {
+                    self.emit_run_changed(&project_id, &run);
+                }
+            }
         }
         self.active
             .write()
