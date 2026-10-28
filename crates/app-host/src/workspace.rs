@@ -25,7 +25,10 @@ use reimagine_runtime::RuntimeService;
 use crate::node_catalog::NodeCatalogAlignment;
 use crate::node_catalog::NodeCatalogService;
 use crate::services::WorkspaceServices;
-use crate::{AppHostError, BoardService, OperationService, ProjectService, WorkflowService};
+use crate::{
+    AppHostError, BoardService, CollectionService, OperationService, ProjectService,
+    WorkflowService,
+};
 #[cfg(feature = "aigc")]
 use crate::{
     BackendSelection, InstalledWorkerInventoryProvider, ModelService, WorkerInventoryProvider,
@@ -96,6 +99,7 @@ pub struct WorkspaceHost {
     pub(crate) backend_config: InferenceBackendConfig,
     pub(crate) project_service: Arc<ProjectService>,
     pub(crate) board_service: Arc<BoardService>,
+    pub(crate) collection_service: Arc<CollectionService>,
     pub(crate) workflow_service: Arc<WorkflowService>,
     pub(crate) workflow_services: RwLock<BTreeMap<ProjectId, Arc<WorkflowService>>>,
     pub(crate) event_bus: EventBus,
@@ -116,6 +120,7 @@ impl std::fmt::Debug for WorkspaceHost {
             .field("backend_config", &self.backend_config)
             .field("runtime_service", &self.runtime_service)
             .field("node_catalog", &self.node_catalog)
+            .field("collection_service", &self.collection_service)
             .field("operation_service", &self.operation_service);
         #[cfg(feature = "aigc")]
         d.field("aigc", &self.aigc);
@@ -144,6 +149,10 @@ impl WorkspaceHost {
         components: WorkspaceComponents,
         operation_service: Arc<OperationService>,
     ) -> Self {
+        let collection_service = Arc::new(CollectionService::with_event_bus(
+            config.paths().clone(),
+            event_bus.clone(),
+        ));
         let board_service = Arc::new(BoardService::with_event_bus(
             config.paths().clone(),
             event_bus.clone(),
@@ -151,7 +160,13 @@ impl WorkspaceHost {
         let project_service = Arc::new(ProjectService::new(
             config.paths().clone(),
             Arc::clone(&board_service),
+            Arc::clone(&collection_service),
         ));
+        crate::collection_ops::register_collection_ops(
+            &operation_service,
+            Arc::clone(&collection_service),
+            Arc::clone(&board_service),
+        );
         let default_project_id = ProjectId::new("default");
         let workflow_service = Arc::new(WorkflowService::for_project_with_events(
             config.paths().clone(),
@@ -185,6 +200,7 @@ impl WorkspaceHost {
             backend_config,
             project_service,
             board_service,
+            collection_service,
             workflow_service,
             workflow_services: RwLock::new(workflow_services),
             event_bus,

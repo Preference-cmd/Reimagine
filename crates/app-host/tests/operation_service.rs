@@ -713,7 +713,7 @@ async fn preview_writes_no_records_refuses_open_world_and_handles_replace_race()
             },
         },
     });
-    host.operation_service().register_kernel_op(open_op).await;
+    host.operation_service().register_kernel_op(open_op);
 
     let open_world_err = host
         .operation_service()
@@ -804,7 +804,7 @@ async fn preview_writes_no_records_refuses_open_world_and_handles_replace_race()
         },
         started: started.clone(),
     });
-    host.operation_service().register_kernel_op(race_op).await;
+    host.operation_service().register_kernel_op(race_op);
 
     let op_svc = host.operation_service().clone();
     let proj = project_id.clone();
@@ -941,7 +941,7 @@ async fn symlinked_parent_directory_escapes_output_dir_rejected() {
         },
         outside_dir: outside_dir_for_op,
     });
-    host.operation_service().register_kernel_op(op).await;
+    host.operation_service().register_kernel_op(op);
 
     let req = InvokeRequest {
         name: "test.symlink_parent".to_string(),

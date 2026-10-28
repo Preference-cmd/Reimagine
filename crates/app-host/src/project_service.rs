@@ -14,6 +14,7 @@ use reimagine_core::model::ProjectId;
 use reimagine_core::project::{Project, ProjectMetadata};
 
 use crate::board_service::{BoardService, ensure_board_file};
+use crate::collection_service::CollectionService;
 use crate::document_store::{read_document, write_document};
 use crate::{AppHostError, AppHostResult};
 
@@ -21,6 +22,7 @@ pub struct ProjectService {
     paths: AppPaths,
     projects: RwLock<BTreeMap<ProjectId, Project>>,
     board_service: Arc<BoardService>,
+    collection_service: Arc<CollectionService>,
 }
 
 impl std::fmt::Debug for ProjectService {
@@ -34,16 +36,22 @@ impl std::fmt::Debug for ProjectService {
             .field("paths", &self.paths)
             .field("project_count", &project_count)
             .field("board_service", &self.board_service)
+            .field("collection_service", &self.collection_service)
             .finish()
     }
 }
 
 impl ProjectService {
-    pub fn new(paths: AppPaths, board_service: Arc<BoardService>) -> Self {
+    pub fn new(
+        paths: AppPaths,
+        board_service: Arc<BoardService>,
+        collection_service: Arc<CollectionService>,
+    ) -> Self {
         Self {
             paths,
             projects: RwLock::new(BTreeMap::new()),
             board_service,
+            collection_service,
         }
     }
 
@@ -236,6 +244,7 @@ impl ProjectService {
             .expect("project registry poisoned")
             .remove(project_id);
         self.board_service.remove_project(project_id);
+        self.collection_service.remove_project(project_id);
         tokio::fs::remove_dir_all(self.project_dir(project_id))
             .await
             .map_err(|error| AppHostError::Io {

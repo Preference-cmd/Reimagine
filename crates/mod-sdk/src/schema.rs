@@ -95,6 +95,21 @@ pub fn find_asset_fields(schema: &Value, value: &Value) -> Vec<AssetField> {
     fields
 }
 
+/// Whether `schema` declares any asset field (`"format": "asset"`).
+pub fn has_asset_field(schema: &Value) -> bool {
+    fn walk(val: &Value) -> bool {
+        if is_asset_marker(val) {
+            return true;
+        }
+        match val {
+            Value::Object(map) => map.values().any(walk),
+            Value::Array(arr) => arr.iter().any(walk),
+            _ => false,
+        }
+    }
+    walk(schema)
+}
+
 fn escape_pointer_segment(seg: &str) -> String {
     seg.replace('~', "~0").replace('/', "~1")
 }
@@ -253,5 +268,25 @@ mod tests {
                 },
             ]
         );
+    }
+
+    #[test]
+    fn has_asset_field_detects_markers() {
+        let with_asset = json!({
+            "type": "object",
+            "properties": {
+                "file": { "type": "string", "format": "asset" }
+            }
+        });
+        assert!(has_asset_field(&with_asset));
+
+        let without_asset = json!({
+            "type": "object",
+            "properties": {
+                "id": { "type": "string" },
+                "version": { "type": "integer" }
+            }
+        });
+        assert!(!has_asset_field(&without_asset));
     }
 }

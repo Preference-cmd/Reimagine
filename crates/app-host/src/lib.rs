@@ -10,6 +10,8 @@ mod app_host;
 pub mod artifact_access;
 pub mod asset_store;
 mod board_service;
+pub mod collection_ops;
+pub mod collection_service;
 mod document_store;
 pub mod dto;
 mod error;
@@ -60,6 +62,11 @@ pub use artifact_access::{
 };
 pub use asset_store::{AssetStore, resolve_media_type};
 pub use board_service::BoardService;
+pub use collection_ops::{
+    CollectionCreateOp, CollectionGetOp, CollectionRedoOp, CollectionSetSlotOp, CollectionUndoOp,
+    register_collection_ops,
+};
+pub use collection_service::CollectionService;
 pub use error::{AppHostError, AppHostResult};
 pub use error_code::AppHostErrorCode;
 #[cfg(feature = "aigc")]

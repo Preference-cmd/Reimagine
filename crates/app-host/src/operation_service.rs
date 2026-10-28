@@ -24,7 +24,8 @@ use reimagine_core::step::{StepOutcome, StepRecord};
 use reimagine_core::task::CancelToken;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
-use tokio::sync::{Mutex, RwLock};
+use std::sync::RwLock;
+use tokio::sync::Mutex;
 
 use crate::asset_store::{AssetStore, matches_media_type_pattern};
 use crate::error::AppHostError;
@@ -82,6 +83,7 @@ pub struct KernelCall {
     pub invocation: Invocation,
     pub project_id: ProjectId,
     pub context: OperationContext,
+    pub caller_input: Value,
 }
 
 /// Trait implemented by built-in kernel operations.
@@ -89,6 +91,9 @@ pub struct KernelCall {
 pub trait KernelOp: Send + Sync {
     fn spec(&self) -> &OperationSpec;
     async fn invoke(&self, call: KernelCall) -> Result<Value, Diagnostic>;
+    fn changes_documents(&self) -> bool {
+        false
+    }
 }
 
 /// The built-in `asset.import` kernel operation.
@@ -336,8 +341,8 @@ impl OperationService {
     }
 
     /// Register a kernel operation.
-    pub async fn register_kernel_op(&self, op: Arc<dyn KernelOp>) {
-        let mut guard = self.kernel_ops.write().await;
+    pub fn register_kernel_op(&self, op: Arc<dyn KernelOp>) {
+        let mut guard = self.kernel_ops.write().expect("kernel_ops poisoned");
         guard.insert(op.spec().name.clone(), op);
     }
 
@@ -346,7 +351,7 @@ impl OperationService {
         let mut result = Vec::new();
 
         // 1. Kernel operations
-        let kernel_guard = self.kernel_ops.read().await;
+        let kernel_guard = self.kernel_ops.read().expect("kernel_ops poisoned");
         for op in kernel_guard.values() {
             result.push(OperationInfo {
                 spec: op.spec().clone(),
@@ -387,7 +392,7 @@ impl OperationService {
         &self,
         name: &str,
     ) -> Result<(OperationSpec, OperationProvider), Diagnostic> {
-        let kernel_guard = self.kernel_ops.read().await;
+        let kernel_guard = self.kernel_ops.read().expect("kernel_ops poisoned");
         if let Some(op) = kernel_guard.get(name) {
             return Ok((op.spec().clone(), OperationProvider::Kernel));
         }
@@ -561,10 +566,18 @@ impl OperationService {
             start_time,
         );
 
+        let should_record_step =
+            !spec.annotations.read_only || mod_sdk::schema::has_asset_field(&spec.output_schema);
+
         let step_log = self.step_log(project).await;
-        if let Err(err) = step_log.record_start(&step_record).await {
-            let _ = tokio::fs::remove_dir_all(&scratch_dir).await;
-            return Err(err);
+        if should_record_step {
+            match step_log.record_start(&step_record).await {
+                Ok(()) => {}
+                Err(err) => {
+                    let _ = tokio::fs::remove_dir_all(&scratch_dir).await;
+                    return Err(err);
+                }
+            }
         }
 
         // Steps 3–5: Execute provider, validate output, and ingest output assets.
@@ -581,16 +594,18 @@ impl OperationService {
 
             let provider_result = match provider {
                 OperationProvider::Kernel => {
-                    let kernel_guard = self.kernel_ops.read().await;
-                    let kernel_op = kernel_guard.get(&request.name).cloned().ok_or_else(|| {
-                        op_caller_error(&request.name, "UNKNOWN_OPERATION", "kernel op missing")
-                    })?;
-                    drop(kernel_guard);
+                    let kernel_op = {
+                        let kernel_guard = self.kernel_ops.read().expect("kernel_ops poisoned");
+                        kernel_guard.get(&request.name).cloned().ok_or_else(|| {
+                            op_caller_error(&request.name, "UNKNOWN_OPERATION", "kernel op missing")
+                        })?
+                    };
 
                     let call = KernelCall {
                         invocation,
                         project_id: project.clone(),
                         context: request.context.clone(),
+                        caller_input: request.input.clone(),
                     };
                     kernel_op.invoke(call).await
                 }
@@ -668,7 +683,9 @@ impl OperationService {
                     },
                     finish_time,
                 );
-                step_log.record_finish(&step_record).await?;
+                if should_record_step {
+                    step_log.record_finish(&step_record).await?;
+                }
 
                 Ok(InvokeResult {
                     step: step_record,
@@ -682,7 +699,9 @@ impl OperationService {
                     StepOutcome::failed(err.clone())
                 };
                 step_record.finish(outcome, finish_time);
-                let _ = step_log.record_finish(&step_record).await;
+                if should_record_step {
+                    let _ = step_log.record_finish(&step_record).await;
+                }
 
                 Err(err)
             }
@@ -708,6 +727,20 @@ impl OperationService {
                 "OPEN_WORLD_PREVIEW_REFUSED",
                 "preview is not supported for open-world operations",
             ));
+        }
+
+        // Refuse operations that change documents
+        if let OperationProvider::Kernel = provider {
+            let kernel_guard = self.kernel_ops.read().expect("kernel_ops poisoned");
+            if let Some(op) = kernel_guard.get(name)
+                && op.changes_documents()
+            {
+                return Err(op_caller_error(
+                    name,
+                    "DOCUMENT_CHANGE_PREVIEW_REFUSED",
+                    "preview is not supported for operations that mutate documents",
+                ));
+            }
         }
 
         let generation = self.next_preview_generation.fetch_add(1, Ordering::Relaxed);
@@ -843,11 +876,12 @@ impl OperationService {
             let invocation = Invocation::new(name, input_for_provider, &preview_dir, cancel.clone());
             let provider_result = match provider {
                 OperationProvider::Kernel => {
-                    let kernel_guard = self.kernel_ops.read().await;
-                    let kernel_op = kernel_guard.get(name).cloned().ok_or_else(|| {
-                        op_caller_error(name, "UNKNOWN_OPERATION", "kernel op missing")
-                    })?;
-                    drop(kernel_guard);
+                    let kernel_op = {
+                        let kernel_guard = self.kernel_ops.read().expect("kernel_ops poisoned");
+                        kernel_guard.get(name).cloned().ok_or_else(|| {
+                            op_caller_error(name, "UNKNOWN_OPERATION", "kernel op missing")
+                        })?
+                    };
 
                     let call = KernelCall {
                         invocation,
@@ -856,6 +890,7 @@ impl OperationService {
                             CommandActor::new(CommandActorKind::Human),
                             CommandProvenance::Direct,
                         ),
+                        caller_input: input.clone(),
                     };
                     kernel_op.invoke(call).await
                 }

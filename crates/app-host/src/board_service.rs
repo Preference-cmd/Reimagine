@@ -10,15 +10,17 @@ use std::collections::BTreeMap;
 use std::sync::{Arc, RwLock};
 
 use reimagine_config::AppPaths;
-use reimagine_core::board::{BoardChange, BoardCommand, BoardDocument};
-use reimagine_core::command::{CommandBatch, CommandResult, CommandStatus};
+use reimagine_core::board::{
+    BoardChange, BoardCommand, BoardDocument, BoardItemKind, BoardItemPosition, BoardItemSize,
+};
+use reimagine_core::command::{CommandBatch, CommandResult, CommandStatus, OperationContext};
 use reimagine_core::document::DocumentSession;
-use reimagine_core::model::{BoardId, DocumentVersion, ProjectId};
+use reimagine_core::event::{Event, EventBus, Timestamp};
+use reimagine_core::model::{BoardId, BoardItemId, CommandBatchId, DocumentVersion, ProjectId};
 use tokio::sync::Mutex as AsyncMutex;
 
 use crate::document_store::{read_document, write_document};
 use crate::{AppHostError, AppHostResult};
-use reimagine_core::event::{Event, EventBus};
 
 pub struct BoardService {
     paths: AppPaths,
@@ -131,6 +133,43 @@ impl BoardService {
     ) -> AppHostResult<CommandResult<BoardChange>> {
         let session = self.session_for(project_id).await?;
         let mut guard = session.lock().await;
+        let result = guard.apply_batch(&(), batch);
+        if result.status() == CommandStatus::Applied {
+            self.save_locked(project_id, &guard).await?;
+            self.emit_changed(&guard);
+        }
+        Ok(result)
+    }
+
+    /// Append a single item to the board under session lock.
+    ///
+    /// Reads the current document version while holding the session lock so
+    /// concurrent additions on the same board do not conflict on version.
+    pub async fn append_item(
+        &self,
+        project_id: &ProjectId,
+        context: &OperationContext,
+        item_id: BoardItemId,
+        kind: BoardItemKind,
+        position: BoardItemPosition,
+        size: BoardItemSize,
+    ) -> AppHostResult<CommandResult<BoardChange>> {
+        let session = self.session_for(project_id).await?;
+        let mut guard = session.lock().await;
+        let base_version = guard.document().version();
+        let batch_id = CommandBatchId::new(format!("batch-add-item-{}", item_id.as_str()));
+        let batch = CommandBatch::new(
+            batch_id,
+            context.clone(),
+            base_version,
+            Timestamp::new(chrono::Utc::now().to_rfc3339()),
+            vec![BoardCommand::AddItem {
+                item_id,
+                kind,
+                position,
+                size,
+            }],
+        );
         let result = guard.apply_batch(&(), batch);
         if result.status() == CommandStatus::Applied {
             self.save_locked(project_id, &guard).await?;

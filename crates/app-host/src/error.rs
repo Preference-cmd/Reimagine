@@ -1,5 +1,5 @@
 use reimagine_config::ConfigError;
-use reimagine_core::model::{DocumentVersion, ProjectId, RunId, WorkflowId};
+use reimagine_core::model::{CollectionId, DocumentVersion, ProjectId, RunId, WorkflowId};
 use reimagine_runtime::RuntimeServiceError;
 
 use crate::artifact_access::ArtifactAccessError;
@@ -20,6 +20,10 @@ pub enum AppHostError {
     },
     UnknownBoard {
         project_id: ProjectId,
+    },
+    UnknownCollection {
+        project_id: ProjectId,
+        collection_id: CollectionId,
     },
     UnknownWorkflow {
         workflow_id: WorkflowId,
@@ -99,6 +103,15 @@ impl std::fmt::Display for AppHostError {
             }
             Self::UnknownBoard { project_id } => {
                 write!(f, "project `{project_id}` has no board")
+            }
+            Self::UnknownCollection {
+                project_id,
+                collection_id,
+            } => {
+                write!(
+                    f,
+                    "project `{project_id}` has no collection `{collection_id}`"
+                )
             }
             Self::UnknownWorkflow { workflow_id } => {
                 write!(f, "unknown workflow `{workflow_id}`")
@@ -181,6 +194,7 @@ impl AppHostError {
             Self::ProjectAlreadyExists { .. } => AppHostErrorCode::Conflict,
             Self::ProjectIdPathUnsafe { .. } => AppHostErrorCode::PermissionDenied,
             Self::UnknownBoard { .. } => AppHostErrorCode::NotFound,
+            Self::UnknownCollection { .. } => AppHostErrorCode::NotFound,
             Self::UnknownWorkflow { .. } => AppHostErrorCode::NotFound,
             Self::NoPendingProposal { .. } => AppHostErrorCode::NotFound,
             Self::ProposalStale { .. } => AppHostErrorCode::Conflict,
@@ -227,6 +241,13 @@ impl AppHostError {
             | Self::UnknownBoard { project_id } => {
                 Some(serde_json::json!({ "project_id": project_id.to_string() }))
             }
+            Self::UnknownCollection {
+                project_id,
+                collection_id,
+            } => Some(serde_json::json!({
+                "project_id": project_id.to_string(),
+                "collection_id": collection_id.to_string(),
+            })),
             Self::ProjectIdPathUnsafe { project_id } => {
                 Some(serde_json::json!({ "project_id": project_id }))
             }
