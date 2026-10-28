@@ -4,9 +4,9 @@
   "version": "0.1.0",
   "identifier": "com.inceptae.reimagine",
   "build": {
-    "beforeDevCommand": "bun run --cwd ui dev",
+    "beforeDevCommand": { "script": "bun run dev", "cwd": "../ui" },
     "devUrl": "http://localhost:1420",
-    "beforeBuildCommand": "bun run --cwd ui build",
+    "beforeBuildCommand": { "script": "bun run build", "cwd": "../ui" },
     "frontendDist": "../ui/dist"
   },
   "app": {
