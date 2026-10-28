@@ -1,6 +1,6 @@
 //! Board item kind variants.
 
-use crate::model::{ArtifactId, RunId, WorkflowId};
+use crate::model::{ArtifactId, CollectionId, RunId, WorkflowId};
 
 /// The kind of item placed on a board.
 #[derive(Debug, Clone, PartialEq, Eq, Hash, serde::Serialize, serde::Deserialize)]
@@ -26,6 +26,11 @@ pub enum BoardItemKind {
         /// The run id this item references.
         run_id: RunId,
     },
+    /// Reference to a collection of asset slots.
+    Collection {
+        /// The collection id this item references.
+        collection_id: CollectionId,
+    },
 }
 
 impl BoardItemKind {
@@ -36,6 +41,7 @@ impl BoardItemKind {
             BoardItemKind::AssetRef { .. } => "Asset",
             BoardItemKind::Note { .. } => "Note",
             BoardItemKind::RunRef { .. } => "Run",
+            BoardItemKind::Collection { .. } => "Collection",
         }
     }
 }
@@ -85,6 +91,16 @@ mod tests {
     }
 
     #[test]
+    fn collection_roundtrip() {
+        let kind = BoardItemKind::Collection {
+            collection_id: crate::model::CollectionId::new("col-1"),
+        };
+        let json = serde_json::to_string(&kind).expect("serialize");
+        let back: BoardItemKind = serde_json::from_str(&json).expect("deserialize");
+        assert_eq!(kind, back);
+    }
+
+    #[test]
     fn item_kind_label() {
         let wf = BoardItemKind::WorkflowRef {
             workflow_id: crate::model::WorkflowId::new("wf-1"),
@@ -105,5 +121,10 @@ mod tests {
             run_id: crate::model::RunId::new("run-1"),
         };
         assert_eq!(run.label(), "Run");
+
+        let col = BoardItemKind::Collection {
+            collection_id: crate::model::CollectionId::new("col-1"),
+        };
+        assert_eq!(col.label(), "Collection");
     }
 }

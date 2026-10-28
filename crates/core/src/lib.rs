@@ -16,6 +16,7 @@
 
 pub mod asset;
 pub mod board;
+pub mod collection;
 pub mod command;
 pub mod diagnostic;
 pub mod document;

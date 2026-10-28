@@ -77,6 +77,7 @@ id_type!(NodeId);
 id_type!(EdgeId);
 id_type!(NodeTypeId);
 id_type!(SlotId);
+id_type!(CollectionId);
 id_type!(WorkflowInputId);
 id_type!(WorkflowOutputId);
 id_type!(RunId);
