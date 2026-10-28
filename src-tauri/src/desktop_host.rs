@@ -343,6 +343,7 @@ impl DesktopHostState {
             input,
             context,
             cancel,
+            run: None,
         };
         workspace
             .operation_service()

@@ -65,6 +65,7 @@ async fn op_invoke_with_invalid_input_returns_diagnostic_and_calls_nothing() {
         input: json!({ "wrong_field": 123 }),
         context: test_context(),
         cancel: CancelToken::new(),
+        run: None,
     };
 
     let err = host
@@ -120,6 +121,7 @@ async fn op_invoke_with_malformed_asset_id_returns_caller_diagnostic() {
             input: json!({ "input_file": bad_id }),
             context: test_context(),
             cancel: CancelToken::new(),
+            run: None,
         };
         let err = host
             .operation_service()
@@ -172,6 +174,7 @@ async fn valid_call_writes_step_record_with_actor_and_output_assets_hold_ids() {
             CommandProvenance::Direct,
         ),
         cancel: CancelToken::new(),
+        run: None,
     };
 
     let import_result = host
@@ -194,6 +197,7 @@ async fn valid_call_writes_step_record_with_actor_and_output_assets_hold_ids() {
             CommandProvenance::Direct,
         ),
         cancel: CancelToken::new(),
+        run: None,
     };
 
     let transform_result = host
@@ -284,6 +288,7 @@ async fn asset_import_origin_and_content_addressable_dedup() {
         input: json!({ "paths": [test_file.to_str().unwrap()] }),
         context: test_context(),
         cancel: CancelToken::new(),
+        run: None,
     };
     let res1 = host
         .operation_service()
@@ -298,6 +303,7 @@ async fn asset_import_origin_and_content_addressable_dedup() {
         input: json!({ "paths": [test_file.to_str().unwrap()] }),
         context: test_context(),
         cancel: CancelToken::new(),
+        run: None,
     };
     let res2 = host
         .operation_service()
@@ -381,6 +387,7 @@ async fn sample_mod_output_escaping_or_symlink_fails() {
                 input: json!({ "paths": [input_file.to_str().unwrap()] }),
                 context: test_context(),
                 cancel: CancelToken::new(),
+                run: None,
             },
         )
         .await
@@ -393,6 +400,7 @@ async fn sample_mod_output_escaping_or_symlink_fails() {
         input: json!({ "input_file": asset_id, "escape": true }),
         context: test_context(),
         cancel: CancelToken::new(),
+        run: None,
     };
     let escape_err = host
         .operation_service()
@@ -410,6 +418,7 @@ async fn sample_mod_output_escaping_or_symlink_fails() {
         input: json!({ "input_file": asset_id, "symlink": true }),
         context: test_context(),
         cancel: CancelToken::new(),
+        run: None,
     };
     let symlink_err = host
         .operation_service()
@@ -465,6 +474,7 @@ async fn sample_mod_output_with_one_good_and_one_escaping_path_finishes_failed_a
                 input: json!({ "paths": [input_file.to_str().unwrap()] }),
                 context: test_context(),
                 cancel: CancelToken::new(),
+                run: None,
             },
         )
         .await
@@ -485,6 +495,7 @@ async fn sample_mod_output_with_one_good_and_one_escaping_path_finishes_failed_a
         input: json!({ "input_file": asset_id, "escape_second": true }),
         context: test_context(),
         cancel: CancelToken::new(),
+        run: None,
     };
     let err = host
         .operation_service()
@@ -628,6 +639,7 @@ async fn preview_writes_no_records_refuses_open_world_and_handles_replace_race()
                 input: json!({ "paths": [input_file.to_str().unwrap()] }),
                 context: test_context(),
                 cancel: CancelToken::new(),
+                run: None,
             },
         )
         .await
@@ -948,6 +960,7 @@ async fn symlinked_parent_directory_escapes_output_dir_rejected() {
         input: json!({}),
         context: test_context(),
         cancel: CancelToken::new(),
+        run: None,
     };
 
     let err = host

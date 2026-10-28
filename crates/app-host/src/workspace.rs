@@ -26,8 +26,8 @@ use crate::node_catalog::NodeCatalogAlignment;
 use crate::node_catalog::NodeCatalogService;
 use crate::services::WorkspaceServices;
 use crate::{
-    AppHostError, BoardService, CollectionService, OperationService, ProjectService,
-    WorkflowService,
+    AppHostError, BoardService, CollectionService, DynamicWorkflowService, OperationService,
+    ProjectService, WorkflowService,
 };
 #[cfg(feature = "aigc")]
 use crate::{
@@ -100,6 +100,7 @@ pub struct WorkspaceHost {
     pub(crate) project_service: Arc<ProjectService>,
     pub(crate) board_service: Arc<BoardService>,
     pub(crate) collection_service: Arc<CollectionService>,
+    pub(crate) dynamic_workflow_service: Arc<DynamicWorkflowService>,
     pub(crate) workflow_service: Arc<WorkflowService>,
     pub(crate) workflow_services: RwLock<BTreeMap<ProjectId, Arc<WorkflowService>>>,
     pub(crate) event_bus: EventBus,
@@ -121,6 +122,7 @@ impl std::fmt::Debug for WorkspaceHost {
             .field("runtime_service", &self.runtime_service)
             .field("node_catalog", &self.node_catalog)
             .field("collection_service", &self.collection_service)
+            .field("dynamic_workflow_service", &self.dynamic_workflow_service)
             .field("operation_service", &self.operation_service);
         #[cfg(feature = "aigc")]
         d.field("aigc", &self.aigc);
@@ -167,6 +169,16 @@ impl WorkspaceHost {
             Arc::clone(&collection_service),
             Arc::clone(&board_service),
         );
+        let dynamic_workflow_service = Arc::new(DynamicWorkflowService::with_event_bus(
+            config.paths().clone(),
+            event_bus.clone(),
+            Arc::downgrade(&operation_service),
+            Arc::clone(&collection_service),
+        ));
+        crate::dynamic_workflow_ops::register_dynamic_workflow_ops(
+            &operation_service,
+            Arc::clone(&dynamic_workflow_service),
+        );
         let default_project_id = ProjectId::new("default");
         let workflow_service = Arc::new(WorkflowService::for_project_with_events(
             config.paths().clone(),
@@ -201,6 +213,7 @@ impl WorkspaceHost {
             project_service,
             board_service,
             collection_service,
+            dynamic_workflow_service,
             workflow_service,
             workflow_services: RwLock::new(workflow_services),
             event_bus,
@@ -642,6 +655,10 @@ impl WorkspaceHost {
         &self.operation_service
     }
 
+    pub fn dynamic_workflow_service(&self) -> &Arc<DynamicWorkflowService> {
+        &self.dynamic_workflow_service
+    }
+
     /// Operating health of the workspace AIGC subsystem.
     pub fn aigc_health(&self) -> &Health {
         #[cfg(feature = "aigc")]
@@ -929,6 +946,9 @@ impl WorkspaceHost {
     /// is exiting so that child worker processes are cleaned up instead of
     /// becoming orphans.
     pub async fn shutdown(&self) {
+        // Abort in-flight dynamic workflow runs; their documents stay as they
+        // are, so the next process reports them as interrupted.
+        self.dynamic_workflow_service.shutdown();
         #[cfg(feature = "aigc")]
         {
             let Some(worker_switch) = &self.aigc.worker_switch else {

@@ -14,6 +14,8 @@ pub mod collection_ops;
 pub mod collection_service;
 mod document_store;
 pub mod dto;
+pub mod dynamic_workflow_ops;
+pub mod dynamic_workflow_service;
 mod error;
 mod error_code;
 mod node_catalog;
@@ -67,6 +69,14 @@ pub use collection_ops::{
     register_collection_ops,
 };
 pub use collection_service::CollectionService;
+pub use dynamic_workflow_ops::{
+    DynamicWorkflowCancelOp, DynamicWorkflowCreateOp, DynamicWorkflowGetOp,
+    DynamicWorkflowGetRunOp, DynamicWorkflowListRunsOp, DynamicWorkflowResumeOp,
+    DynamicWorkflowRunOp, register_dynamic_workflow_ops,
+};
+pub use dynamic_workflow_service::{
+    DYNAMIC_WORKFLOW_SLOT_CONCURRENCY, DynamicWorkflowResult, DynamicWorkflowService,
+};
 pub use error::{AppHostError, AppHostResult};
 pub use error_code::AppHostErrorCode;
 #[cfg(feature = "aigc")]

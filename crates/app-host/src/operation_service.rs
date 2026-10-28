@@ -20,7 +20,7 @@ use reimagine_core::diagnostic::{
 use reimagine_core::event::Timestamp;
 use reimagine_core::health::Health;
 use reimagine_core::model::{AssetId, DiagnosticId, ProjectId, StepId};
-use reimagine_core::step::{StepOutcome, StepRecord};
+use reimagine_core::step::{StepOutcome, StepRecord, StepRun};
 use reimagine_core::task::CancelToken;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
@@ -231,6 +231,8 @@ pub struct InvokeRequest {
     pub input: Value,
     pub context: OperationContext,
     pub cancel: CancelToken,
+    /// Set when the call is one step of a dynamic workflow run.
+    pub run: Option<StepRun>,
 }
 
 /// Result of an operation execution.
@@ -565,9 +567,15 @@ impl OperationService {
             request.context.clone(),
             start_time,
         );
+        if let Some(run) = request.run.clone() {
+            step_record = step_record.with_run(run);
+        }
 
-        let should_record_step =
-            !spec.annotations.read_only || mod_sdk::schema::has_asset_field(&spec.output_schema);
+        // A dynamic workflow run needs a record for every step it executes,
+        // even read-only ones: resume decides from these records.
+        let should_record_step = request.run.is_some()
+            || !spec.annotations.read_only
+            || mod_sdk::schema::has_asset_field(&spec.output_schema);
 
         let step_log = self.step_log(project).await;
         if should_record_step {

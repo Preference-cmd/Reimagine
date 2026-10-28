@@ -31,7 +31,7 @@ reimagine-runtime = { path = "../runtime" }
 serde = { workspace = true }
 serde_json = { workspace = true }
 sha2 = { workspace = true }
-tokio = { workspace = true, features = ["fs", "io-util", "sync", "time"] }
+tokio = { workspace = true, features = ["fs", "io-util", "rt", "sync", "time"] }
 tracing = { workspace = true }
 
 [dev-dependencies]

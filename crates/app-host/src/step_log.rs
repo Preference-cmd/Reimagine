@@ -82,6 +82,47 @@ impl StepLog {
     pub async fn record_finish(&self, record: &StepRecord) -> Result<(), Diagnostic> {
         self.append_record(record).await
     }
+
+    /// All step records, with each step's start and finish lines merged into
+    /// one record (the last line wins). Order follows first appearance.
+    ///
+    /// Malformed lines are skipped: a process abort can leave a torn tail, and
+    /// one bad line must not make a run's history unreadable.
+    pub async fn records(&self) -> Result<Vec<StepRecord>, Diagnostic> {
+        let path = self.steps_jsonl_path();
+        let content = match tokio::fs::read_to_string(&path).await {
+            Ok(content) => content,
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(Vec::new()),
+            Err(error) => {
+                return Err(step_internal_error(
+                    "IO",
+                    format!("read steps.jsonl: {error}"),
+                ));
+            }
+        };
+
+        let mut order: Vec<String> = Vec::new();
+        let mut merged: std::collections::HashMap<String, StepRecord> =
+            std::collections::HashMap::new();
+        for line in content.lines() {
+            if line.trim().is_empty() {
+                continue;
+            }
+            let Ok(record) = serde_json::from_str::<StepRecord>(line) else {
+                continue;
+            };
+            let step_id = record.id.to_string();
+            if !merged.contains_key(&step_id) {
+                order.push(step_id.clone());
+            }
+            merged.insert(step_id, record);
+        }
+
+        Ok(order
+            .into_iter()
+            .filter_map(|step_id| merged.remove(&step_id))
+            .collect())
+    }
 }
 
 #[cfg(test)]
@@ -95,6 +136,44 @@ mod tests {
     use reimagine_core::step::{StepOutcome, StepRecord};
     use serde_json::json;
     use std::sync::Arc;
+
+    #[tokio::test]
+    async fn records_merges_start_and_finish_lines() {
+        let temp = tempfile::tempdir().unwrap();
+        let log = StepLog::new(temp.path());
+        let context = OperationContext::new(
+            CommandActor::new(CommandActorKind::Human).with_id("test-user"),
+            CommandProvenance::Direct,
+        );
+
+        for (index, finish) in [(0usize, true), (1, false)] {
+            let step_id = StepId::new(format!("step-merge-{index}"));
+            let mut record = StepRecord::new_running(
+                step_id,
+                "test.op",
+                "0.1.0",
+                json!({ "index": index }),
+                context.clone(),
+                Timestamp::new("2026-10-27T00:00:00Z"),
+            );
+            log.record_start(&record).await.unwrap();
+            if finish {
+                record.finish(
+                    StepOutcome::Succeeded {
+                        output: json!({ "ok": true }),
+                    },
+                    Timestamp::new("2026-10-27T00:00:01Z"),
+                );
+                log.record_finish(&record).await.unwrap();
+            }
+        }
+
+        let records = log.records().await.unwrap();
+        assert_eq!(records.len(), 2);
+        assert!(matches!(records[0].outcome, StepOutcome::Succeeded { .. }));
+        assert!(matches!(records[1].outcome, StepOutcome::Running));
+        assert!(records[1].finished_at.is_none());
+    }
 
     #[tokio::test]
     async fn step_log_concurrent_appends() {
