@@ -1278,6 +1278,13 @@ export async function mockOpInvoke(input: {
     };
   }
 
+  if (name === "dynamic_workflow.list_runs") {
+    return {
+      step: { id: rand("step"), op: name, outcome: "succeeded" },
+      output: { runs: [] },
+    };
+  }
+
   return {
     step: { id: rand("step"), op: name, outcome: "succeeded" },
     output: {},

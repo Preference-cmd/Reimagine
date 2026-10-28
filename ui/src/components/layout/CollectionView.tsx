@@ -4,12 +4,55 @@ import { Link, useNavigate, useParams } from "@tanstack/react-router";
 import * as m from "$paraglide/messages";
 import { useProjectStore } from "@/store/project";
 import { opInvoke, readAssetPreview, type AssetPreview } from "@/ipc";
-import { type CollectionSlot } from "@/ipc/schemas";
+import { type CollectionSlot, type SlotRunState } from "@/ipc/schemas";
 import { useCollection } from "@/hooks/useCollection";
+import { useCollectionRun } from "@/hooks/useCollectionRun";
 
 const PREVIEW_LINES = 4;
 
-function SlotItem({ projectId, slot }: { projectId: string; slot: CollectionSlot }) {
+function slotStateLabel(state: SlotRunState): string {
+  switch (state) {
+    case "queued":
+      return m["collections.slotState.queued"]();
+    case "running":
+      return m["collections.slotState.running"]();
+    case "succeeded":
+      return m["collections.slotState.succeeded"]();
+    case "failed":
+      return m["collections.slotState.failed"]();
+    case "stale":
+      return m["collections.slotState.stale"]();
+    case "cancelled":
+      return m["collections.slotState.cancelled"]();
+    case "needs_confirmation":
+      return m["collections.slotState.needsConfirmation"]();
+  }
+}
+
+function slotStateClass(state: SlotRunState): string {
+  switch (state) {
+    case "running":
+      return "bg-status-running/10 text-status-running";
+    case "succeeded":
+      return "bg-status-success/10 text-status-success";
+    case "failed":
+      return "bg-status-error/10 text-status-error";
+    case "needs_confirmation":
+      return "bg-status-warning/10 text-status-warning";
+    default:
+      return "bg-control-hover text-on-surface-variant";
+  }
+}
+
+function SlotItem({
+  projectId,
+  slot,
+  state,
+}: {
+  projectId: string;
+  slot: CollectionSlot;
+  state?: SlotRunState;
+}) {
   const [preview, setPreview] = useState<AssetPreview | null>(null);
   const [slotError, setSlotError] = useState<string | null>(null);
 
@@ -38,8 +81,15 @@ function SlotItem({ projectId, slot }: { projectId: string; slot: CollectionSlot
         <span className="font-mono text-caption font-semibold text-primary">
           {m["collections.slotPrefix"]()} {slot.id}
         </span>
-        <span className="rounded bg-control-hover px-2 py-0.5 font-mono text-caption text-on-surface-variant">
-          {mediaType}
+        <span className="flex items-center gap-2">
+          {state && (
+            <span className={`rounded px-2 py-0.5 font-mono text-caption ${slotStateClass(state)}`}>
+              {slotStateLabel(state)}
+            </span>
+          )}
+          <span className="rounded bg-control-hover px-2 py-0.5 font-mono text-caption text-on-surface-variant">
+            {mediaType}
+          </span>
         </span>
       </div>
 
@@ -79,6 +129,7 @@ export function CollectionView() {
     error: collectionError,
     refresh: fetchCollection,
   } = useCollection(activeProjectId, id);
+  const { slotStates } = useCollectionRun(activeProjectId, id);
   const [actionError, setActionError] = useState<string | null>(null);
   const error = collectionError ?? actionError;
 
@@ -185,7 +236,12 @@ export function CollectionView() {
       ) : (
         <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-3">
           {collection.slots.map((slot) => (
-            <SlotItem key={slot.id} projectId={activeProjectId} slot={slot} />
+            <SlotItem
+              key={slot.id}
+              projectId={activeProjectId}
+              slot={slot}
+              state={slotStates[slot.id]}
+            />
           ))}
         </div>
       )}

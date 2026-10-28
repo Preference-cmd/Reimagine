@@ -205,11 +205,12 @@ describe("Collections and Dynamic Workflow UI", () => {
   });
 
   test("a collection.changed event triggers a refetch", async () => {
-    let eventCallback: ((event: unknown) => void) | null = null;
+    const eventCallbacks: Array<(event: unknown) => void> = [];
     vi.spyOn(ipc, "subscribeEvents").mockImplementation((cb) => {
-      eventCallback = cb;
+      eventCallbacks.push(cb as unknown as (event: unknown) => void);
       return () => {
-        eventCallback = null;
+        const index = eventCallbacks.indexOf(cb as unknown as (event: unknown) => void);
+        if (index >= 0) eventCallbacks.splice(index, 1);
       };
     });
 
@@ -238,15 +239,17 @@ describe("Collections and Dynamic Workflow UI", () => {
     expect(getCalls).toBe(1);
 
     // Emit collection.changed event for this collection
-    expect(eventCallback).toBeTruthy();
+    expect(eventCallbacks.length).toBeGreaterThan(0);
     act(() => {
-      (eventCallback as (event: unknown) => void)({
-        type: "document",
-        kind: "collection.changed",
-        projectId: "default",
-        documentId: "col_123",
-        version: 2,
-      });
+      for (const callback of [...eventCallbacks]) {
+        callback({
+          type: "document",
+          kind: "collection.changed",
+          projectId: "default",
+          documentId: "col_123",
+          version: 2,
+        });
+      }
     });
 
     await waitFor(() => {
@@ -256,15 +259,119 @@ describe("Collections and Dynamic Workflow UI", () => {
 
     // Events from other projects must be ignored
     act(() => {
-      (eventCallback as (event: unknown) => void)({
-        type: "document",
-        kind: "collection.changed",
-        projectId: "other-project",
-        documentId: "col_123",
-        version: 3,
-      });
+      for (const callback of [...eventCallbacks]) {
+        callback({
+          type: "document",
+          kind: "collection.changed",
+          projectId: "other-project",
+          documentId: "col_123",
+          version: 3,
+        });
+      }
     });
     expect(getCalls).toBe(2);
+  });
+
+  test("slot run states follow the latest run and refresh on workflow events", async () => {
+    const eventCallbacks: Array<(event: unknown) => void> = [];
+    vi.spyOn(ipc, "subscribeEvents").mockImplementation((cb) => {
+      eventCallbacks.push(cb as unknown as (event: unknown) => void);
+      return () => {};
+    });
+    vi.spyOn(ipc, "readAssetPreview").mockResolvedValue({
+      url: "asset-url",
+      mediaType: "text/plain",
+      text: "body",
+    });
+
+    let listCalls = 0;
+    vi.spyOn(ipc, "opInvoke").mockImplementation(async (_proj, name, _input) => {
+      if (name === "collection.get") {
+        return {
+          step: {} as unknown as never,
+          output: {
+            id: "col_123",
+            name: "Run states",
+            version: 1,
+            slots: [
+              { id: "s1", asset_id: "ast_1" },
+              { id: "s2", asset_id: "ast_2" },
+            ],
+          },
+        };
+      }
+      if (name === "dynamic_workflow.list_runs") {
+        listCalls += 1;
+        const done = listCalls > 1;
+        return {
+          step: {} as unknown as never,
+          output: {
+            runs: [
+              {
+                id: "run-1",
+                project_id: "default",
+                dynamic_workflow_id: "dwf-1",
+                target: { collection_id: "col_123" },
+                state: done ? "completed" : "running",
+                version: listCalls,
+                items: [
+                  {
+                    item_id: "s1",
+                    slot_id: "s1",
+                    state: done ? "succeeded" : "running",
+                  },
+                  { item_id: "s2", slot_id: "s2", state: "failed" },
+                ],
+                created_at: "2026-01-01T00:00:00Z",
+              },
+            ],
+          },
+        };
+      }
+      return { step: {} as unknown as never, output: {} };
+    });
+
+    render(<CollectionView />);
+
+    await waitFor(() => {
+      expect(screen.getByText("Running")).toBeInTheDocument();
+      expect(screen.getByText("Failed")).toBeInTheDocument();
+    });
+    expect(listCalls).toBe(1);
+
+    act(() => {
+      for (const callback of [...eventCallbacks]) {
+        callback({
+          type: "document",
+          kind: "dynamic_workflow.slot_changed",
+          projectId: "default",
+          documentId: "run-1",
+          version: 2,
+        });
+      }
+    });
+    await waitFor(() => {
+      expect(screen.getByText("Succeeded")).toBeInTheDocument();
+    });
+    expect(listCalls).toBe(2);
+
+    act(() => {
+      for (const callback of [...eventCallbacks]) {
+        callback({
+          type: "document",
+          kind: "dynamic_workflow.run_changed",
+          projectId: "default",
+          documentId: "run-1",
+          version: 3,
+        });
+      }
+    });
+    await waitFor(() => {
+      expect(listCalls).toBe(3);
+    });
+
+    // Runs are started elsewhere; this view only reports state.
+    expect(screen.queryByRole("button", { name: /run/i })).toBeNull();
   });
 
   test("switching project navigates back to /collections", async () => {

@@ -491,3 +491,55 @@ export const CollectionDocumentSchema = z.object({
   slots: z.array(CollectionSlotSchema),
 });
 export type CollectionDocument = z.infer<typeof CollectionDocumentSchema>;
+
+/* ───── Dynamic workflow runs (W-c) ───── */
+
+export const RunStateSchema = z.enum([
+  "queued",
+  "running",
+  "completed",
+  "failed",
+  "cancelled",
+  "interrupted",
+  "needs_confirmation",
+]);
+export type RunState = z.infer<typeof RunStateSchema>;
+
+export const SlotRunStateSchema = z.enum([
+  "queued",
+  "running",
+  "succeeded",
+  "failed",
+  "stale",
+  "cancelled",
+  "needs_confirmation",
+]);
+export type SlotRunState = z.infer<typeof SlotRunStateSchema>;
+
+export const RunItemSchema = z.object({
+  item_id: z.string(),
+  slot_id: z.string().nullable().optional(),
+  state: SlotRunStateSchema,
+  diagnostic: z.unknown().nullable().optional(),
+});
+export type RunItem = z.infer<typeof RunItemSchema>;
+
+export const DynamicWorkflowRunSchema = z.object({
+  id: z.string(),
+  project_id: z.string(),
+  dynamic_workflow_id: z.string(),
+  target: z.unknown(),
+  params: z.unknown().optional(),
+  state: RunStateSchema,
+  version: z.number(),
+  items: z.array(RunItemSchema),
+  collection_id: z.string().nullable().optional(),
+  created_at: z.string(),
+  finished_at: z.string().nullable().optional(),
+});
+export type DynamicWorkflowRun = z.infer<typeof DynamicWorkflowRunSchema>;
+
+export const DynamicWorkflowRunListSchema = z.object({
+  runs: z.array(DynamicWorkflowRunSchema),
+});
+export type DynamicWorkflowRunList = z.infer<typeof DynamicWorkflowRunListSchema>;
