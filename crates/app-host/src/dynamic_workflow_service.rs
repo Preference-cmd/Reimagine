@@ -559,7 +559,7 @@ impl DynamicWorkflowService {
         project_id: &ProjectId,
         run_id: &RunId,
     ) -> DynamicWorkflowResult<RunState> {
-        let mut run = self.get_run(project_id, run_id).await?;
+        let run = self.get_run(project_id, run_id).await?;
         if run.state != RunState::Interrupted {
             return Err(dynamic_workflow_caller_error(
                 "NOT_INTERRUPTED",
@@ -569,11 +569,9 @@ impl DynamicWorkflowService {
                 ),
             ));
         }
-        run.state = RunState::Running;
-        run.version += 1;
-        self.write_run(project_id, &run).await?;
-        self.emit_run_changed(project_id, &run);
 
+        // The task announces `running` itself; inserting it before the first
+        // write keeps a concurrent read from mistaking it for a stale run.
         let handle = self.start_task(project_id.clone(), run).await?;
         if let Err(error) = handle.await {
             return Err(dynamic_workflow_internal_error(
