@@ -1,127 +1,92 @@
-@theme {
-  /* Reimagine theme primitives.
-     The editor is canvas-first: semantic primitives describe product
-     roles (canvas, panel, node, status, socket), while framework aliases
-     below keep Tailwind and shadcn-compatible color names stable. */
-  --color-canvas: #ffffff;
-  --color-canvas-grid-dot: #e5e5e5;
-  --color-canvas-grid-line: #f0f0f0;
-  --color-on-canvas: #171717;
+/* Workbench shell theme primitives.
 
-  --color-panel: #ffffff;
-  --color-panel-float: rgb(255 255 255 / 0.96);
-  --color-panel-flat: #ffffff;
-  --color-panel-raised: #fafafa;
-  --color-panel-pressed: #f0f0f0;
-  --color-panel-border: rgb(0 0 0 / 0.08);
-  --color-panel-border-hover: rgb(0 0 0 / 0.12);
-  --color-on-panel: #171717;
-  --color-on-panel-muted: #6b6b6b;
+   Light values are sampled from the reference app: #f2f1f1 chrome, white
+   surfaces, #e1e0e0 selection, #4b6f5b accent, #151515 / #646362 / #838280 /
+   #aaa9a8 ink. @theme emits them on :root; the warm dark set lives on .dark /
+   [data-theme="dark"] below and mirrors every mode-dependent value.
 
-  --color-node: rgb(255 255 255 / 0.72);
-  --color-node-body: rgb(0 0 0 / 0.04);
-  --color-node-border: rgb(0 0 0 / 0.08);
-  --color-node-border-hover: rgb(0 0 0 / 0.12);
-  --color-node-highlight: rgb(255 255 255 / 0.8);
+   A var() inside a custom property resolves where the property is declared,
+   not where it is used, so nested values (--shadow-bezel) are restated in
+   each theme block. */
+@theme static {
+  /* surfaces */
+  --color-app: #f2f1f1;
+  --color-surface: #ffffff;
+  --color-ground: #f8f8f7;
+  --color-note: #fffcf2;
+  --color-bubble: #f2f1f1;
+  --color-tile: #efeeed;
+  --color-grid: rgba(21, 21, 21, 0.085);
 
-  --color-control-hover: rgb(0 0 0 / 0.05);
-  --color-control-active: rgb(0 0 0 / 0.1);
-  --color-control-border: rgb(0 0 0 / 0.06);
-  --color-divider: rgb(0 0 0 / 0.08);
-  --color-preview-scrim: rgb(0 0 0 / 0.4);
-  --color-edge-dash: #171717;
-  --color-edge-label: rgb(255 255 255 / 0.9);
-  --color-minimap-mask: rgb(255 255 255 / 0.55);
+  /* lines: alpha, so they sit right on every surface */
+  --color-hair: rgba(21, 21, 21, 0.075);
+  --color-hair-strong: rgba(21, 21, 21, 0.12);
+  --color-hair-soft: rgba(21, 21, 21, 0.04);
+  --color-bezel-fill: rgba(255, 255, 255, 0.7);
 
-  --color-status-ready: #0070f3;
-  --color-status-running: #7928ca;
-  --color-status-warning: #f5a623;
-  --color-status-error: #ee0000;
-  --color-status-success: #29bc9b;
+  /* interaction */
+  --color-hover: rgba(21, 21, 21, 0.045);
+  --color-press: rgba(21, 21, 21, 0.07);
+  --color-active: #e1e0e0;
 
-  /* Sidebar — light gray chrome in light mode, dark in dark mode. */
-  --color-sidebar-bg: #f5f5f5;
-  --color-sidebar-border: rgb(0 0 0 / 0.06);
-  --color-sidebar-item-hover: rgb(0 0 0 / 0.05);
-  --color-sidebar-item-active: rgb(0 0 0 / 0.08);
-  --color-sidebar-text-primary: rgb(0 0 0 / 0.85);
-  --color-sidebar-text-secondary: rgb(0 0 0 / 0.5);
-  --color-sidebar-text-muted: rgb(0 0 0 / 0.3);
-  --color-sidebar-section-header: rgb(0 0 0 / 0.3);
+  /* ink */
+  --color-fg: #151515;
+  --color-fg2: #646362;
+  --color-fg3: #838280;
+  --color-fg4: #aaa9a8;
 
-  /* Elevation: stacked small offsets + an inset hairline so edges stay crisp
-     without relying on a separate heavy drop-shadow. */
-  --shadow-panel-raised:
-    inset 0 0 0 1px var(--color-panel-border), 0 1px 1px rgb(0 0 0 / 0.02),
-    0 2px 2px rgb(0 0 0 / 0.04), 0 4px 12px -2px rgb(0 0 0 / 0.06);
-  --shadow-node:
-    inset 0 1px 0 var(--color-node-highlight), 0 1px 1px rgb(0 0 0 / 0.02),
-    0 2px 2px rgb(0 0 0 / 0.04), 0 4px 12px -2px rgb(0 0 0 / 0.06);
-  --shadow-node-selected:
-    inset 0 1px 0 var(--color-node-highlight), 0 0 0 1px var(--node-tone),
-    0 1px 1px rgb(0 0 0 / 0.02), 0 4px 12px -2px rgb(0 0 0 / 0.06);
-  --shadow-modal:
-    0 1px 1px rgb(0 0 0 / 0.03), 0 4px 6px -2px rgb(0 0 0 / 0.04), 0 8px 12px -4px rgb(0 0 0 / 0.06);
+  /* accent: the reference's muted green */
+  --color-accent: #4b6f5b;
+  --color-accent-hover: #3f604d;
+  --color-accent-tint: #e7ebe9;
+  --color-accent-line: rgba(75, 111, 91, 0.32);
+  --color-on-accent: #ffffff;
 
-  /* Framework aliases. Keep these names stable for existing utilities. */
-  --color-surface: var(--color-panel);
-  --color-surface-dim: var(--color-panel-raised);
-  --color-surface-bright: var(--color-panel);
-  --color-surface-container-lowest: var(--color-canvas);
-  --color-surface-container-low: var(--color-panel);
-  --color-surface-container: var(--color-panel);
-  --color-surface-container-high: var(--color-panel-raised);
-  --color-surface-container-highest: var(--color-panel-pressed);
-  --color-on-surface: var(--color-on-panel);
-  --color-on-surface-variant: var(--color-on-panel-muted);
-  --color-inverse-surface: var(--color-on-panel);
-  --color-inverse-on-surface: var(--color-panel);
-  --color-outline: var(--color-panel-border);
-  --color-outline-variant: var(--color-control-border);
-  --color-surface-tint: var(--color-status-ready);
-  --color-primary: var(--color-on-panel);
-  --color-on-primary: var(--color-panel);
-  --color-primary-container: var(--color-on-panel);
-  --color-on-primary-container: var(--color-panel);
-  --color-inverse-primary: var(--color-panel);
-  --color-secondary: var(--color-status-ready);
-  --color-on-secondary: #ffffff;
-  --color-secondary-container: #d3e5ff;
-  --color-on-secondary-container: #0761d1;
-  --color-tertiary: #ff0080;
-  --color-on-tertiary: #ffffff;
-  --color-tertiary-container: #ffd9e4;
-  --color-on-tertiary-container: #570032;
-  --color-error: var(--color-status-error);
-  --color-on-error: #ffffff;
-  --color-error-container: #f7d4d6;
-  --color-on-error-container: #c50000;
-  --color-primary-fixed: #e9ddff;
-  --color-primary-fixed-dim: #d0bcff;
-  --color-on-primary-fixed: #23005c;
-  --color-on-primary-fixed-variant: #5516be;
-  --color-secondary-fixed: #d3e5ff;
-  --color-secondary-fixed-dim: var(--color-status-ready);
-  --color-on-secondary-fixed: #001f26;
-  --color-on-secondary-fixed-variant: #004e5c;
-  --color-tertiary-fixed: #ffd9e4;
-  --color-tertiary-fixed-dim: #ff0080;
-  --color-on-tertiary-fixed: #3e0022;
-  --color-on-tertiary-fixed-variant: #8c0053;
-  --color-background: var(--color-canvas);
-  --color-on-background: var(--color-on-canvas);
-  --color-surface-variant: var(--color-panel-raised);
+  /* state */
+  --color-info: #408ef8;
+  --color-info-tint: #e1edfe;
+  --color-ok: #3c8a5c;
+  --color-err: #e5534b;
+  --color-warn: #d9822b;
+  --color-idle: #e3e2e1;
 
-  /* Socket type colors (mirror of tokens.ts SOCKET_COLORS). */
-  --color-socket-model: #f5a623;
-  --color-socket-conditioning: #f5a623;
-  --color-socket-latent: #7928ca;
-  --color-socket-image: #50e3c2;
+  /* agent ink: gold marks only things the agent did or proposed.
+     Never use it for human actions, ordinary selection or decoration. */
+  --color-agent: #8a5d06;
+  --color-agent-btn: #94660c;
+  --color-agent-soft: #fbf5e7;
+  --color-agent-line: rgba(176, 122, 16, 0.38);
+  --color-agent-ink: #ffffff;
 
-  /* Typography. Geist is the primary font; JetBrains Mono is a bundled
-     monospace fallback for code surfaces. */
-  --font-sans: "Geist", system-ui, sans-serif;
-  --font-mono: "Geist Mono", "JetBrains Mono", ui-monospace, monospace;
+  /* depth: diffused and layered, never a hard drop */
+  --shadow-hi: inset 0 1px 0 rgba(255, 255, 255, 0.9);
+  --shadow-1: 0 1px 1px rgba(21, 21, 21, 0.03), 0 1px 3px rgba(21, 21, 21, 0.04);
+  --shadow-2: 0 1px 2px rgba(21, 21, 21, 0.04), 0 6px 16px -6px rgba(21, 21, 21, 0.08);
+  --shadow-3: 0 2px 6px -2px rgba(21, 21, 21, 0.05), 0 24px 48px -18px rgba(21, 21, 21, 0.16);
+  --shadow-bezel:
+    0 0 0 1px var(--color-hair), 0 0 0 5px var(--color-bezel-fill), 0 0 0 6px var(--color-hair-soft);
+
+  /* radii */
+  --radius-xs: 6px;
+  --radius-sm: 8px;
+  --radius-md: 10px;
+  --radius-lg: 12px;
+  --radius-xl: 16px;
+  --radius-full: 9999px;
+
+  /* motion */
+  --ease-ui: cubic-bezier(0.32, 0.72, 0, 1);
+
+  /* Typography. Geist is the primary font; the CJK fallbacks follow the
+     reference app. JetBrains Mono is a bundled monospace fallback. */
+  --font-sans:
+    "Geist", -apple-system, BlinkMacSystemFont, "PingFang SC", "Hiragino Sans GB",
+    "Microsoft YaHei", system-ui, sans-serif;
+  --font-mono: "Geist Mono", "JetBrains Mono", ui-monospace, "SF Mono", Menlo, monospace;
+
+  /* 13px shell body size. */
+  --text-ui: 13px;
+  --text-ui--line-height: 1.5;
 
   --text-display-xl: 48px;
   --text-display-xl--line-height: 48px;
@@ -181,15 +146,7 @@
   --text-label-caps--font-weight: 700;
   --text-label-caps--letter-spacing: 0.05em;
 
-  /* Radii. */
-  --radius-sm: 0.125rem;
-  --radius: 0.25rem; /* DEFAULT */
-  --radius-md: 0.375rem;
-  --radius-lg: 0.5rem;
-  --radius-xl: 0.75rem;
-  --radius-full: 9999px;
-
-  /* Spacing. */
+  /* Spacing scale. */
   --spacing-xxs: 4px;
   --spacing-xs: 8px;
   --spacing-sm: 12px;
@@ -202,38 +159,20 @@
   --spacing-5xl: 96px;
   --spacing-6xl: 128px;
 
+  /* Shell layout, mirrored by LAYOUT in ui/src/design/tokens.ts. */
+  --spacing-sidebar: 264px;
+  --spacing-nav-header: 64px;
+  --spacing-panel: 364px;
+  --spacing-panel-gap: 16px;
+  --spacing-topbar: 48px;
+  --spacing-control-height: 32px;
+
+  /* Editor spacing, still read by the AIGC canvas. */
   --spacing-canvas-grid: 20px;
   --spacing-node-padding: 12px;
-  --spacing-sidebar-width: 280px;
   --spacing-gutter-md: 16px;
   --spacing-stack-tight: 4px;
   --spacing-stack-base: 8px;
-}
-
-/* shadcn CSS variables, aliased to Reimagine theme primitives.
-   Lets shadcn primitives (Button, Dialog, etc.) pick up the palette
-   without forking the components.
-
-   Note: --color-background is NOT bridged here — it's already defined
-   in the @theme block above as the canvas alias. Re-declaring
-   it as `var(--color-background)` here would create a self-reference. */
-@theme inline {
-  --color-foreground: var(--color-on-background);
-  --color-card: var(--color-surface-container);
-  --color-card-foreground: var(--color-on-surface);
-  --color-popover: var(--color-surface-container-high);
-  --color-popover-foreground: var(--color-on-surface);
-  --color-primary-foreground: var(--color-on-primary);
-  --color-secondary-foreground: var(--color-on-secondary);
-  --color-muted: var(--color-surface-container);
-  --color-muted-foreground: var(--color-on-surface-variant);
-  --color-accent: var(--color-surface-container-high);
-  --color-accent-foreground: var(--color-on-surface);
-  --color-destructive: var(--color-error);
-  --color-destructive-foreground: var(--color-on-error);
-  --color-border: var(--color-outline);
-  --color-input: var(--color-outline);
-  --color-ring: var(--color-primary);
 }
 
 :root,
@@ -245,62 +184,98 @@
 [data-theme="dark"] {
   color-scheme: dark;
 
-  --color-canvas: #0a0a0a;
-  --color-canvas-grid-dot: #2b2b2b;
-  --color-canvas-grid-line: #1a1a1a;
-  --color-on-canvas: #f5f5f5;
+  --color-app: #191818;
+  --color-surface: #1e1d1d;
+  --color-ground: #151414;
+  --color-note: #25221c;
+  --color-bubble: #282727;
+  --color-tile: #2a2929;
+  --color-grid: rgba(255, 255, 255, 0.055);
 
-  --color-panel: #111111;
-  --color-panel-float: rgb(17 17 17 / 0.95);
-  --color-panel-flat: #1a1a1a;
-  --color-panel-raised: #1e1e1e;
-  --color-panel-pressed: #2a2a2a;
-  --color-panel-border: rgb(255 255 255 / 0.08);
-  --color-panel-border-hover: rgb(255 255 255 / 0.14);
-  --color-on-panel: #f5f5f5;
-  --color-on-panel-muted: #a3a3a3;
+  --color-hair: rgba(255, 255, 255, 0.075);
+  --color-hair-strong: rgba(255, 255, 255, 0.12);
+  --color-hair-soft: rgba(255, 255, 255, 0.035);
+  --color-bezel-fill: rgba(255, 255, 255, 0.03);
 
+  --color-hover: rgba(255, 255, 255, 0.05);
+  --color-press: rgba(255, 255, 255, 0.08);
+  --color-active: #2d2c2c;
+
+  --color-fg: #edecea;
+  --color-fg2: #a9a8a5;
+  --color-fg3: #8b8a87;
+  --color-fg4: #6c6b69;
+
+  --color-accent: #93c2a6;
+  --color-accent-hover: #a7d0b8;
+  --color-accent-tint: #22302a;
+  --color-accent-line: rgba(147, 194, 166, 0.32);
+  --color-on-accent: #0f1712;
+
+  --color-info: #5b9dff;
+  --color-info-tint: #1a2a42;
+  --color-ok: #6cc08e;
+  --color-err: #ef6b73;
+  --color-warn: #f0904a;
+  --color-idle: #383737;
+
+  --color-agent: #e9b949;
+  --color-agent-btn: #e9b949;
+  --color-agent-soft: rgba(233, 185, 73, 0.09);
+  --color-agent-line: rgba(233, 185, 73, 0.42);
+  --color-agent-ink: #1a1406;
+
+  --shadow-hi: inset 0 1px 0 rgba(255, 255, 255, 0.05);
+  --shadow-1: 0 1px 2px rgba(0, 0, 0, 0.3);
+  --shadow-2: 0 1px 2px rgba(0, 0, 0, 0.3), 0 8px 20px -8px rgba(0, 0, 0, 0.5);
+  --shadow-3: 0 2px 6px -2px rgba(0, 0, 0, 0.4), 0 24px 48px -16px rgba(0, 0, 0, 0.6);
+  /* Restated: see the note at the top of the file. */
+  --shadow-bezel:
+    0 0 0 1px var(--color-hair), 0 0 0 5px var(--color-bezel-fill), 0 0 0 6px var(--color-hair-soft);
+}
+
+/* ─────────────────────────────────────────────────────────────────────
+   AIGC node editor tokens (out of scope for the workbench shell).
+
+   components/canvas and the node styles in globals.css still read these
+   directly, including dynamic var(--color-socket-${kind}) strings. They are
+   plain custom properties rather than theme keys so those strings keep
+   resolving, and they keep their own light/dark values. The scrim is also
+   used by dialogs. */
+:root,
+[data-theme="light"] {
+  --color-node: rgb(255 255 255 / 0.72);
+  --color-node-body: rgb(0 0 0 / 0.04);
+  --color-node-border: rgb(0 0 0 / 0.08);
+  --color-node-border-hover: rgb(0 0 0 / 0.12);
+  --color-node-highlight: rgb(255 255 255 / 0.8);
+
+  --color-edge-dash: #171717;
+  --color-edge-label: rgb(255 255 255 / 0.9);
+  --color-minimap-mask: rgb(255 255 255 / 0.55);
+  --color-scrim: rgb(0 0 0 / 0.4);
+
+  --color-socket-model: #f5a623;
+  --color-socket-conditioning: #f5a623;
+  --color-socket-latent: #7928ca;
+  --color-socket-image: #50e3c2;
+}
+
+.dark,
+[data-theme="dark"] {
   --color-node: rgb(23 23 23 / 0.76);
   --color-node-body: rgb(255 255 255 / 0.06);
   --color-node-border: rgb(255 255 255 / 0.1);
   --color-node-border-hover: rgb(255 255 255 / 0.16);
   --color-node-highlight: rgb(255 255 255 / 0.08);
 
-  --color-control-hover: rgb(255 255 255 / 0.08);
-  --color-control-active: rgb(255 255 255 / 0.12);
-  --color-control-border: rgb(255 255 255 / 0.08);
-  --color-divider: rgb(255 255 255 / 0.1);
-  --color-preview-scrim: rgb(0 0 0 / 0.52);
   --color-edge-dash: #f5f5f5;
   --color-edge-label: rgb(23 23 23 / 0.92);
   --color-minimap-mask: rgb(0 0 0 / 0.45);
+  --color-scrim: rgb(0 0 0 / 0.52);
 
-  --shadow-panel-raised:
-    inset 0 0 0 1px var(--color-panel-border), 0 1px 1px rgb(0 0 0 / 0.2),
-    0 4px 8px -2px rgb(0 0 0 / 0.3), 0 8px 12px -4px rgb(0 0 0 / 0.4);
-  --shadow-node:
-    inset 0 1px 0 var(--color-node-highlight), 0 1px 1px rgb(0 0 0 / 0.25),
-    0 2px 4px -1px rgb(0 0 0 / 0.28), 0 4px 12px -2px rgb(0 0 0 / 0.32);
-  --shadow-node-selected:
-    inset 0 1px 0 var(--color-node-highlight), 0 0 0 1px var(--node-tone),
-    0 1px 1px rgb(0 0 0 / 0.25), 0 4px 12px -2px rgb(0 0 0 / 0.32);
-  --shadow-modal:
-    0 1px 1px rgb(0 0 0 / 0.2), 0 4px 8px -2px rgb(0 0 0 / 0.3), 0 8px 12px -4px rgb(0 0 0 / 0.4);
-
-  --color-secondary-container: #0f315f;
-  --color-on-secondary-container: #b8d6ff;
-  --color-tertiary-container: #5f143d;
-  --color-on-tertiary-container: #ffd9e4;
-  --color-error-container: #5f1717;
-  --color-on-error-container: #ffd4d4;
-
-  /* Sidebar — lighter than content in dark mode for depth. */
-  --color-sidebar-bg: #1a1a1a;
-  --color-sidebar-border: rgb(255 255 255 / 0.06);
-  --color-sidebar-item-hover: rgb(255 255 255 / 0.06);
-  --color-sidebar-item-active: rgb(255 255 255 / 0.1);
-  --color-sidebar-text-primary: rgb(255 255 255 / 0.88);
-  --color-sidebar-text-secondary: rgb(255 255 255 / 0.45);
-  --color-sidebar-text-muted: rgb(255 255 255 / 0.28);
-  --color-sidebar-section-header: rgb(255 255 255 / 0.2);
+  --color-socket-model: #f5a623;
+  --color-socket-conditioning: #f5a623;
+  --color-socket-latent: #7928ca;
+  --color-socket-image: #50e3c2;
 }

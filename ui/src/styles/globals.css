@@ -11,7 +11,7 @@
 
 @layer base {
   html {
-    background-color: var(--color-background);
+    background-color: var(--color-app);
   }
   html,
   body,
@@ -22,11 +22,11 @@
 
   body {
     margin: 0;
-    background-color: var(--color-background);
-    color: var(--color-on-background);
+    background-color: var(--color-app);
+    color: var(--color-fg);
     font-family: var(--font-sans);
-    font-size: var(--text-body-md);
-    line-height: var(--text-body-md--line-height);
+    font-size: var(--text-ui);
+    line-height: var(--text-ui--line-height);
     -webkit-font-smoothing: antialiased;
     text-rendering: optimizeLegibility;
     overflow: hidden;
@@ -52,12 +52,8 @@
 
   /* Infinite canvas dot grid. */
   .canvas-grid {
-    background-color: var(--color-canvas);
-    background-image: radial-gradient(
-      circle,
-      var(--color-canvas-grid-dot) 1.5px,
-      transparent 1.5px
-    );
+    background-color: var(--color-ground);
+    background-image: radial-gradient(circle, var(--color-grid) 1.5px, transparent 1.5px);
     background-size: var(--spacing-canvas-grid) var(--spacing-canvas-grid);
   }
 }
@@ -79,7 +75,7 @@
       inset 0 1px 0 var(--color-node-highlight),
       0 1px 2px rgb(0 0 0 / 0.04),
       0 4px 12px -2px rgb(0 0 0 / 0.08);
-    color: var(--color-on-surface);
+    color: var(--color-fg);
     font-family: var(--font-sans);
     transition:
       border-color 150ms ease-out,
@@ -140,8 +136,8 @@
      glow; incompatible targets (and their whole node) dim. */
   .react-flow__handle.connectingto {
     box-shadow:
-      0 0 0 5px color-mix(in srgb, var(--color-control-active) 20%, transparent),
-      0 0 12px 2px var(--color-control-active);
+      0 0 0 5px color-mix(in srgb, var(--color-accent) 20%, transparent),
+      0 0 12px 2px var(--color-accent);
     transform: translateY(-50%) scale(1.25);
   }
   .react-flow__handle.connectingto:not(.valid) {
@@ -156,12 +152,11 @@
      that ignores the parent panel's padding and rounded corners, so
      node previews and the mask overlay can bleed past the boundary.
      Force the root to clip to the rounded shape, kill the default
-     border, and let the panel-flat show through (bgColor on the
-     component is set to var(--color-panel-flat) for the same reason). */
+     border, and paint the surface behind the minimap. */
   .react-flow__minimap {
     overflow: hidden !important;
     border: none !important;
-    background: var(--color-panel-flat) !important;
+    background: var(--color-surface) !important;
     clip-path: inset(0 round 16px);
   }
   .react-flow__minimap svg {

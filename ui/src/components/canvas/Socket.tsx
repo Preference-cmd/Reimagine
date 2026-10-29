@@ -34,7 +34,7 @@ export function Socket({ kind, side, connected = false, dotColor, style, ...rest
         transform: "translateY(-50%)",
         ...(side === "left" ? { left: "-19px", right: "auto" } : { right: "-19px", left: "auto" }),
         backgroundColor: color,
-        boxShadow: connected ? `0 0 0 2px ${color}22` : "none",
+        boxShadow: connected ? `0 0 0 2px color-mix(in srgb, ${color} 13%, transparent)` : "none",
         ...style,
       }}
       isConnectable
