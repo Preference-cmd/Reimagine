@@ -13,10 +13,12 @@ const EVENT_DEBOUNCE_MS = 50;
  * Latest dynamic workflow run for a collection and its per-slot states.
  * Events are notifications only, so each one triggers a fresh read.
  *
- * Events name their run (`documentId`), so only notifications about the run
- * currently shown cause a read, and responses are applied only when they still
- * belong to the newest request: an older read that resolves late must not
- * roll the state back.
+ * An event names its run (`documentId`) but not the collection that run
+ * targets, and the collection may not have a run yet: an event for any run may
+ * announce this collection's first or newest run. So every relevant event
+ * schedules the same debounced read, and responses are applied only when they
+ * still belong to the newest request: an older read that resolves late must
+ * not roll the state back.
  */
 export function useCollectionRun(
   projectId: string,
@@ -26,14 +28,12 @@ export function useCollectionRun(
   slotStates: Record<string, SlotRunState>;
 } {
   const [run, setRun] = useState<DynamicWorkflowRun | null>(null);
-  const currentRunId = useRef<string | null>(null);
   const requestSeq = useRef(0);
   const debounceTimer = useRef<number | null>(null);
 
   const fetchRun = useCallback(async () => {
     const seq = ++requestSeq.current;
     if (!collectionId) {
-      currentRunId.current = null;
       setRun(null);
       return;
     }
@@ -43,12 +43,10 @@ export function useCollectionRun(
       });
       if (seq !== requestSeq.current) return;
       const parsed = DynamicWorkflowRunListSchema.parse(res.output);
-      currentRunId.current = parsed.runs[0]?.id ?? null;
       setRun(parsed.runs[0] ?? null);
     } catch {
       if (seq !== requestSeq.current) return;
       // A missing run list must not hide the collection itself.
-      currentRunId.current = null;
       setRun(null);
     }
   }, [projectId, collectionId]);
@@ -76,8 +74,8 @@ export function useCollectionRun(
       ) {
         return;
       }
-      // A notification about another run says nothing about the run shown.
-      if (event.documentId !== currentRunId.current) return;
+      // The event may name the shown run or one this collection has not seen
+      // yet; one fresh read of the latest run settles either case.
       if (debounceTimer.current !== null) return;
       debounceTimer.current = window.setTimeout(() => {
         debounceTimer.current = null;

@@ -29,10 +29,10 @@ function runDocument(
   };
 }
 
-function listed(run: DynamicWorkflowRun): InvokeResult {
+function listed(...runs: DynamicWorkflowRun[]): InvokeResult {
   return {
     step: {} as never,
-    output: { runs: [run] },
+    output: { runs },
   };
 }
 
@@ -73,35 +73,77 @@ describe("useCollectionRun", () => {
     });
   }
 
-  test("ignores events about another run and refreshes on the shown run", async () => {
+  test("discovers a new run announced by an event", async () => {
     let listCalls = 0;
     vi.spyOn(ipc, "opInvoke").mockImplementation(async (_project, name) => {
       expect(name).toBe("dynamic_workflow.list_runs");
       listCalls += 1;
-      return listed(
-        listCalls === 1 ? runDocument("run-1", "running", 1) : runDocument("run-1", "completed", 2),
-      );
+      return listCalls === 1
+        ? listed(runDocument("run-1", "running", 1))
+        : listed(runDocument("run-2", "running", 1));
     });
 
     const { result } = renderHook(() => useCollectionRun("default", "col-1"));
-    await waitFor(() => expect(result.current.run?.state).toBe("running"));
+    await waitFor(() => expect(result.current.run?.id).toBe("run-1"));
     expect(listCalls).toBe(1);
 
+    // The event names a run the hook has never seen: it may be this
+    // collection's newest run, so it must trigger a read.
     emitDocument({
-      kind: "dynamic_workflow.slot_changed",
-      documentId: "run-other",
-      version: 9,
+      kind: "dynamic_workflow.run_changed",
+      documentId: "run-2",
+      version: 1,
     });
-    await sleep(80);
-    expect(listCalls).toBe(1);
+    await waitFor(() => expect(result.current.run?.id).toBe("run-2"));
+    expect(listCalls).toBe(2);
+  });
+
+  test("discovers the first run when the initial read found none", async () => {
+    let listCalls = 0;
+    vi.spyOn(ipc, "opInvoke").mockImplementation(async () => {
+      listCalls += 1;
+      return listCalls === 1 ? listed() : listed(runDocument("run-1", "running", 1));
+    });
+
+    const { result } = renderHook(() => useCollectionRun("default", "col-1"));
+    await waitFor(() => expect(listCalls).toBe(1));
+    expect(result.current.run).toBeNull();
 
     emitDocument({
       kind: "dynamic_workflow.slot_changed",
       documentId: "run-1",
-      version: 2,
+      version: 1,
     });
-    await waitFor(() => expect(result.current.run?.state).toBe("completed"));
+    await waitFor(() => expect(result.current.run?.id).toBe("run-1"));
     expect(listCalls).toBe(2);
+  });
+
+  test("ignores events from another project or of an unrelated kind", async () => {
+    let listCalls = 0;
+    vi.spyOn(ipc, "opInvoke").mockImplementation(async () => {
+      listCalls += 1;
+      return listed(runDocument("run-1", "running", 1));
+    });
+
+    const { result } = renderHook(() => useCollectionRun("default", "col-1"));
+    await waitFor(() => expect(result.current.run?.id).toBe("run-1"));
+    expect(listCalls).toBe(1);
+
+    emitDocument({
+      projectId: "other",
+      kind: "dynamic_workflow.slot_changed",
+      documentId: "run-2",
+      version: 1,
+    });
+    emitDocument({
+      kind: "collection.changed",
+      documentId: "run-2",
+      version: 1,
+    });
+    await sleep(80);
+
+    expect(listCalls, "unrelated events must not trigger a read").toBe(1);
+    expect(result.current.run?.id).toBe("run-1");
   });
 
   test("coalesces a burst of run events into one read", async () => {
