@@ -40,6 +40,7 @@ export function useCollectionRun(
     try {
       const res = await opInvoke(projectId, "dynamic_workflow.list_runs", {
         collection_id: collectionId,
+        limit: 1,
       });
       if (seq !== requestSeq.current) return;
       const parsed = DynamicWorkflowRunListSchema.parse(res.output);

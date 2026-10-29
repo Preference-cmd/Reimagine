@@ -42,6 +42,11 @@ fn item_error(code: &str, message: impl Into<String>) -> Diagnostic {
     )
 }
 
+/// Run-context item id of the `collection.create` call that ends a
+/// parameter-group run. Group items are `group-<n>`, so it cannot collide.
+const GROUP_COLLECTION_ITEM: &str = "$collection";
+const GROUP_COLLECTION_STEP: &str = "collection.create";
+
 /// Per-item input prepared before the item tasks start.
 enum ItemInput {
     Collection {
@@ -125,16 +130,8 @@ impl DynamicWorkflowService {
         doc: &Arc<AsyncMutex<RunDocument>>,
         cancel: &CancelToken,
     ) -> Result<(), Diagnostic> {
-        {
-            let mut run = doc.lock().await;
-            if run.state != RunState::Running {
-                run.state = RunState::Running;
-                run.version += 1;
-                self.write_run(project_id, &run).await?;
-                self.emit_run_changed(project_id, &run);
-            }
-        }
-
+        // `begin_task` persisted the `running` state before letting this task
+        // start, so the document is already claimed.
         let (run_id, workflow, target, params, context, existing_collection) = {
             let run = doc.lock().await;
             (
@@ -284,15 +281,12 @@ impl DynamicWorkflowService {
             derive_run_state(&run.items, cancel.is_cancelled())
         };
         if let RunTarget::Groups { name, .. } = &env.target
-            && !cancel.is_cancelled()
+            && state != RunState::Cancelled
             && existing_collection.is_none()
         {
             let assets: Vec<AssetId> = outputs.iter().flatten().cloned().collect();
             if !assets.is_empty() {
-                match self
-                    .create_group_collection(project_id, name, &assets, &env.context)
-                    .await
-                {
+                match self.create_group_collection(&env, name, &assets).await {
                     Ok(id) => {
                         // Record the collection before the run settles so a
                         // later resume does not create a second one.
@@ -350,39 +344,54 @@ impl DynamicWorkflowService {
         Ok(by_item)
     }
 
+    /// Create the collection of a parameter-group run, or recover the one an
+    /// interrupted attempt already created.
+    ///
+    /// The call carries the run context under [`GROUP_COLLECTION_ITEM`], so
+    /// its step record says whether a previous attempt got as far as
+    /// creating the collection before the run document recorded it.
     async fn create_group_collection(
         &self,
-        project_id: &ProjectId,
+        env: &RunEnv,
         name: &str,
         assets: &[AssetId],
-        context: &OperationContext,
     ) -> Result<CollectionId, Diagnostic> {
-        let operations = self.operation_service().ok_or_else(|| {
-            dynamic_workflow_internal_error(
-                "SERVICE_GONE",
-                "operation service is no longer available",
-            )
-        })?;
-        let result = operations
-            .invoke(
-                project_id,
-                InvokeRequest {
-                    name: "collection.create".to_owned(),
-                    input: json!({
-                        "name": name,
-                        "assets": assets
-                            .iter()
-                            .map(|asset| asset.as_str())
-                            .collect::<Vec<_>>(),
-                    }),
-                    context: context.clone(),
-                    cancel: CancelToken::new(),
-                    run: None,
-                },
-            )
-            .await?;
-        let collection_id = result
-            .output
+        let previous = env
+            .records
+            .get(GROUP_COLLECTION_ITEM)
+            .and_then(|records| records.get(GROUP_COLLECTION_STEP));
+        let output = match previous {
+            Some(StepRecord {
+                outcome: StepOutcome::Succeeded { output },
+                ..
+            }) => output.clone(),
+            _ => {
+                env.operations
+                    .invoke(
+                        &env.project_id,
+                        InvokeRequest {
+                            name: GROUP_COLLECTION_STEP.to_owned(),
+                            input: json!({
+                                "name": name,
+                                "assets": assets
+                                    .iter()
+                                    .map(|asset| asset.as_str())
+                                    .collect::<Vec<_>>(),
+                            }),
+                            context: env.context.clone(),
+                            cancel: CancelToken::new(),
+                            run: Some(StepRun {
+                                run_id: env.run_id.clone(),
+                                item_id: GROUP_COLLECTION_ITEM.to_owned(),
+                                step_id: GROUP_COLLECTION_STEP.to_owned(),
+                            }),
+                        },
+                    )
+                    .await?
+                    .output
+            }
+        };
+        let collection_id = output
             .get("collection_id")
             .and_then(Value::as_str)
             .ok_or_else(|| {
@@ -728,6 +737,11 @@ fn derive_run_state(
     items: &[reimagine_core::dynamic_workflow::RunItem],
     cancelled: bool,
 ) -> RunState {
+    // A cancel that arrives after every item already succeeded stopped
+    // nothing: the run completed.
+    if items.iter().all(|item| item.state == SlotState::Succeeded) {
+        return RunState::Completed;
+    }
     if cancelled {
         return RunState::Cancelled;
     }
@@ -740,8 +754,30 @@ fn derive_run_state(
     {
         return RunState::NeedsConfirmation;
     }
-    if items.iter().all(|item| item.state == SlotState::Succeeded) {
-        return RunState::Completed;
-    }
     RunState::Failed
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use reimagine_core::dynamic_workflow::RunItem;
+
+    fn item(state: SlotState) -> RunItem {
+        let mut item = RunItem::new("slot-1", None);
+        item.state = state;
+        item
+    }
+
+    #[test]
+    fn a_late_cancel_does_not_undo_a_completed_run() {
+        let done = [item(SlotState::Succeeded), item(SlotState::Succeeded)];
+        assert_eq!(derive_run_state(&done, true), RunState::Completed);
+
+        let partial = [item(SlotState::Succeeded), item(SlotState::Cancelled)];
+        assert_eq!(derive_run_state(&partial, true), RunState::Cancelled);
+        assert_eq!(
+            derive_run_state(&[item(SlotState::Failed)], false),
+            RunState::Failed
+        );
+    }
 }

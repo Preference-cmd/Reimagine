@@ -372,7 +372,9 @@ impl DynamicWorkflowResumeOp {
         Self {
             spec: OperationSpec {
                 name: "dynamic_workflow.resume".to_owned(),
-                description: "Resume an interrupted dynamic workflow run".to_owned(),
+                description: "Resume an interrupted dynamic workflow run in the background; \
+                              progress arrives as run events"
+                    .to_owned(),
                 input_schema: json!({
                     "type": "object",
                     "properties": {
@@ -389,7 +391,7 @@ impl DynamicWorkflowResumeOp {
                     },
                     "required": ["state"],
                     "additionalProperties": false,
-                    "examples": [{ "state": "completed" }]
+                    "examples": [{ "state": "running" }]
                 }),
                 annotations: OperationAnnotations {
                     read_only: false,
@@ -489,10 +491,11 @@ impl DynamicWorkflowListRunsOp {
                 input_schema: json!({
                     "type": "object",
                     "properties": {
-                        "collection_id": { "type": "string" }
+                        "collection_id": { "type": "string" },
+                        "limit": { "type": "integer", "minimum": 1 }
                     },
                     "additionalProperties": false,
-                    "examples": [{ "collection_id": "col-1" }]
+                    "examples": [{ "collection_id": "col-1", "limit": 1 }]
                 }),
                 output_schema: json!({
                     "type": "object",
@@ -535,9 +538,15 @@ impl KernelOp for DynamicWorkflowListRunsOp {
                 ));
             }
         };
+        // The input schema already bounds `limit` to a positive integer.
+        let limit = call
+            .caller_input
+            .get("limit")
+            .and_then(Value::as_u64)
+            .map(|limit| usize::try_from(limit).unwrap_or(usize::MAX));
         let runs = self
             .service
-            .list_runs(&call.project_id, collection_id.as_ref())
+            .list_runs(&call.project_id, collection_id.as_ref(), limit)
             .await?;
         let runs: Vec<Value> = runs
             .into_iter()

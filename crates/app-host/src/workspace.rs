@@ -655,10 +655,6 @@ impl WorkspaceHost {
         &self.operation_service
     }
 
-    pub fn dynamic_workflow_service(&self) -> &Arc<DynamicWorkflowService> {
-        &self.dynamic_workflow_service
-    }
-
     /// Operating health of the workspace AIGC subsystem.
     pub fn aigc_health(&self) -> &Health {
         #[cfg(feature = "aigc")]

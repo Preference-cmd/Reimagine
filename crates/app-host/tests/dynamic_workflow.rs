@@ -722,6 +722,23 @@ async fn wait_for_run(
     panic!("run `{run_id}` did not settle");
 }
 
+/// Resume an interrupted run, which only schedules it, and wait until the
+/// resumed task settles.
+async fn resume_and_wait(host: &WorkspaceHost, project: &ProjectId, run_id: &RunId) -> RunDocument {
+    let output = invoke(
+        host,
+        project,
+        "dynamic_workflow.resume",
+        json!({ "run_id": run_id.as_str() }),
+    )
+    .await;
+    assert_eq!(
+        output["state"], "running",
+        "resume returns once the task is claimed"
+    );
+    wait_for_run(host, project, run_id, |run| !run.state.is_active()).await
+}
+
 fn copy_workflow(extra_steps: Vec<Value>, output: Value) -> Value {
     let mut steps = vec![json!({
         "id": "check",
@@ -1204,14 +1221,8 @@ async fn interrupted_run_resumes_after_the_last_successful_step() {
     let run = get_run(&host, &project, &run_id).await;
     assert_eq!(run.state, RunState::Interrupted);
 
-    let output = invoke(
-        &host,
-        &project,
-        "dynamic_workflow.resume",
-        json!({ "run_id": run_id.as_str() }),
-    )
-    .await;
-    assert_eq!(output["state"], "completed");
+    let run = resume_and_wait(&host, &project, &run_id).await;
+    assert_eq!(run.state, RunState::Completed);
 
     let run = get_run(&host, &project, &run_id).await;
     assert_eq!(run.state, RunState::Completed);
@@ -1288,14 +1299,8 @@ async fn a_failing_run_task_marks_the_run_failed() {
         .await
         .expect("remove collection");
 
-    let output = invoke(
-        &host,
-        &project,
-        "dynamic_workflow.resume",
-        json!({ "run_id": run_id.as_str() }),
-    )
-    .await;
-    assert_eq!(output["state"], "failed");
+    let run = resume_and_wait(&host, &project, &run_id).await;
+    assert_eq!(run.state, RunState::Failed);
 
     let run = get_run(&host, &project, &run_id).await;
     assert_eq!(run.state, RunState::Failed);
@@ -1371,14 +1376,8 @@ async fn interrupted_open_world_step_needs_confirmation_and_is_not_replayed() {
         RunState::Interrupted
     );
 
-    let output = invoke(
-        &host,
-        &project,
-        "dynamic_workflow.resume",
-        json!({ "run_id": run_id.as_str() }),
-    )
-    .await;
-    assert_eq!(output["state"], "needs_confirmation");
+    let run = resume_and_wait(&host, &project, &run_id).await;
+    assert_eq!(run.state, RunState::NeedsConfirmation);
 
     let run = get_run(&host, &project, &run_id).await;
     assert_eq!(run.state, RunState::NeedsConfirmation);
@@ -1605,14 +1604,8 @@ async fn resume_reads_the_input_asset_pinned_at_run_creation() {
     )
     .await;
 
-    let output = invoke(
-        &host,
-        &project,
-        "dynamic_workflow.resume",
-        json!({ "run_id": run_id.as_str() }),
-    )
-    .await;
-    assert_eq!(output["state"], "completed");
+    let run = resume_and_wait(&host, &project, &run_id).await;
+    assert_eq!(run.state, RunState::Completed);
 
     assert_eq!(
         slot_contents(&host, &project, &collection).await,
@@ -1695,14 +1688,8 @@ async fn resume_uses_the_workflow_snapshot() {
     .await
     .expect("write dynamic workflow");
 
-    let output = invoke(
-        &host,
-        &project,
-        "dynamic_workflow.resume",
-        json!({ "run_id": run_id.as_str() }),
-    )
-    .await;
-    assert_eq!(output["state"], "completed");
+    let run = resume_and_wait(&host, &project, &run_id).await;
+    assert_eq!(run.state, RunState::Completed);
     assert_eq!(
         ops.counters.pause.load(Ordering::SeqCst),
         2,
@@ -1818,11 +1805,15 @@ async fn concurrent_resumes_start_one_task() {
         RunState::Interrupted
     );
 
-    let service = host.dynamic_workflow_service();
-    let (first, second) = tokio::join!(
-        service.resume(&project, &run_id),
-        service.resume(&project, &run_id)
-    );
+    let resume = || {
+        try_invoke(
+            &host,
+            &project,
+            "dynamic_workflow.resume",
+            json!({ "run_id": run_id.as_str() }),
+        )
+    };
+    let (first, second) = tokio::join!(resume(), resume());
     let results = [first, second];
     assert_eq!(
         results.iter().filter(|result| result.is_ok()).count(),
@@ -1843,7 +1834,7 @@ async fn concurrent_resumes_start_one_task() {
         error.code().as_str()
     );
 
-    let run = get_run(&host, &project, &run_id).await;
+    let run = wait_for_run(&host, &project, &run_id, |run| !run.state.is_active()).await;
     assert_eq!(run.state, RunState::Completed);
     assert_eq!(
         ops.counters.pause.load(Ordering::SeqCst),
@@ -1882,14 +1873,8 @@ async fn group_run_resumes_and_creates_its_collection_once() {
     drop(host);
     let host = reopen_host(&base, &ops).await;
 
-    let output = invoke(
-        &host,
-        &project,
-        "dynamic_workflow.resume",
-        json!({ "run_id": run_id.as_str() }),
-    )
-    .await;
-    assert_eq!(output["state"], "completed");
+    let run = resume_and_wait(&host, &project, &run_id).await;
+    assert_eq!(run.state, RunState::Completed);
 
     let run = get_run(&host, &project, &run_id).await;
     assert_eq!(run.state, RunState::Completed);
@@ -1952,14 +1937,8 @@ async fn resuming_a_group_run_that_has_a_collection_does_not_create_another() {
     .await
     .expect("write run document");
 
-    let output = invoke(
-        &host,
-        &project,
-        "dynamic_workflow.resume",
-        json!({ "run_id": run_id.as_str() }),
-    )
-    .await;
-    assert_eq!(output["state"], "completed");
+    let run = resume_and_wait(&host, &project, &run_id).await;
+    assert_eq!(run.state, RunState::Completed);
 
     let run = get_run(&host, &project, &run_id).await;
     assert_eq!(run.collection_id.as_ref(), Some(&original_collection));
@@ -2130,6 +2109,29 @@ async fn unknown_target_keys_are_caller_diagnostics() {
         error.message()
     );
 
+    // A collection id is a path segment; one that climbs out of this
+    // project's directory never reaches the collection service.
+    let other = create_project(&host, "other").await;
+    let other_assets = import_assets(&host, &other, &base, &[("b.txt", "beta")]).await;
+    let other_collection = create_collection(&host, &other, &other_assets).await;
+    let error = try_invoke(
+        &host,
+        &project,
+        "dynamic_workflow.run",
+        json!({
+            "dynamic_workflow_id": workflow_id,
+            "target": {
+                "collection_id": format!("../../other/collections/{other_collection}")
+            }
+        }),
+    )
+    .await
+    .expect_err("a collection id with a path separator is rejected");
+    assert_eq!(
+        error.code().as_str(),
+        "DYNAMIC_WORKFLOW/CALLER_INVALID_TARGET"
+    );
+
     let output = invoke(
         &host,
         &project,
@@ -2141,6 +2143,148 @@ async fn unknown_target_keys_are_caller_diagnostics() {
         output["runs"].as_array().expect("runs").len(),
         0,
         "no run was created"
+    );
+
+    let _ = std::fs::remove_dir_all(&base);
+}
+
+#[tokio::test]
+async fn list_runs_returns_the_newest_runs_first_before_and_after_a_restart() {
+    let base = temp_dir("list-runs-limit");
+    let ops = TestOps::new();
+    let host = build_host(&base).await;
+    let project = create_project(&host, "proj").await;
+    let assets = import_assets(&host, &project, &base, &[("a.txt", "alpha")]).await;
+    let collection = create_collection(&host, &project, &assets).await;
+    let other = create_collection(&host, &project, &assets).await;
+    let workflow_id = create_workflow(
+        &host,
+        &project,
+        copy_workflow(
+            vec![json!({
+                "id": "copy",
+                "op": "test.copy",
+                "input": { "doc": { "$from": "inputs.doc" } }
+            })],
+            json!({ "$from": "steps.copy.doc" }),
+        ),
+    )
+    .await;
+    ops.register(&host);
+
+    let mut runs = Vec::new();
+    for target in [&collection, &other, &collection] {
+        let run_id = start_run(
+            &host,
+            &project,
+            &workflow_id,
+            json!({ "collection_id": target.as_str() }),
+            None,
+        )
+        .await;
+        wait_for_run(&host, &project, &run_id, |run| !run.state.is_active()).await;
+        runs.push(run_id);
+    }
+
+    let listed = |output: Value| -> Vec<String> {
+        output["runs"]
+            .as_array()
+            .expect("runs")
+            .iter()
+            .map(|run| run["id"].as_str().expect("run id").to_owned())
+            .collect()
+    };
+    let newest = invoke(
+        &host,
+        &project,
+        "dynamic_workflow.list_runs",
+        json!({ "collection_id": collection.as_str(), "limit": 1 }),
+    )
+    .await;
+    assert_eq!(listed(newest), vec![runs[2].to_string()]);
+
+    // A new process builds its index from the run documents on disk.
+    host.shutdown().await;
+    drop(host);
+    let host = reopen_host(&base, &ops).await;
+    let all = invoke(
+        &host,
+        &project,
+        "dynamic_workflow.list_runs",
+        json!({ "collection_id": collection.as_str() }),
+    )
+    .await;
+    assert_eq!(listed(all), vec![runs[2].to_string(), runs[0].to_string()]);
+
+    let error = try_invoke(
+        &host,
+        &project,
+        "dynamic_workflow.list_runs",
+        json!({ "limit": 0 }),
+    )
+    .await
+    .expect_err("limit must be positive");
+    assert!(!error.message().is_empty());
+
+    let _ = std::fs::remove_dir_all(&base);
+}
+
+#[tokio::test]
+async fn resuming_a_group_run_reuses_a_collection_it_created_but_never_recorded() {
+    let base = temp_dir("group-unrecorded-collection");
+    let ops = TestOps::new();
+    let host = build_host(&base).await;
+    let project = create_project(&host, "proj").await;
+    let workflow_id = create_workflow(&host, &project, group_workflow("test.render")).await;
+    ops.register(&host);
+
+    let run_id = start_run(
+        &host,
+        &project,
+        &workflow_id,
+        json!({
+            "groups": [{ "text": "first" }, { "text": "second" }],
+            "name": "Rendered batch"
+        }),
+        None,
+    )
+    .await;
+    let run = wait_for_run(&host, &project, &run_id, |run| !run.state.is_active()).await;
+    let original_collection = run.collection_id.clone().expect("created collection");
+
+    // A crash after `collection.create` finished but before the run document
+    // named the collection: only the step log knows about it.
+    let run_path = host
+        .config()
+        .paths()
+        .project_dir(project.as_str())
+        .join("dynamic_workflow_runs")
+        .join(format!("{}.json", run_id.as_str()));
+    let mut document: Value =
+        serde_json::from_slice(&tokio::fs::read(&run_path).await.expect("read run document"))
+            .expect("run json");
+    document["state"] = json!("interrupted");
+    document
+        .as_object_mut()
+        .expect("run object")
+        .remove("collection_id");
+    tokio::fs::write(
+        &run_path,
+        serde_json::to_vec_pretty(&document).expect("serialize run"),
+    )
+    .await
+    .expect("write run document");
+    host.shutdown().await;
+    drop(host);
+    let host = reopen_host(&base, &ops).await;
+
+    let run = resume_and_wait(&host, &project, &run_id).await;
+    assert_eq!(run.state, RunState::Completed);
+    assert_eq!(run.collection_id.as_ref(), Some(&original_collection));
+    assert_eq!(
+        collection_file_count(&host, &project).await,
+        1,
+        "the collection from the step log is reused, not created again"
     );
 
     let _ = std::fs::remove_dir_all(&base);

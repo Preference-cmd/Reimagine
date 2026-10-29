@@ -26,8 +26,8 @@ use reimagine_core::model::{
 };
 use reimagine_core::task::CancelToken;
 use serde_json::{Value, json};
-use tokio::sync::{Mutex as AsyncMutex, Notify};
-use tokio::task::{AbortHandle, JoinHandle};
+use tokio::sync::{Mutex as AsyncMutex, Notify, OwnedMutexGuard};
+use tokio::task::AbortHandle;
 
 use crate::collection_service::CollectionService;
 use crate::document_store::{read_document, write_document};
@@ -106,6 +106,33 @@ pub(crate) struct ActiveRun {
     pub(crate) abort: AbortHandle,
 }
 
+/// A held run transition guard. Dropping it releases the guard and removes
+/// the run's entry once no one else holds or awaits it, so the table only
+/// covers runs with a transition in flight.
+struct RunTransition<'a> {
+    transitions: &'a Mutex<HashMap<RunId, Arc<AsyncMutex<()>>>>,
+    run_id: RunId,
+    guard: Option<OwnedMutexGuard<()>>,
+}
+
+impl Drop for RunTransition<'_> {
+    fn drop(&mut self) {
+        // Release first, so the count below is the table's own handle plus
+        // the callers still waiting for this guard.
+        self.guard.take();
+        let mut transitions = self
+            .transitions
+            .lock()
+            .expect("dynamic workflow run transition registry poisoned");
+        if transitions
+            .get(&self.run_id)
+            .is_some_and(|lock| Arc::strong_count(lock) == 1)
+        {
+            transitions.remove(&self.run_id);
+        }
+    }
+}
+
 /// Owns dynamic workflow documents and schedules their batch runs.
 pub struct DynamicWorkflowService {
     paths: AppPaths,
@@ -124,6 +151,33 @@ pub struct DynamicWorkflowService {
     /// Set once the service is shutting down: no new task may be registered,
     /// even if a claim was already past its first registry check.
     shutting_down: AtomicBool,
+    /// Per project, what `list_runs` needs to filter and order runs without
+    /// reading every run document. A project is scanned once, on its first
+    /// listing; `write_run` keeps a scanned project's entries current.
+    run_index: AsyncMutex<HashMap<ProjectId, HashMap<RunId, RunSummary>>>,
+}
+
+/// The fields of a run document that `list_runs` filters and orders by.
+#[derive(Debug, Clone)]
+struct RunSummary {
+    created_at: Timestamp,
+    target_collection: Option<CollectionId>,
+    created_collection: Option<CollectionId>,
+}
+
+impl RunSummary {
+    fn of(run: &RunDocument) -> Self {
+        Self {
+            created_at: run.created_at.clone(),
+            target_collection: run.target.collection_id().cloned(),
+            created_collection: run.collection_id.clone(),
+        }
+    }
+
+    fn touches(&self, collection_id: &CollectionId) -> bool {
+        self.target_collection.as_ref() == Some(collection_id)
+            || self.created_collection.as_ref() == Some(collection_id)
+    }
 }
 
 impl std::fmt::Debug for DynamicWorkflowService {
@@ -155,6 +209,7 @@ impl DynamicWorkflowService {
             active: RwLock::new(HashMap::new()),
             run_transitions: Mutex::new(HashMap::new()),
             shutting_down: AtomicBool::new(false),
+            run_index: AsyncMutex::new(HashMap::new()),
         }
     }
 
@@ -368,9 +423,7 @@ impl DynamicWorkflowService {
         // The task is claimed before the document is first written: a reader
         // that arrives between the two must see the registered run, not an
         // idle document it can normalize to `interrupted`.
-        self.start_task(project_id.clone(), run.clone())
-            .await
-            .map(|_| ())?;
+        self.start_task(project_id.clone(), run.clone()).await?;
         Ok(run)
     }
 
@@ -391,20 +444,19 @@ impl DynamicWorkflowService {
         Ok(())
     }
 
-    /// Write a run document and spawn its task. The returned handle is for
-    /// callers that want to wait (resume); `run` drops it and returns early.
+    /// Write a run document and spawn its task.
     async fn start_task(
         self: &Arc<Self>,
         project_id: ProjectId,
         run: RunDocument,
-    ) -> DynamicWorkflowResult<JoinHandle<()>> {
-        let transition = self.run_transition(&run.id);
-        let _transition = transition.lock().await;
+    ) -> DynamicWorkflowResult<RunState> {
+        let _transition = self.lock_run_transition(&run.id).await;
         self.begin_task(project_id, run).await
     }
 
     /// Claim `run` in the active registry, persist its `running` state, and
-    /// let its task start. The caller holds this run's transition guard.
+    /// let its task start. Returns the claimed state. The caller holds this
+    /// run's transition guard.
     ///
     /// A run that already has a live task is rejected here rather than
     /// silently replacing the registry entry: two tasks over one run would
@@ -418,7 +470,7 @@ impl DynamicWorkflowService {
         self: &Arc<Self>,
         project_id: ProjectId,
         mut run: RunDocument,
-    ) -> DynamicWorkflowResult<JoinHandle<()>> {
+    ) -> DynamicWorkflowResult<RunState> {
         let run_id = run.id.clone();
         if self.shutting_down.load(Ordering::SeqCst) {
             return Err(shutting_down());
@@ -490,12 +542,13 @@ impl DynamicWorkflowService {
             self.fail_claim(&run_id, &doc).await;
             return Err(error);
         }
-        {
+        let state = {
             let run = doc.lock().await;
             self.emit_run_changed(&project_id, &run);
-        }
+            run.state
+        };
         start.notify_one();
-        Ok(handle)
+        Ok(state)
     }
 
     /// Drop a claim whose `running` state could not be persisted: mark the
@@ -527,10 +580,17 @@ impl DynamicWorkflowService {
         project_id: &ProjectId,
         run: &RunDocument,
     ) -> DynamicWorkflowResult<()> {
+        // The index lock is held across the write so a first scan of this
+        // project cannot miss a document that is being created.
+        let mut index = self.run_index.lock().await;
         let path = self.run_path(project_id, &run.id);
         write_document(&path, run, "dynamic workflow run")
             .await
-            .map_err(io_error)
+            .map_err(io_error)?;
+        if let Some(runs) = index.get_mut(project_id) {
+            runs.insert(run.id.clone(), RunSummary::of(run));
+        }
+        Ok(())
     }
 
     fn emit(&self, kind: &str, project_id: &ProjectId, run: &RunDocument) {
@@ -558,18 +618,25 @@ impl DynamicWorkflowService {
             .cloned()
     }
 
-    /// The transition guard for one run. Claims and normalizations of the
-    /// same run serialize on it; unrelated runs never wait for each other.
-    fn run_transition(&self, run_id: &RunId) -> Arc<AsyncMutex<()>> {
-        let mut transitions = self
-            .run_transitions
-            .lock()
-            .expect("dynamic workflow run transition registry poisoned");
-        Arc::clone(
-            transitions
-                .entry(run_id.clone())
-                .or_insert_with(|| Arc::new(AsyncMutex::new(()))),
-        )
+    /// Take the transition guard for one run. Claims and normalizations of
+    /// the same run serialize on it; unrelated runs never wait for each other.
+    async fn lock_run_transition(&self, run_id: &RunId) -> RunTransition<'_> {
+        let lock = {
+            let mut transitions = self
+                .run_transitions
+                .lock()
+                .expect("dynamic workflow run transition registry poisoned");
+            Arc::clone(
+                transitions
+                    .entry(run_id.clone())
+                    .or_insert_with(|| Arc::new(AsyncMutex::new(()))),
+            )
+        };
+        RunTransition {
+            transitions: &self.run_transitions,
+            run_id: run_id.clone(),
+            guard: Some(lock.lock_owned().await),
+        }
     }
 
     /// Read a run, preferring the in-memory copy of an active task.
@@ -587,8 +654,7 @@ impl DynamicWorkflowService {
         if let Some(active) = self.active_run(run_id) {
             return Ok(active.doc.lock().await.clone());
         }
-        let transition = self.run_transition(run_id);
-        let _transition = transition.lock().await;
+        let _transition = self.lock_run_transition(run_id).await;
         if let Some(active) = self.active_run(run_id) {
             return Ok(active.doc.lock().await.clone());
         }
@@ -621,16 +687,59 @@ impl DynamicWorkflowService {
     }
 
     /// Runs of a project, newest first, optionally only those touching one
-    /// collection (as their target or as their created collection).
+    /// collection (as their target or as their created collection) and at
+    /// most `limit` of them. Only the returned documents are read.
     pub async fn list_runs(
         &self,
         project_id: &ProjectId,
         collection_id: Option<&CollectionId>,
+        limit: Option<usize>,
     ) -> DynamicWorkflowResult<Vec<RunDocument>> {
+        let mut selected: Vec<(RunId, Timestamp)> = {
+            let mut index = self.run_index.lock().await;
+            if !index.contains_key(project_id) {
+                let scanned = self.scan_runs(project_id).await?;
+                index.insert(project_id.clone(), scanned);
+            }
+            index[project_id]
+                .iter()
+                .filter(|(_, summary)| collection_id.is_none_or(|id| summary.touches(id)))
+                .map(|(run_id, summary)| (run_id.clone(), summary.created_at.clone()))
+                .collect()
+        };
+        selected.sort_by(|(a_id, a_created), (b_id, b_created)| {
+            b_created
+                .as_str()
+                .cmp(a_created.as_str())
+                .then_with(|| b_id.as_str().cmp(a_id.as_str()))
+        });
+        selected.truncate(limit.unwrap_or(usize::MAX));
+
+        let mut runs = Vec::with_capacity(selected.len());
+        for (run_id, _) in selected {
+            match self.get_run(project_id, &run_id).await {
+                Ok(run) => runs.push(run),
+                Err(error) => tracing::warn!(
+                    run_id = %run_id,
+                    error = %error.message(),
+                    "skipping unreadable dynamic workflow run document"
+                ),
+            }
+        }
+        Ok(runs)
+    }
+
+    /// Read every run document of a project once to build its index.
+    async fn scan_runs(
+        &self,
+        project_id: &ProjectId,
+    ) -> DynamicWorkflowResult<HashMap<RunId, RunSummary>> {
         let dir = self.runs_dir(project_id);
         let mut entries = match tokio::fs::read_dir(&dir).await {
             Ok(entries) => entries,
-            Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(Vec::new()),
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+                return Ok(HashMap::new());
+            }
             Err(error) => {
                 return Err(dynamic_workflow_internal_error(
                     "IO",
@@ -639,50 +748,26 @@ impl DynamicWorkflowService {
             }
         };
 
-        let mut paths = Vec::new();
+        let mut runs = HashMap::new();
         while let Some(entry) = entries.next_entry().await.map_err(|error| {
             dynamic_workflow_internal_error("IO", format!("read run dir: {error}"))
         })? {
             let path = entry.path();
-            if path.extension().and_then(|ext| ext.to_str()) == Some("json") {
-                paths.push(path);
-            }
-        }
-
-        let mut runs = Vec::new();
-        for path in paths {
-            let Some(run_id) = path
-                .file_stem()
-                .and_then(|stem| stem.to_str())
-                .and_then(|stem| RunId::try_new(stem).ok())
-            else {
+            if path.extension().and_then(|ext| ext.to_str()) != Some("json") {
                 continue;
-            };
-            let run = match self.get_run(project_id, &run_id).await {
-                Ok(run) => run,
-                Err(error) => {
-                    tracing::warn!(
-                        path = %path.display(),
-                        error = %error.message(),
-                        "skipping unreadable dynamic workflow run document"
-                    );
-                    continue;
+            }
+            match read_document::<RunDocument>(&path, "dynamic workflow run").await {
+                Ok(Some(run)) => {
+                    runs.insert(run.id.clone(), RunSummary::of(&run));
                 }
-            };
-            if let Some(collection_id) = collection_id
-                && run.target.collection_id() != Some(collection_id)
-                && run.collection_id.as_ref() != Some(collection_id)
-            {
-                continue;
+                Ok(None) => {}
+                Err(error) => tracing::warn!(
+                    path = %path.display(),
+                    error = %error,
+                    "skipping unreadable dynamic workflow run document"
+                ),
             }
-            runs.push(run);
         }
-        runs.sort_by(|a, b| {
-            b.created_at
-                .as_str()
-                .cmp(a.created_at.as_str())
-                .then_with(|| b.id.as_str().cmp(a.id.as_str()))
-        });
         Ok(runs)
     }
 
@@ -724,8 +809,8 @@ impl DynamicWorkflowService {
 
     /// Resume an interrupted run from the last successful step of each item.
     ///
-    /// Resuming runs synchronously so the returned state describes the
-    /// resumed execution, unlike `run` which returns after scheduling.
+    /// Like `run`, this returns once the resumed task is claimed; the returned
+    /// state is the claimed `running` state, and progress arrives as events.
     pub async fn resume(
         self: &Arc<Self>,
         project_id: &ProjectId,
@@ -739,25 +824,15 @@ impl DynamicWorkflowService {
         // Check the state again inside the claim window: between the read
         // above and here another resume may have claimed the run and even
         // finished it. Two concurrent resumes must not both start a task.
-        let handle = {
-            let transition = self.run_transition(run_id);
-            let _transition = transition.lock().await;
-            if self.active_run(run_id).is_some() {
-                return Err(run_already_active(run_id));
-            }
-            let run = self.load_run(project_id, run_id).await?;
-            if run.state != RunState::Interrupted {
-                return Err(not_interrupted(run_id, run.state));
-            }
-            self.begin_task(project_id.clone(), run).await?
-        };
-        if let Err(error) = handle.await {
-            return Err(dynamic_workflow_internal_error(
-                "RESUME_TASK",
-                format!("resumed run task failed: {error}"),
-            ));
+        let _transition = self.lock_run_transition(run_id).await;
+        if self.active_run(run_id).is_some() {
+            return Err(run_already_active(run_id));
         }
-        Ok(self.get_run(project_id, run_id).await?.state)
+        let run = self.load_run(project_id, run_id).await?;
+        if run.state != RunState::Interrupted {
+            return Err(not_interrupted(run_id, run.state));
+        }
+        self.begin_task(project_id.clone(), run).await
     }
 
     /// Abort every in-flight run task. Run documents are left as they are, so
@@ -798,6 +873,7 @@ mod tests {
     use super::*;
     use reimagine_core::command::{CommandActor, CommandActorKind, CommandProvenance};
     use std::time::Duration;
+    use tokio::task::JoinHandle;
 
     fn test_service() -> Arc<DynamicWorkflowService> {
         let nonce = std::time::SystemTime::now()
@@ -934,8 +1010,7 @@ mod tests {
             .expect("write run b");
 
         // Simulate an in-flight normalization of run a.
-        let transition = service.run_transition(&run_a);
-        let guard = transition.lock().await;
+        let guard = service.lock_run_transition(&run_a).await;
 
         let reader = {
             let service = Arc::clone(&service);
@@ -956,6 +1031,10 @@ mod tests {
             .await
             .expect("normalize run a");
         assert_eq!(run.state, RunState::Interrupted);
+        assert!(
+            service.run_transitions.lock().unwrap().is_empty(),
+            "released transition guards are forgotten"
+        );
 
         let _ = std::fs::remove_dir_all(service.paths.base_path());
     }

@@ -75,8 +75,10 @@ describe("useCollectionRun", () => {
 
   test("discovers a new run announced by an event", async () => {
     let listCalls = 0;
-    vi.spyOn(ipc, "opInvoke").mockImplementation(async (_project, name) => {
+    vi.spyOn(ipc, "opInvoke").mockImplementation(async (_project, name, input) => {
       expect(name).toBe("dynamic_workflow.list_runs");
+      // Only the newest run is shown, so only it is read.
+      expect(input).toEqual({ collection_id: "col-1", limit: 1 });
       listCalls += 1;
       return listCalls === 1
         ? listed(runDocument("run-1", "running", 1))
