@@ -21,7 +21,7 @@ use reimagine_core::dynamic_workflow::{
 };
 use reimagine_core::event::{Event, EventBus, Timestamp};
 use reimagine_core::model::{
-    CollectionId, DiagnosticId, DynamicWorkflowId, ProjectId, RunId, SlotId,
+    AssetId, CollectionId, DiagnosticId, DynamicWorkflowId, ProjectId, RunId, SlotId,
 };
 use reimagine_core::task::CancelToken;
 use serde_json::{Value, json};
@@ -69,6 +69,20 @@ fn io_error(error: crate::AppHostError) -> Diagnostic {
     dynamic_workflow_internal_error("IO", error.to_string())
 }
 
+fn run_already_active(run_id: &RunId) -> Diagnostic {
+    dynamic_workflow_caller_error(
+        "RUN_ALREADY_ACTIVE",
+        format!("run `{run_id}` already has a live task"),
+    )
+}
+
+fn not_interrupted(run_id: &RunId, state: RunState) -> Diagnostic {
+    dynamic_workflow_caller_error(
+        "NOT_INTERRUPTED",
+        format!("run `{run_id}` is `{state}`, only interrupted runs can resume"),
+    )
+}
+
 fn first_validation_error(errors: Vec<Diagnostic>) -> Diagnostic {
     errors.into_iter().next().unwrap_or_else(|| {
         dynamic_workflow_internal_error("INVALID_WORKFLOW", "workflow validation failed")
@@ -93,6 +107,11 @@ pub struct DynamicWorkflowService {
     operations: Weak<OperationService>,
     collections: Arc<CollectionService>,
     active: RwLock<HashMap<RunId, ActiveRun>>,
+    /// Serializes the decisions that depend on "this run has no live task":
+    /// normalizing an idle document and claiming it for a task. A claim holds
+    /// it from the registry insert through the first `running` write, so no
+    /// reader can observe the run as idle in between.
+    run_transition: AsyncMutex<()>,
 }
 
 impl std::fmt::Debug for DynamicWorkflowService {
@@ -122,6 +141,7 @@ impl DynamicWorkflowService {
             operations,
             collections,
             active: RwLock::new(HashMap::new()),
+            run_transition: AsyncMutex::new(()),
         }
     }
 
@@ -251,7 +271,7 @@ impl DynamicWorkflowService {
                         other => dynamic_workflow_internal_error("COLLECTION", other.to_string()),
                     })?;
 
-                let selected: Vec<SlotId> = match slots {
+                let selected: Vec<(SlotId, AssetId)> = match slots {
                     Some(slots) => {
                         let mut seen = std::collections::BTreeSet::new();
                         for slot_id in slots {
@@ -270,17 +290,29 @@ impl DynamicWorkflowService {
                                 ));
                             }
                         }
-                        slots.clone()
+                        slots
+                            .iter()
+                            .filter_map(|slot_id| {
+                                collection
+                                    .slot(slot_id)
+                                    .map(|slot| (slot_id.clone(), slot.asset.clone()))
+                            })
+                            .collect()
                     }
                     None => collection
                         .slots()
                         .iter()
-                        .map(|slot| slot.id.clone())
+                        .map(|slot| (slot.id.clone(), slot.asset.clone()))
                         .collect(),
                 };
+                // Pin each item's input now: a resume after an interruption
+                // must read the asset the run started with, even if the slot
+                // was changed (or undone) in the meantime.
                 let items = selected
                     .into_iter()
-                    .map(|slot_id| RunItem::new(slot_id.to_string(), Some(slot_id)))
+                    .map(|(slot_id, asset)| {
+                        RunItem::new(slot_id.to_string(), Some(slot_id)).with_input_asset(asset)
+                    })
                     .collect();
                 (items, Some(params))
             }
@@ -320,7 +352,9 @@ impl DynamicWorkflowService {
             Timestamp::new(chrono::Utc::now().to_rfc3339()),
         );
 
-        self.write_run(project_id, &run).await?;
+        // The task is claimed before the document is first written: a reader
+        // that arrives between the two must see the registered run, not an
+        // idle document it can normalize to `interrupted`.
         self.start_task(project_id.clone(), run.clone())
             .await
             .map(|_| ())?;
@@ -351,14 +385,45 @@ impl DynamicWorkflowService {
         project_id: ProjectId,
         run: RunDocument,
     ) -> DynamicWorkflowResult<JoinHandle<()>> {
+        let _transition = self.run_transition.lock().await;
+        self.begin_task(project_id, run).await
+    }
+
+    /// Claim `run` in the active registry, persist its `running` state, and
+    /// spawn its task. The caller holds `run_transition`.
+    ///
+    /// A run that already has a live task is rejected here rather than
+    /// silently replacing the registry entry: two tasks over one run would
+    /// execute the same items twice and leave the first task un-abortable.
+    async fn begin_task(
+        self: &Arc<Self>,
+        project_id: ProjectId,
+        mut run: RunDocument,
+    ) -> DynamicWorkflowResult<JoinHandle<()>> {
         let run_id = run.id.clone();
+        if self.active_run(&run_id).is_some() {
+            return Err(run_already_active(&run_id));
+        }
+
+        // A registered run is running the moment it is readable: readers take
+        // the in-memory document and must never see the pre-task state as an
+        // interrupted run.
+        run.state = RunState::Running;
+        run.version = run.version.saturating_add(1);
+        run.finished_at = None;
+
         let doc = Arc::new(AsyncMutex::new(run));
         let cancel = CancelToken::new();
         let done = Arc::new(Notify::new());
-        self.active
-            .write()
-            .expect("dynamic workflow run registry poisoned")
-            .insert(
+        {
+            let mut active = self
+                .active
+                .write()
+                .expect("dynamic workflow run registry poisoned");
+            if active.contains_key(&run_id) {
+                return Err(run_already_active(&run_id));
+            }
+            active.insert(
                 run_id.clone(),
                 ActiveRun {
                     cancel: cancel.clone(),
@@ -367,6 +432,23 @@ impl DynamicWorkflowService {
                     abort: None,
                 },
             );
+        }
+
+        let persisted = {
+            let run = doc.lock().await;
+            self.write_run(&project_id, &run).await
+        };
+        if let Err(error) = persisted {
+            self.active
+                .write()
+                .expect("dynamic workflow run registry poisoned")
+                .remove(&run_id);
+            return Err(error);
+        }
+        {
+            let run = doc.lock().await;
+            self.emit_run_changed(&project_id, &run);
+        }
 
         let service = Arc::clone(self);
         let handle = tokio::spawn(async move {
@@ -420,6 +502,11 @@ impl DynamicWorkflowService {
     }
 
     /// Read a run, preferring the in-memory copy of an active task.
+    ///
+    /// A queued/running document with no live task in this process belongs to
+    /// a previous session: it is normalized to `interrupted` and persisted.
+    /// The normalization is serialized with task claims, so it cannot write
+    /// over a run that has just been (re)started.
     pub async fn get_run(
         &self,
         project_id: &ProjectId,
@@ -428,10 +515,18 @@ impl DynamicWorkflowService {
         if let Some(active) = self.active_run(run_id) {
             return Ok(active.doc.lock().await.clone());
         }
-        let run = self.load_run(project_id, run_id).await?;
-        if run.state.is_active() {
-            return self.mark_interrupted(project_id, run).await;
+        let _transition = self.run_transition.lock().await;
+        if let Some(active) = self.active_run(run_id) {
+            return Ok(active.doc.lock().await.clone());
         }
+        let mut run = self.load_run(project_id, run_id).await?;
+        if !run.state.is_active() {
+            return Ok(run);
+        }
+        run.state = RunState::Interrupted;
+        run.version = run.version.saturating_add(1);
+        self.write_run(project_id, &run).await?;
+        self.emit_run_changed(project_id, &run);
         Ok(run)
     }
 
@@ -450,20 +545,6 @@ impl DynamicWorkflowService {
                     format!("dynamic workflow run `{run_id}` not found"),
                 )
             })
-    }
-
-    /// A queued/running document with no live task in this process belongs to
-    /// a previous session; it is interrupted, not still running.
-    async fn mark_interrupted(
-        &self,
-        project_id: &ProjectId,
-        mut run: RunDocument,
-    ) -> DynamicWorkflowResult<RunDocument> {
-        run.state = RunState::Interrupted;
-        run.version += 1;
-        self.write_run(project_id, &run).await?;
-        self.emit_run_changed(project_id, &run);
-        Ok(run)
     }
 
     /// Runs of a project, newest first, optionally only those touching one
@@ -538,16 +619,34 @@ impl DynamicWorkflowService {
         project_id: &ProjectId,
         run_id: &RunId,
     ) -> DynamicWorkflowResult<RunState> {
-        if let Some(active) = self.active_run(run_id) {
-            let notified = active.done.notified();
-            tokio::pin!(notified);
-            notified.as_mut().enable();
-            active.cancel.cancel();
-            let _ = tokio::time::timeout(CANCEL_SETTLE_DEADLINE, notified).await;
-            let run = active.doc.lock().await.clone();
-            return Ok(run.state);
+        let Some(active) = self.active_run(run_id) else {
+            return Ok(self.get_run(project_id, run_id).await?.state);
+        };
+        // The task may have settled between looking it up and waiting. A
+        // completed task calls `notify_waiters`, which leaves no permit for a
+        // waiter that registers afterwards, so check the state first and
+        // again once the waiter is armed.
+        let settled = {
+            let run = active.doc.lock().await;
+            (!run.state.is_active()).then_some(run.state)
+        };
+        if let Some(state) = settled {
+            return Ok(state);
         }
-        Ok(self.get_run(project_id, run_id).await?.state)
+        let notified = active.done.notified();
+        tokio::pin!(notified);
+        notified.as_mut().enable();
+        let settled = {
+            let run = active.doc.lock().await;
+            (!run.state.is_active()).then_some(run.state)
+        };
+        if let Some(state) = settled {
+            return Ok(state);
+        }
+        active.cancel.cancel();
+        let _ = tokio::time::timeout(CANCEL_SETTLE_DEADLINE, notified).await;
+        let run = active.doc.lock().await.clone();
+        Ok(run.state)
     }
 
     /// Resume an interrupted run from the last successful step of each item.
@@ -561,18 +660,23 @@ impl DynamicWorkflowService {
     ) -> DynamicWorkflowResult<RunState> {
         let run = self.get_run(project_id, run_id).await?;
         if run.state != RunState::Interrupted {
-            return Err(dynamic_workflow_caller_error(
-                "NOT_INTERRUPTED",
-                format!(
-                    "run `{run_id}` is `{}`, only interrupted runs can resume",
-                    run.state
-                ),
-            ));
+            return Err(not_interrupted(run_id, run.state));
         }
 
-        // The task announces `running` itself; inserting it before the first
-        // write keeps a concurrent read from mistaking it for a stale run.
-        let handle = self.start_task(project_id.clone(), run).await?;
+        // Check the state again inside the claim window: between the read
+        // above and here another resume may have claimed the run and even
+        // finished it. Two concurrent resumes must not both start a task.
+        let handle = {
+            let _transition = self.run_transition.lock().await;
+            if self.active_run(run_id).is_some() {
+                return Err(run_already_active(run_id));
+            }
+            let run = self.load_run(project_id, run_id).await?;
+            if run.state != RunState::Interrupted {
+                return Err(not_interrupted(run_id, run.state));
+            }
+            self.begin_task(project_id.clone(), run).await?
+        };
         if let Err(error) = handle.await {
             return Err(dynamic_workflow_internal_error(
                 "RESUME_TASK",

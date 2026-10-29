@@ -90,6 +90,22 @@ impl DynamicWorkflowService {
             if run.state.is_active() {
                 run.state = RunState::Failed;
                 run.finished_at = Some(Timestamp::new(chrono::Utc::now().to_rfc3339()));
+                // A run-level failure ends the items it never settled: a
+                // queued/running item must not keep claiming progress in a
+                // failed run.
+                let diagnostic = item_error(
+                    "RUN_FAILED",
+                    format!("run could not finish: {}", error.message()),
+                );
+                for item in &mut run.items {
+                    if matches!(
+                        item.state,
+                        SlotState::Queued | SlotState::Running | SlotState::Stale
+                    ) {
+                        item.state = SlotState::Failed;
+                        item.diagnostic = Some(diagnostic.clone());
+                    }
+                }
                 run.version += 1;
                 if self.write_run(&project_id, &run).await.is_ok() {
                     self.emit_run_changed(&project_id, &run);
@@ -168,27 +184,31 @@ impl DynamicWorkflowService {
         let mut plans: Vec<(usize, Result<ItemInput, Diagnostic>)> = Vec::new();
         for (index, item) in items.iter().enumerate() {
             let input = match (&target, &collection) {
-                (RunTarget::Collection { collection_id, .. }, Some(collection)) => {
-                    let diagnostic = || {
-                        item_error(
+                (RunTarget::Collection { collection_id, .. }, _) => {
+                    // The asset pinned when the run was created wins: a slot
+                    // edited or undone during an interruption must not change
+                    // what the remaining steps read. Documents written before
+                    // `input_asset` existed fall back to the collection.
+                    let pinned = item.input_asset.clone().or_else(|| {
+                        let slot_id = item.slot_id.as_ref()?;
+                        collection
+                            .as_ref()?
+                            .slot(slot_id)
+                            .map(|slot| slot.asset.clone())
+                    });
+                    match (pinned, item.slot_id.clone()) {
+                        (Some(asset), Some(slot_id)) => Ok(ItemInput::Collection {
+                            asset,
+                            slot_id,
+                            collection_id: collection_id.clone(),
+                        }),
+                        _ => Err(item_error(
                             "ITEM_UNKNOWN_SLOT",
                             format!(
                                 "slot for item `{}` is no longer in the collection",
                                 item.item_id
                             ),
-                        )
-                    };
-                    match item.slot_id.as_ref().and_then(|slot_id| {
-                        collection
-                            .slot(slot_id)
-                            .map(|slot| (slot_id.clone(), slot.asset.clone()))
-                    }) {
-                        Some((slot_id, asset)) => Ok(ItemInput::Collection {
-                            asset,
-                            slot_id,
-                            collection_id: collection_id.clone(),
-                        }),
-                        None => Err(diagnostic()),
+                        )),
                     }
                 }
                 (RunTarget::Groups { groups, .. }, _) => match groups.get(index) {
@@ -200,10 +220,6 @@ impl DynamicWorkflowService {
                         format!("parameter group for item `{}` is missing", item.item_id),
                     )),
                 },
-                _ => Err(item_error(
-                    "ITEM_UNKNOWN_SLOT",
-                    "collection target with no collection snapshot",
-                )),
             };
             plans.push((index, input));
         }
