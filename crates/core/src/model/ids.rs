@@ -15,9 +15,21 @@ macro_rules! id_type {
             Ord,
             Hash,
             serde::Serialize,
-            serde::Deserialize,
         )]
         pub struct $name(String);
+
+        // Ids from JSON (caller input, documents on disk) obey the same rules
+        // as `try_new`: several ids become path segments, so an unchecked
+        // `/` would reach outside its directory.
+        impl<'de> serde::Deserialize<'de> for $name {
+            fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+            where
+                D: serde::Deserializer<'de>,
+            {
+                let raw = String::deserialize(deserializer)?;
+                Self::try_new(raw).map_err(serde::de::Error::custom)
+            }
+        }
 
         impl $name {
             pub fn try_new(id: impl Into<String>) -> Result<Self, &'static str> {
@@ -121,5 +133,26 @@ impl std::fmt::Display for DocumentVersion {
 impl From<u64> for DocumentVersion {
     fn from(version: u64) -> Self {
         Self(version)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn deserialize_applies_the_same_rules_as_try_new() {
+        let id: CollectionId = serde_json::from_str("\"col-1\"").expect("plain id");
+        assert_eq!(id.as_str(), "col-1");
+
+        for raw in ["\"../other/col-1\"", "\"\"", "\"a\\\\b\"", "\"列\""] {
+            assert!(
+                serde_json::from_str::<CollectionId>(raw).is_err(),
+                "{raw} must be rejected"
+            );
+        }
+
+        let artifact: ArtifactId = serde_json::from_str("\"runs/a/b.png\"").expect("slash allowed");
+        assert_eq!(artifact.as_str(), "runs/a/b.png");
     }
 }
