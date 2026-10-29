@@ -98,6 +98,7 @@ struct Counters {
     inspect: AtomicUsize,
     wait: AtomicUsize,
     pause: AtomicUsize,
+    gate: AtomicUsize,
     open_world: AtomicUsize,
     render: AtomicUsize,
 }
@@ -218,6 +219,58 @@ impl KernelOp for WaitOp {
         self.counters.wait.fetch_add(1, Ordering::SeqCst);
         call.invocation.cancel.cancelled().await;
         Err(test_error("CANCELLED", "wait was cancelled"))
+    }
+}
+
+/// Waits for the test to release it, then copies; used to hold a task inside
+/// a shutdown window.
+struct GateOp {
+    spec: OperationSpec,
+    counters: Arc<Counters>,
+    started: Arc<Notify>,
+    release: Arc<Notify>,
+}
+
+impl GateOp {
+    fn new(counters: Arc<Counters>, started: Arc<Notify>, release: Arc<Notify>) -> Self {
+        Self {
+            spec: OperationSpec {
+                name: "test.gate".to_owned(),
+                description: "Wait for the test gate, then copy".to_owned(),
+                input_schema: asset_input_schema(),
+                output_schema: asset_output_schema(),
+                annotations: annotations(false, true, true, false),
+            },
+            counters,
+            started,
+            release,
+        }
+    }
+}
+
+#[async_trait]
+impl KernelOp for GateOp {
+    fn spec(&self) -> &OperationSpec {
+        &self.spec
+    }
+
+    async fn invoke(&self, call: KernelCall) -> Result<Value, Diagnostic> {
+        self.counters.gate.fetch_add(1, Ordering::SeqCst);
+        self.started.notify_one();
+        self.release.notified().await;
+        let input = call
+            .invocation
+            .input
+            .get("doc")
+            .and_then(Value::as_str)
+            .ok_or_else(|| test_error("INVALID_INPUT", "missing doc"))?;
+        let bytes = tokio::fs::read(input)
+            .await
+            .map_err(|error| test_error("IO", error.to_string()))?;
+        tokio::fs::write(call.invocation.output_dir.join("out.txt"), bytes)
+            .await
+            .map_err(|error| test_error("IO", error.to_string()))?;
+        Ok(json!({ "doc": "out.txt" }))
     }
 }
 
@@ -426,6 +479,8 @@ impl KernelOp for RenderOp {
 struct TestOps {
     counters: Arc<Counters>,
     pause_started: Arc<Notify>,
+    gate_started: Arc<Notify>,
+    gate_release: Arc<Notify>,
     open_world_started: Arc<Notify>,
 }
 
@@ -434,6 +489,8 @@ impl TestOps {
         Self {
             counters: Arc::new(Counters::default()),
             pause_started: Arc::new(Notify::new()),
+            gate_started: Arc::new(Notify::new()),
+            gate_release: Arc::new(Notify::new()),
             open_world_started: Arc::new(Notify::new()),
         }
     }
@@ -443,6 +500,11 @@ impl TestOps {
         service.register_kernel_op(Arc::new(CopyOp::new(Arc::clone(&self.counters))));
         service.register_kernel_op(Arc::new(InspectOp::new(Arc::clone(&self.counters))));
         service.register_kernel_op(Arc::new(WaitOp::new(Arc::clone(&self.counters))));
+        service.register_kernel_op(Arc::new(GateOp::new(
+            Arc::clone(&self.counters),
+            Arc::clone(&self.gate_started),
+            Arc::clone(&self.gate_release),
+        )));
         service.register_kernel_op(Arc::new(PauseOp::new(
             Arc::clone(&self.counters),
             Arc::clone(&self.pause_started),
@@ -1020,6 +1082,72 @@ async fn cancel_stops_the_run_and_skips_later_steps() {
         ops.counters.copy.load(Ordering::SeqCst),
         0,
         "the step after the cancelled one must not run"
+    );
+
+    let _ = std::fs::remove_dir_all(&base);
+}
+
+#[tokio::test]
+async fn shutdown_during_run_registration_leaves_no_step_running() {
+    let base = temp_dir("shutdown-race");
+    let ops = TestOps::new();
+    let host = build_host(&base).await;
+    let project = create_project(&host, "proj").await;
+    let assets = import_assets(&host, &project, &base, &[("a.txt", "alpha")]).await;
+    let collection = create_collection(&host, &project, &assets).await;
+    let workflow = json!({
+        "inputs": { "doc": { "type": "string", "format": "asset" } },
+        "params": { "type": "object" },
+        "steps": [
+            {
+                "id": "gate",
+                "op": "test.gate",
+                "input": { "doc": { "$from": "inputs.doc" } }
+            },
+            {
+                "id": "copy",
+                "op": "test.copy",
+                "input": { "doc": { "$from": "steps.gate.doc" } }
+            }
+        ],
+        "output": { "$from": "steps.copy.doc" }
+    });
+    let workflow_id = create_workflow(&host, &project, workflow).await;
+    ops.register(&host);
+
+    // Shutdown races the registration of a new run: the claim may land
+    // before or after the drain. Either way nothing may execute afterwards.
+    let (run_result, ()) = tokio::join!(
+        try_invoke(
+            &host,
+            &project,
+            "dynamic_workflow.run",
+            json!({
+                "dynamic_workflow_id": workflow_id,
+                "target": { "collection_id": collection.as_str() },
+            }),
+        ),
+        async {
+            tokio::task::yield_now().await;
+            host.shutdown().await;
+        }
+    );
+    if let Err(error) = run_result {
+        assert_eq!(
+            error.code().as_str(),
+            "DYNAMIC_WORKFLOW/CALLER_SHUTTING_DOWN",
+            "a run that arrives after shutdown is rejected, not started"
+        );
+    }
+
+    // Release the gate if a task managed to reach it; an aborted or rejected
+    // run must not continue into the copy step.
+    ops.gate_release.notify_one();
+    tokio::time::sleep(Duration::from_millis(100)).await;
+    assert_eq!(
+        ops.counters.copy.load(Ordering::SeqCst),
+        0,
+        "no step may run after shutdown"
     );
 
     let _ = std::fs::remove_dir_all(&base);

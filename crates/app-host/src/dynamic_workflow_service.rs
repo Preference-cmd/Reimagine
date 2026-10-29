@@ -8,7 +8,8 @@ mod execute;
 
 use std::collections::HashMap;
 use std::path::PathBuf;
-use std::sync::{Arc, RwLock, Weak};
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::{Arc, Mutex, RwLock, Weak};
 
 use reimagine_config::AppPaths;
 use reimagine_core::command::OperationContext;
@@ -83,6 +84,13 @@ fn not_interrupted(run_id: &RunId, state: RunState) -> Diagnostic {
     )
 }
 
+fn shutting_down() -> Diagnostic {
+    dynamic_workflow_caller_error(
+        "SHUTTING_DOWN",
+        "the host is shutting down; new dynamic workflow tasks are rejected",
+    )
+}
+
 fn first_validation_error(errors: Vec<Diagnostic>) -> Diagnostic {
     errors.into_iter().next().unwrap_or_else(|| {
         dynamic_workflow_internal_error("INVALID_WORKFLOW", "workflow validation failed")
@@ -95,7 +103,7 @@ pub(crate) struct ActiveRun {
     pub(crate) cancel: CancelToken,
     pub(crate) done: Arc<Notify>,
     pub(crate) doc: Arc<AsyncMutex<RunDocument>>,
-    pub(crate) abort: Option<AbortHandle>,
+    pub(crate) abort: AbortHandle,
 }
 
 /// Owns dynamic workflow documents and schedules their batch runs.
@@ -107,11 +115,15 @@ pub struct DynamicWorkflowService {
     operations: Weak<OperationService>,
     collections: Arc<CollectionService>,
     active: RwLock<HashMap<RunId, ActiveRun>>,
-    /// Serializes the decisions that depend on "this run has no live task":
-    /// normalizing an idle document and claiming it for a task. A claim holds
-    /// it from the registry insert through the first `running` write, so no
-    /// reader can observe the run as idle in between.
-    run_transition: AsyncMutex<()>,
+    /// Per-run guards for the decisions that depend on "this run has no live
+    /// task": normalizing an idle document and claiming it for a task. A claim
+    /// holds its guard from the registry insert through the first `running`
+    /// write, so no reader can observe the run as idle in between. The guards
+    /// are per run, so a write for one run never stalls another.
+    run_transitions: Mutex<HashMap<RunId, Arc<AsyncMutex<()>>>>,
+    /// Set once the service is shutting down: no new task may be registered,
+    /// even if a claim was already past its first registry check.
+    shutting_down: AtomicBool,
 }
 
 impl std::fmt::Debug for DynamicWorkflowService {
@@ -141,7 +153,8 @@ impl DynamicWorkflowService {
             operations,
             collections,
             active: RwLock::new(HashMap::new()),
-            run_transition: AsyncMutex::new(()),
+            run_transitions: Mutex::new(HashMap::new()),
+            shutting_down: AtomicBool::new(false),
         }
     }
 
@@ -385,22 +398,31 @@ impl DynamicWorkflowService {
         project_id: ProjectId,
         run: RunDocument,
     ) -> DynamicWorkflowResult<JoinHandle<()>> {
-        let _transition = self.run_transition.lock().await;
+        let transition = self.run_transition(&run.id);
+        let _transition = transition.lock().await;
         self.begin_task(project_id, run).await
     }
 
     /// Claim `run` in the active registry, persist its `running` state, and
-    /// spawn its task. The caller holds `run_transition`.
+    /// let its task start. The caller holds this run's transition guard.
     ///
     /// A run that already has a live task is rejected here rather than
     /// silently replacing the registry entry: two tasks over one run would
     /// execute the same items twice and leave the first task un-abortable.
+    ///
+    /// The spawned task waits for `start` until the `running` state is on
+    /// disk, and the registry entry is inserted with its abort handle in the
+    /// same critical section, so shutdown can never drain an entry it cannot
+    /// abort.
     async fn begin_task(
         self: &Arc<Self>,
         project_id: ProjectId,
         mut run: RunDocument,
     ) -> DynamicWorkflowResult<JoinHandle<()>> {
         let run_id = run.id.clone();
+        if self.shutting_down.load(Ordering::SeqCst) {
+            return Err(shutting_down());
+        }
         if self.active_run(&run_id).is_some() {
             return Err(run_already_active(&run_id));
         }
@@ -415,21 +437,45 @@ impl DynamicWorkflowService {
         let doc = Arc::new(AsyncMutex::new(run));
         let cancel = CancelToken::new();
         let done = Arc::new(Notify::new());
+        let start = Arc::new(Notify::new());
+
+        let service = Arc::clone(self);
+        let task_project = project_id.clone();
+        let task_doc = Arc::clone(&doc);
+        let task_cancel = cancel.clone();
+        let task_done = Arc::clone(&done);
+        let task_start = Arc::clone(&start);
+        let handle = tokio::spawn(async move {
+            // No item may run before the claimed `running` state is durable.
+            task_start.notified().await;
+            service
+                .execute_run(task_project, task_doc, task_cancel, task_done)
+                .await;
+        });
+        let abort = handle.abort_handle();
+
         {
             let mut active = self
                 .active
                 .write()
                 .expect("dynamic workflow run registry poisoned");
+            if self.shutting_down.load(Ordering::SeqCst) {
+                drop(active);
+                abort.abort();
+                return Err(shutting_down());
+            }
             if active.contains_key(&run_id) {
+                drop(active);
+                abort.abort();
                 return Err(run_already_active(&run_id));
             }
             active.insert(
                 run_id.clone(),
                 ActiveRun {
-                    cancel: cancel.clone(),
-                    done: done.clone(),
+                    cancel,
+                    done: Arc::clone(&done),
                     doc: Arc::clone(&doc),
-                    abort: None,
+                    abort,
                 },
             );
         }
@@ -439,30 +485,41 @@ impl DynamicWorkflowService {
             self.write_run(&project_id, &run).await
         };
         if let Err(error) = persisted {
-            self.active
-                .write()
-                .expect("dynamic workflow run registry poisoned")
-                .remove(&run_id);
+            // Nothing will run or settle this claim, so release the registry
+            // entry and wake anyone already waiting on its `done` first.
+            self.fail_claim(&run_id, &doc).await;
             return Err(error);
         }
         {
             let run = doc.lock().await;
             self.emit_run_changed(&project_id, &run);
         }
+        start.notify_one();
+        Ok(handle)
+    }
 
-        let service = Arc::clone(self);
-        let handle = tokio::spawn(async move {
-            service.execute_run(project_id, doc, cancel, done).await;
-        });
-        if let Some(active) = self
+    /// Drop a claim whose `running` state could not be persisted: mark the
+    /// in-memory document failed, remove it from the registry, abort the
+    /// still-gated task and wake cancel waiters instead of leaving them to
+    /// time out.
+    async fn fail_claim(&self, run_id: &RunId, doc: &Arc<AsyncMutex<RunDocument>>) {
+        {
+            let mut run = doc.lock().await;
+            if run.state.is_active() {
+                run.state = RunState::Failed;
+                run.version = run.version.saturating_add(1);
+                run.finished_at = Some(Timestamp::new(chrono::Utc::now().to_rfc3339()));
+            }
+        }
+        let active = self
             .active
             .write()
             .expect("dynamic workflow run registry poisoned")
-            .get_mut(&run_id)
-        {
-            active.abort = Some(handle.abort_handle());
+            .remove(run_id);
+        if let Some(active) = active {
+            active.abort.abort();
+            active.done.notify_waiters();
         }
-        Ok(handle)
     }
 
     async fn write_run(
@@ -501,12 +558,27 @@ impl DynamicWorkflowService {
             .cloned()
     }
 
+    /// The transition guard for one run. Claims and normalizations of the
+    /// same run serialize on it; unrelated runs never wait for each other.
+    fn run_transition(&self, run_id: &RunId) -> Arc<AsyncMutex<()>> {
+        let mut transitions = self
+            .run_transitions
+            .lock()
+            .expect("dynamic workflow run transition registry poisoned");
+        Arc::clone(
+            transitions
+                .entry(run_id.clone())
+                .or_insert_with(|| Arc::new(AsyncMutex::new(()))),
+        )
+    }
+
     /// Read a run, preferring the in-memory copy of an active task.
     ///
     /// A queued/running document with no live task in this process belongs to
     /// a previous session: it is normalized to `interrupted` and persisted.
-    /// The normalization is serialized with task claims, so it cannot write
-    /// over a run that has just been (re)started.
+    /// The normalization holds only this run's transition guard, so it cannot
+    /// write over a run that has just been (re)started while an unrelated run
+    /// reads or claims independently.
     pub async fn get_run(
         &self,
         project_id: &ProjectId,
@@ -515,7 +587,8 @@ impl DynamicWorkflowService {
         if let Some(active) = self.active_run(run_id) {
             return Ok(active.doc.lock().await.clone());
         }
-        let _transition = self.run_transition.lock().await;
+        let transition = self.run_transition(run_id);
+        let _transition = transition.lock().await;
         if let Some(active) = self.active_run(run_id) {
             return Ok(active.doc.lock().await.clone());
         }
@@ -667,7 +740,8 @@ impl DynamicWorkflowService {
         // above and here another resume may have claimed the run and even
         // finished it. Two concurrent resumes must not both start a task.
         let handle = {
-            let _transition = self.run_transition.lock().await;
+            let transition = self.run_transition(run_id);
+            let _transition = transition.lock().await;
             if self.active_run(run_id).is_some() {
                 return Err(run_already_active(run_id));
             }
@@ -687,16 +761,22 @@ impl DynamicWorkflowService {
     }
 
     /// Abort every in-flight run task. Run documents are left as they are, so
-    /// the next process sees them as interrupted.
+    /// the next process sees them as interrupted. No new task may be
+    /// registered afterwards, including one whose claim was already in flight.
     pub fn shutdown(&self) {
+        // Store the flag before draining: a claim that inserts after this
+        // store re-checks it under the registry lock and aborts itself; one
+        // that inserted before is drained here.
+        self.shutting_down.store(true, Ordering::SeqCst);
         let mut active = self
             .active
             .write()
             .expect("dynamic workflow run registry poisoned");
         for (_, run) in active.drain() {
-            if let Some(abort) = run.abort {
-                abort.abort();
-            }
+            run.abort.abort();
+            // No task will run to its own `notify_waiters`; a cancel that
+            // already holds this entry must not wait out its deadline.
+            run.done.notify_waiters();
         }
     }
 
@@ -710,5 +790,173 @@ impl DynamicWorkflowService {
 
     pub(crate) fn collection_service(&self) -> &Arc<CollectionService> {
         &self.collections
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use reimagine_core::command::{CommandActor, CommandActorKind, CommandProvenance};
+    use std::time::Duration;
+
+    fn test_service() -> Arc<DynamicWorkflowService> {
+        let nonce = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .expect("clock")
+            .as_nanos();
+        let paths = AppPaths::new(
+            std::env::temp_dir().join(format!("reimagine-dynamic-workflow-service-{nonce}")),
+        );
+        Arc::new(DynamicWorkflowService::with_event_bus(
+            paths.clone(),
+            EventBus::new(),
+            Weak::new(),
+            Arc::new(CollectionService::with_event_bus(paths, EventBus::new())),
+        ))
+    }
+
+    fn run_document(id: &RunId, state: RunState) -> RunDocument {
+        let mut run = RunDocument::new(
+            id.clone(),
+            ProjectId::new("default"),
+            DynamicWorkflowId::new("dwf-1"),
+            WorkflowSpec {
+                inputs: std::collections::BTreeMap::new(),
+                params: json!({ "type": "object" }),
+                steps: Vec::new(),
+                output: json!({}),
+            },
+            RunTarget::Groups {
+                groups: Vec::new(),
+                name: "batch".to_owned(),
+            },
+            None,
+            OperationContext::new(
+                CommandActor::new(CommandActorKind::Human),
+                CommandProvenance::Direct,
+            ),
+            Vec::new(),
+            Timestamp::new("2026-01-01T00:00:00Z"),
+        );
+        run.state = state;
+        run
+    }
+
+    fn register_pending(
+        service: &DynamicWorkflowService,
+        run_id: &RunId,
+    ) -> (Arc<Notify>, JoinHandle<()>) {
+        let done = Arc::new(Notify::new());
+        let doc = Arc::new(AsyncMutex::new(run_document(run_id, RunState::Running)));
+        let handle = tokio::spawn(std::future::pending::<()>());
+        service.active.write().unwrap().insert(
+            run_id.clone(),
+            ActiveRun {
+                cancel: CancelToken::new(),
+                done: Arc::clone(&done),
+                doc,
+                abort: handle.abort_handle(),
+            },
+        );
+        (done, handle)
+    }
+
+    #[tokio::test]
+    async fn a_failed_claim_wakes_cancel_waiters() {
+        let service = test_service();
+        let run_id = RunId::new("run-1");
+        let (done, handle) = register_pending(&service, &run_id);
+        let doc = service.active_run(&run_id).expect("registered").doc;
+
+        let notified = done.notified();
+        tokio::pin!(notified);
+        notified.as_mut().enable();
+
+        let result = tokio::time::timeout(Duration::from_secs(1), async {
+            service.fail_claim(&run_id, &doc).await;
+            notified.await;
+        })
+        .await;
+        assert!(
+            result.is_ok(),
+            "a failed claim must notify the cancel waiter instead of leaving it to time out"
+        );
+
+        assert!(service.active.read().unwrap().is_empty());
+        assert_eq!(doc.lock().await.state, RunState::Failed);
+        assert!(handle.await.unwrap_err().is_cancelled());
+    }
+
+    #[tokio::test]
+    async fn shutdown_aborts_registered_tasks_and_rejects_new_claims() {
+        let service = test_service();
+        let run_id = RunId::new("run-1");
+        let (done, handle) = register_pending(&service, &run_id);
+
+        let notified = done.notified();
+        tokio::pin!(notified);
+        notified.as_mut().enable();
+
+        service.shutdown();
+
+        tokio::time::timeout(Duration::from_secs(1), notified)
+            .await
+            .expect("shutdown must wake a cancel waiter");
+        assert!(handle.await.unwrap_err().is_cancelled());
+        assert!(service.active.read().unwrap().is_empty());
+
+        let error = service
+            .begin_task(
+                ProjectId::new("default"),
+                run_document(&RunId::new("run-2"), RunState::Queued),
+            )
+            .await
+            .expect_err("a claim after shutdown must be rejected");
+        assert_eq!(
+            error.code().as_str(),
+            "DYNAMIC_WORKFLOW/CALLER_SHUTTING_DOWN"
+        );
+    }
+
+    #[tokio::test]
+    async fn a_run_transition_does_not_block_another_run() {
+        let service = test_service();
+        let project = ProjectId::new("default");
+        let run_a = RunId::new("run-a");
+        let run_b = RunId::new("run-b");
+        service
+            .write_run(&project, &run_document(&run_a, RunState::Running))
+            .await
+            .expect("write run a");
+        service
+            .write_run(&project, &run_document(&run_b, RunState::Running))
+            .await
+            .expect("write run b");
+
+        // Simulate an in-flight normalization of run a.
+        let transition = service.run_transition(&run_a);
+        let guard = transition.lock().await;
+
+        let reader = {
+            let service = Arc::clone(&service);
+            let project = project.clone();
+            let run_b = run_b.clone();
+            tokio::spawn(async move { service.get_run(&project, &run_b).await })
+        };
+        let normalized = tokio::time::timeout(Duration::from_secs(1), reader)
+            .await
+            .expect("an unrelated run must not wait for run a's transition")
+            .expect("reader task")
+            .expect("normalize run b");
+        assert_eq!(normalized.state, RunState::Interrupted);
+
+        drop(guard);
+        let run = service
+            .get_run(&project, &run_a)
+            .await
+            .expect("normalize run a");
+        assert_eq!(run.state, RunState::Interrupted);
+
+        let _ = std::fs::remove_dir_all(service.paths.base_path());
     }
 }
