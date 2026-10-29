@@ -272,6 +272,59 @@ impl KernelOp for PauseOp {
     }
 }
 
+/// Pauses on its first invocation, then renders its text; used by group runs.
+struct PauseRenderOp {
+    spec: OperationSpec,
+    counters: Arc<Counters>,
+    started: Arc<Notify>,
+}
+
+impl PauseRenderOp {
+    fn new(counters: Arc<Counters>, started: Arc<Notify>) -> Self {
+        Self {
+            spec: OperationSpec {
+                name: "test.pause_render".to_owned(),
+                description: "Pause once, then render".to_owned(),
+                input_schema: json!({
+                    "type": "object",
+                    "properties": { "text": { "type": "string" } },
+                    "required": ["text"],
+                    "additionalProperties": false
+                }),
+                output_schema: asset_output_schema(),
+                annotations: annotations(false, false, false, false),
+            },
+            counters,
+            started,
+        }
+    }
+}
+
+#[async_trait]
+impl KernelOp for PauseRenderOp {
+    fn spec(&self) -> &OperationSpec {
+        &self.spec
+    }
+
+    async fn invoke(&self, call: KernelCall) -> Result<Value, Diagnostic> {
+        let call_number = self.counters.pause.fetch_add(1, Ordering::SeqCst) + 1;
+        if call_number == 1 {
+            self.started.notify_one();
+            std::future::pending::<()>().await;
+        }
+        let text = call
+            .invocation
+            .input
+            .get("text")
+            .and_then(Value::as_str)
+            .ok_or_else(|| test_error("INVALID_INPUT", "missing text"))?;
+        tokio::fs::write(call.invocation.output_dir.join("out.txt"), text)
+            .await
+            .map_err(|error| test_error("IO", error.to_string()))?;
+        Ok(json!({ "doc": "out.txt" }))
+    }
+}
+
 /// Pauses on its first invocation and is declared `open_world` + non-idempotent.
 struct OpenWorldOp {
     spec: OperationSpec,
@@ -394,6 +447,10 @@ impl TestOps {
             Arc::clone(&self.counters),
             Arc::clone(&self.pause_started),
         )));
+        service.register_kernel_op(Arc::new(PauseRenderOp::new(
+            Arc::clone(&self.counters),
+            Arc::clone(&self.pause_started),
+        )));
         service.register_kernel_op(Arc::new(OpenWorldOp::new(
             Arc::clone(&self.counters),
             Arc::clone(&self.open_world_started),
@@ -407,6 +464,17 @@ async fn build_host(base: &Path) -> WorkspaceHost {
         .build()
         .await
         .expect("build host")
+}
+
+/// Simulate a restart: wait for the aborted tasks to exit, then build a host
+/// over the same directory and register the test operations again.
+async fn reopen_host(base: &Path, ops: &TestOps) -> WorkspaceHost {
+    for _ in 0..10 {
+        tokio::task::yield_now().await;
+    }
+    let host = build_host(base).await;
+    ops.register(&host);
+    host
 }
 
 async fn create_project(host: &WorkspaceHost, id: &str) -> ProjectId {
@@ -441,6 +509,50 @@ async fn invoke(host: &WorkspaceHost, project: &ProjectId, name: &str, input: Va
         .await
         .unwrap_or_else(|error| panic!("{name} failed: {}", error.message()))
         .output
+}
+
+async fn invoke_as(
+    host: &WorkspaceHost,
+    project: &ProjectId,
+    name: &str,
+    input: Value,
+    context: OperationContext,
+) -> Value {
+    host.operation_service()
+        .invoke(
+            project,
+            InvokeRequest {
+                name: name.to_owned(),
+                input,
+                context,
+                cancel: CancelToken::new(),
+                run: None,
+            },
+        )
+        .await
+        .unwrap_or_else(|error| panic!("{name} failed: {}", error.message()))
+        .output
+}
+
+async fn try_invoke(
+    host: &WorkspaceHost,
+    project: &ProjectId,
+    name: &str,
+    input: Value,
+) -> Result<Value, Diagnostic> {
+    host.operation_service()
+        .invoke(
+            project,
+            InvokeRequest {
+                name: name.to_owned(),
+                input,
+                context: test_context(),
+                cancel: CancelToken::new(),
+                run: None,
+            },
+        )
+        .await
+        .map(|result| result.output)
 }
 
 async fn import_assets(
@@ -502,11 +614,22 @@ async fn start_run(
     target: Value,
     params: Option<Value>,
 ) -> RunId {
+    start_run_as(host, project, workflow_id, target, params, test_context()).await
+}
+
+async fn start_run_as(
+    host: &WorkspaceHost,
+    project: &ProjectId,
+    workflow_id: &str,
+    target: Value,
+    params: Option<Value>,
+    context: OperationContext,
+) -> RunId {
     let mut input = json!({ "dynamic_workflow_id": workflow_id, "target": target });
     if let Some(params) = params {
         input["params"] = params;
     }
-    let output = invoke(host, project, "dynamic_workflow.run", input).await;
+    let output = invoke_as(host, project, "dynamic_workflow.run", input, context).await;
     RunId::new(output["run_id"].as_str().expect("run id"))
 }
 
@@ -550,6 +673,72 @@ fn copy_workflow(extra_steps: Vec<Value>, output: Value) -> Value {
         "steps": steps,
         "output": output
     })
+}
+
+fn group_workflow(op: &str) -> Value {
+    json!({
+        "inputs": {},
+        "params": {
+            "type": "object",
+            "properties": { "text": { "type": "string" } },
+            "required": ["text"]
+        },
+        "steps": [{
+            "id": "render",
+            "op": op,
+            "input": { "text": { "$from": "params.text" } }
+        }],
+        "output": { "$from": "steps.render.doc" }
+    })
+}
+
+async fn slot_contents(
+    host: &WorkspaceHost,
+    project: &ProjectId,
+    collection: &CollectionId,
+) -> Vec<String> {
+    let output = invoke(
+        host,
+        project,
+        "collection.get",
+        json!({ "collection_id": collection.as_str() }),
+    )
+    .await;
+    let store = AssetStore::new(host.config().paths().project_dir(project.as_str()));
+    let mut contents = Vec::new();
+    for slot in output["slots"].as_array().expect("slots") {
+        let asset = AssetId::new(slot["asset_id"].as_str().expect("asset id"));
+        let record = store
+            .get_asset(&asset)
+            .await
+            .expect("asset lookup")
+            .expect("asset exists");
+        let bytes = tokio::fs::read(store.content_path(&record.hash))
+            .await
+            .expect("asset bytes");
+        contents.push(String::from_utf8(bytes).expect("utf8 asset"));
+    }
+    contents
+}
+
+async fn collection_file_count(host: &WorkspaceHost, project: &ProjectId) -> usize {
+    let dir = host
+        .config()
+        .paths()
+        .project_dir(project.as_str())
+        .join("collections");
+    let mut entries = match tokio::fs::read_dir(dir).await {
+        Ok(entries) => entries,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return 0,
+        Err(error) => panic!("read collections: {error}"),
+    };
+    let mut count = 0;
+    while let Some(entry) = entries.next_entry().await.expect("collection entry") {
+        if entry.path().extension().and_then(|ext| ext.to_str()) == Some("json") {
+            count += 1;
+        }
+    }
+    count
 }
 
 #[tokio::test]
@@ -983,6 +1172,21 @@ async fn a_failing_run_task_marks_the_run_failed() {
     let run = get_run(&host, &project, &run_id).await;
     assert_eq!(run.state, RunState::Failed);
     assert!(run.finished_at.is_some(), "a failed run is finished");
+    for item in &run.items {
+        assert_eq!(
+            item.state,
+            SlotState::Failed,
+            "items the run never settled are failed with it"
+        );
+        assert_eq!(
+            item.diagnostic
+                .as_ref()
+                .expect("item diagnostic")
+                .code()
+                .as_str(),
+            "DYNAMIC_WORKFLOW/RUN_FAILED"
+        );
+    }
 
     let _ = std::fs::remove_dir_all(&base);
 }
@@ -1147,6 +1351,669 @@ async fn group_target_builds_a_collection_in_group_order() {
     let runs = output["runs"].as_array().expect("runs");
     assert_eq!(runs.len(), 1);
     assert_eq!(runs[0]["id"], run_id.as_str());
+
+    let _ = std::fs::remove_dir_all(&base);
+}
+
+#[tokio::test]
+async fn output_must_be_produced_by_this_runs_steps() {
+    let base = temp_dir("output-unproduced");
+    let ops = TestOps::new();
+    let host = build_host(&base).await;
+    let project = create_project(&host, "proj").await;
+    let assets = import_assets(&host, &project, &base, &[("a.txt", "alpha")]).await;
+    let collection = create_collection(&host, &project, &assets).await;
+    // The output binds to the input asset, which exists but no step made it.
+    let workflow_id = create_workflow(
+        &host,
+        &project,
+        copy_workflow(vec![], json!({ "$from": "inputs.doc" })),
+    )
+    .await;
+    ops.register(&host);
+
+    let run_id = start_run(
+        &host,
+        &project,
+        &workflow_id,
+        json!({ "collection_id": collection.as_str() }),
+        None,
+    )
+    .await;
+    let run = wait_for_run(&host, &project, &run_id, |run| {
+        !matches!(run.state, RunState::Queued | RunState::Running)
+    })
+    .await;
+
+    assert_eq!(run.state, RunState::Failed);
+    let item = &run.items[0];
+    assert_eq!(item.state, SlotState::Failed);
+    assert_eq!(
+        item.diagnostic
+            .as_ref()
+            .expect("diagnostic")
+            .code()
+            .as_str(),
+        "DYNAMIC_WORKFLOW/OUTPUT_NOT_PRODUCED"
+    );
+    assert_eq!(
+        ops.counters.copy.load(Ordering::SeqCst),
+        0,
+        "no copy step ran"
+    );
+
+    let _ = std::fs::remove_dir_all(&base);
+}
+
+#[tokio::test]
+async fn resume_reads_the_input_asset_pinned_at_run_creation() {
+    let base = temp_dir("resume-pinned-input");
+    let ops = TestOps::new();
+    let host = build_host(&base).await;
+    let project = create_project(&host, "proj").await;
+    let assets = import_assets(
+        &host,
+        &project,
+        &base,
+        &[("a.txt", "alpha"), ("b.txt", "beta")],
+    )
+    .await;
+    let collection = create_collection(&host, &project, &assets[..1]).await;
+    let workflow = json!({
+        "inputs": { "doc": { "type": "string", "format": "asset" } },
+        "params": { "type": "object" },
+        "steps": [
+            {
+                "id": "pause",
+                "op": "test.pause",
+                "input": { "doc": { "$from": "inputs.doc" } }
+            },
+            {
+                "id": "copy",
+                "op": "test.copy",
+                "input": { "doc": { "$from": "inputs.doc" } }
+            }
+        ],
+        "output": { "$from": "steps.copy.doc" }
+    });
+    let workflow_id = create_workflow(&host, &project, workflow).await;
+    ops.register(&host);
+
+    let run_id = start_run(
+        &host,
+        &project,
+        &workflow_id,
+        json!({ "collection_id": collection.as_str() }),
+        None,
+    )
+    .await;
+    ops.pause_started.notified().await;
+
+    host.shutdown().await;
+    drop(host);
+    let host = reopen_host(&base, &ops).await;
+
+    // The slot is repointed while the run is interrupted.
+    let output = invoke(
+        &host,
+        &project,
+        "collection.get",
+        json!({ "collection_id": collection.as_str() }),
+    )
+    .await;
+    let slot_id = output["slots"][0]["id"]
+        .as_str()
+        .expect("slot id")
+        .to_owned();
+    invoke(
+        &host,
+        &project,
+        "collection.set_slot",
+        json!({
+            "collection_id": collection.as_str(),
+            "slot_id": slot_id,
+            "asset": assets[1],
+        }),
+    )
+    .await;
+
+    let output = invoke(
+        &host,
+        &project,
+        "dynamic_workflow.resume",
+        json!({ "run_id": run_id.as_str() }),
+    )
+    .await;
+    assert_eq!(output["state"], "completed");
+
+    assert_eq!(
+        slot_contents(&host, &project, &collection).await,
+        vec!["alpha".to_owned()],
+        "the resumed steps read the asset pinned at run creation"
+    );
+
+    let _ = std::fs::remove_dir_all(&base);
+}
+
+#[tokio::test]
+async fn resume_uses_the_workflow_snapshot() {
+    let base = temp_dir("resume-snapshot");
+    let ops = TestOps::new();
+    let host = build_host(&base).await;
+    let project = create_project(&host, "proj").await;
+    let assets = import_assets(&host, &project, &base, &[("a.txt", "alpha")]).await;
+    let collection = create_collection(&host, &project, &assets).await;
+    let workflow = json!({
+        "inputs": { "doc": { "type": "string", "format": "asset" } },
+        "params": { "type": "object" },
+        "steps": [
+            {
+                "id": "pause",
+                "op": "test.pause",
+                "input": { "doc": { "$from": "inputs.doc" } }
+            },
+            {
+                "id": "copy",
+                "op": "test.copy",
+                "input": { "doc": { "$from": "inputs.doc" } }
+            }
+        ],
+        "output": { "$from": "steps.copy.doc" }
+    });
+    let workflow_id = create_workflow(&host, &project, workflow).await;
+    ops.register(&host);
+
+    let run_id = start_run(
+        &host,
+        &project,
+        &workflow_id,
+        json!({ "collection_id": collection.as_str() }),
+        None,
+    )
+    .await;
+    ops.pause_started.notified().await;
+
+    host.shutdown().await;
+    drop(host);
+    let host = reopen_host(&base, &ops).await;
+
+    // Rewrite the saved workflow; the run must resume from its own snapshot.
+    let workflow_path = host
+        .config()
+        .paths()
+        .project_dir(project.as_str())
+        .join("dynamic_workflows")
+        .join(format!("{workflow_id}.json"));
+    let mut document: Value = serde_json::from_slice(
+        &tokio::fs::read(&workflow_path)
+            .await
+            .expect("read dynamic workflow"),
+    )
+    .expect("workflow json");
+    document["workflow"] = json!({
+        "inputs": { "doc": { "type": "string", "format": "asset" } },
+        "params": { "type": "object" },
+        "steps": [{
+            "id": "other",
+            "op": "test.missing",
+            "input": { "doc": { "$from": "inputs.doc" } }
+        }],
+        "output": { "$from": "steps.other.doc" }
+    });
+    tokio::fs::write(
+        &workflow_path,
+        serde_json::to_vec_pretty(&document).expect("serialize workflow"),
+    )
+    .await
+    .expect("write dynamic workflow");
+
+    let output = invoke(
+        &host,
+        &project,
+        "dynamic_workflow.resume",
+        json!({ "run_id": run_id.as_str() }),
+    )
+    .await;
+    assert_eq!(output["state"], "completed");
+    assert_eq!(
+        ops.counters.pause.load(Ordering::SeqCst),
+        2,
+        "the snapshot's paused step, not the edited one, was resumed"
+    );
+    assert_eq!(ops.counters.copy.load(Ordering::SeqCst), 1);
+
+    let _ = std::fs::remove_dir_all(&base);
+}
+
+#[tokio::test]
+async fn resume_rejects_a_run_that_is_not_interrupted() {
+    let base = temp_dir("resume-not-interrupted");
+    let ops = TestOps::new();
+    let host = build_host(&base).await;
+    let project = create_project(&host, "proj").await;
+    let assets = import_assets(&host, &project, &base, &[("a.txt", "alpha")]).await;
+    let collection = create_collection(&host, &project, &assets).await;
+    let workflow_id = create_workflow(
+        &host,
+        &project,
+        copy_workflow(
+            vec![json!({
+                "id": "copy",
+                "op": "test.copy",
+                "input": { "doc": { "$from": "inputs.doc" } }
+            })],
+            json!({ "$from": "steps.copy.doc" }),
+        ),
+    )
+    .await;
+    ops.register(&host);
+
+    let run_id = start_run(
+        &host,
+        &project,
+        &workflow_id,
+        json!({ "collection_id": collection.as_str() }),
+        None,
+    )
+    .await;
+    wait_for_run(&host, &project, &run_id, |run| {
+        !matches!(run.state, RunState::Queued | RunState::Running)
+    })
+    .await;
+    assert_eq!(
+        ops.counters.copy.load(Ordering::SeqCst),
+        1,
+        "the run completed before the resume attempt"
+    );
+
+    let error = try_invoke(
+        &host,
+        &project,
+        "dynamic_workflow.resume",
+        json!({ "run_id": run_id.as_str() }),
+    )
+    .await
+    .expect_err("a completed run cannot resume");
+    assert_eq!(
+        error.code().as_str(),
+        "DYNAMIC_WORKFLOW/CALLER_NOT_INTERRUPTED"
+    );
+    assert_eq!(ops.counters.copy.load(Ordering::SeqCst), 1);
+
+    let _ = std::fs::remove_dir_all(&base);
+}
+
+#[tokio::test]
+async fn concurrent_resumes_start_one_task() {
+    let base = temp_dir("resume-concurrent");
+    let ops = TestOps::new();
+    let host = build_host(&base).await;
+    let project = create_project(&host, "proj").await;
+    let assets = import_assets(&host, &project, &base, &[("a.txt", "alpha")]).await;
+    let collection = create_collection(&host, &project, &assets).await;
+    let workflow = json!({
+        "inputs": { "doc": { "type": "string", "format": "asset" } },
+        "params": { "type": "object" },
+        "steps": [
+            {
+                "id": "copy",
+                "op": "test.copy",
+                "input": { "doc": { "$from": "inputs.doc" } }
+            },
+            {
+                "id": "pause",
+                "op": "test.pause",
+                "input": { "doc": { "$from": "steps.copy.doc" } }
+            }
+        ],
+        "output": { "$from": "steps.pause.doc" }
+    });
+    let workflow_id = create_workflow(&host, &project, workflow).await;
+    ops.register(&host);
+
+    let run_id = start_run(
+        &host,
+        &project,
+        &workflow_id,
+        json!({ "collection_id": collection.as_str() }),
+        None,
+    )
+    .await;
+    ops.pause_started.notified().await;
+
+    host.shutdown().await;
+    drop(host);
+    let host = reopen_host(&base, &ops).await;
+
+    assert_eq!(
+        get_run(&host, &project, &run_id).await.state,
+        RunState::Interrupted
+    );
+
+    let service = host.dynamic_workflow_service();
+    let (first, second) = tokio::join!(
+        service.resume(&project, &run_id),
+        service.resume(&project, &run_id)
+    );
+    let results = [first, second];
+    assert_eq!(
+        results.iter().filter(|result| result.is_ok()).count(),
+        1,
+        "exactly one resume may claim the run"
+    );
+    let error = results
+        .iter()
+        .find_map(|result| result.as_ref().err())
+        .expect("the other resume is rejected");
+    assert!(
+        matches!(
+            error.code().as_str(),
+            "DYNAMIC_WORKFLOW/CALLER_NOT_INTERRUPTED"
+                | "DYNAMIC_WORKFLOW/CALLER_RUN_ALREADY_ACTIVE"
+        ),
+        "unexpected rejection: {}",
+        error.code().as_str()
+    );
+
+    let run = get_run(&host, &project, &run_id).await;
+    assert_eq!(run.state, RunState::Completed);
+    assert_eq!(
+        ops.counters.pause.load(Ordering::SeqCst),
+        2,
+        "the resumed step ran once, not once per resume"
+    );
+    assert_eq!(
+        ops.counters.copy.load(Ordering::SeqCst),
+        1,
+        "the successful step was reused"
+    );
+
+    let _ = std::fs::remove_dir_all(&base);
+}
+
+#[tokio::test]
+async fn group_run_resumes_and_creates_its_collection_once() {
+    let base = temp_dir("group-resume");
+    let ops = TestOps::new();
+    let host = build_host(&base).await;
+    let project = create_project(&host, "proj").await;
+    let workflow_id = create_workflow(&host, &project, group_workflow("test.pause_render")).await;
+    ops.register(&host);
+
+    let run_id = start_run(
+        &host,
+        &project,
+        &workflow_id,
+        json!({ "groups": [{ "text": "only" }], "name": "Rendered batch" }),
+        None,
+    )
+    .await;
+    ops.pause_started.notified().await;
+
+    host.shutdown().await;
+    drop(host);
+    let host = reopen_host(&base, &ops).await;
+
+    let output = invoke(
+        &host,
+        &project,
+        "dynamic_workflow.resume",
+        json!({ "run_id": run_id.as_str() }),
+    )
+    .await;
+    assert_eq!(output["state"], "completed");
+
+    let run = get_run(&host, &project, &run_id).await;
+    assert_eq!(run.state, RunState::Completed);
+    let collection = run.collection_id.clone().expect("created collection");
+    assert_eq!(collection_file_count(&host, &project).await, 1);
+    assert_eq!(
+        slot_contents(&host, &project, &collection).await,
+        vec!["only".to_owned()]
+    );
+    assert_eq!(ops.counters.pause.load(Ordering::SeqCst), 2);
+
+    let _ = std::fs::remove_dir_all(&base);
+}
+
+#[tokio::test]
+async fn resuming_a_group_run_that_has_a_collection_does_not_create_another() {
+    let base = temp_dir("group-existing-collection");
+    let ops = TestOps::new();
+    let host = build_host(&base).await;
+    let project = create_project(&host, "proj").await;
+    let workflow_id = create_workflow(&host, &project, group_workflow("test.render")).await;
+    ops.register(&host);
+
+    let run_id = start_run(
+        &host,
+        &project,
+        &workflow_id,
+        json!({
+            "groups": [{ "text": "first" }, { "text": "second" }],
+            "name": "Rendered batch"
+        }),
+        None,
+    )
+    .await;
+    let run = wait_for_run(&host, &project, &run_id, |run| {
+        !matches!(run.state, RunState::Queued | RunState::Running)
+    })
+    .await;
+    assert_eq!(run.state, RunState::Completed);
+    let original_collection = run.collection_id.clone().expect("created collection");
+    assert_eq!(collection_file_count(&host, &project).await, 1);
+
+    // A crash between recording the collection and settling the run leaves a
+    // still-running document that already names its collection.
+    let run_path = host
+        .config()
+        .paths()
+        .project_dir(project.as_str())
+        .join("dynamic_workflow_runs")
+        .join(format!("{}.json", run_id.as_str()));
+    let mut document: Value =
+        serde_json::from_slice(&tokio::fs::read(&run_path).await.expect("read run document"))
+            .expect("run json");
+    document["state"] = json!("interrupted");
+    document["version"] = json!(document["version"].as_u64().expect("version") + 1);
+    tokio::fs::write(
+        &run_path,
+        serde_json::to_vec_pretty(&document).expect("serialize run"),
+    )
+    .await
+    .expect("write run document");
+
+    let output = invoke(
+        &host,
+        &project,
+        "dynamic_workflow.resume",
+        json!({ "run_id": run_id.as_str() }),
+    )
+    .await;
+    assert_eq!(output["state"], "completed");
+
+    let run = get_run(&host, &project, &run_id).await;
+    assert_eq!(run.collection_id.as_ref(), Some(&original_collection));
+    assert_eq!(
+        collection_file_count(&host, &project).await,
+        1,
+        "the existing collection is reused, not duplicated"
+    );
+    assert_eq!(
+        slot_contents(&host, &project, &original_collection).await,
+        vec!["first".to_owned(), "second".to_owned()]
+    );
+
+    let _ = std::fs::remove_dir_all(&base);
+}
+
+#[tokio::test]
+async fn run_set_slot_uses_the_run_context_and_can_be_undone() {
+    let base = temp_dir("set-slot-undo");
+    let ops = TestOps::new();
+    let host = build_host(&base).await;
+    let project = create_project(&host, "proj").await;
+    let assets = import_assets(&host, &project, &base, &[("a.txt", "alpha")]).await;
+    let collection = create_collection(&host, &project, &assets).await;
+    let workflow_id = create_workflow(
+        &host,
+        &project,
+        copy_workflow(
+            vec![json!({
+                "id": "copy",
+                "op": "test.copy",
+                "input": { "doc": { "$from": "inputs.doc" } }
+            })],
+            json!({ "$from": "steps.copy.doc" }),
+        ),
+    )
+    .await;
+    ops.register(&host);
+
+    let run_context = OperationContext::new(
+        CommandActor::new(CommandActorKind::Human).with_id("run-actor"),
+        CommandProvenance::Direct,
+    );
+    let run_id = start_run_as(
+        &host,
+        &project,
+        &workflow_id,
+        json!({ "collection_id": collection.as_str() }),
+        None,
+        run_context,
+    )
+    .await;
+    let run = wait_for_run(&host, &project, &run_id, |run| {
+        !matches!(run.state, RunState::Queued | RunState::Running)
+    })
+    .await;
+    assert_eq!(run.state, RunState::Completed);
+
+    // Every step of the run, including the SetSlot path's siblings, carries
+    // the initiating actor.
+    let step_log = StepLog::new(host.config().paths().project_dir(project.as_str()));
+    let records = step_log.records().await.expect("step records");
+    let run_records: Vec<_> = records
+        .iter()
+        .filter(|record| record.run.as_ref().is_some_and(|run| run.run_id == run_id))
+        .collect();
+    assert!(!run_records.is_empty());
+    for record in run_records {
+        assert_eq!(record.context.actor().id(), Some("run-actor"));
+    }
+
+    let snapshot = invoke(
+        &host,
+        &project,
+        "collection.get",
+        json!({ "collection_id": collection.as_str() }),
+    )
+    .await;
+    let output_asset = snapshot["slots"][0]["asset_id"]
+        .as_str()
+        .expect("asset id")
+        .to_owned();
+    assert_ne!(output_asset, assets[0], "the slot points at the run output");
+
+    let undo = invoke(
+        &host,
+        &project,
+        "collection.undo",
+        json!({ "collection_id": collection.as_str() }),
+    )
+    .await;
+    assert_eq!(undo["applied"], true);
+    let snapshot = invoke(
+        &host,
+        &project,
+        "collection.get",
+        json!({ "collection_id": collection.as_str() }),
+    )
+    .await;
+    assert_eq!(
+        snapshot["slots"][0]["asset_id"].as_str(),
+        Some(assets[0].as_str()),
+        "the run's SetSlot can be undone"
+    );
+
+    let _ = std::fs::remove_dir_all(&base);
+}
+
+#[tokio::test]
+async fn dynamic_workflow_create_is_not_deterministic() {
+    let base = temp_dir("create-annotations");
+    let host = build_host(&base).await;
+    let project = create_project(&host, "proj").await;
+    let infos = host.operation_service().list(&project).await;
+    let create = infos
+        .iter()
+        .find(|info| info.spec.name == "dynamic_workflow.create")
+        .expect("dynamic_workflow.create is registered");
+    assert!(
+        !create.spec.annotations.deterministic,
+        "every create call allocates a new id"
+    );
+    let _ = std::fs::remove_dir_all(&base);
+}
+
+#[tokio::test]
+async fn unknown_target_keys_are_caller_diagnostics() {
+    let base = temp_dir("unknown-target-key");
+    let ops = TestOps::new();
+    let host = build_host(&base).await;
+    let project = create_project(&host, "proj").await;
+    let assets = import_assets(&host, &project, &base, &[("a.txt", "alpha")]).await;
+    let collection = create_collection(&host, &project, &assets).await;
+    let workflow_id = create_workflow(
+        &host,
+        &project,
+        copy_workflow(
+            vec![json!({
+                "id": "copy",
+                "op": "test.copy",
+                "input": { "doc": { "$from": "inputs.doc" } }
+            })],
+            json!({ "$from": "steps.copy.doc" }),
+        ),
+    )
+    .await;
+    ops.register(&host);
+
+    // `slot` is a misspelling of `slots`; it must not degrade to "all slots".
+    let error = try_invoke(
+        &host,
+        &project,
+        "dynamic_workflow.run",
+        json!({
+            "dynamic_workflow_id": workflow_id,
+            "target": { "collection_id": collection.as_str(), "slot": ["slot-1"] }
+        }),
+    )
+    .await
+    .expect_err("a misspelled target key is rejected");
+    assert_eq!(
+        error.code().as_str(),
+        "DYNAMIC_WORKFLOW/CALLER_INVALID_TARGET"
+    );
+    assert!(
+        error.message().contains("slot"),
+        "the diagnostic names the unknown key: {}",
+        error.message()
+    );
+
+    let output = invoke(
+        &host,
+        &project,
+        "dynamic_workflow.list_runs",
+        json!({ "collection_id": collection.as_str() }),
+    )
+    .await;
+    assert_eq!(
+        output["runs"].as_array().expect("runs").len(),
+        0,
+        "no run was created"
+    );
 
     let _ = std::fs::remove_dir_all(&base);
 }
