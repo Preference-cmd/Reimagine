@@ -99,7 +99,8 @@ impl DynamicWorkflowCreateOp {
                     read_only: false,
                     destructive: false,
                     idempotent: false,
-                    deterministic: true,
+                    // Every call allocates a fresh dynamic workflow id.
+                    deterministic: false,
                     open_world: false,
                 },
             },
