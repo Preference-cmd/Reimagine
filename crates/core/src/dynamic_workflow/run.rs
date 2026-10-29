@@ -1,16 +1,21 @@
 //! Batch run documents: targets, items, states and the persisted snapshot.
 
-use serde::{Deserialize, Serialize};
+use serde::de::Error as _;
+use serde::{Deserialize, Deserializer, Serialize};
 use serde_json::Value;
 
 use crate::command::OperationContext;
 use crate::diagnostic::Diagnostic;
 use crate::dynamic_workflow::workflow::WorkflowSpec;
 use crate::event::Timestamp;
-use crate::model::{CollectionId, DynamicWorkflowId, ProjectId, RunId, SlotId};
+use crate::model::{AssetId, CollectionId, DynamicWorkflowId, ProjectId, RunId, SlotId};
 
 /// The set of items a run covers.
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+///
+/// Deserialization is explicit rather than untagged: the two shapes are told
+/// apart by their keys, and an unknown key (a misspelled `slots`, say) is
+/// rejected instead of silently falling back to "all slots".
+#[derive(Debug, Clone, PartialEq, Serialize)]
 #[serde(untagged)]
 pub enum RunTarget {
     /// Slots of an existing collection; `slots` omitted means all of them.
@@ -21,6 +26,73 @@ pub enum RunTarget {
     },
     /// One new collection built from one parameter group per item.
     Groups { groups: Vec<Value>, name: String },
+}
+
+impl<'de> Deserialize<'de> for RunTarget {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: Deserializer<'de>,
+    {
+        let value = Value::deserialize(deserializer)?;
+        let Value::Object(mut fields) = value else {
+            return Err(D::Error::custom("run target must be a JSON object"));
+        };
+
+        if let Some(raw) = fields.remove("collection_id") {
+            let collection_id = serde_json::from_value::<CollectionId>(raw)
+                .map_err(|error| D::Error::custom(format!("invalid 'collection_id': {error}")))?;
+            let slots = match fields.remove("slots") {
+                Some(raw) => Some(
+                    serde_json::from_value::<Vec<SlotId>>(raw)
+                        .map_err(|error| D::Error::custom(format!("invalid 'slots': {error}")))?,
+                ),
+                None => None,
+            };
+            reject_unknown_fields::<D::Error>(&fields)?;
+            return Ok(Self::Collection {
+                collection_id,
+                slots,
+            });
+        }
+
+        if let Some(raw) = fields.remove("groups") {
+            let groups = serde_json::from_value::<Vec<Value>>(raw)
+                .map_err(|error| D::Error::custom(format!("invalid 'groups': {error}")))?;
+            let name = match fields.remove("name") {
+                Some(Value::String(name)) => name,
+                Some(_) => {
+                    return Err(D::Error::custom(
+                        "'name' of a parameter-group run target must be a string",
+                    ));
+                }
+                None => {
+                    return Err(D::Error::custom(
+                        "a parameter-group run target requires 'name'",
+                    ));
+                }
+            };
+            reject_unknown_fields::<D::Error>(&fields)?;
+            return Ok(Self::Groups { groups, name });
+        }
+
+        Err(D::Error::custom(
+            "run target must contain 'collection_id' or 'groups'",
+        ))
+    }
+}
+
+fn reject_unknown_fields<E: serde::de::Error>(
+    fields: &serde_json::Map<String, Value>,
+) -> Result<(), E> {
+    if fields.is_empty() {
+        return Ok(());
+    }
+    let mut names: Vec<&str> = fields.keys().map(String::as_str).collect();
+    names.sort_unstable();
+    Err(E::custom(format!(
+        "unknown run target field(s): {}",
+        names.join(", ")
+    )))
 }
 
 impl RunTarget {
@@ -110,6 +182,11 @@ pub struct RunItem {
     pub item_id: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub slot_id: Option<SlotId>,
+    /// The asset this item read when the run was created. Resuming uses this
+    /// pinned value instead of re-reading a slot that may have changed while
+    /// the run was interrupted.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub input_asset: Option<AssetId>,
     pub state: SlotState,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub diagnostic: Option<Diagnostic>,
@@ -120,9 +197,16 @@ impl RunItem {
         Self {
             item_id: item_id.into(),
             slot_id,
+            input_asset: None,
             state: SlotState::Queued,
             diagnostic: None,
         }
+    }
+
+    /// Pin the input asset resolved when the run was created.
+    pub fn with_input_asset(mut self, asset: AssetId) -> Self {
+        self.input_asset = Some(asset);
+        self
     }
 }
 
@@ -233,6 +317,77 @@ mod tests {
             }
         );
         assert_eq!(target.collection_id(), None);
+    }
+
+    #[test]
+    fn unknown_target_fields_are_rejected() {
+        let error = serde_json::from_value::<RunTarget>(json!({
+            "collection_id": "col-1",
+            "slot": ["slot-1"]
+        }))
+        .expect_err("a misspelled 'slots' must not mean 'all slots'");
+        assert!(
+            error
+                .to_string()
+                .contains("unknown run target field(s): slot"),
+            "unexpected error: {error}"
+        );
+
+        let error = serde_json::from_value::<RunTarget>(json!({
+            "groups": [{ "text": "a" }],
+            "name": "Batch",
+            "collection_id": "col-1"
+        }))
+        .expect_err("both shapes at once");
+        assert!(
+            error.to_string().contains("unknown run target field(s):"),
+            "unexpected error: {error}"
+        );
+
+        let error =
+            serde_json::from_value::<RunTarget>(json!({ "name": "Batch" })).expect_err("no shape");
+        assert!(
+            error.to_string().contains("'collection_id' or 'groups'"),
+            "unexpected error: {error}"
+        );
+
+        let error = serde_json::from_value::<RunTarget>(json!({
+            "groups": [],
+            "name": "Batch",
+            "extra": true
+        }))
+        .expect_err("unknown group target field");
+        assert!(
+            error
+                .to_string()
+                .contains("unknown run target field(s): extra"),
+            "unexpected error: {error}"
+        );
+    }
+
+    #[test]
+    fn run_item_carries_its_input_asset() {
+        let item = RunItem::new("slot-1", Some(SlotId::new("slot-1")))
+            .with_input_asset(AssetId::new("asset-1"));
+        let value = serde_json::to_value(&item).unwrap();
+        assert_eq!(
+            value,
+            json!({
+                "item_id": "slot-1",
+                "slot_id": "slot-1",
+                "input_asset": "asset-1",
+                "state": "queued"
+            })
+        );
+
+        // Run documents written before `input_asset` existed still load.
+        let legacy: RunItem = serde_json::from_value(json!({
+            "item_id": "slot-1",
+            "slot_id": "slot-1",
+            "state": "queued"
+        }))
+        .expect("legacy item");
+        assert_eq!(legacy.input_asset, None);
     }
 
     #[test]
