@@ -1,5 +1,6 @@
 //! Append-only step execution log for projects.
 
+use std::io::SeekFrom;
 use std::path::PathBuf;
 
 use reimagine_core::diagnostic::{
@@ -8,7 +9,7 @@ use reimagine_core::diagnostic::{
 };
 use reimagine_core::model::DiagnosticId;
 use reimagine_core::step::StepRecord;
-use tokio::io::AsyncWriteExt;
+use tokio::io::{AsyncReadExt, AsyncSeekExt, AsyncWriteExt};
 
 fn step_internal_error(code: &str, message: impl Into<String>) -> Diagnostic {
     Diagnostic::new(
@@ -53,10 +54,16 @@ impl StepLog {
 
         let mut file = tokio::fs::OpenOptions::new()
             .create(true)
+            .read(true)
             .append(true)
             .open(&path)
             .await
             .map_err(|e| step_internal_error("IO", format!("open steps.jsonl: {e}")))?;
+
+        // A process abort can leave a partial line. Appending after it would
+        // merge the two records into one malformed line, which `records`
+        // skips along with the record that was just appended.
+        Self::truncate_torn_tail(&mut file).await?;
 
         let line = serde_json::to_string(record).map_err(|e| {
             step_internal_error("SERIALIZATION", format!("serialize step record: {e}"))
@@ -70,6 +77,48 @@ impl StepLog {
             .await
             .map_err(|e| step_internal_error("IO", format!("flush steps.jsonl: {e}")))?;
 
+        Ok(())
+    }
+
+    /// Truncate the file to its last complete line, dropping bytes after the
+    /// final newline. A file without any newline is a single torn record and
+    /// is emptied.
+    async fn truncate_torn_tail(file: &mut tokio::fs::File) -> Result<(), Diagnostic> {
+        let len = file
+            .metadata()
+            .await
+            .map_err(|e| step_internal_error("IO", format!("stat steps.jsonl: {e}")))?
+            .len();
+        if len == 0 {
+            return Ok(());
+        }
+
+        let mut buffer = [0u8; 8192];
+        let mut end = len;
+        while end > 0 {
+            let start = end.saturating_sub(buffer.len() as u64);
+            let chunk_len = (end - start) as usize;
+            file.seek(SeekFrom::Start(start))
+                .await
+                .map_err(|e| step_internal_error("IO", format!("seek steps.jsonl: {e}")))?;
+            file.read_exact(&mut buffer[..chunk_len])
+                .await
+                .map_err(|e| step_internal_error("IO", format!("read steps.jsonl: {e}")))?;
+            if let Some(index) = buffer[..chunk_len].iter().rposition(|byte| *byte == b'\n') {
+                let keep = start + index as u64 + 1;
+                if keep < len {
+                    file.set_len(keep).await.map_err(|e| {
+                        step_internal_error("IO", format!("truncate steps.jsonl: {e}"))
+                    })?;
+                }
+                return Ok(());
+            }
+            end = start;
+        }
+
+        file.set_len(0)
+            .await
+            .map_err(|e| step_internal_error("IO", format!("truncate steps.jsonl: {e}")))?;
         Ok(())
     }
 
@@ -173,6 +222,85 @@ mod tests {
         assert!(matches!(records[0].outcome, StepOutcome::Succeeded { .. }));
         assert!(matches!(records[1].outcome, StepOutcome::Running));
         assert!(records[1].finished_at.is_none());
+    }
+
+    #[tokio::test]
+    async fn append_drops_a_torn_tail_before_writing() {
+        let temp = tempfile::tempdir().unwrap();
+        let log = StepLog::new(temp.path());
+        let path = log.steps_jsonl_path();
+        let context = OperationContext::new(
+            CommandActor::new(CommandActorKind::Human).with_id("test-user"),
+            CommandProvenance::Direct,
+        );
+
+        let mut earlier = StepRecord::new_running(
+            StepId::new("step-before-crash"),
+            "test.op",
+            "0.1.0",
+            json!({ "index": 0 }),
+            context.clone(),
+            Timestamp::new("2026-10-27T00:00:00Z"),
+        );
+        earlier.finish(
+            StepOutcome::Succeeded {
+                output: json!({ "ok": true }),
+            },
+            Timestamp::new("2026-10-27T00:00:01Z"),
+        );
+        let earlier_line = serde_json::to_string(&earlier).unwrap();
+
+        // One complete line, then the partial line an aborted process left.
+        tokio::fs::write(&path, format!("{earlier_line}\n{{\"id\":\"step-torn\""))
+            .await
+            .unwrap();
+
+        let record = StepRecord::new_running(
+            StepId::new("step-after-restart"),
+            "test.op",
+            "0.1.0",
+            json!({ "index": 1 }),
+            context,
+            Timestamp::new("2026-10-27T00:00:02Z"),
+        );
+        log.record_start(&record).await.unwrap();
+
+        let content = tokio::fs::read_to_string(&path).await.unwrap();
+        assert!(
+            !content.contains("step-torn"),
+            "the torn tail must be dropped: {content}"
+        );
+        let records = log.records().await.unwrap();
+        assert_eq!(records.len(), 2, "both complete records survive");
+        assert_eq!(records[0].id.as_str(), "step-before-crash");
+        assert_eq!(records[1].id.as_str(), "step-after-restart");
+    }
+
+    #[tokio::test]
+    async fn append_clears_a_file_that_is_only_a_torn_record() {
+        let temp = tempfile::tempdir().unwrap();
+        let log = StepLog::new(temp.path());
+        tokio::fs::write(log.steps_jsonl_path(), "{\"id\":")
+            .await
+            .unwrap();
+
+        let context = OperationContext::new(
+            CommandActor::new(CommandActorKind::Human).with_id("test-user"),
+            CommandProvenance::Direct,
+        );
+        let record = StepRecord::new_running(
+            StepId::new("step-first"),
+            "test.op",
+            "0.1.0",
+            json!({}),
+            context,
+            Timestamp::new("2026-10-27T00:00:00Z"),
+        );
+        log.record_start(&record).await.unwrap();
+
+        let records = log.records().await.unwrap();
+        assert_eq!(records.len(), 1);
+        assert_eq!(records[0].id.as_str(), "step-first");
     }
 
     #[tokio::test]
