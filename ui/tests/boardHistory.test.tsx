@@ -152,7 +152,7 @@ describe("board history guard", () => {
 
     await waitFor(() =>
       expect(toast.error).toHaveBeenCalledWith("The activity feed was out of date", {
-        description: "Nothing was undone. The activity panel now matches the latest history.",
+        description: "Nothing was undone. The undo and redo targets were resynced.",
       }),
     );
 
