@@ -152,7 +152,7 @@ describe("board history guard", () => {
 
     await waitFor(() =>
       expect(toast.error).toHaveBeenCalledWith("The activity feed was out of date", {
-        description: "Nothing was undone. The board and activity were refreshed.",
+        description: "Nothing was undone. The activity panel now matches the latest history.",
       }),
     );
 
@@ -217,5 +217,131 @@ describe("board history guard", () => {
       description: "history unavailable",
     });
     expect(useActivityStore.getState().undoStack).toEqual([first.historyEntryId]);
+  });
+
+  test("an empty stack sends no request and shows no error", async () => {
+    const undo = vi.spyOn(ipc, "undoBoard");
+    const redo = vi.spyOn(ipc, "redoBoard");
+
+    expect(await runBoardHistory("undo")).toBe(false);
+    expect(await runBoardHistory("redo")).toBe(false);
+
+    expect(undo).not.toHaveBeenCalled();
+    expect(redo).not.toHaveBeenCalled();
+    expect(toast.error).not.toHaveBeenCalled();
+  });
+
+  test("a feed loaded for another project is not an undo target", async () => {
+    const undo = vi.spyOn(ipc, "undoBoard");
+    useActivityStore.setState({ projectId: "proj-other", undoStack: ["h-other"] });
+
+    expect(await runBoardHistory("undo")).toBe(false);
+
+    expect(undo).not.toHaveBeenCalled();
+    expect(toast.error).not.toHaveBeenCalled();
+  });
+
+  test("concurrent undo calls share one host request", async () => {
+    let resolveUndo!: (result: BoardCommandResultDto) => void;
+    const hostCall = new Promise<BoardCommandResultDto>((resolve) => {
+      resolveUndo = resolve;
+    });
+    const undo = vi.spyOn(ipc, "undoBoard").mockReturnValue(hostCall);
+
+    const applied = await applyNote(0, "batch-1", "note-1");
+    const historyId = applied.historyEntryId;
+    expect(historyId).toBeTruthy();
+    useActivityStore.getState().append(PROJECT, (await activityRecords())[0]);
+    expect(useActivityStore.getState().undoStack).toEqual([historyId]);
+
+    const first = runBoardHistory("undo");
+    const second = runBoardHistory("undo");
+    expect(undo).toHaveBeenCalledTimes(1);
+    expect(undo).toHaveBeenCalledWith(PROJECT, historyId);
+
+    resolveUndo({
+      status: "applied",
+      version: 2,
+      changes: [],
+      diagnostics: [],
+      historyEntryId: historyId,
+    });
+    expect(await first).toBe(true);
+    expect(await second).toBe(true);
+    expect(undo).toHaveBeenCalledTimes(1);
+
+    // Once settled the slot clears, so a later call reaches the host again.
+    expect(await runBoardHistory("undo")).toBe(true);
+    expect(undo).toHaveBeenCalledTimes(2);
+  });
+
+  test("a conflict after a workspace switch leaves the other feed and skips the refresh", async () => {
+    const other = "proj-other";
+    const applied = await applyNote(0, "batch-1", "note-1");
+    const staleId = applied.historyEntryId;
+    expect(staleId).toBeTruthy();
+    useActivityStore.getState().append(PROJECT, (await activityRecords())[0]);
+    expect(useActivityStore.getState().undoStack).toEqual([staleId]);
+
+    let rejectUndo!: (reason: unknown) => void;
+    const undo = vi.spyOn(ipc, "undoBoard").mockReturnValue(
+      new Promise<BoardCommandResultDto | null>((_resolve, reject) => {
+        rejectUndo = reject;
+      }),
+    );
+    const getSnapshot = vi.spyOn(ipc, "getBoardSnapshot");
+
+    const otherRecord: ActivityRecord = {
+      id: "act-other",
+      at: "2026-10-30T00:00:00Z",
+      actor: { kind: "Human", id: null, label: null },
+      summary: "Added a note",
+      summaryKey: "activity.board.addNote",
+      summaryParams: { count: 1 },
+      targets: ["note-other"],
+      kind: "applied",
+      historyEntryId: "h-other",
+    };
+    vi.spyOn(ipc, "opInvoke").mockImplementation(async (projectId) => ({
+      step: {},
+      output:
+        projectId === other
+          ? { records: [otherRecord], has_more: false }
+          : { records: [], has_more: false },
+    }));
+
+    const pending = runBoardHistory("undo");
+    expect(undo).toHaveBeenCalledWith(PROJECT, staleId);
+
+    // The user switches to another project while the request is in flight.
+    useProjectStore.setState({ activeProjectId: other });
+    await useActivityStore.getState().load(other);
+    expect(useActivityStore.getState().projectId).toBe(other);
+    expect(useActivityStore.getState().records.map((record) => record.id)).toEqual(["act-other"]);
+
+    rejectUndo({
+      code: "conflict",
+      message: `board undo expected ${staleId} but the current entry is h-host-top`,
+      details: {
+        project_id: PROJECT,
+        action: "undo",
+        expected_entry_id: staleId,
+        undo_entry_id: "h-host-top",
+        redo_entry_id: null,
+      },
+    });
+    expect(await pending).toBe(false);
+
+    // The other feed stays current; nothing is refreshed and no notice shown.
+    const current = useActivityStore.getState();
+    expect(current.projectId).toBe(other);
+    expect(current.records.map((record) => record.id)).toEqual(["act-other"]);
+    expect(current.error).toBeNull();
+    expect(getSnapshot).not.toHaveBeenCalled();
+    expect(toast.error).not.toHaveBeenCalled();
+
+    // The host's top is remembered for the project that was left.
+    await useActivityStore.getState().load(PROJECT);
+    expect(useActivityStore.getState().undoStack).toEqual(["h-host-top"]);
   });
 });

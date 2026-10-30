@@ -518,4 +518,52 @@ describe("In-memory board mock", () => {
 
     unsubscribe();
   });
+
+  test("activity.list mirrors the host for known and unknown before cursors", async () => {
+    for (const [version, itemId] of [
+      [0, "note-1"],
+      [1, "note-2"],
+    ] as const) {
+      await mockApplyBoardCommands({
+        projectId,
+        commandBatch: {
+          base_version: version,
+          commands: [
+            {
+              type: "add_item",
+              item_id: itemId,
+              kind: { type: "note", content: itemId },
+              position: { x: 0, y: 0 },
+              size: { width: 100, height: 100 },
+            },
+          ],
+        },
+      });
+    }
+
+    const first = await mockOpInvoke({
+      projectId,
+      name: "activity.list",
+      input: { limit: 1 },
+    });
+    const firstPage = first.output as { records: Array<{ id: string }>; has_more: boolean };
+    expect(firstPage.records).toHaveLength(1);
+    expect(firstPage.has_more).toBe(true);
+
+    const older = await mockOpInvoke({
+      projectId,
+      name: "activity.list",
+      input: { limit: 50, before: firstPage.records[0].id },
+    });
+    const olderPage = older.output as { records: Array<{ id: string }>; has_more: boolean };
+    expect(olderPage.records).toHaveLength(1);
+    expect(olderPage.has_more).toBe(false);
+
+    const unknown = await mockOpInvoke({
+      projectId,
+      name: "activity.list",
+      input: { limit: 50, before: "act_missing" },
+    });
+    expect(unknown.output).toEqual({ records: [], has_more: false });
+  });
 });

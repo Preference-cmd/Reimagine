@@ -92,6 +92,7 @@ describe("Board canvas interactions and command batches", () => {
   });
 
   afterEach(() => {
+    window.history.pushState({}, "", "/");
     vi.restoreAllMocks();
     vi.unstubAllGlobals();
   });
@@ -1135,21 +1136,22 @@ describe("Board canvas interactions and command batches", () => {
     fireEvent.keyDown(input, { key: "z", metaKey: true });
     expect(undoSpy).not.toHaveBeenCalled();
 
-    // 2. Cmd+Z on window triggers board undo. With an empty activity feed
-    // there is no expected history entry, so the guard sends null.
+    // 2. Cmd+Z on window is ignored while the feed names no expected entry;
+    // the host is never called with a null guard.
     await act(async () => {
       fireEvent.keyDown(window, { key: "z", metaKey: true });
     });
-    expect(undoSpy).toHaveBeenCalledWith("proj-1", null);
+    expect(undoSpy).not.toHaveBeenCalled();
 
-    // 3. Cmd+Shift+Z on window triggers board redo
+    // 3. Cmd+Shift+Z on window is ignored for the same reason
     await act(async () => {
       fireEvent.keyDown(window, { key: "z", metaKey: true, shiftKey: true });
     });
-    expect(redoSpy).toHaveBeenCalledWith("proj-1", null);
+    expect(redoSpy).not.toHaveBeenCalled();
   });
 
   test("undo/redo shortcuts: with no canvas mounted (the /library case), Cmd+Z and Cmd+Shift+Z still undo and redo board history", async () => {
+    window.history.pushState({}, "", "/library");
     const projectId = "proj-library";
     mockResetBoard(projectId);
     useActivityStore.getState().reset();
@@ -1235,5 +1237,44 @@ describe("Board canvas interactions and command batches", () => {
       "note-library",
     ]);
     expect((await hostFeed())[0]).toMatchObject({ kind: "redone", historyEntryId: historyId });
+  });
+
+  test("undo/redo shortcuts: routes without the session panel keep the browser undo", async () => {
+    const projectId = "proj-settings";
+    useActivityStore.getState().reset();
+    useProjectStore.setState({ activeProjectId: projectId });
+    useActivityStore.setState({ projectId, undoStack: ["hist-settings"] });
+    const undoSpy = vi.spyOn(ipc, "undoBoard");
+    const redoSpy = vi.spyOn(ipc, "redoBoard");
+
+    window.history.pushState({}, "", "/settings");
+    render(<UndoRedoShortcutMount />);
+
+    const undoKey = new KeyboardEvent("keydown", {
+      key: "z",
+      metaKey: true,
+      bubbles: true,
+      cancelable: true,
+    });
+    act(() => {
+      window.dispatchEvent(undoKey);
+    });
+    expect(undoKey.defaultPrevented).toBe(false);
+    expect(undoSpy).not.toHaveBeenCalled();
+
+    const redoKey = new KeyboardEvent("keydown", {
+      key: "z",
+      metaKey: true,
+      shiftKey: true,
+      bubbles: true,
+      cancelable: true,
+    });
+    act(() => {
+      window.dispatchEvent(redoKey);
+    });
+    expect(redoKey.defaultPrevented).toBe(false);
+    expect(redoSpy).not.toHaveBeenCalled();
+
+    window.history.pushState({}, "", "/");
   });
 });

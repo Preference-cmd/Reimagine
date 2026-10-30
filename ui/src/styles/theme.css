@@ -51,8 +51,8 @@
 
   /* agent ink: gold marks only things the agent did or proposed.
      Never use it for human actions, ordinary selection or decoration.
-     --color-agent-btn and --color-agent-ink are reserved for the agent
-     action UI, which has no consumer yet. */
+     --color-agent-btn and --color-agent-ink are reserved for the Phase 4
+     agent action UI; no consumer yet. */
   --color-agent: #8a5d06;
   --color-agent-btn: #94660c;
   --color-agent-soft: #fbf5e7;
@@ -121,19 +121,11 @@
   --text-caption--line-height: 16px;
   --text-caption--font-weight: 400;
 
-  /* Spacing scale. */
-  --spacing-xs: 8px;
-  --spacing-sm: 12px;
-  --spacing-md: 16px;
-  --spacing-lg: 24px;
-  --spacing-xl: 32px;
-  --spacing-2xl: 40px;
-
-  /* Shell layout, mirrored by LAYOUT in ui/src/design/tokens.ts. */
+  /* Shell layout widths, mirrored by LAYOUT in ui/src/design/tokens.ts. The
+     topbar height is JS-only and has no spacing token. */
   --spacing-sidebar: 264px;
   --spacing-panel: 364px;
   --spacing-panel-gap: 16px;
-  --spacing-topbar: 48px;
 
   /* Board canvas dot-grid spacing. */
   --spacing-canvas-grid: 20px;

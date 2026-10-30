@@ -153,8 +153,8 @@ Reimagine is in active development; internal APIs, node contracts and the
 workflow document schema will still change. Where it stands today:
 
 - The Project, Board and Workflow model, its command pipeline and undo/redo are
-  implemented in Rust. The desktop UI edits one workflow graph at a time; it
-  does not yet draw the Board's materials, notes and runs.
+  implemented in Rust. The desktop UI is a board, library and activity shell
+  for notes and materials, without a workflow-graph editor.
 - Image generation (SDXL base on Burn) is the only domain implemented; video,
   animation and audio are planned.
 - The agent is not wired in; see the architecture section above.

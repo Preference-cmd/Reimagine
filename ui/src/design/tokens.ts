@@ -5,8 +5,8 @@
  * in both files MUST stay in sync; drift between the two is a bug.
  */
 
-/** Shell layout dimensions in px, mirrored by the --spacing-* shell tokens
- *  in theme.css. */
+/** Shell layout dimensions in px. Sidebar, panel and gap are mirrored by the
+ *  --spacing-* shell tokens in theme.css; the topbar height is JS-only. */
 export const LAYOUT = {
   sidebar: 264,
   panel: 364,

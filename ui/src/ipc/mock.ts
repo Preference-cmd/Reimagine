@@ -1249,7 +1249,19 @@ export async function mockOpInvoke(input: {
     const limit = typeof args.limit === "number" ? Math.max(1, Math.floor(args.limit)) : 50;
     const before = typeof args.before === "string" ? args.before : null;
     const all = mockActivityFor(projectId);
-    const start = before ? all.findIndex((record) => record.id === before) + 1 : 0;
+    let start = 0;
+    if (before) {
+      const cursor = all.findIndex((record) => record.id === before);
+      // Mirrors the host: an unknown cursor is an empty final page, never a
+      // silent jump back to the newest records.
+      if (cursor === -1) {
+        return {
+          step: { id: rand("step"), op: name, outcome: "succeeded" },
+          output: { records: [], has_more: false },
+        };
+      }
+      start = cursor + 1;
+    }
     return {
       step: { id: rand("step"), op: name, outcome: "succeeded" },
       output: {

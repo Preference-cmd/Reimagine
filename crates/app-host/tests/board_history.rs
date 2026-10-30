@@ -188,6 +188,21 @@ async fn expected_history_entries_gate_board_undo_and_redo() {
         .expect("snapshot loads");
     assert_eq!(snapshot.items().len(), 2);
     assert_eq!(snapshot.version(), DocumentVersion::new(2));
+
+    // The snapshot matches the file only if the rejected undo never wrote the
+    // board document.
+    let board_bytes = tokio::fs::read(base.join("projects/proj-history/board.json"))
+        .await
+        .expect("board file is readable");
+    let board_file: Value = serde_json::from_slice(&board_bytes).expect("board file is JSON");
+    assert_eq!(board_file["version"], json!(2));
+    assert_eq!(
+        board_file["items"]
+            .as_object()
+            .expect("board file stores items by id")
+            .len(),
+        2
+    );
     assert!(
         events.try_recv().is_err(),
         "a rejected undo publishes neither board.changed nor activity.appended"

@@ -1,5 +1,5 @@
 /**
- * Command palette helpers (F3-3): fuzzy matching over command/node lists.
+ * Command palette helpers (F3-3): fuzzy matching over the command list.
  * Pure and store-free so the filtering logic stays unit-testable.
  */
 
