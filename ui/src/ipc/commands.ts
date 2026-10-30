@@ -15,8 +15,6 @@ import {
   type ModelInfo,
   type NodeDef,
   type RebootBackendArgs,
-  type RunWorkflowResponse,
-  type Workflow,
   type WorkflowFileSummary,
   type WorkerSwitchArgs,
   type WorkerSwitchResult,
@@ -24,7 +22,6 @@ import {
   type InvokeResult,
   CommandErrorSchema,
   EventSchema,
-  RunWorkflowResponseSchema,
   ProjectMetadataInputSchema,
   DownloadHuggingfaceModelArgsSchema,
   RebootBackendArgsSchema,
@@ -33,7 +30,6 @@ import {
 } from "./schemas";
 import {
   mockCancelAndSwitchWorker,
-  mockCancelRun,
   mockCreateProject,
   mockDeleteProject,
   mockGetBoardSnapshot,
@@ -57,7 +53,6 @@ import {
   mockOpenArtifact,
   mockRebootBackend,
   mockResolveArtifact,
-  mockRunWorkflow,
   mockSaveWorkflow,
   mockSearchModels,
   mockOpInvoke,
@@ -137,28 +132,6 @@ async function invokeWithFallback<T>(real: () => Promise<T>, mock: () => Promise
     }
     throw e;
   }
-}
-
-export async function runWorkflow(
-  projectId: string,
-  workflow: Workflow,
-): Promise<RunWorkflowResponse> {
-  const response = await dispatch("run_workflow", null, { projectId, workflow }, () =>
-    mockRunWorkflow(workflow),
-  );
-  // Parse so a host/UI field mismatch fails here instead of leaving `runId`
-  // undefined and the run store ignoring every run event.
-  return RunWorkflowResponseSchema.parse(response);
-}
-
-export async function cancelRun(runId: string): Promise<void> {
-  return invokeWithFallback(
-    async () => {
-      const { invoke } = await import("@tauri-apps/api/core");
-      return invoke<void>("cancel_run", { runId });
-    },
-    () => mockCancelRun(runId),
-  );
 }
 
 export function listModels(): Promise<ModelInfo[]> {

@@ -8,10 +8,10 @@ import { queryKeys } from "@/hooks/queries";
 /**
  * Artifact preview cache (F5-4).
  *
- * Consumes run events forwarded from the runtime store and resolves
- * artifact ids to displayable URLs via `resolveArtifact()` IPC, keyed by
- * node id. A new run clears the map; pending entries are marked stale on
- * terminal run states so no spinner outlives the run.
+ * Consumes run events and resolves artifact ids to displayable URLs via
+ * `resolveArtifact()` IPC, keyed by node id. A new run clears the map;
+ * pending entries are marked stale on terminal run states so no spinner
+ * outlives the run.
  *
  * Uses TanStack Query's `fetchQuery` for resolution — benefits from
  * caching and automatic retry without changing the store's event-driven
@@ -37,7 +37,7 @@ type ArtifactState = {
   runId: string | null;
   /** nodeId → latest preview for the current run. */
   byNode: Record<string, ArtifactPreview>;
-  /** Feed a run event (called by the runtime store for every event). */
+  /** Feed a run event. */
   handleEvent: (event: RunEvent) => void;
   /** Start a fresh run — clears all previews. */
   beginRun: (runId: string) => void;

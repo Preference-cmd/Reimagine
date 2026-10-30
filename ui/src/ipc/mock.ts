@@ -16,8 +16,6 @@ import {
   type ModelInfo,
   type NodeDef,
   type RebootBackendArgs,
-  type RunWorkflowResponse,
-  type Workflow,
   type WorkflowFileSummary,
   type WorkerSwitchArgs,
   type WorkerSwitchResult,
@@ -25,7 +23,6 @@ import {
   NodeDefSchema,
   type InvokeResult,
 } from "./schemas";
-import { useWorkflowStore } from "@/store/workflow";
 
 const delay = (ms: number) => new Promise((r) => setTimeout(r, ms));
 
@@ -55,81 +52,6 @@ const MOCK_MODELS: ModelInfo[] = [
     sizeBytes: 2_070_000_000,
   },
 ];
-
-export async function mockRunWorkflow(
-  workflow: Workflow | undefined,
-): Promise<RunWorkflowResponse> {
-  await delay(200);
-  const runId = rand("run");
-
-  const emit = (kind: string, nodeId?: string | null, artifactId?: string | null) =>
-    emitEvent({
-      type: "run",
-      id: rand("evt"),
-      runId,
-      workflowId: "mock-workflow",
-      workflowVersion: 1,
-      kind,
-      nodeId: nodeId ?? null,
-      artifact: artifactId ?? null,
-      diagnostics: [],
-      progress: null,
-      createdAt: new Date().toISOString(),
-      correlationId: null,
-    });
-
-  // Demo event stream so inline previews (F5-4) are visible in dev even
-  // when the caller passed no workflow payload (TopBar runs without args).
-  const nodes = workflow?.nodes?.length ? workflow.nodes : useWorkflowStore.getState().nodes;
-
-  emit("RunStarted");
-  for (const node of nodes) {
-    const type = node.type ?? (node as { type_id?: string }).type_id ?? "";
-    emit("NodeStarted", node.id);
-    await delay(350);
-    if (PRODUCES_PREVIEW.has(type)) {
-      const artifactId = `${runId}-${node.id}-0`;
-      emit("ArtifactCreated", node.id, artifactId);
-      await delay(250);
-      emit("PreviewUpdated", node.id, artifactId);
-    }
-    await delay(250);
-    emit("NodeCompleted", node.id);
-  }
-  emit("RunCompleted");
-
-  return {
-    outcome: "started",
-    runId,
-    workflowId: rand("wf"),
-    workflowVersion: 1,
-    initialSnapshot: {
-      runId,
-      workflowId: "mock-wf",
-      workflowVersion: 1,
-      state: "running",
-      nodeStates: {},
-      diagnostics: [],
-      artifacts: [],
-      startedAt: new Date().toISOString(),
-      updatedAt: new Date().toISOString(),
-    },
-    diagnostics: [],
-  };
-}
-
-/** Node types that emit image artifacts in the mock run. */
-const PRODUCES_PREVIEW = new Set([
-  "builtin.preview_image",
-  "builtin.save_image",
-  "builtin.vae_decode",
-  "imageGenerator",
-  "imageOutput",
-]);
-
-export async function mockCancelRun(_runId: string): Promise<void> {
-  await delay(100);
-}
 
 /* ───── Workflow persistence mocks (localStorage-backed) ─────
    Kept in localStorage so dev sessions survive reloads, mirroring the

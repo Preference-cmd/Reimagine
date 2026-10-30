@@ -57,7 +57,7 @@ export const NodeDefSchema = z.object({
 });
 export type NodeDef = z.infer<typeof NodeDefSchema>;
 
-/* ───── Workflow payload (sent to runWorkflow) ───── */
+/* ───── Workflow payload ───── */
 
 export const WorkflowNodeSchema = z.object({
   id: z.string(),
@@ -276,41 +276,6 @@ export const RunSnapshotDtoSchema = z.object({
   updatedAt: z.string(),
 });
 export type RunSnapshotDto = z.infer<typeof RunSnapshotDtoSchema>;
-
-export const RunWorkflowResponseSchema = z.discriminatedUnion("outcome", [
-  z.object({
-    outcome: z.literal("started"),
-    runId: z.string(),
-    workflowId: z.string(),
-    workflowVersion: z.number(),
-    initialSnapshot: RunSnapshotDtoSchema,
-    diagnostics: z.array(
-      z.object({
-        id: z.string(),
-        code: z.string(),
-        severity: z.string(),
-        source: z.string(),
-        message: z.string(),
-        target: z.string(),
-      }),
-    ),
-  }),
-  z.object({
-    outcome: z.literal("blocked"),
-    workflowId: z.string(),
-    diagnostics: z.array(
-      z.object({
-        id: z.string(),
-        code: z.string(),
-        severity: z.string(),
-        source: z.string(),
-        message: z.string(),
-        target: z.string(),
-      }),
-    ),
-  }),
-]);
-export type RunWorkflowResponse = z.infer<typeof RunWorkflowResponseSchema>;
 
 /* ───── Artifact metadata from Rust IPC ───── */
 

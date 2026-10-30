@@ -1,10 +1,9 @@
-import { Link, useLocation } from "@tanstack/react-router";
+import { useLocation } from "@tanstack/react-router";
 import { ArrowLeft, ArrowRight, Folder, PanelLeft, PanelRight } from "lucide-react";
 import * as m from "$paraglide/messages";
 import { cn } from "@/lib/utils";
 import { ICON_STROKE } from "@/design/tokens";
 import { useProjectStore } from "@/store/project";
-import { useRuntimeStore, type RuntimePhase } from "@/store/runtime";
 import { useSettingsStore } from "@/store/settingsStore";
 import { useUIStore } from "@/store/uiStore";
 import {
@@ -31,44 +30,11 @@ function modeLabel(pathname: string): string {
   }
 }
 
-function runPhaseLabel(phase: Exclude<RuntimePhase, "idle">): string {
-  switch (phase) {
-    case "starting":
-      return m["shell.runPhaseStarting"]();
-    case "running":
-      return m["shell.runPhaseRunning"]();
-    case "completed":
-      return m["shell.runPhaseCompleted"]();
-    case "failed":
-      return m["shell.runPhaseFailed"]();
-    case "cancelled":
-      return m["shell.runPhaseCancelled"]();
-  }
-}
-
-function runDotClass(phase: Exclude<RuntimePhase, "idle">): string {
-  switch (phase) {
-    case "starting":
-    case "running":
-      return "bg-info shadow-[0_0_0_3px_var(--color-info-tint)] animate-pulse";
-    case "completed":
-      return "bg-ok";
-    case "failed":
-      return "bg-err";
-    case "cancelled":
-      return "bg-fg4";
-  }
-}
-
-/** 48px topbar: window controls when collapsed, breadcrumb, run pill, panel toggle. */
+/** 48px topbar: window controls when collapsed, breadcrumb, panel toggle. */
 export function WorkbenchTopBar({ history }: { history: ShellHistory }) {
   const { pathname } = useLocation();
   const projects = useProjectStore((state) => state.projects);
   const activeProjectId = useProjectStore((state) => state.activeProjectId);
-  const phase = useRuntimeStore((state) => state.phase);
-  const runId = useRuntimeStore((state) => state.runId);
-  const workflowName = useRuntimeStore((state) => state.workflowName);
-  const progress = useRuntimeStore((state) => state.progress);
   const panelOpen = useUIStore((state) => state.sessionPanelOpen);
   const toggleSessionPanel = useUIStore((state) => state.toggleSessionPanel);
   const collapsed = useSettingsStore((state) => state.sidebarCollapsed);
@@ -80,8 +46,6 @@ export function WorkbenchTopBar({ history }: { history: ShellHistory }) {
   const tauri = isTauriApp();
   const mac = isMacPlatform();
   const sessionPanelVisible = showsSessionPanel(pathname);
-  const runName = workflowName || runId;
-  const runPercent = phase === "completed" ? 100 : Math.round(progress * 100);
 
   return (
     <header
@@ -128,22 +92,6 @@ export function WorkbenchTopBar({ history }: { history: ShellHistory }) {
       </div>
 
       <div className="flex items-center gap-1.5">
-        {phase !== "idle" && (
-          <Link
-            to="/library"
-            search={{ type: "run" }}
-            className="flex h-7 max-w-64 items-center gap-2 rounded-full bg-surface px-2.5 text-xs text-fg2 shadow-[0_0_0_1px_var(--color-hair),var(--shadow-1)] transition-[color,box-shadow,transform] duration-150 hover:text-fg hover:shadow-[0_0_0_1px_var(--color-hair-strong),var(--shadow-2)] active:scale-[0.98] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent"
-          >
-            <span
-              aria-hidden="true"
-              className={cn("size-1.5 shrink-0 rounded-full", runDotClass(phase))}
-            />
-            <span className="shrink-0">{runPhaseLabel(phase)}</span>
-            {runName && <span className="min-w-0 truncate text-fg2">{runName}</span>}
-            <span className="shrink-0 font-mono tabular-nums text-fg2">{runPercent}%</span>
-          </Link>
-        )}
-
         {sessionPanelVisible && (
           <ShellIconButton
             label={m["shell.sessionPanel"]()}
