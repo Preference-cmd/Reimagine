@@ -11,13 +11,23 @@ import {
   type OnNodeDrag,
 } from "@xyflow/react";
 import "@xyflow/react/dist/style.css";
-import { Plus } from "lucide-react";
 import { toast } from "sonner";
 import * as m from "$paraglide/messages";
+import { cn } from "@/lib/utils";
 import { useProjectStore } from "@/store/project";
 import { useBoardStore } from "@/store/board";
+import { useUIStore } from "@/store/uiStore";
 import { registerBoardUndoTarget, unregisterBoardUndoTarget } from "@/hooks/useUndoRedo";
 import { BoardNode, type BoardNodeData } from "./BoardNode";
+import { CanvasEmptyState } from "./CanvasEmptyState";
+import { CanvasHud, type CanvasTool } from "./CanvasHud";
+import {
+  animateViewport,
+  CANVAS_FOCUS_MS,
+  CANVAS_MAX_ZOOM,
+  CANVAS_MIN_ZOOM,
+  SESSION_PANEL_COVERAGE,
+} from "./canvasView";
 import {
   buildAddItemCommand,
   buildDragStopCommands,
@@ -35,6 +45,15 @@ const nodeTypes: NodeTypes = {
   boardNode: BoardNode,
 };
 
+/** How long after placing a note a following double-click is treated as part of it. */
+const NOTE_CLICK_GUARD_MS = 500;
+
+const TOOL_CURSOR_CLASS: Record<CanvasTool, string> = {
+  select: "canvas-tool-select",
+  hand: "canvas-tool-hand",
+  note: "canvas-tool-note",
+};
+
 type PendingMove = {
   x: number;
   y: number;
@@ -44,10 +63,17 @@ type PendingMove = {
 
 export function BoardCanvasInner() {
   const board = useBoardStore();
-  const { screenToFlowPosition } = useReactFlow();
+  const { screenToFlowPosition, getViewport, getZoom, setViewport } = useReactFlow();
 
   const [editingId, setEditingId] = useState<string | null>(null);
+  const [tool, setTool] = useState<CanvasTool>("select");
   const flowWrapperRef = useRef<HTMLDivElement | null>(null);
+  const lastNoteAtRef = useRef(0);
+  const focusAnimationRef = useRef<(() => void) | null>(null);
+
+  const sessionPanelOpen = useUIStore((state) => state.sessionPanelOpen);
+  const canvasFocusItemId = useUIStore((state) => state.canvasFocusItemId);
+  const clearCanvasFocus = useUIStore((state) => state.clearCanvasFocus);
 
   const pendingBatchRef = useRef<Promise<unknown>>(Promise.resolve());
   const pendingMovesRef = useRef<Map<string, PendingMove>>(new Map());
@@ -146,7 +172,7 @@ export function BoardCanvasInner() {
   );
 
   const createOrReconcileNode = useCallback(
-    (item: BoardItem, prev?: Node, isEditing?: boolean): Node => {
+    (item: BoardItem, prev?: Node, isEditing?: boolean, handActive?: boolean): Node => {
       let position = { x: item.position.x, y: item.position.y };
       const optimistic = pendingMovesRef.current.get(item.id);
       if (optimistic) {
@@ -175,8 +201,10 @@ export function BoardCanvasInner() {
           height: item.size.height,
           zIndex: item.z,
         },
-        draggable: !item.locked && !isEditing,
-        selectable: !isEditing,
+        // Per-node flags win over the flow-wide props, so the hand tool has
+        // to be reflected here as well as in nodesDraggable/elementsSelectable.
+        draggable: !item.locked && !isEditing && !handActive,
+        selectable: !isEditing && !handActive,
       };
     },
     [handleEndEdit, handleResizeEnd, handleStartEdit, handleUpdateNote],
@@ -212,7 +240,7 @@ export function BoardCanvasInner() {
       return sorted.map((item) => {
         const prev = prevMap.get(item.id);
         const isEditing = editingId === item.id;
-        return createOrReconcileNode(item, prev, isEditing);
+        return createOrReconcileNode(item, prev, isEditing, tool === "hand");
       });
     });
   }, [
@@ -222,6 +250,7 @@ export function BoardCanvasInner() {
     board.version,
     board.snapshotVersion,
     editingId,
+    tool,
     createOrReconcileNode,
     setNodes,
   ]);
@@ -254,13 +283,68 @@ export function BoardCanvasInner() {
     [dropPendingMoves, executeBatch, setNodes],
   );
 
+  // Unmount cleanup: a focus animation must not keep writing into a disposed flow.
+  useEffect(() => () => focusAnimationRef.current?.(), []);
+
+  // A navigation back from the library remounts this board with the id already
+  // requested, so the effect also runs on mount. It waits for the snapshot
+  // before treating an unknown id as stale.
+  useEffect(() => {
+    if (!canvasFocusItemId || board.id === "") return;
+    const item = board.items.find((candidate) => candidate.id === canvasFocusItemId);
+    if (!item) {
+      clearCanvasFocus();
+      return;
+    }
+    const wrapper = flowWrapperRef.current;
+    if (!wrapper) {
+      clearCanvasFocus();
+      return;
+    }
+    const width = wrapper.clientWidth;
+    const height = wrapper.clientHeight;
+    if (width <= 1 || height <= 1) {
+      clearCanvasFocus();
+      return;
+    }
+    const coverage = sessionPanelOpen ? SESSION_PANEL_COVERAGE : 0;
+    const currentZoom = getZoom();
+    const targetZoom = currentZoom < 0.5 ? 1 : currentZoom;
+    const target = {
+      x: (width - coverage) / 2 - (item.position.x + item.size.width / 2) * targetZoom,
+      y: height / 2 - (item.position.y + item.size.height / 2) * targetZoom,
+      zoom: targetZoom,
+    };
+    focusAnimationRef.current?.();
+    focusAnimationRef.current = animateViewport(
+      getViewport(),
+      target,
+      setViewport,
+      CANVAS_FOCUS_MS,
+    );
+    clearCanvasFocus();
+  }, [
+    board.id,
+    board.items,
+    canvasFocusItemId,
+    clearCanvasFocus,
+    getViewport,
+    getZoom,
+    sessionPanelOpen,
+    setViewport,
+  ]);
+
   const createNewNote = useCallback(
-    async (pos: { x: number; y: number }) => {
+    async (point: { x: number; y: number }) => {
+      lastNoteAtRef.current = Date.now();
       const newItemId = crypto.randomUUID();
       const cmd = buildAddItemCommand({
         itemId: newItemId,
         kind: { type: "note", content: "" },
-        position: pos,
+        position: {
+          x: point.x - DEFAULT_NOTE_SIZE.width / 2,
+          y: point.y - DEFAULT_NOTE_SIZE.height / 2,
+        },
         size: DEFAULT_NOTE_SIZE,
       });
       setEditingId(newItemId);
@@ -269,21 +353,37 @@ export function BoardCanvasInner() {
     [executeBatch],
   );
 
-  const handleNewNoteClick = useCallback(() => {
-    const center = flowWrapperRef.current
-      ? {
-          x: flowWrapperRef.current.clientWidth / 2,
-          y: flowWrapperRef.current.clientHeight / 2,
-        }
-      : { x: window.innerWidth / 2, y: window.innerHeight / 2 };
-    const flowPos = screenToFlowPosition(center);
-    void createNewNote(flowPos);
-  }, [screenToFlowPosition, createNewNote]);
+  const createNoteAtVisibleCenter = useCallback(() => {
+    const wrapper = flowWrapperRef.current;
+    if (!wrapper) return;
+    const rect = wrapper.getBoundingClientRect();
+    const coverage = sessionPanelOpen ? SESSION_PANEL_COVERAGE : 0;
+    const point = screenToFlowPosition({
+      x: rect.left + (rect.width - coverage) / 2,
+      y: rect.top + rect.height / 2,
+    });
+    void createNewNote(point);
+  }, [createNewNote, screenToFlowPosition, sessionPanelOpen]);
+
+  const handlePaneClick = useCallback(
+    (event: React.MouseEvent) => {
+      if (tool !== "note") return;
+      const point = screenToFlowPosition({ x: event.clientX, y: event.clientY });
+      void createNewNote(point);
+      setTool("select");
+    },
+    [createNewNote, screenToFlowPosition, tool],
+  );
 
   const handleDoubleClick = useCallback(
     (e: React.MouseEvent) => {
+      // A double-click that follows a note-tool click would otherwise place a
+      // second note on the same spot.
+      if (Date.now() - lastNoteAtRef.current < NOTE_CLICK_GUARD_MS) return;
       const target = e.target as HTMLElement | null;
-      if (target?.closest(".react-flow__node")) return;
+      if (target?.closest(".react-flow__node,button,a,input,textarea,select,[role='toolbar']")) {
+        return;
+      }
       const flowPos = screenToFlowPosition({ x: e.clientX, y: e.clientY });
       void createNewNote(flowPos);
     },
@@ -316,38 +416,41 @@ export function BoardCanvasInner() {
   return (
     <div
       ref={flowWrapperRef}
-      className="relative h-full w-full bg-background"
+      className={cn("relative h-full w-full bg-ground", TOOL_CURSOR_CLASS[tool])}
       onDoubleClick={handleDoubleClick}
       data-testid="board-canvas"
     >
-      {/* Floating Toolbar */}
-      <div className="absolute top-4 left-4 z-20 flex items-center gap-2 rounded-xl border border-outline bg-surface/85 px-3 py-1.5 shadow-xs backdrop-blur-md">
-        <button
-          type="button"
-          onClick={handleNewNoteClick}
-          className="flex h-7 cursor-pointer items-center gap-1.5 rounded-lg bg-primary px-2.5 text-caption font-medium text-primary-foreground transition-opacity hover:opacity-90"
-          data-testid="toolbar-new-note"
-        >
-          <Plus className="h-3.5 w-3.5" />
-          <span>{m["board.newNote"]()}</span>
-        </button>
-      </div>
-
       <ReactFlow
         nodes={nodes}
         edges={[]}
         onNodesChange={onNodesChange}
         onNodeDragStop={handleNodeDragStop}
+        onPaneClick={handlePaneClick}
         nodeTypes={nodeTypes}
+        selectionOnDrag={tool === "select"}
+        panOnDrag={tool === "hand" ? true : [1, 2]}
+        nodesDraggable={tool !== "hand"}
+        elementsSelectable={tool !== "hand"}
         zoomOnDoubleClick={false}
         deleteKeyCode={null}
-        minZoom={0.2}
-        maxZoom={2.5}
+        minZoom={CANVAS_MIN_ZOOM}
+        maxZoom={CANVAS_MAX_ZOOM}
         fitView={false}
         className="h-full w-full"
       >
-        <Background variant={BackgroundVariant.Dots} gap={20} size={1} />
+        <Background
+          variant={BackgroundVariant.Dots}
+          gap={20}
+          size={1}
+          color="var(--color-grid)"
+          bgColor="var(--color-ground)"
+        />
       </ReactFlow>
+
+      {board.id !== "" && board.items.length === 0 && (
+        <CanvasEmptyState onCreateNote={createNoteAtVisibleCenter} />
+      )}
+      <CanvasHud tool={tool} onToolChange={setTool} />
     </div>
   );
 }

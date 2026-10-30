@@ -167,4 +167,25 @@
     fill: transparent !important;
     stroke: none !important;
   }
+
+  /* Board canvas tools. React Flow gives the pane a grab cursor whenever
+     panning is enabled; the canvas instead spells out which gesture each
+     tool owns, so these overrides win regardless of stylesheet order. */
+  .canvas-tool-select .react-flow__pane {
+    cursor: default !important;
+  }
+  .canvas-tool-select .react-flow__pane.dragging,
+  .canvas-tool-hand .react-flow__pane.dragging {
+    cursor: grabbing !important;
+  }
+  .canvas-tool-hand .react-flow__pane {
+    cursor: grab !important;
+  }
+  .canvas-tool-note .react-flow__pane {
+    cursor: crosshair !important;
+  }
+  .canvas-tool-select .react-flow__selection {
+    background: color-mix(in srgb, var(--color-accent) 7%, transparent) !important;
+    border: 1px solid var(--color-accent-line) !important;
+  }
 }

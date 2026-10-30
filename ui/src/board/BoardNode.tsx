@@ -23,8 +23,8 @@ export function BoardNode({ id, data, selected }: NodeProps) {
         minWidth={MIN_ITEM_WIDTH}
         minHeight={MIN_ITEM_HEIGHT}
         isVisible={Boolean(selected && !item.locked)}
-        lineClassName="!border-primary"
-        handleClassName="!h-2.5 !w-2.5 !bg-primary !border-white !rounded-xs"
+        lineClassName="!border-accent"
+        handleClassName="!h-2.5 !w-2.5 !rounded-xs !border-surface !bg-accent"
         onResizeEnd={(_event, params) => {
           nodeData.onResizeEnd?.(id, { width: params.width, height: params.height });
         }}

@@ -38,6 +38,12 @@ type UIState = {
   setSessionPanelOpen: (open: boolean) => void;
   toggleSessionPanel: () => void;
 
+  // ── Canvas focus ────────────────────────────────────────
+  /** Item the canvas should center on its next render; cleared once handled. */
+  canvasFocusItemId: string | null;
+  requestCanvasFocus: (id: string) => void;
+  clearCanvasFocus: () => void;
+
   // ── Properties drawer ───────────────────────────────────
   propertiesDrawerOpen: boolean;
   setPropertiesDrawerOpen: (open: boolean) => void;
@@ -68,6 +74,11 @@ export const useUIStore = create<UIState>()((set) => ({
   sessionPanelOpen: true,
   setSessionPanelOpen: (open: boolean) => set({ sessionPanelOpen: open }),
   toggleSessionPanel: () => set((state) => ({ sessionPanelOpen: !state.sessionPanelOpen })),
+
+  // Canvas focus
+  canvasFocusItemId: null,
+  requestCanvasFocus: (id: string) => set({ canvasFocusItemId: id }),
+  clearCanvasFocus: () => set({ canvasFocusItemId: null }),
 
   // Properties drawer
   propertiesDrawerOpen: false,

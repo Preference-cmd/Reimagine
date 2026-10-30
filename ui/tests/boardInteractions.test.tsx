@@ -4,6 +4,7 @@ import { BoardCanvas, BoardCanvasInner } from "../src/board/BoardCanvas";
 import { ReactFlowProvider, useStoreApi, type Node } from "@xyflow/react";
 import { useBoardStore } from "../src/store/board";
 import { useProjectStore } from "../src/store/project";
+import { useUIStore } from "../src/store/uiStore";
 import { useWorkflowStore } from "../src/store/workflow";
 import { useUndoRedoShortcuts } from "../src/hooks/useUndoRedo";
 import { useWorkspaceSurface } from "../src/hooks/useWorkspaceSurface";
@@ -30,6 +31,9 @@ vi.mock("sonner", () => ({
 
 vi.mock("@tanstack/react-router", () => ({
   useNavigate: () => vi.fn(),
+  Link: ({ to, children }: { to: string; children: React.ReactNode }) => (
+    <a href={to}>{children}</a>
+  ),
 }));
 
 let testStoreApi: ReturnType<typeof useStoreApi> | null = null;
@@ -48,6 +52,7 @@ describe("Board canvas interactions and command batches", () => {
     vi.clearAllMocks();
     testStoreApi = null;
     useProjectStore.setState({ activeProjectId: "proj-1" });
+    useUIStore.setState({ sessionPanelOpen: true, canvasFocusItemId: null });
     useBoardStore.getState().hydrate({
       id: "board-proj-1",
       projectId: "proj-1",
@@ -75,9 +80,10 @@ describe("Board canvas interactions and command batches", () => {
 
   afterEach(() => {
     vi.restoreAllMocks();
+    vi.unstubAllGlobals();
   });
 
-  test("toolbar 'New note' button generates add_item batch with empty content, default size and enters edit", async () => {
+  test("empty state 'New note' button generates add_item batch with empty content, default size and enters edit", async () => {
     const applySpy = vi.spyOn(ipc, "applyBoardCommands").mockResolvedValue({
       status: "applied",
       version: 4,
@@ -86,9 +92,16 @@ describe("Board canvas interactions and command batches", () => {
       historyEntryId: "hist-1",
     });
 
+    useBoardStore.getState().hydrate({
+      id: "board-proj-1",
+      projectId: "proj-1",
+      version: 3,
+      items: [],
+    });
+
     render(<BoardCanvas />);
 
-    const newNoteBtn = screen.getByTestId("toolbar-new-note");
+    const newNoteBtn = screen.getByRole("button", { name: "New note" });
     await act(async () => {
       fireEvent.click(newNoteBtn);
     });
@@ -103,6 +116,87 @@ describe("Board canvas interactions and command batches", () => {
       kind: { type: "note", content: "" },
       size: { width: 240, height: 160 },
     });
+  });
+
+  test("note tool places one note on a pane click and returns to select", async () => {
+    const applySpy = vi.spyOn(ipc, "applyBoardCommands").mockResolvedValue({
+      status: "applied",
+      version: 4,
+      changes: [],
+      diagnostics: [],
+      historyEntryId: "hist-1",
+    });
+
+    render(<BoardCanvas />);
+
+    const noteTool = screen.getByRole("button", { name: "Note" });
+    fireEvent.click(noteTool);
+    expect(noteTool).toHaveAttribute("aria-pressed", "true");
+
+    const pane = document.querySelector(".react-flow__pane");
+    expect(pane).not.toBeNull();
+    await act(async () => {
+      fireEvent.click(pane!, { clientX: 200, clientY: 200 });
+    });
+
+    expect(applySpy).toHaveBeenCalledTimes(1);
+    expect(noteTool).toHaveAttribute("aria-pressed", "false");
+  });
+
+  test("empty state is hidden until the snapshot loads", () => {
+    useBoardStore.getState().hydrate({
+      id: "",
+      projectId: "proj-1",
+      version: 0,
+      items: [],
+    });
+
+    render(<BoardCanvas />);
+    expect(screen.queryByTestId("canvas-empty-state")).toBeNull();
+
+    act(() => {
+      useBoardStore.getState().hydrate({
+        id: "board-proj-1",
+        projectId: "proj-1",
+        version: 3,
+        items: [],
+      });
+    });
+
+    expect(screen.getByTestId("canvas-empty-state")).toBeInTheDocument();
+  });
+
+  test("requestCanvasFocus is consumed and clears a missing item", async () => {
+    useUIStore.getState().requestCanvasFocus("missing-item");
+
+    render(<BoardCanvas />);
+
+    await waitFor(() => {
+      expect(useUIStore.getState().canvasFocusItemId).toBeNull();
+    });
+  });
+
+  test("requestCanvasFocus centers the item in the area left of the panel", async () => {
+    vi.stubGlobal("matchMedia", () => ({ matches: true }));
+    vi.spyOn(HTMLElement.prototype, "clientWidth", "get").mockReturnValue(1000);
+    vi.spyOn(HTMLElement.prototype, "clientHeight", "get").mockReturnValue(600);
+
+    render(
+      <ReactFlowProvider>
+        <BoardCanvasInner />
+        <StoreCapture />
+      </ReactFlowProvider>,
+    );
+
+    act(() => {
+      useUIStore.getState().requestCanvasFocus("item-2");
+    });
+
+    await waitFor(() => {
+      expect(useUIStore.getState().canvasFocusItemId).toBeNull();
+    });
+    // item-2 center (500, 150); visible center is (302, 300) with the panel open.
+    expect(testStoreApi!.getState().transform).toEqual([-198, 150, 1]);
   });
 
   test("double-clicking empty canvas generates add_item batch at click point", async () => {
@@ -928,9 +1022,16 @@ describe("Board canvas interactions and command batches", () => {
       items: [],
     });
 
+    useBoardStore.getState().hydrate({
+      id: "board-proj-1",
+      projectId: "proj-1",
+      version: 3,
+      items: [],
+    });
+
     render(<BoardCanvas />);
 
-    const newNoteBtn = screen.getByTestId("toolbar-new-note");
+    const newNoteBtn = screen.getByRole("button", { name: "New note" });
     await act(async () => {
       fireEvent.click(newNoteBtn);
     });
