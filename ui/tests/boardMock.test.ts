@@ -2,6 +2,7 @@ import { describe, test, expect, beforeEach } from "vitest";
 import {
   mockApplyBoardCommands,
   mockGetBoardSnapshot,
+  mockOpInvoke,
   mockUndoBoard,
   mockRedoBoard,
   mockResetBoard,
@@ -368,5 +369,62 @@ describe("In-memory board mock", () => {
     const snapAfter = await mockGetBoardSnapshot({ projectId: "proj-delete-test" });
     expect(snapAfter.items).toHaveLength(0);
     expect(snapAfter.version).toBe(0);
+  });
+
+  test("apply, undo and redo append activity the list operation returns", async () => {
+    const events: Event[] = [];
+    const unsubscribe = subscribeEvents((e) => events.push(e));
+
+    const applied = await mockApplyBoardCommands({
+      projectId,
+      commandBatch: {
+        id: "activity-batch",
+        base_version: 0,
+        commands: [
+          {
+            type: "add_item",
+            item_id: "note-activity",
+            kind: { type: "note", content: "feed me" },
+            position: { x: 0, y: 0 },
+            size: { width: 100, height: 100 },
+          },
+        ],
+      },
+    });
+    expect(applied.historyEntryId).toBe("board-history:activity-batch");
+
+    const appended = events.filter((e) => e.type === "mod" && e.kind === "activity.appended");
+    expect(appended).toHaveLength(1);
+    const payload = (appended[0] as { payload: unknown }).payload as {
+      projectId: string;
+      record: Record<string, unknown>;
+    };
+    expect(payload.projectId).toBe(projectId);
+    expect(payload.record).toMatchObject({
+      kind: "applied",
+      summaryKey: "activity.board.addNote",
+      summaryParams: { count: 1 },
+      targets: ["note-activity"],
+      historyEntryId: "board-history:activity-batch",
+    });
+
+    const undone = await mockUndoBoard({ projectId });
+    expect(undone?.historyEntryId).toBe("board-history:activity-batch");
+    const redone = await mockRedoBoard({ projectId });
+    expect(redone?.historyEntryId).toBe("board-history:activity-batch");
+
+    const page = await mockOpInvoke({
+      projectId,
+      name: "activity.list",
+      input: { limit: 50 },
+    });
+    const { records, has_more } = page.output as {
+      records: Array<Record<string, unknown>>;
+      has_more: boolean;
+    };
+    expect(records.map((record) => record.kind)).toEqual(["redone", "undone", "applied"]);
+    expect(has_more).toBe(false);
+
+    unsubscribe();
   });
 });

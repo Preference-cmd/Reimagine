@@ -1,6 +1,9 @@
 import { NodeResizer, type NodeProps } from "@xyflow/react";
+import { cn } from "@/lib/utils";
+import { useUIStore } from "@/store/uiStore";
 import { getCardRenderer } from "./registry";
 import { MIN_ITEM_WIDTH, MIN_ITEM_HEIGHT } from "./batch";
+import { boardNodeTraceClass } from "./trace";
 import type { BoardItem } from "@/ipc/schemas";
 
 export type BoardNodeData = {
@@ -16,9 +19,17 @@ export function BoardNode({ id, data, selected }: NodeProps) {
   const nodeData = data as unknown as BoardNodeData;
   const item = nodeData.item;
   const CardComponent = getCardRenderer(item.kind.type);
+  const canvasTrace = useUIStore((state) => state.canvasTrace);
 
   return (
-    <div className="relative h-full w-full">
+    <div
+      className={cn(
+        "relative h-full w-full transition-[opacity,box-shadow] duration-200 ease-ui motion-reduce:transition-none",
+        boardNodeTraceClass(canvasTrace, id),
+      )}
+      data-tracing={canvasTrace ? String(canvasTrace.targets.includes(id)) : undefined}
+      data-testid="board-node"
+    >
       <NodeResizer
         minWidth={MIN_ITEM_WIDTH}
         minHeight={MIN_ITEM_HEIGHT}

@@ -1,4 +1,5 @@
 import {
+  type ActivityRecord,
   type ArtifactMetadata,
   type BoardCommandResultDto,
   type BoardItem,
@@ -280,12 +281,19 @@ export async function mockSetActiveProject(input: { projectId: string }): Promis
   return mockLoadProject(input);
 }
 
+/** One undoable board batch: the items before it, its history id and targets. */
+type MockBoardHistoryEntry = {
+  items: BoardItem[];
+  entryId: string;
+  targets: string[];
+};
+
 const mockBoards: Record<string, BoardSnapshot> = {};
 const mockBoardHistory: Record<
   string,
   {
-    past: BoardItem[][];
-    future: BoardItem[][];
+    past: MockBoardHistoryEntry[];
+    future: MockBoardHistoryEntry[];
   }
 > = {};
 
@@ -293,6 +301,7 @@ export function mockResetBoard(projectId?: string): void {
   if (projectId) {
     delete mockBoards[projectId];
     delete mockBoardHistory[projectId];
+    delete mockActivity[projectId];
   } else {
     for (const key of Object.keys(mockBoards)) {
       delete mockBoards[key];
@@ -300,7 +309,127 @@ export function mockResetBoard(projectId?: string): void {
     for (const key of Object.keys(mockBoardHistory)) {
       delete mockBoardHistory[key];
     }
+    for (const key of Object.keys(mockActivity)) {
+      delete mockActivity[key];
+    }
   }
+}
+
+/* ───── Dev activity feed (activity.list, activity.appended) ─────
+   Fixture rows make the browser preview show the panel. Live board edits
+   append a record and emit the same event the host sends, so the feed, the
+   undo stack and the canvas trace behave as they do in Tauri. */
+
+const mockActivity: Record<string, ActivityRecord[]> = {};
+let mockActivitySequence = 0;
+
+function mockDemoActivity(projectId: string): ActivityRecord[] {
+  const now = Date.now();
+  const at = (minutesAgo: number) => new Date(now - minutesAgo * 60_000).toISOString();
+  return [
+    {
+      id: `act_demo_agent_${projectId}`,
+      at: at(2),
+      actor: { kind: "Agent", id: "agent-demo", label: "Agent" },
+      summary: "Applied 2 board changes",
+      summaryKey: "activity.board.apply",
+      summaryParams: { count: 2 },
+      targets: ["note-demo-2", "note-demo-3"],
+      kind: "applied",
+      historyEntryId: "board-history:demo-agent",
+    },
+    {
+      id: `act_demo_note_${projectId}`,
+      at: at(5),
+      actor: { kind: "Human", id: null, label: null },
+      summary: "Added a note",
+      summaryKey: "activity.board.addNote",
+      summaryParams: { count: 1 },
+      targets: ["note-demo-1"],
+      kind: "applied",
+      historyEntryId: "board-history:demo-note",
+    },
+    {
+      id: `act_demo_op_${projectId}`,
+      at: at(12),
+      actor: { kind: "Human", id: null, label: null },
+      summary: "Ran collection.create",
+      summaryKey: "activity.op",
+      summaryParams: { op: "collection.create" },
+      targets: [],
+      kind: "applied",
+      historyEntryId: null,
+    },
+    {
+      id: `act_demo_undo_${projectId}`,
+      at: at(20),
+      actor: { kind: "Human", id: null, label: null },
+      summary: "Undid the last board change",
+      summaryKey: "activity.board.undo",
+      summaryParams: {},
+      targets: ["note-demo-1"],
+      kind: "undone",
+      historyEntryId: "board-history:demo-note",
+    },
+  ];
+}
+
+/** Oldest first would break the feed; every project lists newest first. */
+function mockActivityFor(projectId: string): ActivityRecord[] {
+  let records = mockActivity[projectId];
+  if (!records) {
+    records = projectId === MOCK_FIXTURE_PROJECT_ID ? mockDemoActivity(projectId) : [];
+    mockActivity[projectId] = records;
+  }
+  return records;
+}
+
+function appendMockActivity(
+  projectId: string,
+  record: Omit<ActivityRecord, "id" | "at">,
+): ActivityRecord {
+  mockActivitySequence += 1;
+  const appended: ActivityRecord = {
+    ...record,
+    id: `act_mock_${Date.now().toString(36)}_${mockActivitySequence}`,
+    at: new Date().toISOString(),
+  };
+  mockActivityFor(projectId).unshift(appended);
+  emitEvent({
+    type: "mod",
+    kind: "activity.appended",
+    payload: { projectId, record: appended },
+  });
+  return appended;
+}
+
+/** Summary key and English fallback for an applied mock batch (host mirror). */
+function mockApplySummary(commands: RawBoardCommand[]): {
+  summaryKey: string;
+  summary: string;
+} {
+  const count = commands.length;
+  const allAdds = commands.every((command) => command.type === "add_item");
+  const allNotes =
+    allAdds &&
+    commands.every((command) => command.type === "add_item" && command.kind.type === "note");
+
+  if (allNotes) {
+    return {
+      summaryKey: "activity.board.addNote",
+      summary: count === 1 ? "Added a note" : `Added ${count} notes`,
+    };
+  }
+  if (allAdds) {
+    return {
+      summaryKey: "activity.board.addItem",
+      summary: count === 1 ? "Added an item" : `Added ${count} items`,
+    };
+  }
+  return {
+    summaryKey: "activity.board.apply",
+    summary: count === 1 ? "Applied a board change" : `Applied ${count} board changes`,
+  };
 }
 
 export async function mockGetBoardSnapshot(input: { projectId: string }): Promise<BoardSnapshot> {
@@ -640,7 +769,13 @@ export async function mockApplyBoardCommands(input: {
     };
   }
 
-  history.past.push(JSON.parse(JSON.stringify(board.items)));
+  const entryId = `board-history:${batch?.id ?? rand("batch")}`;
+  const targets = [...new Set(commands.map((command) => command.item_id))];
+  history.past.push({
+    items: JSON.parse(JSON.stringify(board.items)),
+    entryId,
+    targets,
+  });
   history.future = [];
   board.items = nextItems;
   board.version += 1;
@@ -653,12 +788,23 @@ export async function mockApplyBoardCommands(input: {
     version: board.version,
   });
 
+  const { summaryKey, summary } = mockApplySummary(commands);
+  appendMockActivity(input.projectId, {
+    actor: { kind: "Human", id: null, label: null },
+    summary,
+    summaryKey,
+    summaryParams: { count: commands.length },
+    targets,
+    kind: "applied",
+    historyEntryId: entryId,
+  });
+
   return {
     status: "applied",
     version: board.version,
     changes,
     diagnostics: [],
-    historyEntryId: `board-history:${batch?.id ?? rand("batch")}`,
+    historyEntryId: entryId,
   };
 }
 
@@ -670,9 +816,13 @@ export async function mockUndoBoard(input: {
   if (!history || history.past.length === 0) {
     return null;
   }
-  const previousItems = history.past.pop()!;
-  history.future.push(JSON.parse(JSON.stringify(board.items)));
-  board.items = previousItems;
+  const entry = history.past.pop()!;
+  history.future.push({
+    items: JSON.parse(JSON.stringify(board.items)),
+    entryId: entry.entryId,
+    targets: entry.targets,
+  });
+  board.items = entry.items;
   board.version += 1;
 
   emitEvent({
@@ -683,12 +833,22 @@ export async function mockUndoBoard(input: {
     version: board.version,
   });
 
+  appendMockActivity(input.projectId, {
+    actor: { kind: "Human", id: null, label: null },
+    summary: "Undid the last board change",
+    summaryKey: "activity.board.undo",
+    summaryParams: {},
+    targets: entry.targets,
+    kind: "undone",
+    historyEntryId: entry.entryId,
+  });
+
   return {
     status: "applied",
     version: board.version,
     changes: [],
     diagnostics: [],
-    historyEntryId: null,
+    historyEntryId: entry.entryId,
   };
 }
 
@@ -700,9 +860,13 @@ export async function mockRedoBoard(input: {
   if (!history || history.future.length === 0) {
     return null;
   }
-  const nextItems = history.future.pop()!;
-  history.past.push(JSON.parse(JSON.stringify(board.items)));
-  board.items = nextItems;
+  const entry = history.future.pop()!;
+  history.past.push({
+    items: JSON.parse(JSON.stringify(board.items)),
+    entryId: entry.entryId,
+    targets: entry.targets,
+  });
+  board.items = entry.items;
   board.version += 1;
 
   emitEvent({
@@ -713,12 +877,22 @@ export async function mockRedoBoard(input: {
     version: board.version,
   });
 
+  appendMockActivity(input.projectId, {
+    actor: { kind: "Human", id: null, label: null },
+    summary: "Redid the last board change",
+    summaryKey: "activity.board.redo",
+    summaryParams: {},
+    targets: entry.targets,
+    kind: "redone",
+    historyEntryId: entry.entryId,
+  });
+
   return {
     status: "applied",
     version: board.version,
     changes: [],
     diagnostics: [],
-    historyEntryId: null,
+    historyEntryId: entry.entryId,
   };
 }
 
@@ -1407,6 +1581,20 @@ export async function mockOpInvoke(input: {
     return {
       step: { id: rand("step"), op: name, outcome: "succeeded" },
       output: { assets },
+    };
+  }
+
+  if (name === "activity.list") {
+    const limit = typeof args.limit === "number" ? Math.max(1, Math.floor(args.limit)) : 50;
+    const before = typeof args.before === "string" ? args.before : null;
+    const all = mockActivityFor(projectId);
+    const start = before ? all.findIndex((record) => record.id === before) + 1 : 0;
+    return {
+      step: { id: rand("step"), op: name, outcome: "succeeded" },
+      output: {
+        records: all.slice(start, start + limit),
+        has_more: start + limit < all.length,
+      },
     };
   }
 

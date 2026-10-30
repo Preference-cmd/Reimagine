@@ -1,6 +1,6 @@
 import { create } from "zustand";
 import type { Viewport, XYPosition } from "@xyflow/react";
-import type { NodeDef } from "@/ipc/schemas";
+import type { ActivityActor, NodeDef } from "@/ipc/schemas";
 
 /**
  * UI shell state — session panel, canvas focus, command palette,
@@ -32,6 +32,16 @@ export type ContextMenuState = {
 
 export type RenameTarget = { id: string; title: string } | null;
 
+/**
+ * Canvas highlight requested by hovering an activity record. Items whose id is
+ * in `targets` keep full ink plus a ring; every other item fades. `actorKind`
+ * chooses the ring colour: agent gold for Agent, accent for everyone else.
+ */
+export type CanvasTrace = {
+  targets: string[];
+  actorKind: ActivityActor["kind"];
+};
+
 type UIState = {
   // ── Session panel ───────────────────────────────────────
   sessionPanelOpen: boolean;
@@ -53,6 +63,12 @@ type UIState = {
    */
   canvasViewports: Record<string, Viewport>;
   setCanvasViewport: (projectId: string, viewport: Viewport) => void;
+
+  // ── Canvas trace ────────────────────────────────────────
+  /** Hover trace from the activity panel; null when nothing is hovered. */
+  canvasTrace: CanvasTrace | null;
+  setCanvasTrace: (trace: CanvasTrace) => void;
+  clearCanvasTrace: () => void;
 
   // ── Settings nav ────────────────────────────────────────
   settingsNavId: string | null;
@@ -92,6 +108,11 @@ export const useUIStore = create<UIState>()((set) => ({
     set((state) => ({
       canvasViewports: { ...state.canvasViewports, [projectId]: viewport },
     })),
+
+  // Canvas trace
+  canvasTrace: null,
+  setCanvasTrace: (trace) => set({ canvasTrace: trace }),
+  clearCanvasTrace: () => set({ canvasTrace: null }),
 
   // Settings nav
   settingsNavId: "general",
