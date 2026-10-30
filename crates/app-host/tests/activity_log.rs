@@ -417,10 +417,11 @@ async fn activity_list_pages_newest_first_with_cursor_boundaries() {
     assert_eq!(second_single["has_more"], json!(true));
     assert_eq!(records(&second_single)[0]["targets"], json!(["item-4"]));
 
-    // An unknown cursor starts from the newest record.
+    // An unknown cursor cannot be placed in the log, so paging ends with an
+    // empty page instead of replaying the newest records.
     let unknown = list(&host, &project, Some("act-unknown"), Some(1)).await;
-    assert_eq!(unknown["has_more"], json!(true));
-    assert_eq!(records(&unknown)[0]["targets"], json!(["item-5"]));
+    assert_eq!(unknown["has_more"], json!(false));
+    assert!(records(&unknown).is_empty());
 
     // Paging past the oldest record yields an empty final page.
     let oldest_id = records(&third_page)[0]["id"].as_str().expect("oldest id");
@@ -448,6 +449,53 @@ async fn activity_list_pages_newest_first_with_cursor_boundaries() {
         .expect("activity.list is registered");
     assert!(info.spec.annotations.read_only);
     assert!(info.spec.annotations.idempotent);
+
+    let _ = fs::remove_dir_all(&base);
+}
+
+#[tokio::test]
+async fn activity_list_ends_paging_on_an_unknown_cursor() {
+    let base = temp_dir("unknown-cursor");
+    let host = build_host(&base).await;
+    let project = create_project(&host, "proj-unknown-cursor").await;
+
+    for index in 1..=3 {
+        apply_note(
+            &host,
+            &project,
+            index - 1,
+            &format!("batch-cursor-{index}"),
+            &format!("item-{index}"),
+        )
+        .await;
+    }
+
+    let first_page = list(&host, &project, None, Some(2)).await;
+    assert_eq!(first_page["has_more"], json!(true));
+    assert_eq!(records(&first_page).len(), 2);
+
+    let unknown = list(&host, &project, Some("act-does-not-exist"), Some(2)).await;
+    assert!(
+        records(&unknown).is_empty(),
+        "an unknown cursor must not return records from the newest page"
+    );
+    assert_eq!(
+        unknown["has_more"],
+        json!(false),
+        "an unknown cursor ends paging instead of leaving more to load"
+    );
+
+    // A known cursor still pages after that record.
+    let second_page = list(
+        &host,
+        &project,
+        records(&first_page)[1]["id"].as_str(),
+        Some(2),
+    )
+    .await;
+    assert_eq!(second_page["has_more"], json!(false));
+    assert_eq!(records(&second_page).len(), 1);
+    assert_eq!(records(&second_page)[0]["targets"], json!(["item-1"]));
 
     let _ = fs::remove_dir_all(&base);
 }
@@ -529,6 +577,54 @@ async fn torn_activity_tail_is_ignored_and_repaired_before_the_next_append() {
     assert!(
         !content.contains("act-torn"),
         "the torn tail must be dropped: {content}"
+    );
+
+    let _ = fs::remove_dir_all(&base);
+}
+
+#[tokio::test]
+async fn non_utf8_activity_tail_is_skipped_and_repaired_before_the_next_append() {
+    let base = temp_dir("torn-non-utf8");
+    let host = build_host(&base).await;
+    let project = create_project(&host, "proj-torn-non-utf8").await;
+
+    apply_note(&host, &project, 0, "batch-utf8-1", "note-1").await;
+    apply_note(&host, &project, 1, "batch-utf8-2", "note-2").await;
+
+    let jsonl_path = project_dir(&host, &project).join("activity.jsonl");
+    let mut bytes = fs::read(&jsonl_path).expect("read activity.jsonl");
+    assert!(
+        bytes.ends_with(b"\n"),
+        "complete records end with a newline"
+    );
+    // `\xc3\x28` is not valid UTF-8: a process abort tore the tail mid-record.
+    bytes.extend_from_slice(b"\xc3\x28");
+    fs::write(&jsonl_path, &bytes).expect("append non-UTF-8 tail");
+
+    let listed = list(&host, &project, None, None).await;
+    let all = records(&listed);
+    assert_eq!(
+        all.len(),
+        2,
+        "a non-UTF-8 tail must not hide the complete records"
+    );
+    assert_eq!(all[0]["targets"], json!(["note-2"]));
+    assert_eq!(all[1]["targets"], json!(["note-1"]));
+    assert_eq!(listed["has_more"], json!(false));
+
+    // The next append truncates the torn tail before writing its record.
+    apply_note(&host, &project, 2, "batch-utf8-3", "note-3").await;
+    let repaired = list(&host, &project, None, None).await;
+    let all = records(&repaired);
+    assert_eq!(all.len(), 3, "the repaired log lists every complete record");
+    assert_eq!(all[0]["targets"], json!(["note-3"]));
+    assert_eq!(all[1]["targets"], json!(["note-2"]));
+    assert_eq!(all[2]["targets"], json!(["note-1"]));
+
+    let bytes = fs::read(&jsonl_path).expect("read repaired log");
+    assert!(
+        std::str::from_utf8(&bytes).is_ok(),
+        "the repaired log is valid UTF-8"
     );
 
     let _ = fs::remove_dir_all(&base);

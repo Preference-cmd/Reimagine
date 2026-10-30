@@ -196,10 +196,14 @@ impl ActivityLog {
 
     /// Records in append order. A torn trailing line and malformed complete
     /// lines are skipped: one bad line must not hide the rest of the history.
+    ///
+    /// The file is read as bytes, so a torn tail that is not valid UTF-8 is
+    /// skipped like any other malformed line. Each call reads the whole file;
+    /// paging does not yet seek to the cursor.
     pub async fn read(&self) -> AppHostResult<Vec<ActivityRecord>> {
         let path = self.activity_jsonl_path();
-        let content = match tokio::fs::read_to_string(&path).await {
-            Ok(content) => content,
+        let bytes = match tokio::fs::read(&path).await {
+            Ok(bytes) => bytes,
             Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(Vec::new()),
             Err(error) => {
                 return Err(AppHostError::Io {
@@ -209,9 +213,11 @@ impl ActivityLog {
             }
         };
 
-        Ok(content
-            .lines()
-            .filter(|line| !line.trim().is_empty())
+        Ok(bytes
+            .split(|byte| *byte == b'\n')
+            .filter_map(|line| std::str::from_utf8(line).ok())
+            .map(str::trim)
+            .filter(|line| !line.is_empty())
             .filter_map(|line| serde_json::from_str::<ActivityRecord>(line).ok())
             .collect())
     }
@@ -300,8 +306,11 @@ impl ActivityService {
     /// One page of records, newest first.
     ///
     /// `before` is the id of the last record of the previous page; paging
-    /// starts after it. An unknown id starts from the newest record.
-    /// `has_more` reports whether older records remain after this page.
+    /// starts after it. An unknown id yields an empty page with
+    /// `has_more = false`: a cursor that cannot be placed in the log cannot
+    /// resume paging, and restarting from the newest record would replay
+    /// records the client already holds. `has_more` reports whether older
+    /// records remain after this page.
     pub async fn list(
         &self,
         project_id: &ProjectId,
@@ -312,11 +321,11 @@ impl ActivityService {
         records.reverse();
 
         let start = match before {
-            Some(before) => records
-                .iter()
-                .position(|record| record.id == before)
-                .map_or(0, |index| index + 1),
             None => 0,
+            Some(before) => match records.iter().position(|record| record.id == before) {
+                Some(index) => index + 1,
+                None => return Ok((Vec::new(), false)),
+            },
         };
         let remaining = records.len().saturating_sub(start);
         let page = records.into_iter().skip(start).take(limit).collect();
