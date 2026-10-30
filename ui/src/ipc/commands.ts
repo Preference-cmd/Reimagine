@@ -1,5 +1,4 @@
 import {
-  type ArtifactMetadata,
   type BoardCommandResultDto,
   type BoardSnapshot,
   type CommandError,
@@ -33,7 +32,6 @@ import {
   mockDownloadHuggingfaceModel,
   mockGetModelCard,
   mockListModels,
-  mockResolveArtifact,
   mockSearchModels,
   mockOpInvoke,
   mockReadAssetPreview,
@@ -116,16 +114,6 @@ async function invokeWithFallback<T>(real: () => Promise<T>, mock: () => Promise
 
 export function listModels(): Promise<ModelInfo[]> {
   return dispatch("list_models", null, undefined, mockListModels);
-}
-
-export async function resolveArtifact(artifactId: string): Promise<ArtifactMetadata> {
-  return invokeWithFallback(
-    async () => {
-      const { invoke } = await import("@tauri-apps/api/core");
-      return invoke<ArtifactMetadata>("resolve_artifact", { artifactId });
-    },
-    () => mockResolveArtifact(artifactId),
-  );
 }
 
 export function searchModels(query: string, filters?: ModelFilters): Promise<ModelCatalogEntry[]> {

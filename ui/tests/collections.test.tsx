@@ -4,7 +4,6 @@ import { CollectionView } from "../src/components/layout/CollectionView";
 import * as ipc from "../src/ipc";
 import { useBoardStore } from "../src/store/board";
 import { useProjectStore } from "../src/store/project";
-import * as artifacts from "../src/lib/artifacts";
 import { mockOpInvoke } from "../src/ipc/mock";
 
 const mockNavigate = vi.fn();
@@ -428,7 +427,7 @@ describe("Collections and Dynamic Workflow UI", () => {
   });
 
   test("asset URLs keep the project and asset as separate path segments", () => {
-    vi.spyOn(artifacts, "tauriAvailable").mockReturnValue(false);
+    // jsdom has no Tauri bridge, so the plain-browser URL shape is exercised.
     expect(ipc.getAssetUrl("proj-1", "asset-1")).toBe("reimagine-asset://localhost/proj-1/asset-1");
   });
 

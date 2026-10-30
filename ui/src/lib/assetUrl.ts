@@ -1,5 +1,16 @@
 import { convertFileSrc } from "@tauri-apps/api/core";
-import { tauriAvailable } from "@/lib/artifacts";
+
+/** True when the current webview exposes the Tauri IPC bridge. */
+function tauriAvailable(): boolean {
+  try {
+    return (
+      typeof window !== "undefined" &&
+      typeof (window as { __TAURI_INTERNALS__?: unknown }).__TAURI_INTERNALS__ !== "undefined"
+    );
+  } catch {
+    return false;
+  }
+}
 
 /**
  * URL of a project asset served by the `reimagine-asset` protocol.

@@ -1,6 +1,5 @@
 import {
   type ActivityRecord,
-  type ArtifactMetadata,
   type BoardCommandResultDto,
   type BoardItem,
   type BoardSnapshot,
@@ -789,30 +788,6 @@ export async function mockRedoBoard(input: {
 export async function mockListModels(): Promise<ModelInfo[]> {
   await delay(150);
   return [...MOCK_MODELS];
-}
-export async function mockResolveArtifact(artifactId: string): Promise<ArtifactMetadata> {
-  await delay(100);
-  return {
-    id: artifactId,
-    nodeId: "node-save-image",
-    mediaType: "image/svg+xml",
-    filename: `${artifactId}.svg`,
-    // Data URL so the mock preview renders in a plain browser.
-    path: mockArtifactDataUrl(artifactId),
-  };
-}
-
-/** Deterministic gradient placeholder image for mock artifacts. */
-function mockArtifactDataUrl(artifactId: string): string {
-  const svg =
-    `<svg xmlns="http://www.w3.org/2000/svg" width="256" height="256">` +
-    `<defs><linearGradient id="g" x1="0" y1="0" x2="1" y2="1">` +
-    `<stop offset="0" stop-color="#7928ca"/><stop offset="1" stop-color="#50e3c2"/>` +
-    `</linearGradient></defs>` +
-    `<rect width="256" height="256" fill="url(#g)"/>` +
-    `<text x="128" y="128" font-family="system-ui, sans-serif" font-size="13" fill="#ffffff" text-anchor="middle" dominant-baseline="middle">${artifactId}</text>` +
-    `</svg>`;
-  return `data:image/svg+xml;utf8,${encodeURIComponent(svg)}`;
 }
 
 const MOCK_CATALOG: ModelCatalogEntry[] = [

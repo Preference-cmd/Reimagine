@@ -150,9 +150,6 @@ export type DownloadProgress = z.infer<typeof DownloadProgressSchema>;
 
 /* ───── Misc ───── */
 
-export const RunIdSchema = z.string().regex(/^run_[a-z0-9]+$/);
-export type RunId = z.infer<typeof RunIdSchema>;
-
 export const ModelInfoSchema = z.object({
   id: z.string(),
   displayName: z.string(),
@@ -164,17 +161,6 @@ export const ModelInfoSchema = z.object({
   sizeBytes: z.number().nullable(),
 });
 export type ModelInfo = z.infer<typeof ModelInfoSchema>;
-
-/* ───── Artifact metadata from Rust IPC ───── */
-
-export const ArtifactMetadataSchema = z.object({
-  id: z.string(),
-  nodeId: z.string(),
-  mediaType: z.string(),
-  filename: z.string(),
-  path: z.string(),
-});
-export type ArtifactMetadata = z.infer<typeof ArtifactMetadataSchema>;
 
 /* ───── Model catalog & download (mirror app-host dto/model_acquisition.rs) ───── */
 
