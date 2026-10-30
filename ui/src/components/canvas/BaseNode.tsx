@@ -76,9 +76,7 @@ export function BaseNode({
       {/* Header — own sub-container */}
       <div className="node-base__header">
         <span className="h-2 w-2 shrink-0 rounded-full" style={{ backgroundColor: tone }} />
-        <span className="truncate text-body-sm font-medium leading-none text-on-surface">
-          {title}
-        </span>
+        <span className="truncate text-body-sm font-medium leading-none text-fg">{title}</span>
       </div>
 
       {/* Body — sockets + inner share this container */}
@@ -100,9 +98,7 @@ export function BaseNode({
                         {slot.badge}
                       </span>
                     )}
-                    <span className="text-body-sm leading-none text-on-surface-variant">
-                      {slot.label}
-                    </span>
+                    <span className="text-body-sm leading-none text-fg2">{slot.label}</span>
                   </div>
                 ))}
               </div>
@@ -112,9 +108,7 @@ export function BaseNode({
                     key={slot.id}
                     className="relative flex h-5 w-full items-center justify-end gap-2"
                   >
-                    <span className="text-body-sm leading-none text-on-surface-variant">
-                      {slot.label}
-                    </span>
+                    <span className="text-body-sm leading-none text-fg2">{slot.label}</span>
                     {slot.badge && (
                       <span
                         className="flex h-5 w-5 shrink-0 items-center justify-center rounded text-caption font-bold text-white"
@@ -140,17 +134,15 @@ export function BaseNode({
                   {parameters.map((p) => (
                     <div key={p.id} className="flex items-center justify-between gap-2">
                       {p.label && (
-                        <span className="text-body-sm leading-none text-on-surface-variant">
-                          {p.label}
-                        </span>
+                        <span className="text-body-sm leading-none text-fg2">{p.label}</span>
                       )}
                       <div className="flex items-center gap-1.5">
-                        <span className="flex items-center gap-1.5 rounded-md bg-surface-container-high px-2.5 py-1.5 text-body-sm font-medium leading-none text-on-surface">
+                        <span className="flex items-center gap-1.5 rounded-md bg-bubble px-2.5 py-1.5 text-body-sm font-medium leading-none text-fg">
                           <span className="truncate">{p.value}</span>
-                          <ChevronDown className="h-3 w-3 shrink-0 text-on-surface-variant" />
+                          <ChevronDown className="h-3 w-3 shrink-0 text-fg2" />
                         </span>
                         {p.tag && (
-                          <span className="rounded-md bg-surface-container-highest px-2 py-1.5 text-caption font-medium leading-none text-on-surface-variant">
+                          <span className="rounded-md bg-tile px-2 py-1.5 text-caption font-medium leading-none text-fg3">
                             {p.tag}
                           </span>
                         )}

@@ -11,7 +11,7 @@ import type { ArtifactPreview } from "@/store/artifacts";
 export function NodePreview({ preview }: { preview?: ArtifactPreview }) {
   if (!preview) {
     return (
-      <div className="flex aspect-square w-full flex-col items-center justify-center gap-1.5 text-on-surface-variant">
+      <div className="flex aspect-square w-full flex-col items-center justify-center gap-1.5 text-fg2">
         <ImageIcon className="h-4 w-4" />
         <span className="text-caption">No preview yet</span>
       </div>
@@ -38,8 +38,8 @@ export function NodePreview({ preview }: { preview?: ArtifactPreview }) {
   return (
     <div
       className={cn(
-        "flex aspect-square w-full flex-col items-center justify-center gap-1.5 text-on-surface-variant",
-        preview.status === "error" && "text-status-error",
+        "flex aspect-square w-full flex-col items-center justify-center gap-1.5 text-fg2",
+        preview.status === "error" && "text-err",
       )}
     >
       {preview.status === "pending" ? (

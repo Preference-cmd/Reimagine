@@ -21,7 +21,7 @@ const AUTOSAVE_DEBOUNCE_MS = 5000;
 let autosaveTimer: ReturnType<typeof setTimeout> | null = null;
 let saveInFlight = false;
 
-/** Save the current workflow now (shared by the hook, Cmd+S, and the TopBar button). */
+/** Save the current workflow now, shared by the hook and the Cmd/Ctrl+S shortcut. */
 export async function saveWorkflowNow(queryClient?: {
   invalidateQueries: (args: { queryKey: readonly unknown[] }) => Promise<void>;
 }): Promise<void> {

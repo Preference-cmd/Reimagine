@@ -3,8 +3,8 @@ import type { SocketSlot, ParamRow } from "@/components/canvas/BaseNode";
 import { SOCKET_COLORS } from "@/design/tokens";
 
 /**
- * Pure helpers shared by GenericNode, PropertiesPanel and the catalog
- * registry. Everything here is node-catalog-aware but React-free, so the
+ * Pure helpers shared by the canvas components and the catalog registry.
+ * Everything here is node-catalog-aware but React-free, so the
  * param-kind inference and spec merging stay unit-testable.
  *
  * Helpers accept a `NodeLike` (anything carrying `.data`) so both real

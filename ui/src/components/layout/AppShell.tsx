@@ -2,6 +2,7 @@ import { useEffect } from "react";
 import { Outlet, useLocation } from "@tanstack/react-router";
 import { ErrorBoundary } from "react-error-boundary";
 import { Toaster } from "sonner";
+import { getLocale } from "$paraglide/runtime";
 import { cn } from "@/lib/utils";
 import { useTheme } from "@/lib/theme";
 import { useNodeDefs } from "@/hooks/queries";
@@ -14,7 +15,11 @@ import { ErrorFallback } from "@/components/layout/ErrorFallback";
 import { SessionPanel } from "@/components/layout/SessionPanel";
 import { WorkbenchSidebar } from "@/components/layout/WorkbenchSidebar";
 import { WorkbenchTopBar } from "@/components/layout/WorkbenchTopBar";
-import { showsSessionPanel, useShellHistory } from "@/components/layout/shellChrome";
+import {
+  applyDocumentLang,
+  showsSessionPanel,
+  useShellHistory,
+} from "@/components/layout/shellChrome";
 
 /**
  * Workbench shell: a fixed 264px rail and one inset surface holding the
@@ -26,6 +31,12 @@ export function AppShell() {
   const history = useShellHistory();
   const { pathname } = useLocation();
   const sessionPanelVisible = showsSessionPanel(pathname);
+
+  // setLocale reloads the document, so the boot pass restores the lang the
+  // switchers wrote before the reload.
+  useEffect(() => {
+    applyDocumentLang(getLocale() === "zh" ? "zh" : "en");
+  }, []);
 
   // Node catalog: fetch once via TanStack Query, hydrate the Zustand store.
   const nodeDefsQuery = useNodeDefs();

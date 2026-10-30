@@ -42,11 +42,11 @@ export const FlowEdgeComponent: FC<EdgeProps<FlowEdge>> = ({
   });
 
   const startColor = data?.sourceKind
-    ? `var(--color-socket-${data.sourceKind}, var(--color-status-running))`
-    : "var(--color-status-running)";
+    ? `var(--color-socket-${data.sourceKind}, var(--color-info))`
+    : "var(--color-info)";
   const endColor = data?.targetKind
-    ? `var(--color-socket-${data.targetKind}, var(--color-status-success))`
-    : "var(--color-status-success)";
+    ? `var(--color-socket-${data.targetKind}, var(--color-ok))`
+    : "var(--color-ok)";
   const labelColor = data?.tone || startColor;
   const glowId = `glow-${id}`;
 

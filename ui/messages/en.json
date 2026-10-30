@@ -1,5 +1,6 @@
 {
   "common.backToApp": "Back to app",
+  "common.back": "Back",
   "common.search": "Search",
   "common.save": "Save",
   "common.cancel": "Cancel",
@@ -34,6 +35,7 @@
   "shell.create": "Create",
   "shell.creating": "Creating…",
   "shell.createWorkspaceFailed": "Could not create the workspace",
+  "shell.switchWorkspaceFailed": "Could not switch the workspace",
   "shell.noWorkspaces": "No workspaces yet",
   "shell.noWorkspacesHint": "Create a workspace to get started.",
   "shell.modules": "Modules",

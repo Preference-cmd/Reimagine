@@ -34,8 +34,8 @@ const PREVIEW_TYPES = new Set([
  *
  * Renders ANY node type from its `NodeDefDto` metadata: header from the
  * display name, sockets from the def's input/output specs, and parameters
- * from the def's param specs (read-only chips here — editing lives in the
- * PropertiesPanel). Nodes that predate the catalog keep rendering from
+ * from the def's param specs (read-only chips here — editing is not
+ * exposed on the canvas). Nodes that predate the catalog keep rendering from
  * their embedded `data` (title/tone/inputs/outputs/parameters).
  *
  * Image-producing nodes (preview_image / save_image / vae_decode) show the
@@ -75,8 +75,8 @@ export function GenericNode({ id, type, data, selected }: NodeProps) {
       {showPreview && (
         <div
           className={cn(
-            "relative overflow-hidden rounded-md border border-control-border",
-            preview?.status === "ready" ? "" : "bg-surface-container-high",
+            "relative overflow-hidden rounded-md border border-hair",
+            preview?.status === "ready" ? "" : "bg-bubble",
           )}
         >
           <NodePreview preview={preview} />

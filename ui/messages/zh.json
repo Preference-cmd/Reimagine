@@ -1,5 +1,6 @@
 {
   "common.backToApp": "返回应用",
+  "common.back": "返回",
   "common.search": "搜索",
   "common.save": "保存",
   "common.cancel": "取消",
@@ -34,6 +35,7 @@
   "shell.create": "创建",
   "shell.creating": "创建中…",
   "shell.createWorkspaceFailed": "创建工作区失败",
+  "shell.switchWorkspaceFailed": "切换工作区失败",
   "shell.noWorkspaces": "暂无工作区",
   "shell.noWorkspacesHint": "新建一个工作区开始使用。",
   "shell.modules": "模组",

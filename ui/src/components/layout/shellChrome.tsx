@@ -20,9 +20,15 @@ export function showsSessionPanel(pathname: string): boolean {
   return pathname === "/" || pathname === "/library";
 }
 
+/** Keep the document language aligned with the active UI locale. */
+export function applyDocumentLang(locale: "en" | "zh"): void {
+  if (typeof document === "undefined") return;
+  document.documentElement.lang = locale === "zh" ? "zh-CN" : "en";
+}
+
 /** Shared 32px navigation row used by the sidebar. */
 export const SHELL_NAV_ITEM =
-  "flex h-8 w-full cursor-pointer items-center gap-2.5 rounded-sm px-2.5 text-left text-ui text-fg transition-colors duration-150 hover:bg-hover active:bg-press focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent disabled:cursor-default disabled:opacity-40 disabled:hover:bg-transparent";
+  "flex h-8 w-full cursor-pointer items-center gap-2.5 rounded-sm px-2.5 text-left text-ui text-fg transition-colors duration-150 hover:bg-hover active:bg-press focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent disabled:cursor-default disabled:opacity-40 disabled:hover:bg-transparent aria-disabled:cursor-default aria-disabled:opacity-40 aria-disabled:hover:bg-transparent";
 
 /**
  * Decorative traffic lights for the browser preview. The desktop app draws

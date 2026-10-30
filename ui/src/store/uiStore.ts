@@ -3,7 +3,7 @@ import type { XYPosition } from "@xyflow/react";
 import type { NodeDef } from "@/ipc/schemas";
 
 /**
- * UI shell state — properties drawer, command palette,
+ * UI shell state — session panel, canvas focus, command palette,
  * context menu, and rename dialog.
  * View-only state — deliberately kept out of the workflow (undo) store.
  * Route navigation is handled by TanStack Router (URL-based).
@@ -44,10 +44,6 @@ type UIState = {
   requestCanvasFocus: (id: string) => void;
   clearCanvasFocus: () => void;
 
-  // ── Properties drawer ───────────────────────────────────
-  propertiesDrawerOpen: boolean;
-  setPropertiesDrawerOpen: (open: boolean) => void;
-
   // ── Settings nav ────────────────────────────────────────
   settingsNavId: string | null;
   setSettingsNavId: (id: string | null) => void;
@@ -79,10 +75,6 @@ export const useUIStore = create<UIState>()((set) => ({
   canvasFocusItemId: null,
   requestCanvasFocus: (id: string) => set({ canvasFocusItemId: id }),
   clearCanvasFocus: () => set({ canvasFocusItemId: null }),
-
-  // Properties drawer
-  propertiesDrawerOpen: false,
-  setPropertiesDrawerOpen: (open: boolean) => set({ propertiesDrawerOpen: open }),
 
   // Settings nav
   settingsNavId: "general",

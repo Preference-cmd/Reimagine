@@ -45,6 +45,7 @@ export function CommandPalette() {
   const [activeIndex, setActiveIndex] = useState(0);
   const inputRef = useRef<HTMLInputElement>(null);
   const listRef = useRef<HTMLUListElement>(null);
+  const dialogRef = useRef<HTMLDivElement>(null);
 
   const open = palette.kind !== "closed";
 
@@ -57,6 +58,18 @@ export function CommandPalette() {
     setActiveIndex(0);
     inputRef.current?.focus();
   }, [open, palette.kind]);
+
+  /* Escape closes regardless of which control inside the palette has focus. */
+  useEffect(() => {
+    if (!open) return;
+    const handler = (event: KeyboardEvent) => {
+      if (event.key !== "Escape") return;
+      event.preventDefault();
+      closePalette();
+    };
+    document.addEventListener("keydown", handler);
+    return () => document.removeEventListener("keydown", handler);
+  }, [open, closePalette]);
 
   /* Cmd/Ctrl+P toggle — kept self-contained (F3-2 not built yet). */
   useEffect(() => {
@@ -89,14 +102,12 @@ export function CommandPalette() {
       label: m["palette.toggleSidebar"](),
       hint: m["palette.toggleSidebarHint"](),
       keywords: ["explorer", "sidebar", "panel"],
-      shortcut: "⌘B",
     },
     {
       id: "settings",
       label: m["palette.settings"](),
       hint: m["palette.settingsHint"](),
       keywords: ["preferences", "config"],
-      shortcut: "⌘,",
     },
   ];
 
@@ -167,9 +178,24 @@ export function CommandPalette() {
       event.preventDefault();
       const item = visible[activeIndex];
       if (item) runCommand(item.id);
-    } else if (event.key === "Escape") {
+    }
+  };
+
+  const trapFocus = (event: React.KeyboardEvent<HTMLDivElement>) => {
+    if (event.key !== "Tab") return;
+    const focusable = dialogRef.current?.querySelectorAll<HTMLElement>(
+      'a[href], button:not([disabled]), input:not([disabled]), select:not([disabled]), textarea:not([disabled]), [tabindex]:not([tabindex="-1"])',
+    );
+    if (!focusable || focusable.length === 0) return;
+    const first = focusable[0];
+    const last = focusable[focusable.length - 1];
+    const active = document.activeElement;
+    if (event.shiftKey && (active === first || !dialogRef.current?.contains(active))) {
       event.preventDefault();
-      closePalette();
+      last.focus();
+    } else if (!event.shiftKey && active === last) {
+      event.preventDefault();
+      first.focus();
     }
   };
 
@@ -185,8 +211,11 @@ export function CommandPalette() {
       }}
     >
       <div
+        ref={dialogRef}
         role="dialog"
+        aria-modal="true"
         aria-label={m["palette.commandPalette"]()}
+        onKeyDown={trapFocus}
         className="w-[min(440px,calc(100vw-2rem))] overflow-hidden rounded-2xl bg-surface shadow-[var(--shadow-bezel),var(--shadow-3),var(--shadow-hi)]"
       >
         <div className="flex items-center gap-2 border-b border-hair px-3.5 py-3">
@@ -203,7 +232,7 @@ export function CommandPalette() {
             placeholder={
               palette.kind === "node" ? m["palette.searchNodes"]() : m["palette.searchCommands"]()
             }
-            className="min-w-0 flex-1 bg-transparent text-body-sm text-fg placeholder:text-fg4 focus:outline-none"
+            className="min-w-0 flex-1 bg-transparent text-body-sm text-fg placeholder:text-fg2 focus:outline-none"
           />
           {palette.kind === "node" && (
             <button
@@ -218,7 +247,7 @@ export function CommandPalette() {
 
         <ul ref={listRef} className="scrollbar-hide max-h-80 overflow-y-auto p-1.5">
           {visible.length === 0 && (
-            <li className="px-2.5 py-2 text-caption text-fg3">{m["palette.noMatches"]()}</li>
+            <li className="px-2.5 py-2 text-caption text-fg2">{m["palette.noMatches"]()}</li>
           )}
           {visible.map((entry, index) => {
             const Icon = palette.kind === "node" ? Boxes : (COMMAND_ICONS[entry.id] ?? CircleDot);
@@ -247,7 +276,7 @@ export function CommandPalette() {
                       {entry.label}
                     </span>
                     {entry.hint && (
-                      <span className="block truncate text-caption text-fg3">{entry.hint}</span>
+                      <span className="block truncate text-caption text-fg2">{entry.hint}</span>
                     )}
                   </span>
                   {entry.shortcut && (

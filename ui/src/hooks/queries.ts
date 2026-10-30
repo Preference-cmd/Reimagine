@@ -33,7 +33,7 @@ export function useNodeDefs() {
   });
 }
 
-/** Installed models list — shared between ModelsView and ExplorerPanel. */
+/** Installed models list — shared by the models page and the install dialog. */
 export function useModels() {
   return useQuery({
     queryKey: queryKeys.models,

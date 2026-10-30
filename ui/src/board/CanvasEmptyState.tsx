@@ -1,6 +1,7 @@
 import type { CSSProperties } from "react";
 import { Link } from "@tanstack/react-router";
 import * as m from "$paraglide/messages";
+import { useReducedMotion } from "@/hooks/useReducedMotion";
 import { useUIStore } from "@/store/uiStore";
 import { CANVAS_HUD_SHIFT_MS, SESSION_PANEL_COVERAGE } from "./canvasView";
 
@@ -20,23 +21,27 @@ type CanvasEmptyStateProps = {
  */
 export function CanvasEmptyState({ onCreateNote }: CanvasEmptyStateProps) {
   const panelOpen = useUIStore((state) => state.sessionPanelOpen);
+  const reducedMotion = useReducedMotion();
 
   const style: CSSProperties = {
     right: panelOpen ? SESSION_PANEL_COVERAGE : 0,
-    transition: `right ${CANVAS_HUD_SHIFT_MS}ms var(--ease-ui)`,
+    transition: reducedMotion ? "none" : `right ${CANVAS_HUD_SHIFT_MS}ms var(--ease-ui)`,
   };
 
   return (
     <div
-      className="pointer-events-none absolute inset-y-0 left-0 z-[5] grid place-items-center motion-reduce:transition-none"
+      className="pointer-events-none absolute inset-y-0 left-0 z-[5] grid place-items-center"
       style={style}
       data-testid="canvas-empty-state"
     >
-      <div className="pointer-events-auto max-w-[340px] px-6 text-center">
+      <div
+        className="pointer-events-auto max-w-[340px] px-6 text-center"
+        onDoubleClick={(event) => event.stopPropagation()}
+      >
         <h2 className="text-[15px] font-semibold tracking-[-0.01em] text-fg">
           {m["board.emptyTitle"]()}
         </h2>
-        <p className="mt-1.5 mb-4 text-ui leading-[1.65] text-fg3">
+        <p className="mt-1.5 mb-4 text-ui leading-[1.65] text-fg2">
           {m["board.emptyDescription"]()}
         </p>
         <div className="flex justify-center gap-1.5">

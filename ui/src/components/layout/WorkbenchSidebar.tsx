@@ -48,6 +48,7 @@ import {
 } from "@/components/ui/dropdown-menu";
 import { Input } from "@/components/ui/input";
 import {
+  applyDocumentLang,
   formatRelativeTime,
   isMacPlatform,
   isTauriApp,
@@ -60,19 +61,22 @@ import {
 function ModeLink({
   to,
   active,
+  current = active,
   label,
   icon: Icon,
 }: {
   to: "/" | "/library";
   active: boolean;
+  current?: boolean;
   label: string;
   icon: ComponentType<{ className?: string; strokeWidth?: number }>;
 }) {
   return (
     <Link
       to={to}
+      activeOptions={{ exact: true }}
       aria-label={label}
-      aria-current={active ? "page" : undefined}
+      aria-current={current ? "page" : undefined}
       title={active ? undefined : label}
       className={cn(
         "relative flex h-8 items-center justify-center gap-1.5 rounded-md text-ui transition-colors duration-200",
@@ -89,7 +93,7 @@ function ModeLink({
 
 /** Left rail: window controls, modes, workspaces, and the fixed bottom nav. */
 export function WorkbenchSidebar({ history }: { history: ShellHistory }) {
-  const { pathname } = useLocation();
+  const { pathname, searchStr } = useLocation();
   const navigate = useNavigate();
   const projects = useProjectStore((state) => state.projects);
   const activeProjectId = useProjectStore((state) => state.activeProjectId);
@@ -105,12 +109,21 @@ export function WorkbenchSidebar({ history }: { history: ShellHistory }) {
 
   const isCanvas = pathname === "/";
   const isLibrary = pathname === "/library";
+  const runsFilter = isLibrary && new URLSearchParams(searchStr).get("type") === "run";
   const tauri = isTauriApp();
   const mac = isMacPlatform();
 
   const handleCreateOpenChange = (open: boolean) => {
     setCreateOpen(open);
     if (open) setName("");
+  };
+
+  const handleSwitchProject = async (projectId: string) => {
+    try {
+      await switchProject(projectId);
+    } catch {
+      toast.error(m["shell.switchWorkspaceFailed"]());
+    }
   };
 
   const submitWorkspace = async (event: React.FormEvent) => {
@@ -137,7 +150,7 @@ export function WorkbenchSidebar({ history }: { history: ShellHistory }) {
   return (
     <aside
       aria-label={m["shell.sidebarLabel"]()}
-      className="flex w-[264px] shrink-0 flex-col px-3 pb-3"
+      className="flex w-[var(--spacing-sidebar)] shrink-0 flex-col px-3 pb-3"
     >
       {/* 64px title row: shares a line with the 48px topbar inside the inset surface. */}
       <div className="relative flex h-16 shrink-0 items-center gap-0.5 pt-2">
@@ -168,6 +181,7 @@ export function WorkbenchSidebar({ history }: { history: ShellHistory }) {
         <ModeLink
           to="/library"
           active={isLibrary}
+          current={isLibrary && !runsFilter}
           label={m["shell.modeLibrary"]()}
           icon={Library}
         />
@@ -176,7 +190,7 @@ export function WorkbenchSidebar({ history }: { history: ShellHistory }) {
       <span title={m["shell.agentNotConnected"]()} className="block">
         <button
           type="button"
-          disabled
+          aria-disabled="true"
           aria-describedby="shell-new-session-hint"
           className={SHELL_NAV_ITEM}
         >
@@ -206,7 +220,7 @@ export function WorkbenchSidebar({ history }: { history: ShellHistory }) {
         </div>
 
         {projects.length === 0 ? (
-          <div className="px-2.5 py-2 text-xs leading-6 text-fg4">
+          <div className="px-2.5 py-2 text-xs leading-6 text-fg2">
             <p>{m["shell.noWorkspaces"]()}</p>
             <p>{m["shell.noWorkspacesHint"]()}</p>
           </div>
@@ -220,10 +234,10 @@ export function WorkbenchSidebar({ history }: { history: ShellHistory }) {
                   key={project.id}
                   type="button"
                   aria-current={active ? "true" : undefined}
-                  onClick={() => void switchProject(project.id)}
+                  onClick={() => void handleSwitchProject(project.id)}
                   className={cn(
                     "flex h-8 w-full cursor-pointer items-center gap-2.5 rounded-sm px-2.5 text-left text-ui transition-colors duration-150 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent",
-                    active ? "bg-active text-fg2" : "text-fg3 hover:bg-hover hover:text-fg",
+                    active ? "bg-active text-fg2" : "text-fg2 hover:bg-hover hover:text-fg",
                   )}
                 >
                   <Folder className="size-4 shrink-0" strokeWidth={ICON_STROKE} />
@@ -250,7 +264,7 @@ export function WorkbenchSidebar({ history }: { history: ShellHistory }) {
         <Link
           to="/library"
           search={{ type: "run" }}
-          aria-current={isLibrary ? "page" : undefined}
+          aria-current={runsFilter ? "page" : undefined}
           className={SHELL_NAV_ITEM}
         >
           <Play className="size-4 shrink-0 text-fg2" strokeWidth={ICON_STROKE} />
@@ -272,7 +286,11 @@ export function WorkbenchSidebar({ history }: { history: ShellHistory }) {
             <DropdownMenuLabel>{m["shell.language"]()}</DropdownMenuLabel>
             <DropdownMenuRadioGroup
               value={getLocale()}
-              onValueChange={(value) => setLocale(value as "en" | "zh")}
+              onValueChange={(value) => {
+                const locale = value as "en" | "zh";
+                setLocale(locale);
+                applyDocumentLang(locale);
+              }}
             >
               <DropdownMenuRadioItem value="en">
                 {m["shell.languageEnglish"]()}

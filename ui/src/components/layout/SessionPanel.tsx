@@ -45,7 +45,7 @@ export function SessionPanel() {
           <Activity className="size-4" strokeWidth={ICON_STROKE} />
         </span>
         <p className="mt-3 text-ui font-medium text-fg">{m["shell.noActivity"]()}</p>
-        <p className="mt-1 max-w-56 text-xs leading-5 text-fg3">{m["shell.noActivityHint"]()}</p>
+        <p className="mt-1 max-w-56 text-xs leading-5 text-fg2">{m["shell.noActivityHint"]()}</p>
       </div>
     </aside>
   );

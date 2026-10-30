@@ -8,6 +8,10 @@ import * as artifacts from "../src/lib/artifacts";
 import { mockOpInvoke } from "../src/ipc/mock";
 
 const mockNavigate = vi.fn();
+const mockHistory = {
+  canGoBack: vi.fn(() => false),
+  back: vi.fn(),
+};
 let mockParams = { id: "col_123" };
 useProjectStore.setState({ activeProjectId: "default" });
 
@@ -27,12 +31,14 @@ vi.mock("@tanstack/react-router", () => ({
   ),
   useNavigate: () => mockNavigate,
   useParams: () => mockParams,
+  useRouter: () => ({ history: mockHistory }),
 }));
 
 describe("Collections and Dynamic Workflow UI", () => {
   beforeEach(() => {
     vi.clearAllMocks();
     mockParams = { id: "col_123" };
+    mockHistory.canGoBack.mockReturnValue(false);
     useProjectStore.setState({ activeProjectId: "default" });
     useBoardStore.getState().hydrate({
       id: "board-default",
@@ -321,7 +327,39 @@ describe("Collections and Dynamic Workflow UI", () => {
     expect(screen.queryByRole("button", { name: /run/i })).toBeNull();
   });
 
-  test("switching project navigates back to /collections", async () => {
+  test("back prefers router history and falls back to the library", async () => {
+    vi.spyOn(ipc, "opInvoke").mockImplementation(async (_proj, name, _input) => {
+      if (name === "collection.get") {
+        return {
+          step: {} as unknown as never,
+          output: {
+            id: "col_123",
+            name: "History Collection",
+            version: 1,
+            slots: [],
+          },
+        };
+      }
+      return { step: {} as unknown as never, output: {} };
+    });
+
+    mockHistory.canGoBack.mockReturnValue(true);
+    render(<CollectionView />);
+    await waitFor(() => {
+      expect(screen.getByText("History Collection")).toBeInTheDocument();
+    });
+
+    fireEvent.click(screen.getByRole("button", { name: "Back" }));
+    expect(mockHistory.back).toHaveBeenCalledTimes(1);
+    expect(mockNavigate).not.toHaveBeenCalledWith({ to: "/library" });
+
+    // Direct links have no history entry: fall back to the library.
+    mockHistory.canGoBack.mockReturnValue(false);
+    fireEvent.click(screen.getByRole("button", { name: "Back" }));
+    expect(mockNavigate).toHaveBeenCalledWith({ to: "/library" });
+  });
+
+  test("switching project navigates back to /library", async () => {
     vi.spyOn(ipc, "opInvoke").mockImplementation(async (_proj, name, _input) => {
       if (name === "collection.get") {
         return {

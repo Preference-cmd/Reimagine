@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from "react";
-import { ArrowLeft, Redo2, Undo2 } from "lucide-react";
-import { Link, useNavigate, useParams } from "@tanstack/react-router";
+import { ArrowLeft, CircleAlert, Redo2, Undo2 } from "lucide-react";
+import { useNavigate, useParams, useRouter } from "@tanstack/react-router";
 import * as m from "$paraglide/messages";
 import { ICON_STROKE } from "@/design/tokens";
 import { useProjectStore } from "@/store/project";
@@ -33,15 +33,31 @@ function slotStateLabel(state: SlotRunState): string {
 function slotStateClass(state: SlotRunState): string {
   switch (state) {
     case "running":
-      return "bg-info/10 text-info";
+      return "bg-info/10 text-fg";
     case "succeeded":
-      return "bg-ok/10 text-ok";
+      return "bg-ok/10 text-fg";
     case "failed":
-      return "bg-err/10 text-err";
+      return "bg-err/10 text-fg";
     case "needs_confirmation":
-      return "bg-warn/10 text-warn";
+      return "bg-warn/10 text-fg";
     default:
-      return "bg-tile text-fg3";
+      return "bg-tile text-fg2";
+  }
+}
+
+/** The tinted pill keeps the text at `fg`; the dot alone carries the state colour. */
+function slotStateDotClass(state: SlotRunState): string | null {
+  switch (state) {
+    case "running":
+      return "bg-info";
+    case "succeeded":
+      return "bg-ok";
+    case "failed":
+      return "bg-err";
+    case "needs_confirmation":
+      return "bg-warn";
+    default:
+      return null;
   }
 }
 
@@ -84,22 +100,30 @@ function SlotItem({
         </span>
         <span className="flex items-center gap-2">
           {state && (
-            <span className={`rounded px-2 py-0.5 font-mono text-caption ${slotStateClass(state)}`}>
+            <span
+              className={`flex items-center gap-1.5 rounded px-2 py-0.5 font-mono text-caption ${slotStateClass(state)}`}
+            >
+              {slotStateDotClass(state) && (
+                <span
+                  aria-hidden="true"
+                  className={`size-1.5 shrink-0 rounded-full ${slotStateDotClass(state)}`}
+                />
+              )}
               {slotStateLabel(state)}
             </span>
           )}
-          <span className="rounded bg-tile px-2 py-0.5 font-mono text-caption text-fg3">
+          <span className="rounded bg-tile px-2 py-0.5 font-mono text-caption text-fg2">
             {mediaType}
           </span>
         </span>
       </div>
 
-      <div className="mt-2 text-caption text-fg3">
+      <div className="mt-2 text-caption text-fg2">
         {m["collections.assetIdPrefix"]()} <span className="font-mono">{slot.asset_id}</span>
       </div>
 
       {slotError ? (
-        <div className="mt-3 flex-1 rounded-lg bg-err/10 p-3 font-mono text-caption text-err">
+        <div className="mt-3 flex-1 rounded-lg border-l-2 border-err bg-err/10 p-3 font-mono text-caption text-fg">
           {slotError}
         </div>
       ) : (
@@ -109,7 +133,7 @@ function SlotItem({
           ) : preview && mediaType.startsWith("image/") ? (
             <img src={preview.url} alt={slot.id} className="max-h-48 rounded object-contain" />
           ) : (
-            <span className="italic text-fg4">{m["collections.noPreview"]()}</span>
+            <span className="italic text-fg2">{m["collections.noPreview"]()}</span>
           )}
         </div>
       )}
@@ -121,6 +145,7 @@ export function CollectionView() {
   const { id } = useParams({ strict: false }) as { id: string };
   const activeProjectId = useProjectStore((s) => s.activeProjectId);
   const navigate = useNavigate();
+  const router = useRouter();
 
   const {
     collection,
@@ -164,17 +189,28 @@ export function CollectionView() {
     }
   }
 
+  // Return to whichever mode opened the detail; a direct link has no history
+  // entry, so it falls back to the library.
+  function handleBack() {
+    if (router.history.canGoBack()) {
+      router.history.back();
+      return;
+    }
+    void navigate({ to: "/library" });
+  }
+
   return (
     <div className="flex h-full flex-col overflow-y-auto bg-ground p-6">
       {/* Top back navigation */}
       <div className="mb-4">
-        <Link
-          to="/library"
-          className="inline-flex items-center gap-1.5 text-caption font-medium text-fg3 hover:text-fg"
+        <button
+          type="button"
+          onClick={handleBack}
+          className="inline-flex cursor-pointer items-center gap-1.5 rounded-sm text-caption font-medium text-fg2 transition-colors hover:text-fg focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/30"
         >
           <ArrowLeft className="h-3.5 w-3.5" strokeWidth={ICON_STROKE} />
-          {m["collections.backToLibrary"]()}
-        </Link>
+          {m["common.back"]()}
+        </button>
       </div>
 
       {/* Header */}
@@ -183,7 +219,7 @@ export function CollectionView() {
           <h1 className="text-display-sm font-semibold text-fg">
             {collection?.name ?? m["collections.defaultTitle"]()}
           </h1>
-          <p className="mt-1 text-body-sm text-fg3">
+          <p className="mt-1 text-body-sm text-fg2">
             {collection
               ? `${collection.slots.length} ${
                   collection.slots.length === 1 ? m["collections.slot"]() : m["collections.slots"]()
@@ -214,18 +250,27 @@ export function CollectionView() {
         </div>
       </div>
 
-      {error && <div className="mb-4 rounded-lg bg-err/10 p-3 text-body-sm text-err">{error}</div>}
+      {error && (
+        <div className="mb-4 flex items-center gap-2 rounded-lg border-l-2 border-err bg-err/10 p-3 text-body-sm text-fg">
+          <CircleAlert
+            className="size-4 shrink-0 text-err"
+            aria-hidden="true"
+            strokeWidth={ICON_STROKE}
+          />
+          {error}
+        </div>
+      )}
 
       {loading ? (
-        <div className="flex flex-1 items-center justify-center text-body-sm text-fg3">
+        <div className="flex flex-1 items-center justify-center text-body-sm text-fg2">
           {m["collections.loadingCollection"]()}
         </div>
       ) : !collection ? (
-        <div className="flex flex-1 items-center justify-center text-body-sm text-fg3">
+        <div className="flex flex-1 items-center justify-center text-body-sm text-fg2">
           {m["collections.notFound"]()}
         </div>
       ) : collection.slots.length === 0 ? (
-        <div className="flex flex-1 items-center justify-center text-body-sm text-fg3">
+        <div className="flex flex-1 items-center justify-center text-body-sm text-fg2">
           {m["collections.emptySlots"]()}
         </div>
       ) : (

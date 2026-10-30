@@ -48,9 +48,9 @@ const PromptNode = ({ data, selected }: NodeProps) => {
     <BaseNode title={d.title} tone={d.tone} selected={selected} disabled={d.disabled === true}>
       {d.prompt && (
         <>
-          <div className="mb-2.5 text-body-sm leading-relaxed text-on-surface">{d.prompt}</div>
+          <div className="mb-2.5 text-body-sm leading-relaxed text-fg">{d.prompt}</div>
           <input
-            className="w-full rounded-md border border-control-border bg-surface-container-high px-2.5 py-1.5 text-body-sm text-on-surface placeholder-on-surface-variant focus:outline-none focus:ring-1 focus:ring-control-active"
+            className="w-full rounded-md border border-hair-strong bg-bubble px-2.5 py-1.5 text-body-sm text-fg placeholder:text-fg3 focus:ring-1 focus:ring-hair-strong focus:outline-none"
             placeholder="Edit prompt"
             readOnly
           />
@@ -73,9 +73,9 @@ const ModelNode = ({ data, selected }: NodeProps) => {
       disabled={d.disabled === true}
     >
       <div className="flex items-center justify-end">
-        <span className="flex items-center gap-1.5 rounded-md bg-surface-container-high px-2.5 py-1.5 text-body-sm font-medium leading-none text-on-surface">
+        <span className="flex items-center gap-1.5 rounded-md bg-bubble px-2.5 py-1.5 text-body-sm font-medium leading-none text-fg">
           <span className="truncate">{d.parameters?.[0]?.value ?? ""}</span>
-          <ChevronDown className="h-3 w-3 shrink-0 text-on-surface-variant" />
+          <ChevronDown className="h-3 w-3 shrink-0 text-fg2" />
         </span>
       </div>
     </BaseNode>
@@ -113,7 +113,7 @@ const ImageOutputNode = ({ data, selected, id }: NodeProps) => {
       disabled={d.disabled === true}
     >
       <div className="relative">
-        <div className="aspect-square w-full overflow-hidden rounded-md border border-control-border">
+        <div className="aspect-square w-full overflow-hidden rounded-md border border-hair">
           {preview?.status === "ready" && preview.url ? (
             <img
               className="h-full w-full object-cover"
@@ -124,7 +124,7 @@ const ImageOutputNode = ({ data, selected, id }: NodeProps) => {
             <NodePreview preview={preview} />
           )}
         </div>
-        <div className="absolute inset-x-2 bottom-2 truncate rounded bg-preview-scrim px-2 py-1 text-caption text-white backdrop-blur-md">
+        <div className="absolute inset-x-2 bottom-2 truncate rounded bg-[var(--color-scrim)] px-2 py-1 text-caption text-white backdrop-blur-md">
           Preview
         </div>
       </div>
@@ -152,10 +152,10 @@ const canvasFitViewOptions = { padding: 0.22 } satisfies FitViewOptions;
 function ZoomControls({ zoom }: { zoom: number }) {
   const { zoomIn, zoomOut, zoomTo, fitView } = useReactFlow();
   const iconButton =
-    "flex h-8 w-8 cursor-pointer items-center justify-center rounded-full text-on-surface-variant transition-colors hover:bg-control-hover hover:text-on-surface focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary/30";
+    "flex h-8 w-8 cursor-pointer items-center justify-center rounded-full text-fg2 transition-colors hover:bg-hover hover:text-fg focus-visible:ring-2 focus-visible:ring-accent/30 focus-visible:outline-none";
 
   return (
-    <div className="panel-flat absolute bottom-5 left-5 z-10 flex h-10 items-center gap-0.5 rounded-xl px-1 shadow-[0_2px_8px_-2px_rgb(0_0_0/0.15)]">
+    <div className="absolute bottom-5 left-5 z-10 flex h-10 items-center gap-0.5 rounded-xl bg-surface px-1 shadow-2">
       <button
         type="button"
         onClick={() => zoomOut({ duration: 200 })}
@@ -168,7 +168,7 @@ function ZoomControls({ zoom }: { zoom: number }) {
         type="button"
         onClick={() => zoomTo(1, { duration: 200 })}
         aria-label="Reset zoom to 100%"
-        className="flex h-8 min-w-12 cursor-pointer items-center justify-center rounded-full px-2 text-body-sm font-medium tabular-nums text-on-surface transition-colors hover:bg-control-hover focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary/30"
+        className="flex h-8 min-w-12 cursor-pointer items-center justify-center rounded-full px-2 text-body-sm font-medium tabular-nums text-fg transition-colors hover:bg-hover focus-visible:ring-2 focus-visible:ring-accent/30 focus-visible:outline-none"
       >
         {Math.round(zoom * 100)}%
       </button>
@@ -483,17 +483,17 @@ function CanvasFlow({ themeMode }: { themeMode: "light" | "dark" }) {
           variant={BackgroundVariant.Dots}
           gap={20}
           size={1.5}
-          color="var(--color-canvas-grid-dot)"
+          color="var(--color-grid)"
         />
         <ZoomControls zoom={zoom} />
         <MiniMap
           pannable
           zoomable
-          bgColor="var(--color-panel-flat)"
+          bgColor="var(--color-surface)"
           maskColor="transparent"
-          nodeColor="var(--color-on-panel-muted)"
-          nodeStrokeColor="var(--color-on-panel)"
-          className="panel-flat absolute bottom-5 right-5 z-10 !m-0 !h-24 !w-40 !rounded-xl shadow-[0_2px_8px_-2px_rgb(0_0_0/0.15)] p-2.5"
+          nodeColor="var(--color-fg3)"
+          nodeStrokeColor="var(--color-fg)"
+          className="absolute bottom-5 right-5 z-10 !m-0 !h-24 !w-40 !rounded-xl bg-surface shadow-2 p-2.5"
         />
       </ReactFlow>
     </div>

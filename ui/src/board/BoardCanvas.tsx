@@ -381,7 +381,12 @@ export function BoardCanvasInner() {
       // second note on the same spot.
       if (Date.now() - lastNoteAtRef.current < NOTE_CLICK_GUARD_MS) return;
       const target = e.target as HTMLElement | null;
-      if (target?.closest(".react-flow__node,button,a,input,textarea,select,[role='toolbar']")) {
+      if (
+        target?.closest(
+          ".react-flow__node,button,a,input,textarea,select,[role='toolbar']," +
+            "[data-testid='canvas-empty-state'],[data-testid='canvas-dock'],[data-testid='canvas-zoom']",
+        )
+      ) {
         return;
       }
       const flowPos = screenToFlowPosition({ x: e.clientX, y: e.clientY });

@@ -93,7 +93,7 @@ export function NoteCard({
       }}
       data-testid="note-card"
     >
-      <div className="mb-2 flex items-center justify-between text-caption font-medium text-fg3">
+      <div className="mb-2 flex items-center justify-between text-caption font-medium text-fg2">
         <span>{m["board.note"]()}</span>
         {locked && (
           <span
@@ -121,7 +121,7 @@ export function NoteCard({
           {content ? (
             content
           ) : (
-            <span className="italic text-fg4">{m["board.doubleClickToEdit"]()}</span>
+            <span className="italic text-fg2">{m["board.doubleClickToEdit"]()}</span>
           )}
         </div>
       )}
@@ -153,7 +153,7 @@ export function CollectionCard({ kind, locked }: BoardCardProps) {
             <h3 className="truncate font-sans text-body-sm font-semibold text-fg">
               {collection?.name ?? (loading ? m["collections.loading"]() : collectionId)}
             </h3>
-            <p className="font-mono text-caption text-fg3 truncate">{collectionId}</p>
+            <p className="font-mono text-caption text-fg2 truncate">{collectionId}</p>
           </div>
         </div>
         {locked && (
@@ -171,7 +171,7 @@ export function CollectionCard({ kind, locked }: BoardCardProps) {
         )}
       </div>
 
-      <div className="mt-3 flex items-center justify-between border-t border-hair pt-2 text-caption text-fg3">
+      <div className="mt-3 flex items-center justify-between border-t border-hair pt-2 text-caption text-fg2">
         <span>
           {slotCount} {slotLabel}
         </span>
@@ -195,7 +195,7 @@ export function AssetRefCard({ kind, id, locked }: BoardCardProps) {
             <FileImage className="h-4 w-4" strokeWidth={ICON_STROKE} />
           </div>
           <div className="min-w-0 flex-1">
-            <span className="text-caption font-medium text-fg3">{m["board.asset"]()}</span>
+            <span className="text-caption font-medium text-fg2">{m["board.asset"]()}</span>
             <p className="truncate font-mono text-body-sm font-medium text-fg">{artifactId}</p>
           </div>
         </div>
@@ -213,7 +213,7 @@ export function AssetRefCard({ kind, id, locked }: BoardCardProps) {
           </span>
         )}
       </div>
-      <div className="mt-2 text-caption text-fg3 truncate font-mono">id: {id}</div>
+      <div className="mt-2 text-caption text-fg2 truncate font-mono">id: {id}</div>
     </div>
   );
 }
@@ -232,7 +232,7 @@ export function WorkflowRefCard({ kind, id, locked }: BoardCardProps) {
             <Boxes className="h-4 w-4" strokeWidth={ICON_STROKE} />
           </div>
           <div className="min-w-0 flex-1">
-            <span className="text-caption font-medium text-fg3">{m["board.workflow"]()}</span>
+            <span className="text-caption font-medium text-fg2">{m["board.workflow"]()}</span>
             <p className="truncate font-mono text-body-sm font-medium text-fg">{workflowId}</p>
           </div>
         </div>
@@ -250,7 +250,7 @@ export function WorkflowRefCard({ kind, id, locked }: BoardCardProps) {
           </span>
         )}
       </div>
-      <div className="mt-2 text-caption text-fg3 truncate font-mono">id: {id}</div>
+      <div className="mt-2 text-caption text-fg2 truncate font-mono">id: {id}</div>
     </div>
   );
 }
@@ -271,7 +271,7 @@ export function RunRefCard({ kind, id, locked }: BoardCardProps) {
             <Play className="h-4 w-4" strokeWidth={ICON_STROKE} />
           </div>
           <div className="min-w-0 flex-1">
-            <span className="text-caption font-medium text-fg3">{m["board.run"]()}</span>
+            <span className="text-caption font-medium text-fg2">{m["board.run"]()}</span>
             <p className="truncate font-mono text-body-sm font-medium text-fg">{runId}</p>
           </div>
         </div>
@@ -289,7 +289,7 @@ export function RunRefCard({ kind, id, locked }: BoardCardProps) {
           </span>
         )}
       </div>
-      <div className="mt-2 text-caption text-fg3 truncate font-mono">id: {id}</div>
+      <div className="mt-2 text-caption text-fg2 truncate font-mono">id: {id}</div>
     </div>
   );
 }
@@ -304,10 +304,10 @@ export function PlaceholderCard({ kind, id, locked }: BoardCardProps) {
     >
       <div className="flex items-start justify-between gap-2">
         <div>
-          <span className="rounded bg-tile px-2 py-0.5 font-mono text-caption font-medium text-fg3">
+          <span className="rounded bg-tile px-2 py-0.5 font-mono text-caption font-medium text-fg2">
             {typeName}
           </span>
-          <p className="mt-2 text-body-sm text-fg3">{m["board.unregisteredItem"]()}</p>
+          <p className="mt-2 text-body-sm text-fg2">{m["board.unregisteredItem"]()}</p>
         </div>
         {locked && (
           <span
@@ -323,7 +323,7 @@ export function PlaceholderCard({ kind, id, locked }: BoardCardProps) {
           </span>
         )}
       </div>
-      <div className="mt-2 font-mono text-caption text-fg3 truncate">id: {id}</div>
+      <div className="mt-2 font-mono text-caption text-fg2 truncate">id: {id}</div>
     </div>
   );
 }

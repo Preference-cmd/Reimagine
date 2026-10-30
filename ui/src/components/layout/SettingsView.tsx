@@ -7,6 +7,7 @@ import { useForm, type UseFormReturn } from "react-hook-form";
 import { zodResolver } from "@hookform/resolvers/zod";
 import { settingsSchema, type SettingsFormData } from "@/lib/settings-schema";
 import { useEffect, useRef, useState } from "react";
+import { applyDocumentLang } from "./shellChrome";
 
 export type ThemeMode = "light" | "dark";
 
@@ -318,7 +319,7 @@ export function SettingsView({ themeMode, onThemeModeChange }: SettingsViewProps
 
           {/* Settings groups as cards */}
           {groups.length === 0 ? (
-            <div className="rounded-xl border border-hair bg-surface px-5 py-10 text-center text-ui text-fg3">
+            <div className="rounded-xl border border-hair bg-surface px-5 py-10 text-center text-ui text-fg2">
               {resolveLabel("common.empty")}
             </div>
           ) : (
@@ -365,6 +366,7 @@ function SettingRow({
   const watchedValues = form.watch();
   const [langOpen, setLangOpen] = useState(false);
   const langRef = useRef<HTMLDivElement>(null);
+  const labelId = `setting-${item.id}-label`;
 
   useEffect(() => {
     if (!langOpen) return;
@@ -527,7 +529,9 @@ function SettingRow({
 
   const handleSegment = (i: number) => {
     if (isLanguage) {
-      setLocale(i === 0 ? "en" : "zh");
+      const locale = i === 0 ? "en" : "zh";
+      setLocale(locale);
+      applyDocumentLang(locale);
     } else if (isColorMode) {
       onThemeModeChange(i === 0 ? "light" : "dark");
     } else if (isGridStyle) {
@@ -540,9 +544,11 @@ function SettingRow({
   return (
     <div className="flex items-center justify-between gap-4 px-5 py-3.5">
       <div className="min-w-0 flex-1">
-        <div className="text-body-sm font-medium text-fg">{resolveLabel(item.labelKey)}</div>
+        <div id={labelId} className="text-body-sm font-medium text-fg">
+          {resolveLabel(item.labelKey)}
+        </div>
         {item.descriptionKey && (
-          <div className="mt-0.5 text-caption leading-relaxed text-fg3">
+          <div className="mt-0.5 text-caption leading-relaxed text-fg2">
             {resolveLabel(item.descriptionKey)}
           </div>
         )}
@@ -563,6 +569,7 @@ function SettingRow({
             type="button"
             role="switch"
             aria-checked={toggleValue ? "true" : "false"}
+            aria-labelledby={labelId}
             onClick={handleToggle}
             className={cn(
               "relative shrink-0 rounded-full transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent",
@@ -583,6 +590,7 @@ function SettingRow({
 
         {item.type === "select" && (
           <select
+            aria-labelledby={labelId}
             style={{ height: "32px", fontSize: "13px", padding: "0 10px" }}
             className="rounded-md border border-hair bg-surface text-fg outline-none focus-visible:border-accent-line focus-visible:ring-2 focus-visible:ring-accent/20"
             value={selectValue}
@@ -647,7 +655,7 @@ function SettingRow({
                   "flex-1 rounded font-medium transition-all",
                   currentSegment === i
                     ? "bg-surface text-fg shadow-[var(--shadow-1)]"
-                    : "text-fg3 hover:bg-hover hover:text-fg",
+                    : "text-fg2 hover:bg-hover hover:text-fg",
                 )}
               >
                 {resolveLabel(opt)}

@@ -85,14 +85,13 @@ export function WorkbenchTopBar({ history }: { history: ShellHistory }) {
 
   return (
     <header
+      data-tauri-drag-region
       className={cn(
         "relative z-20 flex h-12 shrink-0 items-center gap-1.5 bg-surface px-3 pl-4 shadow-[0_1px_0_var(--color-hair-soft)]",
         collapsed && mac && tauri && "pl-[78px]",
       )}
     >
-      <div data-tauri-drag-region aria-hidden="true" className="absolute inset-0" />
-
-      <div className="relative z-10 flex min-w-0 flex-1 items-center gap-1.5">
+      <div className="flex min-w-0 flex-1 items-center gap-1.5">
         {collapsed && (
           <div className="mr-3 flex items-center gap-0.5">
             {mac && !tauri && <WindowLights />}
@@ -115,15 +114,20 @@ export function WorkbenchTopBar({ history }: { history: ShellHistory }) {
           </div>
         )}
 
-        <div className="flex min-w-0 items-center gap-2 text-ui text-fg3">
-          <Folder className="size-3.5 shrink-0" strokeWidth={ICON_STROKE} />
-          <span className="truncate">{workspaceName}</span>
-          <span className="shrink-0 text-fg4">/</span>
-          <b className="truncate font-medium tracking-[-0.005em] text-fg">{modeLabel(pathname)}</b>
+        <div
+          data-tauri-drag-region
+          className="flex min-w-0 flex-1 select-none items-center gap-2 text-ui text-fg2"
+        >
+          <Folder className="pointer-events-none size-3.5 shrink-0" strokeWidth={ICON_STROKE} />
+          <span className="pointer-events-none truncate">{workspaceName}</span>
+          <span className="pointer-events-none shrink-0 text-fg4">/</span>
+          <b className="pointer-events-none truncate font-medium tracking-[-0.005em] text-fg">
+            {modeLabel(pathname)}
+          </b>
         </div>
       </div>
 
-      <div className="relative z-10 flex items-center gap-1.5">
+      <div className="flex items-center gap-1.5">
         {phase !== "idle" && (
           <Link
             to="/library"
@@ -135,8 +139,8 @@ export function WorkbenchTopBar({ history }: { history: ShellHistory }) {
               className={cn("size-1.5 shrink-0 rounded-full", runDotClass(phase))}
             />
             <span className="shrink-0">{runPhaseLabel(phase)}</span>
-            {runName && <span className="min-w-0 truncate text-fg3">{runName}</span>}
-            <span className="shrink-0 font-mono tabular-nums text-fg3">{runPercent}%</span>
+            {runName && <span className="min-w-0 truncate text-fg2">{runName}</span>}
+            <span className="shrink-0 font-mono tabular-nums text-fg2">{runPercent}%</span>
           </Link>
         )}
 

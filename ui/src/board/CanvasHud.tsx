@@ -1,6 +1,13 @@
-import { useCallback, useEffect, useRef, type CSSProperties, type ReactNode } from "react";
 import {
-  getNodesBounds,
+  useCallback,
+  useEffect,
+  useLayoutEffect,
+  useRef,
+  useState,
+  type CSSProperties,
+  type ReactNode,
+} from "react";
+import {
   getViewportForBounds,
   useReactFlow,
   useStore,
@@ -12,14 +19,17 @@ import * as m from "$paraglide/messages";
 import { cn } from "@/lib/utils";
 import { ICON_STROKE } from "@/design/tokens";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
+import { useReducedMotion } from "@/hooks/useReducedMotion";
 import { useUIStore } from "@/store/uiStore";
 import {
   animateViewport,
+  CANVAS_HUD_DOCK_HEIGHT,
   CANVAS_HUD_EDGE,
   CANVAS_HUD_SHIFT_MS,
   CANVAS_MAX_ZOOM,
   CANVAS_MIN_ZOOM,
   CANVAS_VIEW_MS,
+  hudLayout,
   SESSION_PANEL_COVERAGE,
 } from "./canvasView";
 
@@ -77,19 +87,53 @@ type CanvasHudProps = {
 /**
  * Floating canvas instruments: the bottom-center tool dock and the bottom-right
  * zoom bar. Both plates shift left of the floating session panel while it is
- * open, so neither is ever covered.
+ * open; when the strip left free is too narrow, the zoom plate stacks above the
+ * dock instead of overlapping it.
  */
 export function CanvasHud({ tool, onToolChange }: CanvasHudProps) {
   const panelOpen = useUIStore((state) => state.sessionPanelOpen);
   const { zoom } = useViewport();
-  const { getViewport, setViewport, getNodes } = useReactFlow();
+  const { getViewport, getNodes, getNodesBounds, setViewport } = useReactFlow();
   const width = useStore((state) => state.width);
   const height = useStore((state) => state.height);
+  const reducedMotion = useReducedMotion();
 
   const animationRef = useRef<(() => void) | null>(null);
   useEffect(() => () => animationRef.current?.(), []);
 
-  const visibleWidth = Math.max(1, width - (panelOpen ? SESSION_PANEL_COVERAGE : 0));
+  // The stacked arrangement sits the zoom plate on the dock's real height, so
+  // the dock is measured rather than assumed. The constant covers jsdom.
+  const dockRef = useRef<HTMLDivElement | null>(null);
+  const [dockHeight, setDockHeight] = useState(CANVAS_HUD_DOCK_HEIGHT);
+  useLayoutEffect(() => {
+    const dock = dockRef.current;
+    if (!dock) return;
+    const measure = () => setDockHeight(dock.offsetHeight || CANVAS_HUD_DOCK_HEIGHT);
+    measure();
+    if (typeof ResizeObserver === "undefined") return;
+    const observer = new ResizeObserver(measure);
+    observer.observe(dock);
+    return () => observer.disconnect();
+  }, []);
+
+  const panelOffset = panelOpen ? SESSION_PANEL_COVERAGE : 0;
+  const visibleWidth = Math.max(1, width - panelOffset);
+  const layout = hudLayout({
+    freeWidth: visibleWidth,
+    // The panel-open plate stops at the strip edge; closed it keeps the edge
+    // inset used since the instruments were introduced.
+    rightInset: panelOffset || CANVAS_HUD_EDGE,
+    dockHeight,
+  });
+
+  // A stack switch snaps: sliding the plates across the panel while it opens
+  // or closes reads as a jump. Wide-to-wide panel moves keep the slow shift.
+  const previousStacked = useRef(layout.stacked);
+  const stackChanged = previousStacked.current !== layout.stacked;
+  useEffect(() => {
+    previousStacked.current = layout.stacked;
+  }, [layout.stacked]);
+  const animateShift = !reducedMotion && !stackChanged;
 
   const animateTo = useCallback(
     (next: Viewport) => {
@@ -138,28 +182,28 @@ export function CanvasHud({ tool, onToolChange }: CanvasHudProps) {
     }
     const bounds = getNodesBounds(nodes);
     animateTo(getViewportForBounds(bounds, visibleWidth, height, CANVAS_MIN_ZOOM, 1, "40px"));
-  }, [animateTo, getNodes, height, visibleWidth, width]);
+  }, [animateTo, getNodes, getNodesBounds, height, visibleWidth, width]);
 
   const dockStyle: CSSProperties = {
-    left: panelOpen ? `calc((100% - ${SESSION_PANEL_COVERAGE}px) / 2)` : "50%",
-    transition: `left ${CANVAS_HUD_SHIFT_MS}ms var(--ease-ui)`,
+    left: layout.dockLeft,
+    transition: animateShift ? `left ${CANVAS_HUD_SHIFT_MS}ms var(--ease-ui)` : "none",
   };
   const zoomStyle: CSSProperties = {
-    right: panelOpen ? SESSION_PANEL_COVERAGE : CANVAS_HUD_EDGE,
-    transition: `right ${CANVAS_HUD_SHIFT_MS}ms var(--ease-ui)`,
+    right: layout.zoomRight,
+    bottom: layout.zoomBottom,
+    transition: animateShift ? `right ${CANVAS_HUD_SHIFT_MS}ms var(--ease-ui)` : "none",
   };
 
   return (
     <>
       <div
+        ref={dockRef}
         role="toolbar"
         aria-label={m["board.canvasTools"]()}
-        className={cn(
-          PLATE,
-          "absolute bottom-5 z-10 -translate-x-1/2 motion-reduce:transition-none",
-        )}
+        className={cn(PLATE, "absolute bottom-5 z-10 -translate-x-1/2")}
         style={dockStyle}
         data-testid="canvas-dock"
+        onDoubleClick={(event) => event.stopPropagation()}
       >
         <HudButton
           label={m["board.toolSelect"]()}
@@ -191,9 +235,10 @@ export function CanvasHud({ tool, onToolChange }: CanvasHudProps) {
       <div
         role="group"
         aria-label={m["board.zoomControls"]()}
-        className={cn(PLATE, "absolute bottom-5 z-10 motion-reduce:transition-none")}
+        className={cn(PLATE, "absolute z-10")}
         style={zoomStyle}
         data-testid="canvas-zoom"
+        onDoubleClick={(event) => event.stopPropagation()}
       >
         <button
           type="button"

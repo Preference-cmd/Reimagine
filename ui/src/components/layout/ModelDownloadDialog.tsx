@@ -1,5 +1,14 @@
 import { useEffect, useRef, useState } from "react";
-import { ArrowLeft, Boxes, CheckCircle2, Download, Loader2, Search, X } from "lucide-react";
+import {
+  ArrowLeft,
+  Boxes,
+  CheckCircle2,
+  CircleAlert,
+  Download,
+  Loader2,
+  Search,
+  X,
+} from "lucide-react";
 import { Dialog } from "radix-ui";
 import { useQueryClient } from "@tanstack/react-query";
 import { Button } from "@/components/ui/button";
@@ -156,7 +165,7 @@ export function ModelDownloadDialog({
       if (!alive.current) return;
       setOutput(result);
       setPhase("done");
-      // Invalidate models list so both ModelsView and ExplorerPanel update
+      // Invalidate the cached model list so every consumer sees the new model
       await queryClient.invalidateQueries({ queryKey: queryKeys.models });
       onInstalled();
     } catch (error) {
@@ -215,7 +224,7 @@ export function ModelDownloadDialog({
                 <label className="relative block">
                   <Search className="pointer-events-none absolute left-2.5 top-1/2 h-3.5 w-3.5 -translate-y-1/2 text-fg3" />
                   <input
-                    className="h-8 w-full rounded-full border border-hair bg-ground px-3 pl-8 text-caption text-fg outline-none transition-[border-color,box-shadow] placeholder:text-fg3 focus:border-accent-line focus:ring-2 focus:ring-accent/20"
+                    className="h-8 w-full rounded-full border border-hair bg-ground px-3 pl-8 text-caption text-fg outline-none transition-[border-color,box-shadow] placeholder:text-fg2 focus:border-accent-line focus:ring-2 focus:ring-accent/20"
                     placeholder="Search HuggingFace models"
                     value={query}
                     onChange={(event) => setQuery(event.target.value)}
@@ -226,15 +235,15 @@ export function ModelDownloadDialog({
               </div>
               <div className="scrollbar-hide flex-1 overflow-y-auto px-2 pb-3">
                 {searching ? (
-                  <div className="mx-1 flex items-center gap-2 rounded-lg bg-tile px-3 py-2 text-caption text-fg3">
+                  <div className="mx-1 flex items-center gap-2 rounded-lg bg-tile px-3 py-2 text-caption text-fg2">
                     <Loader2 className="h-3.5 w-3.5 animate-spin" />
                     Searching hub...
                   </div>
                 ) : results.length === 0 ? (
-                  <div className="mx-1 mt-2 rounded-lg bg-tile px-3 py-2 text-caption text-fg3">
+                  <div className="mx-1 mt-2 rounded-lg bg-tile px-3 py-2 text-caption text-fg2">
                     {query.trim()
                       ? "No models found."
-                      : "Search HuggingFace or pick a model from the explorer."}
+                      : "Search HuggingFace or pick a model from the list."}
                   </div>
                 ) : (
                   <ul className="space-y-0.5">
@@ -252,7 +261,7 @@ export function ModelDownloadDialog({
                             <span className="block truncate text-caption font-medium text-fg">
                               {entry.id}
                             </span>
-                            <span className="mt-0.5 block truncate text-caption text-fg3">
+                            <span className="mt-0.5 block truncate text-caption text-fg2">
                               {entry.pipelineTag ?? "model"} / {entry.downloads.toLocaleString()}{" "}
                               downloads
                             </span>
@@ -270,11 +279,12 @@ export function ModelDownloadDialog({
             <>
               <div className="scrollbar-hide flex-1 overflow-y-auto p-4">
                 {cardError ? (
-                  <div className="rounded-lg bg-err/10 px-3 py-2 text-caption text-err">
+                  <div className="flex items-center gap-2 rounded-lg border-l-2 border-err bg-err/10 px-3 py-2 text-caption text-fg">
+                    <CircleAlert className="size-3.5 shrink-0 text-err" aria-hidden="true" />
                     {cardError}
                   </div>
                 ) : !card ? (
-                  <div className="flex items-center gap-2 text-caption text-fg3">
+                  <div className="flex items-center gap-2 text-caption text-fg2">
                     <Loader2 className="h-3.5 w-3.5 animate-spin" />
                     Loading model card...
                   </div>
@@ -283,7 +293,7 @@ export function ModelDownloadDialog({
                     <div className="truncate text-body-sm font-semibold text-fg">
                       {card.entry.id}
                     </div>
-                    <div className="mt-0.5 truncate text-caption text-fg3">
+                    <div className="mt-0.5 truncate text-caption text-fg2">
                       {card.entry.author ?? "Unknown author"}
                     </div>
 
@@ -301,11 +311,12 @@ export function ModelDownloadDialog({
                     </div>
 
                     {card.modelSummary && (
-                      <p className="mt-3 text-caption text-fg3">{card.modelSummary}</p>
+                      <p className="mt-3 text-caption text-fg2">{card.modelSummary}</p>
                     )}
 
                     {downloadError && (
-                      <div className="mt-3 rounded-lg bg-err/10 px-3 py-2 text-caption text-err">
+                      <div className="mt-3 flex items-center gap-2 rounded-lg border-l-2 border-err bg-err/10 px-3 py-2 text-caption text-fg">
+                        <CircleAlert className="size-3.5 shrink-0 text-err" aria-hidden="true" />
                         {downloadError}
                       </div>
                     )}
@@ -324,7 +335,7 @@ export function ModelDownloadDialog({
           {phase === "downloading" && (
             <div className="scrollbar-hide flex-1 overflow-y-auto p-4">
               <div className="truncate text-body-sm font-semibold text-fg">{selectedRepoId}</div>
-              <div className="mt-0.5 truncate text-caption text-fg3">
+              <div className="mt-0.5 truncate text-caption text-fg2">
                 {progress.message ?? "Downloading model files"}
               </div>
               <div className="mt-4 h-1.5 overflow-hidden rounded-full bg-tile">
@@ -333,7 +344,7 @@ export function ModelDownloadDialog({
                   style={{ transform: `scaleX(${Math.max(0.04, fraction)})` }}
                 />
               </div>
-              <div className="mt-2 flex items-center justify-between gap-3 text-caption text-fg3">
+              <div className="mt-2 flex items-center justify-between gap-3 text-caption text-fg2">
                 <span className="truncate">{formatBytes(progress.bytes)} transferred</span>
                 {progress.totalBytes ? (
                   <span className="shrink-0">{formatBytes(progress.totalBytes)} total</span>
@@ -348,7 +359,7 @@ export function ModelDownloadDialog({
             <div className="flex flex-1 flex-col items-center justify-center gap-2 p-6 text-center">
               <CheckCircle2 className="h-8 w-8 text-ok" />
               <div className="text-body-sm font-semibold text-fg">Model installed</div>
-              <div className="max-w-full truncate text-caption text-fg3">
+              <div className="max-w-full truncate text-caption text-fg2">
                 {output
                   ? `${output.repoId} · ${formatBytes(output.totalBytes)} · ${
                       output.detectedFormat ?? output.provider
@@ -369,7 +380,7 @@ export function ModelDownloadDialog({
 function DialogSummaryCell({ label, value }: { label: string; value: string }) {
   return (
     <div className="min-w-0 rounded-lg bg-tile px-2 py-1.5">
-      <div className="truncate text-caption text-fg3">{label}</div>
+      <div className="truncate text-caption text-fg2">{label}</div>
       <div className="truncate text-caption font-semibold text-fg">{value}</div>
     </div>
   );
