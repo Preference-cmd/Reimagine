@@ -6,7 +6,9 @@ import { getLocale } from "$paraglide/runtime";
 import { cn } from "@/lib/utils";
 import { useTheme } from "@/lib/theme";
 import { useNodeDefs } from "@/hooks/queries";
+import { useActivitySync } from "@/hooks/useActivitySync";
 import { useNodeRegistryStore } from "@/store/nodeRegistry";
+import { useProjectStore } from "@/store/project";
 import { useSettingsStore } from "@/store/settingsStore";
 import { CommandPalette } from "@/components/palette/CommandPalette";
 import { ContextMenuPanel } from "@/components/canvas/ContextMenuPanel";
@@ -31,6 +33,10 @@ export function AppShell() {
   const history = useShellHistory();
   const { pathname } = useLocation();
   const sessionPanelVisible = showsSessionPanel(pathname);
+  const activeProjectId = useProjectStore((state) => state.activeProjectId);
+
+  // The feed is global: records arrive even while the panel is closed.
+  useActivitySync(activeProjectId);
 
   // setLocale reloads the document, so the boot pass restores the lang the
   // switchers wrote before the reload.

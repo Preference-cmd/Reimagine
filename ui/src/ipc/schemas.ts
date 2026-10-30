@@ -584,3 +584,65 @@ export const DynamicWorkflowRunListSchema = z.object({
   runs: z.array(DynamicWorkflowRunSchema),
 });
 export type DynamicWorkflowRunList = z.infer<typeof DynamicWorkflowRunListSchema>;
+
+/* ───── Project activity (activity.list, activity.appended) ───── */
+
+/** Mirrors the core `CommandActor` serde: PascalCase kind, optional id/label. */
+export const ActivityActorSchema = z.object({
+  kind: z.enum(["Human", "Agent", "Importer", "System"]),
+  id: z.string().nullable(),
+  label: z.string().nullable(),
+});
+export type ActivityActor = z.infer<typeof ActivityActorSchema>;
+
+export const ActivityKindSchema = z.enum([
+  "applied",
+  "undone",
+  "redone",
+  "run_started",
+  "run_finished",
+  "run_cancelled",
+]);
+export type ActivityKind = z.infer<typeof ActivityKindSchema>;
+
+/**
+ * One append-only activity record. `summary` is the host's English fallback;
+ * `summaryKey` + `summaryParams` let clients render their own language.
+ */
+export const ActivityRecordSchema = z.object({
+  id: z.string(),
+  at: z.string(),
+  actor: ActivityActorSchema,
+  summary: z.string(),
+  summaryKey: z.string(),
+  summaryParams: z.unknown(),
+  targets: z.array(z.string()),
+  kind: ActivityKindSchema,
+  historyEntryId: z.string().nullable(),
+});
+export type ActivityRecord = z.infer<typeof ActivityRecordSchema>;
+
+/**
+ * One `activity.list` page, newest first. The host's operation output spells
+ * the paging flag `has_more` (snake_case, unlike the camelCase record body);
+ * the camelCase spelling is accepted too and the parse always exposes
+ * `hasMore`.
+ */
+export const ActivityListResultSchema = z
+  .object({
+    records: z.array(ActivityRecordSchema),
+    has_more: z.boolean().optional(),
+    hasMore: z.boolean().optional(),
+  })
+  .transform((value) => ({
+    records: value.records,
+    hasMore: value.has_more ?? value.hasMore ?? false,
+  }));
+export type ActivityListResult = z.infer<typeof ActivityListResultSchema>;
+
+/** Payload of `Event::Mod { kind: "activity.appended" }`. */
+export const ActivityAppendedPayloadSchema = z.object({
+  projectId: z.string(),
+  record: ActivityRecordSchema,
+});
+export type ActivityAppendedPayload = z.infer<typeof ActivityAppendedPayloadSchema>;
