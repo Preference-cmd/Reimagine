@@ -300,6 +300,12 @@ export function SessionPanel() {
                 const relative = formatRelativeTime(record.at, getLocale());
                 const undo = record.id === undoRecordId;
                 const redo = record.id === redoRecordId;
+                // The applied row whose entry sits on the redo stack is the
+                // one shown as undone; the undo record itself is an action.
+                const undoneApplied =
+                  record.kind === "applied" &&
+                  redoEntryId !== null &&
+                  record.historyEntryId === redoEntryId;
 
                 return (
                   <li
@@ -328,7 +334,7 @@ export function SessionPanel() {
                       <p
                         className={cn(
                           "text-ui leading-5 text-fg",
-                          record.kind === "undone" && "text-fg2 line-through",
+                          undoneApplied && "text-fg2 line-through",
                         )}
                       >
                         <b className={cn("font-medium", agent && "text-agent")}>
