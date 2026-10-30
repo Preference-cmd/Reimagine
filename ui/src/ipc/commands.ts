@@ -13,9 +13,7 @@ import {
   type ModelDownloadOutput,
   type ModelFilters,
   type ModelInfo,
-  type NodeDef,
   type RebootBackendArgs,
-  type WorkflowFileSummary,
   type WorkerSwitchArgs,
   type WorkerSwitchResult,
   type WorkerSwitchTarget,
@@ -45,15 +43,11 @@ import {
   mockDownloadHuggingfaceModel,
   mockDrainAndSwitchWorker,
   mockGetModelCard,
-  mockGetNodeDefs,
   mockListModels,
   mockListWorkerSwitchTargets,
-  mockListWorkflows,
-  mockLoadWorkflow,
   mockOpenArtifact,
   mockRebootBackend,
   mockResolveArtifact,
-  mockSaveWorkflow,
   mockSearchModels,
   mockOpInvoke,
   mockReadAssetPreview,
@@ -136,10 +130,6 @@ async function invokeWithFallback<T>(real: () => Promise<T>, mock: () => Promise
 
 export function listModels(): Promise<ModelInfo[]> {
   return dispatch("list_models", null, undefined, mockListModels);
-}
-
-export function getNodeDefs(): Promise<NodeDef[]> {
-  return dispatch("get_node_defs", null, undefined, mockGetNodeDefs);
 }
 
 export async function resolveArtifact(artifactId: string): Promise<ArtifactMetadata> {
@@ -305,27 +295,6 @@ export function redoBoard(
     { projectId, expectedEntryId: expectedEntryId ?? null },
     mockRedoBoard,
   );
-}
-
-/* ───── Workflow persistence (F1-1/F1-2) ───── */
-
-/** Save a workflow to the workspace `workflows/` dir; resolves to the file path. */
-export function saveWorkflow(
-  projectId: string,
-  workflowId: string,
-  workflowJson: unknown,
-): Promise<string> {
-  return dispatch("save_workflow", null, { projectId, workflowId, workflowJson }, mockSaveWorkflow);
-}
-
-/** Load a saved workflow (backend `Workflow` JSON) by id. */
-export function loadWorkflow(projectId: string, workflowId: string): Promise<unknown> {
-  return dispatch("load_workflow", null, { projectId, workflowId }, mockLoadWorkflow);
-}
-
-/** List saved workflows (newest first). */
-export function listWorkflows(projectId: string): Promise<WorkflowFileSummary[]> {
-  return dispatch("list_workflows", null, { projectId }, mockListWorkflows);
 }
 
 /* ───── Worker switching (BE-32) ───── */

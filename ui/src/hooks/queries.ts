@@ -1,37 +1,18 @@
-import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
-import {
-  getNodeDefs,
-  listModels,
-  searchModels,
-  getModelCard,
-  resolveArtifact,
-  listWorkflows,
-  saveWorkflow,
-} from "@/ipc";
+import { useQuery, useMutation } from "@tanstack/react-query";
+import { listModels, searchModels, getModelCard, resolveArtifact } from "@/ipc";
 import type { DownloadHuggingfaceModelArgs, ModelDownloadOutput } from "@/ipc/schemas";
 import { downloadHuggingfaceModel as ipcDownloadModel } from "@/ipc";
 
 /* ─── Query keys ─────────────────────────────────────────── */
 
 export const queryKeys = {
-  nodeDefs: ["nodeDefs"] as const,
   models: ["models"] as const,
   modelSearch: (query: string) => ["modelSearch", query] as const,
   modelCard: (repoId: string) => ["modelCard", repoId] as const,
   artifact: (artifactId: string) => ["artifact", artifactId] as const,
-  workflows: (projectId: string) => ["workflows", projectId] as const,
 } as const;
 
 /* ─── Queries ────────────────────────────────────────────── */
-
-/** Node catalog — loaded once at startup, never revalidated. */
-export function useNodeDefs() {
-  return useQuery({
-    queryKey: queryKeys.nodeDefs,
-    queryFn: getNodeDefs,
-    staleTime: Infinity,
-  });
-}
 
 /** Installed models list — shared by the models page and the install dialog. */
 export function useModels() {
@@ -72,28 +53,7 @@ export function useArtifactQuery(artifactId: string | null) {
   });
 }
 
-/** Saved workflows list — one-shot load. */
-export function useWorkflows(projectId: string) {
-  return useQuery({
-    queryKey: queryKeys.workflows(projectId),
-    queryFn: () => listWorkflows(projectId),
-    staleTime: Infinity,
-  });
-}
-
 /* ─── Mutations ──────────────────────────────────────────── */
-
-/** Save workflow — invalidates the workflows list on success. */
-export function useSaveWorkflow() {
-  const queryClient = useQueryClient();
-  return useMutation({
-    mutationFn: ({ projectId, id, json }: { projectId: string; id: string; json: unknown }) =>
-      saveWorkflow(projectId, id, json),
-    onSuccess: (_data, variables) => {
-      queryClient.invalidateQueries({ queryKey: queryKeys.workflows(variables.projectId) });
-    },
-  });
-}
 
 /** Download a HuggingFace model; progress arrives as `aigc.download.*` events. */
 export function useDownloadModel() {

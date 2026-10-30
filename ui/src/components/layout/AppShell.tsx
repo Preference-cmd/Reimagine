@@ -5,14 +5,10 @@ import { Toaster } from "sonner";
 import { getLocale } from "$paraglide/runtime";
 import { cn } from "@/lib/utils";
 import { useTheme } from "@/lib/theme";
-import { useNodeDefs } from "@/hooks/queries";
 import { useActivitySync } from "@/hooks/useActivitySync";
-import { useNodeRegistryStore } from "@/store/nodeRegistry";
 import { useProjectStore } from "@/store/project";
 import { useSettingsStore } from "@/store/settingsStore";
 import { CommandPalette } from "@/components/palette/CommandPalette";
-import { ContextMenuPanel } from "@/components/canvas/ContextMenuPanel";
-import { RenameNodeDialog } from "@/components/canvas/RenameNodeDialog";
 import { ErrorFallback } from "@/components/layout/ErrorFallback";
 import { SessionPanel } from "@/components/layout/SessionPanel";
 import { WorkbenchSidebar } from "@/components/layout/WorkbenchSidebar";
@@ -44,16 +40,6 @@ export function AppShell() {
     applyDocumentLang(getLocale() === "zh" ? "zh" : "en");
   }, []);
 
-  // Node catalog: fetch once via TanStack Query, hydrate the Zustand store.
-  const nodeDefsQuery = useNodeDefs();
-  useEffect(() => {
-    if (nodeDefsQuery.data) {
-      useNodeRegistryStore.getState().hydrate(nodeDefsQuery.data);
-    } else if (nodeDefsQuery.error) {
-      useNodeRegistryStore.getState().hydrate([], nodeDefsQuery.error.message);
-    }
-  }, [nodeDefsQuery.data, nodeDefsQuery.error]);
-
   return (
     <div className="flex h-full w-full overflow-hidden bg-app text-fg">
       {!sidebarCollapsed && <WorkbenchSidebar history={history} />}
@@ -76,8 +62,6 @@ export function AppShell() {
       </main>
 
       <CommandPalette />
-      <ContextMenuPanel />
-      <RenameNodeDialog />
       <Toaster
         theme={themeMode}
         position="bottom-center"

@@ -1155,6 +1155,11 @@ describe("Board canvas interactions and command batches", () => {
     useActivityStore.getState().reset();
     useProjectStore.setState({ activeProjectId: projectId });
 
+    // The shell's activity sync loads the feed before live events arrive; a
+    // record appended for a project that is not loaded only updates that
+    // project's remembered stacks.
+    await useActivityStore.getState().load(projectId);
+
     // Seed the in-memory host with one undoable board change and hydrate the
     // stores from it, as the shell does after a board.changed event.
     const applied = await mockApplyBoardCommands({

@@ -1,25 +1,19 @@
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import {
-  Boxes,
   CircleDot,
   CornerDownLeft,
   LayoutGrid,
   Library,
   PanelLeft,
-  Plus,
   Search,
   Settings,
 } from "lucide-react";
 import { useNavigate } from "@tanstack/react-router";
-import { toast } from "sonner";
 import * as m from "$paraglide/messages";
 import { cn } from "@/lib/utils";
 import { useUIStore } from "@/store/uiStore";
-import { useNodeRegistryStore } from "@/store/nodeRegistry";
 import { useSettingsStore } from "@/store/settingsStore";
-import { createNodeAt } from "@/lib/nodeFactory";
 import { filterEntries, type PaletteEntry } from "@/lib/palette";
-import { flowViewportCenter } from "@/lib/flowInstance";
 
 const COMMAND_ICONS: Record<string, typeof CircleDot> = {
   "open-canvas": LayoutGrid,
@@ -30,15 +24,13 @@ const COMMAND_ICONS: Record<string, typeof CircleDot> = {
 
 /**
  * Command palette (F3-3): Cmd/Ctrl+P toggles a searchable action list.
- * The canvas opens the same dialog in node-picker mode for double-click and
- * context-menu insertion. Fuzzy matching and arrow-key navigation with a
- * simple filter input — no extra deps.
+ * Fuzzy matching and arrow-key navigation with a simple filter input —
+ * no extra deps.
  */
 export function CommandPalette() {
   const palette = useUIStore((s) => s.palette);
   const openCommandPalette = useUIStore((s) => s.openCommandPalette);
   const closePalette = useUIStore((s) => s.closePalette);
-  const defs = useNodeRegistryStore((s) => s.defList);
   const navigate = useNavigate();
 
   const [query, setQuery] = useState("");
@@ -111,19 +103,7 @@ export function CommandPalette() {
     },
   ];
 
-  const nodeItems: PaletteEntry[] = useMemo(
-    () =>
-      defs.map((def) => ({
-        id: `node-${def.type}`,
-        label: def.displayName,
-        hint: def.type,
-        keywords: [def.type, def.category],
-      })),
-    [defs],
-  );
-
-  const entries = palette.kind === "node" ? nodeItems : commandItems;
-  const visible = filterEntries(query, entries);
+  const visible = filterEntries(query, commandItems);
   const itemCount = visible.length;
 
   useEffect(() => {
@@ -154,16 +134,6 @@ export function CommandPalette() {
       case "settings":
         navigate({ to: "/settings" });
         return;
-      default:
-        if (id.startsWith("node-")) {
-          const typeId = id.slice("node-".length);
-          const position = palette.kind === "node" ? palette.position : flowViewportCenter();
-          if (!createNodeAt(typeId, position)) {
-            toast.error(m["palette.unknownNode"](), {
-              description: m["palette.unknownNodeDescription"](),
-            });
-          }
-        }
     }
   };
 
@@ -199,10 +169,6 @@ export function CommandPalette() {
     }
   };
 
-  const backToCommands = () => {
-    openCommandPalette();
-  };
-
   return (
     <div
       className="pointer-events-auto fixed inset-0 z-50 flex items-start justify-center bg-[var(--color-scrim)] pt-[18vh]"
@@ -219,30 +185,15 @@ export function CommandPalette() {
         className="w-[min(440px,calc(100vw-2rem))] overflow-hidden rounded-2xl bg-surface shadow-[var(--shadow-bezel),var(--shadow-3),var(--shadow-hi)]"
       >
         <div className="flex items-center gap-2 border-b border-hair px-3.5 py-3">
-          {palette.kind === "node" ? (
-            <Plus className="h-4 w-4 shrink-0 text-fg3" />
-          ) : (
-            <Search className="h-4 w-4 shrink-0 text-fg3" />
-          )}
+          <Search className="h-4 w-4 shrink-0 text-fg3" />
           <input
             ref={inputRef}
             value={query}
             onChange={(event) => setQuery(event.target.value)}
             onKeyDown={onKeyDown}
-            placeholder={
-              palette.kind === "node" ? m["palette.searchNodes"]() : m["palette.searchCommands"]()
-            }
+            placeholder={m["palette.searchCommands"]()}
             className="min-w-0 flex-1 bg-transparent text-body-sm text-fg placeholder:text-fg2 focus:outline-none"
           />
-          {palette.kind === "node" && (
-            <button
-              type="button"
-              onClick={backToCommands}
-              className="shrink-0 rounded-md bg-hover px-2 py-1 text-caption font-medium text-fg2 transition-colors hover:text-fg"
-            >
-              {m["palette.backToCommands"]()}
-            </button>
-          )}
         </div>
 
         <ul ref={listRef} className="scrollbar-hide max-h-80 overflow-y-auto p-1.5">
@@ -250,7 +201,7 @@ export function CommandPalette() {
             <li className="px-2.5 py-2 text-caption text-fg2">{m["palette.noMatches"]()}</li>
           )}
           {visible.map((entry, index) => {
-            const Icon = palette.kind === "node" ? Boxes : (COMMAND_ICONS[entry.id] ?? CircleDot);
+            const Icon = COMMAND_ICONS[entry.id] ?? CircleDot;
             return (
               <li key={entry.id}>
                 <button

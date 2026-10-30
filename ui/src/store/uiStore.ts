@@ -1,36 +1,15 @@
 import { create } from "zustand";
-import type { Viewport, XYPosition } from "@xyflow/react";
-import type { ActivityActor, NodeDef } from "@/ipc/schemas";
+import type { Viewport } from "@xyflow/react";
+import type { ActivityActor } from "@/ipc/schemas";
 
 /**
  * UI shell state — session panel, canvas focus, command palette,
- * context menu, and rename dialog.
- * View-only state — deliberately kept out of the workflow (undo) store.
+ * and settings nav.
+ * View-only state — deliberately kept out of the board (undo) store.
  * Route navigation is handled by TanStack Router (URL-based).
  */
 
-export type PaletteMode =
-  | { kind: "closed" }
-  | { kind: "command" }
-  /** Node-type picker; `position` is the flow coordinate to insert at. */
-  | { kind: "node"; position: XYPosition };
-
-export type ContextMenuItem = {
-  id: string;
-  label: string;
-  danger?: boolean;
-  disabled?: boolean;
-  shortcut?: string;
-  onSelect: () => void;
-};
-
-export type ContextMenuState = {
-  x: number;
-  y: number;
-  items: ContextMenuItem[];
-} | null;
-
-export type RenameTarget = { id: string; title: string } | null;
+export type PaletteMode = { kind: "closed" } | { kind: "command" };
 
 /**
  * Canvas highlight requested by hovering an activity record. Items whose id is
@@ -77,18 +56,7 @@ type UIState = {
   // ── Command palette ─────────────────────────────────────
   palette: PaletteMode;
   openCommandPalette: () => void;
-  openNodePalette: (position: XYPosition) => void;
   closePalette: () => void;
-
-  // ── Context menu ────────────────────────────────────────
-  contextMenu: ContextMenuState;
-  openContextMenu: (x: number, y: number, items: ContextMenuItem[]) => void;
-  closeContextMenu: () => void;
-
-  // ── Rename dialog ───────────────────────────────────────
-  renameTarget: RenameTarget;
-  startRename: (target: { id: string; title: string }) => void;
-  finishRename: () => void;
 };
 
 export const useUIStore = create<UIState>()((set) => ({
@@ -124,33 +92,5 @@ export const useUIStore = create<UIState>()((set) => ({
     set((state) => ({
       palette: state.palette.kind === "command" ? { kind: "closed" } : { kind: "command" },
     })),
-  openNodePalette: (position) => set({ palette: { kind: "node", position } }),
   closePalette: () => set({ palette: { kind: "closed" } }),
-
-  // Context menu
-  contextMenu: null,
-  openContextMenu: (x, y, items) => set({ contextMenu: { x, y, items } }),
-  closeContextMenu: () => set({ contextMenu: null }),
-
-  // Rename dialog
-  renameTarget: null,
-  startRename: (target) => set({ renameTarget: target }),
-  finishRename: () => set({ renameTarget: null }),
 }));
-
-/** Selector: node defs grouped by category, preserving catalog order (F2-2). */
-export function groupDefsByCategory(defs: NodeDef[]): Array<[string, NodeDef[]]> {
-  const groups: Array<[string, NodeDef[]]> = [];
-  const index = new Map<string, number>();
-  for (const def of defs) {
-    const category = def.category || "Other";
-    const existing = index.get(category);
-    if (existing === undefined) {
-      index.set(category, groups.length);
-      groups.push([category, [def]]);
-    } else {
-      groups[existing][1].push(def);
-    }
-  }
-  return groups;
-}

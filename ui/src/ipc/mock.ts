@@ -14,13 +14,10 @@ import {
   type ModelCatalogEntry,
   type ModelDownloadOutput,
   type ModelInfo,
-  type NodeDef,
   type RebootBackendArgs,
-  type WorkflowFileSummary,
   type WorkerSwitchArgs,
   type WorkerSwitchResult,
   type WorkerSwitchTarget,
-  NodeDefSchema,
   type InvokeResult,
 } from "./schemas";
 
@@ -53,24 +50,13 @@ const MOCK_MODELS: ModelInfo[] = [
   },
 ];
 
-/* ───── Workflow persistence mocks (localStorage-backed) ─────
-   Kept in localStorage so dev sessions survive reloads, mirroring the
-   on-disk `workflows/` behavior of the real backend. */
+/* ───── Project mocks (localStorage-backed) ───── */
 
-const PERSISTENCE_KEY = "reimagine.mock.workflows";
 const PROJECTS_KEY = "reimagine.mock.projects";
 const eventSubscribers = new Set<(event: Event) => void>();
 
 function emitEvent(event: Event): void {
   for (const subscriber of eventSubscribers) subscriber(event);
-}
-
-function mockReadAll(): Record<string, string> {
-  try {
-    return JSON.parse(localStorage.getItem(PERSISTENCE_KEY) ?? "{}");
-  } catch {
-    return {};
-  }
 }
 
 function mockReadProjects(): Record<string, Project> {
@@ -91,55 +77,6 @@ function mockReadProjects(): Record<string, Project> {
 
 function mockWriteProjects(projects: Record<string, Project>): void {
   localStorage.setItem(PROJECTS_KEY, JSON.stringify(projects));
-}
-
-function mockWriteAll(all: Record<string, string>): void {
-  localStorage.setItem(PERSISTENCE_KEY, JSON.stringify(all));
-}
-
-export async function mockSaveWorkflow(input: {
-  projectId: string;
-  workflowId: string;
-  workflowJson: unknown;
-}): Promise<string> {
-  await delay(50);
-  const all = mockReadAll();
-  const key = `${input.projectId}/${input.workflowId}`;
-  all[key] = JSON.stringify(input.workflowJson);
-  emitEvent({
-    type: "document",
-    kind: "workflow.changed",
-    projectId: input.projectId,
-    documentId: input.workflowId,
-    version: Number((input.workflowJson as { version?: unknown })?.version ?? 0),
-  });
-  mockWriteAll(all);
-  return `mock:/projects/${input.projectId}/workflows/${input.workflowId}.json`;
-}
-
-export async function mockLoadWorkflow(input: {
-  projectId: string;
-  workflowId: string;
-}): Promise<unknown> {
-  await delay(50);
-  const key = `${input.projectId}/${input.workflowId}`;
-  const raw = mockReadAll()[key];
-  if (!raw) {
-    throw new Error(`mock workflow not found: ${key}`);
-  }
-  return JSON.parse(raw);
-}
-
-export async function mockListWorkflows(input: {
-  projectId: string;
-}): Promise<WorkflowFileSummary[]> {
-  await delay(30);
-  const prefix = `${input.projectId}/`;
-  const entries = Object.entries(mockReadAll()).filter(([key]) => key.startsWith(prefix));
-  return entries.map(([key], index) => ({
-    id: key.slice(prefix.length),
-    modified_millis: entries.length - index,
-  }));
 }
 
 export async function mockSubscribeEvents(onEvent: (event: Event) => void): Promise<void> {
@@ -875,148 +812,6 @@ export async function mockListModels(): Promise<ModelInfo[]> {
   await delay(150);
   return [...MOCK_MODELS];
 }
-export async function mockGetNodeDefs(): Promise<NodeDef[]> {
-  await delay(120);
-  // Mirrors crates/nodes builtins — same type ids, categories, socket kinds
-  // and param kinds, plus options/min/max/step matching the constraint data
-  // the real backend DTO now serializes.
-  return MOCK_NODE_DEFS.map((def) => NodeDefSchema.parse(def));
-}
-
-/* ───── Mock node catalog (mirror of the Rust builtins) ───── */
-
-const SAMPLERS = ["euler", "euler a", "dpm++ 2M", "dpm++ SDE", "ddim"];
-const SCHEDULERS = ["normal", "karras", "exponential", "sgm_uniform"];
-
-const MOCK_NODE_DEFS: NodeDef[] = [
-  {
-    type: "builtin.string",
-    displayName: "String",
-    category: "Input",
-    inputs: [],
-    outputs: [{ id: "value", kind: "string", label: "value" }],
-    parameters: [{ id: "value", label: "Value", kind: "string", default: "" }],
-  },
-  {
-    type: "builtin.load_image",
-    displayName: "Load Image",
-    category: "Input",
-    inputs: [],
-    outputs: [{ id: "image", kind: "image", label: "image" }],
-    parameters: [{ id: "image", label: "Image path", kind: "string", default: "" }],
-  },
-  {
-    type: "builtin.checkpoint_loader",
-    displayName: "Checkpoint Loader",
-    category: "Model",
-    inputs: [],
-    outputs: [
-      { id: "model", kind: "model", label: "model" },
-      { id: "clip", kind: "clip", label: "clip" },
-      { id: "vae", kind: "vae", label: "vae" },
-    ],
-    parameters: [
-      {
-        id: "checkpoint",
-        label: "Checkpoint",
-        kind: "select",
-        default: "sdxl_base_1.0.safetensors",
-        options: [
-          "sdxl_base_1.0.safetensors",
-          "dreamshaper_8.safetensors",
-          "rev_animated.safetensors",
-        ],
-      },
-    ],
-  },
-  {
-    type: "builtin.clip_text_encode",
-    displayName: "CLIP Text Encode",
-    category: "Conditioning",
-    inputs: [{ id: "clip", kind: "clip", label: "clip" }],
-    outputs: [{ id: "conditioning", kind: "conditioning", label: "conditioning" }],
-    parameters: [{ id: "text", label: "Text", kind: "text", default: "" }],
-  },
-  {
-    type: "builtin.empty_latent_image",
-    displayName: "Empty Latent Image",
-    category: "Latent",
-    inputs: [],
-    outputs: [{ id: "latent", kind: "latent", label: "latent" }],
-    parameters: [
-      { id: "width", label: "Width", kind: "int", default: 1024 },
-      { id: "height", label: "Height", kind: "int", default: 1024 },
-      { id: "batch_size", label: "Batch size", kind: "int", default: 1 },
-    ],
-  },
-  {
-    type: "builtin.ksampler",
-    displayName: "KSampler",
-    category: "Sampling",
-    inputs: [
-      { id: "model", kind: "model", label: "model" },
-      { id: "positive", kind: "conditioning", label: "positive" },
-      { id: "negative", kind: "conditioning", label: "negative" },
-      { id: "latent", kind: "latent", label: "latent" },
-    ],
-    outputs: [{ id: "latent", kind: "latent", label: "latent" }],
-    parameters: [
-      { id: "seed", label: "Seed", kind: "int", default: 12345 },
-      { id: "steps", label: "Steps", kind: "int", default: 30, min: 1, max: 100 },
-      { id: "cfg", label: "CFG scale", kind: "float", default: 8.0, min: 1, max: 20 },
-      { id: "sampler", label: "Sampler", kind: "select", default: "dpm++ 2M", options: SAMPLERS },
-      {
-        id: "scheduler",
-        label: "Scheduler",
-        kind: "select",
-        default: "karras",
-        options: SCHEDULERS,
-      },
-      { id: "denoise", label: "Denoise", kind: "float", default: 0.5, min: 0, max: 1 },
-    ],
-  },
-  {
-    type: "builtin.vae_decode",
-    displayName: "VAE Decode",
-    category: "Image",
-    inputs: [
-      { id: "vae", kind: "vae", label: "vae" },
-      { id: "latent", kind: "latent", label: "latent" },
-    ],
-    outputs: [{ id: "image", kind: "image", label: "image" }],
-    parameters: [],
-  },
-  {
-    type: "builtin.vae_encode",
-    displayName: "VAE Encode",
-    category: "Latent",
-    inputs: [
-      { id: "vae", kind: "vae", label: "vae" },
-      { id: "image", kind: "image", label: "image" },
-    ],
-    outputs: [{ id: "latent", kind: "latent", label: "latent" }],
-    parameters: [],
-  },
-  {
-    type: "builtin.save_image",
-    displayName: "Save Image",
-    category: "Image",
-    inputs: [{ id: "image", kind: "image", label: "image" }],
-    outputs: [],
-    parameters: [
-      { id: "filename_prefix", label: "Filename prefix", kind: "string", default: "reimagine" },
-    ],
-  },
-  {
-    type: "builtin.preview_image",
-    displayName: "Preview Image",
-    category: "Image",
-    inputs: [{ id: "image", kind: "image", label: "image" }],
-    outputs: [],
-    parameters: [],
-  },
-];
-
 export async function mockResolveArtifact(artifactId: string): Promise<ArtifactMetadata> {
   await delay(100);
   return {
