@@ -1,6 +1,7 @@
 //! Kernel operations for dynamic workflows and their batch runs:
 //! - `dynamic_workflow.create`
 //! - `dynamic_workflow.get`
+//! - `dynamic_workflow.list`
 //! - `dynamic_workflow.run`
 //! - `dynamic_workflow.cancel`
 //! - `dynamic_workflow.resume`
@@ -219,6 +220,81 @@ impl KernelOp for DynamicWorkflowGetOp {
             "version": document.version,
             "workflow": document.workflow,
         }))
+    }
+}
+
+/// `dynamic_workflow.list`
+pub struct DynamicWorkflowListOp {
+    spec: OperationSpec,
+    service: Arc<DynamicWorkflowService>,
+}
+
+impl DynamicWorkflowListOp {
+    pub fn new(service: Arc<DynamicWorkflowService>) -> Self {
+        Self {
+            spec: OperationSpec {
+                name: "dynamic_workflow.list".to_owned(),
+                description: "List the project's dynamic workflow documents".to_owned(),
+                input_schema: json!({
+                    "type": "object",
+                    "properties": {},
+                    "additionalProperties": false
+                }),
+                output_schema: json!({
+                    "type": "object",
+                    "properties": {
+                        "workflows": {
+                            "type": "array",
+                            "items": {
+                                "type": "object",
+                                "properties": {
+                                    "id": { "type": "string" },
+                                    "name": { "type": "string" },
+                                    "version": { "type": "integer", "minimum": 1 },
+                                    "step_count": { "type": "integer", "minimum": 0 }
+                                },
+                                "required": ["id", "name", "version", "step_count"],
+                                "additionalProperties": false
+                            }
+                        }
+                    },
+                    "required": ["workflows"],
+                    "additionalProperties": false,
+                    "examples": [{ "workflows": [] }]
+                }),
+                annotations: OperationAnnotations {
+                    read_only: true,
+                    destructive: false,
+                    idempotent: true,
+                    deterministic: true,
+                    open_world: false,
+                },
+            },
+            service,
+        }
+    }
+}
+
+#[async_trait]
+impl KernelOp for DynamicWorkflowListOp {
+    fn spec(&self) -> &OperationSpec {
+        &self.spec
+    }
+
+    async fn invoke(&self, call: KernelCall) -> Result<Value, Diagnostic> {
+        let summaries = self.service.list(&call.project_id).await?;
+        let workflows: Vec<Value> = summaries
+            .iter()
+            .map(|summary| {
+                json!({
+                    "id": summary.id.as_str(),
+                    "name": summary.name.as_str(),
+                    "version": summary.version,
+                    "step_count": summary.step_count,
+                })
+            })
+            .collect();
+        Ok(json!({ "workflows": workflows }))
     }
 }
 
@@ -562,13 +638,14 @@ impl KernelOp for DynamicWorkflowListRunsOp {
     }
 }
 
-/// Register all seven dynamic workflow operations.
+/// Register all dynamic workflow operations.
 pub fn register_dynamic_workflow_ops(
     op_service: &OperationService,
     service: Arc<DynamicWorkflowService>,
 ) {
     op_service.register_kernel_op(Arc::new(DynamicWorkflowCreateOp::new(Arc::clone(&service))));
     op_service.register_kernel_op(Arc::new(DynamicWorkflowGetOp::new(Arc::clone(&service))));
+    op_service.register_kernel_op(Arc::new(DynamicWorkflowListOp::new(Arc::clone(&service))));
     op_service.register_kernel_op(Arc::new(DynamicWorkflowRunOp::new(Arc::clone(&service))));
     op_service.register_kernel_op(Arc::new(DynamicWorkflowCancelOp::new(Arc::clone(&service))));
     op_service.register_kernel_op(Arc::new(DynamicWorkflowResumeOp::new(Arc::clone(&service))));

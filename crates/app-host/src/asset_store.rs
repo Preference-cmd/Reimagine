@@ -253,6 +253,39 @@ impl AssetStore {
         Ok(record)
     }
 
+    /// Every asset record in file order (oldest first).
+    ///
+    /// A record is appended one line at a time, so a trailing line without a
+    /// newline is an interrupted append and is ignored; unparseable lines are
+    /// skipped rather than failing the listing.
+    pub async fn list(&self) -> Result<Vec<AssetRecord>, Diagnostic> {
+        let jsonl_path = self.assets_jsonl_path();
+        if !jsonl_path.exists() {
+            return Ok(Vec::new());
+        }
+        let content = tokio::fs::read_to_string(&jsonl_path).await.map_err(|e| {
+            asset_internal_error(
+                "IO",
+                format!("failed to read `{}`: {e}", jsonl_path.display()),
+            )
+        })?;
+        let completed = match content.rfind('\n') {
+            Some(last_nl) => &content[..=last_nl],
+            None => "",
+        };
+        let mut records = Vec::new();
+        for line in completed.lines() {
+            let line = line.trim();
+            if line.is_empty() {
+                continue;
+            }
+            if let Ok(record) = serde_json::from_str::<AssetRecord>(line) {
+                records.push(record);
+            }
+        }
+        Ok(records)
+    }
+
     /// Read an asset record by AssetId synchronously.
     pub fn get_asset_sync(&self, id: &AssetId) -> Result<Option<AssetRecord>, Diagnostic> {
         let jsonl_path = self.assets_jsonl_path();

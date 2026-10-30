@@ -208,6 +208,83 @@ impl KernelOp for AssetImportOp {
     }
 }
 
+/// The built-in `asset.list` kernel operation.
+pub struct AssetListOp {
+    spec: OperationSpec,
+    paths: AppPaths,
+}
+
+impl AssetListOp {
+    pub fn new(paths: AppPaths) -> Self {
+        Self {
+            spec: OperationSpec {
+                name: "asset.list".to_owned(),
+                description: "List assets imported into the project, newest first".to_owned(),
+                input_schema: serde_json::json!({
+                    "type": "object",
+                    "properties": {},
+                    "additionalProperties": false
+                }),
+                output_schema: serde_json::json!({
+                    "type": "object",
+                    "properties": {
+                        "assets": {
+                            "type": "array",
+                            "items": {
+                                "type": "object",
+                                "properties": {
+                                    "id": { "type": "string" },
+                                    "media_type": { "type": "string" },
+                                    "size": { "type": "integer", "minimum": 0 },
+                                    "origin": { "type": "string" }
+                                },
+                                "required": ["id", "media_type", "size", "origin"],
+                                "additionalProperties": false
+                            }
+                        }
+                    },
+                    "required": ["assets"],
+                    "additionalProperties": false,
+                    "examples": [{ "assets": [] }]
+                }),
+                annotations: OperationAnnotations {
+                    read_only: true,
+                    destructive: false,
+                    idempotent: true,
+                    deterministic: true,
+                    open_world: false,
+                },
+            },
+            paths,
+        }
+    }
+}
+
+#[async_trait]
+impl KernelOp for AssetListOp {
+    fn spec(&self) -> &OperationSpec {
+        &self.spec
+    }
+
+    async fn invoke(&self, call: KernelCall) -> Result<Value, Diagnostic> {
+        let store = AssetStore::new(self.paths.project_dir(call.project_id.as_str()));
+        let mut records = store.list().await?;
+        records.reverse();
+        let assets: Vec<Value> = records
+            .iter()
+            .map(|record| {
+                serde_json::json!({
+                    "id": record.id.as_str(),
+                    "media_type": record.media_type.as_str(),
+                    "size": record.size,
+                    "origin": record.origin.as_str(),
+                })
+            })
+            .collect();
+        Ok(serde_json::json!({ "assets": assets }))
+    }
+}
+
 /// Provider of an operation: kernel or a domain mod.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
@@ -283,6 +360,8 @@ impl OperationService {
         let mut ops: HashMap<String, Arc<dyn KernelOp>> = HashMap::new();
         let import_op = Arc::new(AssetImportOp::new());
         ops.insert(import_op.spec().name.clone(), import_op);
+        let list_op = Arc::new(AssetListOp::new(paths.clone()));
+        ops.insert(list_op.spec().name.clone(), list_op);
 
         Self {
             paths,

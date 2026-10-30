@@ -133,6 +133,26 @@ impl Drop for RunTransition<'_> {
     }
 }
 
+/// Summary of one dynamic workflow document, for listing.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct DynamicWorkflowSummary {
+    pub id: DynamicWorkflowId,
+    pub name: String,
+    pub version: u64,
+    pub step_count: usize,
+}
+
+impl DynamicWorkflowSummary {
+    fn of(document: &DynamicWorkflowDocument) -> Self {
+        Self {
+            id: document.id.clone(),
+            name: document.name.clone(),
+            version: document.version,
+            step_count: document.workflow.steps.len(),
+        }
+    }
+}
+
 /// Owns dynamic workflow documents and schedules their batch runs.
 pub struct DynamicWorkflowService {
     paths: AppPaths,
@@ -218,9 +238,12 @@ impl DynamicWorkflowService {
     }
 
     fn workflow_path(&self, project_id: &ProjectId, id: &DynamicWorkflowId) -> PathBuf {
-        self.project_dir(project_id)
-            .join("dynamic_workflows")
+        self.workflows_dir(project_id)
             .join(format!("{}.json", id.as_str()))
+    }
+
+    fn workflows_dir(&self, project_id: &ProjectId) -> PathBuf {
+        self.project_dir(project_id).join("dynamic_workflows")
     }
 
     fn run_path(&self, project_id: &ProjectId, run_id: &RunId) -> PathBuf {
@@ -270,6 +293,49 @@ impl DynamicWorkflowService {
         read_document(&path, "dynamic workflow")
             .await
             .map_err(io_error)
+    }
+
+    /// Summaries of every dynamic workflow document in `project_id`, sorted
+    /// by id.
+    ///
+    /// A missing `dynamic_workflows/` directory lists nothing. An unreadable
+    /// document is skipped so one bad file does not hide the rest.
+    pub async fn list(
+        &self,
+        project_id: &ProjectId,
+    ) -> DynamicWorkflowResult<Vec<DynamicWorkflowSummary>> {
+        let dir = self.workflows_dir(project_id);
+        let mut entries = match tokio::fs::read_dir(&dir).await {
+            Ok(entries) => entries,
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(Vec::new()),
+            Err(error) => {
+                return Err(dynamic_workflow_internal_error(
+                    "IO",
+                    format!("read dynamic workflow dir `{}`: {error}", dir.display()),
+                ));
+            }
+        };
+
+        let mut summaries = Vec::new();
+        while let Some(entry) = entries.next_entry().await.map_err(|error| {
+            dynamic_workflow_internal_error("IO", format!("read dynamic workflow dir: {error}"))
+        })? {
+            let path = entry.path();
+            if path.extension().and_then(|extension| extension.to_str()) != Some("json") {
+                continue;
+            }
+            match read_document::<DynamicWorkflowDocument>(&path, "dynamic workflow").await {
+                Ok(Some(document)) => summaries.push(DynamicWorkflowSummary::of(&document)),
+                Ok(None) => {}
+                Err(error) => tracing::warn!(
+                    path = %path.display(),
+                    error = %error,
+                    "skipping unreadable dynamic workflow document"
+                ),
+            }
+        }
+        summaries.sort_by(|a, b| a.id.as_str().cmp(b.id.as_str()));
+        Ok(summaries)
     }
 
     /// Create a run document and start executing it in the background.

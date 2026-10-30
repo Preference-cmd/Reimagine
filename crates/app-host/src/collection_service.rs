@@ -22,6 +22,26 @@ use crate::{AppHostError, AppHostResult};
 
 type CollectionSessionHandle = Arc<AsyncMutex<DocumentSession<CollectionDocument>>>;
 
+/// The fields of a collection document that listing needs, without its slots.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct CollectionSummary {
+    pub id: CollectionId,
+    pub name: String,
+    pub version: u64,
+    pub slot_count: usize,
+}
+
+impl CollectionSummary {
+    fn of(document: &CollectionDocument) -> Self {
+        Self {
+            id: document.id().clone(),
+            name: document.name().to_owned(),
+            version: document.version().get(),
+            slot_count: document.slots().len(),
+        }
+    }
+}
+
 pub struct CollectionService {
     paths: AppPaths,
     sessions: RwLock<BTreeMap<(ProjectId, CollectionId), CollectionSessionHandle>>,
@@ -56,10 +76,58 @@ impl CollectionService {
         project_id: &ProjectId,
         collection_id: &CollectionId,
     ) -> std::path::PathBuf {
+        self.collections_dir(project_id)
+            .join(format!("{}.json", collection_id.as_str()))
+    }
+
+    fn collections_dir(&self, project_id: &ProjectId) -> std::path::PathBuf {
         self.paths
             .project_dir(project_id.as_str())
             .join("collections")
-            .join(format!("{}.json", collection_id.as_str()))
+    }
+
+    /// Summaries of every collection document in `project_id`, sorted by id.
+    ///
+    /// A missing `collections/` directory lists nothing. An unreadable
+    /// document is skipped so one bad file does not hide the rest.
+    pub async fn list(&self, project_id: &ProjectId) -> AppHostResult<Vec<CollectionSummary>> {
+        let dir = self.collections_dir(project_id);
+        let mut entries = match tokio::fs::read_dir(&dir).await {
+            Ok(entries) => entries,
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(Vec::new()),
+            Err(error) => {
+                return Err(AppHostError::Io {
+                    path: dir,
+                    message: error.to_string(),
+                });
+            }
+        };
+
+        let mut summaries = Vec::new();
+        while let Some(entry) = entries
+            .next_entry()
+            .await
+            .map_err(|error| AppHostError::Io {
+                path: dir.clone(),
+                message: error.to_string(),
+            })?
+        {
+            let path = entry.path();
+            if path.extension().and_then(|extension| extension.to_str()) != Some("json") {
+                continue;
+            }
+            match read_document::<CollectionDocument>(&path, "collection").await {
+                Ok(Some(document)) => summaries.push(CollectionSummary::of(&document)),
+                Ok(None) => {}
+                Err(error) => tracing::warn!(
+                    path = %path.display(),
+                    error = %error,
+                    "skipping unreadable collection document"
+                ),
+            }
+        }
+        summaries.sort_by(|a, b| a.id.as_str().cmp(b.id.as_str()));
+        Ok(summaries)
     }
 
     /// Create and persist a new collection document, initializing its session.

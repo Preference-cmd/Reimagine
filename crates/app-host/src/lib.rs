@@ -65,17 +65,18 @@ pub use artifact_access::{
 pub use asset_store::{AssetStore, resolve_media_type};
 pub use board_service::BoardService;
 pub use collection_ops::{
-    CollectionCreateOp, CollectionGetOp, CollectionRedoOp, CollectionSetSlotOp, CollectionUndoOp,
-    register_collection_ops,
+    CollectionCreateOp, CollectionGetOp, CollectionListOp, CollectionRedoOp, CollectionSetSlotOp,
+    CollectionUndoOp, register_collection_ops,
 };
-pub use collection_service::CollectionService;
+pub use collection_service::{CollectionService, CollectionSummary};
 pub use dynamic_workflow_ops::{
     DynamicWorkflowCancelOp, DynamicWorkflowCreateOp, DynamicWorkflowGetOp,
-    DynamicWorkflowGetRunOp, DynamicWorkflowListRunsOp, DynamicWorkflowResumeOp,
-    DynamicWorkflowRunOp, register_dynamic_workflow_ops,
+    DynamicWorkflowGetRunOp, DynamicWorkflowListOp, DynamicWorkflowListRunsOp,
+    DynamicWorkflowResumeOp, DynamicWorkflowRunOp, register_dynamic_workflow_ops,
 };
 pub use dynamic_workflow_service::{
     DYNAMIC_WORKFLOW_SLOT_CONCURRENCY, DynamicWorkflowResult, DynamicWorkflowService,
+    DynamicWorkflowSummary,
 };
 pub use error::{AppHostError, AppHostResult};
 pub use error_code::AppHostErrorCode;
@@ -85,7 +86,7 @@ pub use error_code::{worker_switch_error_code, worker_switch_error_details};
 pub use node_catalog::NodeCatalogAlignment;
 pub use node_catalog::NodeCatalogService;
 pub use operation_service::{
-    AssetImportOp, InvokeRequest, InvokeResult, KernelCall, KernelOp, OperationInfo,
+    AssetImportOp, AssetListOp, InvokeRequest, InvokeResult, KernelCall, KernelOp, OperationInfo,
     OperationProvider, OperationService, is_valid_preview_key, validate_preview_key,
 };
 pub use project_service::ProjectService;

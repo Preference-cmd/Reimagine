@@ -1,6 +1,7 @@
 //! Kernel operations for collections:
 //! - `collection.create`
 //! - `collection.get`
+//! - `collection.list`
 //! - `collection.set_slot`
 //! - `collection.undo`
 //! - `collection.redo`
@@ -306,6 +307,85 @@ impl KernelOp for CollectionGetOp {
             "version": doc.version().get(),
             "slots": slots,
         }))
+    }
+}
+
+/// The built-in `collection.list` kernel operation.
+pub struct CollectionListOp {
+    spec: OperationSpec,
+    collection_service: Arc<CollectionService>,
+}
+
+impl CollectionListOp {
+    pub fn new(collection_service: Arc<CollectionService>) -> Self {
+        Self {
+            spec: OperationSpec {
+                name: "collection.list".to_owned(),
+                description: "List the project's collection documents".to_owned(),
+                input_schema: json!({
+                    "type": "object",
+                    "properties": {},
+                    "additionalProperties": false
+                }),
+                output_schema: json!({
+                    "type": "object",
+                    "properties": {
+                        "collections": {
+                            "type": "array",
+                            "items": {
+                                "type": "object",
+                                "properties": {
+                                    "id": { "type": "string" },
+                                    "name": { "type": "string" },
+                                    "version": { "type": "integer", "minimum": 0 },
+                                    "slot_count": { "type": "integer", "minimum": 0 }
+                                },
+                                "required": ["id", "name", "version", "slot_count"],
+                                "additionalProperties": false
+                            }
+                        }
+                    },
+                    "required": ["collections"],
+                    "additionalProperties": false,
+                    "examples": [{ "collections": [] }]
+                }),
+                annotations: OperationAnnotations {
+                    read_only: true,
+                    destructive: false,
+                    idempotent: true,
+                    deterministic: true,
+                    open_world: false,
+                },
+            },
+            collection_service,
+        }
+    }
+}
+
+#[async_trait]
+impl KernelOp for CollectionListOp {
+    fn spec(&self) -> &OperationSpec {
+        &self.spec
+    }
+
+    async fn invoke(&self, call: KernelCall) -> Result<Value, Diagnostic> {
+        let summaries = self
+            .collection_service
+            .list(&call.project_id)
+            .await
+            .map_err(|error| collection_internal_error("LIST_FAILED", error.to_string()))?;
+        let collections: Vec<Value> = summaries
+            .iter()
+            .map(|summary| {
+                json!({
+                    "id": summary.id.as_str(),
+                    "name": summary.name.as_str(),
+                    "version": summary.version,
+                    "slot_count": summary.slot_count,
+                })
+            })
+            .collect();
+        Ok(json!({ "collections": collections }))
     }
 }
 
@@ -633,6 +713,9 @@ pub fn register_collection_ops(
         Arc::clone(&board_service),
     )));
     op_service.register_kernel_op(Arc::new(CollectionGetOp::new(Arc::clone(
+        &collection_service,
+    ))));
+    op_service.register_kernel_op(Arc::new(CollectionListOp::new(Arc::clone(
         &collection_service,
     ))));
     op_service.register_kernel_op(Arc::new(CollectionSetSlotOp::new(Arc::clone(
