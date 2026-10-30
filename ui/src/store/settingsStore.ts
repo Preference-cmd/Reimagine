@@ -20,6 +20,9 @@ type SettingsState = {
   // Shortcuts
   cmdPaletteKey: "⌘P" | "⌘K";
 
+  // Shell
+  sidebarCollapsed: boolean;
+
   // Runtime
   backend: "Burn";
   device: "auto" | "cpu" | "gpu0" | "gpu1";
@@ -40,6 +43,7 @@ type SettingsState = {
   setGridStyle: (v: "dots" | "lines" | "none") => void;
   setMinimap: (v: boolean) => void;
   setCmdPaletteKey: (v: "⌘P" | "⌘K") => void;
+  setSidebarCollapsed: (v: boolean) => void;
   setBackend: (v: "Burn") => void;
   setDevice: (v: "auto" | "cpu" | "gpu0" | "gpu1") => void;
   setMemoryBudget: (v: "2GB" | "4GB" | "8GB" | "16GB") => void;
@@ -70,6 +74,7 @@ function persistSettings(state: SettingsState) {
     setGridStyle: _setGridStyle,
     setMinimap: _setMinimap,
     setCmdPaletteKey: _setCmdPaletteKey,
+    setSidebarCollapsed: _setSidebarCollapsed,
     setBackend: _setBackend,
     setDevice: _setDevice,
     setMemoryBudget: _setMemoryBudget,
@@ -90,6 +95,7 @@ const DEFAULTS: Omit<
   | "setGridStyle"
   | "setMinimap"
   | "setCmdPaletteKey"
+  | "setSidebarCollapsed"
   | "setBackend"
   | "setDevice"
   | "setMemoryBudget"
@@ -104,6 +110,7 @@ const DEFAULTS: Omit<
   gridStyle: "dots",
   minimap: true,
   cmdPaletteKey: "⌘P",
+  sidebarCollapsed: false,
   backend: "Burn",
   device: "auto",
   memoryBudget: "4GB",
@@ -144,6 +151,10 @@ export const useSettingsStore = create<SettingsState>()((set, get) => {
     },
     setCmdPaletteKey: (v) => {
       set({ cmdPaletteKey: v });
+      persist();
+    },
+    setSidebarCollapsed: (v) => {
+      set({ sidebarCollapsed: v });
       persist();
     },
     setBackend: (v) => {

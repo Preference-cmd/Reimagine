@@ -1,6 +1,5 @@
 import { describe, test, expect, vi, beforeEach, afterEach } from "vitest";
 import { act, render, screen, fireEvent, waitFor } from "./test-utils";
-import { CollectionsView } from "../src/components/layout/CollectionsView";
 import { CollectionView } from "../src/components/layout/CollectionView";
 import * as ipc from "../src/ipc";
 import { useBoardStore } from "../src/store/board";
@@ -30,10 +29,6 @@ vi.mock("@tanstack/react-router", () => ({
   useParams: () => mockParams,
 }));
 
-vi.mock("@tauri-apps/plugin-dialog", () => ({
-  open: vi.fn(),
-}));
-
 describe("Collections and Dynamic Workflow UI", () => {
   beforeEach(() => {
     vi.clearAllMocks();
@@ -49,54 +44,6 @@ describe("Collections and Dynamic Workflow UI", () => {
 
   afterEach(() => {
     vi.restoreAllMocks();
-  });
-
-  test("import flow calls asset.import then collection.create with the returned ids", async () => {
-    const dialog = await import("@tauri-apps/plugin-dialog");
-    vi.mocked(dialog.open).mockResolvedValue(["/Users/test/file1.txt", "/Users/test/file2.txt"]);
-
-    const opInvokeSpy = vi
-      .spyOn(ipc, "opInvoke")
-      .mockImplementation(async (_proj, name, _input) => {
-        if (name === "asset.import") {
-          return {
-            step: {} as unknown as never,
-            output: { assets: ["ast_alpha", "ast_beta"] },
-          };
-        }
-        if (name === "collection.create") {
-          return {
-            step: {} as unknown as never,
-            output: { collection_id: "col_new_456", board_item_id: "item_789" },
-          };
-        }
-        return { step: {} as unknown as never, output: {} };
-      });
-
-    render(<CollectionsView />);
-
-    const importBtn = screen.getByRole("button", { name: /^import$/i });
-    fireEvent.click(importBtn);
-
-    await waitFor(() => {
-      expect(dialog.open).toHaveBeenCalledWith({
-        multiple: true,
-        directory: false,
-      });
-    });
-
-    await waitFor(() => {
-      expect(opInvokeSpy).toHaveBeenCalledWith("default", "asset.import", {
-        paths: ["/Users/test/file1.txt", "/Users/test/file2.txt"],
-      });
-      expect(opInvokeSpy).toHaveBeenCalledWith("default", "collection.create", {
-        name: expect.stringContaining("Collection"),
-        assets: ["ast_alpha", "ast_beta"],
-      });
-      expect(mockNavigate).toHaveBeenCalledWith({
-        to: "/collections/col_new_456",
-      });
-    });
   });
 
   test("the view renders slots with media type and text snippet via asset URL", async () => {
@@ -401,7 +348,7 @@ describe("Collections and Dynamic Workflow UI", () => {
     });
 
     await waitFor(() => {
-      expect(mockNavigate).toHaveBeenCalledWith({ to: "/collections" });
+      expect(mockNavigate).toHaveBeenCalledWith({ to: "/library" });
     });
   });
 

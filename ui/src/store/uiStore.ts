@@ -33,13 +33,10 @@ export type ContextMenuState = {
 export type RenameTarget = { id: string; title: string } | null;
 
 type UIState = {
-  // ── Sidebar ─────────────────────────────────────────────
-  sidebarWidth: number;
-  setSidebarWidth: (width: number) => void;
-
-  // ── Sidebar progress ────────────────────────────────────
-  sidebarProgress: number;
-  setSidebarProgress: (progress: number) => void;
+  // ── Session panel ───────────────────────────────────────
+  sessionPanelOpen: boolean;
+  setSessionPanelOpen: (open: boolean) => void;
+  toggleSessionPanel: () => void;
 
   // ── Properties drawer ───────────────────────────────────
   propertiesDrawerOpen: boolean;
@@ -66,38 +63,11 @@ type UIState = {
   finishRename: () => void;
 };
 
-const STORAGE_KEY = "reimagine:sidebar-width";
-const DEFAULT_WIDTH = 220;
-
-function loadSidebarWidth(): number {
-  try {
-    const raw = localStorage.getItem(STORAGE_KEY);
-    if (raw !== null) {
-      const n = Number(raw);
-      if (Number.isFinite(n) && n >= 120 && n <= 400) return Math.round(n);
-    }
-  } catch {
-    /* ignore */
-  }
-  return DEFAULT_WIDTH;
-}
-
 export const useUIStore = create<UIState>()((set) => ({
-  // Sidebar
-  sidebarWidth: loadSidebarWidth(),
-  setSidebarWidth: (width) => {
-    const rounded = Math.round(width);
-    try {
-      localStorage.setItem(STORAGE_KEY, String(rounded));
-    } catch {
-      /* ignore */
-    }
-    set({ sidebarWidth: rounded });
-  },
-
-  // Sidebar progress
-  sidebarProgress: 0,
-  setSidebarProgress: (progress) => set({ sidebarProgress: progress }),
+  // Session panel
+  sessionPanelOpen: true,
+  setSessionPanelOpen: (open: boolean) => set({ sessionPanelOpen: open }),
+  toggleSessionPanel: () => set((state) => ({ sessionPanelOpen: !state.sessionPanelOpen })),
 
   // Properties drawer
   propertiesDrawerOpen: false,

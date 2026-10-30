@@ -86,6 +86,11 @@ function tauriAvailable(): boolean {
   }
 }
 
+/** Public shell check: false in a plain browser preview, true in Tauri. */
+export function isTauri(): boolean {
+  return tauriAvailable();
+}
+
 /** Best-effort detection of "Tauri isn't here" errors from @tauri-apps/api. */
 function isTauriUnavailable(error: unknown): boolean {
   if (!error || typeof error !== "object") return false;

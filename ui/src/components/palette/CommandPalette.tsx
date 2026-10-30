@@ -6,6 +6,7 @@ import { cn } from "@/lib/utils";
 import { useUIStore } from "@/store/uiStore";
 import { useNodeRegistryStore } from "@/store/nodeRegistry";
 import { useRuntimeStore } from "@/store/runtime";
+import { useSettingsStore } from "@/store/settingsStore";
 import { saveWorkflowNow } from "@/hooks/useWorkflowPersistence";
 import { createNodeAt } from "@/lib/nodeFactory";
 import { filterEntries, type PaletteEntry } from "@/lib/palette";
@@ -128,9 +129,11 @@ export function CommandPalette() {
       case "add-node":
         openNodePalette(flowViewportCenter());
         return;
-      case "toggle-panel":
-        useUIStore.getState().setSidebarWidth(220);
+      case "toggle-panel": {
+        const settings = useSettingsStore.getState();
+        settings.setSidebarCollapsed(!settings.sidebarCollapsed);
         return;
+      }
       case "run-workflow":
         startRun();
         return;
@@ -184,13 +187,13 @@ export function CommandPalette() {
       <div
         role="dialog"
         aria-label="Command palette"
-        className="panel-raised w-[min(440px,calc(100vw-2rem))] overflow-hidden rounded-2xl"
+        className="w-[min(440px,calc(100vw-2rem))] overflow-hidden rounded-2xl bg-surface shadow-[var(--shadow-bezel),var(--shadow-3),var(--shadow-hi)]"
       >
-        <div className="flex items-center gap-2 border-b border-outline px-3.5 py-3">
+        <div className="flex items-center gap-2 border-b border-hair px-3.5 py-3">
           {palette.kind === "node" ? (
-            <Plus className="h-4 w-4 shrink-0 text-on-surface-variant" />
+            <Plus className="h-4 w-4 shrink-0 text-fg3" />
           ) : (
-            <Search className="h-4 w-4 shrink-0 text-on-surface-variant" />
+            <Search className="h-4 w-4 shrink-0 text-fg3" />
           )}
           <input
             ref={inputRef}
@@ -198,13 +201,13 @@ export function CommandPalette() {
             onChange={(event) => setQuery(event.target.value)}
             onKeyDown={onKeyDown}
             placeholder={palette.kind === "node" ? "Search node types…" : "Search commands…"}
-            className="min-w-0 flex-1 bg-transparent text-body-sm text-on-surface placeholder:text-on-surface-variant focus:outline-none"
+            className="min-w-0 flex-1 bg-transparent text-body-sm text-fg placeholder:text-fg4 focus:outline-none"
           />
           {palette.kind === "node" && (
             <button
               type="button"
               onClick={backToCommands}
-              className="shrink-0 rounded-md bg-control-hover px-2 py-1 text-caption font-medium text-on-surface-variant transition-colors hover:text-on-surface"
+              className="shrink-0 rounded-md bg-hover px-2 py-1 text-caption font-medium text-fg2 transition-colors hover:text-fg"
             >
               ← Commands
             </button>
@@ -213,7 +216,7 @@ export function CommandPalette() {
 
         <ul ref={listRef} className="scrollbar-hide max-h-80 overflow-y-auto p-1.5">
           {visible.length === 0 && (
-            <li className="px-2.5 py-2 text-caption text-on-surface-variant">No matches.</li>
+            <li className="px-2.5 py-2 text-caption text-fg3">No matches.</li>
           )}
           {visible.map((entry, index) => {
             const Icon =
@@ -226,32 +229,28 @@ export function CommandPalette() {
                   onMouseEnter={() => setActiveIndex(index)}
                   onClick={() => runCommand(entry.id)}
                   className={cn(
-                    "flex w-full cursor-pointer items-center gap-2.5 rounded-lg px-2.5 py-2 text-left transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary/30",
-                    index === activeIndex && "bg-control-hover",
+                    "flex w-full cursor-pointer items-center gap-2.5 rounded-lg px-2.5 py-2 text-left transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/30",
+                    index === activeIndex && "bg-hover",
                   )}
                 >
                   <span
                     className={cn(
                       "flex h-6 w-6 shrink-0 items-center justify-center rounded-md",
-                      index === activeIndex
-                        ? "bg-primary text-on-primary"
-                        : "bg-control-hover text-on-surface-variant",
+                      index === activeIndex ? "bg-accent text-on-accent" : "bg-hover text-fg2",
                     )}
                   >
                     <Icon className="h-3.5 w-3.5" />
                   </span>
                   <span className="min-w-0 flex-1">
-                    <span className="block truncate text-body-sm font-medium text-on-surface">
+                    <span className="block truncate text-body-sm font-medium text-fg">
                       {entry.label}
                     </span>
                     {entry.hint && (
-                      <span className="block truncate text-caption text-on-surface-variant">
-                        {entry.hint}
-                      </span>
+                      <span className="block truncate text-caption text-fg3">{entry.hint}</span>
                     )}
                   </span>
                   {entry.shortcut && (
-                    <span className="flex shrink-0 items-center gap-1 text-caption text-on-surface-variant/70">
+                    <span className="flex shrink-0 items-center gap-1 text-caption text-fg4">
                       <CornerDownLeft className="h-3 w-3" />
                       {entry.shortcut}
                     </span>

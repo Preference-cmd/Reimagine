@@ -133,13 +133,13 @@ export function CollectionView() {
   const [actionError, setActionError] = useState<string | null>(null);
   const error = collectionError ?? actionError;
 
-  // On project switch: reset state and navigate back to /collections
+  // On project switch: reset state and navigate back to the library
   const prevProjectIdRef = useRef(activeProjectId);
   useEffect(() => {
     if (prevProjectIdRef.current !== activeProjectId) {
       prevProjectIdRef.current = activeProjectId;
       setActionError(null);
-      void navigate({ to: "/collections" });
+      void navigate({ to: "/library" });
     }
   }, [activeProjectId, navigate]);
 
@@ -170,11 +170,11 @@ export function CollectionView() {
       {/* Top back navigation */}
       <div className="mb-4">
         <Link
-          to="/collections"
+          to="/library"
           className="inline-flex items-center gap-1.5 text-caption font-medium text-on-surface-variant hover:text-on-surface"
         >
           <ArrowLeft className="h-3.5 w-3.5" />
-          {m["collections.backToCollections"]()}
+          {m["collections.backToLibrary"]()}
         </Link>
       </div>
 

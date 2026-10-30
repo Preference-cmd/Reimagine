@@ -10,12 +10,9 @@
 
 import { Route as rootRouteImport } from "./routes/__root"
 import { Route as IndexRouteImport } from "./routes/index"
-import { Route as AssetsRouteImport } from "./routes/assets"
+import { Route as LibraryRouteImport } from "./routes/library"
 import { Route as ModelsRouteImport } from "./routes/models"
-import { Route as NewRouteImport } from "./routes/new"
-import { Route as RunsRouteImport } from "./routes/runs"
 import { Route as SettingsRouteImport } from "./routes/settings"
-import { Route as CollectionsIndexRouteImport } from "./routes/collections/index"
 import { Route as CollectionsIdRouteImport } from "./routes/collections/$id"
 
 const IndexRoute = IndexRouteImport.update({
@@ -23,9 +20,9 @@ const IndexRoute = IndexRouteImport.update({
   path: "/",
   getParentRoute: () => rootRouteImport,
 } as any)
-const AssetsRoute = AssetsRouteImport.update({
-  id: "/assets",
-  path: "/assets",
+const LibraryRoute = LibraryRouteImport.update({
+  id: "/library",
+  path: "/library",
   getParentRoute: () => rootRouteImport,
 } as any)
 const ModelsRoute = ModelsRouteImport.update({
@@ -33,24 +30,9 @@ const ModelsRoute = ModelsRouteImport.update({
   path: "/models",
   getParentRoute: () => rootRouteImport,
 } as any)
-const NewRoute = NewRouteImport.update({
-  id: "/new",
-  path: "/new",
-  getParentRoute: () => rootRouteImport,
-} as any)
-const RunsRoute = RunsRouteImport.update({
-  id: "/runs",
-  path: "/runs",
-  getParentRoute: () => rootRouteImport,
-} as any)
 const SettingsRoute = SettingsRouteImport.update({
   id: "/settings",
   path: "/settings",
-  getParentRoute: () => rootRouteImport,
-} as any)
-const CollectionsIndexRoute = CollectionsIndexRouteImport.update({
-  id: "/collections/",
-  path: "/collections/",
   getParentRoute: () => rootRouteImport,
 } as any)
 const CollectionsIdRoute = CollectionsIdRouteImport.update({
@@ -61,77 +43,41 @@ const CollectionsIdRoute = CollectionsIdRouteImport.update({
 
 export interface FileRoutesByFullPath {
   "/": typeof IndexRoute
-  "/assets": typeof AssetsRoute
+  "/library": typeof LibraryRoute
   "/models": typeof ModelsRoute
-  "/new": typeof NewRoute
-  "/runs": typeof RunsRoute
   "/settings": typeof SettingsRoute
   "/collections/$id": typeof CollectionsIdRoute
-  "/collections/": typeof CollectionsIndexRoute
 }
 export interface FileRoutesByTo {
   "/": typeof IndexRoute
-  "/assets": typeof AssetsRoute
+  "/library": typeof LibraryRoute
   "/models": typeof ModelsRoute
-  "/new": typeof NewRoute
-  "/runs": typeof RunsRoute
   "/settings": typeof SettingsRoute
   "/collections/$id": typeof CollectionsIdRoute
-  "/collections": typeof CollectionsIndexRoute
 }
 export interface FileRoutesById {
   __root__: typeof rootRouteImport
   "/": typeof IndexRoute
-  "/assets": typeof AssetsRoute
+  "/library": typeof LibraryRoute
   "/models": typeof ModelsRoute
-  "/new": typeof NewRoute
-  "/runs": typeof RunsRoute
   "/settings": typeof SettingsRoute
   "/collections/$id": typeof CollectionsIdRoute
-  "/collections/": typeof CollectionsIndexRoute
 }
 export interface FileRouteTypes {
   fileRoutesByFullPath: FileRoutesByFullPath
-  fullPaths:
-    | "/"
-    | "/assets"
-    | "/models"
-    | "/new"
-    | "/runs"
-    | "/settings"
-    | "/collections/$id"
-    | "/collections/"
+  fullPaths: "/" | "/library" | "/models" | "/settings" | "/collections/$id"
   fileRoutesByTo: FileRoutesByTo
-  to:
-    | "/"
-    | "/assets"
-    | "/models"
-    | "/new"
-    | "/runs"
-    | "/settings"
-    | "/collections/$id"
-    | "/collections"
+  to: "/" | "/library" | "/models" | "/settings" | "/collections/$id"
   id:
-    | "__root__"
-    | "/"
-    | "/assets"
-    | "/models"
-    | "/new"
-    | "/runs"
-    | "/settings"
-    | "/collections/$id"
-    | "/collections/"
+    "__root__" | "/" | "/library" | "/models" | "/settings" | "/collections/$id"
   fileRoutesById: FileRoutesById
 }
 export interface RootRouteChildren {
   IndexRoute: typeof IndexRoute
-  AssetsRoute: typeof AssetsRoute
+  LibraryRoute: typeof LibraryRoute
   ModelsRoute: typeof ModelsRoute
-  NewRoute: typeof NewRoute
-  RunsRoute: typeof RunsRoute
   SettingsRoute: typeof SettingsRoute
   CollectionsIdRoute: typeof CollectionsIdRoute
-  CollectionsIndexRoute: typeof CollectionsIndexRoute
 }
 
 declare module "@tanstack/react-router" {
@@ -143,11 +89,11 @@ declare module "@tanstack/react-router" {
       preLoaderRoute: typeof IndexRouteImport
       parentRoute: typeof rootRouteImport
     }
-    "/assets": {
-      id: "/assets"
-      path: "/assets"
-      fullPath: "/assets"
-      preLoaderRoute: typeof AssetsRouteImport
+    "/library": {
+      id: "/library"
+      path: "/library"
+      fullPath: "/library"
+      preLoaderRoute: typeof LibraryRouteImport
       parentRoute: typeof rootRouteImport
     }
     "/models": {
@@ -157,32 +103,11 @@ declare module "@tanstack/react-router" {
       preLoaderRoute: typeof ModelsRouteImport
       parentRoute: typeof rootRouteImport
     }
-    "/new": {
-      id: "/new"
-      path: "/new"
-      fullPath: "/new"
-      preLoaderRoute: typeof NewRouteImport
-      parentRoute: typeof rootRouteImport
-    }
-    "/runs": {
-      id: "/runs"
-      path: "/runs"
-      fullPath: "/runs"
-      preLoaderRoute: typeof RunsRouteImport
-      parentRoute: typeof rootRouteImport
-    }
     "/settings": {
       id: "/settings"
       path: "/settings"
       fullPath: "/settings"
       preLoaderRoute: typeof SettingsRouteImport
-      parentRoute: typeof rootRouteImport
-    }
-    "/collections/": {
-      id: "/collections/"
-      path: "/collections"
-      fullPath: "/collections/"
-      preLoaderRoute: typeof CollectionsIndexRouteImport
       parentRoute: typeof rootRouteImport
     }
     "/collections/$id": {
@@ -197,13 +122,10 @@ declare module "@tanstack/react-router" {
 
 const rootRouteChildren: RootRouteChildren = {
   IndexRoute: IndexRoute,
-  AssetsRoute: AssetsRoute,
+  LibraryRoute: LibraryRoute,
   ModelsRoute: ModelsRoute,
-  NewRoute: NewRoute,
-  RunsRoute: RunsRoute,
   SettingsRoute: SettingsRoute,
   CollectionsIdRoute: CollectionsIdRoute,
-  CollectionsIndexRoute: CollectionsIndexRoute,
 }
 export const routeTree = rootRouteImport
   ._addFileChildren(rootRouteChildren)

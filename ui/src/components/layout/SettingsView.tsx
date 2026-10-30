@@ -66,11 +66,6 @@ const SETTINGS_CONTENT: Record<string, SettingsGroup[]> = {
           type: "segment",
           options: ["settings.light", "settings.dark"],
         },
-      ],
-    },
-    {
-      labelKey: "settings.appearance",
-      items: [
         {
           id: "grid-style",
           labelKey: "settings.grid-style",
@@ -155,7 +150,7 @@ const SETTINGS_CONTENT: Record<string, SettingsGroup[]> = {
       ],
     },
   ],
-  models: [
+  modelManagement: [
     {
       labelKey: "settings.modelManagement",
       items: [
@@ -177,13 +172,44 @@ const SETTINGS_CONTENT: Record<string, SettingsGroup[]> = {
   ],
 };
 
+type SettingsNavItem = { id: string; labelKey: string };
+type SettingsNavGroup = { labelKey: string; items: SettingsNavItem[] };
+
+const SETTINGS_NAV: SettingsNavGroup[] = [
+  {
+    labelKey: "settings.groupPersonal",
+    items: [
+      { id: "general", labelKey: "settings.general" },
+      { id: "appearance", labelKey: "settings.appearance" },
+      { id: "shortcuts", labelKey: "settings.shortcuts" },
+      { id: "runtime", labelKey: "settings.runtime" },
+      { id: "workspace", labelKey: "settings.workspace" },
+      { id: "modelManagement", labelKey: "settings.modelManagement" },
+    ],
+  },
+  {
+    labelKey: "settings.groupIntegration",
+    items: [
+      { id: "plugins", labelKey: "settings.plugins" },
+      { id: "browser", labelKey: "settings.browser" },
+    ],
+  },
+  {
+    labelKey: "settings.groupCoding",
+    items: [{ id: "hooks", labelKey: "settings.hooks" }],
+  },
+];
+
 const SECTION_LABEL_KEYS: Record<string, string> = {
   general: "settings.general",
   appearance: "settings.appearance",
   shortcuts: "settings.shortcuts",
   runtime: "settings.runtime",
   workspace: "settings.workspace",
-  models: "settings.modelManagement",
+  modelManagement: "settings.modelManagement",
+  plugins: "settings.plugins",
+  browser: "settings.browser",
+  hooks: "settings.hooks",
 };
 
 type SettingsViewProps = {
@@ -192,11 +218,12 @@ type SettingsViewProps = {
 };
 
 /**
- * SettingsView — Codex-style content-only settings page.
- * Light gray background, large title, card sections with group headers.
+ * SettingsView — a grouped section rail beside card sections. The active
+ * section lives in the UI store so it survives route changes.
  */
 export function SettingsView({ themeMode, onThemeModeChange }: SettingsViewProps) {
   const settingsNavId = useUIStore((s) => s.settingsNavId);
+  const setSettingsNavId = useUIStore((s) => s.setSettingsNavId);
   const activeSection = settingsNavId ?? "general";
   const groups = SETTINGS_CONTENT[activeSection] ?? [];
   const sectionLabelKey = SECTION_LABEL_KEYS[activeSection] ?? "settings.general";
@@ -249,34 +276,74 @@ export function SettingsView({ themeMode, onThemeModeChange }: SettingsViewProps
   };
 
   return (
-    <div className="min-h-0 flex-1 overflow-y-auto bg-background">
-      <div className="max-w-[750px] mx-auto px-10 py-8">
-        {/* Large title */}
-        <h1 className="mb-8 text-headline-lg font-bold tracking-tight text-on-surface">
-          {resolveLabel(sectionLabelKey)}
-        </h1>
-
-        {/* Settings groups as cards */}
-        {groups.map((group, gi) => (
-          <section key={`${group.labelKey}-${gi}`} className="mb-6">
-            <h2 className="mb-2 text-body-sm font-semibold text-on-surface">
+    <div className="flex min-h-0 flex-1 overflow-hidden bg-ground">
+      <nav
+        aria-label={resolveLabel("shell.settings")}
+        className="w-[200px] shrink-0 overflow-y-auto border-r border-hair-soft px-3 py-6"
+      >
+        {SETTINGS_NAV.map((group) => (
+          <div key={group.labelKey} className="mb-5 last:mb-0">
+            <div className="px-2.5 pb-1.5 text-xs font-medium tracking-[0.02em] text-fg4">
               {resolveLabel(group.labelKey)}
-            </h2>
-            <div className="overflow-hidden rounded-xl border border-outline bg-surface">
-              {group.items.map((item, idx) => (
-                <div key={item.id} className={cn(idx > 0 && "border-t border-outline")}>
-                  <SettingRow
-                    item={item}
-                    form={form}
-                    themeMode={themeMode}
-                    onThemeModeChange={onThemeModeChange}
-                    resolveLabel={resolveLabel}
-                  />
-                </div>
-              ))}
             </div>
-          </section>
+            <div className="space-y-0.5">
+              {group.items.map((item) => {
+                const active = item.id === activeSection;
+                return (
+                  <button
+                    key={item.id}
+                    type="button"
+                    aria-current={active ? "page" : undefined}
+                    onClick={() => setSettingsNavId(item.id)}
+                    className={cn(
+                      "flex h-8 w-full cursor-pointer items-center rounded-sm px-2.5 text-left text-ui transition-colors duration-150 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent",
+                      active
+                        ? "bg-active font-medium text-fg"
+                        : "text-fg2 hover:bg-hover hover:text-fg",
+                    )}
+                  >
+                    <span className="min-w-0 flex-1 truncate">{resolveLabel(item.labelKey)}</span>
+                  </button>
+                );
+              })}
+            </div>
+          </div>
         ))}
+      </nav>
+
+      <div className="min-h-0 min-w-0 flex-1 overflow-y-auto">
+        <div className="mx-auto w-full max-w-[760px] px-7 py-8">
+          {/* Large title */}
+          <h1 className="mb-8 text-headline-lg text-fg">{resolveLabel(sectionLabelKey)}</h1>
+
+          {/* Settings groups as cards */}
+          {groups.length === 0 ? (
+            <div className="rounded-xl border border-hair bg-surface px-5 py-10 text-center text-ui text-fg3">
+              {resolveLabel("common.empty")}
+            </div>
+          ) : (
+            groups.map((group, gi) => (
+              <section key={`${group.labelKey}-${gi}`} className="mb-6">
+                <h2 className="mb-2 text-body-sm font-semibold text-fg">
+                  {resolveLabel(group.labelKey)}
+                </h2>
+                <div className="overflow-hidden rounded-xl border border-hair bg-surface">
+                  {group.items.map((item, idx) => (
+                    <div key={item.id} className={cn(idx > 0 && "border-t border-hair-soft")}>
+                      <SettingRow
+                        item={item}
+                        form={form}
+                        themeMode={themeMode}
+                        onThemeModeChange={onThemeModeChange}
+                        resolveLabel={resolveLabel}
+                      />
+                    </div>
+                  ))}
+                </div>
+              </section>
+            ))
+          )}
+        </div>
       </div>
     </div>
   );
@@ -473,11 +540,9 @@ function SettingRow({
   return (
     <div className="flex items-center justify-between gap-4 px-5 py-3.5">
       <div className="min-w-0 flex-1">
-        <div className="text-body-sm font-medium text-on-surface">
-          {resolveLabel(item.labelKey)}
-        </div>
+        <div className="text-body-sm font-medium text-fg">{resolveLabel(item.labelKey)}</div>
         {item.descriptionKey && (
-          <div className="mt-0.5 text-caption leading-relaxed text-on-surface-variant">
+          <div className="mt-0.5 text-caption leading-relaxed text-fg3">
             {resolveLabel(item.descriptionKey)}
           </div>
         )}
@@ -487,7 +552,7 @@ function SettingRow({
         {item.type === "readonly" && (
           <div
             style={{ height: "32px", fontSize: "13px", padding: "0 10px" }}
-            className="inline-flex items-center rounded-md border border-outline bg-surface-container-low text-on-surface font-medium select-none"
+            className="inline-flex items-center rounded-md border border-hair bg-app text-fg2 font-medium select-none"
           >
             {resolveLabel("settings.burn")}
           </div>
@@ -500,13 +565,13 @@ function SettingRow({
             aria-checked={toggleValue ? "true" : "false"}
             onClick={handleToggle}
             className={cn(
-              "relative shrink-0 rounded-full transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-secondary/30",
-              toggleValue ? "bg-status-ready" : "bg-control-border",
+              "relative shrink-0 rounded-full transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent",
+              toggleValue ? "bg-accent" : "bg-hair-strong",
             )}
             style={{ width: "40px", height: "22px" }}
           >
             <span
-              className="absolute top-[2px] rounded-full bg-white shadow-sm transition-all"
+              className="absolute top-[2px] rounded-full bg-surface shadow-[0_0_0_1px_var(--color-hair-strong),var(--shadow-1)] transition-all"
               style={{
                 width: "18px",
                 height: "18px",
@@ -519,7 +584,7 @@ function SettingRow({
         {item.type === "select" && (
           <select
             style={{ height: "32px", fontSize: "13px", padding: "0 10px" }}
-            className="rounded-md border border-outline bg-surface text-on-surface outline-none focus-visible:border-secondary/30 focus-visible:ring-2 focus-visible:ring-secondary/10"
+            className="rounded-md border border-hair bg-surface text-fg outline-none focus-visible:border-accent-line focus-visible:ring-2 focus-visible:ring-accent/20"
             value={selectValue}
             onChange={(e) => handleSelect(e.target.value)}
           >
@@ -537,13 +602,13 @@ function SettingRow({
               type="button"
               onClick={() => setLangOpen(!langOpen)}
               style={{ height: "32px", padding: "0 10px", fontSize: "13px" }}
-              className="flex items-center gap-1.5 rounded-md border border-outline bg-surface font-medium text-on-surface hover:bg-control-hover transition-colors"
+              className="flex items-center gap-1.5 rounded-md border border-hair bg-surface font-medium text-fg transition-colors hover:bg-hover"
             >
               {resolveLabel(item.options[currentSegment])}
-              <span className="text-on-surface-variant text-[10px]">▾</span>
+              <span className="text-[10px] text-fg3">▾</span>
             </button>
             {langOpen && (
-              <div className="absolute right-0 top-full mt-1 z-50 min-w-[120px] rounded-md border border-outline bg-surface py-1 shadow-md">
+              <div className="absolute right-0 top-full mt-1 z-50 min-w-[120px] rounded-md border border-hair bg-surface py-1 shadow-[var(--shadow-3)]">
                 {item.options.map((opt, i) => (
                   <button
                     key={opt}
@@ -555,8 +620,8 @@ function SettingRow({
                     className={cn(
                       "w-full text-left px-3 py-1.5 text-[13px] transition-colors",
                       currentSegment === i
-                        ? "bg-surface-container-low text-on-surface font-medium"
-                        : "text-on-surface hover:bg-control-hover",
+                        ? "bg-active text-fg font-medium"
+                        : "text-fg hover:bg-hover",
                     )}
                   >
                     {resolveLabel(opt)}
@@ -569,7 +634,7 @@ function SettingRow({
 
         {item.type === "segment" && item.options && !isLanguage && (
           <div
-            className="flex rounded-md border border-outline/50 bg-surface-container-low"
+            className="flex rounded-md border border-hair-soft bg-app"
             style={{ padding: "2px" }}
           >
             {item.options.map((opt, i) => (
@@ -581,8 +646,8 @@ function SettingRow({
                 className={cn(
                   "flex-1 rounded font-medium transition-all",
                   currentSegment === i
-                    ? "bg-surface text-on-surface shadow-sm"
-                    : "text-on-surface-variant hover:text-on-surface hover:bg-control-hover",
+                    ? "bg-surface text-fg shadow-[var(--shadow-1)]"
+                    : "text-fg3 hover:bg-hover hover:text-fg",
                 )}
               >
                 {resolveLabel(opt)}

@@ -58,6 +58,12 @@
   --color-agent-line: rgba(176, 122, 16, 0.38);
   --color-agent-ink: #ffffff;
 
+  /* decorative macOS window lights, drawn only in the browser preview */
+  --color-window-close: #ff5f57;
+  --color-window-minimize: #febc2e;
+  --color-window-maximize: #28c840;
+  --color-window-light-ring: rgba(0, 0, 0, 0.12);
+
   /* depth: diffused and layered, never a hard drop */
   --shadow-hi: inset 0 1px 0 rgba(255, 255, 255, 0.9);
   --shadow-1: 0 1px 1px rgba(21, 21, 21, 0.03), 0 1px 3px rgba(21, 21, 21, 0.04);

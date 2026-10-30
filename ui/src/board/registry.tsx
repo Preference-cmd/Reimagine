@@ -260,7 +260,7 @@ export function RunRefCard({ kind, id, locked }: BoardCardProps) {
 
   return (
     <div
-      onClick={() => void navigate({ to: "/runs" })}
+      onClick={() => void navigate({ to: "/library", search: { type: "run" } })}
       className="flex h-full w-full cursor-pointer flex-col justify-between rounded-xl border border-outline bg-surface p-4 text-on-surface shadow-xs transition-all select-none hover:border-primary/50 hover:bg-surface-container-high hover:shadow-md"
       data-testid="run-ref-card"
     >

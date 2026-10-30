@@ -88,7 +88,7 @@ describe("Board card renderers and registry", () => {
     expect(screen.getByText(/id: item-wf/)).toBeInTheDocument();
   });
 
-  test("RunRefCard renders Run label and run id, and navigates to /runs on click", () => {
+  test("RunRefCard renders Run label and run id, and opens the library run filter", () => {
     render(
       <RunRefCard
         id="item-run"
@@ -101,7 +101,7 @@ describe("Board card renderers and registry", () => {
     expect(screen.getByText("run-alpha-42")).toBeInTheDocument();
 
     fireEvent.click(screen.getByTestId("run-ref-card"));
-    expect(mockNavigate).toHaveBeenCalledWith({ to: "/runs" });
+    expect(mockNavigate).toHaveBeenCalledWith({ to: "/library", search: { type: "run" } });
   });
 
   test("NoteCard renders text, double-click triggers onStartEdit, blur or Cmd+Enter submits update", () => {
