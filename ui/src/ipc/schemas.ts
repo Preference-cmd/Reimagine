@@ -492,6 +492,47 @@ export const CollectionDocumentSchema = z.object({
 });
 export type CollectionDocument = z.infer<typeof CollectionDocumentSchema>;
 
+/* ───── Library summaries (collection.list, dynamic_workflow.list, asset.list) ───── */
+
+export const CollectionSummarySchema = z.object({
+  id: z.string(),
+  name: z.string(),
+  version: z.number(),
+  slot_count: z.number(),
+});
+export type CollectionSummary = z.infer<typeof CollectionSummarySchema>;
+
+export const CollectionSummaryListSchema = z.object({
+  collections: z.array(CollectionSummarySchema),
+});
+export type CollectionSummaryList = z.infer<typeof CollectionSummaryListSchema>;
+
+export const DynamicWorkflowSummarySchema = z.object({
+  id: z.string(),
+  name: z.string(),
+  version: z.number(),
+  step_count: z.number(),
+});
+export type DynamicWorkflowSummary = z.infer<typeof DynamicWorkflowSummarySchema>;
+
+export const DynamicWorkflowSummaryListSchema = z.object({
+  workflows: z.array(DynamicWorkflowSummarySchema),
+});
+export type DynamicWorkflowSummaryList = z.infer<typeof DynamicWorkflowSummaryListSchema>;
+
+export const AssetSummarySchema = z.object({
+  id: z.string(),
+  media_type: z.string(),
+  size: z.number(),
+  origin: z.string(),
+});
+export type AssetSummary = z.infer<typeof AssetSummarySchema>;
+
+export const AssetSummaryListSchema = z.object({
+  assets: z.array(AssetSummarySchema),
+});
+export type AssetSummaryList = z.infer<typeof AssetSummaryListSchema>;
+
 /* ───── Dynamic workflow runs (W-c) ───── */
 
 export const RunStateSchema = z.enum([

@@ -1052,12 +1052,82 @@ export type MockCollectionDoc = {
   slots: Array<{ id: string; asset_id: string }>;
 };
 
-const mockCollections: Record<string, MockCollectionDoc> = {};
+type MockAsset = {
+  projectId: string;
+  mediaType: string;
+  content: string;
+};
+
+/** Dev fixture collection so the preview library has a collection row. */
+const mockCollections: Record<string, MockCollectionDoc> = {
+  col_demo_drafts: {
+    id: "col_demo_drafts",
+    projectId: "default",
+    name: "Blog drafts",
+    version: 4,
+    slots: [
+      { id: "slot-1", asset_id: "ast_demo_style_guide" },
+      { id: "slot-2", asset_id: "ast_demo_blog_v2" },
+      { id: "slot-3", asset_id: "ast_demo_cover_brief" },
+    ],
+  },
+};
 const mockCollectionHistory: Record<
   string,
   { past: MockCollectionDoc[]; future: MockCollectionDoc[] }
 > = {};
-const mockAssets: Record<string, { mediaType: string; content: string }> = {};
+/** Dev fixture files so the preview library has file rows. */
+const mockAssets: Record<string, MockAsset> = {
+  ast_demo_style_guide: {
+    projectId: "default",
+    mediaType: "text/markdown",
+    content:
+      "# Style guide\n\nVoice, headings and image ratios for the workspace.\n\n" +
+      "Use sentence case for headings and plain verbs for actions.\n".repeat(40),
+  },
+  ast_demo_blog_v2: {
+    projectId: "default",
+    mediaType: "text/markdown",
+    content:
+      "# Blog v2\n\nOutline and opening paragraph.\n\n" +
+      "The draft keeps one idea per section and cites its source.\n".repeat(28),
+  },
+  ast_demo_cover_brief: {
+    projectId: "default",
+    mediaType: "text/plain",
+    content:
+      "Cover brief: warm grey background, one image, no headline.\n" +
+      "Keep the lower third clear for the series label.\n".repeat(55),
+  },
+};
+
+const MOCK_DYNAMIC_WORKFLOWS = [
+  { id: "dwf_demo_cleanup", name: "Draft cleanup", version: 3, step_count: 3 },
+  { id: "dwf_demo_archive", name: "Archive sweep", version: 1, step_count: 2 },
+];
+
+const MOCK_DEMO_RUN_ID = "run_demo_cleanup";
+
+function mockDemoRun(projectId: string) {
+  const now = Date.now();
+  return {
+    id: MOCK_DEMO_RUN_ID,
+    project_id: projectId,
+    dynamic_workflow_id: "dwf_demo_cleanup",
+    target: { collection_id: "col_demo_drafts" },
+    params: {},
+    state: "completed",
+    version: 1,
+    items: [
+      { item_id: "slot-1", slot_id: "slot-1", state: "succeeded" },
+      { item_id: "slot-2", slot_id: "slot-2", state: "succeeded" },
+      { item_id: "slot-3", slot_id: "slot-3", state: "succeeded" },
+    ],
+    collection_id: "col_demo_drafts",
+    created_at: new Date(now - 6 * 60_000).toISOString(),
+    finished_at: new Date(now - 4 * 60_000).toISOString(),
+  };
+}
 
 export async function mockReadAssetPreview(
   url: string,
@@ -1090,6 +1160,7 @@ export async function mockOpInvoke(input: {
       assetIds.push(assetId);
       const filename = p.split(/[/\\]/).pop() ?? "file.txt";
       mockAssets[assetId] = {
+        projectId,
         mediaType: filename.endsWith(".png")
           ? "image/png"
           : filename.endsWith(".json")
@@ -1278,10 +1349,58 @@ export async function mockOpInvoke(input: {
     };
   }
 
-  if (name === "dynamic_workflow.list_runs") {
+  if (name === "collection.list") {
+    const collections = Object.values(mockCollections)
+      .filter((doc) => doc.projectId === projectId)
+      .map((doc) => ({
+        id: doc.id,
+        name: doc.name,
+        version: doc.version,
+        slot_count: doc.slots.length,
+      }));
     return {
       step: { id: rand("step"), op: name, outcome: "succeeded" },
-      output: { runs: [] },
+      output: { collections },
+    };
+  }
+
+  if (name === "dynamic_workflow.list") {
+    return {
+      step: { id: rand("step"), op: name, outcome: "succeeded" },
+      output: { workflows: MOCK_DYNAMIC_WORKFLOWS },
+    };
+  }
+
+  if (name === "asset.list") {
+    const assets = Object.entries(mockAssets)
+      .reverse()
+      .filter(([, asset]) => asset.projectId === projectId)
+      .map(([id, asset]) => ({
+        id,
+        media_type: asset.mediaType,
+        size: asset.content.length,
+        origin: "step-mock",
+      }));
+    return {
+      step: { id: rand("step"), op: name, outcome: "succeeded" },
+      output: { assets },
+    };
+  }
+
+  if (name === "dynamic_workflow.list_runs") {
+    const collectionId = args.collection_id as string | undefined;
+    // The demo run belongs to the fixture collection; other collections have
+    // no runs, matching the old empty behavior.
+    if (collectionId && collectionId !== "col_demo_drafts") {
+      return {
+        step: { id: rand("step"), op: name, outcome: "succeeded" },
+        output: { runs: [] },
+      };
+    }
+    const limit = typeof args.limit === "number" ? Math.max(1, args.limit) : 50;
+    return {
+      step: { id: rand("step"), op: name, outcome: "succeeded" },
+      output: { runs: [mockDemoRun(projectId)].slice(0, limit) },
     };
   }
 
