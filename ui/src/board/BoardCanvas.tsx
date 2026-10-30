@@ -18,7 +18,6 @@ import { cn } from "@/lib/utils";
 import { useProjectStore } from "@/store/project";
 import { useBoardStore } from "@/store/board";
 import { useUIStore } from "@/store/uiStore";
-import { registerBoardUndoTarget, unregisterBoardUndoTarget } from "@/hooks/useUndoRedo";
 import { BoardNode, type BoardNodeData } from "./BoardNode";
 import { CanvasEmptyState } from "./CanvasEmptyState";
 import { CanvasHud, type CanvasTool } from "./CanvasHud";
@@ -100,16 +99,6 @@ export function BoardCanvasInner() {
     const stored = useUIStore.getState().canvasViewports[projectId] ?? DEFAULT_VIEWPORT;
     void setViewport(stored, { duration: 0 });
   }, [projectId, setViewport]);
-
-  // Register undo/redo shortcuts target on mount and unregister on unmount
-  useEffect(() => {
-    const target = {
-      undo: () => useBoardStore.getState().undo(useProjectStore.getState().activeProjectId),
-      redo: () => useBoardStore.getState().redo(useProjectStore.getState().activeProjectId),
-    };
-    registerBoardUndoTarget(target);
-    return () => unregisterBoardUndoTarget(target);
-  }, []);
 
   // Drops the optimistic positions recorded for one drag batch, or all of
   // them when the failed batch was not a drag.

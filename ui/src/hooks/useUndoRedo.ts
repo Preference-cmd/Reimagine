@@ -1,27 +1,11 @@
 import { useEffect } from "react";
-import { useWorkflowStore, useWorkflowTemporal } from "@/store/workflow";
-
-export type BoardUndoTarget = {
-  undo: () => void | Promise<unknown>;
-  redo: () => void | Promise<unknown>;
-};
-
-let activeBoardUndoTarget: BoardUndoTarget | null = null;
-
-export function registerBoardUndoTarget(target: BoardUndoTarget): void {
-  activeBoardUndoTarget = target;
-}
-
-export function unregisterBoardUndoTarget(target: BoardUndoTarget): void {
-  if (activeBoardUndoTarget === target) {
-    activeBoardUndoTarget = null;
-  }
-}
+import { runBoardHistory } from "@/lib/boardHistory";
 
 /**
- * Bind Cmd/Ctrl+Z and Cmd/Ctrl+Shift+Z to either Board or Workflow undo / redo
- * depending on whether an active Board undo target is registered.
- * Mount once near the root.
+ * Bind Cmd/Ctrl+Z and Cmd/Ctrl+Shift+Z to the active project's board undo /
+ * redo. The app root mounts this once, so the shortcut keeps working on
+ * surfaces that do not render the canvas; both keys go through the same
+ * history guard as the activity panel's Undo and Redo buttons.
  */
 export function useUndoRedoShortcuts() {
   useEffect(() => {
@@ -41,29 +25,9 @@ export function useUndoRedoShortcuts() {
       if (!zKey) return;
       e.preventDefault();
 
-      if (activeBoardUndoTarget) {
-        if (e.shiftKey) {
-          void activeBoardUndoTarget.redo();
-        } else {
-          void activeBoardUndoTarget.undo();
-        }
-      } else {
-        const t = useWorkflowStore.temporal.getState();
-        if (e.shiftKey) t.redo();
-        else t.undo();
-      }
+      void runBoardHistory(e.shiftKey ? "redo" : "undo");
     };
     window.addEventListener("keydown", handler);
     return () => window.removeEventListener("keydown", handler);
   }, []);
-}
-
-/** Reactive hook for "can undo?" / "can redo?" booleans for workflows. */
-export function useUndoRedoAvailability(): {
-  canUndo: boolean;
-  canRedo: boolean;
-} {
-  const canUndo = useWorkflowTemporal((s) => s.pastStates.length > 0);
-  const canRedo = useWorkflowTemporal((s) => s.futureStates.length > 0);
-  return { canUndo, canRedo };
 }

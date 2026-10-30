@@ -2,16 +2,24 @@ import { describe, test, expect, vi, beforeEach, afterEach } from "vitest";
 import { render, screen, fireEvent, act, renderHook, waitFor } from "./test-utils";
 import { BoardCanvas, BoardCanvasInner } from "../src/board/BoardCanvas";
 import { ReactFlowProvider, useStoreApi, type Node } from "@xyflow/react";
+import { useActivityStore } from "../src/store/activity";
 import { useBoardStore } from "../src/store/board";
 import { useProjectStore } from "../src/store/project";
 import { useUIStore } from "../src/store/uiStore";
-import { useWorkflowStore } from "../src/store/workflow";
 import { useUndoRedoShortcuts } from "../src/hooks/useUndoRedo";
 import { useWorkspaceSurface } from "../src/hooks/useWorkspaceSurface";
 import * as ipc from "../src/ipc";
+import {
+  mockApplyBoardCommands,
+  mockGetBoardSnapshot,
+  mockOpInvoke,
+  mockRedoBoard,
+  mockResetBoard,
+  mockUndoBoard,
+} from "../src/ipc/mock";
 import { toast } from "sonner";
 import { buildDragStopCommands, type CommandBatch, type BoardCommand } from "../src/board/batch";
-import type { BoardCommandResultDto } from "../src/ipc/schemas";
+import type { ActivityRecord, BoardCommandResultDto } from "../src/ipc/schemas";
 
 // Mock ResizeObserver for xyflow in jsdom
 if (typeof globalThis.ResizeObserver === "undefined") {
@@ -51,6 +59,7 @@ describe("Board canvas interactions and command batches", () => {
   beforeEach(() => {
     vi.clearAllMocks();
     testStoreApi = null;
+    useActivityStore.getState().reset();
     useProjectStore.setState({ activeProjectId: "proj-1" });
     useUIStore.setState({
       sessionPanelOpen: true,
@@ -1097,7 +1106,7 @@ describe("Board canvas interactions and command batches", () => {
     expect(getSnapshotSpy).toHaveBeenCalledWith("proj-1");
   });
 
-  test("undo/redo shortcuts: calls Board undo/redo when BoardCanvas is mounted, but not while typing in an input", async () => {
+  test("undo/redo shortcuts: while the canvas is mounted, Cmd+Z and Cmd+Shift+Z act on the board and inputs are ignored", async () => {
     const undoSpy = vi.spyOn(ipc, "undoBoard").mockResolvedValue({
       status: "applied",
       version: 4,
@@ -1126,39 +1135,100 @@ describe("Board canvas interactions and command batches", () => {
     fireEvent.keyDown(input, { key: "z", metaKey: true });
     expect(undoSpy).not.toHaveBeenCalled();
 
-    // 2. Cmd+Z on window triggers board undo
+    // 2. Cmd+Z on window triggers board undo. With an empty activity feed
+    // there is no expected history entry, so the guard sends null.
     await act(async () => {
       fireEvent.keyDown(window, { key: "z", metaKey: true });
     });
-    expect(undoSpy).toHaveBeenCalledWith("proj-1", undefined);
+    expect(undoSpy).toHaveBeenCalledWith("proj-1", null);
 
     // 3. Cmd+Shift+Z on window triggers board redo
     await act(async () => {
       fireEvent.keyDown(window, { key: "z", metaKey: true, shiftKey: true });
     });
-    expect(redoSpy).toHaveBeenCalledWith("proj-1", undefined);
+    expect(redoSpy).toHaveBeenCalledWith("proj-1", null);
   });
 
-  test("undo/redo shortcuts: when BoardCanvas is unmounted, delegates to workflow store undo", async () => {
-    const workflowTemporalUndo = vi.spyOn(useWorkflowStore.temporal.getState(), "undo");
-    const workflowTemporalRedo = vi.spyOn(useWorkflowStore.temporal.getState(), "redo");
+  test("undo/redo shortcuts: with no canvas mounted (the /library case), Cmd+Z and Cmd+Shift+Z still undo and redo board history", async () => {
+    const projectId = "proj-library";
+    mockResetBoard(projectId);
+    useActivityStore.getState().reset();
+    useProjectStore.setState({ activeProjectId: projectId });
 
-    const { unmount } = render(
-      <div>
-        <UndoRedoShortcutMount />
-        <BoardCanvas />
-      </div>,
-    );
+    // Seed the in-memory host with one undoable board change and hydrate the
+    // stores from it, as the shell does after a board.changed event.
+    const applied = await mockApplyBoardCommands({
+      projectId,
+      commandBatch: {
+        base_version: 0,
+        commands: [
+          {
+            type: "add_item",
+            item_id: "note-library",
+            kind: { type: "note", content: "Made before leaving the board" },
+            position: { x: 0, y: 0 },
+            size: { width: 100, height: 100 },
+          },
+        ],
+      },
+    });
+    const historyId = applied.historyEntryId;
+    expect(historyId).toBeTruthy();
 
-    // Unmount BoardCanvas
-    unmount();
+    useBoardStore.getState().hydrate(await mockGetBoardSnapshot({ projectId }));
+    expect(useBoardStore.getState().items.map((item) => item.id)).toEqual(["note-library"]);
 
+    const hostFeed = async (): Promise<ActivityRecord[]> => {
+      const page = await mockOpInvoke({
+        projectId,
+        name: "activity.list",
+        input: { limit: 50 },
+      });
+      return (page.output as { records: ActivityRecord[] }).records;
+    };
+
+    useActivityStore.getState().append(projectId, (await hostFeed())[0]);
+    expect(useActivityStore.getState().undoStack).toEqual([historyId]);
+
+    const undoSpy = vi
+      .spyOn(ipc, "undoBoard")
+      .mockImplementation((id, expectedEntryId) =>
+        mockUndoBoard({ projectId: id, expectedEntryId: expectedEntryId ?? null }),
+      );
+    const redoSpy = vi
+      .spyOn(ipc, "redoBoard")
+      .mockImplementation((id, expectedEntryId) =>
+        mockRedoBoard({ projectId: id, expectedEntryId: expectedEntryId ?? null }),
+      );
+
+    // Only the shell listener is mounted; there is no BoardCanvas to register
+    // a target, which is exactly the state of the /library surface.
     render(<UndoRedoShortcutMount />);
+    expect(screen.queryByTestId("board-canvas")).toBeNull();
 
-    fireEvent.keyDown(window, { key: "z", metaKey: true });
-    expect(workflowTemporalUndo).toHaveBeenCalledTimes(1);
+    await act(async () => {
+      fireEvent.keyDown(window, { key: "z", metaKey: true });
+    });
 
-    fireEvent.keyDown(window, { key: "z", metaKey: true, shiftKey: true });
-    expect(workflowTemporalRedo).toHaveBeenCalledTimes(1);
+    await waitFor(() => expect(useBoardStore.getState().version).toBe(2));
+    expect(undoSpy).toHaveBeenCalledWith(projectId, historyId);
+    expect((await mockGetBoardSnapshot({ projectId })).items).toHaveLength(0);
+    const undone = (await hostFeed())[0];
+    expect(undone).toMatchObject({ kind: "undone", historyEntryId: historyId });
+
+    // The activity sync appends the undo record; its id becomes the redo target.
+    useActivityStore.getState().append(projectId, undone);
+    expect(useActivityStore.getState().redoStack).toEqual([historyId]);
+
+    await act(async () => {
+      fireEvent.keyDown(window, { key: "z", metaKey: true, shiftKey: true });
+    });
+
+    await waitFor(() => expect(useBoardStore.getState().version).toBe(3));
+    expect(redoSpy).toHaveBeenCalledWith(projectId, historyId);
+    expect((await mockGetBoardSnapshot({ projectId })).items.map((item) => item.id)).toEqual([
+      "note-library",
+    ]);
+    expect((await hostFeed())[0]).toMatchObject({ kind: "redone", historyEntryId: historyId });
   });
 });
