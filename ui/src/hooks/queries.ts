@@ -1,5 +1,5 @@
 import { useQuery, useMutation } from "@tanstack/react-query";
-import { listModels, searchModels, getModelCard, resolveArtifact } from "@/ipc";
+import { listModels, searchModels, getModelCard } from "@/ipc";
 import type { DownloadHuggingfaceModelArgs, ModelDownloadOutput } from "@/ipc/schemas";
 import { downloadHuggingfaceModel as ipcDownloadModel } from "@/ipc";
 
@@ -9,7 +9,6 @@ export const queryKeys = {
   models: ["models"] as const,
   modelSearch: (query: string) => ["modelSearch", query] as const,
   modelCard: (repoId: string) => ["modelCard", repoId] as const,
-  artifact: (artifactId: string) => ["artifact", artifactId] as const,
 } as const;
 
 /* ─── Queries ────────────────────────────────────────────── */
@@ -39,16 +38,6 @@ export function useModelCard(repoId: string | null) {
     queryKey: queryKeys.modelCard(repoId ?? ""),
     queryFn: () => getModelCard(repoId!),
     enabled: !!repoId,
-    staleTime: Infinity,
-  });
-}
-
-/** Artifact metadata resolution — enabled only when artifactId is provided. */
-export function useArtifactQuery(artifactId: string | null) {
-  return useQuery({
-    queryKey: queryKeys.artifact(artifactId ?? ""),
-    queryFn: () => resolveArtifact(artifactId!),
-    enabled: !!artifactId,
     staleTime: Infinity,
   });
 }

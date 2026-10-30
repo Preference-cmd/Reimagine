@@ -4,7 +4,6 @@ import {
   type BoardCommandResultDto,
   type BoardItem,
   type BoardSnapshot,
-  type ComputeProfile,
   type Event,
   type Project,
   type ProjectMetadataInput,
@@ -14,10 +13,6 @@ import {
   type ModelCatalogEntry,
   type ModelDownloadOutput,
   type ModelInfo,
-  type RebootBackendArgs,
-  type WorkerSwitchArgs,
-  type WorkerSwitchResult,
-  type WorkerSwitchTarget,
   type InvokeResult,
 } from "./schemas";
 
@@ -109,23 +104,6 @@ export async function mockCreateProject(input: {
 export async function mockLoadProject(input: { projectId: string }): Promise<Project> {
   const project = mockReadProjects()[input.projectId];
   if (!project) throw new Error("mock project not found: " + input.projectId);
-  return project;
-}
-
-export async function mockUpdateProject(input: {
-  projectId: string;
-  metadata: ProjectMetadataInput;
-}): Promise<Project> {
-  const current = await mockLoadProject({ projectId: input.projectId });
-  const project = {
-    ...current,
-    name: input.metadata.name,
-    description: input.metadata.description,
-    updatedAt: input.metadata.updatedAt ?? new Date().toISOString(),
-  };
-  const projects = mockReadProjects();
-  projects[input.projectId] = project;
-  mockWriteProjects(projects);
   return project;
 }
 
@@ -837,10 +815,6 @@ function mockArtifactDataUrl(artifactId: string): string {
   return `data:image/svg+xml;utf8,${encodeURIComponent(svg)}`;
 }
 
-export async function mockOpenArtifact(_artifactId: string): Promise<void> {
-  await delay(100);
-}
-
 const MOCK_CATALOG: ModelCatalogEntry[] = [
   {
     id: "stabilityai/stable-diffusion-xl-base-1.0",
@@ -925,64 +899,6 @@ export async function mockDownloadHuggingfaceModel(
     totalBytes: total,
     finishedAt: new Date().toISOString(),
     detectedFormat: "Diffusers",
-  };
-}
-
-/* ───── Worker switching mocks (BE-32) ───── */
-
-const MOCK_SWITCH_TARGETS: WorkerSwitchTarget[] = [
-  {
-    installationId: "mock-burn-worker",
-    version: "0.1.0",
-    backendInstanceId: "burn:wgpu:default",
-    backendKind: "burn",
-    target: "aarch64-apple-darwin",
-    installedAt: new Date().toISOString(),
-    installPath: "/mock/workers/installed/mock-burn-worker",
-    manifestDigest: "sha256-mock",
-  },
-];
-
-export async function mockDrainAndSwitchWorker(
-  input: WorkerSwitchArgs,
-): Promise<WorkerSwitchResult> {
-  await delay(120);
-  return {
-    instance: input.target,
-    incarnationId: `incarnation-${Date.now()}`,
-  };
-}
-
-export async function mockCancelAndSwitchWorker(
-  input: WorkerSwitchArgs,
-): Promise<WorkerSwitchResult> {
-  await delay(120);
-  return {
-    instance: input.target,
-    incarnationId: `incarnation-${Date.now()}`,
-  };
-}
-
-export async function mockListWorkerSwitchTargets(): Promise<WorkerSwitchTarget[]> {
-  await delay(30);
-  return [...MOCK_SWITCH_TARGETS];
-}
-
-export async function mockRebootBackend(input: RebootBackendArgs): Promise<ComputeProfile> {
-  await delay(400);
-  const backend = input.selection;
-  return {
-    backend_profiles: [
-      {
-        backend,
-        plugin: null,
-        extension: null,
-        instances: [],
-        diagnostics: [],
-      },
-    ],
-    diagnostics: [],
-    topology_workers: [],
   };
 }
 

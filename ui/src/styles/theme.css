@@ -14,7 +14,6 @@
   --color-surface: #ffffff;
   --color-ground: #f8f8f7;
   --color-note: #fffcf2;
-  --color-bubble: #f2f1f1;
   --color-tile: #efeeed;
   --color-grid: rgba(21, 21, 21, 0.085);
 
@@ -44,11 +43,9 @@
 
   /* state */
   --color-info: #408ef8;
-  --color-info-tint: #e1edfe;
   --color-ok: #3c8a5c;
   --color-err: #e5534b;
   --color-warn: #d9822b;
-  --color-idle: #e3e2e1;
   /* Sits behind dialogs and the command palette. */
   --color-scrim: rgb(0 0 0 / 0.4);
 
@@ -98,21 +95,6 @@
   --text-ui: 13px;
   --text-ui--line-height: 1.5;
 
-  --text-display-xl: 48px;
-  --text-display-xl--line-height: 48px;
-  --text-display-xl--font-weight: 600;
-  --text-display-xl--letter-spacing: -0.05em;
-
-  --text-display-lg: 32px;
-  --text-display-lg--line-height: 40px;
-  --text-display-lg--font-weight: 600;
-  --text-display-lg--letter-spacing: -0.04em;
-
-  --text-display-md: 24px;
-  --text-display-md--line-height: 32px;
-  --text-display-md--font-weight: 600;
-  --text-display-md--letter-spacing: -0.04em;
-
   --text-display-sm: 20px;
   --text-display-sm--line-height: 28px;
   --text-display-sm--font-weight: 600;
@@ -122,10 +104,6 @@
   --text-headline-lg--line-height: 32px;
   --text-headline-lg--font-weight: 600;
   --text-headline-lg--letter-spacing: -0.02em;
-
-  --text-headline-md: 18px;
-  --text-headline-md--line-height: 24px;
-  --text-headline-md--font-weight: 600;
 
   --text-body-lg: 18px;
   --text-body-lg--line-height: 28px;
@@ -143,39 +121,19 @@
   --text-caption--line-height: 16px;
   --text-caption--font-weight: 400;
 
-  --text-caption-mono: 12px;
-  --text-caption-mono--line-height: 16px;
-  --text-caption-mono--font-weight: 400;
-
-  --text-code-md: 13px;
-  --text-code-md--line-height: 20px;
-  --text-code-md--font-weight: 400;
-
-  --text-label-caps: 12px;
-  --text-label-caps--line-height: 16px;
-  --text-label-caps--font-weight: 700;
-  --text-label-caps--letter-spacing: 0.05em;
-
   /* Spacing scale. */
-  --spacing-xxs: 4px;
   --spacing-xs: 8px;
   --spacing-sm: 12px;
   --spacing-md: 16px;
   --spacing-lg: 24px;
   --spacing-xl: 32px;
   --spacing-2xl: 40px;
-  --spacing-3xl: 48px;
-  --spacing-4xl: 64px;
-  --spacing-5xl: 96px;
-  --spacing-6xl: 128px;
 
   /* Shell layout, mirrored by LAYOUT in ui/src/design/tokens.ts. */
   --spacing-sidebar: 264px;
-  --spacing-nav-header: 64px;
   --spacing-panel: 364px;
   --spacing-panel-gap: 16px;
   --spacing-topbar: 48px;
-  --spacing-control-height: 32px;
 
   /* Board canvas dot-grid spacing. */
   --spacing-canvas-grid: 20px;
@@ -194,7 +152,6 @@
   --color-surface: #1e1d1d;
   --color-ground: #151414;
   --color-note: #25221c;
-  --color-bubble: #282727;
   --color-tile: #2a2929;
   --color-grid: rgba(255, 255, 255, 0.055);
 
@@ -219,11 +176,9 @@
   --color-on-accent: #0f1712;
 
   --color-info: #5b9dff;
-  --color-info-tint: #1a2a42;
   --color-ok: #6cc08e;
   --color-err: #ef6b73;
   --color-warn: #f0904a;
-  --color-idle: #383737;
   --color-scrim: rgb(0 0 0 / 0.52);
 
   --color-agent: #e9b949;

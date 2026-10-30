@@ -165,28 +165,6 @@ export const ModelInfoSchema = z.object({
 });
 export type ModelInfo = z.infer<typeof ModelInfoSchema>;
 
-export const RunSnapshotDtoSchema = z.object({
-  runId: z.string(),
-  workflowId: z.string(),
-  workflowVersion: z.number(),
-  state: z.string(),
-  nodeStates: z.record(z.string(), z.string()),
-  diagnostics: z.array(
-    z.object({
-      id: z.string(),
-      code: z.string(),
-      severity: z.string(),
-      source: z.string(),
-      message: z.string(),
-      target: z.string(),
-    }),
-  ),
-  artifacts: z.array(z.any()),
-  startedAt: z.string(),
-  updatedAt: z.string(),
-});
-export type RunSnapshotDto = z.infer<typeof RunSnapshotDtoSchema>;
-
 /* ───── Artifact metadata from Rust IPC ───── */
 
 export const ArtifactMetadataSchema = z.object({
@@ -277,73 +255,6 @@ export const CommandErrorSchema = z.object({
   details: z.record(z.string(), z.unknown()).nullable().optional(),
 });
 export type CommandError = z.infer<typeof CommandErrorSchema>;
-
-/* ───── Worker switching (BE-32) ───── */
-
-/** Active worker after a switch (mirrors `WorkerSwitchResultDto`). */
-export const WorkerSwitchResultSchema = z.object({
-  instance: z.string(),
-  incarnationId: z.string(),
-});
-export type WorkerSwitchResult = z.infer<typeof WorkerSwitchResultSchema>;
-
-/** Installed worker usable as a switch target (mirrors `WorkerInstallationDto`). */
-export const WorkerSwitchTargetSchema = z.object({
-  installationId: z.string(),
-  version: z.string(),
-  backendInstanceId: z.string(),
-  backendKind: z.string(),
-  target: z.string(),
-  installedAt: z.string(),
-  installPath: z.string(),
-  manifestDigest: z.string(),
-});
-export type WorkerSwitchTarget = z.infer<typeof WorkerSwitchTargetSchema>;
-
-export const WorkerSwitchArgsSchema = z.object({
-  /** Backend instance id of the installed worker, e.g. `burn:wgpu:default`. */
-  target: z.string(),
-  /** Drain/cancel deadline in seconds (defaults to 30 on the backend). */
-  deadlineSecs: z.number().positive().optional(),
-});
-export type WorkerSwitchArgs = z.infer<typeof WorkerSwitchArgsSchema>;
-
-/* ───── Backend re-bootstrap (BE-38 / B4-8) ───── */
-
-/** Backend kind accepted by `rebootstrap_backend`. */
-export const BackendSelectionSchema = z.enum(["burn"]);
-export type BackendSelection = z.infer<typeof BackendSelectionSchema>;
-
-export const RebootBackendArgsSchema = z.object({
-  selection: BackendSelectionSchema,
-});
-export type RebootBackendArgs = z.infer<typeof RebootBackendArgsSchema>;
-
-/** Compute profile returned by `rebootstrap_backend` (mirrors
- *  `ComputeProfileDto`; wire shape is snake_case and intentionally loose —
- *  the UI reads it for display only). */
-export const ComputeProfileSchema = z.object({
-  backend_profiles: z.array(z.any()),
-  diagnostics: z.array(z.any()),
-  /** Topology pool workers (T13): discovered remote gRPC endpoints that
-   *  are registered but not necessarily connected. Optional — absent
-   *  when no topology manager is configured. */
-  topology_workers: z
-    .array(
-      z.object({
-        id: z.string(),
-        transport: z.string(),
-        address: z.string(),
-        trusted: z.boolean(),
-        device_label: z.string(),
-        capabilities: z.array(z.string()),
-        state: z.string(),
-      }),
-    )
-    .optional()
-    .default([]),
-});
-export type ComputeProfile = z.infer<typeof ComputeProfileSchema>;
 
 /* ───── Operation Orchestration (W-a / W-b) ───── */
 

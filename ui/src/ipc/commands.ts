@@ -3,7 +3,6 @@ import {
   type BoardCommandResultDto,
   type BoardSnapshot,
   type CommandError,
-  type ComputeProfile,
   type Event,
   type Project,
   type ProjectMetadataInput,
@@ -13,23 +12,15 @@ import {
   type ModelDownloadOutput,
   type ModelFilters,
   type ModelInfo,
-  type RebootBackendArgs,
-  type WorkerSwitchArgs,
-  type WorkerSwitchResult,
-  type WorkerSwitchTarget,
   type InvokeResult,
   CommandErrorSchema,
   EventSchema,
   ProjectMetadataInputSchema,
   DownloadHuggingfaceModelArgsSchema,
-  RebootBackendArgsSchema,
-  WorkerSwitchArgsSchema,
   BoardSnapshotSchema,
 } from "./schemas";
 import {
-  mockCancelAndSwitchWorker,
   mockCreateProject,
-  mockDeleteProject,
   mockGetBoardSnapshot,
   mockListProjects,
   mockLoadProject,
@@ -39,14 +30,9 @@ import {
   mockRedoBoard,
   mockApplyBoardCommands,
   mockPreviewBoardCommands,
-  mockUpdateProject,
   mockDownloadHuggingfaceModel,
-  mockDrainAndSwitchWorker,
   mockGetModelCard,
   mockListModels,
-  mockListWorkerSwitchTargets,
-  mockOpenArtifact,
-  mockRebootBackend,
   mockResolveArtifact,
   mockSearchModels,
   mockOpInvoke,
@@ -142,16 +128,6 @@ export async function resolveArtifact(artifactId: string): Promise<ArtifactMetad
   );
 }
 
-export async function openArtifact(artifactId: string): Promise<void> {
-  return invokeWithFallback(
-    async () => {
-      const { invoke } = await import("@tauri-apps/api/core");
-      return invoke<void>("open_artifact", { artifactId });
-    },
-    () => mockOpenArtifact(artifactId),
-  );
-}
-
 export function searchModels(query: string, filters?: ModelFilters): Promise<ModelCatalogEntry[]> {
   return dispatch("search_models", null, { query, filters }, mockSearchModels);
 }
@@ -184,15 +160,6 @@ export function createProject(projectId: string, metadata: ProjectMetadataInput)
 
 export function loadProject(projectId: string): Promise<Project> {
   return dispatch("load_project", null, { projectId }, mockLoadProject);
-}
-
-export function updateProject(projectId: string, metadata: ProjectMetadataInput): Promise<Project> {
-  ProjectMetadataInputSchema.parse(metadata);
-  return dispatch("update_project", null, { projectId, metadata }, mockUpdateProject);
-}
-
-export function deleteProject(projectId: string): Promise<void> {
-  return dispatch("delete_project", null, { projectId }, mockDeleteProject);
 }
 
 export function setActiveProject(projectId: string): Promise<Project> {
@@ -295,41 +262,6 @@ export function redoBoard(
     { projectId, expectedEntryId: expectedEntryId ?? null },
     mockRedoBoard,
   );
-}
-
-/* ───── Worker switching (BE-32) ───── */
-
-/** Drain in-flight runs (waiting up to `deadlineSecs`) then switch the active
- *  worker to the installed worker for `args.target` (a backend instance id). */
-export function drainAndSwitchWorker(args: WorkerSwitchArgs): Promise<WorkerSwitchResult> {
-  return dispatch(
-    "drain_and_switch_worker",
-    WorkerSwitchArgsSchema,
-    args,
-    mockDrainAndSwitchWorker,
-  );
-}
-
-/** Cancel in-flight runs, then switch the active worker to `args.target`. */
-export function cancelAndSwitchWorker(args: WorkerSwitchArgs): Promise<WorkerSwitchResult> {
-  return dispatch(
-    "cancel_and_switch_worker",
-    WorkerSwitchArgsSchema,
-    args,
-    mockCancelAndSwitchWorker,
-  );
-}
-
-/** List installed workers usable as switch targets. */
-export function listWorkerSwitchTargets(): Promise<WorkerSwitchTarget[]> {
-  return dispatch("list_worker_switch_targets", null, undefined, mockListWorkerSwitchTargets);
-}
-
-/** Drain in-flight runs and re-bootstrap the workspace with `selection`
- *  (a backend kind, `"burn"`). Resolves to the new compute
- *  profile. The selection is not persisted across app restarts. */
-export function rebootBackend(args: RebootBackendArgs): Promise<ComputeProfile> {
-  return dispatch("rebootstrap_backend", RebootBackendArgsSchema, args, mockRebootBackend);
 }
 
 /**
