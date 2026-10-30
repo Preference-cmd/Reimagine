@@ -223,6 +223,10 @@ pub struct ActivityService {
     paths: AppPaths,
     event_bus: EventBus,
     logs: tokio::sync::Mutex<BTreeMap<ProjectId, Arc<ActivityLog>>>,
+    /// Serializes append+publish so concurrent recorders cannot publish an
+    /// event before an earlier (or after a later) record reaches the file.
+    /// The per-log append lock only orders writes, not the events.
+    record_lock: tokio::sync::Mutex<()>,
     next_id: AtomicU64,
 }
 
@@ -232,6 +236,7 @@ impl ActivityService {
             paths,
             event_bus,
             logs: tokio::sync::Mutex::new(BTreeMap::new()),
+            record_lock: tokio::sync::Mutex::new(()),
             next_id: AtomicU64::new(1),
         }
     }
@@ -249,8 +254,10 @@ impl ActivityService {
 
     /// Append one record and publish `activity.appended`.
     ///
-    /// The event carries `{ projectId, record }` under the core `mod` event
-    /// shape, so core stays independent of app-host types.
+    /// The whole append+publish pair runs under one service lock, so the
+    /// event order matches the file order even when several recorders run
+    /// concurrently. The event carries `{ projectId, record }` under the core
+    /// `mod` event shape, so core stays independent of app-host types.
     #[allow(clippy::too_many_arguments)]
     pub async fn record(
         &self,
@@ -263,6 +270,8 @@ impl ActivityService {
         targets: Vec<String>,
         history_entry_id: Option<HistoryEntryId>,
     ) -> AppHostResult<ActivityRecord> {
+        let _record_guard = self.record_lock.lock().await;
+
         let count = self.next_id.fetch_add(1, Ordering::Relaxed);
         let now = chrono::Utc::now();
         let nanos = now.timestamp_nanos_opt().unwrap_or_default();
@@ -338,9 +347,9 @@ impl ActivityListOp {
                         },
                         "limit": {
                             "type": "integer",
-                            "minimum": 1,
-                            "maximum": ACTIVITY_LIST_MAX_LIMIT,
-                            "default": ACTIVITY_LIST_DEFAULT_LIMIT
+                            "minimum": 0,
+                            "default": ACTIVITY_LIST_DEFAULT_LIMIT,
+                            "description": "Requested page size; values below 1 or above 200 are clamped into 1..=200."
                         }
                     },
                     "additionalProperties": false

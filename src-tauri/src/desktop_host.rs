@@ -291,7 +291,7 @@ impl DesktopHostState {
         let workspace = self.workspace_arc();
         Ok(workspace
             .board_service()
-            .undo(&project_id)
+            .undo(&project_id, CommandActor::new(CommandActorKind::Human))
             .await?
             .map(Into::into))
     }
@@ -304,7 +304,7 @@ impl DesktopHostState {
         let workspace = self.workspace_arc();
         Ok(workspace
             .board_service()
-            .redo(&project_id)
+            .redo(&project_id, CommandActor::new(CommandActorKind::Human))
             .await?
             .map(Into::into))
     }

@@ -94,12 +94,6 @@ export function canRedo(stacks: ActivityStacks): boolean {
 export const ACTIVITY_ACTOR_FILTERS = ["all", "you", "agent"] as const;
 export type ActivityActorFilter = (typeof ACTIVITY_ACTOR_FILTERS)[number];
 
-export function isActivityActorFilter(
-  value: string | null | undefined,
-): value is ActivityActorFilter {
-  return typeof value === "string" && (ACTIVITY_ACTOR_FILTERS as readonly string[]).includes(value);
-}
-
 /**
  * "you" is the human operator; importer/system records only appear under
  * "all", since the panel has no separate identities for them.

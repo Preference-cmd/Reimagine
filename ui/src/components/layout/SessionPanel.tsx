@@ -22,8 +22,13 @@ const ACTOR_GLYPHS: Record<ActivityActor["kind"], Glyph> = {
   System: Cpu,
 };
 
-function actorLabel(kind: ActivityActor["kind"]): string {
-  switch (kind) {
+function actorLabel(actor: ActivityActor): string {
+  // A named agent or importer carries its own label; the kind label is only
+  // the fallback.
+  const label = actor.label?.trim();
+  if (label) return label;
+
+  switch (actor.kind) {
     case "Human":
       return m["activity.actorYou"]();
     case "Agent":
@@ -75,9 +80,9 @@ const HISTORY_BUTTON =
   "cursor-pointer rounded-xs text-caption font-medium text-fg2 underline decoration-hair-strong underline-offset-2 transition-colors hover:text-fg hover:decoration-current focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent disabled:cursor-default disabled:opacity-40 disabled:hover:text-fg2";
 
 /**
- * Floating session panel over the content area. Phase 3 fills the
- * workspace-activity tab: the live feed, actor filters, row-level undo/redo
- * and the canvas trace set while a row is hovered.
+ * Floating session panel over the content area. Its workspace-activity tab
+ * renders the live feed, actor filters, row-level undo/redo and the canvas
+ * trace set while a row is hovered or focused.
  */
 export function SessionPanel() {
   const open = useUIStore((state) => state.sessionPanelOpen);
@@ -138,7 +143,19 @@ export function SessionPanel() {
 
   function traceRecord(record: ActivityRecord) {
     if (record.targets.length === 0) return;
+    const itemIds = new Set(useBoardStore.getState().items.map((item) => item.id));
+    // A trace that matches nothing would dim the whole canvas; leave it be.
+    if (!record.targets.some((id) => itemIds.has(id))) return;
     setCanvasTrace({ targets: record.targets, actorKind: record.actor.kind });
+  }
+
+  function retryPage() {
+    const store = useActivityStore.getState();
+    if (!store.loaded) {
+      if (projectId) void store.load(projectId);
+      return;
+    }
+    void store.loadMore();
   }
 
   async function runHistory(action: "undo" | "redo") {
@@ -289,9 +306,12 @@ export function SessionPanel() {
                     key={record.id}
                     data-testid="activity-row"
                     data-activity-id={record.id}
+                    tabIndex={0}
                     onPointerEnter={() => traceRecord(record)}
                     onPointerLeave={clearCanvasTrace}
-                    className="flex gap-2.5 rounded-md px-2 py-2.5 transition-colors hover:bg-hover"
+                    onFocus={() => traceRecord(record)}
+                    onBlur={clearCanvasTrace}
+                    className="flex gap-2.5 rounded-md px-2 py-2.5 transition-colors hover:bg-hover focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent"
                   >
                     <span
                       aria-hidden="true"
@@ -312,7 +332,7 @@ export function SessionPanel() {
                         )}
                       >
                         <b className={cn("font-medium", agent && "text-agent")}>
-                          {actorLabel(record.actor.kind)}
+                          {actorLabel(record.actor)}
                         </b>{" "}
                         <span>{summary}</span>
                       </p>
@@ -364,7 +384,8 @@ export function SessionPanel() {
                 <span className="min-w-0 flex-1 truncate">{error}</span>
                 <button
                   type="button"
-                  onClick={() => void useActivityStore.getState().loadMore()}
+                  data-testid="activity-page-retry"
+                  onClick={retryPage}
                   className="cursor-pointer rounded-xs font-medium text-fg underline decoration-hair-strong underline-offset-2 hover:decoration-current focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent"
                 >
                   {m["activity.retry"]()}

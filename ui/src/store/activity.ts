@@ -3,8 +3,6 @@ import type { ActivityRecord } from "@/ipc/schemas";
 import {
   ACTIVITY_PAGE_SIZE,
   applyActivityRecord,
-  canRedo,
-  canUndo,
   listActivity,
   mergeActivityPage,
   redoEntryId,
@@ -25,7 +23,7 @@ export type ActivityState = ActivityStacks & {
   error: string | null;
   load: (projectId: string) => Promise<void>;
   loadMore: () => Promise<void>;
-  append: (record: ActivityRecord) => void;
+  append: (projectId: string, record: ActivityRecord) => void;
   reset: () => void;
 };
 
@@ -51,12 +49,39 @@ function emptyState() {
 let readSequence = 0;
 
 /**
+ * Undo/redo stacks per project for this app session. The board history is
+ * per-project and survives a workspace switch, so the stacks the feed knows
+ * about must survive it too; `load` restores the entry for the project it
+ * opens.
+ */
+const projectStacks = new Map<string, ActivityStacks>();
+
+function emptyStacks(): ActivityStacks {
+  return { undoStack: [], redoStack: [] };
+}
+
+function stacksFor(projectId: string | null): ActivityStacks {
+  if (!projectId) return emptyStacks();
+  return projectStacks.get(projectId) ?? emptyStacks();
+}
+
+function rememberStacks(projectId: string, stacks: ActivityStacks): void {
+  if (stacks.undoStack.length === 0 && stacks.redoStack.length === 0) {
+    projectStacks.delete(projectId);
+  } else {
+    projectStacks.set(projectId, stacks);
+  }
+}
+
+/**
  * Workspace activity feed for the active project. The shell mounts one sync
  * hook; the panel reads this store when it opens.
  *
  * Loaded pages only fill `records`. The undo/redo stacks start empty and
  * change solely through `append`: the board history lives in memory, so
- * history from before a restart has nothing to target.
+ * history from before a restart has nothing to target. Loaded pages never
+ * seed the stacks, but the stacks a project accrued during the session are
+ * restored when the feed returns to it.
  */
 export const useActivityStore = create<ActivityState>()((set, get) => ({
   ...emptyState(),
@@ -67,7 +92,14 @@ export const useActivityStore = create<ActivityState>()((set, get) => ({
     if (current.projectId === projectId && (current.loading || current.loaded)) return;
 
     const sequence = ++readSequence;
-    set({ ...emptyState(), projectId, loading: true });
+    const stacks = stacksFor(projectId);
+    set({
+      ...emptyState(),
+      projectId,
+      loading: true,
+      undoStack: stacks.undoStack,
+      redoStack: stacks.redoStack,
+    });
 
     try {
       const page = await listActivity(projectId, { limit: ACTIVITY_PAGE_SIZE });
@@ -112,21 +144,34 @@ export const useActivityStore = create<ActivityState>()((set, get) => ({
     }
   },
 
-  /** Prepend a live record; duplicate ids are ignored. */
-  append: (record) => {
+  /**
+   * Prepend a live record for `projectId`; duplicate ids are ignored. An
+   * event for a project other than the active one only updates that
+   * project's stacks, so a switch cannot apply the wrong stacks.
+   */
+  append: (projectId, record) => {
     const state = get();
-    if (state.records.some((existing) => existing.id === record.id)) return;
+    const active = state.projectId === null || state.projectId === projectId;
+    if (active && state.records.some((existing) => existing.id === record.id)) {
+      return;
+    }
 
-    const stacks = applyActivityRecord(state, record);
+    const stacks = applyActivityRecord(active ? state : stacksFor(projectId), record);
+    rememberStacks(projectId, stacks);
+    if (!active) return;
+
     set({
+      projectId: state.projectId ?? projectId,
       records: [record, ...state.records],
       undoStack: stacks.undoStack,
       redoStack: stacks.redoStack,
     });
   },
 
+  /** Clears the feed and the session's per-project stacks. */
   reset: () => {
     readSequence += 1;
+    projectStacks.clear();
     set(emptyState());
   },
 }));
@@ -135,5 +180,3 @@ export const useActivityStore = create<ActivityState>()((set, get) => ({
 
 export const selectUndoEntryId = (state: ActivityState) => undoEntryId(state);
 export const selectRedoEntryId = (state: ActivityState) => redoEntryId(state);
-export const selectCanUndo = (state: ActivityState) => canUndo(state);
-export const selectCanRedo = (state: ActivityState) => canRedo(state);

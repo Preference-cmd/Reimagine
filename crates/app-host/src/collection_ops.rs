@@ -84,11 +84,18 @@ impl CollectionCreateOp {
                     "type": "object",
                     "properties": {
                         "collection_id": { "type": "string" },
-                        "board_item_id": { "type": "string" }
+                        "board_item_id": { "type": "string" },
+                        // The board session history entry for the appended
+                        // item; undo/redo of this operation targets it.
+                        "history_entry_id": { "type": ["string", "null"] }
                     },
-                    "required": ["collection_id", "board_item_id"],
+                    "required": ["collection_id", "board_item_id", "history_entry_id"],
                     "additionalProperties": false,
-                    "examples": [{ "collection_id": "col-1", "board_item_id": "item-1" }]
+                    "examples": [{
+                        "collection_id": "col-1",
+                        "board_item_id": "item-1",
+                        "history_entry_id": "board-history:batch-add-item-item-1"
+                    }]
                 }),
                 annotations: OperationAnnotations {
                     read_only: false,
@@ -166,10 +173,11 @@ impl KernelOp for CollectionCreateOp {
             )
             .await;
 
-        match board_res {
+        let history_entry_id = match board_res {
             Ok(result) if result.status() == CommandStatus::Applied => {
                 // 3. On success publish collection.changed
                 self.collection_service.emit_changed(&doc);
+                result.history_entry_id().cloned()
             }
             Ok(_rejected) => {
                 let _ = self
@@ -191,11 +199,12 @@ impl KernelOp for CollectionCreateOp {
                     e.to_string(),
                 ));
             }
-        }
+        };
 
         Ok(json!({
             "collection_id": collection_id.as_str(),
             "board_item_id": board_item_id.as_str(),
+            "history_entry_id": history_entry_id,
         }))
     }
 }

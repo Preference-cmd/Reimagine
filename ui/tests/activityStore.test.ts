@@ -8,7 +8,6 @@ import {
   applyActivityRecord,
   canRedo,
   canUndo,
-  isActivityActorFilter,
   mergeActivityPage,
   redoEntryId,
   undoEntryId,
@@ -163,13 +162,6 @@ describe("activity page merge and actor filter", () => {
     expect(activityActorMatches(importer, "you")).toBe(false);
     expect(activityActorMatches(importer, "agent")).toBe(false);
   });
-
-  test("isActivityActorFilter rejects unknown filters", () => {
-    expect(isActivityActorFilter("you")).toBe(true);
-    expect(isActivityActorFilter("agent")).toBe(true);
-    expect(isActivityActorFilter("system")).toBe(false);
-    expect(isActivityActorFilter(null)).toBe(false);
-  });
 });
 
 describe("activity store", () => {
@@ -265,7 +257,7 @@ describe("activity store", () => {
     await useActivityStore.getState().load("proj-1");
     useActivityStore
       .getState()
-      .append(record({ id: "live-1", kind: "applied", historyEntryId: "h-live" }));
+      .append("proj-1", record({ id: "live-1", kind: "applied", historyEntryId: "h-live" }));
     expect(useActivityStore.getState().undoStack).toEqual(["h-live"]);
 
     await useActivityStore.getState().load("proj-2");
@@ -277,24 +269,67 @@ describe("activity store", () => {
     expect(state.redoStack).toEqual([]);
   });
 
+  test("returning to a project restores the stacks it accrued in this session", async () => {
+    vi.spyOn(ipc, "opInvoke").mockImplementation(async (projectId) =>
+      pageOutput([record({ id: `${projectId}-page` })], false),
+    );
+
+    await useActivityStore.getState().load("proj-a");
+    useActivityStore
+      .getState()
+      .append("proj-a", record({ id: "a-live", kind: "applied", historyEntryId: "h-a" }));
+    expect(undoEntryId(useActivityStore.getState())).toBe("h-a");
+
+    await useActivityStore.getState().load("proj-b");
+    expect(useActivityStore.getState().undoStack).toEqual([]);
+
+    await useActivityStore.getState().load("proj-a");
+    const state = useActivityStore.getState();
+    expect(state.projectId).toBe("proj-a");
+    expect(state.undoStack).toEqual(["h-a"]);
+    expect(undoEntryId(state)).toBe("h-a");
+    // The loaded page still does not seed the stacks with its own entries.
+    expect(ids(state.records)).toEqual(["proj-a-page"]);
+  });
+
+  test("an event for a previous project updates only that project's stacks", async () => {
+    vi.spyOn(ipc, "opInvoke").mockImplementation(async (projectId) =>
+      pageOutput([record({ id: `${projectId}-page` })], false),
+    );
+
+    await useActivityStore.getState().load("proj-a");
+    await useActivityStore.getState().load("proj-b");
+    useActivityStore
+      .getState()
+      .append("proj-a", record({ id: "late-a", kind: "applied", historyEntryId: "h-late" }));
+
+    const active = useActivityStore.getState();
+    expect(active.projectId).toBe("proj-b");
+    expect(active.undoStack).toEqual([]);
+    expect(ids(active.records)).toEqual(["proj-b-page"]);
+
+    await useActivityStore.getState().load("proj-a");
+    expect(useActivityStore.getState().undoStack).toEqual(["h-late"]);
+  });
+
   test("append prepends live records once and moves the stacks", () => {
     const applied = record({ id: "live-1", kind: "applied", historyEntryId: "h-1" });
-    useActivityStore.getState().append(applied);
-    useActivityStore.getState().append(applied);
+    useActivityStore.getState().append("default", applied);
+    useActivityStore.getState().append("default", applied);
 
     expect(ids(useActivityStore.getState().records)).toEqual(["live-1"]);
     expect(useActivityStore.getState().undoStack).toEqual(["h-1"]);
 
     useActivityStore
       .getState()
-      .append(record({ id: "live-2", kind: "undone", historyEntryId: "h-1" }));
+      .append("default", record({ id: "live-2", kind: "undone", historyEntryId: "h-1" }));
     expect(ids(useActivityStore.getState().records)).toEqual(["live-2", "live-1"]);
     expect(useActivityStore.getState().undoStack).toEqual([]);
     expect(useActivityStore.getState().redoStack).toEqual(["h-1"]);
 
     useActivityStore
       .getState()
-      .append(record({ id: "run-1", kind: "run_started", historyEntryId: null }));
+      .append("default", record({ id: "run-1", kind: "run_started", historyEntryId: null }));
     expect(useActivityStore.getState().undoStack).toEqual([]);
     expect(useActivityStore.getState().redoStack).toEqual(["h-1"]);
   });
@@ -306,7 +341,7 @@ describe("activity store", () => {
     await useActivityStore.getState().load("proj-1");
     useActivityStore
       .getState()
-      .append(record({ id: "live-1", kind: "applied", historyEntryId: "h-2" }));
+      .append("proj-1", record({ id: "live-1", kind: "applied", historyEntryId: "h-2" }));
 
     useActivityStore.getState().reset();
 

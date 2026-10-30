@@ -4,14 +4,18 @@
 
 use std::fs;
 use std::path::{Path, PathBuf};
+use std::sync::Arc;
 use std::time::Duration;
 
-use reimagine_app_host::{InvokeRequest, WorkspaceHost, WorkspaceHostBuilder, WorkspaceScope};
+use reimagine_app_host::{
+    ACTIVITY_LIST_MAX_LIMIT, ActivityKind, ActivityService, InvokeRequest, WorkspaceHost,
+    WorkspaceHostBuilder, WorkspaceScope,
+};
 use reimagine_core::board::{
     BoardChange, BoardCommand, BoardItemKind, BoardItemPosition, BoardItemSize,
 };
 use reimagine_core::command::{
-    CommandActor, CommandActorKind, CommandBatch, CommandProvenance, CommandResult,
+    CommandActor, CommandActorKind, CommandBatch, CommandProvenance, CommandResult, CommandStatus,
     OperationContext,
 };
 use reimagine_core::event::{Event, Timestamp};
@@ -59,6 +63,16 @@ fn human_context(label: &str) -> OperationContext {
             .with_label(label),
         CommandProvenance::Direct,
     )
+}
+
+fn human_actor() -> CommandActor {
+    CommandActor::new(CommandActorKind::Human)
+}
+
+fn agent_actor(label: &str) -> CommandActor {
+    CommandActor::new(CommandActorKind::Agent)
+        .with_id("agent-1")
+        .with_label(label)
 }
 
 fn agent_context() -> OperationContext {
@@ -179,8 +193,20 @@ async fn board_apply_undo_redo_and_op_record_are_listed_newest_first() {
         .cloned()
         .expect("an applied board batch names its history entry")
         .to_string();
-    assert!(host.board_service().undo(&project).await.unwrap().is_some());
-    assert!(host.board_service().redo(&project).await.unwrap().is_some());
+    assert!(
+        host.board_service()
+            .undo(&project, human_actor())
+            .await
+            .unwrap()
+            .is_some()
+    );
+    assert!(
+        host.board_service()
+            .redo(&project, human_actor())
+            .await
+            .unwrap()
+            .is_some()
+    );
 
     // A write op with an Agent actor records its own step; the board item it
     // creates through `append_item` must not add a second record.
@@ -214,8 +240,20 @@ async fn board_apply_undo_redo_and_op_record_are_listed_newest_first() {
     assert_eq!(op_record["actor"]["kind"], json!("Agent"));
     assert_eq!(op_record["actor"]["id"], json!("agent-1"));
     assert_eq!(op_record["actor"]["label"], json!("Agent"));
-    assert_eq!(op_record["targets"], json!([]));
-    assert_eq!(op_record["historyEntryId"], Value::Null);
+    // The op's own board append is the change its record must undo: the op
+    // output names that history entry and the board item it touched.
+    let appended_item_id = created["board_item_id"]
+        .as_str()
+        .expect("board item id in the op output");
+    let appended_history_entry_id = created["history_entry_id"]
+        .as_str()
+        .expect("history entry id in the op output")
+        .to_owned();
+    assert_eq!(op_record["targets"], json!([appended_item_id]));
+    assert_eq!(
+        op_record["historyEntryId"],
+        json!(appended_history_entry_id)
+    );
 
     let redo_record = &all[1];
     assert_eq!(redo_record["kind"], json!("redone"));
@@ -258,6 +296,27 @@ async fn board_apply_undo_redo_and_op_record_are_listed_newest_first() {
         chrono::DateTime::parse_from_rfc3339(at).expect("RFC 3339 timestamp");
     }
 
+    // An undo taken from the newest history entry reverses the collection
+    // append the op made, not the note that preceded it.
+    let undone = host
+        .board_service()
+        .undo(&project, human_actor())
+        .await
+        .unwrap()
+        .expect("the collection append is the newest history entry");
+    assert_eq!(
+        undone.history_entry_id().map(ToString::to_string),
+        Some(appended_history_entry_id.clone())
+    );
+    let undone_page = list(&host, &project, None, Some(1)).await;
+    let undone_record = &records(&undone_page)[0];
+    assert_eq!(undone_record["kind"], json!("undone"));
+    assert_eq!(undone_record["targets"], json!([appended_item_id]));
+    assert_eq!(
+        undone_record["historyEntryId"],
+        json!(appended_history_entry_id)
+    );
+
     let _ = fs::remove_dir_all(&base);
 }
 
@@ -268,7 +327,10 @@ async fn activity_records_persist_across_a_host_restart() {
     let project = create_project(&host, "proj-restart").await;
 
     apply_note(&host, &project, 0, "batch-persist-1", "note-1").await;
-    host.board_service().undo(&project).await.unwrap();
+    host.board_service()
+        .undo(&project, human_actor())
+        .await
+        .unwrap();
     invoke(
         &host,
         &project,
@@ -467,6 +529,319 @@ async fn torn_activity_tail_is_ignored_and_repaired_before_the_next_append() {
     assert!(
         !content.contains("act-torn"),
         "the torn tail must be dropped: {content}"
+    );
+
+    let _ = fs::remove_dir_all(&base);
+}
+
+#[tokio::test]
+async fn rejected_and_no_op_board_batches_append_nothing() {
+    let base = temp_dir("no-append");
+    let host = build_host(&base).await;
+    let project = create_project(&host, "proj-no-append").await;
+
+    apply_note(&host, &project, 0, "batch-base", "note-1").await;
+
+    // A stale base version is rejected before anything mutates.
+    let rejected = host
+        .board_service()
+        .apply_batch(
+            &project,
+            note_batch(
+                DocumentVersion::new(0),
+                "batch-stale",
+                "note-2",
+                human_context("You"),
+            ),
+        )
+        .await
+        .expect("apply returns a result");
+    assert_eq!(rejected.status(), CommandStatus::Rejected);
+
+    // Moving an item onto its current position produces no change.
+    let no_op = host
+        .board_service()
+        .apply_batch(
+            &project,
+            CommandBatch::new(
+                CommandBatchId::new("batch-noop"),
+                human_context("You"),
+                DocumentVersion::new(1),
+                Timestamp::new("2026-01-01T00:00:00Z"),
+                vec![BoardCommand::MoveItem {
+                    item_id: BoardItemId::new("note-1"),
+                    position: BoardItemPosition::new(0, 0),
+                }],
+            ),
+        )
+        .await
+        .expect("apply returns a result");
+    assert_eq!(no_op.status(), CommandStatus::NoOp);
+
+    let listed = list(&host, &project, None, None).await;
+    assert_eq!(
+        records(&listed).len(),
+        1,
+        "neither a rejected nor a no-op batch appends a record"
+    );
+    assert_eq!(records(&listed)[0]["targets"], json!(["note-1"]));
+
+    let _ = fs::remove_dir_all(&base);
+}
+
+#[tokio::test]
+async fn undo_with_empty_history_appends_nothing_and_records_the_actor() {
+    let base = temp_dir("undo-empty");
+    let host = build_host(&base).await;
+    let project = create_project(&host, "proj-undo-empty").await;
+
+    assert!(
+        host.board_service()
+            .undo(&project, human_actor())
+            .await
+            .unwrap()
+            .is_none()
+    );
+    let empty = list(&host, &project, None, None).await;
+    assert!(
+        records(&empty).is_empty(),
+        "undo with no history appends nothing"
+    );
+
+    apply_note(&host, &project, 0, "batch-undo-actor", "note-1").await;
+
+    let undone = host
+        .board_service()
+        .undo(&project, agent_actor("Agent"))
+        .await
+        .unwrap()
+        .expect("history entry exists");
+    assert_eq!(undone.status(), CommandStatus::Applied);
+    assert!(
+        host.board_service()
+            .undo(&project, human_actor())
+            .await
+            .unwrap()
+            .is_none(),
+        "the history is exhausted after one undo"
+    );
+
+    let listed = list(&host, &project, None, None).await;
+    assert_eq!(
+        records(&listed).len(),
+        2,
+        "the exhausted second undo appends nothing"
+    );
+    let undo_record = &records(&listed)[0];
+    assert_eq!(undo_record["kind"], json!("undone"));
+    assert_eq!(undo_record["actor"]["kind"], json!("Agent"));
+    assert_eq!(undo_record["actor"]["id"], json!("agent-1"));
+    assert_eq!(undo_record["targets"], json!(["note-1"]));
+    assert_eq!(
+        undo_record["historyEntryId"],
+        json!(
+            undone
+                .history_entry_id()
+                .expect("undo names its entry")
+                .to_string()
+        )
+    );
+
+    let _ = fs::remove_dir_all(&base);
+}
+
+#[tokio::test]
+async fn multi_item_board_batch_dedupes_targets_in_change_order() {
+    let base = temp_dir("targets");
+    let host = build_host(&base).await;
+    let project = create_project(&host, "proj-targets").await;
+
+    let batch = CommandBatch::new(
+        CommandBatchId::new("batch-multi"),
+        human_context("You"),
+        DocumentVersion::new(0),
+        Timestamp::new("2026-01-01T00:00:00Z"),
+        vec![
+            BoardCommand::AddItem {
+                item_id: BoardItemId::new("item-a"),
+                kind: BoardItemKind::Note {
+                    content: "a".to_owned(),
+                },
+                position: BoardItemPosition::new(0, 0),
+                size: BoardItemSize::new(100, 80),
+            },
+            BoardCommand::AddItem {
+                item_id: BoardItemId::new("item-b"),
+                kind: BoardItemKind::Note {
+                    content: "b".to_owned(),
+                },
+                position: BoardItemPosition::new(200, 0),
+                size: BoardItemSize::new(100, 80),
+            },
+            BoardCommand::MoveItem {
+                item_id: BoardItemId::new("item-a"),
+                position: BoardItemPosition::new(40, 40),
+            },
+        ],
+    );
+    let applied = host
+        .board_service()
+        .apply_batch(&project, batch)
+        .await
+        .expect("apply multi-item batch");
+    assert_eq!(applied.status(), CommandStatus::Applied);
+    assert_eq!(
+        applied.changes().len(),
+        3,
+        "the last change touches item-a again"
+    );
+
+    let listed = list(&host, &project, None, None).await;
+    let record = &records(&listed)[0];
+    assert_eq!(
+        record["targets"],
+        json!(["item-a", "item-b"]),
+        "targets keep first-touch order without duplicates"
+    );
+    assert_eq!(
+        record["historyEntryId"],
+        json!(
+            applied
+                .history_entry_id()
+                .expect("applied batch names its entry")
+                .to_string()
+        )
+    );
+
+    let _ = fs::remove_dir_all(&base);
+}
+
+#[tokio::test]
+async fn activity_logs_are_isolated_per_project() {
+    let base = temp_dir("isolation");
+    let host = build_host(&base).await;
+    let project_a = create_project(&host, "proj-iso-a").await;
+    let project_b = create_project(&host, "proj-iso-b").await;
+
+    apply_note(&host, &project_a, 0, "batch-iso-a", "item-a").await;
+    apply_note(&host, &project_b, 0, "batch-iso-b", "item-b").await;
+
+    let listed_a = list(&host, &project_a, None, None).await;
+    assert_eq!(records(&listed_a).len(), 1);
+    assert_eq!(records(&listed_a)[0]["targets"], json!(["item-a"]));
+
+    let listed_b = list(&host, &project_b, None, None).await;
+    assert_eq!(records(&listed_b).len(), 1);
+    assert_eq!(records(&listed_b)[0]["targets"], json!(["item-b"]));
+
+    let _ = fs::remove_dir_all(&base);
+}
+
+#[tokio::test]
+async fn activity_list_clamps_the_limit_at_both_ends() {
+    let base = temp_dir("limit");
+    let host = build_host(&base).await;
+    let project = create_project(&host, "proj-limit").await;
+
+    // Write past the maximum page directly; the list op is what clamps.
+    let writer = ActivityService::new(host.config().paths().clone(), host.event_bus().clone());
+    for index in 1..=ACTIVITY_LIST_MAX_LIMIT + 5 {
+        writer
+            .record(
+                &project,
+                ActivityKind::Applied,
+                human_actor(),
+                format!("event {index}"),
+                "activity.test",
+                json!({}),
+                Vec::new(),
+                None,
+            )
+            .await
+            .expect("append record");
+    }
+
+    let zero = list(&host, &project, None, Some(0)).await;
+    assert_eq!(
+        records(&zero).len(),
+        1,
+        "a limit of 0 clamps up to the 1-record minimum"
+    );
+    assert_eq!(zero["has_more"], json!(true));
+
+    let huge = list(&host, &project, None, Some(500)).await;
+    assert_eq!(
+        records(&huge).len(),
+        ACTIVITY_LIST_MAX_LIMIT,
+        "a limit of 500 clamps down to the maximum page"
+    );
+    assert_eq!(huge["has_more"], json!(true));
+
+    let _ = fs::remove_dir_all(&base);
+}
+
+#[tokio::test]
+async fn concurrent_records_publish_in_file_order() {
+    let base = temp_dir("order");
+    let host = build_host(&base).await;
+    let project = create_project(&host, "proj-order").await;
+    let mut events = host.event_bus().subscribe();
+
+    let activity = Arc::new(ActivityService::new(
+        host.config().paths().clone(),
+        host.event_bus().clone(),
+    ));
+    let mut tasks = Vec::new();
+    for index in 0..16 {
+        let activity = Arc::clone(&activity);
+        let project = project.clone();
+        tasks.push(tokio::spawn(async move {
+            activity
+                .record(
+                    &project,
+                    ActivityKind::Applied,
+                    human_actor(),
+                    format!("concurrent {index}"),
+                    "activity.test",
+                    json!({}),
+                    Vec::new(),
+                    None,
+                )
+                .await
+                .expect("append record");
+        }));
+    }
+    for task in tasks {
+        task.await.expect("recorder finishes");
+    }
+
+    let mut published = Vec::new();
+    while published.len() < 16 {
+        let event = tokio::time::timeout(Duration::from_secs(5), events.recv())
+            .await
+            .expect("activity event arrives")
+            .expect("event channel open");
+        if let Event::Mod { kind, payload } = event
+            && kind == "activity.appended"
+        {
+            published.push(
+                payload["record"]["id"]
+                    .as_str()
+                    .expect("record id")
+                    .to_owned(),
+            );
+        }
+    }
+
+    let (mut appended, _) = activity
+        .list(&project, None, ACTIVITY_LIST_MAX_LIMIT)
+        .await
+        .expect("read the activity log");
+    appended.reverse();
+    let file_order: Vec<String> = appended.into_iter().map(|record| record.id).collect();
+    assert_eq!(
+        published, file_order,
+        "published order matches append order"
     );
 
     let _ = fs::remove_dir_all(&base);

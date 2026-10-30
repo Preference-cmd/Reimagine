@@ -1,8 +1,9 @@
 import { describe, test, expect, vi, beforeEach, afterEach } from "vitest";
+import { setLocale } from "$paraglide/runtime";
 import { act, fireEvent, render, screen, waitFor, within } from "./test-utils";
 import { SessionPanel } from "../src/components/layout/SessionPanel";
 import * as ipc from "../src/ipc";
-import type { ActivityRecord } from "../src/ipc/schemas";
+import type { ActivityRecord, BoardItem } from "../src/ipc/schemas";
 import { useActivityStore } from "../src/store/activity";
 import { useBoardStore } from "../src/store/board";
 import { useProjectStore } from "../src/store/project";
@@ -54,12 +55,27 @@ function rowIds(): Array<string | null> {
   return screen.getAllByTestId("activity-row").map((row) => row.getAttribute("data-activity-id"));
 }
 
+function pageOutput(records: ActivityRecord[]) {
+  return { step: {}, output: { records, has_more: false } };
+}
+
 function rowFor(id: string): HTMLElement {
   const row = screen
     .getAllByTestId("activity-row")
     .find((candidate) => candidate.getAttribute("data-activity-id") === id);
   if (!row) throw new Error(`no activity row ${id}`);
   return row;
+}
+
+function boardItem(id: string): BoardItem {
+  return {
+    id,
+    kind: { type: "note", content: id },
+    position: { x: 0, y: 0 },
+    size: { width: 200, height: 120 },
+    z: 1,
+    locked: false,
+  };
 }
 
 beforeEach(() => {
@@ -76,9 +92,12 @@ beforeEach(() => {
     activeProjectId: "default",
   });
   useUIStore.setState({ sessionPanelOpen: true, canvasTrace: null });
-  useBoardStore
-    .getState()
-    .hydrate({ id: "board-default", projectId: "default", version: 0, items: [] });
+  useBoardStore.getState().hydrate({
+    id: "board-default",
+    projectId: "default",
+    version: 0,
+    items: ["note-1", "note-2", "note-3"].map(boardItem),
+  });
   useActivityStore.getState().reset();
 });
 
@@ -128,6 +147,45 @@ describe("activity panel feed", () => {
     expect(within(rowFor("human-note")).getByText("Added a note")).toBeInTheDocument();
     expect(within(rowFor("human-op")).getByText("Ran collection.create")).toBeInTheDocument();
     expect(within(rowFor("human-undo")).getByText("Undone")).toBeInTheDocument();
+  });
+
+  test("uses a record's named actor label instead of the kind label", () => {
+    seed([
+      record({
+        id: "named-agent",
+        actor: { kind: "Agent", id: "agent-7", label: "Draft agent" },
+      }),
+      record({
+        id: "named-importer",
+        actor: { kind: "Importer", id: null, label: "Library importer" },
+      }),
+      record({ id: "unnamed-importer", actor: { kind: "Importer", id: null, label: null } }),
+    ]);
+    render(<SessionPanel />);
+
+    expect(within(rowFor("named-agent")).getByText("Draft agent")).toBeInTheDocument();
+    expect(within(rowFor("named-importer")).getByText("Library importer")).toBeInTheDocument();
+    expect(within(rowFor("unnamed-importer")).getByText("System")).toBeInTheDocument();
+  });
+
+  test("renders a summary in the Chinese locale", () => {
+    setLocale("zh", { reload: false });
+    try {
+      seed([
+        record({
+          id: "zh",
+          actor: { kind: "Human", id: null, label: null },
+          summaryKey: "activity.board.apply",
+          summaryParams: { count: 2 },
+        }),
+      ]);
+      render(<SessionPanel />);
+
+      expect(within(rowFor("zh")).getByText("你")).toBeInTheDocument();
+      expect(within(rowFor("zh")).getByText("应用了 2 处画布修改")).toBeInTheDocument();
+    } finally {
+      setLocale("en", { reload: false });
+    }
   });
 
   test("falls back to the host summary for an unknown key", () => {
@@ -241,6 +299,37 @@ describe("activity panel feed", () => {
     );
   });
 
+  test("a loaded row offers Undo again after a workspace round trip", async () => {
+    const rowA = record({ id: "row-a", historyEntryId: "h-a" });
+    const rowB = record({ id: "row-b", historyEntryId: "h-b" });
+    const liveA = record({ id: "live-a", kind: "applied", historyEntryId: "h-a" });
+    vi.spyOn(ipc, "opInvoke")
+      .mockResolvedValueOnce(pageOutput([rowA]))
+      .mockResolvedValueOnce(pageOutput([rowB]))
+      .mockResolvedValueOnce(pageOutput([liveA, rowA]));
+
+    await act(async () => {
+      await useActivityStore.getState().load("default");
+    });
+    useActivityStore.getState().append("default", liveA);
+
+    // Away: another project's feed has no undo targets.
+    await act(async () => {
+      await useActivityStore.getState().load("proj-b");
+    });
+    const away = render(<SessionPanel />);
+    expect(within(rowFor("row-b")).queryByTestId("activity-undo")).toBeNull();
+    away.unmount();
+
+    // Back: the live record returns from the loaded page, and its stack
+    // survived the switch.
+    await act(async () => {
+      await useActivityStore.getState().load("default");
+    });
+    render(<SessionPanel />);
+    expect(within(rowFor("live-a")).getByTestId("activity-undo")).toBeInTheDocument();
+  });
+
   test("hovering a record traces its targets and leaving clears the trace", () => {
     const target = record({ id: "target", targets: ["note-1", "note-2"] });
     const op = record({
@@ -281,6 +370,46 @@ describe("activity panel feed", () => {
       targets: ["note-3"],
       actorKind: "Agent",
     });
+  });
+
+  test("keyboard focus traces a record and blur clears the trace", () => {
+    seed([record({ id: "target", targets: ["note-1"] })]);
+    render(<SessionPanel />);
+
+    const row = rowFor("target");
+    row.focus();
+    expect(row).toHaveFocus();
+    expect(useUIStore.getState().canvasTrace).toEqual({
+      targets: ["note-1"],
+      actorKind: "Human",
+    });
+
+    row.blur();
+    expect(useUIStore.getState().canvasTrace).toBeNull();
+  });
+
+  test("focusing the undo button inside a row also traces that row", () => {
+    seed([record({ id: "applied", historyEntryId: "h-2", targets: ["note-1"] })], {
+      undoStack: ["h-2"],
+    });
+    render(<SessionPanel />);
+
+    within(rowFor("applied")).getByTestId("activity-undo").focus();
+    expect(useUIStore.getState().canvasTrace).toEqual({
+      targets: ["note-1"],
+      actorKind: "Human",
+    });
+  });
+
+  test("a record whose targets are not on the canvas leaves it undimmed", () => {
+    seed([record({ id: "ghost", targets: ["note-absent"] })]);
+    render(<SessionPanel />);
+
+    fireEvent.pointerOver(rowFor("ghost"));
+    expect(useUIStore.getState().canvasTrace).toBeNull();
+
+    rowFor("ghost").focus();
+    expect(useUIStore.getState().canvasTrace).toBeNull();
   });
 
   test("closing and unmounting clear a hover trace", () => {
@@ -342,6 +471,39 @@ describe("activity panel states", () => {
 
     render(<SessionPanel />);
     fireEvent.click(screen.getByTestId("activity-load-more"));
+
+    await waitFor(() =>
+      expect(opInvoke).toHaveBeenCalledWith("default", "activity.list", {
+        limit: 50,
+        before: "only",
+      }),
+    );
+  });
+
+  test("page-error retry refetches the first page when the feed is not loaded", async () => {
+    const opInvoke = vi
+      .spyOn(ipc, "opInvoke")
+      .mockResolvedValue({ step: {}, output: { records: [], has_more: false } });
+    seed([record({ id: "stale" })]);
+    useActivityStore.setState({ error: "host down", loaded: false });
+
+    render(<SessionPanel />);
+    fireEvent.click(screen.getByTestId("activity-page-retry"));
+
+    await waitFor(() =>
+      expect(opInvoke).toHaveBeenCalledWith("default", "activity.list", { limit: 50 }),
+    );
+  });
+
+  test("page-error retry loads the next page after a failed load-more", async () => {
+    const opInvoke = vi
+      .spyOn(ipc, "opInvoke")
+      .mockResolvedValue({ step: {}, output: { records: [], has_more: false } });
+    seed([record({ id: "only" })]);
+    useActivityStore.setState({ hasMore: true, error: "older page failed" });
+
+    render(<SessionPanel />);
+    fireEvent.click(screen.getByTestId("activity-page-retry"));
 
     await waitFor(() =>
       expect(opInvoke).toHaveBeenCalledWith("default", "activity.list", {

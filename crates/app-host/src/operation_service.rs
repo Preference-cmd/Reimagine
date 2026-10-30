@@ -19,7 +19,7 @@ use reimagine_core::diagnostic::{
 };
 use reimagine_core::event::Timestamp;
 use reimagine_core::health::Health;
-use reimagine_core::model::{AssetId, DiagnosticId, ProjectId, StepId};
+use reimagine_core::model::{AssetId, DiagnosticId, HistoryEntryId, ProjectId, StepId};
 use reimagine_core::step::{StepOutcome, StepRecord, StepRun};
 use reimagine_core::task::CancelToken;
 use serde::{Deserialize, Serialize};
@@ -54,6 +54,28 @@ fn op_internal_error(op_name: &str, code: &str, message: impl Into<String>) -> D
         message,
         DiagnosticTarget::new(DiagnosticTargetDomain::new(format!("op.{op_name}"))),
     )
+}
+
+/// Output keys through which a board-mutating operation names the session
+/// history entry it produced and the board item it touched. The activity
+/// record reads them generically, so an operation opts in by adding the keys
+/// to its output schema instead of by an operation-specific branch.
+const OUTPUT_HISTORY_ENTRY_ID: &str = "history_entry_id";
+const OUTPUT_BOARD_ITEM_ID: &str = "board_item_id";
+
+fn output_history_entry_id(output: &Value) -> Option<HistoryEntryId> {
+    output
+        .get(OUTPUT_HISTORY_ENTRY_ID)
+        .and_then(Value::as_str)
+        .and_then(|id| HistoryEntryId::try_new(id).ok())
+}
+
+fn output_targets(output: &Value) -> Vec<String> {
+    output
+        .get(OUTPUT_BOARD_ITEM_ID)
+        .and_then(Value::as_str)
+        .map(|item_id| vec![item_id.to_owned()])
+        .unwrap_or_default()
 }
 
 /// Validate whether a preview key matches ^[A-Za-z0-9_-]{1,64}$.
@@ -408,7 +430,17 @@ impl OperationService {
 
     /// Append one `applied` activity record for a successful recorded step.
     /// An activity failure is logged, not propagated: the step already ran.
-    async fn record_op_activity(&self, project: &ProjectId, request: &InvokeRequest) {
+    ///
+    /// When the validated output carries a `history_entry_id` and/or a
+    /// `board_item_id`, the record adopts them as its history entry and
+    /// targets, so an undo derived from the record reverses the board change
+    /// the operation made rather than the preceding entry.
+    async fn record_op_activity(
+        &self,
+        project: &ProjectId,
+        request: &InvokeRequest,
+        output: &Value,
+    ) {
         let activity = self
             .activity
             .read()
@@ -426,8 +458,8 @@ impl OperationService {
                 format!("Ran {}", request.name),
                 "activity.op",
                 serde_json::json!({ "op": request.name }),
-                Vec::new(),
-                None,
+                output_targets(output),
+                output_history_entry_id(output),
             )
             .await
         {
@@ -815,7 +847,7 @@ impl OperationService {
                 );
                 if should_record_step {
                     step_log.record_finish(&step_record).await?;
-                    self.record_op_activity(project, &request).await;
+                    self.record_op_activity(project, &request, &output).await;
                 }
 
                 Ok(InvokeResult {

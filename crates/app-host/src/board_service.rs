@@ -14,7 +14,7 @@ use reimagine_core::board::{
     BoardChange, BoardCommand, BoardDocument, BoardItemKind, BoardItemPosition, BoardItemSize,
 };
 use reimagine_core::command::{
-    CommandActor, CommandActorKind, CommandBatch, CommandResult, CommandStatus, OperationContext,
+    CommandActor, CommandBatch, CommandResult, CommandStatus, OperationContext,
 };
 use reimagine_core::document::DocumentSession;
 use reimagine_core::event::{Event, EventBus, Timestamp};
@@ -176,7 +176,10 @@ impl BoardService {
     /// Append a single item to the board under session lock.
     ///
     /// Reads the current document version while holding the session lock so
-    /// concurrent additions on the same board do not conflict on version.
+    /// concurrent additions on the same board do not conflict on version. An
+    /// applied result names the session history entry for the append through
+    /// [`CommandResult::history_entry_id`], so callers that wrap this append
+    /// in an operation can report the entry their activity record must undo.
     pub async fn append_item(
         &self,
         project_id: &ProjectId,
@@ -211,9 +214,14 @@ impl BoardService {
     }
 
     /// Undo the last applied batch, persisting the restored document.
+    ///
+    /// `actor` is the operator asking for the undo; it is recorded in the
+    /// activity log so a future agent path can pass an agent actor instead of
+    /// the UI's human actor.
     pub async fn undo(
         &self,
         project_id: &ProjectId,
+        actor: CommandActor,
     ) -> AppHostResult<Option<CommandResult<BoardChange>>> {
         let session = self.session_for(project_id).await?;
         let mut guard = session.lock().await;
@@ -225,7 +233,7 @@ impl BoardService {
         self.record_board_activity(
             project_id,
             ActivityKind::Undone,
-            CommandActor::new(CommandActorKind::Human),
+            actor,
             "activity.board.undo",
             "Undid the last board change",
             json!({}),
@@ -237,9 +245,12 @@ impl BoardService {
     }
 
     /// Redo the last undone batch, persisting the restored document.
+    ///
+    /// `actor` is recorded in the activity log, as for [`Self::undo`].
     pub async fn redo(
         &self,
         project_id: &ProjectId,
+        actor: CommandActor,
     ) -> AppHostResult<Option<CommandResult<BoardChange>>> {
         let session = self.session_for(project_id).await?;
         let mut guard = session.lock().await;
@@ -251,7 +262,7 @@ impl BoardService {
         self.record_board_activity(
             project_id,
             ActivityKind::Redone,
-            CommandActor::new(CommandActorKind::Human),
+            actor,
             "activity.board.redo",
             "Redid the last board change",
             json!({}),

@@ -7,7 +7,8 @@ import { useActivityStore } from "@/store/activity";
  * Keeps the activity feed for `projectId` current. Mounted once by the shell:
  * the panel may be closed, but live records must still reach the store.
  *
- * Loaded history never touches the undo/redo stacks; only appended records do.
+ * Loaded history never touches the undo/redo stacks; only appended records do,
+ * and they update the stacks of the project that emitted them.
  */
 export function useActivitySync(projectId: string): void {
   useEffect(() => {
@@ -19,7 +20,7 @@ export function useActivitySync(projectId: string): void {
       if (event.type !== "mod" || event.kind !== "activity.appended") return;
       const payload = ActivityAppendedPayloadSchema.safeParse(event.payload);
       if (!payload.success || payload.data.projectId !== projectId) return;
-      useActivityStore.getState().append(payload.data.record);
+      useActivityStore.getState().append(payload.data.projectId, payload.data.record);
     });
 
     return unsubscribe;
