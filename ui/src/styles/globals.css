@@ -1,14 +1,6 @@
 @import "tailwindcss";
 @import "./theme.css";
 
-/* Edge flow dash animation — single global rule, referenced by the
-   flowing dash overlay in FlowEdge (previously injected per-instance). */
-@keyframes flow {
-  to {
-    stroke-dashoffset: -32;
-  }
-}
-
 @layer base {
   html {
     background-color: var(--color-app);
@@ -59,115 +51,6 @@
 }
 
 @layer components {
-  /* Node base surface — lightweight frame over the canvas.
-     `--node-tone` is set per-instance from React and drives the header
-     dot and the selected ring. Selected state uses a crisp ring instead
-     of a colored glow. */
-  .node-base {
-    position: relative;
-    width: 280px;
-    border-radius: 12px;
-    background: var(--color-node);
-    backdrop-filter: blur(20px);
-    -webkit-backdrop-filter: blur(20px);
-    border: 1px solid var(--color-node-border);
-    box-shadow:
-      inset 0 1px 0 var(--color-node-highlight),
-      0 1px 2px rgb(0 0 0 / 0.04),
-      0 4px 12px -2px rgb(0 0 0 / 0.08);
-    color: var(--color-fg);
-    font-family: var(--font-sans);
-    transition:
-      border-color 150ms ease-out,
-      box-shadow 150ms ease-out,
-      transform 150ms ease-out;
-  }
-  .node-base:hover {
-    border-color: var(--color-node-border-hover);
-    box-shadow:
-      inset 0 1px 0 var(--color-node-highlight),
-      0 2px 4px rgb(0 0 0 / 0.06),
-      0 8px 24px -4px rgb(0 0 0 / 0.1);
-  }
-  .node-base--selected {
-    border-color: var(--node-tone);
-    box-shadow:
-      inset 0 1px 0 var(--color-node-highlight),
-      0 0 0 1px var(--node-tone),
-      0 2px 4px rgb(0 0 0 / 0.06),
-      0 8px 24px -4px rgb(0 0 0 / 0.1);
-  }
-  .node-base--disabled {
-    opacity: 0.55;
-    filter: saturate(0.7);
-  }
-
-  /* Header — bare title row, no background, no bottom divider. The
-     tone dot + title sit directly on the node-base glass; the body's
-     own rounded surface (which sits below with margin and a light-gray
-     fill) is what visually separates the body from the header. */
-  .node-base__header {
-    display: flex;
-    align-items: center;
-    gap: 8px;
-    padding: 14px 12px;
-  }
-
-  /* Body — a quiet inset surface inside node-base. */
-  .node-base__body {
-    margin: 0 8px 8px;
-    border-radius: 10px;
-    background: var(--color-node-body);
-    padding: 8px 14px 10px;
-    display: flex;
-    flex-direction: column;
-    gap: 8px;
-  }
-
-  /* Inner card — transparent container inside the body. */
-  .node-base__inner {
-    border-radius: 8px;
-    padding: 4px 2px;
-  }
-
-  /* Socket compatibility feedback while dragging a connection (F2-3):
-     the target handle carries `connectingto` + `valid`/`invalid` classes
-     computed by React Flow from `isValidConnection`. Compatible targets
-     glow; incompatible targets (and their whole node) dim. */
-  .react-flow__handle.connectingto {
-    box-shadow:
-      0 0 0 5px color-mix(in srgb, var(--color-accent) 20%, transparent),
-      0 0 12px 2px var(--color-accent);
-    transform: translateY(-50%) scale(1.25);
-  }
-  .react-flow__handle.connectingto:not(.valid) {
-    box-shadow: none;
-    opacity: 0.3;
-  }
-  .react-flow__node:has(.react-flow__handle.connectingto:not(.valid)) {
-    opacity: 0.45;
-  }
-
-  /* MiniMap containment. react-flow's MiniMap renders an internal SVG
-     that ignores the parent panel's padding and rounded corners, so
-     node previews and the mask overlay can bleed past the boundary.
-     Force the root to clip to the rounded shape, kill the default
-     border, and paint the surface behind the minimap. */
-  .react-flow__minimap {
-    overflow: hidden !important;
-    border: none !important;
-    background: var(--color-surface) !important;
-    clip-path: inset(0 round 16px);
-  }
-  .react-flow__minimap svg {
-    background: transparent !important;
-    border-radius: 12px;
-  }
-  .react-flow__minimap .react-flow__minimap-mask {
-    fill: transparent !important;
-    stroke: none !important;
-  }
-
   /* Board canvas tools. React Flow gives the pane a grab cursor whenever
      panning is enabled; the canvas instead spells out which gesture each
      tool owns, so these overrides win regardless of stylesheet order. */

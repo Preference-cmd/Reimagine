@@ -5,19 +5,6 @@
  * in both files MUST stay in sync; drift between the two is a bug.
  */
 
-/**
- * Socket type → CSS color. The custom properties are plain theme-block
- * variables in theme.css, so a socket's color follows the active theme.
- */
-export const SOCKET_COLORS = {
-  model: "var(--color-socket-model)", // model and checkpoint route
-  conditioning: "var(--color-socket-conditioning)", // positive/negative conditioning route
-  latent: "var(--color-socket-latent)", // latent tensor route
-  image: "var(--color-socket-image)", // image artifact route
-} as const;
-
-export type SocketKind = keyof typeof SOCKET_COLORS;
-
 /** Font stacks — match --font-sans / --font-mono in theme.css. */
 export const FONT_STACKS = {
   sans: '"Geist", -apple-system, BlinkMacSystemFont, "PingFang SC", "Hiragino Sans GB", "Microsoft YaHei", system-ui, sans-serif',

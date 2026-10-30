@@ -49,9 +49,13 @@
   --color-err: #e5534b;
   --color-warn: #d9822b;
   --color-idle: #e3e2e1;
+  /* Sits behind dialogs and the command palette. */
+  --color-scrim: rgb(0 0 0 / 0.4);
 
   /* agent ink: gold marks only things the agent did or proposed.
-     Never use it for human actions, ordinary selection or decoration. */
+     Never use it for human actions, ordinary selection or decoration.
+     --color-agent-btn and --color-agent-ink are reserved for the agent
+     action UI, which has no consumer yet. */
   --color-agent: #8a5d06;
   --color-agent-btn: #94660c;
   --color-agent-soft: #fbf5e7;
@@ -173,12 +177,8 @@
   --spacing-topbar: 48px;
   --spacing-control-height: 32px;
 
-  /* Editor spacing, still read by the AIGC canvas. */
+  /* Board canvas dot-grid spacing. */
   --spacing-canvas-grid: 20px;
-  --spacing-node-padding: 12px;
-  --spacing-gutter-md: 16px;
-  --spacing-stack-tight: 4px;
-  --spacing-stack-base: 8px;
 }
 
 :root,
@@ -224,6 +224,7 @@
   --color-err: #ef6b73;
   --color-warn: #f0904a;
   --color-idle: #383737;
+  --color-scrim: rgb(0 0 0 / 0.52);
 
   --color-agent: #e9b949;
   --color-agent-btn: #e9b949;
@@ -238,58 +239,4 @@
   /* Restated: see the note at the top of the file. */
   --shadow-bezel:
     0 0 0 1px var(--color-hair), 0 0 0 5px var(--color-bezel-fill), 0 0 0 6px var(--color-hair-soft);
-}
-
-/* ─────────────────────────────────────────────────────────────────────
-   AIGC node editor tokens (out of scope for the workbench shell).
-
-   components/canvas and the node styles in globals.css still read these
-   directly, including dynamic var(--color-socket-${kind}) strings. They are
-   plain custom properties rather than theme keys so those strings keep
-   resolving, and they keep their own light/dark values. The scrim is also
-   used by dialogs. */
-:root,
-[data-theme="light"] {
-  --color-node: rgb(255 255 255 / 0.72);
-  --color-node-body: rgb(0 0 0 / 0.04);
-  --color-node-border: rgb(0 0 0 / 0.08);
-  --color-node-border-hover: rgb(0 0 0 / 0.12);
-  --color-node-highlight: rgb(255 255 255 / 0.8);
-
-  --color-edge-dash: #171717;
-  --color-edge-label: rgb(255 255 255 / 0.9);
-  --color-minimap-mask: rgb(255 255 255 / 0.55);
-  --color-scrim: rgb(0 0 0 / 0.4);
-
-  --color-socket-model: #f5a623;
-  --color-socket-conditioning: #f5a623;
-  --color-socket-latent: #7928ca;
-  --color-socket-image: #50e3c2;
-
-  /* Demo node tones that have no socket kind of their own. */
-  --color-tone-negative: #ff0080;
-  --color-tone-vae: #0070f3;
-}
-
-.dark,
-[data-theme="dark"] {
-  --color-node: rgb(23 23 23 / 0.76);
-  --color-node-body: rgb(255 255 255 / 0.06);
-  --color-node-border: rgb(255 255 255 / 0.1);
-  --color-node-border-hover: rgb(255 255 255 / 0.16);
-  --color-node-highlight: rgb(255 255 255 / 0.08);
-
-  --color-edge-dash: #f5f5f5;
-  --color-edge-label: rgb(23 23 23 / 0.92);
-  --color-minimap-mask: rgb(0 0 0 / 0.45);
-  --color-scrim: rgb(0 0 0 / 0.52);
-
-  --color-socket-model: #f5a623;
-  --color-socket-conditioning: #f5a623;
-  --color-socket-latent: #7928ca;
-  --color-socket-image: #50e3c2;
-
-  /* Restated so both theme blocks declare the same AIGC set. */
-  --color-tone-negative: #ff0080;
-  --color-tone-vae: #0070f3;
 }
