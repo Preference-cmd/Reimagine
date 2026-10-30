@@ -5,6 +5,8 @@ import {
   DynamicWorkflowRunListSchema,
   DynamicWorkflowSummaryListSchema,
   type AssetSummary,
+  type BoardItem,
+  type BoardItemKind,
   type CollectionSummary,
   type DynamicWorkflowRun,
   type DynamicWorkflowSummary,
@@ -138,6 +140,59 @@ export function filterLibraryRows(
     if (!needle) return true;
     return row.name.toLowerCase().includes(needle) || row.detail.toLowerCase().includes(needle);
   });
+}
+
+/* ───── Library rows on the board ───── */
+
+/** Card sizes used when a library row is placed, in flow px. */
+export const LIBRARY_PLACEMENT_SIZES: Record<LibraryRowType, { width: number; height: number }> = {
+  collection: { width: 300, height: 200 },
+  workflow: { width: 280, height: 160 },
+  run: { width: 280, height: 160 },
+  asset: { width: 240, height: 160 },
+};
+
+/**
+ * The board item a library row stands for. Imported files reuse `asset_ref`
+ * with the asset id in place of an artifact id; there is no file kind.
+ */
+export function libraryRowBoardKind(row: Pick<LibraryRow, "type" | "id">): BoardItemKind {
+  switch (row.type) {
+    case "collection":
+      return { type: "collection", collection_id: row.id };
+    case "workflow":
+      return { type: "workflow_ref", workflow_id: row.id };
+    case "run":
+      return { type: "run_ref", run_id: row.id };
+    case "asset":
+      return { type: "asset_ref", artifact_id: row.id };
+  }
+}
+
+/** True when `item` is the board copy of `row` (same kind and same id field). */
+export function boardItemMatchesRow(
+  item: BoardItem,
+  row: Pick<LibraryRow, "type" | "id">,
+): boolean {
+  const kind = item.kind as { type: string; [field: string]: unknown };
+  switch (row.type) {
+    case "collection":
+      return kind.type === "collection" && kind.collection_id === row.id;
+    case "workflow":
+      return kind.type === "workflow_ref" && kind.workflow_id === row.id;
+    case "run":
+      return kind.type === "run_ref" && kind.run_id === row.id;
+    case "asset":
+      return kind.type === "asset_ref" && kind.artifact_id === row.id;
+  }
+}
+
+/** Top-left position that centers a card of `size` on the given flow point. */
+export function centeredPosition(
+  center: { x: number; y: number },
+  size: { width: number; height: number },
+): { x: number; y: number } {
+  return { x: center.x - size.width / 2, y: center.y - size.height / 2 };
 }
 
 /* ───── Typed library reads (op_invoke + output parsing) ───── */

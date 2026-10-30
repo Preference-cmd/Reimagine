@@ -74,9 +74,30 @@ export function BoardCanvasInner() {
   const sessionPanelOpen = useUIStore((state) => state.sessionPanelOpen);
   const canvasFocusItemId = useUIStore((state) => state.canvasFocusItemId);
   const clearCanvasFocus = useUIStore((state) => state.clearCanvasFocus);
+  const setLastCanvasCenter = useUIStore((state) => state.setLastCanvasCenter);
 
   const pendingBatchRef = useRef<Promise<unknown>>(Promise.resolve());
   const pendingMovesRef = useRef<Map<string, PendingMove>>(new Map());
+
+  // Remembers the flow point under the center of the strip the session panel
+  // leaves free. The library places new items there, so it stays current on
+  // mount, on every pan/zoom end and when the panel opens or closes.
+  const updateCanvasCenter = useCallback(() => {
+    const wrapper = flowWrapperRef.current;
+    if (!wrapper) return;
+    const rect = wrapper.getBoundingClientRect();
+    if (rect.width <= 1 || rect.height <= 1) return;
+    const coverage = sessionPanelOpen ? SESSION_PANEL_COVERAGE : 0;
+    const center = screenToFlowPosition({
+      x: rect.left + (rect.width - coverage) / 2,
+      y: rect.top + rect.height / 2,
+    });
+    setLastCanvasCenter({ x: Math.round(center.x), y: Math.round(center.y) });
+  }, [screenToFlowPosition, sessionPanelOpen, setLastCanvasCenter]);
+
+  useEffect(() => {
+    updateCanvasCenter();
+  }, [updateCanvasCenter]);
 
   // Register undo/redo shortcuts target on mount and unregister on unmount
   useEffect(() => {
@@ -430,6 +451,7 @@ export function BoardCanvasInner() {
         edges={[]}
         onNodesChange={onNodesChange}
         onNodeDragStop={handleNodeDragStop}
+        onMoveEnd={updateCanvasCenter}
         onPaneClick={handlePaneClick}
         nodeTypes={nodeTypes}
         selectionOnDrag={tool === "select"}

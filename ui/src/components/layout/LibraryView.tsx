@@ -6,12 +6,14 @@ import {
   Layers,
   Library,
   Loader2,
+  LocateFixed,
   Play,
+  Plus,
   Search,
   SearchX,
   Upload,
 } from "lucide-react";
-import { useNavigate, useSearch } from "@tanstack/react-router";
+import { Link, useNavigate, useSearch } from "@tanstack/react-router";
 import { useQueryClient } from "@tanstack/react-query";
 import { toast } from "sonner";
 import * as m from "$paraglide/messages";
@@ -20,11 +22,17 @@ import { cn } from "@/lib/utils";
 import { useReducedMotion } from "@/hooks/useReducedMotion";
 import { useLibraryRows, libraryQueryKeys } from "@/hooks/useLibrary";
 import { useProjectStore } from "@/store/project";
+import { useBoardStore } from "@/store/board";
 import { useUIStore } from "@/store/uiStore";
 import { isTauri, opInvoke } from "@/ipc";
+import { buildAddItemCommand, createBoardBatch } from "@/board/batch";
 import {
+  boardItemMatchesRow,
+  centeredPosition,
   filterLibraryRows,
   isLibraryFilter,
+  LIBRARY_PLACEMENT_SIZES,
+  libraryRowBoardKind,
   type LibraryFilter,
   type LibraryRow,
   type LibraryRowType,
@@ -52,7 +60,143 @@ function rowTypeLabel(type: LibraryRowType): string {
   }
 }
 
-function LibraryTable({ rows }: { rows: LibraryRow[] }) {
+const PLACE_BUTTON =
+  "inline-flex h-7 cursor-pointer items-center gap-1.5 rounded-full bg-surface px-2.5 text-caption font-medium whitespace-nowrap text-fg shadow-[inset_0_0_0_1px_var(--color-hair-strong),var(--shadow-hi)] transition-colors hover:bg-hover focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/30 disabled:cursor-not-allowed disabled:opacity-50";
+
+const SHOW_BUTTON =
+  "inline-flex h-7 cursor-pointer items-center gap-1.5 rounded-full px-2.5 text-caption font-medium whitespace-nowrap text-fg2 transition-colors hover:bg-app hover:text-fg focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/30";
+
+function LibraryRowView({ row, projectId }: { row: LibraryRow; projectId: string }) {
+  const Icon = ROW_ICONS[row.type];
+  const navigate = useNavigate();
+  const [placing, setPlacing] = useState(false);
+  // A boolean selector over the board items: the row flips as soon as a
+  // snapshot carrying this item lands, without subscribing to unrelated state.
+  const onBoard = useBoardStore((state) =>
+    state.items.some((item) => boardItemMatchesRow(item, row)),
+  );
+
+  function handleShow() {
+    const item = useBoardStore
+      .getState()
+      .items.find((candidate) => boardItemMatchesRow(candidate, row));
+    if (item) useUIStore.getState().requestCanvasFocus(item.id);
+    void navigate({ to: "/" });
+  }
+
+  async function handlePlace() {
+    if (placing) return;
+    setPlacing(true);
+    try {
+      let board = useBoardStore.getState();
+      if (board.id === "") {
+        // Without a snapshot the version is 0 and the board may already hold
+        // this item, so load first and re-check before adding a second copy.
+        await board.load(projectId);
+        board = useBoardStore.getState();
+        if (board.items.some((item) => boardItemMatchesRow(item, row))) return;
+      }
+
+      const center = useUIStore.getState().lastCanvasCenter ?? { x: 0, y: 0 };
+      const size = LIBRARY_PLACEMENT_SIZES[row.type];
+      const command = buildAddItemCommand({
+        kind: libraryRowBoardKind(row),
+        position: centeredPosition(center, size),
+        size,
+      });
+      const batch = createBoardBatch(board.version, [command]);
+      const result = await useBoardStore.getState().apply(projectId, batch);
+
+      if (result.status === "rejected") {
+        const firstDiag = result.diagnostics?.[0] as { message?: string } | undefined;
+        toast.error(firstDiag?.message ?? m["library.placeFailed"]());
+        await useBoardStore
+          .getState()
+          .load(projectId)
+          .catch(() => false);
+        return;
+      }
+
+      // The host accepted the command, so refresh the snapshot now instead of
+      // waiting for the board event; the row flips without a manual reload.
+      await useBoardStore
+        .getState()
+        .load(projectId)
+        .catch(() => false);
+      toast.success(m["library.placed"]());
+    } catch {
+      toast.error(m["library.placeFailed"]());
+    } finally {
+      setPlacing(false);
+    }
+  }
+
+  return (
+    <tr className="group" data-testid="library-row">
+      <td className="h-[46px] rounded-l-xs border-b border-hair-soft px-3 transition-colors group-hover:bg-hover">
+        <span className="flex min-w-0 items-center gap-2.5 font-medium text-fg">
+          <Icon
+            className="size-3.5 shrink-0 text-fg3"
+            strokeWidth={ICON_STROKE}
+            aria-hidden="true"
+          />
+          {row.type === "collection" ? (
+            <Link
+              to="/collections/$id"
+              params={{ id: row.id }}
+              className="min-w-0 truncate rounded-xs hover:underline focus-visible:ring-2 focus-visible:ring-accent/30 focus-visible:outline-none"
+              title={row.name}
+              data-testid="library-collection-link"
+            >
+              {row.name}
+            </Link>
+          ) : (
+            <span className="truncate" title={row.name}>
+              {row.name}
+            </span>
+          )}
+        </span>
+      </td>
+      <td className="h-[46px] truncate border-b border-hair-soft px-3 text-fg2 transition-colors group-hover:bg-hover">
+        {rowTypeLabel(row.type)}
+      </td>
+      <td
+        className="h-[46px] truncate border-b border-hair-soft px-3 text-fg2 transition-colors group-hover:bg-hover"
+        title={row.detail}
+      >
+        {row.detail}
+      </td>
+      <td className="h-[46px] rounded-r-xs border-b border-hair-soft px-3 text-right transition-colors group-hover:bg-hover">
+        {onBoard ? (
+          <button
+            type="button"
+            onClick={handleShow}
+            data-testid="library-row-action"
+            data-action="show"
+            className={SHOW_BUTTON}
+          >
+            <LocateFixed className="size-3.5" strokeWidth={ICON_STROKE} aria-hidden="true" />
+            {m["library.showInCanvas"]()}
+          </button>
+        ) : (
+          <button
+            type="button"
+            onClick={() => void handlePlace()}
+            disabled={placing}
+            data-testid="library-row-action"
+            data-action="place"
+            className={PLACE_BUTTON}
+          >
+            <Plus className="size-3.5" strokeWidth={ICON_STROKE} aria-hidden="true" />
+            {m["library.placeOnCanvas"]()}
+          </button>
+        )}
+      </td>
+    </tr>
+  );
+}
+
+function LibraryTable({ rows, projectId }: { rows: LibraryRow[]; projectId: string }) {
   return (
     <div className="min-w-0 overflow-x-auto">
       <table
@@ -63,7 +207,7 @@ function LibraryTable({ rows }: { rows: LibraryRow[] }) {
           <tr className="text-left text-caption text-fg2">
             <th
               scope="col"
-              className="w-[44%] border-b border-hair px-3 pb-2 font-normal whitespace-nowrap"
+              className="w-[41%] border-b border-hair px-3 pb-2 font-normal whitespace-nowrap"
             >
               {m["library.columnName"]()}
             </th>
@@ -79,37 +223,18 @@ function LibraryTable({ rows }: { rows: LibraryRow[] }) {
             >
               {m["library.columnDetails"]()}
             </th>
+            <th
+              scope="col"
+              className="w-[158px] border-b border-hair px-3 pb-2 text-right font-normal whitespace-nowrap"
+            >
+              <span className="sr-only">{m["library.actions"]()}</span>
+            </th>
           </tr>
         </thead>
         <tbody>
-          {rows.map((row) => {
-            const Icon = ROW_ICONS[row.type];
-            return (
-              <tr key={`${row.type}:${row.id}`} className="group" data-testid="library-row">
-                <td className="h-[46px] rounded-l-xs border-b border-hair-soft px-3 transition-colors group-hover:bg-hover">
-                  <span className="flex min-w-0 items-center gap-2.5 font-medium text-fg">
-                    <Icon
-                      className="size-3.5 shrink-0 text-fg3"
-                      strokeWidth={ICON_STROKE}
-                      aria-hidden="true"
-                    />
-                    <span className="truncate" title={row.name}>
-                      {row.name}
-                    </span>
-                  </span>
-                </td>
-                <td className="h-[46px] truncate border-b border-hair-soft px-3 text-fg2 transition-colors group-hover:bg-hover">
-                  {rowTypeLabel(row.type)}
-                </td>
-                <td
-                  className="h-[46px] truncate rounded-r-xs border-b border-hair-soft px-3 text-fg2 transition-colors group-hover:bg-hover"
-                  title={row.detail}
-                >
-                  {row.detail}
-                </td>
-              </tr>
-            );
-          })}
+          {rows.map((row) => (
+            <LibraryRowView key={`${row.type}:${row.id}`} row={row} projectId={projectId} />
+          ))}
         </tbody>
       </table>
     </div>
@@ -118,8 +243,8 @@ function LibraryTable({ rows }: { rows: LibraryRow[] }) {
 
 /**
  * Library mode: the workspace's collections, dynamic workflows, runs and
- * imported files in one filterable table. Row actions (place/show on the
- * canvas) are owned by the next stage.
+ * imported files in one filterable table. Each row can be placed on the canvas
+ * at the last visible center, or focused there when it is already on it.
  */
 export function LibraryView() {
   const panelOpen = useUIStore((state) => state.sessionPanelOpen);
@@ -331,7 +456,7 @@ export function LibraryView() {
             </p>
           </div>
         ) : (
-          <LibraryTable rows={visibleRows} />
+          <LibraryTable rows={visibleRows} projectId={projectId} />
         )}
       </div>
     </div>

@@ -44,6 +44,15 @@ type UIState = {
   requestCanvasFocus: (id: string) => void;
   clearCanvasFocus: () => void;
 
+  // ── Canvas center memory ────────────────────────────────
+  /**
+   * Flow coordinates at the center of the canvas strip the session panel
+   * leaves visible, kept current by the canvas. The library places new items
+   * here; null until the canvas has measured itself in this session.
+   */
+  lastCanvasCenter: { x: number; y: number } | null;
+  setLastCanvasCenter: (center: { x: number; y: number }) => void;
+
   // ── Settings nav ────────────────────────────────────────
   settingsNavId: string | null;
   setSettingsNavId: (id: string | null) => void;
@@ -75,6 +84,10 @@ export const useUIStore = create<UIState>()((set) => ({
   canvasFocusItemId: null,
   requestCanvasFocus: (id: string) => set({ canvasFocusItemId: id }),
   clearCanvasFocus: () => set({ canvasFocusItemId: null }),
+
+  // Canvas center memory
+  lastCanvasCenter: null,
+  setLastCanvasCenter: (center) => set({ lastCanvasCenter: center }),
 
   // Settings nav
   settingsNavId: "general",
