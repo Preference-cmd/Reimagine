@@ -374,7 +374,7 @@ function mockDemoActivity(projectId: string): ActivityRecord[] {
   ];
 }
 
-/** Oldest first would break the feed; every project lists newest first. */
+/** Activity for one project, seeded newest first on first use. */
 function mockActivityFor(projectId: string): ActivityRecord[] {
   let records = mockActivity[projectId];
   if (!records) {
@@ -770,7 +770,14 @@ export async function mockApplyBoardCommands(input: {
   }
 
   const entryId = `board-history:${batch?.id ?? rand("batch")}`;
-  const targets = [...new Set(commands.map((command) => command.item_id))];
+  // Mirrors the host: one target per changed item, in change order.
+  const targets = [
+    ...new Set(
+      changes
+        .map((change) => (change as { item_id?: string }).item_id)
+        .filter((id): id is string => typeof id === "string"),
+    ),
+  ];
   history.past.push({
     items: JSON.parse(JSON.stringify(board.items)),
     entryId,
