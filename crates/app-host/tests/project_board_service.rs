@@ -232,7 +232,11 @@ async fn board_apply_persists_emits_changed_and_rejects_stale_versions() {
     // Undo restores the empty board, persists it, and re-emits the event.
     let undo = host
         .board_service()
-        .undo(&project_id, CommandActor::new(CommandActorKind::Human))
+        .undo(
+            &project_id,
+            CommandActor::new(CommandActorKind::Human),
+            None,
+        )
         .await
         .expect("undo succeeds")
         .expect("history entry exists");
@@ -278,7 +282,11 @@ async fn board_apply_persists_emits_changed_and_rejects_stale_versions() {
     // Redo persists the restored item and publishes one more shared event.
     let redo = host
         .board_service()
-        .redo(&project_id, CommandActor::new(CommandActorKind::Human))
+        .redo(
+            &project_id,
+            CommandActor::new(CommandActorKind::Human),
+            None,
+        )
         .await
         .expect("redo succeeds")
         .expect("history entry exists");

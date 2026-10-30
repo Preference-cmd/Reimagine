@@ -306,12 +306,32 @@ export function applyBoardCommands(
   );
 }
 
-export function undoBoard(projectId: string): Promise<BoardCommandResultDto | null> {
-  return dispatch("undo_board", null, { projectId }, mockUndoBoard);
+/** Undo the top board history entry, or reject when `expectedEntryId` is not
+ *  the current top. Passing null keeps the unguarded host behavior. */
+export function undoBoard(
+  projectId: string,
+  expectedEntryId?: string | null,
+): Promise<BoardCommandResultDto | null> {
+  return dispatch(
+    "undo_board",
+    null,
+    { projectId, expectedEntryId: expectedEntryId ?? null },
+    mockUndoBoard,
+  );
 }
 
-export function redoBoard(projectId: string): Promise<BoardCommandResultDto | null> {
-  return dispatch("redo_board", null, { projectId }, mockRedoBoard);
+/** Redo the top undone board history entry, or reject when `expectedEntryId`
+ *  is not the current top. Passing null keeps the unguarded host behavior. */
+export function redoBoard(
+  projectId: string,
+  expectedEntryId?: string | null,
+): Promise<BoardCommandResultDto | null> {
+  return dispatch(
+    "redo_board",
+    null,
+    { projectId, expectedEntryId: expectedEntryId ?? null },
+    mockRedoBoard,
+  );
 }
 
 /* ───── Workflow persistence (F1-1/F1-2) ───── */

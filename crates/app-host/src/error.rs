@@ -1,5 +1,7 @@
 use reimagine_config::ConfigError;
-use reimagine_core::model::{CollectionId, DocumentVersion, ProjectId, RunId, WorkflowId};
+use reimagine_core::model::{
+    CollectionId, DocumentVersion, HistoryEntryId, ProjectId, RunId, WorkflowId,
+};
 use reimagine_runtime::RuntimeServiceError;
 
 use crate::artifact_access::ArtifactAccessError;
@@ -46,6 +48,18 @@ pub enum AppHostError {
         workflow_id: WorkflowId,
         expected: DocumentVersion,
         actual: DocumentVersion,
+    },
+    /// A board undo/redo request named a history entry that is not the
+    /// current top of that direction's stack. The board was not mutated and
+    /// no activity record was appended. The details carry both current tops
+    /// so a caller can re-synchronize its own stacks.
+    BoardHistoryMismatch {
+        project_id: ProjectId,
+        /// The requested direction: `"undo"` or `"redo"`.
+        action: &'static str,
+        expected_entry_id: HistoryEntryId,
+        undo_entry_id: Option<HistoryEntryId>,
+        redo_entry_id: Option<HistoryEntryId>,
     },
     /// The workflow commands applied in memory but their atomic
     /// persistence to `projects/{project_id}/workflows/` failed (AR-08).
@@ -142,6 +156,18 @@ impl std::fmt::Display for AppHostError {
                 f,
                 "workflow `{workflow_id}` version conflict: expected {expected}, got {actual}"
             ),
+            Self::BoardHistoryMismatch {
+                project_id,
+                action,
+                expected_entry_id,
+                undo_entry_id,
+                redo_entry_id,
+            } => write!(
+                f,
+                "board {action} for project `{project_id}` expected history entry `{expected_entry_id}`, but the current undo entry is {} and the current redo entry is {}",
+                option_entry(undo_entry_id),
+                option_entry(redo_entry_id)
+            ),
             Self::WorkflowPersistFailed {
                 workflow_id,
                 message,
@@ -201,6 +227,7 @@ impl AppHostError {
             Self::UnknownRun { .. } => AppHostErrorCode::NotFound,
             Self::WorkflowIdPathUnsafe { .. } => AppHostErrorCode::PermissionDenied,
             Self::WorkflowVersionConflict { .. } => AppHostErrorCode::Conflict,
+            Self::BoardHistoryMismatch { .. } => AppHostErrorCode::Conflict,
             Self::WorkflowPersistFailed { .. } => AppHostErrorCode::Io,
             Self::Io { .. } => AppHostErrorCode::Io,
             Self::WorkflowJson { .. } => AppHostErrorCode::WorkflowInvalid,
@@ -278,6 +305,19 @@ impl AppHostError {
                 "expected": expected.to_string(),
                 "actual": actual.to_string(),
             })),
+            Self::BoardHistoryMismatch {
+                project_id,
+                action,
+                expected_entry_id,
+                undo_entry_id,
+                redo_entry_id,
+            } => Some(serde_json::json!({
+                "project_id": project_id.to_string(),
+                "action": action,
+                "expected_entry_id": expected_entry_id.to_string(),
+                "undo_entry_id": undo_entry_id.as_ref().map(ToString::to_string),
+                "redo_entry_id": redo_entry_id.as_ref().map(ToString::to_string),
+            })),
             Self::WorkflowPersistFailed { workflow_id, .. } => {
                 Some(serde_json::json!({ "workflow_id": workflow_id.to_string() }))
             }
@@ -301,6 +341,10 @@ impl AppHostError {
 }
 
 impl std::error::Error for AppHostError {}
+
+fn option_entry(entry_id: &Option<HistoryEntryId>) -> &str {
+    entry_id.as_ref().map_or("none", HistoryEntryId::as_str)
+}
 
 impl From<reimagine_model_acquisition::ModelAcquisitionError> for AppHostError {
     fn from(value: reimagine_model_acquisition::ModelAcquisitionError) -> Self {

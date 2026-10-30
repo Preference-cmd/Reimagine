@@ -217,14 +217,31 @@ impl BoardService {
     ///
     /// `actor` is the operator asking for the undo; it is recorded in the
     /// activity log so a future agent path can pass an agent actor instead of
-    /// the UI's human actor.
+    /// the UI's human actor. When `expected` names the entry the caller
+    /// believes is on top, a mismatch rejects the request with
+    /// [`AppHostError::BoardHistoryMismatch`] before the board changes;
+    /// `None` keeps the plain "undo the current top" behavior.
     pub async fn undo(
         &self,
         project_id: &ProjectId,
         actor: CommandActor,
+        expected: Option<&HistoryEntryId>,
     ) -> AppHostResult<Option<CommandResult<BoardChange>>> {
         let session = self.session_for(project_id).await?;
         let mut guard = session.lock().await;
+        let current_undo = guard.undo_entry_id().cloned();
+        let current_redo = guard.redo_entry_id().cloned();
+        if let Some(expected) = expected
+            && current_undo.as_ref() != Some(expected)
+        {
+            return Err(AppHostError::BoardHistoryMismatch {
+                project_id: project_id.clone(),
+                action: "undo",
+                expected_entry_id: expected.clone(),
+                undo_entry_id: current_undo,
+                redo_entry_id: current_redo,
+            });
+        }
         let Some(result) = guard.undo() else {
             return Ok(None);
         };
@@ -246,14 +263,29 @@ impl BoardService {
 
     /// Redo the last undone batch, persisting the restored document.
     ///
-    /// `actor` is recorded in the activity log, as for [`Self::undo`].
+    /// `actor` is recorded in the activity log, as for [`Self::undo`], and
+    /// `expected` guards the redo stack's top the same way.
     pub async fn redo(
         &self,
         project_id: &ProjectId,
         actor: CommandActor,
+        expected: Option<&HistoryEntryId>,
     ) -> AppHostResult<Option<CommandResult<BoardChange>>> {
         let session = self.session_for(project_id).await?;
         let mut guard = session.lock().await;
+        let current_undo = guard.undo_entry_id().cloned();
+        let current_redo = guard.redo_entry_id().cloned();
+        if let Some(expected) = expected
+            && current_redo.as_ref() != Some(expected)
+        {
+            return Err(AppHostError::BoardHistoryMismatch {
+                project_id: project_id.clone(),
+                action: "redo",
+                expected_entry_id: expected.clone(),
+                undo_entry_id: current_undo,
+                redo_entry_id: current_redo,
+            });
+        }
         let Some(result) = guard.redo() else {
             return Ok(None);
         };

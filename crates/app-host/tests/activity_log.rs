@@ -195,14 +195,14 @@ async fn board_apply_undo_redo_and_op_record_are_listed_newest_first() {
         .to_string();
     assert!(
         host.board_service()
-            .undo(&project, human_actor())
+            .undo(&project, human_actor(), None)
             .await
             .unwrap()
             .is_some()
     );
     assert!(
         host.board_service()
-            .redo(&project, human_actor())
+            .redo(&project, human_actor(), None)
             .await
             .unwrap()
             .is_some()
@@ -300,7 +300,7 @@ async fn board_apply_undo_redo_and_op_record_are_listed_newest_first() {
     // append the op made, not the note that preceded it.
     let undone = host
         .board_service()
-        .undo(&project, human_actor())
+        .undo(&project, human_actor(), None)
         .await
         .unwrap()
         .expect("the collection append is the newest history entry");
@@ -328,7 +328,7 @@ async fn activity_records_persist_across_a_host_restart() {
 
     apply_note(&host, &project, 0, "batch-persist-1", "note-1").await;
     host.board_service()
-        .undo(&project, human_actor())
+        .undo(&project, human_actor(), None)
         .await
         .unwrap();
     invoke(
@@ -597,7 +597,7 @@ async fn undo_with_empty_history_appends_nothing_and_records_the_actor() {
 
     assert!(
         host.board_service()
-            .undo(&project, human_actor())
+            .undo(&project, human_actor(), None)
             .await
             .unwrap()
             .is_none()
@@ -612,14 +612,14 @@ async fn undo_with_empty_history_appends_nothing_and_records_the_actor() {
 
     let undone = host
         .board_service()
-        .undo(&project, agent_actor("Agent"))
+        .undo(&project, agent_actor("Agent"), None)
         .await
         .unwrap()
         .expect("history entry exists");
     assert_eq!(undone.status(), CommandStatus::Applied);
     assert!(
         host.board_service()
-            .undo(&project, human_actor())
+            .undo(&project, human_actor(), None)
             .await
             .unwrap()
             .is_none(),

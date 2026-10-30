@@ -2,7 +2,7 @@
 
 use crate::command::{CommandBatch, CommandResult, CommandStatus};
 use crate::diagnostic::Diagnostic;
-use crate::model::DocumentVersion;
+use crate::model::{DocumentVersion, HistoryEntryId};
 
 use super::history::{History, HistoryEntry};
 use super::traits::Document;
@@ -124,6 +124,19 @@ impl<D: Document> DocumentSession<D> {
                 )
             }
         }
+    }
+
+    /// Id of the history entry [`Self::undo`] would restore, if any.
+    ///
+    /// Callers that hold a copy of the stack top can compare it with this
+    /// value before undo mutates the document.
+    pub fn undo_entry_id(&self) -> Option<&HistoryEntryId> {
+        self.history.entry_to_undo().map(HistoryEntry::id)
+    }
+
+    /// Id of the history entry [`Self::redo`] would re-apply, if any.
+    pub fn redo_entry_id(&self) -> Option<&HistoryEntryId> {
+        self.history.entry_to_redo().map(HistoryEntry::id)
     }
 
     /// Undo the last applied command batch.

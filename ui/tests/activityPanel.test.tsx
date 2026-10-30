@@ -277,10 +277,10 @@ describe("activity panel feed", () => {
     render(<SessionPanel />);
 
     fireEvent.click(within(rowFor("applied")).getByTestId("activity-undo"));
-    await waitFor(() => expect(undoSpy).toHaveBeenCalledWith("default"));
+    await waitFor(() => expect(undoSpy).toHaveBeenCalledWith("default", "h-2"));
 
     fireEvent.click(within(rowFor("undone")).getByTestId("activity-redo"));
-    await waitFor(() => expect(redoSpy).toHaveBeenCalledWith("default"));
+    await waitFor(() => expect(redoSpy).toHaveBeenCalledWith("default", "h-3"));
   });
 
   test("a failed undo is toasted", async () => {

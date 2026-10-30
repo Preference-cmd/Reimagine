@@ -16,8 +16,14 @@ type BoardState = BoardSnapshot & {
   load: (projectId: string) => Promise<boolean>;
   preview: (projectId: string, commandBatch: unknown) => Promise<BoardCommandResultDto>;
   apply: (projectId: string, commandBatch: unknown) => Promise<BoardCommandResultDto>;
-  undo: (projectId: string) => Promise<BoardCommandResultDto | null>;
-  redo: (projectId: string) => Promise<BoardCommandResultDto | null>;
+  undo: (
+    projectId: string,
+    expectedEntryId?: string | null,
+  ) => Promise<BoardCommandResultDto | null>;
+  redo: (
+    projectId: string,
+    expectedEntryId?: string | null,
+  ) => Promise<BoardCommandResultDto | null>;
 };
 
 const empty = (): BoardSnapshot & { snapshotVersion: number } => ({
@@ -63,15 +69,15 @@ export const useBoardStore = create<BoardState>((set, get) => ({
     }
     return result;
   },
-  undo: async (projectId) => {
-    const result = await undoBoard(projectId);
+  undo: async (projectId, expectedEntryId) => {
+    const result = await undoBoard(projectId, expectedEntryId);
     if (result && get().projectId === projectId && result.version >= get().version) {
       set({ version: result.version });
     }
     return result;
   },
-  redo: async (projectId) => {
-    const result = await redoBoard(projectId);
+  redo: async (projectId, expectedEntryId) => {
+    const result = await redoBoard(projectId, expectedEntryId);
     if (result && get().projectId === projectId && result.version >= get().version) {
       set({ version: result.version });
     }

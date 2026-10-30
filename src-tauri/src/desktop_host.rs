@@ -27,7 +27,7 @@ use reimagine_core::command::{
     OperationContext, WorkflowChange, WorkflowCommand,
 };
 use reimagine_core::event::{Event, EventBus};
-use reimagine_core::model::ProjectId;
+use reimagine_core::model::{HistoryEntryId, ProjectId};
 use reimagine_core::task::CancelToken;
 use reimagine_core::workflow::Workflow;
 #[cfg(feature = "aigc")]
@@ -286,12 +286,18 @@ impl DesktopHostState {
     pub async fn undo_board(
         &self,
         project_id: &str,
+        expected_entry_id: Option<&str>,
     ) -> Result<Option<BoardCommandResultDto>, AppHostError> {
         let project_id = self.require_project(project_id).await?;
+        let expected = expected_entry_id.map(HistoryEntryId::from);
         let workspace = self.workspace_arc();
         Ok(workspace
             .board_service()
-            .undo(&project_id, CommandActor::new(CommandActorKind::Human))
+            .undo(
+                &project_id,
+                CommandActor::new(CommandActorKind::Human),
+                expected.as_ref(),
+            )
             .await?
             .map(Into::into))
     }
@@ -299,12 +305,18 @@ impl DesktopHostState {
     pub async fn redo_board(
         &self,
         project_id: &str,
+        expected_entry_id: Option<&str>,
     ) -> Result<Option<BoardCommandResultDto>, AppHostError> {
         let project_id = self.require_project(project_id).await?;
+        let expected = expected_entry_id.map(HistoryEntryId::from);
         let workspace = self.workspace_arc();
         Ok(workspace
             .board_service()
-            .redo(&project_id, CommandActor::new(CommandActorKind::Human))
+            .redo(
+                &project_id,
+                CommandActor::new(CommandActorKind::Human),
+                expected.as_ref(),
+            )
             .await?
             .map(Into::into))
     }

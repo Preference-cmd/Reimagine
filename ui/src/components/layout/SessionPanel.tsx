@@ -1,11 +1,11 @@
 import { useEffect, useMemo, useState, type ComponentType } from "react";
 import { Activity, Bot, CircleAlert, Cpu, Loader2, UserRound, X } from "lucide-react";
-import { toast } from "sonner";
 import { getLocale } from "$paraglide/runtime";
 import * as m from "$paraglide/messages";
 import { ICON_STROKE } from "@/design/tokens";
 import { cn } from "@/lib/utils";
 import { activityActorMatches, type ActivityActorFilter } from "@/lib/activity";
+import { runBoardHistory } from "@/lib/boardHistory";
 import { useActivityStore, selectRedoEntryId, selectUndoEntryId } from "@/store/activity";
 import { useBoardStore } from "@/store/board";
 import { useProjectStore } from "@/store/project";
@@ -162,18 +162,7 @@ export function SessionPanel() {
     if (pending) return;
     setPending(action);
     try {
-      const board = useBoardStore.getState();
-      const result =
-        action === "undo"
-          ? await board.undo(useProjectStore.getState().activeProjectId)
-          : await board.redo(useProjectStore.getState().activeProjectId);
-      if (!result) {
-        toast.error(action === "undo" ? m["activity.undoFailed"]() : m["activity.redoFailed"]());
-      }
-    } catch (failure) {
-      toast.error(action === "undo" ? m["activity.undoFailed"]() : m["activity.redoFailed"](), {
-        description: failure instanceof Error ? failure.message : String(failure),
-      });
+      await runBoardHistory(action);
     } finally {
       setPending(null);
     }

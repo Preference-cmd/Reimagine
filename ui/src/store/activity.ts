@@ -21,10 +21,27 @@ export type ActivityState = ActivityStacks & {
   /** True once the first page resolved; keeps remounts from refetching. */
   loaded: boolean;
   error: string | null;
-  load: (projectId: string) => Promise<void>;
+  /**
+   * First page for `projectId`; a reload of the same project is a no-op
+   * unless `force` is set. A forced load refetches the page while keeping the
+   * project's stacks.
+   */
+  load: (projectId: string, options?: { force?: boolean }) => Promise<void>;
   loadMore: () => Promise<void>;
   append: (projectId: string, record: ActivityRecord) => void;
+  /**
+   * Replace a project's stacks with the host's current tops after a rejected
+   * undo/redo. The host is authoritative here: its entry is the only one the
+   * next request can act on.
+   */
+  resyncHistory: (projectId: string, tops: ActivityHistoryResync) => void;
   reset: () => void;
+};
+
+/** Host-side tops after the feed and the board history disagreed. */
+export type ActivityHistoryResync = {
+  undoEntryId: string | null;
+  redoEntryId: string | null;
 };
 
 function errorMessage(error: unknown): string {
@@ -78,18 +95,21 @@ function rememberStacks(projectId: string, stacks: ActivityStacks): void {
  * hook; the panel reads this store when it opens.
  *
  * Loaded pages only fill `records`. The undo/redo stacks start empty and
- * change solely through `append`: the board history lives in memory, so
- * history from before a restart has nothing to target. Loaded pages never
- * seed the stacks, but the stacks a project accrued during the session are
- * restored when the feed returns to it.
+ * change solely through `append`, or through an explicit `resyncHistory` when
+ * the host rejects a stale top: the board history lives in memory, so history
+ * from before a restart has nothing to target. Loaded pages never seed the
+ * stacks by themselves, but the stacks a project accrued during the session
+ * are restored when the feed returns to it.
  */
 export const useActivityStore = create<ActivityState>()((set, get) => ({
   ...emptyState(),
 
-  /** First page for `projectId`; a reload of the same project is a no-op. */
-  load: async (projectId) => {
+  /** First page for `projectId`; reloads only when forced. */
+  load: async (projectId, options = {}) => {
     const current = get();
-    if (current.projectId === projectId && (current.loading || current.loaded)) return;
+    if (!options.force && current.projectId === projectId && (current.loading || current.loaded)) {
+      return;
+    }
 
     const sequence = ++readSequence;
     const stacks = stacksFor(projectId);
@@ -166,6 +186,17 @@ export const useActivityStore = create<ActivityState>()((set, get) => ({
       undoStack: stacks.undoStack,
       redoStack: stacks.redoStack,
     });
+  },
+
+  /** Replace a project's stacks with the host's current tops. */
+  resyncHistory: (projectId, tops) => {
+    const stacks: ActivityStacks = {
+      undoStack: tops.undoEntryId ? [tops.undoEntryId] : [],
+      redoStack: tops.redoEntryId ? [tops.redoEntryId] : [],
+    };
+    rememberStacks(projectId, stacks);
+    if (get().projectId !== projectId) return;
+    set({ undoStack: stacks.undoStack, redoStack: stacks.redoStack });
   },
 
   /** Clears the feed and the session's per-project stacks. */

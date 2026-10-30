@@ -1130,13 +1130,13 @@ describe("Board canvas interactions and command batches", () => {
     await act(async () => {
       fireEvent.keyDown(window, { key: "z", metaKey: true });
     });
-    expect(undoSpy).toHaveBeenCalledWith("proj-1");
+    expect(undoSpy).toHaveBeenCalledWith("proj-1", undefined);
 
     // 3. Cmd+Shift+Z on window triggers board redo
     await act(async () => {
       fireEvent.keyDown(window, { key: "z", metaKey: true, shiftKey: true });
     });
-    expect(redoSpy).toHaveBeenCalledWith("proj-1");
+    expect(redoSpy).toHaveBeenCalledWith("proj-1", undefined);
   });
 
   test("undo/redo shortcuts: when BoardCanvas is unmounted, delegates to workflow store undo", async () => {

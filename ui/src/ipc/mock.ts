@@ -297,6 +297,42 @@ const mockBoardHistory: Record<
   }
 > = {};
 
+function mockBoardEntryId(
+  history: { past: MockBoardHistoryEntry[]; future: MockBoardHistoryEntry[] } | undefined,
+  direction: "past" | "future",
+): string | null {
+  const entries = history?.[direction];
+  if (!entries || entries.length === 0) return null;
+  return entries[entries.length - 1].entryId;
+}
+
+/**
+ * Mirrors the host's history guard: reject before touching the board, the
+ * history stacks or the activity feed. The details carry both current tops so
+ * the UI can resynchronize its stacks.
+ */
+function rejectBoardHistoryMismatch(
+  projectId: string,
+  action: "undo" | "redo",
+  expectedEntryId: string,
+  history: { past: MockBoardHistoryEntry[]; future: MockBoardHistoryEntry[] } | undefined,
+): never {
+  const undoEntryId = mockBoardEntryId(history, "past");
+  const redoEntryId = mockBoardEntryId(history, "future");
+  const currentEntryId = action === "undo" ? undoEntryId : redoEntryId;
+  throw {
+    code: "conflict",
+    message: `board ${action} for project \`${projectId}\` expected history entry \`${expectedEntryId}\`, but the current ${action} entry is ${currentEntryId === null ? "none" : `\`${currentEntryId}\``}`,
+    details: {
+      project_id: projectId,
+      action,
+      expected_entry_id: expectedEntryId,
+      undo_entry_id: undoEntryId,
+      redo_entry_id: redoEntryId,
+    },
+  };
+}
+
 export function mockResetBoard(projectId?: string): void {
   if (projectId) {
     delete mockBoards[projectId];
@@ -817,9 +853,14 @@ export async function mockApplyBoardCommands(input: {
 
 export async function mockUndoBoard(input: {
   projectId: string;
+  expectedEntryId?: string | null;
 }): Promise<BoardCommandResultDto | null> {
   const board = await mockGetBoardSnapshot({ projectId: input.projectId });
   const history = mockBoardHistory[input.projectId];
+  const expected = input.expectedEntryId;
+  if (expected != null && mockBoardEntryId(history, "past") !== expected) {
+    rejectBoardHistoryMismatch(input.projectId, "undo", expected, history);
+  }
   if (!history || history.past.length === 0) {
     return null;
   }
@@ -861,9 +902,14 @@ export async function mockUndoBoard(input: {
 
 export async function mockRedoBoard(input: {
   projectId: string;
+  expectedEntryId?: string | null;
 }): Promise<BoardCommandResultDto | null> {
   const board = await mockGetBoardSnapshot({ projectId: input.projectId });
   const history = mockBoardHistory[input.projectId];
+  const expected = input.expectedEntryId;
+  if (expected != null && mockBoardEntryId(history, "future") !== expected) {
+    rejectBoardHistoryMismatch(input.projectId, "redo", expected, history);
+  }
   if (!history || history.future.length === 0) {
     return null;
   }

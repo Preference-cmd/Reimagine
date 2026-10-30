@@ -197,6 +197,50 @@ describe("activity store", () => {
     expect(opInvoke).toHaveBeenCalledTimes(1);
   });
 
+  test("a forced load refetches the first page and keeps the project's stacks", async () => {
+    const first = record({ id: "act-1" });
+    const live = record({ id: "live-1", historyEntryId: "h-live" });
+    const opInvoke = vi
+      .spyOn(ipc, "opInvoke")
+      .mockResolvedValueOnce(pageOutput([first], false))
+      .mockResolvedValueOnce(pageOutput([live, first], false));
+
+    await useActivityStore.getState().load("proj-1");
+    useActivityStore.getState().append("proj-1", live);
+
+    await useActivityStore.getState().load("proj-1", { force: true });
+
+    expect(opInvoke).toHaveBeenCalledTimes(2);
+    const state = useActivityStore.getState();
+    expect(ids(state.records)).toEqual(["live-1", "act-1"]);
+    expect(state.undoStack).toEqual(["h-live"]);
+    expect(state.loaded).toBe(true);
+  });
+
+  test("resyncHistory replaces the active stacks with the host tops", async () => {
+    vi.spyOn(ipc, "opInvoke").mockImplementation(async (projectId) =>
+      pageOutput([record({ id: `${projectId}-page` })], false),
+    );
+
+    await useActivityStore.getState().load("proj-a");
+    useActivityStore
+      .getState()
+      .append("proj-a", record({ id: "a-live", historyEntryId: "h-stale" }));
+    expect(undoEntryId(useActivityStore.getState())).toBe("h-stale");
+
+    useActivityStore
+      .getState()
+      .resyncHistory("proj-a", { undoEntryId: "h-server", redoEntryId: null });
+    expect(useActivityStore.getState().undoStack).toEqual(["h-server"]);
+    expect(useActivityStore.getState().redoStack).toEqual([]);
+
+    // The host tops also replace the remembered stacks for a later switch.
+    await useActivityStore.getState().load("proj-b");
+    expect(useActivityStore.getState().undoStack).toEqual([]);
+    await useActivityStore.getState().load("proj-a");
+    expect(useActivityStore.getState().undoStack).toEqual(["h-server"]);
+  });
+
   test("a failed first load is recorded and a later load retries", async () => {
     const opInvoke = vi
       .spyOn(ipc, "opInvoke")

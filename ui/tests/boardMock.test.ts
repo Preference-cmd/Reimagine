@@ -216,6 +216,97 @@ describe("In-memory board mock", () => {
     const nullRedo = await mockRedoBoard({ projectId });
     expect(nullRedo).toBeNull();
   });
+  test("undo and redo reject a stale expected entry before mutating", async () => {
+    const first = await mockApplyBoardCommands({
+      projectId,
+      commandBatch: {
+        id: "history-first",
+        base_version: 0,
+        commands: [
+          {
+            type: "add_item",
+            item_id: "note-1",
+            kind: { type: "note", content: "first" },
+            position: { x: 0, y: 0 },
+            size: { width: 100, height: 100 },
+          },
+        ],
+      },
+    });
+    const second = await mockApplyBoardCommands({
+      projectId,
+      commandBatch: {
+        id: "history-second",
+        base_version: 1,
+        commands: [
+          {
+            type: "add_item",
+            item_id: "note-2",
+            kind: { type: "note", content: "second" },
+            position: { x: 10, y: 10 },
+            size: { width: 100, height: 100 },
+          },
+        ],
+      },
+    });
+    const firstId = first.historyEntryId!;
+    const secondId = second.historyEntryId!;
+
+    await expect(mockUndoBoard({ projectId, expectedEntryId: firstId })).rejects.toMatchObject({
+      code: "conflict",
+      details: {
+        project_id: projectId,
+        action: "undo",
+        expected_entry_id: firstId,
+        undo_entry_id: secondId,
+        redo_entry_id: null,
+      },
+    });
+
+    // The rejected request changed neither the board nor its history.
+    let snapshot = await mockGetBoardSnapshot({ projectId });
+    expect(snapshot.items.map((item) => item.id)).toEqual(["note-1", "note-2"]);
+    expect(snapshot.version).toBe(2);
+    let page = await mockOpInvoke({
+      projectId,
+      name: "activity.list",
+      input: { limit: 50 },
+    });
+    expect(
+      (page.output as { records: Array<{ kind: string }> }).records.map((r) => r.kind),
+    ).toEqual(["applied", "applied"]);
+
+    await mockUndoBoard({ projectId, expectedEntryId: secondId });
+    snapshot = await mockGetBoardSnapshot({ projectId });
+    expect(snapshot.items.map((item) => item.id)).toEqual(["note-1"]);
+    expect(snapshot.version).toBe(3);
+
+    await expect(mockRedoBoard({ projectId, expectedEntryId: firstId })).rejects.toMatchObject({
+      code: "conflict",
+      details: {
+        project_id: projectId,
+        action: "redo",
+        expected_entry_id: firstId,
+        undo_entry_id: firstId,
+        redo_entry_id: secondId,
+      },
+    });
+    snapshot = await mockGetBoardSnapshot({ projectId });
+    expect(snapshot.items.map((item) => item.id)).toEqual(["note-1"]);
+    expect(snapshot.version).toBe(3);
+    page = await mockOpInvoke({
+      projectId,
+      name: "activity.list",
+      input: { limit: 50 },
+    });
+    expect(
+      (page.output as { records: Array<{ kind: string }> }).records.map((r) => r.kind),
+    ).toEqual(["undone", "applied", "applied"]);
+
+    const redone = await mockRedoBoard({ projectId, expectedEntryId: secondId });
+    expect(redone?.historyEntryId).toBe(secondId);
+  });
+
   test("missing item error matches Rust code and message", async () => {
     const res = await mockApplyBoardCommands({
       projectId,

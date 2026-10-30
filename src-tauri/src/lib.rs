@@ -402,9 +402,10 @@ async fn apply_board_commands(
 async fn undo_board(
     state: tauri::State<'_, DesktopHostState>,
     project_id: String,
+    expected_entry_id: Option<String>,
 ) -> Result<Option<reimagine_app_host::dto::BoardCommandResultDto>, TauriCommandError> {
     state
-        .undo_board(&project_id)
+        .undo_board(&project_id, expected_entry_id.as_deref())
         .await
         .map_err(app_host_command_error)
 }
@@ -413,9 +414,10 @@ async fn undo_board(
 async fn redo_board(
     state: tauri::State<'_, DesktopHostState>,
     project_id: String,
+    expected_entry_id: Option<String>,
 ) -> Result<Option<reimagine_app_host::dto::BoardCommandResultDto>, TauriCommandError> {
     state
-        .redo_board(&project_id)
+        .redo_board(&project_id, expected_entry_id.as_deref())
         .await
         .map_err(app_host_command_error)
 }
