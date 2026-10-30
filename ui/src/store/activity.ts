@@ -165,13 +165,15 @@ export const useActivityStore = create<ActivityState>()((set, get) => ({
   },
 
   /**
-   * Prepend a live record for `projectId`; duplicate ids are ignored. An
-   * event for a project other than the active one only updates that
-   * project's stacks, so a switch cannot apply the wrong stacks.
+   * Prepend a live record for `projectId`; duplicate ids are ignored. A
+   * record for a project other than the loaded one only updates that
+   * project's stacks, so a switch cannot apply the wrong stacks or mix the
+   * feeds. With no project loaded the feed stays empty and only the stacks
+   * are remembered; the next `load` restores them.
    */
   append: (projectId, record) => {
     const state = get();
-    const active = state.projectId === null || state.projectId === projectId;
+    const active = state.projectId === projectId;
     if (active && state.records.some((existing) => existing.id === record.id)) {
       return;
     }
@@ -181,7 +183,7 @@ export const useActivityStore = create<ActivityState>()((set, get) => ({
     if (!active) return;
 
     set({
-      projectId: state.projectId ?? projectId,
+      projectId,
       records: [record, ...state.records],
       undoStack: stacks.undoStack,
       redoStack: stacks.redoStack,

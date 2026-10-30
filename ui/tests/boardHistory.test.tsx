@@ -111,6 +111,9 @@ beforeEach(() => {
     items: [],
   });
   useActivityStore.getState().reset();
+  // These tests feed live records directly, so keep the store on the project;
+  // only the loaded page is absent.
+  useActivityStore.setState({ projectId: PROJECT });
 });
 
 afterEach(() => {

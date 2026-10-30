@@ -356,7 +356,29 @@ describe("activity store", () => {
     expect(useActivityStore.getState().undoStack).toEqual(["h-late"]);
   });
 
-  test("append prepends live records once and moves the stacks", () => {
+  test("an append before any project is loaded keeps the feed empty", async () => {
+    vi.spyOn(ipc, "opInvoke").mockImplementation(async (projectId) =>
+      pageOutput([record({ id: `${projectId}-page` })], false),
+    );
+
+    useActivityStore
+      .getState()
+      .append("proj-a", record({ id: "early", kind: "applied", historyEntryId: "h-early" }));
+
+    const idle = useActivityStore.getState();
+    expect(idle.projectId).toBeNull();
+    expect(idle.records).toEqual([]);
+    expect(idle.undoStack).toEqual([]);
+
+    // The next load of that project restores the remembered stack.
+    await useActivityStore.getState().load("proj-a");
+    expect(undoEntryId(useActivityStore.getState())).toBe("h-early");
+  });
+
+  test("append prepends live records once and moves the stacks", async () => {
+    vi.spyOn(ipc, "opInvoke").mockResolvedValue(pageOutput([], false));
+    await useActivityStore.getState().load("default");
+
     const applied = record({ id: "live-1", kind: "applied", historyEntryId: "h-1" });
     useActivityStore.getState().append("default", applied);
     useActivityStore.getState().append("default", applied);
@@ -401,7 +423,7 @@ describe("activity store", () => {
 });
 
 describe("useActivitySync", () => {
-  test("loads the project and appends only its live activity records", async () => {
+  test("loads the project and forwards every live activity record to the store", async () => {
     const listeners = new Set<(event: ipc.Event) => void>();
     vi.spyOn(ipc, "subscribeEvents").mockImplementation((listener) => {
       listeners.add(listener);
@@ -438,7 +460,10 @@ describe("useActivitySync", () => {
         listener({
           type: "mod",
           kind: "activity.appended",
-          payload: { projectId: "proj-2", record: record({ id: "live-2" }) },
+          payload: {
+            projectId: "proj-2",
+            record: record({ id: "live-2", kind: "applied", historyEntryId: "h-other" }),
+          },
         });
         listener({ type: "mod", kind: "board.changed", payload: {} });
         listener({ type: "mod", kind: "activity.appended", payload: { projectId: "proj-1" } });
@@ -447,6 +472,8 @@ describe("useActivitySync", () => {
 
     expect(useActivityStore.getState().records.some((entry) => entry.id === "live-2")).toBe(false);
     expect(ids(useActivityStore.getState().records)).toEqual(["live-1", "act-page"]);
+    // The event for proj-2 never touches the loaded project's stacks.
+    expect(useActivityStore.getState().undoStack).toEqual(["h-live"]);
 
     unmount();
     expect(listeners.size).toBe(0);
