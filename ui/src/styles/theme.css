@@ -265,6 +265,10 @@
   --color-socket-conditioning: #f5a623;
   --color-socket-latent: #7928ca;
   --color-socket-image: #50e3c2;
+
+  /* Demo node tones that have no socket kind of their own. */
+  --color-tone-negative: #ff0080;
+  --color-tone-vae: #0070f3;
 }
 
 .dark,
@@ -284,4 +288,8 @@
   --color-socket-conditioning: #f5a623;
   --color-socket-latent: #7928ca;
   --color-socket-image: #50e3c2;
+
+  /* Restated so both theme blocks declare the same AIGC set. */
+  --color-tone-negative: #ff0080;
+  --color-tone-vae: #0070f3;
 }

@@ -1,29 +1,43 @@
 import { useEffect, useMemo, useRef, useState } from "react";
-import { Boxes, CircleDot, CornerDownLeft, Plus, Search } from "lucide-react";
+import {
+  Boxes,
+  CircleDot,
+  CornerDownLeft,
+  LayoutGrid,
+  Library,
+  PanelLeft,
+  Plus,
+  Search,
+  Settings,
+} from "lucide-react";
 import { useNavigate } from "@tanstack/react-router";
 import { toast } from "sonner";
+import * as m from "$paraglide/messages";
 import { cn } from "@/lib/utils";
 import { useUIStore } from "@/store/uiStore";
 import { useNodeRegistryStore } from "@/store/nodeRegistry";
-import { useRuntimeStore } from "@/store/runtime";
 import { useSettingsStore } from "@/store/settingsStore";
-import { saveWorkflowNow } from "@/hooks/useWorkflowPersistence";
 import { createNodeAt } from "@/lib/nodeFactory";
 import { filterEntries, type PaletteEntry } from "@/lib/palette";
 import { flowViewportCenter } from "@/lib/flowInstance";
 
+const COMMAND_ICONS: Record<string, typeof CircleDot> = {
+  "open-canvas": LayoutGrid,
+  "open-library": Library,
+  "toggle-panel": PanelLeft,
+  settings: Settings,
+};
+
 /**
- * Command palette (F3-3): Cmd/Ctrl+P toggles a searchable action list;
- * "Add Node…" switches into a node-type picker that inserts at the viewport
- * center (or the canvas double-click position, F2-2). Fuzzy matching and
- * arrow-key navigation with a simple filter input — no extra deps.
+ * Command palette (F3-3): Cmd/Ctrl+P toggles a searchable action list.
+ * The canvas opens the same dialog in node-picker mode for double-click and
+ * context-menu insertion. Fuzzy matching and arrow-key navigation with a
+ * simple filter input — no extra deps.
  */
 export function CommandPalette() {
   const palette = useUIStore((s) => s.palette);
   const openCommandPalette = useUIStore((s) => s.openCommandPalette);
-  const openNodePalette = useUIStore((s) => s.openNodePalette);
   const closePalette = useUIStore((s) => s.closePalette);
-  const startRun = useRuntimeStore((s) => s.startRun);
   const defs = useNodeRegistryStore((s) => s.defList);
   const navigate = useNavigate();
 
@@ -56,46 +70,35 @@ export function CommandPalette() {
     return () => window.removeEventListener("keydown", handler);
   }, [openCommandPalette]);
 
-  const commandItems: PaletteEntry[] = useMemo(
-    () => [
-      {
-        id: "add-node",
-        label: "Add Node…",
-        hint: "Insert a node from the catalog",
-        keywords: ["create", "insert", "node"],
-        shortcut: "⇧⌘N",
-      },
-      {
-        id: "toggle-panel",
-        label: "Toggle Sidebar",
-        hint: "Show or hide the sidebar",
-        keywords: ["explorer", "sidebar", "panel"],
-        shortcut: "⌘B",
-      },
-      {
-        id: "run-workflow",
-        label: "Run Workflow",
-        hint: "Start generation",
-        keywords: ["run", "execute", "generate", "start"],
-        shortcut: "⌘⏎",
-      },
-      {
-        id: "save",
-        label: "Save",
-        hint: "Save workflow to workspace",
-        keywords: ["persist", "write", "file"],
-        shortcut: "⌘S",
-      },
-      {
-        id: "settings",
-        label: "Settings",
-        hint: "Application settings",
-        keywords: ["preferences", "config"],
-        shortcut: "⌘,",
-      },
-    ],
-    [],
-  );
+  // Rebuilt every render so a locale switch reaches the labels without remount.
+  const commandItems: PaletteEntry[] = [
+    {
+      id: "open-canvas",
+      label: m["palette.openCanvas"](),
+      hint: m["palette.openCanvasHint"](),
+      keywords: ["canvas", "board", "project", "work"],
+    },
+    {
+      id: "open-library",
+      label: m["palette.openLibrary"](),
+      hint: m["palette.openLibraryHint"](),
+      keywords: ["library", "collections", "runs", "files", "assets"],
+    },
+    {
+      id: "toggle-panel",
+      label: m["palette.toggleSidebar"](),
+      hint: m["palette.toggleSidebarHint"](),
+      keywords: ["explorer", "sidebar", "panel"],
+      shortcut: "⌘B",
+    },
+    {
+      id: "settings",
+      label: m["palette.settings"](),
+      hint: m["palette.settingsHint"](),
+      keywords: ["preferences", "config"],
+      shortcut: "⌘,",
+    },
+  ];
 
   const nodeItems: PaletteEntry[] = useMemo(
     () =>
@@ -126,20 +129,17 @@ export function CommandPalette() {
   const runCommand = (id: string) => {
     closePalette();
     switch (id) {
-      case "add-node":
-        openNodePalette(flowViewportCenter());
+      case "open-canvas":
+        navigate({ to: "/" });
+        return;
+      case "open-library":
+        navigate({ to: "/library" });
         return;
       case "toggle-panel": {
         const settings = useSettingsStore.getState();
         settings.setSidebarCollapsed(!settings.sidebarCollapsed);
         return;
       }
-      case "run-workflow":
-        startRun();
-        return;
-      case "save":
-        void saveWorkflowNow();
-        return;
       case "settings":
         navigate({ to: "/settings" });
         return;
@@ -148,8 +148,8 @@ export function CommandPalette() {
           const typeId = id.slice("node-".length);
           const position = palette.kind === "node" ? palette.position : flowViewportCenter();
           if (!createNodeAt(typeId, position)) {
-            toast.error("Unknown node type", {
-              description: `"${typeId}" is not in the node catalog.`,
+            toast.error(m["palette.unknownNode"](), {
+              description: m["palette.unknownNodeDescription"](),
             });
           }
         }
@@ -179,14 +179,14 @@ export function CommandPalette() {
 
   return (
     <div
-      className="pointer-events-auto fixed inset-0 z-[var(--overlay-z-modal)] flex items-start justify-center bg-black/20 pt-[18vh]"
+      className="pointer-events-auto fixed inset-0 z-50 flex items-start justify-center bg-[var(--color-scrim)] pt-[18vh]"
       onPointerDown={(event) => {
         if (event.target === event.currentTarget) closePalette();
       }}
     >
       <div
         role="dialog"
-        aria-label="Command palette"
+        aria-label={m["palette.commandPalette"]()}
         className="w-[min(440px,calc(100vw-2rem))] overflow-hidden rounded-2xl bg-surface shadow-[var(--shadow-bezel),var(--shadow-3),var(--shadow-hi)]"
       >
         <div className="flex items-center gap-2 border-b border-hair px-3.5 py-3">
@@ -200,7 +200,9 @@ export function CommandPalette() {
             value={query}
             onChange={(event) => setQuery(event.target.value)}
             onKeyDown={onKeyDown}
-            placeholder={palette.kind === "node" ? "Search node types…" : "Search commands…"}
+            placeholder={
+              palette.kind === "node" ? m["palette.searchNodes"]() : m["palette.searchCommands"]()
+            }
             className="min-w-0 flex-1 bg-transparent text-body-sm text-fg placeholder:text-fg4 focus:outline-none"
           />
           {palette.kind === "node" && (
@@ -209,18 +211,17 @@ export function CommandPalette() {
               onClick={backToCommands}
               className="shrink-0 rounded-md bg-hover px-2 py-1 text-caption font-medium text-fg2 transition-colors hover:text-fg"
             >
-              ← Commands
+              {m["palette.backToCommands"]()}
             </button>
           )}
         </div>
 
         <ul ref={listRef} className="scrollbar-hide max-h-80 overflow-y-auto p-1.5">
           {visible.length === 0 && (
-            <li className="px-2.5 py-2 text-caption text-fg3">No matches.</li>
+            <li className="px-2.5 py-2 text-caption text-fg3">{m["palette.noMatches"]()}</li>
           )}
           {visible.map((entry, index) => {
-            const Icon =
-              palette.kind === "node" ? Boxes : entry.id === "add-node" ? Plus : CircleDot;
+            const Icon = palette.kind === "node" ? Boxes : (COMMAND_ICONS[entry.id] ?? CircleDot);
             return (
               <li key={entry.id}>
                 <button

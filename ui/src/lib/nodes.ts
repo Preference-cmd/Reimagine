@@ -1,5 +1,6 @@
 import type { NodeDef, ParamKind, ParamSpec, SocketSpec } from "@/ipc/schemas";
 import type { SocketSlot, ParamRow } from "@/components/canvas/BaseNode";
+import { SOCKET_COLORS } from "@/design/tokens";
 
 /**
  * Pure helpers shared by GenericNode, PropertiesPanel and the catalog
@@ -33,20 +34,22 @@ export type NodeLike = { data?: unknown };
 
 /* ───── Category → tone ───── */
 
+/* Legacy category tints. Each value keeps the color the inline demo used;
+   the socket tokens are simply how those colors are spelled now. */
 const CATEGORY_TONES: Record<string, string> = {
-  Model: "#f5a623",
-  Conditioning: "#50e3c2",
-  Latent: "#7928ca",
-  Sampling: "#7928ca",
-  Image: "#50e3c2",
-  VAE: "#0070f3",
-  Input: "#f5a623",
-  Output: "#50e3c2",
+  Model: SOCKET_COLORS.model,
+  Conditioning: SOCKET_COLORS.image,
+  Latent: SOCKET_COLORS.latent,
+  Sampling: SOCKET_COLORS.latent,
+  Image: SOCKET_COLORS.image,
+  VAE: "var(--color-tone-vae)",
+  Input: SOCKET_COLORS.model,
+  Output: SOCKET_COLORS.image,
 };
 
-/** Category name → header tone hex (with a sane default for unknown ones). */
+/** Category name → header tone (with a sane default for unknown ones). */
 export function categoryTone(category: string | undefined): string {
-  return (category && CATEGORY_TONES[category]) || "#7928ca";
+  return (category && CATEGORY_TONES[category]) || SOCKET_COLORS.latent;
 }
 
 /* ───── Socket kind mapping ───── */

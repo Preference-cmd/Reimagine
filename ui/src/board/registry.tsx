@@ -2,6 +2,7 @@ import { useEffect, useRef, useState } from "react";
 import { Boxes, FileImage, Layers, Play, Lock } from "lucide-react";
 import { useNavigate } from "@tanstack/react-router";
 import * as m from "$paraglide/messages";
+import { ICON_STROKE } from "@/design/tokens";
 import { useProjectStore } from "@/store/project";
 import { useCollection } from "@/hooks/useCollection";
 import type { BoardItemKind } from "@/ipc/schemas";
@@ -84,7 +85,7 @@ export function NoteCard({
 
   return (
     <div
-      className="flex h-full w-full flex-col overflow-hidden rounded-xl border border-outline bg-surface-container-high p-4 text-on-surface shadow-xs transition-shadow select-none hover:shadow-md"
+      className="flex h-full w-full flex-col overflow-hidden rounded-lg border border-hair-strong bg-note p-4 text-fg shadow-1 transition-shadow select-none hover:shadow-2"
       onDoubleClick={(e) => {
         e.stopPropagation();
         if (locked) return;
@@ -92,7 +93,7 @@ export function NoteCard({
       }}
       data-testid="note-card"
     >
-      <div className="mb-2 flex items-center justify-between text-caption font-medium text-on-surface-variant">
+      <div className="mb-2 flex items-center justify-between text-caption font-medium text-fg3">
         <span>{m["board.note"]()}</span>
         {locked && (
           <span
@@ -100,7 +101,7 @@ export function NoteCard({
             aria-label={m["board.locked"]()}
             data-testid="lock-indicator"
           >
-            <Lock className="h-3.5 w-3.5 text-on-surface-variant" aria-hidden="true" />
+            <Lock className="h-3.5 w-3.5 text-fg3" aria-hidden="true" strokeWidth={ICON_STROKE} />
           </span>
         )}
       </div>
@@ -111,18 +112,16 @@ export function NoteCard({
           onChange={(e) => setDraft(e.target.value)}
           onBlur={handleBlur}
           onKeyDown={handleKeyDown}
-          className="nodrag nopan nowheel h-full w-full resize-none border-0 bg-transparent p-0 font-sans text-body-sm text-on-surface outline-none focus:ring-0"
+          className="nodrag nopan nowheel h-full w-full resize-none border-0 bg-transparent p-0 font-sans text-body-sm text-fg outline-none focus:ring-0"
           placeholder={m["board.notePlaceholder"]()}
           data-testid="note-textarea"
         />
       ) : (
-        <div className="h-full w-full overflow-y-auto whitespace-pre-wrap font-sans text-body-sm leading-relaxed text-on-surface">
+        <div className="h-full w-full overflow-y-auto whitespace-pre-wrap font-sans text-body-sm leading-relaxed text-fg">
           {content ? (
             content
           ) : (
-            <span className="italic text-on-surface-variant/60">
-              {m["board.doubleClickToEdit"]()}
-            </span>
+            <span className="italic text-fg4">{m["board.doubleClickToEdit"]()}</span>
           )}
         </div>
       )}
@@ -142,21 +141,19 @@ export function CollectionCard({ kind, locked }: BoardCardProps) {
   return (
     <div
       onClick={() => void navigate({ to: "/collections/$id", params: { id: collectionId } })}
-      className="flex h-full w-full cursor-pointer flex-col justify-between rounded-xl border border-outline bg-surface p-4 text-on-surface shadow-xs transition-all select-none hover:border-primary/50 hover:bg-surface-container-high hover:shadow-md"
+      className="flex h-full w-full cursor-pointer flex-col justify-between rounded-lg border border-hair bg-surface p-4 text-fg shadow-1 transition-all select-none hover:border-hair-strong hover:bg-tile hover:shadow-2"
       data-testid="collection-card"
     >
       <div className="flex items-start justify-between gap-2">
         <div className="flex items-center gap-2 min-w-0 flex-1">
-          <div className="flex h-8 w-8 shrink-0 items-center justify-center rounded-lg bg-primary/10 text-primary">
-            <Layers className="h-4 w-4" />
+          <div className="flex h-8 w-8 shrink-0 items-center justify-center rounded-lg bg-accent-tint text-accent">
+            <Layers className="h-4 w-4" strokeWidth={ICON_STROKE} />
           </div>
           <div className="min-w-0 flex-1">
-            <h3 className="truncate font-sans text-body-sm font-semibold text-on-surface">
+            <h3 className="truncate font-sans text-body-sm font-semibold text-fg">
               {collection?.name ?? (loading ? m["collections.loading"]() : collectionId)}
             </h3>
-            <p className="font-mono text-caption text-on-surface-variant truncate">
-              {collectionId}
-            </p>
+            <p className="font-mono text-caption text-fg3 truncate">{collectionId}</p>
           </div>
         </div>
         {locked && (
@@ -165,12 +162,16 @@ export function CollectionCard({ kind, locked }: BoardCardProps) {
             aria-label={m["board.locked"]()}
             data-testid="lock-indicator"
           >
-            <Lock className="h-3.5 w-3.5 text-on-surface-variant shrink-0" aria-hidden="true" />
+            <Lock
+              className="h-3.5 w-3.5 text-fg3 shrink-0"
+              aria-hidden="true"
+              strokeWidth={ICON_STROKE}
+            />
           </span>
         )}
       </div>
 
-      <div className="mt-3 flex items-center justify-between border-t border-outline/50 pt-2 text-caption text-on-surface-variant">
+      <div className="mt-3 flex items-center justify-between border-t border-hair pt-2 text-caption text-fg3">
         <span>
           {slotCount} {slotLabel}
         </span>
@@ -185,21 +186,17 @@ export function AssetRefCard({ kind, id, locked }: BoardCardProps) {
 
   return (
     <div
-      className="flex h-full w-full flex-col justify-between rounded-xl border border-outline bg-surface p-4 text-on-surface shadow-xs transition-shadow select-none hover:shadow-md"
+      className="flex h-full w-full flex-col justify-between rounded-lg border border-hair bg-surface p-4 text-fg shadow-1 transition-shadow select-none hover:shadow-2"
       data-testid="asset-ref-card"
     >
       <div className="flex items-start justify-between gap-2.5">
         <div className="flex items-center gap-2.5 min-w-0 flex-1">
-          <div className="flex h-8 w-8 shrink-0 items-center justify-center rounded-lg bg-accent/10 text-accent">
-            <FileImage className="h-4 w-4" />
+          <div className="flex h-8 w-8 shrink-0 items-center justify-center rounded-lg bg-accent-tint text-accent">
+            <FileImage className="h-4 w-4" strokeWidth={ICON_STROKE} />
           </div>
           <div className="min-w-0 flex-1">
-            <span className="text-caption font-medium text-on-surface-variant">
-              {m["board.asset"]()}
-            </span>
-            <p className="truncate font-mono text-body-sm font-medium text-on-surface">
-              {artifactId}
-            </p>
+            <span className="text-caption font-medium text-fg3">{m["board.asset"]()}</span>
+            <p className="truncate font-mono text-body-sm font-medium text-fg">{artifactId}</p>
           </div>
         </div>
         {locked && (
@@ -208,11 +205,15 @@ export function AssetRefCard({ kind, id, locked }: BoardCardProps) {
             aria-label={m["board.locked"]()}
             data-testid="lock-indicator"
           >
-            <Lock className="h-3.5 w-3.5 text-on-surface-variant shrink-0" aria-hidden="true" />
+            <Lock
+              className="h-3.5 w-3.5 text-fg3 shrink-0"
+              aria-hidden="true"
+              strokeWidth={ICON_STROKE}
+            />
           </span>
         )}
       </div>
-      <div className="mt-2 text-caption text-on-surface-variant truncate font-mono">id: {id}</div>
+      <div className="mt-2 text-caption text-fg3 truncate font-mono">id: {id}</div>
     </div>
   );
 }
@@ -222,21 +223,17 @@ export function WorkflowRefCard({ kind, id, locked }: BoardCardProps) {
 
   return (
     <div
-      className="flex h-full w-full flex-col justify-between rounded-xl border border-outline bg-surface p-4 text-on-surface shadow-xs transition-shadow select-none hover:shadow-md"
+      className="flex h-full w-full flex-col justify-between rounded-lg border border-hair bg-surface p-4 text-fg shadow-1 transition-shadow select-none hover:shadow-2"
       data-testid="workflow-ref-card"
     >
       <div className="flex items-start justify-between gap-2.5">
         <div className="flex items-center gap-2.5 min-w-0 flex-1">
-          <div className="flex h-8 w-8 shrink-0 items-center justify-center rounded-lg bg-secondary/10 text-secondary">
-            <Boxes className="h-4 w-4" />
+          <div className="flex h-8 w-8 shrink-0 items-center justify-center rounded-lg bg-tile text-fg2">
+            <Boxes className="h-4 w-4" strokeWidth={ICON_STROKE} />
           </div>
           <div className="min-w-0 flex-1">
-            <span className="text-caption font-medium text-on-surface-variant">
-              {m["board.workflow"]()}
-            </span>
-            <p className="truncate font-mono text-body-sm font-medium text-on-surface">
-              {workflowId}
-            </p>
+            <span className="text-caption font-medium text-fg3">{m["board.workflow"]()}</span>
+            <p className="truncate font-mono text-body-sm font-medium text-fg">{workflowId}</p>
           </div>
         </div>
         {locked && (
@@ -245,11 +242,15 @@ export function WorkflowRefCard({ kind, id, locked }: BoardCardProps) {
             aria-label={m["board.locked"]()}
             data-testid="lock-indicator"
           >
-            <Lock className="h-3.5 w-3.5 text-on-surface-variant shrink-0" aria-hidden="true" />
+            <Lock
+              className="h-3.5 w-3.5 text-fg3 shrink-0"
+              aria-hidden="true"
+              strokeWidth={ICON_STROKE}
+            />
           </span>
         )}
       </div>
-      <div className="mt-2 text-caption text-on-surface-variant truncate font-mono">id: {id}</div>
+      <div className="mt-2 text-caption text-fg3 truncate font-mono">id: {id}</div>
     </div>
   );
 }
@@ -261,19 +262,17 @@ export function RunRefCard({ kind, id, locked }: BoardCardProps) {
   return (
     <div
       onClick={() => void navigate({ to: "/library", search: { type: "run" } })}
-      className="flex h-full w-full cursor-pointer flex-col justify-between rounded-xl border border-outline bg-surface p-4 text-on-surface shadow-xs transition-all select-none hover:border-primary/50 hover:bg-surface-container-high hover:shadow-md"
+      className="flex h-full w-full cursor-pointer flex-col justify-between rounded-lg border border-hair bg-surface p-4 text-fg shadow-1 transition-all select-none hover:border-hair-strong hover:bg-tile hover:shadow-2"
       data-testid="run-ref-card"
     >
       <div className="flex items-start justify-between gap-2.5">
         <div className="flex items-center gap-2.5 min-w-0 flex-1">
-          <div className="flex h-8 w-8 shrink-0 items-center justify-center rounded-lg bg-emerald-500/10 text-emerald-500">
-            <Play className="h-4 w-4" />
+          <div className="flex h-8 w-8 shrink-0 items-center justify-center rounded-lg bg-ok/10 text-ok">
+            <Play className="h-4 w-4" strokeWidth={ICON_STROKE} />
           </div>
           <div className="min-w-0 flex-1">
-            <span className="text-caption font-medium text-on-surface-variant">
-              {m["board.run"]()}
-            </span>
-            <p className="truncate font-mono text-body-sm font-medium text-on-surface">{runId}</p>
+            <span className="text-caption font-medium text-fg3">{m["board.run"]()}</span>
+            <p className="truncate font-mono text-body-sm font-medium text-fg">{runId}</p>
           </div>
         </div>
         {locked && (
@@ -282,11 +281,15 @@ export function RunRefCard({ kind, id, locked }: BoardCardProps) {
             aria-label={m["board.locked"]()}
             data-testid="lock-indicator"
           >
-            <Lock className="h-3.5 w-3.5 text-on-surface-variant shrink-0" aria-hidden="true" />
+            <Lock
+              className="h-3.5 w-3.5 text-fg3 shrink-0"
+              aria-hidden="true"
+              strokeWidth={ICON_STROKE}
+            />
           </span>
         )}
       </div>
-      <div className="mt-2 text-caption text-on-surface-variant truncate font-mono">id: {id}</div>
+      <div className="mt-2 text-caption text-fg3 truncate font-mono">id: {id}</div>
     </div>
   );
 }
@@ -296,17 +299,15 @@ export function PlaceholderCard({ kind, id, locked }: BoardCardProps) {
 
   return (
     <div
-      className="flex h-full w-full flex-col justify-between rounded-xl border border-dashed border-outline bg-surface/50 p-4 text-on-surface shadow-xs transition-shadow select-none"
+      className="flex h-full w-full flex-col justify-between rounded-lg border border-dashed border-hair-strong bg-surface/50 p-4 text-fg shadow-1 transition-shadow select-none"
       data-testid="placeholder-card"
     >
       <div className="flex items-start justify-between gap-2">
         <div>
-          <span className="rounded bg-control-hover px-2 py-0.5 font-mono text-caption font-medium text-on-surface-variant">
+          <span className="rounded bg-tile px-2 py-0.5 font-mono text-caption font-medium text-fg3">
             {typeName}
           </span>
-          <p className="mt-2 text-body-sm text-on-surface-variant">
-            {m["board.unregisteredItem"]()}
-          </p>
+          <p className="mt-2 text-body-sm text-fg3">{m["board.unregisteredItem"]()}</p>
         </div>
         {locked && (
           <span
@@ -314,11 +315,15 @@ export function PlaceholderCard({ kind, id, locked }: BoardCardProps) {
             aria-label={m["board.locked"]()}
             data-testid="lock-indicator"
           >
-            <Lock className="h-3.5 w-3.5 text-on-surface-variant shrink-0" aria-hidden="true" />
+            <Lock
+              className="h-3.5 w-3.5 text-fg3 shrink-0"
+              aria-hidden="true"
+              strokeWidth={ICON_STROKE}
+            />
           </span>
         )}
       </div>
-      <div className="mt-2 font-mono text-caption text-on-surface-variant truncate">id: {id}</div>
+      <div className="mt-2 font-mono text-caption text-fg3 truncate">id: {id}</div>
     </div>
   );
 }

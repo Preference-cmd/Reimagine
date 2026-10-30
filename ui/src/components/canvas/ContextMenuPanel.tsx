@@ -41,7 +41,7 @@ export function ContextMenuPanel() {
     <div
       ref={menuRef}
       role="menu"
-      className="panel-raised pointer-events-auto fixed z-[var(--overlay-z-modal)] w-48 overflow-hidden rounded-lg py-1"
+      className="pointer-events-auto fixed z-50 w-48 overflow-hidden rounded-lg border border-hair-strong bg-surface py-1 text-fg shadow-[var(--shadow-bezel),var(--shadow-2)]"
       style={{ left: menu.x, top: menu.y }}
     >
       {menu.items.map((item) => (
@@ -55,14 +55,12 @@ export function ContextMenuPanel() {
             item.onSelect();
           }}
           className={cn(
-            "flex w-full cursor-pointer items-center gap-2 px-3 py-1.5 text-left text-caption font-medium text-on-surface transition-colors hover:bg-control-hover focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary/30 disabled:cursor-default disabled:opacity-45",
-            item.danger && "text-destructive hover:bg-destructive/10",
+            "flex w-full cursor-pointer items-center gap-2 px-3 py-1.5 text-left text-caption font-medium text-fg transition-colors hover:bg-hover focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/30 disabled:cursor-default disabled:opacity-45",
+            item.danger && "text-err hover:bg-err/10",
           )}
         >
           <span className="flex-1 truncate">{item.label}</span>
-          {item.shortcut && (
-            <span className="text-caption text-on-surface-variant/70">{item.shortcut}</span>
-          )}
+          {item.shortcut && <span className="text-caption text-fg4">{item.shortcut}</span>}
         </button>
       ))}
     </div>

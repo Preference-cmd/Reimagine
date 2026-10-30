@@ -40,7 +40,7 @@ export function RenameNodeDialog() {
         </DialogHeader>
         <input
           autoFocus
-          className="w-full rounded-md border border-control-border bg-surface-container-high px-2.5 py-1.5 text-body-sm text-on-surface placeholder:text-on-surface-variant focus:outline-none focus:ring-1 focus:ring-control-active"
+          className="w-full rounded-md border border-hair-strong bg-bubble px-2.5 py-1.5 text-body-sm text-fg placeholder:text-fg3 focus:border-accent-line focus:outline-none focus:ring-2 focus:ring-accent/20"
           value={value}
           onChange={(event) => setValue(event.target.value)}
           onKeyDown={(event) => {

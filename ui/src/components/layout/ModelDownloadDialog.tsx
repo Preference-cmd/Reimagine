@@ -177,24 +177,24 @@ export function ModelDownloadDialog({
   return (
     <Dialog.Root open={open} onOpenChange={(nextOpen) => !nextOpen && onClose()}>
       <Dialog.Portal>
-        <Dialog.Overlay className="fixed inset-0 z-[var(--overlay-z-modal-backdrop)] bg-background/18 backdrop-blur-[2px]" />
+        <Dialog.Overlay className="fixed inset-0 z-50 bg-[var(--color-scrim)] backdrop-blur-[2px]" />
         <Dialog.Content
           aria-label="Install model"
-          className="fixed left-1/2 top-1/2 z-[var(--overlay-z-modal)] flex max-h-[min(560px,calc(100vh-48px))] w-[min(420px,calc(100vw-48px))] -translate-x-1/2 -translate-y-1/2 flex-col overflow-hidden rounded-xl border border-outline bg-surface shadow-modal outline-none"
+          className="fixed left-1/2 top-1/2 z-50 flex max-h-[min(560px,calc(100vh-48px))] w-[min(420px,calc(100vw-48px))] -translate-x-1/2 -translate-y-1/2 flex-col overflow-hidden rounded-xl border border-hair bg-surface shadow-3 outline-none"
         >
-          <header className="flex h-12 shrink-0 items-center justify-between border-b border-outline px-4">
+          <header className="flex h-12 shrink-0 items-center justify-between border-b border-hair px-4">
             <div className="flex min-w-0 items-center gap-2">
               {phase === "card" && (
                 <button
                   type="button"
                   aria-label="Back to search"
                   onClick={() => setPhase("browse")}
-                  className="flex h-6 w-6 shrink-0 cursor-pointer items-center justify-center rounded-md text-on-surface-variant transition-colors hover:bg-control-hover hover:text-on-surface focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary/30"
+                  className="flex h-6 w-6 shrink-0 cursor-pointer items-center justify-center rounded-md text-fg3 transition-colors hover:bg-hover hover:text-fg focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/30"
                 >
                   <ArrowLeft className="h-4 w-4" />
                 </button>
               )}
-              <Dialog.Title className="truncate text-body-sm font-semibold text-on-surface">
+              <Dialog.Title className="truncate text-body-sm font-semibold text-fg">
                 {PHASE_TITLES[phase]}
               </Dialog.Title>
             </div>
@@ -202,7 +202,7 @@ export function ModelDownloadDialog({
               <button
                 type="button"
                 aria-label="Close install dialog"
-                className="flex h-6 w-6 shrink-0 cursor-pointer items-center justify-center rounded-md text-on-surface-variant transition-colors hover:bg-control-hover hover:text-on-surface focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary/30"
+                className="flex h-6 w-6 shrink-0 cursor-pointer items-center justify-center rounded-md text-fg3 transition-colors hover:bg-hover hover:text-fg focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/30"
               >
                 <X className="h-4 w-4" />
               </button>
@@ -213,9 +213,9 @@ export function ModelDownloadDialog({
             <>
               <div className="p-4">
                 <label className="relative block">
-                  <Search className="pointer-events-none absolute left-2.5 top-1/2 h-3.5 w-3.5 -translate-y-1/2 text-on-surface-variant" />
+                  <Search className="pointer-events-none absolute left-2.5 top-1/2 h-3.5 w-3.5 -translate-y-1/2 text-fg3" />
                   <input
-                    className="h-8 w-full rounded-full border border-outline bg-surface-container-low px-3 pl-8 text-caption text-on-surface outline-none transition-[border-color,box-shadow] placeholder:text-on-surface-variant focus:border-primary/30 focus:ring-2 focus:ring-primary/10"
+                    className="h-8 w-full rounded-full border border-hair bg-ground px-3 pl-8 text-caption text-fg outline-none transition-[border-color,box-shadow] placeholder:text-fg3 focus:border-accent-line focus:ring-2 focus:ring-accent/20"
                     placeholder="Search HuggingFace models"
                     value={query}
                     onChange={(event) => setQuery(event.target.value)}
@@ -226,12 +226,12 @@ export function ModelDownloadDialog({
               </div>
               <div className="scrollbar-hide flex-1 overflow-y-auto px-2 pb-3">
                 {searching ? (
-                  <div className="mx-1 flex items-center gap-2 rounded-lg bg-control-hover/60 px-3 py-2 text-caption text-on-surface-variant">
+                  <div className="mx-1 flex items-center gap-2 rounded-lg bg-tile px-3 py-2 text-caption text-fg3">
                     <Loader2 className="h-3.5 w-3.5 animate-spin" />
                     Searching hub...
                   </div>
                 ) : results.length === 0 ? (
-                  <div className="mx-1 mt-2 rounded-lg bg-control-hover/60 px-3 py-2 text-caption text-on-surface-variant">
+                  <div className="mx-1 mt-2 rounded-lg bg-tile px-3 py-2 text-caption text-fg3">
                     {query.trim()
                       ? "No models found."
                       : "Search HuggingFace or pick a model from the explorer."}
@@ -243,16 +243,16 @@ export function ModelDownloadDialog({
                         <button
                           type="button"
                           onClick={() => void openRepo(entry.id)}
-                          className="grid w-full cursor-pointer grid-cols-[auto_minmax(0,1fr)] gap-2 rounded-lg px-2 py-1.5 text-left transition-colors hover:bg-control-hover focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary/20"
+                          className="grid w-full cursor-pointer grid-cols-[auto_minmax(0,1fr)] gap-2 rounded-lg px-2 py-1.5 text-left transition-colors hover:bg-hover focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/20"
                         >
-                          <span className="mt-0.5 flex h-5 w-5 shrink-0 items-center justify-center rounded-md bg-control-hover text-on-surface-variant">
+                          <span className="mt-0.5 flex h-5 w-5 shrink-0 items-center justify-center rounded-md bg-tile text-fg3">
                             <Boxes className="h-3.5 w-3.5" />
                           </span>
                           <span className="min-w-0 flex-1">
-                            <span className="block truncate text-caption font-medium text-on-surface">
+                            <span className="block truncate text-caption font-medium text-fg">
                               {entry.id}
                             </span>
-                            <span className="mt-0.5 block truncate text-caption text-on-surface-variant">
+                            <span className="mt-0.5 block truncate text-caption text-fg3">
                               {entry.pipelineTag ?? "model"} / {entry.downloads.toLocaleString()}{" "}
                               downloads
                             </span>
@@ -270,20 +270,20 @@ export function ModelDownloadDialog({
             <>
               <div className="scrollbar-hide flex-1 overflow-y-auto p-4">
                 {cardError ? (
-                  <div className="rounded-lg bg-error-container/40 px-3 py-2 text-caption text-on-surface">
+                  <div className="rounded-lg bg-err/10 px-3 py-2 text-caption text-err">
                     {cardError}
                   </div>
                 ) : !card ? (
-                  <div className="flex items-center gap-2 text-caption text-on-surface-variant">
+                  <div className="flex items-center gap-2 text-caption text-fg3">
                     <Loader2 className="h-3.5 w-3.5 animate-spin" />
                     Loading model card...
                   </div>
                 ) : (
                   <>
-                    <div className="truncate text-body-sm font-semibold text-on-surface">
+                    <div className="truncate text-body-sm font-semibold text-fg">
                       {card.entry.id}
                     </div>
-                    <div className="mt-0.5 truncate text-caption text-on-surface-variant">
+                    <div className="mt-0.5 truncate text-caption text-fg3">
                       {card.entry.author ?? "Unknown author"}
                     </div>
 
@@ -301,20 +301,18 @@ export function ModelDownloadDialog({
                     </div>
 
                     {card.modelSummary && (
-                      <p className="mt-3 text-caption text-on-surface-variant">
-                        {card.modelSummary}
-                      </p>
+                      <p className="mt-3 text-caption text-fg3">{card.modelSummary}</p>
                     )}
 
                     {downloadError && (
-                      <div className="mt-3 rounded-lg bg-error-container/40 px-3 py-2 text-caption text-on-surface">
+                      <div className="mt-3 rounded-lg bg-err/10 px-3 py-2 text-caption text-err">
                         {downloadError}
                       </div>
                     )}
                   </>
                 )}
               </div>
-              <footer className="flex shrink-0 items-center justify-end gap-2 border-t border-outline px-4 py-3">
+              <footer className="flex shrink-0 items-center justify-end gap-2 border-t border-hair px-4 py-3">
                 <Button size="sm" onClick={() => void startDownload()} disabled={!card}>
                   <Download className="h-3.5 w-3.5" />
                   Download
@@ -325,19 +323,17 @@ export function ModelDownloadDialog({
 
           {phase === "downloading" && (
             <div className="scrollbar-hide flex-1 overflow-y-auto p-4">
-              <div className="truncate text-body-sm font-semibold text-on-surface">
-                {selectedRepoId}
-              </div>
-              <div className="mt-0.5 truncate text-caption text-on-surface-variant">
+              <div className="truncate text-body-sm font-semibold text-fg">{selectedRepoId}</div>
+              <div className="mt-0.5 truncate text-caption text-fg3">
                 {progress.message ?? "Downloading model files"}
               </div>
-              <div className="mt-4 h-1.5 overflow-hidden rounded-full bg-surface-container-high">
+              <div className="mt-4 h-1.5 overflow-hidden rounded-full bg-tile">
                 <div
-                  className="h-full origin-left rounded-full bg-primary transition-transform duration-200 ease-out motion-reduce:transition-none"
+                  className="h-full origin-left rounded-full bg-accent transition-transform duration-200 ease-out motion-reduce:transition-none"
                   style={{ transform: `scaleX(${Math.max(0.04, fraction)})` }}
                 />
               </div>
-              <div className="mt-2 flex items-center justify-between gap-3 text-caption text-on-surface-variant">
+              <div className="mt-2 flex items-center justify-between gap-3 text-caption text-fg3">
                 <span className="truncate">{formatBytes(progress.bytes)} transferred</span>
                 {progress.totalBytes ? (
                   <span className="shrink-0">{formatBytes(progress.totalBytes)} total</span>
@@ -350,9 +346,9 @@ export function ModelDownloadDialog({
 
           {phase === "done" && (
             <div className="flex flex-1 flex-col items-center justify-center gap-2 p-6 text-center">
-              <CheckCircle2 className="h-8 w-8 text-status-ready" />
-              <div className="text-body-sm font-semibold text-on-surface">Model installed</div>
-              <div className="max-w-full truncate text-caption text-on-surface-variant">
+              <CheckCircle2 className="h-8 w-8 text-ok" />
+              <div className="text-body-sm font-semibold text-fg">Model installed</div>
+              <div className="max-w-full truncate text-caption text-fg3">
                 {output
                   ? `${output.repoId} · ${formatBytes(output.totalBytes)} · ${
                       output.detectedFormat ?? output.provider
@@ -372,9 +368,9 @@ export function ModelDownloadDialog({
 
 function DialogSummaryCell({ label, value }: { label: string; value: string }) {
   return (
-    <div className="min-w-0 rounded-lg bg-control-hover/60 px-2 py-1.5">
-      <div className="truncate text-caption text-on-surface-variant">{label}</div>
-      <div className="truncate text-caption font-semibold text-on-surface">{value}</div>
+    <div className="min-w-0 rounded-lg bg-tile px-2 py-1.5">
+      <div className="truncate text-caption text-fg3">{label}</div>
+      <div className="truncate text-caption font-semibold text-fg">{value}</div>
     </div>
   );
 }

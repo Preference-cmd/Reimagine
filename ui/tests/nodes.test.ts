@@ -52,9 +52,9 @@ test("maps backend socket kinds onto the four visual tokens", () => {
 });
 
 test("maps catalog categories to header tones", () => {
-  expect(categoryTone("Sampling")).toBe("#7928ca");
-  expect(categoryTone("Image")).toBe("#50e3c2");
-  expect(categoryTone(undefined)).toBe("#7928ca");
+  expect(categoryTone("Sampling")).toBe("var(--color-socket-latent)");
+  expect(categoryTone("Image")).toBe("var(--color-socket-image)");
+  expect(categoryTone(undefined)).toBe("var(--color-socket-latent)");
 });
 
 /* ───── Param spec merging (F2-1/F2-4) ───── */

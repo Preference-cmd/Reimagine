@@ -40,7 +40,7 @@ export function PropertiesPanel() {
   const node = nodes.find((n) => n.id === selectedNode.id);
   const data = (node?.data ?? {}) as InspectorNodeData;
   const title = readString(data.title) ?? selectedNode.id;
-  const tone = readString(data.tone) ?? "#7928ca";
+  const tone = readString(data.tone) ?? "var(--color-socket-latent)";
   const inputs = readArray(data.inputs);
   const outputs = readArray(data.outputs);
   const prompt = readString(data.prompt);

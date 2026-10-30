@@ -47,7 +47,7 @@ test("createNodeFromDef builds a flow node with title, tone and params", () => {
   expect(node.position).toEqual({ x: 10, y: 20 });
   expect(node.data).toMatchObject({
     title: "KSampler",
-    tone: "#7928ca",
+    tone: "var(--color-socket-latent)",
     params: { seed: 12345 },
   });
 });

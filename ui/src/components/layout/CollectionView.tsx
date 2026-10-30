@@ -2,6 +2,7 @@ import { useEffect, useRef, useState } from "react";
 import { ArrowLeft, Redo2, Undo2 } from "lucide-react";
 import { Link, useNavigate, useParams } from "@tanstack/react-router";
 import * as m from "$paraglide/messages";
+import { ICON_STROKE } from "@/design/tokens";
 import { useProjectStore } from "@/store/project";
 import { opInvoke, readAssetPreview, type AssetPreview } from "@/ipc";
 import { type CollectionSlot, type SlotRunState } from "@/ipc/schemas";
@@ -32,15 +33,15 @@ function slotStateLabel(state: SlotRunState): string {
 function slotStateClass(state: SlotRunState): string {
   switch (state) {
     case "running":
-      return "bg-status-running/10 text-status-running";
+      return "bg-info/10 text-info";
     case "succeeded":
-      return "bg-status-success/10 text-status-success";
+      return "bg-ok/10 text-ok";
     case "failed":
-      return "bg-status-error/10 text-status-error";
+      return "bg-err/10 text-err";
     case "needs_confirmation":
-      return "bg-status-warning/10 text-status-warning";
+      return "bg-warn/10 text-warn";
     default:
-      return "bg-control-hover text-on-surface-variant";
+      return "bg-tile text-fg3";
   }
 }
 
@@ -76,9 +77,9 @@ function SlotItem({
   const mediaType = preview?.mediaType ?? "";
 
   return (
-    <div className="flex flex-col rounded-xl border border-outline bg-surface p-4 transition-all">
-      <div className="flex items-center justify-between border-b border-outline/50 pb-2">
-        <span className="font-mono text-caption font-semibold text-primary">
+    <div className="flex flex-col rounded-lg border border-hair bg-surface p-4 shadow-1 transition-all">
+      <div className="flex items-center justify-between border-b border-hair pb-2">
+        <span className="font-mono text-caption font-semibold text-accent">
           {m["collections.slotPrefix"]()} {slot.id}
         </span>
         <span className="flex items-center gap-2">
@@ -87,30 +88,28 @@ function SlotItem({
               {slotStateLabel(state)}
             </span>
           )}
-          <span className="rounded bg-control-hover px-2 py-0.5 font-mono text-caption text-on-surface-variant">
+          <span className="rounded bg-tile px-2 py-0.5 font-mono text-caption text-fg3">
             {mediaType}
           </span>
         </span>
       </div>
 
-      <div className="mt-2 text-caption text-on-surface-variant">
+      <div className="mt-2 text-caption text-fg3">
         {m["collections.assetIdPrefix"]()} <span className="font-mono">{slot.asset_id}</span>
       </div>
 
       {slotError ? (
-        <div className="mt-3 flex-1 rounded-lg bg-destructive/10 p-3 font-mono text-caption text-destructive">
+        <div className="mt-3 flex-1 rounded-lg bg-err/10 p-3 font-mono text-caption text-err">
           {slotError}
         </div>
       ) : (
-        <div className="mt-3 flex-1 rounded-lg bg-surface-container-high/40 p-3 font-mono text-caption text-on-surface">
+        <div className="mt-3 flex-1 rounded-lg bg-tile p-3 font-mono text-caption text-fg">
           {preview?.text ? (
             <pre className="whitespace-pre-wrap">{preview.text}</pre>
           ) : preview && mediaType.startsWith("image/") ? (
             <img src={preview.url} alt={slot.id} className="max-h-48 rounded object-contain" />
           ) : (
-            <span className="italic text-on-surface-variant/60">
-              {m["collections.noPreview"]()}
-            </span>
+            <span className="italic text-fg4">{m["collections.noPreview"]()}</span>
           )}
         </div>
       )}
@@ -166,14 +165,14 @@ export function CollectionView() {
   }
 
   return (
-    <div className="flex h-full flex-col bg-background p-6">
+    <div className="flex h-full flex-col overflow-y-auto bg-ground p-6">
       {/* Top back navigation */}
       <div className="mb-4">
         <Link
           to="/library"
-          className="inline-flex items-center gap-1.5 text-caption font-medium text-on-surface-variant hover:text-on-surface"
+          className="inline-flex items-center gap-1.5 text-caption font-medium text-fg3 hover:text-fg"
         >
-          <ArrowLeft className="h-3.5 w-3.5" />
+          <ArrowLeft className="h-3.5 w-3.5" strokeWidth={ICON_STROKE} />
           {m["collections.backToLibrary"]()}
         </Link>
       </div>
@@ -181,10 +180,10 @@ export function CollectionView() {
       {/* Header */}
       <div className="mb-6 flex flex-wrap items-center justify-between gap-4">
         <div>
-          <h1 className="text-display-sm font-semibold text-on-surface">
+          <h1 className="text-display-sm font-semibold text-fg">
             {collection?.name ?? m["collections.defaultTitle"]()}
           </h1>
-          <p className="mt-1 text-body-sm text-on-surface-variant">
+          <p className="mt-1 text-body-sm text-fg3">
             {collection
               ? `${collection.slots.length} ${
                   collection.slots.length === 1 ? m["collections.slot"]() : m["collections.slots"]()
@@ -198,39 +197,35 @@ export function CollectionView() {
             type="button"
             onClick={() => void handleUndo()}
             title={m["collections.undo"]()}
-            className="flex h-9 cursor-pointer items-center gap-1.5 rounded-lg border border-outline bg-surface px-3 text-body-sm font-medium text-on-surface transition-colors hover:bg-control-hover"
+            className="flex h-9 cursor-pointer items-center gap-1.5 rounded-lg border border-hair bg-surface px-3 text-body-sm font-medium text-fg transition-colors hover:bg-hover focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/30"
           >
-            <Undo2 className="h-4 w-4" />
+            <Undo2 className="h-4 w-4" strokeWidth={ICON_STROKE} />
             {m["collections.undo"]()}
           </button>
           <button
             type="button"
             onClick={() => void handleRedo()}
             title={m["collections.redo"]()}
-            className="flex h-9 cursor-pointer items-center gap-1.5 rounded-lg border border-outline bg-surface px-3 text-body-sm font-medium text-on-surface transition-colors hover:bg-control-hover"
+            className="flex h-9 cursor-pointer items-center gap-1.5 rounded-lg border border-hair bg-surface px-3 text-body-sm font-medium text-fg transition-colors hover:bg-hover focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/30"
           >
-            <Redo2 className="h-4 w-4" />
+            <Redo2 className="h-4 w-4" strokeWidth={ICON_STROKE} />
             {m["collections.redo"]()}
           </button>
         </div>
       </div>
 
-      {error && (
-        <div className="mb-4 rounded-lg bg-destructive/10 p-3 text-body-sm text-destructive">
-          {error}
-        </div>
-      )}
+      {error && <div className="mb-4 rounded-lg bg-err/10 p-3 text-body-sm text-err">{error}</div>}
 
       {loading ? (
-        <div className="flex flex-1 items-center justify-center text-body-sm text-on-surface-variant">
+        <div className="flex flex-1 items-center justify-center text-body-sm text-fg3">
           {m["collections.loadingCollection"]()}
         </div>
       ) : !collection ? (
-        <div className="flex flex-1 items-center justify-center text-body-sm text-on-surface-variant">
+        <div className="flex flex-1 items-center justify-center text-body-sm text-fg3">
           {m["collections.notFound"]()}
         </div>
       ) : collection.slots.length === 0 ? (
-        <div className="flex flex-1 items-center justify-center text-body-sm text-on-surface-variant">
+        <div className="flex flex-1 items-center justify-center text-body-sm text-fg3">
           {m["collections.emptySlots"]()}
         </div>
       ) : (

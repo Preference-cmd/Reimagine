@@ -5,6 +5,7 @@ import type { Node, NodeChange, EdgeChange, Connection } from "@xyflow/react";
 import { applyNodeChanges, applyEdgeChanges, addEdge as rfAddEdge } from "@xyflow/react";
 
 import type { FlowEdge, FlowEdgeData } from "@/components/canvas/FlowEdge";
+import { SOCKET_COLORS } from "@/design/tokens";
 import type { ParamValue } from "@/lib/nodes";
 import { uniqueNodeId } from "@/lib/nodeFactory";
 
@@ -67,6 +68,9 @@ type WorkflowState = {
    Negative ────────┘
    Edges carry an optional `label` + `tone` for the midpoint pill tag. */
 
+/** Negative-prompt tone; AIGC-only, so it has no socket kind. */
+const NEGATIVE_TONE = "var(--color-tone-negative)";
+
 const initialNodes: Node[] = [
   {
     id: "model",
@@ -74,11 +78,16 @@ const initialNodes: Node[] = [
     position: { x: 60, y: 220 },
     data: {
       title: "Model",
-      tone: "#7928ca",
+      tone: SOCKET_COLORS.latent,
       outputs: [
-        { id: "model", kind: "model", label: "model", dotColor: "#f5a623" },
-        { id: "positive", kind: "conditioning", label: "positive", dotColor: "#50e3c2" },
-        { id: "negative", kind: "conditioning", label: "negative", dotColor: "#ff0080" },
+        { id: "model", kind: "model", label: "model", dotColor: SOCKET_COLORS.model },
+        { id: "positive", kind: "conditioning", label: "positive", dotColor: SOCKET_COLORS.image },
+        {
+          id: "negative",
+          kind: "conditioning",
+          label: "negative",
+          dotColor: NEGATIVE_TONE,
+        },
       ],
       parameters: [
         {
@@ -101,7 +110,7 @@ const initialNodes: Node[] = [
     position: { x: 380, y: 60 },
     data: {
       title: "Positive",
-      tone: "#50e3c2",
+      tone: SOCKET_COLORS.image,
       prompt: "A black bear with a pink snout, minimalist style, soft gradients, clear blue sky",
     },
   },
@@ -111,7 +120,7 @@ const initialNodes: Node[] = [
     position: { x: 380, y: 320 },
     data: {
       title: "Negative",
-      tone: "#ff0080",
+      tone: NEGATIVE_TONE,
       prompt: "No text, unnecessary details, background objects, other animals or people",
     },
   },
@@ -121,14 +130,19 @@ const initialNodes: Node[] = [
     position: { x: 720, y: 120 },
     data: {
       title: "Sampler",
-      tone: "#7928ca",
+      tone: SOCKET_COLORS.latent,
       inputs: [
-        { id: "model", kind: "model", label: "model", dotColor: "#f5a623" },
-        { id: "positive", kind: "conditioning", label: "positive", dotColor: "#50e3c2" },
-        { id: "negative", kind: "conditioning", label: "negative", dotColor: "#ff0080" },
-        { id: "latent", kind: "latent", label: "latent", dotColor: "#7928ca" },
+        { id: "model", kind: "model", label: "model", dotColor: SOCKET_COLORS.model },
+        { id: "positive", kind: "conditioning", label: "positive", dotColor: SOCKET_COLORS.image },
+        {
+          id: "negative",
+          kind: "conditioning",
+          label: "negative",
+          dotColor: NEGATIVE_TONE,
+        },
+        { id: "latent", kind: "latent", label: "latent", dotColor: SOCKET_COLORS.latent },
       ],
-      outputs: [{ id: "image", kind: "image", label: "image", dotColor: "#50e3c2" }],
+      outputs: [{ id: "image", kind: "image", label: "image", dotColor: SOCKET_COLORS.image }],
       parameters: [
         { id: "seed", label: "Seed", value: "12345", tag: "Fixed", kind: "int" },
         { id: "steps", label: "Steps", value: "30", kind: "int" },
@@ -156,8 +170,8 @@ const initialNodes: Node[] = [
     position: { x: 1080, y: 140 },
     data: {
       title: "Image",
-      tone: "#50e3c2",
-      inputs: [{ id: "image", kind: "image", label: "image", dotColor: "#50e3c2" }],
+      tone: SOCKET_COLORS.image,
+      inputs: [{ id: "image", kind: "image", label: "image", dotColor: SOCKET_COLORS.image }],
     },
   },
 ];
