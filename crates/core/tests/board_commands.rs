@@ -124,18 +124,22 @@ fn undo_redo() {
             size: BoardItemSize::new(100, 100),
         }],
     );
-    session.apply_batch(&(), batch1);
+    let applied_result = session.apply_batch(&(), batch1);
     assert_eq!(session.document().items().len(), 1);
+    let history_entry_id = applied_result
+        .history_entry_id()
+        .cloned()
+        .expect("an applied batch names its history entry");
 
-    // Undo
-    let undo_result = session.undo();
-    assert!(undo_result.is_some());
+    // Undo names the entry it reversed.
+    let undo_result = session.undo().expect("undo result");
     assert_eq!(session.document().items().len(), 0);
+    assert_eq!(undo_result.history_entry_id(), Some(&history_entry_id));
 
-    // Redo
-    let redo_result = session.redo();
-    assert!(redo_result.is_some());
+    // Redo names the same entry again.
+    let redo_result = session.redo().expect("redo result");
     assert_eq!(session.document().items().len(), 1);
+    assert_eq!(redo_result.history_entry_id(), Some(&history_entry_id));
 }
 
 #[test]

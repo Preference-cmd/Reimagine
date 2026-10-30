@@ -84,3 +84,18 @@ pub enum BoardChange {
         after: bool,
     },
 }
+
+impl BoardChange {
+    /// The item this change applies to.
+    pub fn item_id(&self) -> &BoardItemId {
+        match self {
+            Self::ItemAdded { item_id, .. }
+            | Self::ItemRemoved { item_id, .. }
+            | Self::ItemMoved { item_id, .. }
+            | Self::ItemResized { item_id, .. }
+            | Self::ItemZChanged { item_id, .. }
+            | Self::NoteUpdated { item_id, .. }
+            | Self::ItemLocked { item_id, .. } => item_id,
+        }
+    }
+}

@@ -144,7 +144,7 @@ impl<D: Document> DocumentSession<D> {
             next_version,
             changes,
             Vec::new(),
-            None,
+            Some(entry.id().clone()),
         ))
     }
 
@@ -166,7 +166,7 @@ impl<D: Document> DocumentSession<D> {
             next_version,
             changes,
             Vec::new(),
-            None,
+            Some(entry.id().clone()),
         ))
     }
 

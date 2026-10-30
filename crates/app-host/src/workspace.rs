@@ -26,8 +26,8 @@ use crate::node_catalog::NodeCatalogAlignment;
 use crate::node_catalog::NodeCatalogService;
 use crate::services::WorkspaceServices;
 use crate::{
-    AppHostError, BoardService, CollectionService, DynamicWorkflowService, OperationService,
-    ProjectService, WorkflowService,
+    ActivityService, AppHostError, BoardService, CollectionService, DynamicWorkflowService,
+    OperationService, ProjectService, WorkflowService,
 };
 #[cfg(feature = "aigc")]
 use crate::{
@@ -155,9 +155,15 @@ impl WorkspaceHost {
             config.paths().clone(),
             event_bus.clone(),
         ));
-        let board_service = Arc::new(BoardService::with_event_bus(
+        let activity_service = Arc::new(ActivityService::new(
             config.paths().clone(),
             event_bus.clone(),
+        ));
+        operation_service.set_activity_service(Arc::clone(&activity_service));
+        let board_service = Arc::new(BoardService::with_event_bus_and_activity(
+            config.paths().clone(),
+            event_bus.clone(),
+            Some(Arc::clone(&activity_service)),
         ));
         let project_service = Arc::new(ProjectService::new(
             config.paths().clone(),
@@ -169,6 +175,7 @@ impl WorkspaceHost {
             Arc::clone(&collection_service),
             Arc::clone(&board_service),
         );
+        crate::activity::register_activity_ops(&operation_service, activity_service);
         let dynamic_workflow_service = Arc::new(DynamicWorkflowService::with_event_bus(
             config.paths().clone(),
             event_bus.clone(),

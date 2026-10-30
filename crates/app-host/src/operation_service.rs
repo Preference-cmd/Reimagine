@@ -27,6 +27,7 @@ use serde_json::Value;
 use std::sync::RwLock;
 use tokio::sync::Mutex;
 
+use crate::activity::{ActivityKind, ActivityService};
 use crate::asset_store::{AssetStore, matches_media_type_pattern};
 use crate::error::AppHostError;
 use crate::step_log::StepLog;
@@ -336,6 +337,7 @@ pub struct OperationService {
     asset_stores: Mutex<HashMap<ProjectId, Arc<AssetStore>>>,
     step_logs: Mutex<HashMap<ProjectId, Arc<StepLog>>>,
     preview_locks: Mutex<HashMap<String, Arc<Mutex<()>>>>,
+    activity: RwLock<Option<Arc<ActivityService>>>,
 }
 
 impl std::fmt::Debug for OperationService {
@@ -373,7 +375,14 @@ impl OperationService {
             asset_stores: Mutex::new(HashMap::new()),
             step_logs: Mutex::new(HashMap::new()),
             preview_locks: Mutex::new(HashMap::new()),
+            activity: RwLock::new(None),
         }
+    }
+
+    /// Attach the workspace activity log. Recorded operation steps append one
+    /// `applied` record after they finish successfully.
+    pub fn set_activity_service(&self, activity: Arc<ActivityService>) {
+        *self.activity.write().expect("activity slot poisoned") = Some(activity);
     }
 
     async fn asset_store(&self, project: &ProjectId) -> Arc<AssetStore> {
@@ -395,6 +404,40 @@ impl OperationService {
                 Arc::new(StepLog::new(project_dir))
             })
             .clone()
+    }
+
+    /// Append one `applied` activity record for a successful recorded step.
+    /// An activity failure is logged, not propagated: the step already ran.
+    async fn record_op_activity(&self, project: &ProjectId, request: &InvokeRequest) {
+        let activity = self
+            .activity
+            .read()
+            .expect("activity slot poisoned")
+            .clone();
+        let Some(activity) = activity else {
+            return;
+        };
+
+        if let Err(error) = activity
+            .record(
+                project,
+                ActivityKind::Applied,
+                request.context.actor().clone(),
+                format!("Ran {}", request.name),
+                "activity.op",
+                serde_json::json!({ "op": request.name }),
+                Vec::new(),
+                None,
+            )
+            .await
+        {
+            tracing::warn!(
+                project_id = %project,
+                op = %request.name,
+                %error,
+                "failed to append op activity record"
+            );
+        }
     }
 
     async fn preview_lock_for(&self, key: &str) -> Arc<Mutex<()>> {
@@ -772,6 +815,7 @@ impl OperationService {
                 );
                 if should_record_step {
                     step_log.record_finish(&step_record).await?;
+                    self.record_op_activity(project, &request).await;
                 }
 
                 Ok(InvokeResult {

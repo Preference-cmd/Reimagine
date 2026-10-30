@@ -9,12 +9,23 @@ use reimagine_core::command::{
     CommandActor, CommandActorKind, CommandBatch, CommandProvenance, CommandStatus,
     OperationContext,
 };
-use reimagine_core::event::Timestamp;
+use reimagine_core::event::{Event, Timestamp};
 use reimagine_core::model::{BoardItemId, CommandBatchId, DocumentVersion, ProjectId, WorkflowId};
 use reimagine_core::project::ProjectMetadata;
 
 fn build_host(scope: &str) -> WorkspaceHost {
     WorkspaceHost::with_defaults(WorkspaceScope::new(scope), temp_dir(scope))
+}
+
+fn expect_activity_event(event: Event, expected_kind: &str) {
+    match event {
+        Event::Mod { kind, payload } => {
+            assert_eq!(kind, "activity.appended");
+            assert_eq!(payload["projectId"], "proj-board");
+            assert_eq!(payload["record"]["kind"], expected_kind);
+        }
+        other => panic!("expected Event::Mod, got: {other:?}"),
+    }
 }
 
 fn metadata(name: &str, updated_at: &str) -> ProjectMetadata {
@@ -186,12 +197,17 @@ async fn board_apply_persists_emits_changed_and_rejects_stale_versions() {
         }
         other => panic!("expected Event::Document, got: {other:?}"),
     }
+    let activity_event = tokio::time::timeout(std::time::Duration::from_secs(5), events.recv())
+        .await
+        .expect("activity event arrives")
+        .expect("event channel open");
+    expect_activity_event(activity_event, "applied");
     assert!(
         matches!(
             events.try_recv(),
             Err(tokio::sync::broadcast::error::TryRecvError::Empty)
         ),
-        "one durable Board change must publish exactly one workspace event"
+        "one durable Board change publishes board.changed and activity.appended"
     );
 
     // The change is durable on disk, not just in the session cache.
@@ -246,12 +262,17 @@ async fn board_apply_persists_emits_changed_and_rejects_stale_versions() {
         }
         other => panic!("expected Event::Document, got: {other:?}"),
     }
+    let activity_event = tokio::time::timeout(std::time::Duration::from_secs(5), events.recv())
+        .await
+        .expect("undo activity event arrives")
+        .expect("event channel open");
+    expect_activity_event(activity_event, "undone");
     assert!(
         matches!(
             events.try_recv(),
             Err(tokio::sync::broadcast::error::TryRecvError::Empty)
         ),
-        "undo must also publish exactly one workspace event"
+        "undo publishes board.changed and activity.appended"
     );
 
     // Redo persists the restored item and publishes one more shared event.
@@ -279,12 +300,17 @@ async fn board_apply_persists_emits_changed_and_rejects_stale_versions() {
         }
         other => panic!("expected Event::Document, got: {other:?}"),
     }
+    let activity_event = tokio::time::timeout(std::time::Duration::from_secs(5), events.recv())
+        .await
+        .expect("redo activity event arrives")
+        .expect("event channel open");
+    expect_activity_event(activity_event, "redone");
     assert!(
         matches!(
             events.try_recv(),
             Err(tokio::sync::broadcast::error::TryRecvError::Empty)
         ),
-        "redo must also publish exactly one workspace event"
+        "redo publishes board.changed and activity.appended"
     );
 
     // Deleting the project drops the in-memory board session.

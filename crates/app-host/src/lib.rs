@@ -6,6 +6,7 @@
 
 #![deny(unsafe_code)]
 
+pub mod activity;
 mod app_host;
 pub mod artifact_access;
 pub mod asset_store;
@@ -30,6 +31,10 @@ mod workflow_service;
 mod workspace;
 mod workspace_scope;
 
+pub use activity::{
+    ACTIVITY_LIST_DEFAULT_LIMIT, ACTIVITY_LIST_MAX_LIMIT, ActivityKind, ActivityListOp,
+    ActivityLog, ActivityRecord, ActivityService, register_activity_ops,
+};
 #[cfg(feature = "aigc")]
 pub use aigc::BackendSelection;
 #[cfg(feature = "aigc")]

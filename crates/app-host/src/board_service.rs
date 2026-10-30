@@ -13,12 +13,18 @@ use reimagine_config::AppPaths;
 use reimagine_core::board::{
     BoardChange, BoardCommand, BoardDocument, BoardItemKind, BoardItemPosition, BoardItemSize,
 };
-use reimagine_core::command::{CommandBatch, CommandResult, CommandStatus, OperationContext};
+use reimagine_core::command::{
+    CommandActor, CommandActorKind, CommandBatch, CommandResult, CommandStatus, OperationContext,
+};
 use reimagine_core::document::DocumentSession;
 use reimagine_core::event::{Event, EventBus, Timestamp};
-use reimagine_core::model::{BoardId, BoardItemId, CommandBatchId, DocumentVersion, ProjectId};
+use reimagine_core::model::{
+    BoardId, BoardItemId, CommandBatchId, DocumentVersion, HistoryEntryId, ProjectId,
+};
+use serde_json::json;
 use tokio::sync::Mutex as AsyncMutex;
 
+use crate::activity::{ActivityKind, ActivityService};
 use crate::document_store::{read_document, write_document};
 use crate::{AppHostError, AppHostResult};
 
@@ -26,6 +32,7 @@ pub struct BoardService {
     paths: AppPaths,
     sessions: RwLock<BTreeMap<ProjectId, Arc<AsyncMutex<DocumentSession<BoardDocument>>>>>,
     event_bus: EventBus,
+    activity: Option<Arc<ActivityService>>,
 }
 
 impl std::fmt::Debug for BoardService {
@@ -38,6 +45,7 @@ impl std::fmt::Debug for BoardService {
         f.debug_struct("BoardService")
             .field("paths", &self.paths)
             .field("session_count", &session_count)
+            .field("activity", &self.activity.is_some())
             .finish()
     }
 }
@@ -48,10 +56,19 @@ impl BoardService {
     }
 
     pub fn with_event_bus(paths: AppPaths, event_bus: EventBus) -> Self {
+        Self::with_event_bus_and_activity(paths, event_bus, None)
+    }
+
+    pub fn with_event_bus_and_activity(
+        paths: AppPaths,
+        event_bus: EventBus,
+        activity: Option<Arc<ActivityService>>,
+    ) -> Self {
         Self {
             paths,
             sessions: RwLock::new(BTreeMap::new()),
             event_bus,
+            activity,
         }
     }
 
@@ -125,7 +142,8 @@ impl BoardService {
     }
 
     /// Apply a command batch, persist the board, and emit
-    /// `board.changed` when the batch was applied.
+    /// `board.changed` when the batch was applied. An applied batch also
+    /// appends one `activity.appended` record.
     pub async fn apply_batch(
         &self,
         project_id: &ProjectId,
@@ -133,10 +151,24 @@ impl BoardService {
     ) -> AppHostResult<CommandResult<BoardChange>> {
         let session = self.session_for(project_id).await?;
         let mut guard = session.lock().await;
+        let actor = batch.context().actor().clone();
+        let (summary_key, summary) = apply_summary(batch.commands());
+        let command_count = batch.commands().len();
         let result = guard.apply_batch(&(), batch);
         if result.status() == CommandStatus::Applied {
             self.save_locked(project_id, &guard).await?;
             self.emit_changed(&guard);
+            self.record_board_activity(
+                project_id,
+                ActivityKind::Applied,
+                actor,
+                summary_key,
+                summary,
+                json!({ "count": command_count }),
+                result.changes(),
+                result.history_entry_id().cloned(),
+            )
+            .await;
         }
         Ok(result)
     }
@@ -190,6 +222,17 @@ impl BoardService {
         };
         self.save_locked(project_id, &guard).await?;
         self.emit_changed(&guard);
+        self.record_board_activity(
+            project_id,
+            ActivityKind::Undone,
+            CommandActor::new(CommandActorKind::Human),
+            "activity.board.undo",
+            "Undid the last board change",
+            json!({}),
+            result.changes(),
+            result.history_entry_id().cloned(),
+        )
+        .await;
         Ok(Some(result))
     }
 
@@ -205,6 +248,17 @@ impl BoardService {
         };
         self.save_locked(project_id, &guard).await?;
         self.emit_changed(&guard);
+        self.record_board_activity(
+            project_id,
+            ActivityKind::Redone,
+            CommandActor::new(CommandActorKind::Human),
+            "activity.board.redo",
+            "Redid the last board change",
+            json!({}),
+            result.changes(),
+            result.history_entry_id().cloned(),
+        )
+        .await;
         Ok(Some(result))
     }
 
@@ -241,6 +295,55 @@ impl BoardService {
         });
     }
 
+    /// Append an activity record, never failing the board operation: a broken
+    /// activity log must not undo an already persisted board change.
+    #[allow(clippy::too_many_arguments)]
+    async fn record_board_activity(
+        &self,
+        project_id: &ProjectId,
+        kind: ActivityKind,
+        actor: CommandActor,
+        summary_key: impl Into<String>,
+        summary: impl Into<String>,
+        summary_params: serde_json::Value,
+        changes: &[BoardChange],
+        history_entry_id: Option<HistoryEntryId>,
+    ) {
+        let Some(activity) = &self.activity else {
+            return;
+        };
+
+        // One entry per touched item, in change order.
+        let mut targets: Vec<String> = Vec::new();
+        for change in changes {
+            let item_id = change.item_id().to_string();
+            if !targets.contains(&item_id) {
+                targets.push(item_id);
+            }
+        }
+
+        if let Err(error) = activity
+            .record(
+                project_id,
+                kind,
+                actor,
+                summary,
+                summary_key,
+                summary_params,
+                targets,
+                history_entry_id,
+            )
+            .await
+        {
+            tracing::warn!(
+                project_id = %project_id,
+                ?kind,
+                %error,
+                "failed to append board activity record"
+            );
+        }
+    }
+
     async fn save_locked(
         &self,
         project_id: &ProjectId,
@@ -248,6 +351,49 @@ impl BoardService {
     ) -> AppHostResult<()> {
         let path = self.board_path(project_id);
         write_document(&path, session.document(), "board").await
+    }
+}
+
+/// Summary key and English fallback for an applied board batch.
+fn apply_summary(commands: &[BoardCommand]) -> (&'static str, String) {
+    let count = commands.len();
+    let all_adds = commands
+        .iter()
+        .all(|command| matches!(command, BoardCommand::AddItem { .. }));
+    let all_notes = commands.iter().all(|command| {
+        matches!(
+            command,
+            BoardCommand::AddItem {
+                kind: BoardItemKind::Note { .. },
+                ..
+            }
+        )
+    });
+
+    if all_adds && all_notes {
+        (
+            "activity.board.addNote",
+            match count {
+                1 => "Added a note".to_owned(),
+                _ => format!("Added {count} notes"),
+            },
+        )
+    } else if all_adds {
+        (
+            "activity.board.addItem",
+            match count {
+                1 => "Added an item".to_owned(),
+                _ => format!("Added {count} items"),
+            },
+        )
+    } else {
+        (
+            "activity.board.apply",
+            match count {
+                1 => "Applied a board change".to_owned(),
+                _ => format!("Applied {count} board changes"),
+            },
+        )
     }
 }
 
