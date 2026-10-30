@@ -11,7 +11,7 @@ use reimagine_core::diagnostic::{
 };
 use reimagine_core::model::{AssetId, DiagnosticId, StepId};
 use sha2::{Digest, Sha256};
-use tokio::io::AsyncWriteExt;
+use tokio::io::{AsyncReadExt, AsyncSeekExt, AsyncWriteExt};
 
 fn asset_caller_error(code: &str, message: impl Into<String>) -> Diagnostic {
     Diagnostic::new(
@@ -227,6 +227,7 @@ impl AssetStore {
             let _guard = self.append_lock.lock().await;
             let mut file = tokio::fs::OpenOptions::new()
                 .create(true)
+                .read(true)
                 .append(true)
                 .open(&jsonl_path)
                 .await
@@ -236,6 +237,7 @@ impl AssetStore {
                         format!("failed to open `{}`: {e}", jsonl_path.display()),
                     )
                 })?;
+            Self::terminate_partial_line(&mut file, &jsonl_path).await?;
             file.write_all(line.as_bytes()).await.map_err(|e| {
                 asset_internal_error(
                     "IO",
@@ -251,6 +253,55 @@ impl AssetStore {
         }
 
         Ok(record)
+    }
+
+    /// Terminate a partial trailing line before appending a record.
+    ///
+    /// A process abort can interrupt an append, leaving a line without its
+    /// newline. Appending directly after it would merge the torn line and the
+    /// new record into one unparseable line, so `list` would drop both. Adding
+    /// the missing newline keeps the torn line a single ignored record and
+    /// starts the new record on its own line.
+    async fn terminate_partial_line(
+        file: &mut tokio::fs::File,
+        jsonl_path: &Path,
+    ) -> Result<(), Diagnostic> {
+        let len = file
+            .metadata()
+            .await
+            .map_err(|e| {
+                asset_internal_error(
+                    "IO",
+                    format!("failed to stat `{}`: {e}", jsonl_path.display()),
+                )
+            })?
+            .len();
+        if len == 0 {
+            return Ok(());
+        }
+
+        file.seek(std::io::SeekFrom::End(-1)).await.map_err(|e| {
+            asset_internal_error(
+                "IO",
+                format!("failed to seek `{}`: {e}", jsonl_path.display()),
+            )
+        })?;
+        let mut last = [0u8; 1];
+        file.read_exact(&mut last).await.map_err(|e| {
+            asset_internal_error(
+                "IO",
+                format!("failed to read `{}`: {e}", jsonl_path.display()),
+            )
+        })?;
+        if last[0] != b'\n' {
+            file.write_all(b"\n").await.map_err(|e| {
+                asset_internal_error(
+                    "IO",
+                    format!("failed to repair `{}`: {e}", jsonl_path.display()),
+                )
+            })?;
+        }
+        Ok(())
     }
 
     /// Every asset record in file order (oldest first).
@@ -434,5 +485,35 @@ mod tests {
         // Exactly one content file on disk
         let content_path = store.content_path(&rec1.hash);
         assert!(content_path.is_file());
+    }
+
+    #[tokio::test]
+    async fn ingest_after_a_torn_tail_keeps_the_new_record() {
+        let temp = tempfile::tempdir().unwrap();
+        let store = AssetStore::new(temp.path());
+        let jsonl_path = temp.path().join("assets.jsonl");
+
+        // Simulate a crash mid-append: a partial record without its newline.
+        tokio::fs::write(&jsonl_path, b"{\"id\":\"asset-torn\",\"hash\":")
+            .await
+            .unwrap();
+
+        let source = temp.path().join("source.txt");
+        tokio::fs::write(&source, b"after the crash").await.unwrap();
+
+        let record = store
+            .ingest_file(StepId::new("step-1"), &source, Some("text/plain"))
+            .await
+            .expect("ingest after a torn tail");
+
+        let listed = store.list().await.expect("list assets");
+        assert_eq!(listed.len(), 1, "the torn line stays one ignored record");
+        assert_eq!(listed[0].id, record.id);
+
+        let contents = tokio::fs::read_to_string(&jsonl_path).await.unwrap();
+        let lines: Vec<&str> = contents.lines().collect();
+        assert_eq!(lines.len(), 2, "the repaired newline splits the two lines");
+        assert_eq!(lines[0], "{\"id\":\"asset-torn\",\"hash\":");
+        assert!(serde_json::from_str::<AssetRecord>(lines[1]).is_ok());
     }
 }

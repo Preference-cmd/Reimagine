@@ -82,6 +82,7 @@
   "library.retry": "Try again",
   "library.noMatchesTitle": "No matching items",
   "library.noMatchesDescription": "Try a different name or type filter.",
+  "library.resultCount": "Results: {count}",
   "library.searchLabel": "Filter by name",
   "library.searchPlaceholder": "Filter by name",
   "library.importFiles": "Import files",

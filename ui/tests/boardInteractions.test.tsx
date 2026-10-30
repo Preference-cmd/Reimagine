@@ -52,7 +52,11 @@ describe("Board canvas interactions and command batches", () => {
     vi.clearAllMocks();
     testStoreApi = null;
     useProjectStore.setState({ activeProjectId: "proj-1" });
-    useUIStore.setState({ sessionPanelOpen: true, canvasFocusItemId: null });
+    useUIStore.setState({
+      sessionPanelOpen: true,
+      canvasFocusItemId: null,
+      canvasViewports: {},
+    });
     useBoardStore.getState().hydrate({
       id: "board-proj-1",
       projectId: "proj-1",
@@ -197,6 +201,59 @@ describe("Board canvas interactions and command batches", () => {
     });
     // item-2 center (500, 150); visible center is (302, 300) with the panel open.
     expect(testStoreApi!.getState().transform).toEqual([-198, 150, 1]);
+  });
+
+  test("mounts at the stored viewport and persists pan/zoom ends per project", async () => {
+    useUIStore.setState({
+      canvasViewports: { "proj-1": { x: -120, y: -80, zoom: 0.75 } },
+    });
+
+    render(
+      <ReactFlowProvider>
+        <BoardCanvasInner />
+        <StoreCapture />
+      </ReactFlowProvider>,
+    );
+
+    await waitFor(() => {
+      expect(testStoreApi!.getState().transform).toEqual([-120, -80, 0.75]);
+    });
+
+    act(() => {
+      testStoreApi!.getState().onMoveEnd?.({} as MouseEvent, { x: -600, y: -300, zoom: 1.5 });
+    });
+    expect(useUIStore.getState().canvasViewports["proj-1"]).toEqual({
+      x: -600,
+      y: -300,
+      zoom: 1.5,
+    });
+  });
+
+  test("a project switch applies that project's stored viewport", async () => {
+    useUIStore.setState({
+      canvasViewports: {
+        "proj-1": { x: 10, y: 20, zoom: 1 },
+        "proj-2": { x: -30, y: -40, zoom: 0.5 },
+      },
+    });
+
+    render(
+      <ReactFlowProvider>
+        <BoardCanvasInner />
+        <StoreCapture />
+      </ReactFlowProvider>,
+    );
+    await waitFor(() => {
+      expect(testStoreApi!.getState().transform).toEqual([10, 20, 1]);
+    });
+
+    act(() => {
+      useProjectStore.setState({ activeProjectId: "proj-2" });
+    });
+
+    await waitFor(() => {
+      expect(testStoreApi!.getState().transform).toEqual([-30, -40, 0.5]);
+    });
   });
 
   test("double-clicking empty canvas generates add_item batch at click point", async () => {

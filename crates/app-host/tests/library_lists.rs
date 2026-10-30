@@ -35,6 +35,10 @@ async fn build_host(base: &Path) -> WorkspaceHost {
         .expect("build host")
 }
 
+fn project_dir(host: &WorkspaceHost, project: &ProjectId) -> std::path::PathBuf {
+    host.config().paths().project_dir(project.as_str())
+}
+
 async fn create_project(host: &WorkspaceHost, id: &str) -> ProjectId {
     let project_id = ProjectId::new(id);
     host.project_service()
@@ -244,6 +248,30 @@ async fn list_operations_are_empty_for_unknown_and_empty_projects() {
 }
 
 #[tokio::test]
+async fn list_operations_record_no_step() {
+    let base = temp_dir("no-steps");
+    let host = build_host(&base).await;
+    let project = create_project(&host, "proj-no-steps").await;
+
+    for name in ["collection.list", "dynamic_workflow.list", "asset.list"] {
+        let _ = invoke(&host, &project, name, json!({})).await;
+    }
+
+    let steps_path = project_dir(&host, &project).join("steps.jsonl");
+    let empty = match fs::metadata(&steps_path) {
+        Ok(metadata) => metadata.len() == 0,
+        Err(error) => error.kind() == std::io::ErrorKind::NotFound,
+    };
+    assert!(
+        empty,
+        "read-only list operations must not append to `{}`",
+        steps_path.display()
+    );
+
+    let _ = fs::remove_dir_all(&base);
+}
+
+#[tokio::test]
 async fn list_operations_return_records_after_a_host_reopen() {
     let base = temp_dir("reopen");
     let host = build_host(&base).await;
@@ -307,6 +335,164 @@ async fn asset_list_ignores_a_torn_last_line() {
         "a torn trailing line is not a completed record"
     );
     assert_eq!(records[0]["id"].as_str(), Some(assets[0].as_str()));
+
+    let _ = fs::remove_dir_all(&base);
+}
+
+#[tokio::test]
+async fn asset_import_after_a_torn_tail_keeps_both_records() {
+    let base = temp_dir("torn-append");
+    let host = build_host(&base).await;
+    let project = create_project(&host, "proj-torn-append").await;
+
+    let first = import_files(&host, &project, &base, &[("a.txt", "alpha")]).await;
+    let jsonl_path = project_dir(&host, &project).join("assets.jsonl");
+    let mut contents = fs::read_to_string(&jsonl_path).expect("read assets.jsonl");
+    contents.push_str(r#"{"id":"asset-torn","hash":"#);
+    fs::write(&jsonl_path, contents).expect("append torn line");
+
+    // The next import must terminate the torn line before appending, so the
+    // new record parses instead of merging with the partial one.
+    let second = import_files(&host, &project, &base, &[("b.txt", "beta")]).await;
+    assert_eq!(second.len(), 1);
+
+    let listed = invoke(&host, &project, "asset.list", json!({})).await;
+    let records = listed["assets"].as_array().expect("assets array");
+    assert_eq!(
+        records.len(),
+        2,
+        "both complete records are listed and the torn line is ignored"
+    );
+    assert_eq!(records[0]["id"].as_str(), Some(second[0].as_str()));
+    assert_eq!(records[1]["id"].as_str(), Some(first[0].as_str()));
+
+    let _ = fs::remove_dir_all(&base);
+}
+
+#[tokio::test]
+async fn asset_list_skips_a_complete_but_invalid_line() {
+    let base = temp_dir("invalid-line");
+    let host = build_host(&base).await;
+    let project = create_project(&host, "proj-invalid-line").await;
+
+    let assets = import_files(&host, &project, &base, &[("a.txt", "alpha")]).await;
+    let jsonl_path = project_dir(&host, &project).join("assets.jsonl");
+    let mut contents = fs::read_to_string(&jsonl_path).expect("read assets.jsonl");
+    // Syntactically valid JSON that is not an asset record, terminated by a
+    // newline so it counts as a completed line.
+    contents.push_str("{\"id\":\"asset-invalid\",\"media_type\":\"text/plain\"}\n");
+    fs::write(&jsonl_path, contents).expect("append invalid record");
+
+    let listed = invoke(&host, &project, "asset.list", json!({})).await;
+    let records = listed["assets"].as_array().expect("assets array");
+    assert_eq!(records.len(), 1, "an invalid completed line is ignored");
+    assert_eq!(records[0]["id"].as_str(), Some(assets[0].as_str()));
+
+    let _ = fs::remove_dir_all(&base);
+}
+
+#[tokio::test]
+async fn list_operations_are_isolated_per_project() {
+    let base = temp_dir("isolation");
+    let host = build_host(&base).await;
+    let alpha = create_project(&host, "proj-alpha").await;
+    let beta = create_project(&host, "proj-beta").await;
+
+    let alpha_assets = import_files(&host, &alpha, &base, &[("alpha.txt", "alpha")]).await;
+    let beta_assets = import_files(&host, &beta, &base, &[("beta.txt", "beta")]).await;
+    assert_eq!(alpha_assets.len(), 1);
+    assert_eq!(beta_assets.len(), 1);
+    assert_ne!(alpha_assets[0], beta_assets[0]);
+
+    let alpha_collection =
+        create_collection(&host, &alpha, "Alpha only", &[alpha_assets[0].as_str()]).await;
+    let beta_collection =
+        create_collection(&host, &beta, "Beta only", &[beta_assets[0].as_str()]).await;
+    let alpha_workflow = create_workflow(&host, &alpha, "Alpha flow").await;
+    let beta_workflow = create_workflow(&host, &beta, "Beta flow").await;
+
+    let cases = [
+        (
+            &alpha,
+            alpha_collection.as_str(),
+            alpha_workflow.as_str(),
+            alpha_assets[0].as_str(),
+        ),
+        (
+            &beta,
+            beta_collection.as_str(),
+            beta_workflow.as_str(),
+            beta_assets[0].as_str(),
+        ),
+    ];
+    for (project, collection_id, workflow_id, asset_id) in cases {
+        let listed = invoke(&host, project, "collection.list", json!({})).await;
+        let collections = listed["collections"].as_array().expect("collections array");
+        assert_eq!(
+            collections.len(),
+            1,
+            "only `{}`'s collection is listed",
+            project.as_str()
+        );
+        assert_eq!(collections[0]["id"].as_str(), Some(collection_id));
+
+        let listed = invoke(&host, project, "dynamic_workflow.list", json!({})).await;
+        let workflows = listed["workflows"].as_array().expect("workflows array");
+        assert_eq!(
+            workflows.len(),
+            1,
+            "only `{}`'s workflow is listed",
+            project.as_str()
+        );
+        assert_eq!(workflows[0]["id"].as_str(), Some(workflow_id));
+
+        let listed = invoke(&host, project, "asset.list", json!({})).await;
+        let records = listed["assets"].as_array().expect("assets array");
+        assert_eq!(
+            records.len(),
+            1,
+            "only `{}`'s assets are listed",
+            project.as_str()
+        );
+        assert_eq!(records[0]["id"].as_str(), Some(asset_id));
+    }
+
+    let _ = fs::remove_dir_all(&base);
+}
+
+#[tokio::test]
+async fn list_operations_skip_malformed_documents() {
+    let base = temp_dir("malformed");
+    let host = build_host(&base).await;
+    let project = create_project(&host, "proj-malformed").await;
+
+    let assets = import_files(&host, &project, &base, &[("a.txt", "alpha")]).await;
+    let collection_id = create_collection(&host, &project, "Alpha", &[assets[0].as_str()]).await;
+    let workflow_id = create_workflow(&host, &project, "Flow One").await;
+
+    // A malformed document is logged as a warning and skipped; one bad file
+    // must not hide the rest of the library or fail the list operation.
+    let project_root = project_dir(&host, &project);
+    let malformed_collection = project_root.join("collections").join("broken.json");
+    fs::create_dir_all(malformed_collection.parent().expect("collection dir"))
+        .expect("create collections dir");
+    fs::write(&malformed_collection, "{ not a collection document")
+        .expect("write malformed collection");
+    let malformed_workflow = project_root.join("dynamic_workflows").join("broken.json");
+    fs::create_dir_all(malformed_workflow.parent().expect("workflow dir"))
+        .expect("create dynamic workflows dir");
+    fs::write(&malformed_workflow, "{ not a dynamic workflow document")
+        .expect("write malformed workflow");
+
+    let listed = invoke(&host, &project, "collection.list", json!({})).await;
+    let collections = listed["collections"].as_array().expect("collections array");
+    assert_eq!(collections.len(), 1, "the valid collection is still listed");
+    assert_eq!(collections[0]["id"].as_str(), Some(collection_id.as_str()));
+
+    let listed = invoke(&host, &project, "dynamic_workflow.list", json!({})).await;
+    let workflows = listed["workflows"].as_array().expect("workflows array");
+    assert_eq!(workflows.len(), 1, "the valid workflow is still listed");
+    assert_eq!(workflows[0]["id"].as_str(), Some(workflow_id.as_str()));
 
     let _ = fs::remove_dir_all(&base);
 }

@@ -1,6 +1,7 @@
-import { useCallback, useMemo } from "react";
+import { useCallback, useEffect, useMemo } from "react";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import * as m from "$paraglide/messages";
+import { subscribeEvents } from "@/ipc";
 import type { RunState } from "@/ipc/schemas";
 import {
   buildLibraryRows,
@@ -40,8 +41,10 @@ const LABELS: LibraryRowLabels = {
 };
 
 /**
- * The library's four list reads plus the combined table rows. Events are not
- * subscribed here: the table reads on mount and on an explicit refetch.
+ * The library's four list reads plus the combined table rows. Lists refetch
+ * on every mount and follow document events for the active project:
+ * `collection.changed` refreshes collections and `dynamic_workflow.*`
+ * refreshes workflows and runs.
  */
 export function useLibraryRows(
   projectId: string,
@@ -58,23 +61,47 @@ export function useLibraryRows(
   const collections = useQuery({
     queryKey: libraryQueryKeys.collections(projectId),
     queryFn: () => listCollections(projectId),
-    staleTime: 30_000,
+    staleTime: 0,
+    refetchOnMount: "always",
   });
   const workflows = useQuery({
     queryKey: libraryQueryKeys.workflows(projectId),
     queryFn: () => listDynamicWorkflows(projectId),
-    staleTime: 30_000,
+    staleTime: 0,
+    refetchOnMount: "always",
   });
   const runs = useQuery({
     queryKey: libraryQueryKeys.runs(projectId, limit),
     queryFn: () => listRuns(projectId, limit),
-    staleTime: 30_000,
+    staleTime: 0,
+    refetchOnMount: "always",
   });
   const assets = useQuery({
     queryKey: libraryQueryKeys.assets(projectId),
     queryFn: () => listAssets(projectId),
-    staleTime: 30_000,
+    staleTime: 0,
+    refetchOnMount: "always",
   });
+
+  useEffect(() => {
+    if (!projectId) return;
+    const unsubscribe = subscribeEvents((event) => {
+      if (event.type !== "document" || event.projectId !== projectId) return;
+      if (event.kind === "collection.changed") {
+        void queryClient.invalidateQueries({
+          queryKey: libraryQueryKeys.collections(projectId),
+        });
+      } else if (event.kind.startsWith("dynamic_workflow.")) {
+        void queryClient.invalidateQueries({
+          queryKey: libraryQueryKeys.workflows(projectId),
+        });
+        void queryClient.invalidateQueries({
+          queryKey: libraryQueryKeys.runs(projectId, limit),
+        });
+      }
+    });
+    return () => unsubscribe();
+  }, [projectId, limit, queryClient]);
 
   const rows = useMemo(
     () =>

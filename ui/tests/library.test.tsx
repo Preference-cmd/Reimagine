@@ -2,7 +2,7 @@ import { describe, test, expect, vi, beforeEach, afterEach } from "vitest";
 import type { ReactNode } from "react";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { toast } from "sonner";
-import { fireEvent, render, screen, waitFor, within } from "./test-utils";
+import { act, fireEvent, render, screen, waitFor, within } from "./test-utils";
 import { LibraryView } from "../src/components/layout/LibraryView";
 import * as ipc from "../src/ipc";
 import type {
@@ -22,9 +22,11 @@ import {
   formatBytes,
   LIBRARY_PLACEMENT_SIZES,
   libraryRowBoardKind,
+  type LibraryRowLabels,
 } from "../src/lib/library";
 import { useBoardStore } from "../src/store/board";
 import { useProjectStore } from "../src/store/project";
+import { useSettingsStore } from "../src/store/settingsStore";
 import { useUIStore } from "../src/store/uiStore";
 
 const mockNavigate = vi.fn();
@@ -36,6 +38,12 @@ vi.mock("sonner", () => ({
     success: vi.fn(),
   },
 }));
+
+const TEST_LABELS: LibraryRowLabels = {
+  collectionDetail: (count, version) => `${count} slots · v${version}`,
+  workflowDetail: (count, version) => `${count} steps · v${version}`,
+  runState: (state) => state,
+};
 
 vi.mock("@tanstack/react-router", () => ({
   Link: ({
@@ -256,7 +264,7 @@ describe("library row placement helpers", () => {
 });
 
 describe("library row helpers", () => {
-  const rows = buildLibraryRows({ collections, workflows, runs, assets });
+  const rows = buildLibraryRows({ collections, workflows, runs, assets }, TEST_LABELS);
 
   test("sorts by type then name and formats each detail", () => {
     expect(rows.map((row) => `${row.type}:${row.name}`)).toEqual([
@@ -264,15 +272,14 @@ describe("library row helpers", () => {
       "collection:Beta Collection",
       "workflow:Archive sweep",
       "workflow:Draft cleanup",
-      "run:Draft cleanup",
-      "run:dwf_missing",
+      "run:Draft cleanup #run_2",
+      "run:dwf_missing #run_1",
       "asset:ast_abc",
       "asset:ast_def",
     ]);
     expect(rows[0].detail).toBe("4 slots · v3");
     expect(rows[2].detail).toBe("2 steps · v1");
     expect(rows[4].detail).toBe("completed · 2/3");
-    expect(rows[4].meta).toBe("2026-10-29T10:00:00Z");
     expect(rows[5].detail).toBe("running · 0/1");
     expect(rows[6].detail).toBe("image/png · 2 KB");
     expect(rows[7].detail).toBe("text/markdown · 1.5 KB");
@@ -316,8 +323,12 @@ describe("LibraryView", () => {
     useUIStore.setState({
       sessionPanelOpen: false,
       canvasFocusItemId: null,
-      lastCanvasCenter: null,
+      canvasViewports: {},
     });
+    useSettingsStore.setState({ sidebarCollapsed: false });
+    // The library reads the window directly to derive the canvas visible area.
+    Object.defineProperty(window, "innerWidth", { configurable: true, value: 1440 });
+    Object.defineProperty(window, "innerHeight", { configurable: true, value: 900 });
     emptyBoard();
     mockOpInvoke();
   });
@@ -330,14 +341,17 @@ describe("LibraryView", () => {
     renderLibrary();
     await expectRows(8);
 
+    expect(screen.getByRole("heading", { level: 1 })).toHaveTextContent("Library");
     expect(screen.getByText("Alpha Collection")).toBeInTheDocument();
     expect(screen.getByText("4 slots · v3")).toBeInTheDocument();
     expect(screen.getByText("2 steps · v1")).toBeInTheDocument();
     expect(screen.getByText("Completed · 2/3")).toBeInTheDocument();
     expect(screen.getByText("image/png · 2 KB")).toBeInTheDocument();
-    // The run joins the workflow name; both rows carry "Draft cleanup".
-    expect(screen.getAllByText("Draft cleanup")).toHaveLength(2);
-    expect(screen.getByText("dwf_missing")).toBeInTheDocument();
+    // The run joins the workflow name and carries a short run id.
+    expect(screen.getByText("Draft cleanup")).toBeInTheDocument();
+    expect(screen.getByText("Draft cleanup #run_2")).toBeInTheDocument();
+    expect(screen.getByText("dwf_missing #run_1")).toBeInTheDocument();
+    expect(screen.getByTestId("library-result-count")).toHaveTextContent("Results: 8");
 
     const chipCounts: Array<[string, string]> = [
       ["all", "8"],
@@ -367,7 +381,9 @@ describe("LibraryView", () => {
 
     fireEvent.change(screen.getByTestId("library-search"), { target: { value: "  DRAFT " } });
     await expectRows(2);
-    expect(screen.getAllByText("Draft cleanup")).toHaveLength(2);
+    expect(screen.getAllByText("Draft cleanup")).toHaveLength(1);
+    expect(screen.getByText("Draft cleanup #run_2")).toBeInTheDocument();
+    expect(screen.getByTestId("library-result-count")).toHaveTextContent("Results: 2");
 
     fireEvent.change(screen.getByTestId("library-search"), { target: { value: "image/png" } });
     await expectRows(1);
@@ -485,14 +501,19 @@ describe("LibraryView", () => {
     const onBoard: Array<[string, string]> = [
       ["Collection", "Alpha Collection"],
       ["Dynamic workflow", "Draft cleanup"],
-      ["Run", "dwf_missing"],
+      ["Run", "dwf_missing #run_1"],
       ["File", "ast_abc"],
     ];
     for (const [typeLabel, name] of onBoard) {
       expect(actionFor(typeLabel, name)).toHaveTextContent("Show in canvas");
       expect(actionFor(typeLabel, name)).toHaveAttribute("data-action", "show");
+      expect(actionFor(typeLabel, name)).toHaveAttribute("aria-label", `Show in canvas — ${name}`);
     }
     expect(actionFor("Collection", "Beta Collection")).toHaveTextContent("Place on canvas");
+    expect(actionFor("Collection", "Beta Collection")).toHaveAttribute(
+      "aria-label",
+      "Place on canvas — Beta Collection",
+    );
 
     fireEvent.click(actionFor("Collection", "Alpha Collection"));
 
@@ -500,14 +521,19 @@ describe("LibraryView", () => {
     expect(mockNavigate).toHaveBeenCalledWith({ to: "/" });
   });
 
-  test("placing a collection sends add_item at the last canvas center and flips the row", async () => {
+  test("placing a collection centers it on the visible area of the stored viewport", async () => {
     useBoardStore.getState().hydrate({
       id: "board-default",
       projectId: "default",
       version: 3,
       items: [],
     });
-    useUIStore.setState({ lastCanvasCenter: { x: 1000, y: 800 } });
+    // 1440x900, expanded sidebar, panel open, panned by (-600, -300):
+    // the visible center is (986, 718) in flow coordinates.
+    useUIStore.setState({
+      sessionPanelOpen: true,
+      canvasViewports: { default: { x: -600, y: -300, zoom: 1 } },
+    });
 
     const applySpy = vi.spyOn(ipc, "applyBoardCommands").mockResolvedValue({
       status: "applied",
@@ -554,7 +580,7 @@ describe("LibraryView", () => {
         type: "add_item",
         item_id: expect.any(String),
         kind: { type: "collection", collection_id: "col_alpha" },
-        position: { x: 850, y: 700 },
+        position: { x: 836, y: 618 },
         size: { width: 300, height: 200 },
       },
     ]);
@@ -569,9 +595,7 @@ describe("LibraryView", () => {
     expect(mockNavigate).not.toHaveBeenCalled();
   });
 
-  test("placing a file on an unloaded board loads it first and falls back to the origin", async () => {
-    useUIStore.setState({ lastCanvasCenter: null });
-
+  test("placing a file on an unloaded board loads it first and centers cold start", async () => {
     const applySpy = vi.spyOn(ipc, "applyBoardCommands").mockResolvedValue({
       status: "applied",
       version: 1,
@@ -612,12 +636,14 @@ describe("LibraryView", () => {
     await waitFor(() => expect(applySpy).toHaveBeenCalledTimes(1));
     const [, batch] = applySpy.mock.calls[0] as [string, CommandBatch<BoardCommand>];
     expect(batch.base_version).toBe(0);
+    // No stored viewport: the canvas mounts at 0,0,1, whose visible center on
+    // 1440x900 with the expanded sidebar and the panel closed is (584, 418).
     expect(batch.commands).toEqual([
       {
         type: "add_item",
         item_id: expect.any(String),
         kind: { type: "asset_ref", artifact_id: "ast_abc" },
-        position: { x: -120, y: -80 },
+        position: { x: 464, y: 338 },
         size: { width: 240, height: 160 },
       },
     ]);
@@ -629,14 +655,16 @@ describe("LibraryView", () => {
     expect(getSnapshotSpy).toHaveBeenCalledTimes(2);
   });
 
-  test("placing a run sends run_ref at the measured center", async () => {
+  test("placing a run divides the stored viewport by its zoom", async () => {
     useBoardStore.getState().hydrate({
       id: "board-default",
       projectId: "default",
       version: 3,
       items: [],
     });
-    useUIStore.setState({ lastCanvasCenter: { x: 500, y: 500 } });
+    useUIStore.setState({
+      canvasViewports: { default: { x: -600, y: -300, zoom: 2 } },
+    });
 
     const applySpy = vi.spyOn(ipc, "applyBoardCommands").mockResolvedValue({
       status: "applied",
@@ -655,7 +683,7 @@ describe("LibraryView", () => {
     renderLibrary();
     await expectRows(8);
 
-    fireEvent.click(actionFor("Run", "Draft cleanup"));
+    fireEvent.click(actionFor("Run", "Draft cleanup #run_2"));
 
     await waitFor(() => expect(applySpy).toHaveBeenCalledTimes(1));
     const [, batch] = applySpy.mock.calls[0] as [string, CommandBatch<BoardCommand>];
@@ -664,7 +692,7 @@ describe("LibraryView", () => {
         type: "add_item",
         item_id: expect.any(String),
         kind: { type: "run_ref", run_id: "run_2" },
-        position: { x: 360, y: 420 },
+        position: { x: 452, y: 279 },
         size: { width: 280, height: 160 },
       },
     ]);
@@ -677,7 +705,6 @@ describe("LibraryView", () => {
       version: 3,
       items: [],
     });
-    useUIStore.setState({ lastCanvasCenter: { x: 0, y: 0 } });
 
     vi.spyOn(ipc, "applyBoardCommands").mockResolvedValue({
       status: "rejected",
@@ -703,5 +730,196 @@ describe("LibraryView", () => {
     });
     expect(actionFor("Dynamic workflow", "Draft cleanup")).toHaveTextContent("Place on canvas");
     expect(toast.success).not.toHaveBeenCalled();
+  });
+
+  test("row placements queue: one apply at a time, the next reads the new version", async () => {
+    useBoardStore.getState().hydrate({
+      id: "board-default",
+      projectId: "default",
+      version: 3,
+      items: [],
+    });
+
+    let resolveFirstApply: ((value: unknown) => void) | undefined;
+    const firstApply = new Promise((resolve) => {
+      resolveFirstApply = resolve;
+    });
+    let applyCount = 0;
+    const applySpy = vi.spyOn(ipc, "applyBoardCommands").mockImplementation(async () => {
+      applyCount += 1;
+      if (applyCount === 1) {
+        await firstApply;
+        return {
+          status: "applied" as const,
+          version: 4,
+          changes: [],
+          diagnostics: [],
+          historyEntryId: null,
+        };
+      }
+      return {
+        status: "applied" as const,
+        version: 5,
+        changes: [],
+        diagnostics: [],
+        historyEntryId: null,
+      };
+    });
+    vi.spyOn(ipc, "getBoardSnapshot").mockImplementation(async (projectId) => {
+      const commands = applySpy.mock.calls.map(
+        ([, batch]) =>
+          (batch as CommandBatch<BoardCommand>).commands[0] as Extract<
+            BoardCommand,
+            { type: "add_item" }
+          >,
+      );
+      return {
+        id: "board-default",
+        projectId,
+        version: 3 + commands.length,
+        items: commands.map((command, index) => ({
+          id: command.item_id,
+          kind: command.kind,
+          position: command.position,
+          size: command.size,
+          z: index,
+          locked: false,
+        })),
+      };
+    });
+
+    renderLibrary();
+    await expectRows(8);
+
+    // Two raw clicks in one batch bypass the re-render that disables the other
+    // buttons, so both rows enqueue and the second must wait for the first.
+    act(() => {
+      actionFor("Collection", "Alpha Collection").click();
+      actionFor("Collection", "Beta Collection").click();
+    });
+
+    await waitFor(() => expect(applySpy).toHaveBeenCalledTimes(1));
+    expect(applySpy.mock.calls[0][1]).toMatchObject({ base_version: 3 });
+    for (const action of screen
+      .getAllByTestId("library-row-action")
+      .filter((element) => element.getAttribute("data-action") === "place")) {
+      expect(action).toBeDisabled();
+    }
+
+    await act(async () => {
+      resolveFirstApply?.(undefined);
+    });
+
+    await waitFor(() => expect(applySpy).toHaveBeenCalledTimes(2));
+    expect(applySpy.mock.calls[1][1]).toMatchObject({ base_version: 4 });
+    await waitFor(() => {
+      expect(actionFor("Collection", "Beta Collection")).toHaveTextContent("Show in canvas");
+    });
+  });
+
+  test("a queued placement is dropped when the active project changes", async () => {
+    useBoardStore.getState().hydrate({
+      id: "board-default",
+      projectId: "default",
+      version: 3,
+      items: [],
+    });
+
+    let resolveFirstApply: ((value: unknown) => void) | undefined;
+    const firstApply = new Promise((resolve) => {
+      resolveFirstApply = resolve;
+    });
+    let applyCount = 0;
+    const applySpy = vi.spyOn(ipc, "applyBoardCommands").mockImplementation(async () => {
+      applyCount += 1;
+      if (applyCount === 1) await firstApply;
+      return {
+        status: "applied" as const,
+        version: 3 + applyCount,
+        changes: [],
+        diagnostics: [],
+        historyEntryId: null,
+      };
+    });
+    const getSnapshotSpy = vi.spyOn(ipc, "getBoardSnapshot");
+
+    renderLibrary();
+    await expectRows(8);
+
+    act(() => {
+      actionFor("Collection", "Alpha Collection").click();
+      actionFor("Collection", "Beta Collection").click();
+    });
+    await waitFor(() => expect(applySpy).toHaveBeenCalledTimes(1));
+
+    // The switch lands while the first batch is in flight and before the
+    // second row reaches the front of the queue.
+    act(() => {
+      useProjectStore.setState({ activeProjectId: "other" });
+    });
+    await act(async () => {
+      resolveFirstApply?.(undefined);
+      await Promise.resolve();
+    });
+
+    expect(applySpy).toHaveBeenCalledTimes(1);
+    expect(getSnapshotSpy).not.toHaveBeenCalled();
+    expect(toast.success).not.toHaveBeenCalled();
+  });
+
+  test("follows collection and dynamic workflow events for the active project", async () => {
+    let listener: ((event: ipc.Event) => void) | null = null;
+    vi.spyOn(ipc, "subscribeEvents").mockImplementation((onEvent) => {
+      listener = onEvent;
+      return () => {
+        listener = null;
+      };
+    });
+    const opSpy = mockOpInvoke();
+    const opCalls = () => opSpy.mock.calls.map(([, name]) => name);
+
+    renderLibrary();
+    await expectRows(8);
+    expect(opCalls()).toHaveLength(4);
+
+    act(() => {
+      listener?.({
+        type: "document",
+        kind: "collection.changed",
+        projectId: "default",
+        documentId: "col_alpha",
+        version: 4,
+      });
+    });
+    await waitFor(() => {
+      expect(opCalls().filter((name) => name === "collection.list")).toHaveLength(2);
+    });
+
+    act(() => {
+      listener?.({
+        type: "document",
+        kind: "dynamic_workflow.run_changed",
+        projectId: "default",
+        documentId: "run_2",
+        version: 2,
+      });
+    });
+    await waitFor(() => {
+      expect(opCalls().filter((name) => name === "dynamic_workflow.list")).toHaveLength(2);
+      expect(opCalls().filter((name) => name === "dynamic_workflow.list_runs")).toHaveLength(2);
+    });
+
+    // Another project's events are ignored.
+    const before = opCalls().length;
+    act(() => {
+      listener?.({
+        type: "document",
+        kind: "collection.changed",
+        projectId: "other",
+        documentId: "col_other",
+        version: 2,
+      });
+    });
+    expect(opCalls()).toHaveLength(before);
   });
 });

@@ -26,20 +26,12 @@ export type LibraryRow = {
   id: string;
   name: string;
   detail: string;
-  /** Secondary value kept for row actions (run creation time). */
-  meta?: string;
 };
 
 export type LibraryRowLabels = {
   collectionDetail: (slotCount: number, version: number) => string;
   workflowDetail: (stepCount: number, version: number) => string;
   runState: (state: RunState) => string;
-};
-
-const DEFAULT_LABELS: LibraryRowLabels = {
-  collectionDetail: (count, version) => `${count} slots · v${version}`,
-  workflowDetail: (count, version) => `${count} steps · v${version}`,
-  runState: (state) => state,
 };
 
 export function isLibraryFilter(value: string | null | undefined): value is LibraryFilter {
@@ -63,7 +55,8 @@ export function formatBytes(bytes: number): string {
 
 /**
  * Flattens the four list reads into table rows. Runs join their workflow
- * name by id and fall back to the raw id when the workflow is gone.
+ * name by id and fall back to the raw id when the workflow is gone; a short
+ * run id suffix keeps several runs of the same workflow apart.
  * Rows are sorted by type order, then by name.
  */
 export function buildLibraryRows(
@@ -73,7 +66,7 @@ export function buildLibraryRows(
     runs: DynamicWorkflowRun[];
     assets: AssetSummary[];
   },
-  labels: LibraryRowLabels = DEFAULT_LABELS,
+  labels: LibraryRowLabels,
 ): LibraryRow[] {
   const workflowNames = new Map(input.workflows.map((workflow) => [workflow.id, workflow.name]));
 
@@ -93,12 +86,12 @@ export function buildLibraryRows(
     ...input.runs.map((run) => {
       const succeeded = run.items.filter((item) => item.state === "succeeded").length;
       const counter = run.items.length > 0 ? ` · ${succeeded}/${run.items.length}` : "";
+      const workflowName = workflowNames.get(run.dynamic_workflow_id) ?? run.dynamic_workflow_id;
       return {
         type: "run" as const,
         id: run.id,
-        name: workflowNames.get(run.dynamic_workflow_id) ?? run.dynamic_workflow_id,
+        name: `${workflowName} #${run.id.slice(-6)}`,
         detail: `${labels.runState(run.state)}${counter}`,
-        meta: run.created_at,
       };
     }),
     ...input.assets.map((asset) => ({

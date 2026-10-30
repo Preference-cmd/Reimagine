@@ -82,6 +82,7 @@
   "library.retry": "重试",
   "library.noMatchesTitle": "没有匹配的条目",
   "library.noMatchesDescription": "换个名称或类型筛选试试。",
+  "library.resultCount": "结果：{count}",
   "library.searchLabel": "按名称筛选",
   "library.searchPlaceholder": "按名称筛选",
   "library.importFiles": "导入文件",

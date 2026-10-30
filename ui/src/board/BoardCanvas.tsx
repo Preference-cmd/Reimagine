@@ -9,6 +9,7 @@ import {
   type Node,
   type NodeTypes,
   type OnNodeDrag,
+  type Viewport,
 } from "@xyflow/react";
 import "@xyflow/react/dist/style.css";
 import { toast } from "sonner";
@@ -48,6 +49,9 @@ const nodeTypes: NodeTypes = {
 /** How long after placing a note a following double-click is treated as part of it. */
 const NOTE_CLICK_GUARD_MS = 500;
 
+/** Viewport a project starts at before it has been panned or zoomed. */
+const DEFAULT_VIEWPORT: Viewport = { x: 0, y: 0, zoom: 1 };
+
 const TOOL_CURSOR_CLASS: Record<CanvasTool, string> = {
   select: "canvas-tool-select",
   hand: "canvas-tool-hand",
@@ -74,30 +78,28 @@ export function BoardCanvasInner() {
   const sessionPanelOpen = useUIStore((state) => state.sessionPanelOpen);
   const canvasFocusItemId = useUIStore((state) => state.canvasFocusItemId);
   const clearCanvasFocus = useUIStore((state) => state.clearCanvasFocus);
-  const setLastCanvasCenter = useUIStore((state) => state.setLastCanvasCenter);
+  const setCanvasViewport = useUIStore((state) => state.setCanvasViewport);
+  const projectId = useProjectStore((state) => state.activeProjectId);
 
   const pendingBatchRef = useRef<Promise<unknown>>(Promise.resolve());
   const pendingMovesRef = useRef<Map<string, PendingMove>>(new Map());
 
-  // Remembers the flow point under the center of the strip the session panel
-  // leaves free. The library places new items there, so it stays current on
-  // mount, on every pan/zoom end and when the panel opens or closes.
-  const updateCanvasCenter = useCallback(() => {
-    const wrapper = flowWrapperRef.current;
-    if (!wrapper) return;
-    const rect = wrapper.getBoundingClientRect();
-    if (rect.width <= 1 || rect.height <= 1) return;
-    const coverage = sessionPanelOpen ? SESSION_PANEL_COVERAGE : 0;
-    const center = screenToFlowPosition({
-      x: rect.left + (rect.width - coverage) / 2,
-      y: rect.top + rect.height / 2,
-    });
-    setLastCanvasCenter({ x: Math.round(center.x), y: Math.round(center.y) });
-  }, [screenToFlowPosition, sessionPanelOpen, setLastCanvasCenter]);
+  // React Flow reads `defaultViewport` once per mount; a canvas that remounts
+  // after visiting the library starts at the view this project was left at.
+  const initialViewportRef = useRef<Viewport>(
+    useUIStore.getState().canvasViewports[projectId] ?? DEFAULT_VIEWPORT,
+  );
+  const previousProjectRef = useRef(projectId);
 
+  // Switching workspace while the canvas is mounted restores that project's
+  // viewport; the first pass is left to `defaultViewport` so a focus request
+  // arriving with the mount is not overwritten.
   useEffect(() => {
-    updateCanvasCenter();
-  }, [updateCanvasCenter]);
+    if (previousProjectRef.current === projectId) return;
+    previousProjectRef.current = projectId;
+    const stored = useUIStore.getState().canvasViewports[projectId] ?? DEFAULT_VIEWPORT;
+    void setViewport(stored, { duration: 0 });
+  }, [projectId, setViewport]);
 
   // Register undo/redo shortcuts target on mount and unregister on unmount
   useEffect(() => {
@@ -451,8 +453,9 @@ export function BoardCanvasInner() {
         edges={[]}
         onNodesChange={onNodesChange}
         onNodeDragStop={handleNodeDragStop}
-        onMoveEnd={updateCanvasCenter}
+        onMoveEnd={(_, viewport) => setCanvasViewport(projectId, viewport)}
         onPaneClick={handlePaneClick}
+        defaultViewport={initialViewportRef.current}
         nodeTypes={nodeTypes}
         selectionOnDrag={tool === "select"}
         panOnDrag={tool === "hand" ? true : [1, 2]}

@@ -1058,11 +1058,14 @@ type MockAsset = {
   content: string;
 };
 
+/** Project that owns the dev fixture library, mirroring the seeded Default project. */
+const MOCK_FIXTURE_PROJECT_ID = "default";
+
 /** Dev fixture collection so the preview library has a collection row. */
 const mockCollections: Record<string, MockCollectionDoc> = {
   col_demo_drafts: {
     id: "col_demo_drafts",
-    projectId: "default",
+    projectId: MOCK_FIXTURE_PROJECT_ID,
     name: "Blog drafts",
     version: 4,
     slots: [
@@ -1079,21 +1082,21 @@ const mockCollectionHistory: Record<
 /** Dev fixture files so the preview library has file rows. */
 const mockAssets: Record<string, MockAsset> = {
   ast_demo_style_guide: {
-    projectId: "default",
+    projectId: MOCK_FIXTURE_PROJECT_ID,
     mediaType: "text/markdown",
     content:
       "# Style guide\n\nVoice, headings and image ratios for the workspace.\n\n" +
       "Use sentence case for headings and plain verbs for actions.\n".repeat(40),
   },
   ast_demo_blog_v2: {
-    projectId: "default",
+    projectId: MOCK_FIXTURE_PROJECT_ID,
     mediaType: "text/markdown",
     content:
       "# Blog v2\n\nOutline and opening paragraph.\n\n" +
       "The draft keeps one idea per section and cites its source.\n".repeat(28),
   },
   ast_demo_cover_brief: {
-    projectId: "default",
+    projectId: MOCK_FIXTURE_PROJECT_ID,
     mediaType: "text/plain",
     content:
       "Cover brief: warm grey background, one image, no headline.\n" +
@@ -1102,11 +1105,23 @@ const mockAssets: Record<string, MockAsset> = {
 };
 
 const MOCK_DYNAMIC_WORKFLOWS = [
-  { id: "dwf_demo_cleanup", name: "Draft cleanup", version: 3, step_count: 3 },
-  { id: "dwf_demo_archive", name: "Archive sweep", version: 1, step_count: 2 },
+  {
+    id: "dwf_demo_cleanup",
+    projectId: MOCK_FIXTURE_PROJECT_ID,
+    name: "Draft cleanup",
+    version: 3,
+    step_count: 3,
+  },
+  {
+    id: "dwf_demo_archive",
+    projectId: MOCK_FIXTURE_PROJECT_ID,
+    name: "Archive sweep",
+    version: 1,
+    step_count: 2,
+  },
 ];
 
-const MOCK_DEMO_RUN_ID = "run_demo_cleanup";
+const MOCK_DEMO_RUN_ID = "run_2";
 
 function mockDemoRun(projectId: string) {
   const now = Date.now();
@@ -1365,9 +1380,17 @@ export async function mockOpInvoke(input: {
   }
 
   if (name === "dynamic_workflow.list") {
+    const workflows = MOCK_DYNAMIC_WORKFLOWS.filter(
+      (workflow) => workflow.projectId === projectId,
+    ).map((workflow) => ({
+      id: workflow.id,
+      name: workflow.name,
+      version: workflow.version,
+      step_count: workflow.step_count,
+    }));
     return {
       step: { id: rand("step"), op: name, outcome: "succeeded" },
-      output: { workflows: MOCK_DYNAMIC_WORKFLOWS },
+      output: { workflows },
     };
   }
 
@@ -1389,15 +1412,18 @@ export async function mockOpInvoke(input: {
 
   if (name === "dynamic_workflow.list_runs") {
     const collectionId = args.collection_id as string | undefined;
-    // The demo run belongs to the fixture collection; other collections have
-    // no runs, matching the old empty behavior.
-    if (collectionId && collectionId !== "col_demo_drafts") {
+    const limit = typeof args.limit === "number" ? Math.max(1, args.limit) : 50;
+    // The demo run belongs to the fixture project's collection; other projects
+    // and other collections have no runs, matching the old empty behavior.
+    const hasDemoRun =
+      projectId === MOCK_FIXTURE_PROJECT_ID &&
+      (!collectionId || collectionId === "col_demo_drafts");
+    if (!hasDemoRun) {
       return {
         step: { id: rand("step"), op: name, outcome: "succeeded" },
         output: { runs: [] },
       };
     }
-    const limit = typeof args.limit === "number" ? Math.max(1, args.limit) : 50;
     return {
       step: { id: rand("step"), op: name, outcome: "succeeded" },
       output: { runs: [mockDemoRun(projectId)].slice(0, limit) },

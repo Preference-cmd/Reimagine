@@ -1,5 +1,5 @@
 import { create } from "zustand";
-import type { XYPosition } from "@xyflow/react";
+import type { Viewport, XYPosition } from "@xyflow/react";
 import type { NodeDef } from "@/ipc/schemas";
 
 /**
@@ -44,14 +44,15 @@ type UIState = {
   requestCanvasFocus: (id: string) => void;
   clearCanvasFocus: () => void;
 
-  // ── Canvas center memory ────────────────────────────────
+  // ── Canvas viewports ────────────────────────────────────
   /**
-   * Flow coordinates at the center of the canvas strip the session panel
-   * leaves visible, kept current by the canvas. The library places new items
-   * here; null until the canvas has measured itself in this session.
+   * React Flow viewport per project, persisted by the canvas on every pan or
+   * zoom end. The canvas restores it on mount and on project switches so a
+   * canvas → library → canvas trip keeps the view, and the library derives the
+   * placement center from it.
    */
-  lastCanvasCenter: { x: number; y: number } | null;
-  setLastCanvasCenter: (center: { x: number; y: number }) => void;
+  canvasViewports: Record<string, Viewport>;
+  setCanvasViewport: (projectId: string, viewport: Viewport) => void;
 
   // ── Settings nav ────────────────────────────────────────
   settingsNavId: string | null;
@@ -85,9 +86,12 @@ export const useUIStore = create<UIState>()((set) => ({
   requestCanvasFocus: (id: string) => set({ canvasFocusItemId: id }),
   clearCanvasFocus: () => set({ canvasFocusItemId: null }),
 
-  // Canvas center memory
-  lastCanvasCenter: null,
-  setLastCanvasCenter: (center) => set({ lastCanvasCenter: center }),
+  // Canvas viewports
+  canvasViewports: {},
+  setCanvasViewport: (projectId, viewport) =>
+    set((state) => ({
+      canvasViewports: { ...state.canvasViewports, [projectId]: viewport },
+    })),
 
   // Settings nav
   settingsNavId: "general",
