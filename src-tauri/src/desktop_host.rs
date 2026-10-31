@@ -1,6 +1,7 @@
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, RwLock};
 
+use mod_sdk::{ModRegistry, ProcessMod, ProcessModSpec};
 use reimagine_app_host::WorkspaceScope;
 use reimagine_app_host::dto::{
     ArtifactMetadataDto, BoardCommandResultDto, BoardSnapshotDto, HealthResponse,
@@ -38,6 +39,78 @@ use crate::event_bridge::TauriEventBridge;
 
 const WORKSPACE_SCOPE: &str = "reimagine-tauri-host";
 const APP_HOST_LOCK: &str = "desktop app_host lock poisoned";
+
+/// Names an explicit `text-mod` binary; must point at an existing file.
+const TEXT_MOD_ENV: &str = "REIMAGINE_TEXT_MOD";
+/// The mod binary shipped beside the desktop executable.
+const TEXT_MOD_NAME: &str = "text-mod";
+/// Bounds the mod's initialize handshake and `mod/start` round-trip.
+const TEXT_MOD_STARTUP_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(5);
+
+/// Resolve the text-mod binary: `REIMAGINE_TEXT_MOD` when it names a file,
+/// otherwise `text-mod` beside the current executable (`.exe` on Windows).
+fn text_mod_candidate(env: Option<&std::ffi::OsStr>, exe_dir: Option<&Path>) -> Option<PathBuf> {
+    if let Some(value) = env {
+        let path = PathBuf::from(value);
+        if path.is_file() {
+            return Some(path);
+        }
+        eprintln!(
+            "[reimagine] {TEXT_MOD_ENV} (`{}`) is not a file; looking beside the executable",
+            path.display()
+        );
+    }
+    let candidate = exe_dir?.join(format!("{TEXT_MOD_NAME}{}", std::env::consts::EXE_SUFFIX));
+    candidate.is_file().then_some(candidate)
+}
+
+fn resolve_text_mod_path() -> Option<PathBuf> {
+    let env = std::env::var_os(TEXT_MOD_ENV);
+    let exe_dir = std::env::current_exe()
+        .ok()
+        .and_then(|path| path.parent().map(Path::to_path_buf));
+    text_mod_candidate(env.as_deref(), exe_dir.as_deref())
+}
+
+/// Start the text mod when its binary is present.
+///
+/// A missing or unrunnable mod never blocks application startup: the host is
+/// built with an empty registry and the text operations are simply absent from
+/// `op_list`. The child is stopped by [`WorkspaceHost::shutdown`] on exit.
+async fn start_text_mod(event_bus: &EventBus) -> Arc<ModRegistry> {
+    let Some(program) = resolve_text_mod_path() else {
+        eprintln!("[reimagine] text mod not found; text operations are unavailable");
+        return Arc::new(ModRegistry::empty());
+    };
+    let spec = ProcessModSpec {
+        startup_timeout: TEXT_MOD_STARTUP_TIMEOUT,
+        ..ProcessModSpec::new(&program)
+    };
+    let process_mod = match ProcessMod::spawn(spec).await {
+        Ok(process_mod) => process_mod,
+        Err(diagnostic) => {
+            eprintln!(
+                "[reimagine] failed to spawn the text mod at `{}`: {}",
+                program.display(),
+                diagnostic.message()
+            );
+            return Arc::new(ModRegistry::empty());
+        }
+    };
+    let registry = ModRegistry::start(vec![Arc::new(process_mod)], event_bus).await;
+    if !registry
+        .list()
+        .first()
+        .is_some_and(|entry| entry.health.is_available())
+    {
+        eprintln!(
+            "[reimagine] the text mod at `{}` did not start; text operations are unavailable",
+            program.display()
+        );
+        return Arc::new(ModRegistry::empty());
+    }
+    Arc::new(registry)
+}
 
 #[derive(Debug)]
 pub struct DesktopHostState {
@@ -91,20 +164,13 @@ impl DesktopHostState {
             }
         });
 
-        #[cfg(feature = "aigc")]
-        let workspace = WorkspaceHost::try_with_app_data_root_and_event_bus(
+        let mod_registry = start_text_mod(&event_bus).await;
+        let workspace = WorkspaceHost::try_with_app_data_root_and_event_bus_and_mod_registry(
             WorkspaceScope::new(WORKSPACE_SCOPE),
             &workspace_base_path,
             &app_data_root,
             event_bus.clone(),
-        )
-        .await?;
-
-        #[cfg(not(feature = "aigc"))]
-        let workspace = WorkspaceHost::try_with_event_bus(
-            WorkspaceScope::new(WORKSPACE_SCOPE),
-            &workspace_base_path,
-            event_bus.clone(),
+            mod_registry,
         )
         .await?;
 
@@ -1094,4 +1160,64 @@ fn workflow_id_from_str(id: &str) -> Result<reimagine_core::model::WorkflowId, A
         });
     }
     Ok(reimagine_core::model::WorkflowId::new(id))
+}
+
+#[cfg(test)]
+mod tests {
+    use std::fs;
+
+    use super::*;
+
+    fn write_file(path: &Path) {
+        fs::write(path, b"#!/bin/sh\n").expect("write fixture");
+    }
+
+    #[test]
+    fn an_existing_env_path_wins_over_the_sibling() {
+        let dir = tempfile::tempdir().expect("temp dir");
+        let explicit = dir.path().join("custom-mod");
+        write_file(&explicit);
+        let sibling = dir
+            .path()
+            .join(format!("{TEXT_MOD_NAME}{}", std::env::consts::EXE_SUFFIX));
+        write_file(&sibling);
+
+        assert_eq!(
+            text_mod_candidate(Some(explicit.as_os_str()), Some(dir.path())),
+            Some(explicit)
+        );
+    }
+
+    #[test]
+    fn a_missing_env_path_falls_back_to_the_sibling() {
+        let dir = tempfile::tempdir().expect("temp dir");
+        let sibling = dir
+            .path()
+            .join(format!("{TEXT_MOD_NAME}{}", std::env::consts::EXE_SUFFIX));
+        write_file(&sibling);
+
+        assert_eq!(
+            text_mod_candidate(
+                Some(dir.path().join("missing").as_os_str()),
+                Some(dir.path())
+            ),
+            Some(sibling)
+        );
+    }
+
+    #[test]
+    fn without_an_env_path_only_an_existing_sibling_is_used() {
+        let dir = tempfile::tempdir().expect("temp dir");
+        assert_eq!(text_mod_candidate(None, Some(dir.path())), None);
+
+        let sibling = dir
+            .path()
+            .join(format!("{TEXT_MOD_NAME}{}", std::env::consts::EXE_SUFFIX));
+        write_file(&sibling);
+        assert_eq!(
+            text_mod_candidate(None, Some(dir.path())),
+            Some(sibling.clone())
+        );
+        assert_eq!(text_mod_candidate(None, None), None);
+    }
 }

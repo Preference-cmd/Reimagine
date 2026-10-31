@@ -114,6 +114,42 @@ if [[ -z "$members" ]]; then
   exit 1
 fi
 
+# Mods under mods/ are first-party extensions. A normal direct dependency may
+# be the mod contract (`mod-sdk`) or a general library, but never another
+# kernel crate, aigc, the desktop shell or a backend. Dev and build
+# dependencies are exempt: tests may compose the host, and a mod ships as its
+# own binary. `cargo metadata --no-deps` reads direct edges, so no transitive
+# crate can hide one.
+cargo metadata --no-deps --format-version 1 --locked |
+  python3 -c '
+import json, os, re, sys
+
+metadata = json.load(sys.stdin)
+root = os.path.realpath(metadata["workspace_root"])
+banned = re.compile(r"^(reimagine($|-)|aigc$|tauri|burn($|-)|cubecl($|-)|wgpu$)")
+violations = []
+members = 0
+for package in metadata["packages"]:
+    crate_dir = os.path.dirname(os.path.realpath(package["manifest_path"]))
+    relative = os.path.relpath(crate_dir, root)
+    if relative != "mods" and not relative.startswith("mods" + os.sep):
+        continue
+    members += 1
+    for dependency in package["dependencies"]:
+        if dependency["kind"] is not None:
+            continue
+        name = dependency["name"]
+        if name == "mod-sdk" or not banned.match(name):
+            continue
+        violations.append("{} -> {}".format(package["name"], name))
+
+if violations:
+    for violation in violations:
+        print("FAIL: mods/ direct dependency not allowed: " + violation, file=sys.stderr)
+    sys.exit(1)
+print("ok: mods/ ({} member(s), direct normal dependencies)".format(members))
+'
+
 # Leaves: the domain vocabulary, the mod contract and the worker wire
 # protocol. The domain root also stays free of HTTP and the desktop shell.
 check reimagine-core "$WORKSPACE" 'reqwest v' "$HTTP_SERVER" "$TAURI"

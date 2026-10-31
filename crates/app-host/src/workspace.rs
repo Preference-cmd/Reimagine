@@ -3,7 +3,6 @@ pub mod builder;
 
 use std::collections::BTreeMap;
 use std::path::Path;
-use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, RwLock};
 
 #[cfg(feature = "aigc")]
@@ -112,9 +111,9 @@ pub struct WorkspaceHost {
     pub(crate) operation_service: Arc<OperationService>,
     /// The registry the operation service dispatches to. The host owns the
     /// shutdown call, so a process mod's child does not outlive the application.
+    /// A rebuild shares the same registry with the host it replaces: the mods
+    /// are application-scoped, not backend-scoped.
     pub(crate) mod_registry: Arc<ModRegistry>,
-    /// Guards [`WorkspaceHost::shutdown`] against stopping the mods twice.
-    pub(crate) mods_stopped: AtomicBool,
     #[cfg(feature = "aigc")]
     pub(crate) aigc: AigcParts,
 }
@@ -237,7 +236,6 @@ impl WorkspaceHost {
             services,
             operation_service,
             mod_registry,
-            mods_stopped: AtomicBool::new(false),
             #[cfg(feature = "aigc")]
             aigc: components.aigc,
         }
@@ -434,7 +432,11 @@ impl WorkspaceHost {
     /// [`WorkspaceHost::shutdown`], so a process mod's child does not outlive
     /// the application. The other app-data constructor keeps an empty
     /// registry for callers that load no mods.
-    #[cfg(feature = "aigc")]
+    ///
+    /// Available with and without the `aigc` feature, so the desktop host can
+    /// pass the same registry to either build; without `aigc` the app-data root
+    /// has no worker inventory to describe and is ignored.
+    #[cfg_attr(not(feature = "aigc"), allow(unused_variables))]
     pub async fn try_with_app_data_root_and_event_bus_and_mod_registry(
         workspace_scope: WorkspaceScope,
         base_path: impl Into<std::path::PathBuf>,
@@ -450,6 +452,7 @@ impl WorkspaceHost {
             config,
             backend_config,
             event_bus,
+            #[cfg(feature = "aigc")]
             Arc::new(InstalledWorkerInventoryProvider::new(
                 WorkerStorePaths::new(app_data_root),
             )),
@@ -832,11 +835,11 @@ impl WorkspaceHost {
             backend_config,
             current.event_bus.clone(),
             Arc::clone(&current.aigc.worker_inventory),
-            Arc::new(ModRegistry::empty()),
+            Arc::clone(&current.mod_registry),
         )
         .await?;
         if let Some(reason) = rebuilt.aigc_unavailable_reason() {
-            rebuilt.shutdown().await;
+            rebuilt.shutdown_owned().await;
             return Err(AppHostError::InferenceBootstrap {
                 message: reason.to_string(),
             });
@@ -845,7 +848,7 @@ impl WorkspaceHost {
             .drain_active_worker(REBOOTSTRAP_DRAIN_DEADLINE)
             .await
         {
-            rebuilt.shutdown().await;
+            rebuilt.shutdown_owned().await;
             return Err(AppHostError::RebootFailed {
                 message: error.to_string(),
             });
@@ -995,14 +998,24 @@ impl WorkspaceHost {
     ///
     /// This is the application-level shutdown hook. Call it when the host
     /// is exiting so that child worker and mod processes are cleaned up
-    /// instead of becoming orphans. Repeated calls stop the mods once.
+    /// instead of becoming orphans. Repeated calls stop the mods once:
+    /// [`ModRegistry::stop`] owns the idempotency guard, so a host rebuilt
+    /// around the same registry cannot stop a mod the application still uses.
     pub async fn shutdown(&self) {
+        self.shutdown_owned().await;
+        self.mod_registry.stop().await;
+    }
+
+    /// Stop what this host owns outright: in-flight dynamic workflow runs and
+    /// its inference worker.
+    ///
+    /// Mods are deliberately excluded. A re-bootstrap builds a replacement
+    /// host around the current registry, and a failed replacement must be
+    /// discarded without stopping mods the surviving host still dispatches to.
+    async fn shutdown_owned(&self) {
         // Abort in-flight dynamic workflow runs; their documents stay as they
         // are, so the next process reports them as interrupted.
         self.dynamic_workflow_service.shutdown();
-        if !self.mods_stopped.swap(true, Ordering::SeqCst) {
-            self.mod_registry.stop().await;
-        }
         #[cfg(feature = "aigc")]
         {
             let Some(worker_switch) = &self.aigc.worker_switch else {

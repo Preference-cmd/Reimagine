@@ -70,44 +70,100 @@ fn check_marker_locations(
     is_marker: fn(&Value) -> bool,
     message: &str,
 ) -> Result<(), String> {
-    fn walk(
-        val: &Value,
-        in_allowed: bool,
-        is_marker: fn(&Value) -> bool,
-        message: &str,
-    ) -> Result<(), String> {
-        if is_marker(val) && !in_allowed {
-            return Err(message.to_owned());
-        }
-        match val {
-            Value::Object(map) => {
-                for (k, v) in map {
-                    if k == "properties" {
-                        if let Value::Object(props) = v {
-                            for prop_val in props.values() {
-                                walk(prop_val, true, is_marker, message)?;
-                            }
-                        } else {
-                            walk(v, false, is_marker, message)?;
-                        }
-                    } else if k == "items" {
-                        walk(v, true, is_marker, message)?;
-                    } else {
-                        walk(v, false, is_marker, message)?;
-                    }
-                }
+    let mut rejection = None;
+    walk_marker_positions(
+        schema,
+        None,
+        "",
+        true,
+        false,
+        &mut |node, _value, _pointer, allowed| {
+            if rejection.is_none() && !allowed && is_marker(node) {
+                rejection = Some(message.to_owned());
             }
-            Value::Array(arr) => {
-                for item in arr {
-                    walk(item, false, is_marker, message)?;
-                }
+        },
+    );
+    match rejection {
+        Some(message) => Err(message),
+        None => Ok(()),
+    }
+}
+
+/// Walk every schema node from the root and report whether it sits in a place
+/// a marker may annotate.
+///
+/// `on_walk` is true for the root and for every node the marker finders follow;
+/// `allowed` is true only for followed nodes other than the root, i.e. values of
+/// a `properties` object or of `items`, transitively. Any other keyword
+/// (`oneOf`, `allOf`, `not`, `additionalProperties`, …) is scanned with both
+/// flags false: a marker there is rejected by the checks and is never returned
+/// by the finders, so validation and discovery cannot disagree.
+///
+/// `value` is the payload paired with `schema` when finding fields; validation
+/// passes `None` to walk the schema structurally.
+fn walk_marker_positions(
+    schema: &Value,
+    value: Option<&Value>,
+    pointer: &str,
+    on_walk: bool,
+    allowed: bool,
+    visit: &mut impl FnMut(&Value, Option<&Value>, &str, bool),
+) {
+    visit(schema, value, pointer, allowed);
+
+    let Value::Object(map) = schema else {
+        if let Value::Array(items) = schema {
+            for (index, item) in items.iter().enumerate() {
+                let next = format!("{pointer}/{index}");
+                walk_marker_positions(item, None, &next, false, false, visit);
             }
-            _ => {}
         }
-        Ok(())
+        return;
+    };
+
+    if !on_walk {
+        for (key, child) in map {
+            let next = format!("{pointer}/{}", escape_pointer_segment(key));
+            walk_marker_positions(child, None, &next, false, false, visit);
+        }
+        return;
     }
 
-    walk(schema, false, is_marker, message)
+    if let Some(properties) = map.get("properties") {
+        if let Value::Object(properties) = properties {
+            for (name, property) in properties {
+                let next = format!("{pointer}/{}", escape_pointer_segment(name));
+                let property_value = value
+                    .and_then(Value::as_object)
+                    .and_then(|object| object.get(name));
+                walk_marker_positions(property, property_value, &next, true, true, visit);
+            }
+        } else {
+            let next = format!("{pointer}/properties");
+            walk_marker_positions(properties, None, &next, false, false, visit);
+        }
+    }
+    if let Some(items) = map.get("items") {
+        match value.and_then(Value::as_array) {
+            Some(array) if !array.is_empty() => {
+                for (index, item_value) in array.iter().enumerate() {
+                    let next = format!("{pointer}/{index}");
+                    walk_marker_positions(items, Some(item_value), &next, true, true, visit);
+                }
+            }
+            _ => {
+                let next = format!("{pointer}/items");
+                walk_marker_positions(items, None, &next, true, true, visit);
+            }
+        }
+    }
+    for (key, child) in map {
+        if key == "properties" || key == "items" {
+            continue;
+        }
+        let next = format!("{pointer}/{}", escape_pointer_segment(key));
+        walk_marker_positions(child, None, &next, false, false, visit);
+    }
 }
 
 /// Represents an asset field discovered within a payload instance.
@@ -123,7 +179,28 @@ pub struct AssetField {
 /// of all populated asset fields.
 pub fn find_asset_fields(schema: &Value, value: &Value) -> Vec<AssetField> {
     let mut fields = Vec::new();
-    walk_schema_value(schema, value, "", &mut fields);
+    walk_marker_positions(
+        schema,
+        Some(value),
+        "",
+        true,
+        false,
+        &mut |node, value, pointer, allowed| {
+            if !allowed || !is_asset_schema(node) {
+                return;
+            }
+            if value.is_some_and(Value::is_string) {
+                let media_type = node
+                    .get("contentMediaType")
+                    .and_then(Value::as_str)
+                    .map(|s| s.to_owned());
+                fields.push(AssetField {
+                    pointer: pointer.to_owned(),
+                    media_type,
+                });
+            }
+        },
+    );
     fields
 }
 
@@ -160,91 +237,29 @@ pub struct InlineTextField {
 /// array of strings or a nested object is found.
 pub fn find_inline_text_fields(schema: &Value, value: &Value) -> Vec<InlineTextField> {
     let mut fields = Vec::new();
-    walk_schema_inline_text(schema, value, "", &mut fields);
+    walk_marker_positions(
+        schema,
+        Some(value),
+        "",
+        true,
+        false,
+        &mut |node, value, pointer, allowed| {
+            if !allowed || !is_inline_text_marker(node) {
+                return;
+            }
+            if let Some(text) = value.and_then(Value::as_str) {
+                fields.push(InlineTextField {
+                    pointer: pointer.to_owned(),
+                    bytes: text.len(),
+                });
+            }
+        },
+    );
     fields
-}
-
-fn walk_schema_inline_text(
-    schema: &Value,
-    value: &Value,
-    current_ptr: &str,
-    out: &mut Vec<InlineTextField>,
-) {
-    if is_inline_text_marker(schema) {
-        if let Some(text) = value.as_str() {
-            out.push(InlineTextField {
-                pointer: current_ptr.to_owned(),
-                bytes: text.len(),
-            });
-        }
-        return;
-    }
-
-    match (schema, value) {
-        (Value::Object(s_map), Value::Object(v_map)) => {
-            if let Some(Value::Object(props)) = s_map.get("properties") {
-                for (prop_name, prop_schema) in props {
-                    if let Some(prop_val) = v_map.get(prop_name) {
-                        let seg = escape_pointer_segment(prop_name);
-                        let next_ptr = format!("{current_ptr}/{seg}");
-                        walk_schema_inline_text(prop_schema, prop_val, &next_ptr, out);
-                    }
-                }
-            }
-        }
-        (Value::Object(s_map), Value::Array(v_arr)) => {
-            if let Some(items_schema) = s_map.get("items") {
-                for (idx, item_val) in v_arr.iter().enumerate() {
-                    let next_ptr = format!("{current_ptr}/{idx}");
-                    walk_schema_inline_text(items_schema, item_val, &next_ptr, out);
-                }
-            }
-        }
-        _ => {}
-    }
 }
 
 fn escape_pointer_segment(seg: &str) -> String {
     seg.replace('~', "~0").replace('/', "~1")
-}
-
-fn walk_schema_value(schema: &Value, value: &Value, current_ptr: &str, out: &mut Vec<AssetField>) {
-    if is_asset_schema(schema) {
-        if value.is_string() {
-            let media_type = schema
-                .get("contentMediaType")
-                .and_then(Value::as_str)
-                .map(|s| s.to_owned());
-            out.push(AssetField {
-                pointer: current_ptr.to_owned(),
-                media_type,
-            });
-        }
-        return;
-    }
-
-    match (schema, value) {
-        (Value::Object(s_map), Value::Object(v_map)) => {
-            if let Some(Value::Object(props)) = s_map.get("properties") {
-                for (prop_name, prop_schema) in props {
-                    if let Some(prop_val) = v_map.get(prop_name) {
-                        let seg = escape_pointer_segment(prop_name);
-                        let next_ptr = format!("{current_ptr}/{seg}");
-                        walk_schema_value(prop_schema, prop_val, &next_ptr, out);
-                    }
-                }
-            }
-        }
-        (Value::Object(s_map), Value::Array(v_arr)) => {
-            if let Some(items_schema) = s_map.get("items") {
-                for (idx, item_val) in v_arr.iter().enumerate() {
-                    let next_ptr = format!("{current_ptr}/{idx}");
-                    walk_schema_value(items_schema, item_val, &next_ptr, out);
-                }
-            }
-        }
-        _ => {}
-    }
 }
 
 #[cfg(test)]
@@ -343,6 +358,162 @@ mod tests {
         ] {
             assert!(check_inline_text_marker_locations(&invalid_schema).is_err());
         }
+    }
+
+    #[test]
+    fn markers_under_oneof_are_rejected_even_inside_nested_properties() {
+        let inline_under_oneof = json!({
+            "type": "object",
+            "properties": {
+                "wrapper": {
+                    "oneOf": [{
+                        "type": "object",
+                        "properties": {
+                            "text": { "type": "string", "format": "inline-text" }
+                        }
+                    }]
+                }
+            }
+        });
+        assert!(check_inline_text_marker_locations(&inline_under_oneof).is_err());
+        assert!(
+            find_inline_text_fields(&inline_under_oneof, &json!({ "wrapper": { "text": "x" } }))
+                .is_empty(),
+            "a rejected marker must not be discovered"
+        );
+
+        let asset_under_allof = json!({
+            "type": "object",
+            "properties": {
+                "wrapper": {
+                    "allOf": [{
+                        "type": "object",
+                        "properties": {
+                            "doc": { "type": "string", "format": "asset" }
+                        }
+                    }]
+                }
+            }
+        });
+        assert!(check_asset_marker_locations(&asset_under_allof).is_err());
+        assert!(
+            find_asset_fields(
+                &asset_under_allof,
+                &json!({ "wrapper": { "doc": "asset-1" } })
+            )
+            .is_empty(),
+            "a rejected asset marker must not be discovered"
+        );
+    }
+
+    #[test]
+    fn every_accepted_inline_text_marker_is_found() {
+        let marker = json!({ "type": "string", "format": "inline-text" });
+        let schema = json!({
+            "type": "object",
+            "properties": {
+                "text": marker,
+                "nested": {
+                    "type": "object",
+                    "properties": { "text": marker }
+                },
+                "texts": {
+                    "type": "array",
+                    "items": marker
+                },
+                "grid": {
+                    "type": "array",
+                    "items": {
+                        "type": "array",
+                        "items": marker
+                    }
+                }
+            }
+        });
+        assert!(check_inline_text_marker_locations(&schema).is_ok());
+
+        let value = json!({
+            "text": "a",
+            "nested": { "text": "bb" },
+            "texts": ["c", "dd"],
+            "grid": [["e"], ["ff"]]
+        });
+        assert_eq!(
+            find_inline_text_fields(&schema, &value),
+            vec![
+                InlineTextField {
+                    pointer: "/grid/0/0".to_owned(),
+                    bytes: 1,
+                },
+                InlineTextField {
+                    pointer: "/grid/1/0".to_owned(),
+                    bytes: 2,
+                },
+                InlineTextField {
+                    pointer: "/nested/text".to_owned(),
+                    bytes: 2,
+                },
+                InlineTextField {
+                    pointer: "/text".to_owned(),
+                    bytes: 1,
+                },
+                InlineTextField {
+                    pointer: "/texts/0".to_owned(),
+                    bytes: 1,
+                },
+                InlineTextField {
+                    pointer: "/texts/1".to_owned(),
+                    bytes: 2,
+                },
+            ]
+        );
+    }
+
+    #[test]
+    fn every_accepted_asset_marker_is_found() {
+        let marker = json!({ "type": "string", "format": "asset" });
+        let schema = json!({
+            "type": "object",
+            "properties": {
+                "doc": marker,
+                "nested": {
+                    "type": "object",
+                    "properties": { "file": marker }
+                },
+                "assets": {
+                    "type": "array",
+                    "items": marker
+                },
+                "grid": {
+                    "type": "array",
+                    "items": {
+                        "type": "array",
+                        "items": marker
+                    }
+                }
+            }
+        });
+        assert!(check_asset_marker_locations(&schema).is_ok());
+
+        let value = json!({
+            "doc": "asset-doc",
+            "nested": { "file": "asset-file" },
+            "assets": ["asset-a", "asset-b"],
+            "grid": [["asset-c"]]
+        });
+        assert_eq!(
+            find_asset_fields(&schema, &value)
+                .into_iter()
+                .map(|field| field.pointer)
+                .collect::<Vec<_>>(),
+            [
+                "/assets/0",
+                "/assets/1",
+                "/doc",
+                "/grid/0/0",
+                "/nested/file"
+            ]
+        );
     }
 
     #[test]

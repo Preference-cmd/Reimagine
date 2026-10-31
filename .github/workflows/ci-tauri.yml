@@ -5,6 +5,7 @@ on:
     branches: [main]
     paths:
       - 'crates/**'
+      - 'mods/**'
       - 'src-tauri/**'
       - 'ui/**'
       - 'Cargo.toml'
@@ -17,6 +18,7 @@ on:
     branches: [main]
     paths:
       - 'crates/**'
+      - 'mods/**'
       - 'src-tauri/**'
       - 'ui/**'
       - 'Cargo.toml'

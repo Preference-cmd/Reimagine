@@ -6653,6 +6653,7 @@ name = "reimagine"
 version = "0.1.0"
 dependencies = [
  "chrono",
+ "mod-sdk",
  "opener",
  "reimagine-app-host",
  "reimagine-backend-worker-host",
@@ -8406,6 +8407,8 @@ version = "0.1.0"
 dependencies = [
  "mod-sdk",
  "regex",
+ "reimagine-app-host",
+ "reimagine-core",
  "tempfile",
  "tokio",
  "unicode-normalization",

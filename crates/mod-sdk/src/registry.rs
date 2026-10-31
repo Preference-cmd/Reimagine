@@ -1,5 +1,6 @@
 use std::collections::HashSet;
 use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, Ordering};
 
 use reimagine_core::diagnostic::Diagnostic;
 use reimagine_core::event::EventBus;
@@ -42,14 +43,25 @@ struct Registered {
 
 /// The started mods of one application. A rejected mod stays listed as
 /// unavailable and never affects the others.
+///
+/// Stopping is idempotent and serialized: a host may share the registry (the
+/// re-bootstrap path does) and call `stop` from either copy without stopping a
+/// child twice. A cancelled `stop` leaves the registry unstoppable only until
+/// the next call: the flag is set after every mod returned.
 pub struct ModRegistry {
     mods: Vec<Registered>,
+    stopped: AtomicBool,
+    stop_lock: tokio::sync::Mutex<()>,
 }
 
 impl ModRegistry {
     /// Create an empty mod registry.
     pub fn empty() -> Self {
-        Self { mods: Vec::new() }
+        Self {
+            mods: Vec::new(),
+            stopped: AtomicBool::new(false),
+            stop_lock: tokio::sync::Mutex::new(()),
+        }
     }
 
     /// Validate every manifest, then start each accepted mod in order.
@@ -92,11 +104,24 @@ impl ModRegistry {
                 instance,
             });
         }
-        Self { mods: registered }
+        Self {
+            mods: registered,
+            stopped: AtomicBool::new(false),
+            stop_lock: tokio::sync::Mutex::new(()),
+        }
     }
 
-    /// Stop every mod that started.
+    /// Stop every mod that started, once.
+    ///
+    /// The stop flag is stored only after every mod returned, so a cancelled
+    /// call retries the remaining mods instead of pretending they stopped. The
+    /// async lock serializes concurrent callers; a third sequential call is a
+    /// no-op.
     pub async fn stop(&self) {
+        let _guard = self.stop_lock.lock().await;
+        if self.stopped.load(Ordering::SeqCst) {
+            return;
+        }
         for registered in self.available() {
             let Some(instance) = registered.instance.as_ref() else {
                 continue;
@@ -109,6 +134,7 @@ impl ModRegistry {
                 );
             }
         }
+        self.stopped.store(true, Ordering::SeqCst);
     }
 
     /// Call an operation on mod `mod_id`. Fails before reaching the mod when
@@ -339,6 +365,8 @@ impl Default for ModRegistry {
 mod tests {
     use std::path::PathBuf;
     use std::sync::Mutex;
+    use std::sync::atomic::{AtomicUsize, Ordering};
+    use std::time::Duration;
 
     use async_trait::async_trait;
     use reimagine_core::task::CancelToken;
@@ -642,5 +670,76 @@ mod tests {
         assert_eq!(*demo.calls.lock().unwrap(), ["stop"]);
         assert!(broken.calls.lock().unwrap().is_empty());
         assert!(rejected.calls.lock().unwrap().is_empty());
+
+        registry.stop().await;
+        assert_eq!(
+            *demo.calls.lock().unwrap(),
+            ["stop"],
+            "a repeated stop must not stop the mod twice"
+        );
+    }
+
+    /// A mod whose `stop` waits for a permit, so a test can cancel the stop
+    /// future in the middle of the loop.
+    struct SlowStop {
+        manifest: ModManifest,
+        entered: tokio::sync::Notify,
+        release: tokio::sync::Semaphore,
+        stops: AtomicUsize,
+    }
+
+    #[async_trait]
+    impl Mod for SlowStop {
+        fn manifest(&self) -> &ModManifest {
+            &self.manifest
+        }
+
+        async fn start(&self, _ctx: ModContext) -> Result<(), Diagnostic> {
+            Ok(())
+        }
+
+        async fn invoke(&self, _invocation: Invocation) -> Result<Value, Diagnostic> {
+            Ok(json!({}))
+        }
+
+        async fn stop(&self) -> Result<(), Diagnostic> {
+            self.stops.fetch_add(1, Ordering::SeqCst);
+            self.entered.notify_waiters();
+            let _permit = self
+                .release
+                .acquire()
+                .await
+                .map_err(|_| internal_error("slow_stop", "STOP", "release closed"))?;
+            Ok(())
+        }
+    }
+
+    #[tokio::test]
+    async fn a_cancelled_stop_is_retried_and_then_marks_the_registry_stopped() {
+        let slow = Arc::new(SlowStop {
+            manifest: manifest("slow_stop"),
+            entered: tokio::sync::Notify::new(),
+            release: tokio::sync::Semaphore::new(0),
+            stops: AtomicUsize::new(0),
+        });
+        let registry =
+            ModRegistry::start(vec![Arc::clone(&slow) as Arc<dyn Mod>], &EventBus::new()).await;
+
+        let cancelled = tokio::time::timeout(Duration::from_millis(50), registry.stop()).await;
+        assert!(cancelled.is_err(), "the first stop must be cancelled");
+        assert_eq!(slow.stops.load(Ordering::SeqCst), 1);
+
+        slow.release.add_permits(1);
+        tokio::time::timeout(Duration::from_secs(5), registry.stop())
+            .await
+            .expect("a cancelled stop is retried and completes");
+        assert_eq!(slow.stops.load(Ordering::SeqCst), 2);
+
+        registry.stop().await;
+        assert_eq!(
+            slow.stops.load(Ordering::SeqCst),
+            2,
+            "a completed stop is not repeated"
+        );
     }
 }

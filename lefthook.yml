@@ -23,14 +23,14 @@ pre-commit:
       stage_fixed: true
 
     - name: rust fmt
-      glob: "{crates/**/*.rs,src-tauri/**/*.rs,Cargo.toml}"
+      glob: "{crates/**/*.rs,src-tauri/**/*.rs,mods/**/*.rs,Cargo.toml}"
       run: cargo fmt --all --check
 
     - name: whitespace
       run: git diff --cached --check
 
     - name: module layout
-      glob: "{crates/**,src-tauri/**}"
+      glob: "{crates/**,src-tauri/**,mods/**}"
       run: python3 .github/scripts/check-module-layout.py
 
 commit-msg:

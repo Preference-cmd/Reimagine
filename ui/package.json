@@ -5,6 +5,7 @@
   "license": "GPL-3.0-or-later",
   "type": "module",
   "scripts": {
+    "predev": "cargo build --manifest-path ../Cargo.toml -p text-mod",
     "dev": "vite",
     "prebuild": "paraglide-js compile --project ./project.inlang --outdir ./src/paraglide --emit-ts-declarations",
     "build": "tsc && vite build",

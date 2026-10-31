@@ -12,7 +12,7 @@ from pathlib import Path
 import re
 import sys
 
-ROOTS = ("crates", "src-tauri")
+ROOTS = ("crates", "src-tauri", "mods")
 SKIP = {"target", "node_modules", ".git"}
 PATH_ATTR = re.compile(r"^\s*#!?\[path\s*=", re.MULTILINE)
 
