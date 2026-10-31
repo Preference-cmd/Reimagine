@@ -831,6 +831,25 @@ pub(crate) fn handle_asset_uri_request(
     }
 }
 
+/// Deadline for stopping child worker and mod processes on exit.
+const EXIT_SHUTDOWN_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(5);
+
+/// Drive `future` to completion on Tauri's async runtime from the synchronous
+/// exit callback, giving up after `timeout`.
+///
+/// The exit callback runs on the UI thread with no Tokio context, so it must
+/// go through Tauri's runtime instead of `tokio::runtime::Handle::current()`.
+/// Returning at the deadline keeps a stuck child process from blocking the
+/// application forever, and the timeout is enforced by the runtime.
+fn block_on_with_timeout<F>(future: F, timeout: std::time::Duration) -> bool
+where
+    F: std::future::Future<Output = ()>,
+{
+    tauri::async_runtime::block_on(
+        async move { tokio::time::timeout(timeout, future).await.is_ok() },
+    )
+}
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     match tauri::Builder::default()
@@ -919,23 +938,10 @@ pub fn run() {
         Ok(app) => app.run(|app_handle, event| {
             if let tauri::RunEvent::ExitRequested { .. } = event {
                 let state = app_handle.state::<DesktopHostState>();
-                let state = state.inner().clone();
-                let _ = std::thread::scope(|s| {
-                    s.spawn(|| {
-                        let rt = tokio::runtime::Handle::current();
-                        rt.block_on(async {
-                            let shutdown = tokio::time::timeout(
-                                std::time::Duration::from_secs(5),
-                                state.shutdown(),
-                            );
-                            if shutdown.await.is_err() {
-                                eprintln!("[tauri] worker shutdown timed out after 5s; exiting");
-                                std::process::exit(1);
-                            }
-                        });
-                    })
-                    .join()
-                });
+                if !block_on_with_timeout(state.shutdown(), EXIT_SHUTDOWN_TIMEOUT) {
+                    eprintln!("[tauri] worker shutdown timed out after 5s; exiting");
+                    std::process::exit(1);
+                }
             }
         }),
         Err(error) => {
@@ -948,7 +954,7 @@ pub fn run() {
 #[cfg(test)]
 mod tests {
     use super::desktop_host::{DesktopHostState, default_workspace_path};
-    use super::{TauriCommandError, app_host_command_error};
+    use super::{TauriCommandError, app_host_command_error, block_on_with_timeout};
     use reimagine_app_host::dto::HealthDto;
 
     fn temp_dir(prefix: &str) -> std::path::PathBuf {
@@ -1005,6 +1011,40 @@ mod tests {
         );
 
         let _ = std::fs::remove_dir_all(&base_path);
+    }
+
+    #[test]
+    fn exit_shutdown_completes_without_a_tokio_context() {
+        let base_path = temp_dir("exit-shutdown");
+        let state = tauri::async_runtime::block_on(DesktopHostState::bootstrap(&base_path))
+            .expect("desktop host state should bootstrap");
+
+        // The Tauri exit callback runs on the UI thread with no Tokio context,
+        // outside any runtime. Driving shutdown through the same helper must
+        // complete without panicking, and a repeated call stays cheap.
+        assert!(
+            block_on_with_timeout(state.shutdown(), std::time::Duration::from_secs(5)),
+            "shutdown should finish before the deadline"
+        );
+        assert!(
+            block_on_with_timeout(state.shutdown(), std::time::Duration::from_secs(5)),
+            "a repeated shutdown should also finish"
+        );
+
+        let _ = std::fs::remove_dir_all(&base_path);
+    }
+
+    #[test]
+    fn exit_shutdown_returns_at_the_deadline() {
+        let started = std::time::Instant::now();
+        assert!(
+            !block_on_with_timeout(std::future::pending(), std::time::Duration::from_millis(10)),
+            "an unfinished shutdown must report the deadline"
+        );
+        assert!(
+            started.elapsed() < std::time::Duration::from_secs(5),
+            "the deadline must not let the exit callback hang"
+        );
     }
 
     #[test]

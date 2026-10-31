@@ -74,9 +74,12 @@ fn resolve_text_mod_path() -> Option<PathBuf> {
 
 /// Start the text mod when its binary is present.
 ///
-/// A missing or unrunnable mod never blocks application startup: the host is
-/// built with an empty registry and the text operations are simply absent from
-/// `op_list`. The child is stopped by [`WorkspaceHost::shutdown`] on exit.
+/// A missing binary or a failed spawn never blocks application startup: the
+/// host is built with an empty registry and the text operations are simply
+/// absent from `op_list`. A mod that spawned but failed to start stays
+/// registered as unavailable, so `op_list` reports its operations with that
+/// health instead of silently hiding them. The child is stopped by
+/// [`WorkspaceHost::shutdown`] on exit.
 async fn start_text_mod(event_bus: &EventBus) -> Arc<ModRegistry> {
     let Some(program) = resolve_text_mod_path() else {
         eprintln!("[reimagine] text mod not found; text operations are unavailable");
@@ -107,9 +110,29 @@ async fn start_text_mod(event_bus: &EventBus) -> Arc<ModRegistry> {
             "[reimagine] the text mod at `{}` did not start; text operations are unavailable",
             program.display()
         );
-        return Arc::new(ModRegistry::empty());
     }
     Arc::new(registry)
+}
+
+/// Create the workspace event bus and the bridge that forwards its events to
+/// subscribed Tauri channels.
+fn event_pipeline() -> (EventBus, TauriEventBridge) {
+    let event_bus = EventBus::new();
+    let event_bridge = TauriEventBridge::new();
+
+    let mut event_rx = event_bus.subscribe();
+    let bridge_forwarder = event_bridge.clone();
+    tokio::spawn(async move {
+        loop {
+            match event_rx.recv().await {
+                Ok(event) => bridge_forwarder.broadcast(&event),
+                Err(tokio::sync::broadcast::error::RecvError::Lagged(_)) => continue,
+                Err(tokio::sync::broadcast::error::RecvError::Closed) => break,
+            }
+        }
+    });
+
+    (event_bus, event_bridge)
 }
 
 #[derive(Debug)]
@@ -134,42 +157,60 @@ impl Clone for DesktopHostState {
 }
 
 impl DesktopHostState {
+    /// Bootstrap without resolving or spawning a text mod.
+    ///
+    /// Test-only: the production path discovers `text-mod` beside the
+    /// executable or through `REIMAGINE_TEXT_MOD`, which would couple tests to
+    /// the developer's environment and could start a real child process.
     #[cfg(test)]
     pub async fn bootstrap(workspace_base_path: impl Into<PathBuf>) -> Result<Self, AppHostError> {
         let workspace_base_path = workspace_base_path.into();
         let app_data_root = workspace_base_path.with_extension("app-data");
-        Self::bootstrap_with_app_data_root(app_data_root, workspace_base_path).await
+        AppPaths::new(&workspace_base_path).ensure_all().await?;
+        let (event_bus, event_bridge) = event_pipeline();
+        Self::from_parts(
+            app_data_root,
+            workspace_base_path,
+            event_bus,
+            event_bridge,
+            Arc::new(ModRegistry::empty()),
+        )
+        .await
     }
 
     pub async fn bootstrap_with_app_data_root(
         app_data_root: impl Into<PathBuf>,
         workspace_base_path: impl Into<PathBuf>,
     ) -> Result<Self, AppHostError> {
-        #[cfg_attr(not(feature = "aigc"), allow(unused_variables))]
         let app_data_root = app_data_root.into();
         let workspace_base_path = workspace_base_path.into();
         AppPaths::new(&workspace_base_path).ensure_all().await?;
-        let event_bus = EventBus::new();
-        let event_bridge = TauriEventBridge::new();
-
-        let mut event_rx = event_bus.subscribe();
-        let bridge_forwarder = event_bridge.clone();
-        tokio::spawn(async move {
-            loop {
-                match event_rx.recv().await {
-                    Ok(event) => bridge_forwarder.broadcast(&event),
-                    Err(tokio::sync::broadcast::error::RecvError::Lagged(_)) => continue,
-                    Err(tokio::sync::broadcast::error::RecvError::Closed) => break,
-                }
-            }
-        });
-
+        let (event_bus, event_bridge) = event_pipeline();
         let mod_registry = start_text_mod(&event_bus).await;
+        Self::from_parts(
+            app_data_root,
+            workspace_base_path,
+            event_bus,
+            event_bridge,
+            mod_registry,
+        )
+        .await
+    }
+
+    /// Build the host from an ensured workspace, a running event pipeline and
+    /// a mod registry.
+    async fn from_parts(
+        app_data_root: PathBuf,
+        workspace_base_path: PathBuf,
+        event_bus: EventBus,
+        event_bridge: TauriEventBridge,
+        mod_registry: Arc<ModRegistry>,
+    ) -> Result<Self, AppHostError> {
         let workspace = WorkspaceHost::try_with_app_data_root_and_event_bus_and_mod_registry(
             WorkspaceScope::new(WORKSPACE_SCOPE),
             &workspace_base_path,
             &app_data_root,
-            event_bus.clone(),
+            event_bus,
             mod_registry,
         )
         .await?;

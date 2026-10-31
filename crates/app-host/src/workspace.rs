@@ -999,8 +999,13 @@ impl WorkspaceHost {
     /// This is the application-level shutdown hook. Call it when the host
     /// is exiting so that child worker and mod processes are cleaned up
     /// instead of becoming orphans. Repeated calls stop the mods once:
-    /// [`ModRegistry::stop`] owns the idempotency guard, so a host rebuilt
-    /// around the same registry cannot stop a mod the application still uses.
+    /// [`ModRegistry::stop`] owns the idempotency guard.
+    ///
+    /// A replacement host shares the registry, so the registry is not owned by
+    /// either host: a failed or superseded replacement must be discarded with
+    /// `shutdown_owned`, and callers must not shut down a superseded host.
+    /// Either host's `shutdown` would stop the mods the other one still
+    /// dispatches to.
     pub async fn shutdown(&self) {
         self.shutdown_owned().await;
         self.mod_registry.stop().await;

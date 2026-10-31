@@ -44,10 +44,11 @@ struct Registered {
 /// The started mods of one application. A rejected mod stays listed as
 /// unavailable and never affects the others.
 ///
-/// Stopping is idempotent and serialized: a host may share the registry (the
-/// re-bootstrap path does) and call `stop` from either copy without stopping a
-/// child twice. A cancelled `stop` leaves the registry unstoppable only until
-/// the next call: the flag is set after every mod returned.
+/// Stopping is serialized and idempotent once it completes: a host may share
+/// the registry (the re-bootstrap path does) and call `stop` from either copy
+/// without stopping a child twice. A cancelled `stop` restarts the loop on the
+/// next call, so every mod's `stop` must tolerate repeated calls. The stop flag
+/// is set only after every mod returned.
 pub struct ModRegistry {
     mods: Vec<Registered>,
     stopped: AtomicBool,
@@ -111,12 +112,13 @@ impl ModRegistry {
         }
     }
 
-    /// Stop every mod that started, once.
+    /// Stop every mod that started.
     ///
     /// The stop flag is stored only after every mod returned, so a cancelled
-    /// call retries the remaining mods instead of pretending they stopped. The
-    /// async lock serializes concurrent callers; a third sequential call is a
-    /// no-op.
+    /// call does not pretend the mods stopped. The retry restarts the loop
+    /// from the first available mod, so a `stop` implementation must tolerate
+    /// repeated calls. The async lock serializes concurrent callers; a call
+    /// after a completed stop is a no-op.
     pub async fn stop(&self) {
         let _guard = self.stop_lock.lock().await;
         if self.stopped.load(Ordering::SeqCst) {
@@ -715,25 +717,45 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn a_cancelled_stop_is_retried_and_then_marks_the_registry_stopped() {
+    async fn a_cancelled_stop_restarts_the_loop_and_then_marks_the_registry_stopped() {
         let slow = Arc::new(SlowStop {
             manifest: manifest("slow_stop"),
             entered: tokio::sync::Notify::new(),
             release: tokio::sync::Semaphore::new(0),
             stops: AtomicUsize::new(0),
         });
-        let registry =
-            ModRegistry::start(vec![Arc::clone(&slow) as Arc<dyn Mod>], &EventBus::new()).await;
+        let after = fake(manifest("after"));
+        let registry = ModRegistry::start(
+            vec![
+                Arc::clone(&slow) as Arc<dyn Mod>,
+                Arc::clone(&after) as Arc<dyn Mod>,
+            ],
+            &EventBus::new(),
+        )
+        .await;
 
         let cancelled = tokio::time::timeout(Duration::from_millis(50), registry.stop()).await;
         assert!(cancelled.is_err(), "the first stop must be cancelled");
         assert_eq!(slow.stops.load(Ordering::SeqCst), 1);
+        assert!(
+            after.calls.lock().unwrap().is_empty(),
+            "the cancelled loop never reached the second mod"
+        );
 
         slow.release.add_permits(1);
         tokio::time::timeout(Duration::from_secs(5), registry.stop())
             .await
             .expect("a cancelled stop is retried and completes");
-        assert_eq!(slow.stops.load(Ordering::SeqCst), 2);
+        assert_eq!(
+            slow.stops.load(Ordering::SeqCst),
+            2,
+            "the retry restarts at the first mod, so `stop` must tolerate repeats"
+        );
+        assert_eq!(
+            *after.calls.lock().unwrap(),
+            ["stop"],
+            "the restarted loop still reaches the remaining mods"
+        );
 
         registry.stop().await;
         assert_eq!(
@@ -741,5 +763,6 @@ mod tests {
             2,
             "a completed stop is not repeated"
         );
+        assert_eq!(*after.calls.lock().unwrap(), ["stop"]);
     }
 }

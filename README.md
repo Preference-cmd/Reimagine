@@ -124,7 +124,8 @@ examples/                        sample workflow JSON
 ```
 
 `src-tauri/` is the thin desktop host adapter driving the
-`reimagine-app-host` facade; all domain logic lives under `crates/`.
+`reimagine-app-host` facade; domain logic lives under `crates/`, and the
+first-party text mod lives under `mods/text/`.
 
 No workspace crate depends on an agent stack. The open-source agent kernel
 lives in the sibling repository `../agent-stack-oss` (`Causa`: `causa`,
