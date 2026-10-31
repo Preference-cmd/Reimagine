@@ -13,6 +13,7 @@ import {
   type ModelDownloadOutput,
   type ModelInfo,
   type InvokeResult,
+  type OperationInfo,
 } from "./schemas";
 
 const delay = (ms: number) => new Promise((r) => setTimeout(r, ms));
@@ -994,6 +995,232 @@ export async function mockReadAssetPreview(
   };
 }
 
+export async function mockReadAssetText(projectId: string, assetId: string): Promise<string> {
+  void projectId;
+  const asset = mockAssets[assetId];
+  if (!asset) throw new Error(`mock asset ${assetId} not found`);
+  return asset.content;
+}
+
+/* ───── `op_list` descriptors and `op_preview` ───── */
+
+function textDocumentProperties(): Record<string, unknown> {
+  return {
+    doc: {
+      type: "string",
+      format: "asset",
+      contentMediaType: "text/*",
+      description: "An asset path. Give exactly one of `doc` and `text`.",
+    },
+    text: {
+      type: "string",
+      format: "inline-text",
+      description: "Inline text (at most 256 KiB). Give exactly one of `doc` and `text`.",
+    },
+  };
+}
+
+function textOperation(
+  name: string,
+  description: string,
+  properties: Record<string, unknown>,
+  required: string[],
+  annotations: Record<string, unknown>,
+): OperationInfo {
+  return {
+    spec: {
+      name,
+      description,
+      input_schema: {
+        type: "object",
+        properties: { ...textDocumentProperties(), ...properties },
+        required,
+        additionalProperties: false,
+      },
+      output_schema: {
+        type: "object",
+        properties: textDocumentProperties(),
+        required: [],
+        additionalProperties: false,
+      },
+      annotations,
+    },
+    provider: { mod: { id: "text" } },
+    health: { status: "available" },
+  };
+}
+
+const TEXT_ANNOTATIONS = {
+  read_only: false,
+  destructive: false,
+  idempotent: false,
+  deterministic: true,
+  open_world: false,
+};
+
+const MOCK_TEXT_OPERATIONS: OperationInfo[] = [
+  textOperation(
+    "text.normalize",
+    "Normalize a document's whitespace, full-width punctuation, line endings and Unicode form.",
+    {
+      whitespace: { type: "boolean", default: true },
+      punctuation: { type: "string", enum: ["none", "halfwidth"], default: "none" },
+      newline: { type: "boolean", default: true },
+      unicode: { type: "string", enum: ["NFC", "none"], default: "NFC" },
+    },
+    [],
+    { ...TEXT_ANNOTATIONS, idempotent: true },
+  ),
+  textOperation(
+    "text.replace",
+    "Replace literal strings, whole words or regular expressions and report the count per pair.",
+    {
+      pairs: {
+        type: "array",
+        description: "Replacement pairs, applied in order.",
+        items: {
+          type: "object",
+          properties: {
+            find: { type: "string", minLength: 1 },
+            replace: {
+              type: "string",
+              description:
+                "In `regex` mode `$1` refers to a capture group; in the other modes the text is literal.",
+            },
+            mode: { type: "string", enum: ["literal", "word", "regex"] },
+            case_sensitive: { type: "boolean", default: true },
+          },
+          required: ["find", "replace", "mode"],
+          additionalProperties: false,
+        },
+      },
+    },
+    ["pairs"],
+    TEXT_ANNOTATIONS,
+  ),
+  textOperation(
+    "text.inspect",
+    "Read a document's title, ATX headings, flat front matter and text statistics as JSON.",
+    {},
+    [],
+    { ...TEXT_ANNOTATIONS, read_only: true },
+  ),
+  textOperation(
+    "text.template",
+    "Render a `{{name}}` template from values, the document's front matter and its body.",
+    {
+      template: { type: "string" },
+      values: { type: "object", default: {} },
+    },
+    ["template"],
+    TEXT_ANNOTATIONS,
+  ),
+  textOperation(
+    "text.split",
+    "Split a document at a heading level or a literal separator; every piece carries a title.",
+    {
+      by: {
+        type: "object",
+        properties: {
+          kind: { type: "string", enum: ["heading", "separator"] },
+          level: { type: "integer", minimum: 1, maximum: 6 },
+          separator: { type: "string", minLength: 1 },
+        },
+        required: ["kind"],
+        additionalProperties: false,
+      },
+    },
+    ["by"],
+    TEXT_ANNOTATIONS,
+  ),
+  textOperation(
+    "text.join",
+    "Join documents in order with a separator, or render a template for each and concatenate.",
+    {
+      docs: { type: "array", items: { type: "object" } },
+      texts: { type: "array", items: { type: "string" } },
+      separator: { type: "string" },
+      template: { type: "string" },
+    },
+    [],
+    TEXT_ANNOTATIONS,
+  ),
+];
+
+export async function mockOpList(input: { projectId: string }): Promise<OperationInfo[]> {
+  void input.projectId;
+  return MOCK_TEXT_OPERATIONS.map((operation) => ({
+    ...operation,
+    spec: { ...operation.spec },
+  }));
+}
+
+type MockPair = {
+  find?: unknown;
+  replace?: unknown;
+  mode?: unknown;
+  case_sensitive?: unknown;
+};
+
+/** Apply replace pairs the way the text mod does, including per-pair counts. */
+function applyMockReplacements(
+  text: string,
+  pairs: MockPair[],
+): { text: string; counts: number[] } {
+  let result = text;
+  const counts: number[] = [];
+  for (const pair of pairs) {
+    const find = typeof pair.find === "string" ? pair.find : "";
+    const replacement = typeof pair.replace === "string" ? pair.replace : "";
+    if (find.length === 0) {
+      counts.push(0);
+      continue;
+    }
+    const mode = typeof pair.mode === "string" ? pair.mode : "literal";
+    const caseSensitive = pair.case_sensitive !== false;
+    const flags = caseSensitive ? "g" : "gi";
+    let pattern: RegExp;
+    if (mode === "regex") {
+      pattern = new RegExp(find, flags);
+      const matches = result.match(pattern)?.length ?? 0;
+      result = result.replace(pattern, replacement);
+      counts.push(matches);
+      continue;
+    }
+    const escaped = find.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+    pattern = new RegExp(mode === "word" ? `\\b${escaped}\\b` : escaped, flags);
+    const matches = result.match(pattern)?.length ?? 0;
+    // Literal and word replacements never expand `$1` groups.
+    result = result.replace(pattern, () => replacement);
+    counts.push(matches);
+  }
+  return { text: result, counts };
+}
+
+function mockDocumentText(projectId: string, input: Record<string, unknown>): string {
+  if (typeof input.text === "string") return input.text;
+  const docId = typeof input.doc === "string" ? input.doc : "";
+  const asset = mockAssets[docId];
+  if (!asset) throw new Error(`mock asset ${docId || "(missing doc)"} not found`);
+  void projectId;
+  return asset.content;
+}
+
+export async function mockOpPreview(input: {
+  projectId: string;
+  name: string;
+  input: unknown;
+  previewKey: string;
+}): Promise<unknown> {
+  if (input.name !== "text.replace") {
+    throw new Error(`mock preview does not support ${input.name}`);
+  }
+  const args = (input.input as Record<string, unknown>) ?? {};
+  const pairs = Array.isArray(args.pairs) ? (args.pairs as MockPair[]) : [];
+  const original = mockDocumentText(input.projectId, args);
+  return applyMockReplacements(original, pairs);
+}
+
 export async function mockOpInvoke(input: {
   projectId: string;
   name: string;
@@ -1026,6 +1253,24 @@ export async function mockOpInvoke(input: {
         outcome: "succeeded",
       },
       output: { assets: assetIds },
+    };
+  }
+
+  if (name === "text.replace") {
+    const docId = typeof args.doc === "string" ? args.doc : "";
+    const asset = mockAssets[docId];
+    if (!asset) throw new Error(`mock asset ${docId || "(missing doc)"} not found`);
+    const pairs = Array.isArray(args.pairs) ? (args.pairs as MockPair[]) : [];
+    const { text, counts } = applyMockReplacements(asset.content, pairs);
+    const outputId = rand("ast");
+    mockAssets[outputId] = {
+      projectId,
+      mediaType: asset.mediaType,
+      content: text,
+    };
+    return {
+      step: { id: rand("step"), op: "text.replace", outcome: "succeeded" },
+      output: { doc: outputId, counts },
     };
   }
 

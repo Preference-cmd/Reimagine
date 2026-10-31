@@ -1,13 +1,16 @@
 import { useEffect, useRef, useState } from "react";
-import { ArrowLeft, CircleAlert, Redo2, Undo2 } from "lucide-react";
+import { ArrowLeft, CircleAlert, Redo2, Type, Undo2 } from "lucide-react";
 import { useNavigate, useParams, useRouter } from "@tanstack/react-router";
 import * as m from "$paraglide/messages";
 import { ICON_STROKE } from "@/design/tokens";
 import { useProjectStore } from "@/store/project";
+import { Button } from "@/components/ui/button";
 import { opInvoke, readAssetPreview, type AssetPreview } from "@/ipc";
 import { type CollectionSlot, type SlotRunState } from "@/ipc/schemas";
 import { useCollection } from "@/hooks/useCollection";
 import { useCollectionRun } from "@/hooks/useCollectionRun";
+import { useOperations } from "@/hooks/useOperations";
+import { TextToolDialog } from "@/components/layout/TextToolDialog";
 
 const PREVIEW_LINES = 4;
 
@@ -65,10 +68,14 @@ function SlotItem({
   projectId,
   slot,
   state,
+  textToolAvailable,
+  onOpenTextTool,
 }: {
   projectId: string;
   slot: CollectionSlot;
   state?: SlotRunState;
+  textToolAvailable: boolean;
+  onOpenTextTool: () => void;
 }) {
   const [preview, setPreview] = useState<AssetPreview | null>(null);
   const [slotError, setSlotError] = useState<string | null>(null);
@@ -118,8 +125,16 @@ function SlotItem({
         </span>
       </div>
 
-      <div className="mt-2 text-caption text-fg2">
-        {m["collections.assetIdPrefix"]()} <span className="font-mono">{slot.asset_id}</span>
+      <div className="mt-2 flex items-center justify-between gap-2 text-caption text-fg2">
+        <span>
+          {m["collections.assetIdPrefix"]()} <span className="font-mono">{slot.asset_id}</span>
+        </span>
+        {textToolAvailable && (
+          <Button type="button" variant="ghost" size="xs" onClick={onOpenTextTool}>
+            <Type aria-hidden="true" />
+            {m["collections.textTool.open"]()}
+          </Button>
+        )}
       </div>
 
       {slotError ? (
@@ -154,7 +169,9 @@ export function CollectionView() {
     refresh: fetchCollection,
   } = useCollection(activeProjectId, id);
   const { slotStates } = useCollectionRun(activeProjectId, id);
+  const { textReplace, textReplaceAvailable } = useOperations(activeProjectId);
   const [actionError, setActionError] = useState<string | null>(null);
+  const [toolSlot, setToolSlot] = useState<CollectionSlot | null>(null);
   const error = collectionError ?? actionError;
 
   // On project switch: reset state and navigate back to the library
@@ -281,9 +298,25 @@ export function CollectionView() {
               projectId={activeProjectId}
               slot={slot}
               state={slotStates[slot.id]}
+              textToolAvailable={textReplaceAvailable}
+              onOpenTextTool={() => setToolSlot(slot)}
             />
           ))}
         </div>
+      )}
+
+      {toolSlot && (
+        <TextToolDialog
+          open
+          projectId={activeProjectId}
+          collectionId={id}
+          slot={toolSlot}
+          operation={textReplace}
+          onOpenChange={(open) => {
+            if (!open) setToolSlot(null);
+          }}
+          onApplied={fetchCollection}
+        />
       )}
     </div>
   );

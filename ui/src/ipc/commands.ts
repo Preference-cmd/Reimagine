@@ -12,6 +12,7 @@ import {
   type ModelFilters,
   type ModelInfo,
   type InvokeResult,
+  type OperationInfo,
   CommandErrorSchema,
   EventSchema,
   ProjectMetadataInputSchema,
@@ -34,7 +35,10 @@ import {
   mockListModels,
   mockSearchModels,
   mockOpInvoke,
+  mockOpList,
+  mockOpPreview,
   mockReadAssetPreview,
+  mockReadAssetText,
 } from "./mock";
 import { getAssetUrl } from "../lib/assetUrl";
 
@@ -272,11 +276,44 @@ export function opInvoke(projectId: string, name: string, input: unknown): Promi
   );
 }
 
+/** Operations available to a project: kernel tools plus loaded mods. */
+export function opList(projectId: string): Promise<OperationInfo[]> {
+  return dispatch("op_list", null, { projectId }, mockOpList);
+}
+
+/**
+ * Render an operation's output without recording a step. Preview results are
+ * temporary and the host cancels the previous preview for the same key.
+ */
+export function opPreview(
+  projectId: string,
+  name: string,
+  input: unknown,
+  previewKey: string,
+): Promise<unknown> {
+  return dispatch("op_preview", null, { projectId, name, input, previewKey }, () =>
+    mockOpPreview({ projectId, name, input, previewKey }),
+  );
+}
+
 /** Media type of an asset and, for textual assets, its first `maxLines` lines. */
 export type AssetPreview = { url: string; mediaType: string; text: string | null };
 
 function isTextual(mediaType: string): boolean {
   return mediaType.startsWith("text/") || mediaType === "application/json";
+}
+
+/** Read a whole textual asset through the `reimagine-asset` protocol. */
+export async function readAssetText(projectId: string, assetId: string): Promise<string> {
+  const url = getAssetUrl(projectId, assetId);
+  return await invokeWithFallback(
+    async () => {
+      const res = await fetch(url);
+      if (!res.ok) throw new Error(`HTTP ${res.status} reading asset ${assetId}`);
+      return await res.text();
+    },
+    () => mockReadAssetText(projectId, assetId),
+  );
 }
 
 /** Read an asset through the `reimagine-asset` protocol; HTTP errors reject. */

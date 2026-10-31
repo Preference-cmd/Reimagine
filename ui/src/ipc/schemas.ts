@@ -250,6 +250,21 @@ export const InvokeResultSchema = z.object({
 });
 export type InvokeResult = z.infer<typeof InvokeResultSchema>;
 
+/** One `op_list` descriptor. Field names stay snake_case, as the host sends them. */
+export type OperationSpecInfo = {
+  name: string;
+  description: string;
+  input_schema: Record<string, unknown>;
+  output_schema: Record<string, unknown>;
+  annotations: Record<string, unknown>;
+};
+
+export type OperationInfo = {
+  spec: OperationSpecInfo;
+  provider: unknown;
+  health: unknown;
+};
+
 export const CollectionSlotSchema = z.object({
   id: z.string(),
   asset_id: z.string(),
