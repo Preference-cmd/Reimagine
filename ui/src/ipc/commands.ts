@@ -309,8 +309,7 @@ export function opPreviewCancel(previewKey: string): Promise<void> {
 /** Media type of an asset and, for textual assets, its first `maxLines` lines. */
 export type AssetPreview = { url: string; mediaType: string; text: string | null };
 
-/** Textual slots are the ones the text tools can read and replace. */
-export function isTextualMediaType(mediaType: string): boolean {
+function isTextual(mediaType: string): boolean {
   return mediaType.startsWith("text/") || mediaType === "application/json";
 }
 
@@ -339,7 +338,7 @@ export async function readAssetPreview(
       const res = await fetch(url);
       if (!res.ok) throw new Error(`HTTP ${res.status} reading asset ${assetId}`);
       const mediaType = res.headers.get("content-type") ?? "application/octet-stream";
-      const text = isTextualMediaType(mediaType)
+      const text = isTextual(mediaType)
         ? (await res.text()).split("\n").slice(0, maxLines).join("\n")
         : null;
       return { url, mediaType, text };

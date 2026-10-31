@@ -106,7 +106,14 @@ impl Pair {
 
         let (pattern, expand) = match mode {
             "literal" => (regex::escape(find), false),
-            "word" => (format!(r"\b{}\b", regex::escape(find)), false),
+            // A whole word is a match with no word character directly before
+            // or after it. Half boundaries check only the outer side, so a
+            // `find` that starts or ends with punctuation (`C++`, `.NET`)
+            // still matches; a plain `\b` would need a word character there.
+            "word" => (
+                format!(r"\b{{start-half}}{}\b{{end-half}}", regex::escape(find)),
+                false,
+            ),
             "regex" => (find.to_owned(), true),
             other => {
                 return Err(caller_error(
@@ -205,6 +212,21 @@ mod tests {
         // between 猫 and 咪: only the two standalone 猫 match.
         assert_eq!(text, "dog 猫咪 dog");
         assert_eq!(counts, [2]);
+    }
+
+    #[test]
+    fn word_mode_matches_terms_that_start_or_end_with_punctuation() {
+        let (text, counts) = replace(
+            "C++ and C++11, .NET and on.NET",
+            json!([
+                { "find": "C++", "replace": "Rust", "mode": "word" },
+                { "find": ".NET", "replace": "JVM", "mode": "word" }
+            ]),
+        );
+        // `C++11` and `on.NET` touch a word character on the outer side, so
+        // they are not whole-word matches.
+        assert_eq!(text, "Rust and C++11, JVM and on.NET");
+        assert_eq!(counts, [1, 1]);
     }
 
     #[test]

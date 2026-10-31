@@ -5,7 +5,7 @@ import * as m from "$paraglide/messages";
 import { ICON_STROKE } from "@/design/tokens";
 import { useProjectStore } from "@/store/project";
 import { Button } from "@/components/ui/button";
-import { isTextualMediaType, opInvoke, readAssetPreview, type AssetPreview } from "@/ipc";
+import { opInvoke, readAssetPreview, type AssetPreview } from "@/ipc";
 import { type CollectionSlot, type SlotRunState } from "@/ipc/schemas";
 import { useCollection } from "@/hooks/useCollection";
 import { useCollectionRun } from "@/hooks/useCollectionRun";
@@ -98,9 +98,9 @@ function SlotItem({
   }, [projectId, slot.asset_id]);
 
   const mediaType = preview?.mediaType ?? "";
-  // The tool reads and replaces text, so an image or binary slot has nothing
-  // it could safely edit.
-  const textToolShown = textToolAvailable && isTextualMediaType(mediaType);
+  // `text.replace` accepts only `text/*` documents, so an image, binary or
+  // JSON slot would only ever get a media-type diagnostic from the host.
+  const textToolShown = textToolAvailable && mediaType.startsWith("text/");
 
   return (
     <div className="flex flex-col rounded-lg border border-hair bg-surface p-4 shadow-1 transition-all">

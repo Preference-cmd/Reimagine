@@ -781,6 +781,22 @@ describe("text replace tool", () => {
     expect(textToolButton()).toBeNull();
   });
 
+  test("hides the tool on a JSON slot that text.replace would reject", async () => {
+    mockOperationsAvailable();
+    vi.spyOn(ipc, "readAssetPreview").mockResolvedValue({
+      url: "asset-url",
+      mediaType: "application/json",
+      text: '{"a": 1}',
+    });
+
+    render(<CollectionView />);
+    await waitFor(() => {
+      expect(screen.getByText("application/json")).toBeInTheDocument();
+    });
+    await settleOperations();
+    expect(textToolButton()).toBeNull();
+  });
+
   test("surfaces an op_list failure and retries on demand", async () => {
     const operations = await mockOpList({ projectId: "default" });
     const opListSpy = vi
