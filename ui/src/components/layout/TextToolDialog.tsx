@@ -141,6 +141,7 @@ async function readPreviewOutput(
   output: unknown,
   pairIndexes: number[],
   cacheBuster: number,
+  signal: AbortSignal,
 ): Promise<PreviewResult> {
   if (!output || typeof output !== "object") {
     throw new Error(m["collections.textTool.previewOutputError"]());
@@ -153,7 +154,7 @@ async function readPreviewOutput(
     return { text: record.text, counts, pairIndexes };
   }
   if (typeof record.doc === "string") {
-    const res = await fetch(getPreviewUrl(record.doc, cacheBuster));
+    const res = await fetch(getPreviewUrl(record.doc, cacheBuster), { signal });
     if (!res.ok) {
       throw new Error(m["collections.textTool.previewReadError"]({ status: String(res.status) }));
     }
@@ -237,15 +238,18 @@ export function TextToolDialog({
   const previewKeyRef = useRef(createPreviewKey());
   const previewSequence = useRef(0);
   const previewInFlightRef = useRef(false);
+  const previewAbortRef = useRef<AbortController | null>(null);
   const applyingRef = useRef(false);
   const assetId = slot.asset_id;
 
   /**
    * Stop the host preview that is still running for this dialog. The response
-   * is ignored either way through `previewSequence`; the cancel just stops the
-   * provider from doing work the user no longer sees.
+   * is ignored either way through `previewSequence`; the abort and cancel just
+   * stop work the user no longer sees.
    */
   const cancelPreviewInFlight = useCallback(() => {
+    previewAbortRef.current?.abort();
+    previewAbortRef.current = null;
     if (!previewInFlightRef.current || applyingRef.current) return;
     previewInFlightRef.current = false;
     void opPreviewCancel(previewKeyRef.current).catch(() => {
@@ -296,6 +300,9 @@ export function TextToolDialog({
 
   useEffect(() => {
     const sequence = ++previewSequence.current;
+    // Every pass owns the flag: a response from an earlier edit must not claim
+    // (or clear) the in-flight state of a request this pass has not sent yet.
+    previewInFlightRef.current = false;
     if (!open || original === null || !hasPairs) {
       setPreview(null);
       setPreviewError(null);
@@ -304,7 +311,11 @@ export function TextToolDialog({
     }
     setPreviewing(true);
     setPreviewError(null);
+    let controller: AbortController | null = null;
     const timer = setTimeout(() => {
+      const current = new AbortController();
+      controller = current;
+      previewAbortRef.current = current;
       void (async () => {
         previewInFlightRef.current = true;
         try {
@@ -315,7 +326,12 @@ export function TextToolDialog({
             previewKeyRef.current,
           );
           if (sequence !== previewSequence.current) return;
-          const result = await readPreviewOutput(output, validPairs.pairIndexes, sequence);
+          const result = await readPreviewOutput(
+            output,
+            validPairs.pairIndexes,
+            sequence,
+            current.signal,
+          );
           if (sequence !== previewSequence.current) return;
           setPreview(result);
           setPreviewing(false);
@@ -325,6 +341,7 @@ export function TextToolDialog({
           setPreviewError(errorMessage(error));
           setPreviewing(false);
         } finally {
+          if (previewAbortRef.current === current) previewAbortRef.current = null;
           if (sequence === previewSequence.current) previewInFlightRef.current = false;
         }
       })();
@@ -332,6 +349,8 @@ export function TextToolDialog({
 
     return () => {
       clearTimeout(timer);
+      controller?.abort();
+      if (previewAbortRef.current === controller) previewAbortRef.current = null;
     };
     // `validPairs` is derived from `pairs` on every render; the effect depends
     // on `pairs` so every edit restarts the debounce, and the sequence guard

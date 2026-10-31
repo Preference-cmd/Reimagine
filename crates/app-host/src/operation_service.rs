@@ -368,6 +368,10 @@ pub struct OperationService {
     kernel_ops: Arc<RwLock<HashMap<String, Arc<dyn KernelOp>>>>,
     preview_root: PathBuf,
     active_previews: Arc<Mutex<HashMap<String, ActivePreview>>>,
+    /// Newest preview generation registered per key. A finishing preview may
+    /// clean the directory only while it is still the newest generation, so a
+    /// cancelled successor cannot make an older cleanup delete its directory.
+    latest_preview_generations: Mutex<HashMap<String, u64>>,
     next_preview_generation: Arc<AtomicU64>,
     asset_stores: Mutex<HashMap<ProjectId, Arc<AssetStore>>>,
     step_logs: Mutex<HashMap<ProjectId, Arc<StepLog>>>,
@@ -406,6 +410,7 @@ impl OperationService {
             kernel_ops: Arc::new(RwLock::new(ops)),
             preview_root,
             active_previews: Arc::new(Mutex::new(HashMap::new())),
+            latest_preview_generations: Mutex::new(HashMap::new()),
             next_preview_generation: Arc::new(AtomicU64::new(1)),
             asset_stores: Mutex::new(HashMap::new()),
             step_logs: Mutex::new(HashMap::new()),
@@ -968,6 +973,14 @@ impl OperationService {
 
         // Cancel previous preview with the same key
         {
+            // Publish this generation before the active entry: a preview that
+            // already removed itself may still be waiting on the key lock, and
+            // it must see the newer generation before it can consider the key
+            // unowned.
+            self.latest_preview_generations
+                .lock()
+                .await
+                .insert(preview_key.to_string(), generation);
             let mut active = self.active_previews.lock().await;
             if let Some(previous) = active.remove(preview_key) {
                 previous.cancel.cancel();
@@ -1177,12 +1190,17 @@ impl OperationService {
             Ok(output) => {
                 // Succeeded previews leave their directory on disk for HTTP serving.
                 // Remove from active_previews only if still current.
-                let mut active = self.active_previews.lock().await;
-                if let Some(entry) = active.get(preview_key)
-                    && entry.generation == generation
                 {
-                    active.remove(preview_key);
+                    let mut active = self.active_previews.lock().await;
+                    if let Some(entry) = active.get(preview_key)
+                        && entry.generation == generation
+                    {
+                        active.remove(preview_key);
+                    }
                 }
+                let _ = self
+                    .take_newest_preview_generation(preview_key, generation)
+                    .await;
                 Ok(output)
             }
             Err(err) => {
@@ -1200,16 +1218,37 @@ impl OperationService {
                 };
                 if is_current {
                     let _guard = key_lock.lock().await;
-                    let is_still_current = {
-                        let active = self.active_previews.lock().await;
-                        !active.contains_key(preview_key)
-                    };
-                    if is_still_current {
+                    // A newer generation (possibly cancelled since it
+                    // registered) owns <preview root>/<key>/ now, so only the
+                    // newest generation may delete it.
+                    if self
+                        .take_newest_preview_generation(preview_key, generation)
+                        .await
+                    {
                         let _ = tokio::fs::remove_dir_all(&preview_dir).await;
                     }
+                } else {
+                    // A cancelled or replaced preview leaves its directory in
+                    // place; drop only its own generation marker.
+                    let _ = self
+                        .take_newest_preview_generation(preview_key, generation)
+                        .await;
                 }
                 Err(err)
             }
+        }
+    }
+
+    /// Drop the newest-generation marker for `preview_key` when `generation`
+    /// still owns it, returning whether it did. A finishing preview that is no
+    /// longer the newest must not touch the shared directory.
+    async fn take_newest_preview_generation(&self, preview_key: &str, generation: u64) -> bool {
+        let mut latest = self.latest_preview_generations.lock().await;
+        if latest.get(preview_key) == Some(&generation) {
+            latest.remove(preview_key);
+            true
+        } else {
+            false
         }
     }
 }
@@ -1520,8 +1559,9 @@ mod tests {
             "a cancelled preview must leave no active entry"
         );
 
-        let error = handle
+        let error = tokio::time::timeout(std::time::Duration::from_secs(5), handle)
             .await
+            .expect("the cancelled preview must stop within the timeout")
             .expect("join preview task")
             .expect_err("the cancelled preview must fail");
         assert_eq!(error.code().as_str(), "TEST/CALLER_CANCELLED");
@@ -1548,5 +1588,159 @@ mod tests {
             .cancel_preview("not-in-flight")
             .await
             .expect("cancelling an idle key is a no-op");
+    }
+
+    /// The first call fails when released; the second writes its marker into
+    /// the key's directory and waits for cancellation.
+    struct RacingPreviewOp {
+        spec: OperationSpec,
+        calls: std::sync::atomic::AtomicUsize,
+        first_started: tokio::sync::Notify,
+        first_release: tokio::sync::Notify,
+        second_started: tokio::sync::Notify,
+    }
+
+    #[async_trait]
+    impl KernelOp for RacingPreviewOp {
+        fn spec(&self) -> &OperationSpec {
+            &self.spec
+        }
+
+        async fn invoke(&self, call: KernelCall) -> Result<Value, Diagnostic> {
+            let call_index = self.calls.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+            if call_index == 0 {
+                self.first_started.notify_one();
+                self.first_release.notified().await;
+                return Err(op_internal_error(
+                    "test.race",
+                    "FIRST_FAILED",
+                    "the older preview failed",
+                ));
+            }
+            let marker = call.invocation.output_dir.join("newer.txt");
+            tokio::fs::write(&marker, b"newer preview")
+                .await
+                .expect("write newer marker");
+            self.second_started.notify_one();
+            call.invocation.cancel.cancelled().await;
+            Err(op_caller_error(
+                "test.race",
+                "CANCELLED",
+                "preview cancelled",
+            ))
+        }
+    }
+
+    #[tokio::test]
+    async fn cancelled_older_preview_cannot_delete_a_newer_previews_directory() {
+        let dir = tempfile::tempdir().expect("temp dir");
+        let service = Arc::new(OperationService::new(
+            AppPaths::new(dir.path()),
+            Arc::new(ModRegistry::empty()),
+        ));
+        let op = Arc::new(RacingPreviewOp {
+            spec: OperationSpec {
+                name: "test.race".to_owned(),
+                description: "racing preview".to_owned(),
+                input_schema: serde_json::json!({
+                    "type": "object",
+                    "properties": {},
+                    "additionalProperties": false
+                }),
+                output_schema: serde_json::json!({ "type": "object", "properties": {} }),
+                annotations: OperationAnnotations {
+                    read_only: false,
+                    destructive: false,
+                    idempotent: false,
+                    deterministic: true,
+                    open_world: false,
+                },
+            },
+            calls: std::sync::atomic::AtomicUsize::new(0),
+            first_started: tokio::sync::Notify::new(),
+            first_release: tokio::sync::Notify::new(),
+            second_started: tokio::sync::Notify::new(),
+        });
+        service.register_kernel_op(op.clone());
+        let preview_key = "race-key";
+        let preview_dir = service.preview_dir(preview_key).expect("valid key");
+
+        let older_service = Arc::clone(&service);
+        let older = tokio::spawn(async move {
+            older_service
+                .preview(
+                    &ProjectId::new("proj-race"),
+                    "test.race",
+                    serde_json::json!({}),
+                    preview_key,
+                    CancelToken::new(),
+                )
+                .await
+        });
+        op.first_started.notified().await;
+
+        // Park the older generation's error cleanup on the key lock. Dropping
+        // the map entry gives the newer preview its own lock, standing in for
+        // a schedule where the newer generation takes the lock first.
+        let older_key_lock = service.preview_lock_for(preview_key).await;
+        service.preview_locks.lock().await.remove(preview_key);
+        let older_guard = older_key_lock.lock().await;
+
+        op.first_release.notify_one();
+        tokio::time::timeout(std::time::Duration::from_secs(5), async {
+            loop {
+                if !service
+                    .active_previews
+                    .lock()
+                    .await
+                    .contains_key(preview_key)
+                {
+                    break;
+                }
+                tokio::task::yield_now().await;
+            }
+        })
+        .await
+        .expect("the older preview must remove its entry before its cleanup waits");
+
+        let newer_service = Arc::clone(&service);
+        let newer = tokio::spawn(async move {
+            newer_service
+                .preview(
+                    &ProjectId::new("proj-race"),
+                    "test.race",
+                    serde_json::json!({}),
+                    preview_key,
+                    CancelToken::new(),
+                )
+                .await
+        });
+        op.second_started.notified().await;
+        service
+            .cancel_preview(preview_key)
+            .await
+            .expect("cancel the newer preview");
+        drop(older_guard);
+
+        older
+            .await
+            .expect("join older preview")
+            .expect_err("the older preview fails");
+        newer
+            .await
+            .expect("join newer preview")
+            .expect_err("the cancelled newer preview fails");
+
+        let marker = preview_dir.join("newer.txt");
+        assert!(
+            marker.is_file(),
+            "an older generation's failed cleanup must not delete the newer generation's directory"
+        );
+        assert_eq!(
+            tokio::fs::read_to_string(&marker)
+                .await
+                .expect("read the newer marker"),
+            "newer preview"
+        );
     }
 }

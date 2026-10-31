@@ -439,6 +439,7 @@ describe("text replace tool", () => {
       text: "Hello there\nSecond line",
       counts: [1],
     });
+    const cancelSpy = vi.spyOn(ipc, "opPreviewCancel").mockResolvedValue(undefined);
     const opInvokeSpy = mockCollection(
       () => ({
         id: "col_123",
@@ -488,6 +489,8 @@ describe("text replace tool", () => {
     // One read on mount and one guard read before the write.
     expect(names.filter((name) => name === "collection.get").length).toBeGreaterThanOrEqual(2);
     expect(toast.success).toHaveBeenCalledWith("Text replaced");
+    // The dialog closes after a successful apply; nothing is left to cancel.
+    expect(cancelSpy).not.toHaveBeenCalled();
   });
 
   test("refuses to write when the slot moved since the preview", async () => {
@@ -546,7 +549,39 @@ describe("text replace tool", () => {
     await waitForDiff("Hello there");
     expect(fetchSpy).toHaveBeenCalledWith(
       expect.stringMatching(/^reimagine-asset:\/\/localhost\/preview\/abc123\/out\.md\?v=\d+$/),
+      { signal: expect.any(AbortSignal) },
     );
+  });
+
+  test("aborts a pending preview document fetch on close", async () => {
+    mockOperationsAvailable();
+    vi.spyOn(ipc, "opPreview").mockResolvedValue({
+      doc: "reimagine-asset://preview/abc123/out.md",
+      counts: [1],
+    });
+    let fetchSignal: AbortSignal | undefined;
+    const fetchSpy = vi.fn((_url: string, init?: RequestInit) => {
+      fetchSignal = init?.signal ?? undefined;
+      return new Promise<Response>((_resolve, reject) => {
+        init?.signal?.addEventListener("abort", () => {
+          reject(new DOMException("Aborted", "AbortError"));
+        });
+      });
+    });
+    vi.stubGlobal("fetch", fetchSpy);
+
+    render(<CollectionView />);
+    await openTool();
+    fillPair("world", "there");
+    await waitFor(() => {
+      expect(fetchSpy).toHaveBeenCalled();
+    });
+
+    fireEvent.click(screen.getByRole("button", { name: /^cancel$/i }));
+    await waitFor(() => {
+      expect(screen.queryByRole("dialog")).toBeNull();
+    });
+    expect(fetchSignal?.aborted).toBe(true);
   });
 
   test("reports inline output instead of writing an asset", async () => {
@@ -629,12 +664,57 @@ describe("text replace tool", () => {
     expect(screen.queryByTestId("text-tool-diff")).toBeNull();
   });
 
+  test("keeps a newer preview when an older edit resolves after it", async () => {
+    mockOperationsAvailable();
+    const resolvers: Array<(value: unknown) => void> = [];
+    const previewSpy = vi.spyOn(ipc, "opPreview").mockImplementation(
+      () =>
+        new Promise((resolve) => {
+          resolvers.push(resolve);
+        }),
+    );
+
+    render(<CollectionView />);
+    await openTool();
+
+    fillPair("world", "first");
+    await waitFor(() => {
+      expect(previewSpy).toHaveBeenCalledTimes(1);
+    });
+    const previewKey = previewSpy.mock.calls[0][3];
+
+    // The second edit restarts the debounce but keeps the dialog's key.
+    fireEvent.change(screen.getByLabelText("Replace with"), { target: { value: "second" } });
+    await waitFor(() => {
+      expect(previewSpy).toHaveBeenCalledTimes(2);
+    });
+    expect(previewSpy.mock.calls[1][3]).toBe(previewKey);
+
+    // The newer request settles first even though it was sent last.
+    await act(async () => {
+      resolvers[1]({ text: "Hello second\nSecond line", counts: [1] });
+      await Promise.resolve();
+    });
+    await waitForDiff("Hello second");
+
+    // The older request settles while the dialog is still open; it must not
+    // overwrite the newer diff.
+    await act(async () => {
+      resolvers[0]({ text: "Hello first\nSecond line", counts: [1] });
+      await Promise.resolve();
+    });
+    expect(screen.queryByText(/Hello first/)).toBeNull();
+    expect(screen.getByTestId("text-tool-diff")).toHaveTextContent("Hello second");
+    expect(screen.getByRole("dialog")).toBeInTheDocument();
+  });
+
   test("does not dismiss on Escape while applying", async () => {
     mockOperationsAvailable();
     vi.spyOn(ipc, "opPreview").mockResolvedValue({
       text: "Hello there\nSecond line",
       counts: [1],
     });
+    const cancelSpy = vi.spyOn(ipc, "opPreviewCancel").mockResolvedValue(undefined);
     let resolveReplace: (output: unknown) => void = () => {};
     const opInvokeSpy = mockCollection(
       () => ({
@@ -669,6 +749,9 @@ describe("text replace tool", () => {
       await Promise.resolve();
     });
     expect(screen.getByRole("dialog")).toBeInTheDocument();
+    // An apply in progress owns the dialog, so Escape neither closes nor
+    // cancels a preview.
+    expect(cancelSpy).not.toHaveBeenCalled();
 
     resolveReplace({ doc: "ast_new", counts: [1] });
     await waitFor(() => {
@@ -679,6 +762,7 @@ describe("text replace tool", () => {
       slot_id: "s1",
       asset: "ast_new",
     });
+    expect(cancelSpy).not.toHaveBeenCalled();
   });
 
   test("hides the tool when the slot preview is not textual", async () => {
