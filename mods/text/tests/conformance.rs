@@ -415,6 +415,24 @@ async fn split_yields_docs_for_assets_and_pieces_for_inline() {
     )
     .await;
     assert_eq!(code(error), "MOD/CALLER_NO_HEADINGS");
+
+    // Headings exist but none is at or above the requested level: the whole
+    // body is one piece instead of an error.
+    let fallback = call(
+        &registry,
+        "text.split",
+        json!({
+            "text": "### Deep only\n\nbody\n",
+            "by": { "kind": "heading", "level": 2 }
+        }),
+        &out_dir(&temp, "split-deep-only"),
+    )
+    .await
+    .expect("whole-body fallback");
+    validate_output(&registry, "text.split", &fallback);
+    assert_eq!(fallback["pieces"].as_array().expect("pieces").len(), 1);
+    assert_eq!(fallback["pieces"][0]["title"], "### Deep only");
+    assert_eq!(fallback["pieces"][0]["text"], "### Deep only\n\nbody\n");
     registry.stop().await;
 }
 

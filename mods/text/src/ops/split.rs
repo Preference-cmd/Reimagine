@@ -1,10 +1,14 @@
 //! `text.split`: cut a document at a heading level or a literal separator.
 //!
 //! Asset input produces `docs` (files written to the output directory);
-//! inline input produces `pieces`. Whitespace-only pieces are dropped. A front
-//! matter block describes the whole document, so it is stripped before
-//! splitting: the heading scan, the piece texts and `chars` all describe the
-//! body that remains, never the metadata block.
+//! inline input produces `pieces`. Whitespace-only pieces are dropped.
+//! Splitting operates on the body after the front matter is stripped, and
+//! front matter is never copied into a piece: the block describes the whole
+//! document, so the heading scan, the piece texts and `chars` all describe the
+//! body that remains. A heading split falls back to one piece holding the
+//! whole body when the document has ATX headings but none at or above the
+//! requested level; only a document with no ATX headings at all is
+//! `NO_HEADINGS`.
 
 use std::path::Path;
 
@@ -43,34 +47,42 @@ pub fn run(input: &Value, output_dir: &Path) -> Result<Value, Diagnostic> {
             })?;
             let regions = markdown::regions(parsed.body, level);
             if regions.is_empty() {
-                return Err(caller_error(
-                    ID,
-                    "NO_HEADINGS",
-                    format!(
-                        "the document has no ATX headings at level {level} or above to split on"
-                    ),
-                ));
+                if markdown::headings(parsed.body).is_empty() {
+                    return Err(caller_error(
+                        ID,
+                        "NO_HEADINGS",
+                        "the document has no ATX headings to split on",
+                    ));
+                }
+                // Headings exist, but every one is deeper than `level`: the
+                // whole body is one piece, titled from its first line, rather
+                // than an error.
+                vec![Piece::new(
+                    parsed.body.to_owned(),
+                    first_non_empty_line(parsed.body).unwrap_or_default(),
+                )]
+            } else {
+                regions
+                    .into_iter()
+                    .filter_map(|region| match region.heading {
+                        Some(heading) => {
+                            let title = if heading.text.trim().is_empty() {
+                                first_non_empty_line(region.text).unwrap_or_default()
+                            } else {
+                                heading.text
+                            };
+                            Some(Piece::new(region.text.to_owned(), title))
+                        }
+                        // The preamble carries content outside any target-level
+                        // section; keep it unless it is only whitespace.
+                        None if region.text.trim().is_empty() => None,
+                        None => Some(Piece::new(
+                            region.text.to_owned(),
+                            first_non_empty_line(region.text).unwrap_or_default(),
+                        )),
+                    })
+                    .collect()
             }
-            regions
-                .into_iter()
-                .filter_map(|region| match region.heading {
-                    Some(heading) => {
-                        let title = if heading.text.trim().is_empty() {
-                            first_non_empty_line(region.text).unwrap_or_default()
-                        } else {
-                            heading.text
-                        };
-                        Some(Piece::new(region.text.to_owned(), title))
-                    }
-                    // The preamble carries content outside any target-level
-                    // section; keep it unless it is only whitespace.
-                    None if region.text.trim().is_empty() => None,
-                    None => Some(Piece::new(
-                        region.text.to_owned(),
-                        first_non_empty_line(region.text).unwrap_or_default(),
-                    )),
-                })
-                .collect()
         }
         "separator" => {
             let separator = by
@@ -271,12 +283,31 @@ mod tests {
         .expect_err("no headings");
         assert_eq!(error.code().as_str(), "MOD/CALLER_NO_HEADINGS");
 
+        // A heading inside a fence is not an ATX heading, so it cannot serve
+        // as a split point either.
         let error = split_inline(
-            "### Deep only\n\nbody\n",
+            "```\n## fenced only\n```\n",
             json!({ "kind": "heading", "level": 2 }),
         )
-        .expect_err("no boundary headings");
+        .expect_err("no headings");
         assert_eq!(error.code().as_str(), "MOD/CALLER_NO_HEADINGS");
+    }
+
+    #[test]
+    fn a_deeper_heading_only_document_splits_as_one_whole_body_piece() {
+        let result = split_inline(
+            "---\ntitle: Meta\n---\n### Deep only\n\nbody text\n",
+            json!({ "kind": "heading", "level": 2 }),
+        )
+        .expect("whole-body fallback");
+        let pieces = result["pieces"].as_array().expect("pieces");
+        assert_eq!(pieces.len(), 1);
+        assert_eq!(pieces[0]["text"], "### Deep only\n\nbody text\n");
+        assert_eq!(pieces[0]["title"], "### Deep only");
+        assert_eq!(
+            pieces[0]["chars"],
+            pieces[0]["text"].as_str().unwrap().chars().count()
+        );
     }
 
     #[test]

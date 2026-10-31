@@ -8,11 +8,13 @@
 //!
 //! Inline pieces share one 256 KiB budget per invocation: their UTF-8 bytes
 //! are summed before joining, and the joined result is checked again. A
-//! relative `doc` is resolved against the invocation's output directory, so a
-//! `text.split` `docs` array can be passed through unchanged when both calls
-//! share a directory; the host otherwise supplies absolute asset paths.
+//! relative `doc` is resolved against the invocation's output directory and
+//! may not contain a parent, root or prefix component, so a `text.split`
+//! `docs` array can be passed through unchanged when both calls share a
+//! directory. That relative form is a direct-call convenience only: the host
+//! always supplies absolute asset paths.
 
-use std::path::{Path, PathBuf};
+use std::path::{Component, Path, PathBuf};
 
 use mod_sdk::diagnostic::{Diagnostic, caller_error};
 use mod_sdk::serde_json::Value;
@@ -104,11 +106,7 @@ fn load_docs(value: &Value, output_dir: &Path) -> Result<Vec<String>, Diagnostic
                 format!("`docs[{index}].doc` must be a string asset path"),
             )
         })?;
-        let path: PathBuf = if Path::new(path).is_absolute() {
-            PathBuf::from(path)
-        } else {
-            output_dir.join(path)
-        };
+        let path = resolve_doc(path, output_dir, index)?;
         let bytes = std::fs::read(&path).map_err(|error| {
             caller_error(
                 ID,
@@ -129,6 +127,32 @@ fn load_docs(value: &Value, output_dir: &Path) -> Result<Vec<String>, Diagnostic
         pieces.push(text);
     }
     Ok(pieces)
+}
+
+/// Resolve `docs[index].doc`. An absolute path comes from the host and is used
+/// as given. A relative path is the direct-call convenience: it is resolved
+/// against `output_dir` and may not climb out of it through a parent, root or
+/// prefix component.
+fn resolve_doc(path: &str, output_dir: &Path, index: usize) -> Result<PathBuf, Diagnostic> {
+    let requested = Path::new(path);
+    if requested.is_absolute() {
+        return Ok(requested.to_path_buf());
+    }
+    if requested.components().any(|component| {
+        matches!(
+            component,
+            Component::ParentDir | Component::RootDir | Component::Prefix(_)
+        )
+    }) {
+        return Err(caller_error(
+            ID,
+            "INVALID_JOIN_INPUT",
+            format!(
+                "`docs[{index}].doc` is relative, so it must not contain a parent, root or prefix component; use an absolute asset path"
+            ),
+        ));
+    }
+    Ok(output_dir.join(requested))
 }
 
 fn load_texts(value: &Value) -> Result<Vec<String>, Diagnostic> {
@@ -270,6 +294,21 @@ mod tests {
             std::fs::read_to_string(dir.join("joined.md")).expect("read"),
             "first"
         );
+    }
+
+    #[test]
+    fn a_relative_doc_may_not_escape_the_output_directory() {
+        let temp = tempdir().expect("temp dir");
+        let dir = out_dir(&temp);
+        // The target exists beside the output directory, so rejecting the path
+        // must happen before any read.
+        std::fs::write(temp.path().join("outside.md"), "outside").expect("write");
+        let error = run(
+            &json!({ "docs": [{ "doc": "../outside.md" }], "separator": "" }),
+            &dir,
+        )
+        .expect_err("parent traversal");
+        assert_eq!(error.code().as_str(), "MOD/CALLER_INVALID_JOIN_INPUT");
     }
 
     #[test]
