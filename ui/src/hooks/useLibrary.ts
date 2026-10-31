@@ -35,8 +35,10 @@ const RUN_STATE_LABELS: Record<RunState, () => string> = {
 };
 
 const LABELS: LibraryRowLabels = {
-  collectionDetail: (count, version) => `${count} ${m["library.slots"]()} · v${version}`,
-  workflowDetail: (count, version) => `${count} ${m["library.steps"]()} · v${version}`,
+  collectionDetail: (count, version) =>
+    `${count} ${count === 1 ? m["library.slot"]() : m["library.slots"]()} · v${version}`,
+  workflowDetail: (count, version) =>
+    `${count} ${count === 1 ? m["library.step"]() : m["library.steps"]()} · v${version}`,
   runState: (state) => RUN_STATE_LABELS[state](),
 };
 

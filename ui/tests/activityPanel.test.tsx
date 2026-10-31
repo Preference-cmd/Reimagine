@@ -142,11 +142,46 @@ describe("activity panel feed", () => {
     expect(rowIds()).toEqual(["agent-apply", "human-note", "human-op", "human-undo"]);
 
     expect(within(rowFor("agent-apply")).getByText("Agent")).toBeInTheDocument();
-    expect(within(rowFor("agent-apply")).getByText("Applied 2 board changes")).toBeInTheDocument();
+    expect(within(rowFor("agent-apply")).getByText("applied 2 board changes")).toBeInTheDocument();
     expect(within(rowFor("human-note")).getByText("You")).toBeInTheDocument();
-    expect(within(rowFor("human-note")).getByText("Added a note")).toBeInTheDocument();
-    expect(within(rowFor("human-op")).getByText("Ran collection.create")).toBeInTheDocument();
-    expect(within(rowFor("human-undo")).getByText("Undone")).toBeInTheDocument();
+    expect(within(rowFor("human-note")).getByText("added a note")).toBeInTheDocument();
+    expect(within(rowFor("human-op")).getByText("ran collection.create")).toBeInTheDocument();
+    // No applied row shares its history entry, so the undo keeps the generic
+    // sentence and carries no separate state tag.
+    expect(
+      within(rowFor("human-undo")).getByText("undid the last board change"),
+    ).toBeInTheDocument();
+    expect(within(rowFor("human-undo")).queryByText("Undone")).toBeNull();
+  });
+
+  test("names the change an undo or redo moved when its applied row is loaded", () => {
+    seed([
+      record({
+        id: "redo",
+        kind: "redone",
+        historyEntryId: "h-2",
+        summaryKey: "activity.board.redo",
+        summaryParams: {},
+      }),
+      record({
+        id: "undo",
+        kind: "undone",
+        historyEntryId: "h-2",
+        summaryKey: "activity.board.undo",
+        summaryParams: {},
+      }),
+      record({
+        id: "applied",
+        kind: "applied",
+        historyEntryId: "h-2",
+        summaryKey: "activity.board.addItem",
+      }),
+    ]);
+
+    render(<SessionPanel />);
+
+    expect(within(rowFor("undo")).getByText("undid “added an item”")).toBeInTheDocument();
+    expect(within(rowFor("redo")).getByText("redid “added an item”")).toBeInTheDocument();
   });
 
   test("uses a record's named actor label instead of the kind label", () => {
@@ -246,7 +281,7 @@ describe("activity panel feed", () => {
     expect(within(rowFor("undone")).getByTestId("activity-redo")).toBeInTheDocument();
 
     expect(
-      within(rowFor("newest")).getByRole("button", { name: "Undo: Added a note" }),
+      within(rowFor("newest")).getByRole("button", { name: "Undo: added a note" }),
     ).toBeInTheDocument();
   });
 

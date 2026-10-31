@@ -47,8 +47,24 @@ function numericParam(value: unknown, fallback: number): number {
  * Localized record summary. The host stores an English fallback plus a key
  * and params; an unknown key keeps the host's sentence instead of hiding the
  * row.
+ *
+ * An undo or redo names the change it moved when the applied record with the
+ * same history entry is in `records`; otherwise it keeps the generic sentence.
  */
-function activitySummary(record: ActivityRecord): string {
+function activitySummary(record: ActivityRecord, records: readonly ActivityRecord[]): string {
+  if ((record.kind === "undone" || record.kind === "redone") && record.historyEntryId) {
+    const target = records.find(
+      (candidate) =>
+        candidate.kind === "applied" && candidate.historyEntryId === record.historyEntryId,
+    );
+    if (target) {
+      const summary = activitySummary(target, records);
+      return record.kind === "undone"
+        ? m["activity.board.undoOf"]({ summary })
+        : m["activity.board.redoOf"]({ summary });
+    }
+  }
+
   const params = (record.summaryParams ?? {}) as { count?: unknown; op?: unknown };
   const count = numericParam(params.count, 1);
 
@@ -285,7 +301,7 @@ export function SessionPanel() {
               {visibleRecords.map((record) => {
                 const agent = record.actor.kind === "Agent";
                 const Glyph = ACTOR_GLYPHS[record.actor.kind];
-                const summary = activitySummary(record);
+                const summary = activitySummary(record, records);
                 const relative = formatRelativeTime(record.at, getLocale());
                 const undo = record.id === undoRecordId;
                 const redo = record.id === redoRecordId;
@@ -333,7 +349,6 @@ export function SessionPanel() {
                       </p>
                       <div className="mt-1 flex flex-wrap items-center gap-2 text-caption text-fg2">
                         {relative && <span>{relative}</span>}
-                        {record.kind === "undone" && <span>{m["activity.undone"]()}</span>}
                         {undo && (
                           <button
                             type="button"

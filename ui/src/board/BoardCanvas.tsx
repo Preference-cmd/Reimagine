@@ -64,6 +64,11 @@ type PendingMove = {
   resultVersion?: number;
 };
 
+/**
+ * The workbench draws its own floating canvas controls; React Flow's corner
+ * attribution would sit under the session panel. The library is MIT licensed.
+ */
+const PRO_OPTIONS = { hideAttribution: true } as const;
 export function BoardCanvasInner() {
   const board = useBoardStore();
   const { screenToFlowPosition, getViewport, getZoom, setViewport } = useReactFlow();
@@ -455,6 +460,7 @@ export function BoardCanvasInner() {
         minZoom={CANVAS_MIN_ZOOM}
         maxZoom={CANVAS_MAX_ZOOM}
         fitView={false}
+        proOptions={PRO_OPTIONS}
         className="h-full w-full"
       >
         <Background

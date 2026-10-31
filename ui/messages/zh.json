@@ -89,7 +89,9 @@
   "library.typeRun": "运行",
   "library.typeAsset": "文件",
   "library.slots": "个槽位",
+  "library.slot": "个槽位",
   "library.steps": "个步骤",
+  "library.step": "个步骤",
   "library.runState.queued": "排队中",
   "library.runState.running": "运行中",
   "library.runState.completed": "已完成",
@@ -226,7 +228,6 @@
   "activity.historyOutOfDate": "活动记录已过期",
   "activity.historyOutOfDateUndo": "没有撤销任何修改。撤销和重做目标已重新同步。",
   "activity.historyOutOfDateRedo": "没有重做任何修改。撤销和重做目标已重新同步。",
-  "activity.undone": "已撤销",
   "activity.board.addNote": "添加了一条便签",
   "activity.board.addNoteMany": "添加了 {count} 条便签",
   "activity.board.addItem": "添加了一个条目",
@@ -235,5 +236,7 @@
   "activity.board.applyMany": "应用了 {count} 处画布修改",
   "activity.board.undo": "撤销了上一步画布修改",
   "activity.board.redo": "重做了上一步画布修改",
+  "activity.board.undoOf": "撤销了「{summary}」",
+  "activity.board.redoOf": "重做了「{summary}」",
   "activity.op": "运行了 {op}"
 }
