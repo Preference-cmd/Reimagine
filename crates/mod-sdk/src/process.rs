@@ -418,6 +418,14 @@ impl Mod for ProcessMod {
     }
 
     async fn stop(&self) -> Result<(), Diagnostic> {
+        // Taking the child first makes a repeated stop a no-op: the child is
+        // gone, so there is nobody to answer a second `mod/stop` and waiting
+        // for the reply would only time out.
+        let mut child_guard = self.child.lock().await;
+        let Some(mut child) = child_guard.take() else {
+            return Ok(());
+        };
+
         let req_id = self.next_id.fetch_add(1, Ordering::SeqCst);
         let (tx, rx) = oneshot::channel();
         self.pending.lock().await.insert(req_id, tx);
@@ -430,35 +438,39 @@ impl Mod for ProcessMod {
         })
         .expect("serialize mod/stop request");
 
-        let _ = self.writer_tx.send(WriterCommand::Line(stop_msg)).await;
-        let stop_res = tokio::time::timeout(self.shutdown_timeout, rx).await;
+        let stop_res = if self
+            .writer_tx
+            .send(WriterCommand::Line(stop_msg))
+            .await
+            .is_err()
+        {
+            // The writer already closed the pipe, so no reply can arrive.
+            self.pending.lock().await.remove(&req_id);
+            Ok(())
+        } else {
+            match tokio::time::timeout(self.shutdown_timeout, rx).await {
+                Ok(Ok(Ok(_))) => Ok(()),
+                Ok(Ok(Err(diag))) => Err(diag),
+                Ok(Err(_)) => Ok(()),
+                Err(_) => Err(internal_error(
+                    &self.manifest.id,
+                    "TIMEOUT",
+                    "shutdown timeout waiting for mod/stop response",
+                )),
+            }
+        };
 
         // Close stdin
         let _ = self.writer_tx.send(WriterCommand::Close).await;
 
         // Wait for child to exit within shutdown_timeout, else kill it
-        let mut child_guard = self.child.lock().await;
-        if let Some(mut child) = child_guard.take() {
-            let wait_res = tokio::time::timeout(self.shutdown_timeout, child.wait()).await;
-            match wait_res {
-                Ok(Ok(_)) => {}
-                _ => {
-                    let _ = child.start_kill();
-                    let _ = child.wait().await;
-                }
-            }
+        let wait_res = tokio::time::timeout(self.shutdown_timeout, child.wait()).await;
+        if wait_res.is_err() {
+            let _ = child.start_kill();
+            let _ = child.wait().await;
         }
 
-        match stop_res {
-            Ok(Ok(Ok(_))) => Ok(()),
-            Ok(Ok(Err(diag))) => Err(diag),
-            Ok(Err(_)) => Ok(()),
-            Err(_) => Err(internal_error(
-                &self.manifest.id,
-                "TIMEOUT",
-                "shutdown timeout waiting for mod/stop response",
-            )),
-        }
+        stop_res
     }
 }
 

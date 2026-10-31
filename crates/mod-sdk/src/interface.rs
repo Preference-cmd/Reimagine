@@ -47,6 +47,9 @@ pub trait Mod: Send + Sync {
     /// Run one operation declared in the manifest.
     async fn invoke(&self, invocation: Invocation) -> Result<Value, Diagnostic>;
 
-    /// Called once at shutdown; no `invoke` follows.
+    /// Stop the mod; no `invoke` follows.
+    ///
+    /// The kernel may call this again when an earlier call was cancelled before
+    /// it completed, so `stop` must be idempotent.
     async fn stop(&self) -> Result<(), Diagnostic>;
 }

@@ -984,11 +984,11 @@ impl DesktopHostState {
         Ok(reimagine_app_host::dto::ModelDownloadOutput::from(report))
     }
 
-    /// Shut down the active inference worker, if any.
+    /// Shut down the active inference worker and the registered mods, if any.
     ///
     /// This is the application-level shutdown hook. Call it when the host
-    /// is exiting so that child worker processes are cleaned up instead of
-    /// becoming orphans.
+    /// is exiting so that child worker and mod processes are cleaned up
+    /// instead of becoming orphans.
     pub async fn shutdown(&self) {
         let app_host = self.app_host.read().expect(APP_HOST_LOCK).clone();
         app_host.shutdown().await;

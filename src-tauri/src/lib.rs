@@ -939,7 +939,7 @@ pub fn run() {
             if let tauri::RunEvent::ExitRequested { .. } = event {
                 let state = app_handle.state::<DesktopHostState>();
                 if !block_on_with_timeout(state.shutdown(), EXIT_SHUTDOWN_TIMEOUT) {
-                    eprintln!("[tauri] worker shutdown timed out after 5s; exiting");
+                    eprintln!("[tauri] worker and mod shutdown timed out after 5s; exiting");
                     std::process::exit(1);
                 }
             }
@@ -1023,6 +1023,10 @@ mod tests {
         // outside any runtime. Driving shutdown through the same helper must
         // complete without panicking, and a repeated call stays cheap.
         assert!(
+            tokio::runtime::Handle::try_current().is_err(),
+            "the test must start outside a Tokio context, like the exit callback"
+        );
+        assert!(
             block_on_with_timeout(state.shutdown(), std::time::Duration::from_secs(5)),
             "shutdown should finish before the deadline"
         );
@@ -1036,14 +1040,20 @@ mod tests {
 
     #[test]
     fn exit_shutdown_returns_at_the_deadline() {
+        let deadline = std::time::Duration::from_millis(10);
         let started = std::time::Instant::now();
         assert!(
-            !block_on_with_timeout(std::future::pending(), std::time::Duration::from_millis(10)),
+            !block_on_with_timeout(std::future::pending(), deadline),
             "an unfinished shutdown must report the deadline"
         );
+        let elapsed = started.elapsed();
         assert!(
-            started.elapsed() < std::time::Duration::from_secs(5),
-            "the deadline must not let the exit callback hang"
+            elapsed >= deadline,
+            "the deadline must be honored, not bypassed; returned after {elapsed:?}"
+        );
+        assert!(
+            elapsed < deadline + std::time::Duration::from_secs(1),
+            "the exit callback must return close to the deadline; took {elapsed:?}"
         );
     }
 

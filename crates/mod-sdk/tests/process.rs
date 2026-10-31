@@ -94,6 +94,29 @@ async fn a_panicking_invoke_returns_a_diagnostic() {
     assert_eq!(err.code().as_str(), "MOD/INTERNAL_PANIC");
 }
 
+#[tokio::test]
+async fn a_second_stop_returns_without_waiting_the_shutdown_timeout() {
+    let spec = ProcessModSpec::new(env!("CARGO_BIN_EXE_sample-mod"));
+
+    let proc = ProcessMod::spawn(spec).await.expect("spawn must succeed");
+    let bus = EventBus::new();
+    let ctx = ModContext::new(Arc::new(proc.manifest().clone()), bus);
+    proc.start(ctx).await.expect("start must succeed");
+
+    proc.stop().await.expect("the first stop must succeed");
+
+    // The registry may call `stop` again after a cancelled one. The child is
+    // gone, so this must return at once instead of waiting out the 3s reply
+    // timeout and reporting a spurious TIMEOUT.
+    let started = std::time::Instant::now();
+    proc.stop().await.expect("a repeated stop is a no-op");
+    assert!(
+        started.elapsed() < Duration::from_secs(1),
+        "a repeated stop waited on the child; took {:?}",
+        started.elapsed()
+    );
+}
+
 #[cfg(unix)]
 fn temp_pid_file(label: &str) -> std::path::PathBuf {
     std::env::temp_dir().join(format!(

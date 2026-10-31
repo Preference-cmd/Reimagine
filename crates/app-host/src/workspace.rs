@@ -1002,7 +1002,7 @@ impl WorkspaceHost {
     /// [`ModRegistry::stop`] owns the idempotency guard.
     ///
     /// A replacement host shares the registry, so the registry is not owned by
-    /// either host: a failed or superseded replacement must be discarded with
+    /// either host: the rebuild path discards a failed replacement with
     /// `shutdown_owned`, and callers must not shut down a superseded host.
     /// Either host's `shutdown` would stop the mods the other one still
     /// dispatches to.
