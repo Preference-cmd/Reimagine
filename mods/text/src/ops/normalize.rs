@@ -37,17 +37,21 @@ fn unify_newlines(text: &str) -> String {
     text.replace("\r\n", "\n").replace('\r', "\n")
 }
 
-/// Collapse runs of spaces and tabs into one space, trim line ends and keep
-/// blank lines.
+/// Collapse runs of spaces and tabs into one space after each line's leading
+/// indentation, trim line ends and keep blank lines. Leading indentation is
+/// preserved verbatim so Markdown code blocks and nesting survive.
 fn collapse_whitespace(text: &str) -> String {
     let mut collapsed = String::with_capacity(text.len());
     for (index, line) in text.split('\n').enumerate() {
         if index > 0 {
             collapsed.push('\n');
         }
-        let trimmed = line.trim_end_matches([' ', '\t']);
+        let line = line.trim_end_matches([' ', '\t']);
+        let indent = line.len() - line.trim_start_matches([' ', '\t']).len();
+        let (leading, rest) = line.split_at(indent);
+        collapsed.push_str(leading);
         let mut in_run = false;
-        for character in trimmed.chars() {
+        for character in rest.chars() {
             if character == ' ' || character == '\t' {
                 if !in_run {
                     collapsed.push(' ');
@@ -99,14 +103,23 @@ mod tests {
     fn defaults_normalize_whitespace_newlines_punctuation_form_and_are_idempotent() {
         let input = "  a  \tb \r\n\r\nwide，punctuation！\r\n";
         let once = normalize(input, json!({}));
-        assert_eq!(once, " a b\n\nwide，punctuation！\n");
+        assert_eq!(once, "  a b\n\nwide，punctuation！\n");
         // Default punctuation is `none`; ask for halfwidth explicitly.
         let once = normalize(input, json!({ "punctuation": "halfwidth" }));
-        assert_eq!(once, " a b\n\nwide,punctuation!\n");
+        assert_eq!(once, "  a b\n\nwide,punctuation!\n");
         assert_eq!(
             normalize(&once, json!({ "punctuation": "halfwidth" })),
             once,
             "normalize must be idempotent"
+        );
+    }
+
+    #[test]
+    fn leading_indentation_is_preserved_verbatim() {
+        let input = "    indented code\n\tone tab\n  a  b\n";
+        assert_eq!(
+            normalize(input, json!({})),
+            "    indented code\n\tone tab\n  a b\n"
         );
     }
 

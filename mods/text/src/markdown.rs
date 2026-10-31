@@ -10,12 +10,14 @@ pub struct Heading {
     pub offset: usize,
 }
 
-/// A section that starts at a heading of a chosen level.
+/// A region of a heading split: the preamble before the first boundary
+/// heading, or the text starting at a boundary heading.
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub struct Section<'a> {
-    pub heading: Heading,
-    /// The section text, starting with the heading line and ending before the
-    /// next heading of the same or a higher level.
+pub struct Region<'a> {
+    /// The heading that starts the region; `None` for the preamble.
+    pub heading: Option<Heading>,
+    /// The region text, from its first byte to the next boundary heading (or
+    /// the end of the document). The preamble starts at byte 0.
     pub text: &'a str,
 }
 
@@ -45,27 +47,41 @@ pub fn headings(text: &str) -> Vec<Heading> {
     found
 }
 
-/// Split `text` into sections at headings of `level`. A section runs until
-/// the next heading of the same or a higher level, so subheadings stay inside
-/// their parent section. Text before the first heading is not a section.
-pub fn sections(text: &str, level: u8) -> Vec<Section<'_>> {
+/// Split `text` into regions at every heading whose level is at most `level`.
+/// A heading at or above `level` starts a new region, so a target-level
+/// heading splits while a higher-level heading keeps its own content. Headings
+/// deeper than `level` stay inside the region that contains them. The
+/// preamble — everything before the first boundary heading — is its own region,
+/// so text outside target-level sections is preserved rather than dropped.
+///
+/// The result is empty when the document has no heading at or above `level`.
+pub fn regions(text: &str, level: u8) -> Vec<Region<'_>> {
     let all = headings(text);
-    let mut sections = Vec::new();
-    for (index, heading) in all.iter().enumerate() {
-        if heading.level != level {
-            continue;
-        }
-        let end = all[index + 1..]
-            .iter()
-            .find(|next| next.level <= level)
+    let boundaries: Vec<&Heading> = all
+        .iter()
+        .filter(|heading| heading.level <= level)
+        .collect();
+    let Some(first) = boundaries.first() else {
+        return Vec::new();
+    };
+    let mut regions = Vec::with_capacity(boundaries.len() + 1);
+    if first.offset > 0 {
+        regions.push(Region {
+            heading: None,
+            text: &text[..first.offset],
+        });
+    }
+    for (index, heading) in boundaries.iter().enumerate() {
+        let end = boundaries
+            .get(index + 1)
             .map(|next| next.offset)
             .unwrap_or(text.len());
-        sections.push(Section {
-            heading: heading.clone(),
+        regions.push(Region {
+            heading: Some((*heading).clone()),
             text: &text[heading.offset..end],
         });
     }
-    sections
+    regions
 }
 
 /// `(byte offset, line without its terminator)` for every line.
@@ -198,18 +214,38 @@ mod tests {
     }
 
     #[test]
-    fn sections_run_to_the_next_heading_of_the_same_or_higher_level() {
+    fn regions_start_at_every_heading_at_or_above_the_target_level() {
         let text = "intro\n\n## A\n\none\n\n### A1\n\nsub\n\n## B\n\ntwo\n";
-        let sections = sections(text, 2);
-        assert_eq!(sections.len(), 2);
-        assert_eq!(sections[0].heading.text, "A");
-        assert_eq!(sections[0].text, "## A\n\none\n\n### A1\n\nsub\n\n");
-        assert_eq!(sections[1].heading.text, "B");
-        assert_eq!(sections[1].text, "## B\n\ntwo\n");
+        let regions = regions(text, 2);
+        assert_eq!(regions.len(), 3);
+        assert_eq!(regions[0].heading, None);
+        assert_eq!(regions[0].text, "intro\n\n");
+        let first = regions[1].heading.as_ref().expect("heading");
+        assert_eq!(first.text, "A");
+        assert_eq!(
+            regions[1].text, "## A\n\none\n\n### A1\n\nsub\n\n",
+            "a deeper heading stays inside its region"
+        );
+        assert_eq!(regions[2].heading.as_ref().expect("heading").text, "B");
+        assert_eq!(regions[2].text, "## B\n\ntwo\n");
     }
 
     #[test]
-    fn sections_of_an_absent_level_are_empty() {
-        assert!(sections("## A\n\n### B\n", 1).is_empty());
+    fn higher_level_headings_start_their_own_region() {
+        let text = "# Title\n\nintro\n\n## A\n\none\n\n# Part\n\nunder part\n\n## B\n\ntwo\n";
+        let regions = regions(text, 2);
+        let titles: Vec<Option<&str>> = regions
+            .iter()
+            .map(|region| region.heading.as_ref().map(|heading| heading.text.as_str()))
+            .collect();
+        assert_eq!(titles, [Some("Title"), Some("A"), Some("Part"), Some("B")]);
+        assert_eq!(regions[2].text, "# Part\n\nunder part\n\n");
+    }
+
+    #[test]
+    fn regions_are_empty_without_a_heading_at_or_above_the_target_level() {
+        assert!(regions("## A\n\n### B\n", 1).is_empty());
+        assert!(regions("plain text", 1).is_empty());
+        assert!(regions("   \n\n", 2).is_empty());
     }
 }

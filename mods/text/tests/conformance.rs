@@ -75,6 +75,23 @@ fn validate_output(registry: &ModRegistry, operation: &str, output: &Value) {
     );
 }
 
+/// Check `input` against the operation's declared input schema, as the host
+/// does before it invokes a mod.
+fn validate_input(registry: &ModRegistry, operation: &str, input: &Value) {
+    let manifest = &registry.list()[0].manifest;
+    let spec = manifest
+        .operations
+        .iter()
+        .find(|spec| spec.name == operation)
+        .expect("declared operation");
+    let validator = mod_sdk::schema::compile(&spec.input_schema).expect("compiled schema");
+    assert_eq!(
+        mod_sdk::schema::violations(&validator, input),
+        None,
+        "input to {operation} does not match its schema: {input}"
+    );
+}
+
 #[tokio::test]
 async fn manifest_declares_six_deterministic_project_local_operations() {
     let (registry, _temp) = start().await;
@@ -282,6 +299,56 @@ async fn template_resolves_values_then_front_matter_then_body() {
 }
 
 #[tokio::test]
+async fn inspect_and_template_accept_the_asset_form() {
+    let (registry, temp) = start().await;
+    let body = "# Heading\n\nBody line\n";
+    let input_path = temp.path().join("asset.md");
+    std::fs::write(&input_path, format!("---\ntitle: Asset\n---\n{body}")).expect("write");
+
+    let inspected = call(
+        &registry,
+        "text.inspect",
+        json!({ "doc": input_path.to_str().expect("utf8 path") }),
+        &out_dir(&temp, "inspect-asset"),
+    )
+    .await
+    .expect("asset inspect");
+    validate_output(&registry, "text.inspect", &inspected);
+    assert_eq!(inspected["title"], "Asset");
+    assert_eq!(
+        inspected["headings"],
+        json!([{ "level": 1, "text": "Heading" }])
+    );
+    assert_eq!(
+        inspected["stats"]["chars"],
+        body.chars().count(),
+        "stats describe the body after front matter is stripped"
+    );
+    assert!(inspected.get("doc").is_none());
+    assert!(inspected.get("text").is_none());
+
+    let output_dir = out_dir(&temp, "template-asset");
+    let rendered = call(
+        &registry,
+        "text.template",
+        json!({
+            "doc": input_path.to_str().expect("utf8 path"),
+            "template": "{{title}}: {{body}}"
+        }),
+        &output_dir,
+    )
+    .await
+    .expect("asset template");
+    validate_output(&registry, "text.template", &rendered);
+    assert_eq!(rendered, json!({ "doc": "output.md" }));
+    assert_eq!(
+        std::fs::read_to_string(output_dir.join("output.md")).expect("read output"),
+        format!("Asset: {body}")
+    );
+    registry.stop().await;
+}
+
+#[tokio::test]
 async fn split_yields_docs_for_assets_and_pieces_for_inline() {
     let (registry, temp) = start().await;
     let source = "Intro\n\n## One\n\nfirst\n\n### Sub\n\nsub text\n\n## Two\n\nsecond\n";
@@ -301,11 +368,17 @@ async fn split_yields_docs_for_assets_and_pieces_for_inline() {
     .expect("asset split");
     validate_output(&registry, "text.split", &asset);
     let docs = asset["docs"].as_array().expect("docs");
-    assert_eq!(docs.len(), 2);
-    assert_eq!(docs[0]["title"], "One");
-    assert_eq!(docs[1]["title"], "Two");
+    assert_eq!(docs.len(), 3);
+    assert_eq!(docs[0]["title"], "Intro");
+    assert_eq!(docs[1]["title"], "One");
+    assert_eq!(docs[2]["title"], "Two");
     assert_eq!(
         std::fs::read_to_string(asset_dir.join(docs[0]["doc"].as_str().expect("doc")))
+            .expect("read preamble"),
+        "Intro\n\n"
+    );
+    assert_eq!(
+        std::fs::read_to_string(asset_dir.join(docs[1]["doc"].as_str().expect("doc")))
             .expect("read first piece"),
         "## One\n\nfirst\n\n### Sub\n\nsub text\n\n"
     );
@@ -326,8 +399,8 @@ async fn split_yields_docs_for_assets_and_pieces_for_inline() {
     assert_eq!(
         inline["pieces"],
         json!([
-            { "text": "one", "title": "one", "chars": 3 },
-            { "text": "two", "title": "two", "chars": 3 }
+            { "text": "one\n", "title": "one", "chars": 4 },
+            { "text": "\ntwo\n", "title": "two", "chars": 5 }
         ])
     );
 
@@ -346,12 +419,43 @@ async fn split_yields_docs_for_assets_and_pieces_for_inline() {
 }
 
 #[tokio::test]
-async fn join_accepts_the_docs_from_split_and_renders_texts_with_a_template() {
+async fn heading_split_preserves_preamble_and_higher_level_text() {
+    let (registry, temp) = start().await;
+    let source =
+        "Preamble line\n\nmore\n\n## One\n\nfirst\n\n# Part\n\nunder part\n\n## Two\n\nsecond\n";
+    let split = call(
+        &registry,
+        "text.split",
+        json!({
+            "text": source,
+            "by": { "kind": "heading", "level": 2 }
+        }),
+        &out_dir(&temp, "split-preamble"),
+    )
+    .await
+    .expect("split");
+    validate_output(&registry, "text.split", &split);
+    let pieces = split["pieces"].as_array().expect("pieces");
+    let titles: Vec<&str> = pieces
+        .iter()
+        .map(|piece| piece["title"].as_str().expect("title"))
+        .collect();
+    assert_eq!(titles, ["Preamble line", "One", "Part", "Two"]);
+    let rejoined: String = pieces
+        .iter()
+        .map(|piece| piece["text"].as_str().expect("text"))
+        .collect();
+    assert_eq!(rejoined, source, "split must not lose any text");
+    registry.stop().await;
+}
+
+#[tokio::test]
+async fn join_accepts_the_docs_from_split_unchanged() {
     let (registry, temp) = start().await;
     let source = "## One\n\nfirst\n\n## Two\n\nsecond\n";
     let input_path = temp.path().join("join.md");
     std::fs::write(&input_path, source).expect("write");
-    let split_dir = out_dir(&temp, "join-split");
+    let dir = out_dir(&temp, "join-split");
     let split = call(
         &registry,
         "text.split",
@@ -359,36 +463,31 @@ async fn join_accepts_the_docs_from_split_and_renders_texts_with_a_template() {
             "doc": input_path.to_str().expect("utf8 path"),
             "by": { "kind": "heading", "level": 2 }
         }),
-        &split_dir,
+        &dir,
     )
     .await
     .expect("split");
-    let docs: Vec<Value> = split["docs"]
-        .as_array()
-        .expect("docs")
-        .iter()
-        .map(|item| {
-            let path = split_dir.join(item["doc"].as_str().expect("doc"));
-            json!({ "doc": path.to_str().expect("utf8 path"), "title": item["title"] })
-        })
-        .collect();
+    validate_output(&registry, "text.split", &split);
 
-    let join_dir = out_dir(&temp, "join-asset");
-    let joined = call(
-        &registry,
-        "text.join",
-        json!({ "docs": docs, "separator": "\n\n" }),
-        &join_dir,
-    )
-    .await
-    .expect("asset join");
+    // The pieces stay in the split output directory and the docs array goes
+    // to join exactly as split produced it, including `chars`.
+    let input = json!({ "docs": split["docs"].clone(), "separator": "\n\n" });
+    validate_input(&registry, "text.join", &input);
+    let joined = call(&registry, "text.join", input, &dir)
+        .await
+        .expect("join the unchanged split docs");
     validate_output(&registry, "text.join", &joined);
     assert_eq!(joined["doc"], "joined.md");
     assert_eq!(
-        std::fs::read_to_string(join_dir.join("joined.md")).expect("read joined"),
+        std::fs::read_to_string(dir.join("joined.md")).expect("read joined"),
         "## One\n\nfirst\n\n\n\n## Two\n\nsecond\n"
     );
+    registry.stop().await;
+}
 
+#[tokio::test]
+async fn join_renders_texts_with_a_template() {
+    let (registry, temp) = start().await;
     let texts = call(
         &registry,
         "text.join",

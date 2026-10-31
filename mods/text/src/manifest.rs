@@ -329,12 +329,17 @@ fn join_input() -> Value {
         "properties": {
             "docs": {
                 "type": "array",
-                "description": "Documents to join, in order. Give exactly one of `docs` and `texts`.",
+                "description": "Documents to join, in order. Give exactly one of `docs` and `texts`. A `text.split` `docs` array can be passed unchanged.",
                 "items": {
                     "type": "object",
                     "properties": {
                         "doc": { "type": "string", "format": "asset", "contentMediaType": "text/*" },
-                        "title": { "type": "string" }
+                        "title": { "type": "string" },
+                        "chars": {
+                            "type": "integer",
+                            "minimum": 1,
+                            "description": "Piece length from `text.split`; accepted and ignored."
+                        }
                     },
                     "required": ["doc"],
                     "additionalProperties": false
@@ -406,5 +411,35 @@ mod tests {
         assert!(annotations("text.inspect").read_only);
         assert!(!annotations("text.replace").idempotent);
         assert!(!annotations("text.inspect").idempotent);
+    }
+
+    #[test]
+    fn join_declares_split_shaped_docs_with_text_media_types() {
+        let manifest = manifest();
+        let join = manifest
+            .operations
+            .iter()
+            .find(|operation| operation.name == "text.join")
+            .expect("text.join");
+        let docs = &join.input_schema["properties"]["docs"];
+        assert_eq!(docs["type"], "array");
+        let item = &docs["items"];
+        assert_eq!(item["required"], json!(["doc"]));
+        assert_eq!(item["properties"]["doc"]["format"], "asset");
+        assert_eq!(item["properties"]["doc"]["contentMediaType"], "text/*");
+        assert!(item["properties"].get("title").is_some());
+        assert!(item["properties"].get("chars").is_some());
+        assert_eq!(item["additionalProperties"], false);
+
+        let texts = &join.input_schema["properties"]["texts"];
+        assert_eq!(texts["items"]["format"], "inline-text");
+
+        // A `text.split` `docs` item validates unchanged.
+        let validator = mod_sdk::schema::compile(&join.input_schema).expect("join input schema");
+        let split_item = json!({
+            "docs": [{ "doc": "piece-1.md", "title": "One", "chars": 5 }],
+            "separator": ""
+        });
+        assert_eq!(mod_sdk::schema::violations(&validator, &split_item), None);
     }
 }

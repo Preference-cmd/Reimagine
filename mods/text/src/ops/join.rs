@@ -5,8 +5,14 @@
 //! plus exactly one of `separator` and `template`. The result mirrors the
 //! input form. Separator mode keeps every piece verbatim; template mode
 //! resolves placeholders against each piece's front matter and body.
+//!
+//! Inline pieces share one 256 KiB budget per invocation: their UTF-8 bytes
+//! are summed before joining, and the joined result is checked again. A
+//! relative `doc` is resolved against the invocation's output directory, so a
+//! `text.split` `docs` array can be passed through unchanged when both calls
+//! share a directory; the host otherwise supplies absolute asset paths.
 
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
 use mod_sdk::diagnostic::{Diagnostic, caller_error};
 use mod_sdk::serde_json::Value;
@@ -20,7 +26,7 @@ pub fn run(input: &Value, output_dir: &Path) -> Result<Value, Diagnostic> {
     let docs = input.get("docs").filter(|value| !value.is_null());
     let texts = input.get("texts").filter(|value| !value.is_null());
     let (pieces, form) = match (docs, texts) {
-        (Some(docs), None) => (load_docs(docs)?, Form::Asset),
+        (Some(docs), None) => (load_docs(docs, output_dir)?, Form::Asset),
         (None, Some(texts)) => (load_texts(texts)?, Form::Inline),
         (Some(_), Some(_)) => {
             return Err(caller_error(
@@ -81,12 +87,12 @@ pub fn run(input: &Value, output_dir: &Path) -> Result<Value, Diagnostic> {
     document::result(form, output_dir, "joined.md", &joined)
 }
 
-fn load_docs(value: &Value) -> Result<Vec<String>, Diagnostic> {
+fn load_docs(value: &Value, output_dir: &Path) -> Result<Vec<String>, Diagnostic> {
     let docs = value.as_array().ok_or_else(|| {
         caller_error(
             ID,
             "INVALID_JOIN_INPUT",
-            "`docs` must be an array of `{doc, title?}` items",
+            "`docs` must be an array of `{doc, title?, chars?}` items",
         )
     })?;
     let mut pieces = Vec::with_capacity(docs.len());
@@ -98,18 +104,26 @@ fn load_docs(value: &Value) -> Result<Vec<String>, Diagnostic> {
                 format!("`docs[{index}].doc` must be a string asset path"),
             )
         })?;
-        let bytes = std::fs::read(path).map_err(|error| {
+        let path: PathBuf = if Path::new(path).is_absolute() {
+            PathBuf::from(path)
+        } else {
+            output_dir.join(path)
+        };
+        let bytes = std::fs::read(&path).map_err(|error| {
             caller_error(
                 ID,
                 "READ_FAILED",
-                format!("failed to read the document at `{path}`: {error}"),
+                format!(
+                    "failed to read the document at `{}`: {error}",
+                    path.display()
+                ),
             )
         })?;
         let text = String::from_utf8(bytes).map_err(|_| {
             caller_error(
                 ID,
                 "INVALID_UTF8",
-                format!("the document at `{path}` is not valid UTF-8"),
+                format!("the document at `{}` is not valid UTF-8", path.display()),
             )
         })?;
         pieces.push(text);
@@ -126,6 +140,7 @@ fn load_texts(value: &Value) -> Result<Vec<String>, Diagnostic> {
         )
     })?;
     let mut pieces = Vec::with_capacity(texts.len());
+    let mut total = 0usize;
     for (index, text) in texts.iter().enumerate() {
         let text = text.as_str().ok_or_else(|| {
             caller_error(
@@ -135,6 +150,17 @@ fn load_texts(value: &Value) -> Result<Vec<String>, Diagnostic> {
             )
         })?;
         document::check_inline(text)?;
+        total = total.saturating_add(text.len());
+        if total > document::MAX_INLINE_BYTES {
+            return Err(caller_error(
+                ID,
+                "INLINE_TOO_LARGE",
+                format!(
+                    "inline `texts` total {total} bytes; the limit is {} bytes. Use assets (`docs`) instead",
+                    document::MAX_INLINE_BYTES
+                ),
+            ));
+        }
         pieces.push(text.to_owned());
     }
     Ok(pieces)
@@ -208,15 +234,42 @@ mod tests {
     #[test]
     fn docs_join_with_a_template_uses_each_pieces_front_matter() {
         let temp = tempdir().expect("temp dir");
+        let path = temp.path().join("piece.md");
+        std::fs::write(&path, "---\ntitle: First\n---\nBody one").expect("write");
+        let dir = out_dir(&temp);
         let result = run(
             &json!({
-                "texts": ["---\ntitle: First\n---\nBody one"],
+                "docs": [{ "doc": path.to_str().expect("utf8 path"), "chars": 18 }],
                 "template": "# {{title}}\n\n{{body}}\n"
             }),
-            &out_dir(&temp),
+            &dir,
         )
         .expect("join");
-        assert_eq!(result, json!({ "text": "# First\n\nBody one\n" }));
+        assert_eq!(result, json!({ "doc": "joined.md" }));
+        assert_eq!(
+            std::fs::read_to_string(dir.join("joined.md")).expect("read"),
+            "# First\n\nBody one\n"
+        );
+    }
+
+    #[test]
+    fn a_relative_doc_is_resolved_against_the_output_directory() {
+        let temp = tempdir().expect("temp dir");
+        let dir = out_dir(&temp);
+        std::fs::write(dir.join("piece-1.md"), "first").expect("write");
+        let result = run(
+            &json!({
+                "docs": [{ "doc": "piece-1.md", "title": "First", "chars": 5 }],
+                "separator": ""
+            }),
+            &dir,
+        )
+        .expect("join");
+        assert_eq!(result, json!({ "doc": "joined.md" }));
+        assert_eq!(
+            std::fs::read_to_string(dir.join("joined.md")).expect("read"),
+            "first"
+        );
     }
 
     #[test]
@@ -276,17 +329,19 @@ mod tests {
     }
 
     #[test]
-    fn inline_join_output_over_the_cap_is_a_diagnostic() {
+    fn the_inline_cap_covers_the_whole_texts_array() {
         let temp = tempdir().expect("temp dir");
-        let piece = "x".repeat(document::MAX_INLINE_BYTES);
+        let dir = out_dir(&temp);
+        // Each piece is under the cap; together they are over it.
+        let piece = "x".repeat(document::MAX_INLINE_BYTES / 2 + 1);
         let error = run(
-            &json!({ "texts": [piece, piece], "separator": "" }),
-            &out_dir(&temp),
+            &json!({ "texts": [piece.clone(), piece.clone()], "separator": "" }),
+            &dir,
         )
-        .expect_err("output over the cap");
+        .expect_err("input sum over the cap");
         assert_eq!(error.code().as_str(), "MOD/CALLER_INLINE_TOO_LARGE");
 
-        // The same two pieces as assets join fine.
+        // The same two pieces as assets join fine: the cap is for inline text.
         let one = temp.path().join("one.md");
         let two = temp.path().join("two.md");
         std::fs::write(&one, &piece).expect("write");
@@ -299,9 +354,24 @@ mod tests {
                 ],
                 "separator": ""
             }),
-            &out_dir(&temp),
+            &dir,
         )
         .expect("asset join");
+    }
+
+    #[test]
+    fn the_joined_inline_output_is_checked_again() {
+        let temp = tempdir().expect("temp dir");
+        // Small inputs, but the separator pushes the output over the cap.
+        let error = run(
+            &json!({
+                "texts": ["a", "b"],
+                "separator": "x".repeat(document::MAX_INLINE_BYTES)
+            }),
+            &out_dir(&temp),
+        )
+        .expect_err("output over the cap");
+        assert_eq!(error.code().as_str(), "MOD/CALLER_INLINE_TOO_LARGE");
     }
 
     #[test]

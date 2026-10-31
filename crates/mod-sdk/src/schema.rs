@@ -46,11 +46,38 @@ pub(crate) fn is_asset_schema(schema: &Value) -> bool {
 /// appears ONLY directly as a property in `properties` or as `items`.
 /// Rejects markers anywhere else (e.g. under `oneOf`, `anyOf`, `allOf`, `not`, root).
 pub fn check_asset_marker_locations(schema: &Value) -> Result<(), String> {
-    fn walk(val: &Value, in_allowed: bool) -> Result<(), String> {
-        if is_asset_marker(val) && !in_allowed {
-            return Err(
-                "asset markers are allowed only under `properties` and `items`".to_string(),
-            );
+    check_marker_locations(
+        schema,
+        is_asset_marker,
+        "asset markers are allowed only under `properties` and `items`",
+    )
+}
+
+/// The inline-text counterpart of [`check_asset_marker_locations`]: a
+/// `"format": "inline-text"` marker must appear only directly as a property
+/// in `properties` or as `items`, the same places the walk that finds inline
+/// fields follows.
+pub fn check_inline_text_marker_locations(schema: &Value) -> Result<(), String> {
+    check_marker_locations(
+        schema,
+        is_inline_text_marker,
+        "inline-text markers are allowed only under `properties` and `items`",
+    )
+}
+
+fn check_marker_locations(
+    schema: &Value,
+    is_marker: fn(&Value) -> bool,
+    message: &str,
+) -> Result<(), String> {
+    fn walk(
+        val: &Value,
+        in_allowed: bool,
+        is_marker: fn(&Value) -> bool,
+        message: &str,
+    ) -> Result<(), String> {
+        if is_marker(val) && !in_allowed {
+            return Err(message.to_owned());
         }
         match val {
             Value::Object(map) => {
@@ -58,21 +85,21 @@ pub fn check_asset_marker_locations(schema: &Value) -> Result<(), String> {
                     if k == "properties" {
                         if let Value::Object(props) = v {
                             for prop_val in props.values() {
-                                walk(prop_val, true)?;
+                                walk(prop_val, true, is_marker, message)?;
                             }
                         } else {
-                            walk(v, false)?;
+                            walk(v, false, is_marker, message)?;
                         }
                     } else if k == "items" {
-                        walk(v, true)?;
+                        walk(v, true, is_marker, message)?;
                     } else {
-                        walk(v, false)?;
+                        walk(v, false, is_marker, message)?;
                     }
                 }
             }
             Value::Array(arr) => {
                 for item in arr {
-                    walk(item, false)?;
+                    walk(item, false, is_marker, message)?;
                 }
             }
             _ => {}
@@ -80,7 +107,7 @@ pub fn check_asset_marker_locations(schema: &Value) -> Result<(), String> {
         Ok(())
     }
 
-    walk(schema, false)
+    walk(schema, false, is_marker, message)
 }
 
 /// Represents an asset field discovered within a payload instance.
@@ -271,6 +298,68 @@ mod tests {
             "format": "asset"
         });
         assert!(check_asset_marker_locations(&invalid_schema).is_err());
+    }
+
+    #[test]
+    fn inline_text_marker_locations_valid() {
+        let valid_schema = json!({
+            "type": "object",
+            "properties": {
+                "text": { "type": "string", "format": "inline-text" },
+                "texts": {
+                    "type": "array",
+                    "items": { "type": "string", "format": "inline-text" }
+                },
+                "nested": {
+                    "type": "object",
+                    "properties": {
+                        "text": { "type": "string", "format": "inline-text" }
+                    }
+                }
+            }
+        });
+        assert!(check_inline_text_marker_locations(&valid_schema).is_ok());
+    }
+
+    #[test]
+    fn inline_text_marker_locations_reject_other_positions() {
+        for invalid_schema in [
+            json!({ "type": "string", "format": "inline-text" }),
+            json!({
+                "type": "object",
+                "properties": {
+                    "text": {
+                        "oneOf": [
+                            { "type": "string", "format": "inline-text" },
+                            { "type": "null" }
+                        ]
+                    }
+                }
+            }),
+            json!({
+                "type": "object",
+                "additionalProperties": { "type": "string", "format": "inline-text" }
+            }),
+        ] {
+            assert!(check_inline_text_marker_locations(&invalid_schema).is_err());
+        }
+    }
+
+    #[test]
+    fn inline_text_and_asset_markers_are_checked_separately() {
+        let asset_under_oneof = json!({
+            "type": "object",
+            "properties": {
+                "doc": {
+                    "oneOf": [
+                        { "type": "string", "format": "asset" },
+                        { "type": "null" }
+                    ]
+                }
+            }
+        });
+        assert!(check_inline_text_marker_locations(&asset_under_oneof).is_ok());
+        assert!(check_asset_marker_locations(&asset_under_oneof).is_err());
     }
 
     #[test]

@@ -58,7 +58,8 @@ impl ModRegistry {
     /// already taken, when its api requirement excludes [`API_VERSION`],
     /// when an operation or event leaves the mod's namespace or repeats,
     /// or when a schema does not compile, an input schema is not an object
-    /// schema, or asset markers are used outside properties and items.
+    /// schema, or asset or inline-text markers are used outside properties
+    /// and items.
     pub async fn start(mods: Vec<Arc<dyn Mod>>, event_bus: &EventBus) -> Self {
         let mut registered: Vec<Registered> = Vec::with_capacity(mods.len());
         for instance in mods {
@@ -246,7 +247,19 @@ fn validate_manifest_structure(manifest: &ModManifest, id_taken: bool) -> Result
                 format!("operation `{}` input_schema: {why}", operation.name),
             );
         }
+        if let Err(why) = schema::check_inline_text_marker_locations(&operation.input_schema) {
+            return reject(
+                "INVALID_SCHEMA",
+                format!("operation `{}` input_schema: {why}", operation.name),
+            );
+        }
         if let Err(why) = schema::check_asset_marker_locations(&operation.output_schema) {
+            return reject(
+                "INVALID_SCHEMA",
+                format!("operation `{}` output_schema: {why}", operation.name),
+            );
+        }
+        if let Err(why) = schema::check_inline_text_marker_locations(&operation.output_schema) {
             return reject(
                 "INVALID_SCHEMA",
                 format!("operation `{}` output_schema: {why}", operation.name),
@@ -499,12 +512,35 @@ mod tests {
             }
         });
 
+        // Inline-text marker under oneOf
+        let mut inline_marker = manifest("bad_inline");
+        inline_marker.operations[0].input_schema = json!({
+            "type": "object",
+            "properties": {
+                "text": {
+                    "oneOf": [
+                        { "type": "string", "format": "inline-text" },
+                        { "type": "null" }
+                    ]
+                }
+            }
+        });
+
+        // Inline-text marker in an output schema, outside properties
+        let mut inline_output = manifest("bad_inline_output");
+        inline_output.operations[0].output_schema = json!({
+            "type": "object",
+            "additionalProperties": { "type": "string", "format": "inline-text" }
+        });
+
         let cases = [
             (non_object_input, "bad_input_root.ping"),
             (uncompilable_input, "bad_input_schema.ping"),
             (uncompilable_output, "bad_output_schema.ping"),
             (uncompilable_event, "bad_event_schema.pinged"),
             (oneof_marker, "bad_oneof.ping"),
+            (inline_marker, "bad_inline.ping"),
+            (inline_output, "bad_inline_output.ping"),
         ];
 
         for (manifest, target_name) in cases {

@@ -85,10 +85,13 @@ impl Pair {
                     format!("pair {index} needs a string `replace`"),
                 )
             })?;
-        let mode = object
-            .get("mode")
-            .and_then(Value::as_str)
-            .unwrap_or("literal");
+        let mode = object.get("mode").and_then(Value::as_str).ok_or_else(|| {
+            caller_error(
+                ID,
+                "INVALID_PAIR",
+                format!("pair {index} needs a string `mode`"),
+            )
+        })?;
         let case_sensitive = match object.get("case_sensitive") {
             None | Some(Value::Null) => true,
             Some(Value::Bool(value)) => *value,
@@ -216,6 +219,18 @@ mod tests {
     }
 
     #[test]
+    fn a_pair_without_a_mode_is_a_diagnostic() {
+        let temp = tempdir().expect("temp dir");
+        let error = run(
+            &json!({ "text": "x", "pairs": [{ "find": "x", "replace": "y" }] }),
+            temp.path(),
+        )
+        .expect_err("missing mode");
+        assert_eq!(error.code().as_str(), "MOD/CALLER_INVALID_PAIR");
+        assert!(error.message().contains("`mode`"));
+    }
+
+    #[test]
     fn an_invalid_regex_is_a_diagnostic() {
         let temp = tempdir().expect("temp dir");
         let error = run(
@@ -233,6 +248,7 @@ mod tests {
             json!(null),
             json!([7]),
             json!([{ "replace": "y", "mode": "literal" }]),
+            json!([{ "find": "x", "replace": "y" }]),
             json!([{ "find": "x", "mode": "literal" }]),
             json!([{ "find": "x", "replace": "y", "mode": "glob" }]),
             json!([{ "find": "x", "replace": "y", "mode": "literal", "case_sensitive": "no" }]),

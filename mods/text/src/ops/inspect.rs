@@ -1,4 +1,8 @@
 //! `text.inspect`: title, ATX headings, flat front matter and stats.
+//!
+//! The headings and the `stats` describe the body after the front matter
+//! block is stripped; the block itself is reported separately as
+//! `front_matter`, so metadata is never counted as content.
 
 use std::path::Path;
 
