@@ -33,4 +33,18 @@ pub use manifest::{API_VERSION, ModEvent, ModManifest, OperationAnnotations, Ope
 pub use process::{ProcessMod, ProcessModSpec};
 pub use protocol::PROTOCOL_VERSION;
 pub use registry::{ModEntry, ModRegistry, RESERVED_NAMESPACES};
-pub use schema::{AssetField, check_asset_marker_locations, find_asset_fields};
+pub use schema::{
+    AssetField, InlineTextField, check_asset_marker_locations, find_asset_fields,
+    find_inline_text_fields,
+};
+
+// Re-exported so a mod can write `mod_sdk::async_trait` and
+// `mod_sdk::serde_json` without its own dependency on either crate.
+pub use async_trait::async_trait;
+pub use serde_json;
+
+// Re-exported because they appear in the signatures a mod uses to drive its
+// own conformance tests (`Invocation`, `Mod::start`, `ModRegistry::start`):
+// a mod must not need a direct kernel dependency to build an invocation.
+pub use reimagine_core::event::EventBus;
+pub use reimagine_core::task::CancelToken;

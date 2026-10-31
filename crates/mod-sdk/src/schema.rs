@@ -31,6 +31,11 @@ pub(crate) fn is_asset_marker(schema: &Value) -> bool {
     schema.get("format").and_then(Value::as_str) == Some("asset")
 }
 
+/// Whether `schema` has the inline-text marker (`"format": "inline-text"`).
+pub(crate) fn is_inline_text_marker(schema: &Value) -> bool {
+    schema.get("format").and_then(Value::as_str) == Some("inline-text")
+}
+
 /// Whether `schema` is a valid asset field (`"type": "string"`, `"format": "asset"`).
 pub(crate) fn is_asset_schema(schema: &Value) -> bool {
     schema.get("type").and_then(Value::as_str) == Some("string")
@@ -108,6 +113,68 @@ pub fn has_asset_field(schema: &Value) -> bool {
         }
     }
     walk(schema)
+}
+
+/// A populated inline-text field discovered within a payload instance.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct InlineTextField {
+    /// JSON Pointer (RFC 6901), e.g. `"/text"` or `"/texts/0"`.
+    pub pointer: String,
+    /// Length of the value in UTF-8 bytes.
+    pub bytes: usize,
+}
+
+/// Walk schema and value together and return the JSON pointers and UTF-8 byte
+/// lengths of all populated inline-text fields.
+///
+/// A field is inline text when its schema carries `"format": "inline-text"`
+/// and the value is a string. The walk follows `properties` and `items`, the
+/// same places the asset marker is allowed, so an inline document inside an
+/// array of strings or a nested object is found.
+pub fn find_inline_text_fields(schema: &Value, value: &Value) -> Vec<InlineTextField> {
+    let mut fields = Vec::new();
+    walk_schema_inline_text(schema, value, "", &mut fields);
+    fields
+}
+
+fn walk_schema_inline_text(
+    schema: &Value,
+    value: &Value,
+    current_ptr: &str,
+    out: &mut Vec<InlineTextField>,
+) {
+    if is_inline_text_marker(schema) {
+        if let Some(text) = value.as_str() {
+            out.push(InlineTextField {
+                pointer: current_ptr.to_owned(),
+                bytes: text.len(),
+            });
+        }
+        return;
+    }
+
+    match (schema, value) {
+        (Value::Object(s_map), Value::Object(v_map)) => {
+            if let Some(Value::Object(props)) = s_map.get("properties") {
+                for (prop_name, prop_schema) in props {
+                    if let Some(prop_val) = v_map.get(prop_name) {
+                        let seg = escape_pointer_segment(prop_name);
+                        let next_ptr = format!("{current_ptr}/{seg}");
+                        walk_schema_inline_text(prop_schema, prop_val, &next_ptr, out);
+                    }
+                }
+            }
+        }
+        (Value::Object(s_map), Value::Array(v_arr)) => {
+            if let Some(items_schema) = s_map.get("items") {
+                for (idx, item_val) in v_arr.iter().enumerate() {
+                    let next_ptr = format!("{current_ptr}/{idx}");
+                    walk_schema_inline_text(items_schema, item_val, &next_ptr, out);
+                }
+            }
+        }
+        _ => {}
+    }
 }
 
 fn escape_pointer_segment(seg: &str) -> String {
@@ -288,5 +355,128 @@ mod tests {
             }
         });
         assert!(!has_asset_field(&without_asset));
+    }
+
+    #[test]
+    fn find_inline_text_fields_reports_direct_fields_in_byte_length() {
+        let schema = json!({
+            "type": "object",
+            "properties": {
+                "text": { "type": "string", "format": "inline-text" }
+            }
+        });
+        let fields = find_inline_text_fields(&schema, &json!({ "text": "héllo" }));
+        assert_eq!(
+            fields,
+            vec![InlineTextField {
+                pointer: "/text".to_owned(),
+                bytes: 6,
+            }]
+        );
+    }
+
+    #[test]
+    fn find_inline_text_fields_walks_nested_objects_and_array_items() {
+        let schema = json!({
+            "type": "object",
+            "properties": {
+                "doc": {
+                    "type": "object",
+                    "properties": {
+                        "text": { "type": "string", "format": "inline-text" }
+                    }
+                },
+                "texts": {
+                    "type": "array",
+                    "items": { "type": "string", "format": "inline-text" }
+                }
+            }
+        });
+        let value = json!({
+            "doc": { "text": "ab" },
+            "texts": ["c", "dé"]
+        });
+        assert_eq!(
+            find_inline_text_fields(&schema, &value),
+            vec![
+                InlineTextField {
+                    pointer: "/doc/text".to_owned(),
+                    bytes: 2,
+                },
+                InlineTextField {
+                    pointer: "/texts/0".to_owned(),
+                    bytes: 1,
+                },
+                InlineTextField {
+                    pointer: "/texts/1".to_owned(),
+                    bytes: 3,
+                },
+            ]
+        );
+    }
+
+    #[test]
+    fn find_inline_text_fields_ignores_non_string_values() {
+        let schema = json!({
+            "type": "object",
+            "properties": {
+                "text": { "type": "string", "format": "inline-text" },
+                "items": {
+                    "type": "array",
+                    "items": { "type": "string", "format": "inline-text" }
+                }
+            }
+        });
+        let value = json!({
+            "text": 7,
+            "items": ["ok", 1, null, { "text": "nested" }]
+        });
+        assert_eq!(
+            find_inline_text_fields(&schema, &value),
+            vec![InlineTextField {
+                pointer: "/items/0".to_owned(),
+                bytes: 2,
+            }]
+        );
+    }
+
+    #[test]
+    fn find_inline_text_fields_has_no_false_positives() {
+        let schema = json!({
+            "type": "object",
+            "properties": {
+                "doc": { "type": "string", "format": "asset" },
+                "plain": { "type": "string" },
+                "nested": {
+                    "type": "object",
+                    "properties": {
+                        "plain": { "type": "string" }
+                    }
+                }
+            }
+        });
+        let value = json!({
+            "doc": "asset-1",
+            "plain": "just text",
+            "nested": { "plain": "more text" }
+        });
+        assert!(find_inline_text_fields(&schema, &value).is_empty());
+    }
+
+    #[test]
+    fn find_inline_text_fields_escapes_pointer_segments() {
+        let schema = json!({
+            "type": "object",
+            "properties": {
+                "a/b": { "type": "string", "format": "inline-text" },
+                "a~b": { "type": "string", "format": "inline-text" }
+            }
+        });
+        let value = json!({ "a/b": "x", "a~b": "y" });
+        let pointers: Vec<String> = find_inline_text_fields(&schema, &value)
+            .into_iter()
+            .map(|field| field.pointer)
+            .collect();
+        assert_eq!(pointers, ["/a~1b", "/a~0b"]);
     }
 }

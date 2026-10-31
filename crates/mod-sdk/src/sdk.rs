@@ -34,6 +34,17 @@ enum WriterStep {
     Command(Option<WriterMsg>),
 }
 
+/// Serve a mod over standard I/O on a current-thread Tokio runtime.
+///
+/// This is the entry point a mod binary calls from `main`: it builds the
+/// runtime [`serve`] needs and blocks on it until stdin reaches EOF.
+pub fn serve_main(module: impl Mod + 'static) -> std::io::Result<()> {
+    tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .build()?
+        .block_on(serve(module))
+}
+
 /// Serve a mod over standard I/O speaking JSON-RPC 2.0.
 ///
 /// Reads lines from stdin until EOF. When stdin reaches EOF (the lifeline to

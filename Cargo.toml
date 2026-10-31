@@ -16,6 +16,7 @@ members = [
     "crates/mod-sdk",
     "crates/backend-worker-protocol",
     "crates/backend-worker-host",
+    "mods/text",
 ]
 
 [workspace.package]
@@ -74,3 +75,5 @@ arc-swap = "1"
 blake3 = "1"
 thiserror = "2"
 jsonschema = { version = "0.60", default-features = false }
+regex = "1"
+unicode-normalization = "0.1"

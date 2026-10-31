@@ -1,6 +1,10 @@
 //! Interface conformance, run against the sample mod. Every behavior test
 //! runs once per way of hosting the mod and must hold for each.
 
+// A diagnostic is the error of every mod call. It is large but only built on
+// the failure path, so the test helper keeps the type unboxed.
+#![allow(clippy::result_large_err)]
+
 use std::sync::Arc;
 use std::time::Duration;
 

@@ -1,0 +1,25 @@
+[package]
+name = "text-mod"
+version.workspace = true
+description = "The `text` mod: normalize, replace, inspect, template, split and join text documents."
+authors.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+publish.workspace = true
+
+[lib]
+name = "text_mod"
+
+[[bin]]
+name = "text-mod"
+path = "src/main.rs"
+
+[dependencies]
+mod-sdk = { path = "../../crates/mod-sdk" }
+regex = { workspace = true }
+unicode-normalization = { workspace = true }
+
+[dev-dependencies]
+tempfile = { workspace = true }
+tokio = { workspace = true, features = ["macros", "rt", "time"] }
