@@ -5,7 +5,7 @@ import * as m from "$paraglide/messages";
 import { ICON_STROKE } from "@/design/tokens";
 import { useProjectStore } from "@/store/project";
 import { Button } from "@/components/ui/button";
-import { opInvoke, readAssetPreview, type AssetPreview } from "@/ipc";
+import { isTextualMediaType, opInvoke, readAssetPreview, type AssetPreview } from "@/ipc";
 import { type CollectionSlot, type SlotRunState } from "@/ipc/schemas";
 import { useCollection } from "@/hooks/useCollection";
 import { useCollectionRun } from "@/hooks/useCollectionRun";
@@ -98,6 +98,9 @@ function SlotItem({
   }, [projectId, slot.asset_id]);
 
   const mediaType = preview?.mediaType ?? "";
+  // The tool reads and replaces text, so an image or binary slot has nothing
+  // it could safely edit.
+  const textToolShown = textToolAvailable && isTextualMediaType(mediaType);
 
   return (
     <div className="flex flex-col rounded-lg border border-hair bg-surface p-4 shadow-1 transition-all">
@@ -129,7 +132,7 @@ function SlotItem({
         <span>
           {m["collections.assetIdPrefix"]()} <span className="font-mono">{slot.asset_id}</span>
         </span>
-        {textToolAvailable && (
+        {textToolShown && (
           <Button type="button" variant="ghost" size="xs" onClick={onOpenTextTool}>
             <Type aria-hidden="true" />
             {m["collections.textTool.open"]()}
@@ -169,7 +172,12 @@ export function CollectionView() {
     refresh: fetchCollection,
   } = useCollection(activeProjectId, id);
   const { slotStates } = useCollectionRun(activeProjectId, id);
-  const { textReplace, textReplaceAvailable } = useOperations(activeProjectId);
+  const {
+    textReplace,
+    textReplaceAvailable,
+    error: textToolError,
+    retry: retryTextTools,
+  } = useOperations(activeProjectId);
   const [actionError, setActionError] = useState<string | null>(null);
   const [toolSlot, setToolSlot] = useState<CollectionSlot | null>(null);
   const error = collectionError ?? actionError;
@@ -275,6 +283,20 @@ export function CollectionView() {
             strokeWidth={ICON_STROKE}
           />
           {error}
+        </div>
+      )}
+
+      {textToolError && !textReplaceAvailable && (
+        <div className="mb-4 flex items-center gap-3 rounded-lg border-l-2 border-warn bg-warn/10 p-3 text-body-sm text-fg">
+          <CircleAlert
+            className="size-4 shrink-0 text-warn"
+            aria-hidden="true"
+            strokeWidth={ICON_STROKE}
+          />
+          <span className="flex-1">{m["collections.textTool.loadError"]()}</span>
+          <Button type="button" variant="outline" size="sm" onClick={retryTextTools}>
+            {m["collections.textTool.retry"]()}
+          </Button>
         </div>
       )}
 

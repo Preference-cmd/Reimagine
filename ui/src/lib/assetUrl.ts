@@ -33,15 +33,25 @@ export function getAssetUrl(projectId: string, assetId: string): string {
  *
  * The host always reports the custom-scheme form; the webview needs the same
  * platform base as `getAssetUrl`, so only the path after `preview/` is kept and
- * each segment is encoded on its own.
+ * each segment is encoded on its own. A preview key is reused, so a caller that
+ * has already fetched this file can pass a `cacheBuster` sequence to defeat the
+ * webview cache. `.` and `..` segments are rejected before encoding.
  */
-export function getPreviewUrl(previewUri: string): string {
+export function getPreviewUrl(previewUri: string, cacheBuster?: number): string {
   const base = tauriAvailable()
     ? convertFileSrc("", "reimagine-asset")
     : "reimagine-asset://localhost/";
   const withoutScheme = previewUri.replace(/^[a-zA-Z][a-zA-Z0-9+.-]*:\/\//, "");
-  const segments = withoutScheme.split("/").filter((segment) => segment.length > 0);
+  const pathOnly = withoutScheme.split(/[?#]/, 1)[0];
+  const segments = pathOnly.split("/").filter((segment) => segment.length > 0);
   const previewIndex = segments.indexOf("preview");
-  const relative = previewIndex === -1 ? segments : segments.slice(previewIndex + 1);
-  return `${base}preview/${relative.map(encodeURIComponent).join("/")}`;
+  const relative = previewIndex === -1 ? [] : segments.slice(previewIndex + 1);
+  if (relative.length === 0) {
+    throw new Error(`not a preview URI: ${previewUri}`);
+  }
+  if (relative.some((segment) => segment === "." || segment === "..")) {
+    throw new Error(`preview URI has a dot segment: ${previewUri}`);
+  }
+  const query = typeof cacheBuster === "number" ? `?v=${cacheBuster}` : "";
+  return `${base}preview/${relative.map(encodeURIComponent).join("/")}${query}`;
 }

@@ -1221,6 +1221,9 @@ export async function mockOpPreview(input: {
   return applyMockReplacements(original, pairs);
 }
 
+/** Preview mocks complete synchronously, so there is nothing to stop. */
+export async function mockOpPreviewCancel(_input: { previewKey: string }): Promise<void> {}
+
 export async function mockOpInvoke(input: {
   projectId: string;
   name: string;

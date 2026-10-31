@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState, type ReactNode } from "react";
+import { useCallback, useEffect, useRef, useState, type ReactNode } from "react";
 import { CircleAlert, Plus, Trash2 } from "lucide-react";
 import { diffLines } from "diff";
 import { toast } from "sonner";
@@ -13,7 +13,7 @@ import {
   DialogTitle,
 } from "@/components/ui/dialog";
 import { Input } from "@/components/ui/input";
-import { opInvoke, opPreview, readAssetText } from "@/ipc";
+import { opInvoke, opPreview, opPreviewCancel, readAssetText } from "@/ipc";
 import { CollectionDocumentSchema, type CollectionSlot, type OperationInfo } from "@/ipc/schemas";
 import { getPreviewUrl } from "@/lib/assetUrl";
 
@@ -33,7 +33,8 @@ type PairRow = {
   values: Record<string, unknown>;
 };
 
-type PreviewResult = { text: string; counts: number[] };
+/** `pairIndexes` maps each count back to its row in `pairs` after empty rows drop. */
+type PreviewResult = { text: string; counts: number[]; pairIndexes: number[] };
 
 let pairSequence = 0;
 
@@ -98,47 +99,67 @@ function fieldLabel(name: string): string {
 
 function modeLabel(mode: string): string {
   switch (mode) {
+    case "literal":
+      return m["collections.textTool.modes.literal"]();
     case "word":
       return m["collections.textTool.modes.word"]();
     case "regex":
       return m["collections.textTool.modes.regex"]();
     default:
-      return m["collections.textTool.modes.literal"]();
+      // A newer host may add a mode this build does not name; show it as sent.
+      return mode;
   }
 }
 
-function pairsForInput(pairs: PairRow[]): Array<Record<string, unknown>> {
-  return pairs
-    .filter((pair) => String(pairValue(pair, "find") ?? "").length > 0)
-    .map((pair) => ({
+/**
+ * Drop pairs with no find string and remember each kept pair's row index, so a
+ * per-pair count still points at the row the user edited.
+ */
+function pairsForInput(pairs: PairRow[]): {
+  pairs: Array<Record<string, unknown>>;
+  pairIndexes: number[];
+} {
+  const kept = pairs
+    .map((pair, index) => ({ pair, index }))
+    .filter(({ pair }) => String(pairValue(pair, "find") ?? "").length > 0);
+  return {
+    pairs: kept.map(({ pair }) => ({
       find: String(pairValue(pair, "find") ?? ""),
       replace: String(pairValue(pair, "replace") ?? ""),
       mode: String(pairValue(pair, "mode") ?? "literal"),
       case_sensitive: pairValue(pair, "case_sensitive") !== false,
-    }));
+    })),
+    pairIndexes: kept.map(({ index }) => index),
+  };
 }
 
 /**
  * Resolve a preview output: the mock returns inline `text`, the host returns a
  * `doc` URI that has to be read through the asset protocol.
  */
-async function readPreviewOutput(output: unknown): Promise<PreviewResult> {
+async function readPreviewOutput(
+  output: unknown,
+  pairIndexes: number[],
+  cacheBuster: number,
+): Promise<PreviewResult> {
   if (!output || typeof output !== "object") {
-    throw new Error("preview returned no output");
+    throw new Error(m["collections.textTool.previewOutputError"]());
   }
   const record = output as { text?: unknown; doc?: unknown; counts?: unknown };
   const counts = Array.isArray(record.counts)
     ? record.counts.map((count) => (typeof count === "number" ? count : 0))
     : [];
   if (typeof record.text === "string") {
-    return { text: record.text, counts };
+    return { text: record.text, counts, pairIndexes };
   }
   if (typeof record.doc === "string") {
-    const res = await fetch(getPreviewUrl(record.doc));
-    if (!res.ok) throw new Error(`HTTP ${res.status} reading the preview`);
-    return { text: await res.text(), counts };
+    const res = await fetch(getPreviewUrl(record.doc, cacheBuster));
+    if (!res.ok) {
+      throw new Error(m["collections.textTool.previewReadError"]({ status: String(res.status) }));
+    }
+    return { text: await res.text(), counts, pairIndexes };
   }
-  throw new Error("preview returned neither text nor a document");
+  throw new Error(m["collections.textTool.previewOutputError"]());
 }
 
 function DiffView({ original, changed }: { original: string; changed: string }) {
@@ -215,7 +236,26 @@ export function TextToolDialog({
 
   const previewKeyRef = useRef(createPreviewKey());
   const previewSequence = useRef(0);
+  const previewInFlightRef = useRef(false);
+  const applyingRef = useRef(false);
   const assetId = slot.asset_id;
+
+  /**
+   * Stop the host preview that is still running for this dialog. The response
+   * is ignored either way through `previewSequence`; the cancel just stops the
+   * provider from doing work the user no longer sees.
+   */
+  const cancelPreviewInFlight = useCallback(() => {
+    if (!previewInFlightRef.current || applyingRef.current) return;
+    previewInFlightRef.current = false;
+    void opPreviewCancel(previewKeyRef.current).catch(() => {
+      // Closing must not fail on a host that already dropped the preview.
+    });
+  }, []);
+
+  // A direct unmount (route change, parent reset) must not leave a preview
+  // running either.
+  useEffect(() => () => cancelPreviewInFlight(), [cancelPreviewInFlight]);
 
   // A new open starts from a clean form, a fresh preview key and no late results.
   useEffect(() => {
@@ -252,7 +292,7 @@ export function TextToolDialog({
   }, [open, projectId, assetId]);
 
   const validPairs = pairsForInput(pairs);
-  const hasPairs = validPairs.length > 0;
+  const hasPairs = validPairs.pairs.length > 0;
 
   useEffect(() => {
     const sequence = ++previewSequence.current;
@@ -266,15 +306,16 @@ export function TextToolDialog({
     setPreviewError(null);
     const timer = setTimeout(() => {
       void (async () => {
+        previewInFlightRef.current = true;
         try {
           const output = await opPreview(
             projectId,
             "text.replace",
-            { doc: assetId, pairs: validPairs },
+            { doc: assetId, pairs: validPairs.pairs },
             previewKeyRef.current,
           );
           if (sequence !== previewSequence.current) return;
-          const result = await readPreviewOutput(output);
+          const result = await readPreviewOutput(output, validPairs.pairIndexes, sequence);
           if (sequence !== previewSequence.current) return;
           setPreview(result);
           setPreviewing(false);
@@ -283,6 +324,8 @@ export function TextToolDialog({
           setPreview(null);
           setPreviewError(errorMessage(error));
           setPreviewing(false);
+        } finally {
+          if (sequence === previewSequence.current) previewInFlightRef.current = false;
         }
       })();
     }, PREVIEW_DEBOUNCE_MS);
@@ -290,8 +333,10 @@ export function TextToolDialog({
     return () => {
       clearTimeout(timer);
     };
-    // `validPairs` is derived from `pairs`; the signature keeps the effect
-    // from re-running for edits that leave the payload unchanged.
+    // `validPairs` is derived from `pairs` on every render; the effect depends
+    // on `pairs` so every edit restarts the debounce, and the sequence guard
+    // drops responses from an earlier edit. It deliberately does not dedupe
+    // edits by payload signature.
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [open, original, pairs, projectId, assetId, hasPairs]);
 
@@ -312,7 +357,13 @@ export function TextToolDialog({
   }
 
   function handleOpenChange(next: boolean) {
-    if (!next) previewSequence.current += 1;
+    if (!next) {
+      // Escape, the overlay and the close button all arrive here. An apply in
+      // progress owns the dialog until it succeeds or fails.
+      if (applyingRef.current) return;
+      previewSequence.current += 1;
+      cancelPreviewInFlight();
+    }
     onOpenChange(next);
   }
 
@@ -326,6 +377,7 @@ export function TextToolDialog({
 
   async function handleApply() {
     if (!canApply) return;
+    applyingRef.current = true;
     setApplying(true);
     setApplyError(null);
     try {
@@ -341,7 +393,7 @@ export function TextToolDialog({
 
       const invoked = await opInvoke(projectId, "text.replace", {
         doc: assetId,
-        pairs: validPairs,
+        pairs: validPairs.pairs,
       });
       const output = (invoked.output ?? null) as { doc?: unknown } | null;
       if (!output || typeof output.doc !== "string") {
@@ -361,10 +413,13 @@ export function TextToolDialog({
       } catch {
         // The collection.changed event still refreshes an open view.
       }
+      // The write is done, so this close is allowed through the guard.
+      applyingRef.current = false;
       handleOpenChange(false);
     } catch (error) {
       setApplyError(`${m["collections.textTool.applyError"]()}: ${errorMessage(error)}`);
     } finally {
+      applyingRef.current = false;
       setApplying(false);
     }
   }
@@ -533,9 +588,9 @@ export function TextToolDialog({
                   <DiffView original={original} changed={previewText} />
                   <ul className="flex flex-col gap-1 text-caption text-fg2">
                     {preview.counts.map((count, index) => (
-                      <li key={index}>
+                      <li key={preview.pairIndexes[index] ?? index}>
                         {m["collections.textTool.pairCount"]({
-                          index: index + 1,
+                          index: (preview.pairIndexes[index] ?? index) + 1,
                           count,
                         })}
                       </li>

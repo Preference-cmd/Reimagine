@@ -37,6 +37,7 @@ import {
   mockOpInvoke,
   mockOpList,
   mockOpPreview,
+  mockOpPreviewCancel,
   mockReadAssetPreview,
   mockReadAssetText,
 } from "./mock";
@@ -296,10 +297,20 @@ export function opPreview(
   );
 }
 
+/**
+ * Stop the in-flight preview registered under `previewKey`. The host keeps the
+ * preview directory (an in-flight provider may still be writing), so callers
+ * only need to ignore the late response.
+ */
+export function opPreviewCancel(previewKey: string): Promise<void> {
+  return dispatch("op_preview_cancel", null, { previewKey }, mockOpPreviewCancel);
+}
+
 /** Media type of an asset and, for textual assets, its first `maxLines` lines. */
 export type AssetPreview = { url: string; mediaType: string; text: string | null };
 
-function isTextual(mediaType: string): boolean {
+/** Textual slots are the ones the text tools can read and replace. */
+export function isTextualMediaType(mediaType: string): boolean {
   return mediaType.startsWith("text/") || mediaType === "application/json";
 }
 
@@ -328,7 +339,7 @@ export async function readAssetPreview(
       const res = await fetch(url);
       if (!res.ok) throw new Error(`HTTP ${res.status} reading asset ${assetId}`);
       const mediaType = res.headers.get("content-type") ?? "application/octet-stream";
-      const text = isTextual(mediaType)
+      const text = isTextualMediaType(mediaType)
         ? (await res.text()).split("\n").slice(0, maxLines).join("\n")
         : null;
       return { url, mediaType, text };

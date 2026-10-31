@@ -913,6 +913,21 @@ impl OperationService {
         }
     }
 
+    /// Cancel an in-flight preview registered under `preview_key`, if any.
+    ///
+    /// The preview directory is left in place: the cancelled provider may still
+    /// be writing to it, so the next preview under the same key or the next
+    /// session's temporary-directory cleanup removes it. Cancelling a key that
+    /// is not in flight is a no-op.
+    pub async fn cancel_preview(&self, preview_key: &str) -> Result<(), Diagnostic> {
+        validate_preview_key(preview_key)?;
+        let mut active = self.active_previews.lock().await;
+        if let Some(entry) = active.remove(preview_key) {
+            entry.cancel.cancel();
+        }
+        Ok(())
+    }
+
     /// Preview an operation into an ephemeral preview directory without recording steps or assets.
     pub async fn preview(
         &self,
@@ -1401,4 +1416,137 @@ fn set_json_pointer(target: &mut Value, pointer: &str, new_val: Value) -> Result
     }
 
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::sync::Arc;
+
+    use mod_sdk::ModRegistry;
+    use reimagine_config::AppPaths;
+
+    struct SlowPreviewOp {
+        spec: OperationSpec,
+        started: Arc<tokio::sync::Notify>,
+    }
+
+    #[async_trait]
+    impl KernelOp for SlowPreviewOp {
+        fn spec(&self) -> &OperationSpec {
+            &self.spec
+        }
+
+        async fn invoke(&self, call: KernelCall) -> Result<Value, Diagnostic> {
+            // Leave a file behind so the test can prove cancellation does not
+            // delete a directory that may still be written to.
+            let marker = call.invocation.output_dir.join("in-flight.txt");
+            tokio::fs::write(&marker, b"partial preview")
+                .await
+                .expect("write in-flight marker");
+            self.started.notify_one();
+            call.invocation.cancel.cancelled().await;
+            Err(op_caller_error(
+                "test.slow",
+                "CANCELLED",
+                "preview cancelled",
+            ))
+        }
+    }
+
+    fn slow_preview_service(
+        dir: &tempfile::TempDir,
+    ) -> (Arc<OperationService>, Arc<tokio::sync::Notify>) {
+        let service = Arc::new(OperationService::new(
+            AppPaths::new(dir.path()),
+            Arc::new(ModRegistry::empty()),
+        ));
+        let started = Arc::new(tokio::sync::Notify::new());
+        service.register_kernel_op(Arc::new(SlowPreviewOp {
+            spec: OperationSpec {
+                name: "test.slow".to_owned(),
+                description: "slow preview".to_owned(),
+                input_schema: serde_json::json!({
+                    "type": "object",
+                    "properties": {},
+                    "additionalProperties": false
+                }),
+                output_schema: serde_json::json!({ "type": "object", "properties": {} }),
+                annotations: OperationAnnotations {
+                    read_only: false,
+                    destructive: false,
+                    idempotent: false,
+                    deterministic: true,
+                    open_world: false,
+                },
+            },
+            started: started.clone(),
+        }));
+        (service, started)
+    }
+
+    #[tokio::test]
+    async fn cancel_preview_stops_the_provider_and_removes_the_entry() {
+        let dir = tempfile::tempdir().expect("temp dir");
+        let (service, started) = slow_preview_service(&dir);
+        let preview_key = "cancel-key";
+
+        let preview_service = Arc::clone(&service);
+        let handle = tokio::spawn(async move {
+            preview_service
+                .preview(
+                    &ProjectId::new("proj-cancel"),
+                    "test.slow",
+                    serde_json::json!({}),
+                    preview_key,
+                    CancelToken::new(),
+                )
+                .await
+        });
+
+        started.notified().await;
+        service
+            .cancel_preview(preview_key)
+            .await
+            .expect("cancel by key");
+
+        assert!(
+            service
+                .active_previews
+                .lock()
+                .await
+                .get(preview_key)
+                .is_none(),
+            "a cancelled preview must leave no active entry"
+        );
+
+        let error = handle
+            .await
+            .expect("join preview task")
+            .expect_err("the cancelled preview must fail");
+        assert_eq!(error.code().as_str(), "TEST/CALLER_CANCELLED");
+
+        let preview_dir = service.preview_dir(preview_key).expect("valid key");
+        assert!(
+            preview_dir.join("in-flight.txt").is_file(),
+            "cancel must not delete a directory an in-flight provider may still write"
+        );
+    }
+
+    #[tokio::test]
+    async fn cancel_preview_rejects_an_invalid_key_and_ignores_an_unknown_key() {
+        let dir = tempfile::tempdir().expect("temp dir");
+        let (service, _started) = slow_preview_service(&dir);
+
+        let error = service
+            .cancel_preview("../escape")
+            .await
+            .expect_err("invalid keys must be rejected");
+        assert_eq!(error.code().as_str(), "KERNEL/CALLER_INVALID_PREVIEW_KEY");
+
+        service
+            .cancel_preview("not-in-flight")
+            .await
+            .expect("cancelling an idle key is a no-op");
+    }
 }

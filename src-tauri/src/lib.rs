@@ -549,6 +549,18 @@ async fn op_preview(
         .map_err(app_host_command_error)
 }
 
+/// Cancel an in-flight `op_preview` by its key. Unknown keys are a no-op.
+#[tauri::command]
+async fn op_preview_cancel(
+    state: tauri::State<'_, DesktopHostState>,
+    preview_key: String,
+) -> Result<(), TauriCommandError> {
+    state
+        .op_preview_cancel(&preview_key)
+        .await
+        .map_err(app_host_command_error)
+}
+
 #[derive(Debug, PartialEq, Eq)]
 pub(crate) enum ParsedAssetUri {
     Asset { project: String, asset_id: String },
@@ -825,6 +837,9 @@ pub(crate) fn handle_asset_uri_request(
                 .status(tauri::http::StatusCode::OK)
                 .header("Content-Type", media_type)
                 .header("Content-Length", bytes.len().to_string())
+                // A preview key is reused, so the same URL can name different
+                // bytes after a re-preview.
+                .header("Cache-Control", "no-store")
                 .body(bytes)
                 .unwrap_or_default()
         }
@@ -914,6 +929,7 @@ pub fn run() {
             op_list,
             op_invoke,
             op_preview,
+            op_preview_cancel,
             // Model download commands
             #[cfg(feature = "aigc")]
             download_huggingface_model,
@@ -1578,7 +1594,7 @@ mod tests {
 
     #[test]
     fn op_commands_and_asset_uri_protocol_serving() {
-        use super::handle_asset_uri_request;
+        use super::{ParsedAssetUri, handle_asset_uri_request, parse_asset_uri};
         use reimagine_app_host::dto::ProjectMetadataInputDto;
 
         let base_path = temp_dir("desktop-ops");
@@ -1682,6 +1698,23 @@ mod tests {
         let resp = handle_asset_uri_request(&state, &preview_uri, None);
         assert_eq!(resp.status(), tauri::http::StatusCode::OK);
         assert_eq!(resp.headers().get("Content-Type").unwrap(), "image/png");
+        assert_eq!(resp.headers().get("Cache-Control").unwrap(), "no-store");
+        assert_eq!(resp.body(), b"\x89PNG\r\n\x1a\n");
+
+        // 6b. The cache-busting query is ignored by the parser and still served
+        let preview_uri_busted: tauri::http::Uri =
+            format!("reimagine-asset://preview/{preview_key}/preview.png?v=7")
+                .parse()
+                .unwrap();
+        assert_eq!(
+            parse_asset_uri(&preview_uri_busted).unwrap(),
+            ParsedAssetUri::Preview {
+                key: preview_key.to_string(),
+                relative_path: "preview.png".to_string(),
+            }
+        );
+        let resp = handle_asset_uri_request(&state, &preview_uri_busted, None);
+        assert_eq!(resp.status(), tauri::http::StatusCode::OK);
         assert_eq!(resp.body(), b"\x89PNG\r\n\x1a\n");
 
         // 7. Test preview symlink rejection (forbidden)

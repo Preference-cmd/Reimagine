@@ -488,6 +488,19 @@ impl DesktopHostState {
             .map_err(AppHostError::from)
     }
 
+    /// Cancel the in-flight preview registered under `preview_key`.
+    ///
+    /// The key is global to the operation service, so this needs no project and
+    /// is a no-op when no preview is running under it.
+    pub async fn op_preview_cancel(&self, preview_key: &str) -> Result<(), AppHostError> {
+        let workspace = self.workspace_arc();
+        workspace
+            .operation_service()
+            .cancel_preview(preview_key)
+            .await
+            .map_err(AppHostError::from)
+    }
+
     pub(crate) fn require_project_sync(&self, project_id: &str) -> Result<ProjectId, AppHostError> {
         let project_id = parse_project_id(project_id)?;
         let workspace = self.workspace_arc();
