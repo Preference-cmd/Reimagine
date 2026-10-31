@@ -63,6 +63,19 @@ fn op_internal_error(op_name: &str, code: &str, message: impl Into<String>) -> D
 const OUTPUT_HISTORY_ENTRY_ID: &str = "history_entry_id";
 const OUTPUT_BOARD_ITEM_ID: &str = "board_item_id";
 
+/// Largest inline text payload, in UTF-8 bytes, that one operation call may
+/// carry in its input or place in its output. The step record keeps the call's
+/// input and output, so a larger payload must be passed as an asset instead.
+pub const MAX_INLINE_TEXT_BYTES: usize = 262_144;
+
+/// Sum the UTF-8 byte lengths of every populated inline-text field that
+/// `schema` marks (`"format": "inline-text"`) in `value`.
+fn inline_text_bytes(schema: &Value, value: &Value) -> usize {
+    mod_sdk::schema::find_inline_text_fields(schema, value)
+        .into_iter()
+        .fold(0usize, |total, field| total.saturating_add(field.bytes))
+}
+
 fn output_history_entry_id(output: &Value) -> Option<HistoryEntryId> {
     output
         .get(OUTPUT_HISTORY_ENTRY_ID)
@@ -607,6 +620,21 @@ impl OperationService {
             ));
         }
 
+        // Inline text becomes part of the step record, so the caller must
+        // switch to an asset above the cap. Reject before the scratch dir and
+        // the start record exist, leaving no trace of an oversized call.
+        let inline_input_bytes = inline_text_bytes(&spec.input_schema, &request.input);
+        if inline_input_bytes > MAX_INLINE_TEXT_BYTES {
+            return Err(op_caller_error(
+                &request.name,
+                "INLINE_TEXT_TOO_LARGE",
+                format!(
+                    "inline text input is {inline_input_bytes} bytes; the limit is \
+                     {MAX_INLINE_TEXT_BYTES} bytes. Pass the text as an asset instead"
+                ),
+            ));
+        }
+
         // Validate media types of input asset fields
         let project_dir = self.paths.project_dir(project.as_str());
         let asset_store = self.asset_store(project).await;
@@ -795,6 +823,20 @@ impl OperationService {
                 ));
             }
 
+            // The output lands in the step record too, so the same cap applies.
+            // Reject before any asset is ingested or the step finishes.
+            let inline_output_bytes = inline_text_bytes(&spec.output_schema, &raw_output);
+            if inline_output_bytes > MAX_INLINE_TEXT_BYTES {
+                return Err(op_internal_error(
+                    &request.name,
+                    "INVALID_OUTPUT",
+                    format!(
+                        "inline text output is {inline_output_bytes} bytes; the limit is \
+                         {MAX_INLINE_TEXT_BYTES} bytes"
+                    ),
+                ));
+            }
+
             // Step 5: Ingest the output's asset paths.
             // IMPORTANT: Validate ALL output asset paths before ingesting ANY of them,
             // so a bad subsequent path does not leave earlier assets registered against a failed step.
@@ -972,6 +1014,20 @@ impl OperationService {
                     name,
                     "INVALID_INPUT",
                     format!("input validation failed for `{name}`: {violations}"),
+                ));
+            }
+
+            // A preview enters the same provider as an invocation, so it takes
+            // the same input cap; the caller must move oversized text to an asset.
+            let inline_input_bytes = inline_text_bytes(&spec.input_schema, &input);
+            if inline_input_bytes > MAX_INLINE_TEXT_BYTES {
+                return Err(op_caller_error(
+                    name,
+                    "INLINE_TEXT_TOO_LARGE",
+                    format!(
+                        "inline text input is {inline_input_bytes} bytes; the limit is \
+                         {MAX_INLINE_TEXT_BYTES} bytes. Pass the text as an asset instead"
+                    ),
                 ));
             }
 

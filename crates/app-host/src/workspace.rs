@@ -3,6 +3,7 @@ pub mod builder;
 
 use std::collections::BTreeMap;
 use std::path::Path;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, RwLock};
 
 #[cfg(feature = "aigc")]
@@ -109,6 +110,11 @@ pub struct WorkspaceHost {
     pub(crate) builtin_catalog: Arc<BuiltinNodeCatalog>,
     pub(crate) services: Arc<WorkspaceServices>,
     pub(crate) operation_service: Arc<OperationService>,
+    /// The registry the operation service dispatches to. The host owns the
+    /// shutdown call, so a process mod's child does not outlive the application.
+    pub(crate) mod_registry: Arc<ModRegistry>,
+    /// Guards [`WorkspaceHost::shutdown`] against stopping the mods twice.
+    pub(crate) mods_stopped: AtomicBool,
     #[cfg(feature = "aigc")]
     pub(crate) aigc: AigcParts,
 }
@@ -150,6 +156,7 @@ impl WorkspaceHost {
         builtin_catalog: Arc<BuiltinNodeCatalog>,
         components: WorkspaceComponents,
         operation_service: Arc<OperationService>,
+        mod_registry: Arc<ModRegistry>,
     ) -> Self {
         let collection_service = Arc::new(CollectionService::with_event_bus(
             config.paths().clone(),
@@ -229,6 +236,8 @@ impl WorkspaceHost {
             builtin_catalog,
             services,
             operation_service,
+            mod_registry,
+            mods_stopped: AtomicBool::new(false),
             #[cfg(feature = "aigc")]
             aigc: components.aigc,
         }
@@ -307,6 +316,7 @@ impl WorkspaceHost {
             builtin_catalog,
             components,
             operation_service,
+            mod_registry,
         )
     }
 
@@ -361,6 +371,7 @@ impl WorkspaceHost {
             event_bus,
             #[cfg(feature = "aigc")]
             Arc::new(InstalledWorkerInventoryProvider::for_base_path(&base_path)),
+            Arc::new(ModRegistry::empty()),
         )
         .await
     }
@@ -411,6 +422,38 @@ impl WorkspaceHost {
             Arc::new(InstalledWorkerInventoryProvider::new(
                 WorkerStorePaths::new(app_data_root),
             )),
+            Arc::new(ModRegistry::empty()),
+        )
+        .await
+    }
+
+    /// Bootstrap with the desktop host's app-data worker convention and an
+    /// already started [`ModRegistry`].
+    ///
+    /// The host dispatches operations to `mod_registry` and stops it from
+    /// [`WorkspaceHost::shutdown`], so a process mod's child does not outlive
+    /// the application. The other app-data constructor keeps an empty
+    /// registry for callers that load no mods.
+    #[cfg(feature = "aigc")]
+    pub async fn try_with_app_data_root_and_event_bus_and_mod_registry(
+        workspace_scope: WorkspaceScope,
+        base_path: impl Into<std::path::PathBuf>,
+        app_data_root: impl Into<std::path::PathBuf>,
+        event_bus: EventBus,
+        mod_registry: Arc<ModRegistry>,
+    ) -> Result<Self, AppHostError> {
+        let base_path = base_path.into();
+        let config = AppConfig::new(AppPaths::new(&base_path));
+        let backend_config = load_backend_config_result(&config).await?;
+        Self::with_backend_config_and_worker_inventory_inner(
+            workspace_scope,
+            config,
+            backend_config,
+            event_bus,
+            Arc::new(InstalledWorkerInventoryProvider::new(
+                WorkerStorePaths::new(app_data_root),
+            )),
+            mod_registry,
         )
         .await
     }
@@ -430,6 +473,7 @@ impl WorkspaceHost {
             backend_config,
             event_bus,
             worker_inventory,
+            Arc::new(ModRegistry::empty()),
         )
         .await
     }
@@ -465,6 +509,7 @@ impl WorkspaceHost {
             Arc::new(BuiltinNodeCatalog::v1()),
             components,
             operation_service,
+            mod_registry,
         )
     }
 
@@ -563,11 +608,13 @@ impl WorkspaceHost {
         backend_config: InferenceBackendConfig,
         event_bus: EventBus,
         #[cfg(feature = "aigc")] worker_inventory: Arc<dyn WorkerInventoryProvider>,
+        mod_registry: Arc<ModRegistry>,
     ) -> Result<Self, AppHostError> {
         let base_path = config.paths().base_path().to_path_buf();
         let builder = WorkspaceHostBuilder::new(workspace_scope, base_path)
             .backend_config(backend_config)
-            .event_bus(event_bus);
+            .event_bus(event_bus)
+            .mod_registry(mod_registry);
         #[cfg(feature = "aigc")]
         let builder = builder.worker_inventory(worker_inventory);
         builder.build().await
@@ -785,6 +832,7 @@ impl WorkspaceHost {
             backend_config,
             current.event_bus.clone(),
             Arc::clone(&current.aigc.worker_inventory),
+            Arc::new(ModRegistry::empty()),
         )
         .await?;
         if let Some(reason) = rebuilt.aigc_unavailable_reason() {
@@ -943,15 +991,18 @@ impl WorkspaceHost {
         &self.aigc.resolved_backend_instance
     }
 
-    /// Shut down the active inference worker, if any.
+    /// Shut down the active inference worker and the registered mods, if any.
     ///
     /// This is the application-level shutdown hook. Call it when the host
-    /// is exiting so that child worker processes are cleaned up instead of
-    /// becoming orphans.
+    /// is exiting so that child worker and mod processes are cleaned up
+    /// instead of becoming orphans. Repeated calls stop the mods once.
     pub async fn shutdown(&self) {
         // Abort in-flight dynamic workflow runs; their documents stay as they
         // are, so the next process reports them as interrupted.
         self.dynamic_workflow_service.shutdown();
+        if !self.mods_stopped.swap(true, Ordering::SeqCst) {
+            self.mod_registry.stop().await;
+        }
         #[cfg(feature = "aigc")]
         {
             let Some(worker_switch) = &self.aigc.worker_switch else {

@@ -167,6 +167,7 @@ impl WorkspaceHostBuilder {
             Arc::new(reimagine_nodes::BuiltinNodeCatalog::v1()),
             components,
             operation_service,
+            mod_registry,
         ))
     }
 

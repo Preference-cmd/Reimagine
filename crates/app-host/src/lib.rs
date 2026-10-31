@@ -91,8 +91,9 @@ pub use error_code::{worker_switch_error_code, worker_switch_error_details};
 pub use node_catalog::NodeCatalogAlignment;
 pub use node_catalog::NodeCatalogService;
 pub use operation_service::{
-    AssetImportOp, AssetListOp, InvokeRequest, InvokeResult, KernelCall, KernelOp, OperationInfo,
-    OperationProvider, OperationService, is_valid_preview_key, validate_preview_key,
+    AssetImportOp, AssetListOp, InvokeRequest, InvokeResult, KernelCall, KernelOp,
+    MAX_INLINE_TEXT_BYTES, OperationInfo, OperationProvider, OperationService,
+    is_valid_preview_key, validate_preview_key,
 };
 pub use project_service::ProjectService;
 pub use proposal::{ProposalReceipt, ProposalStatus, WorkflowProposal};
